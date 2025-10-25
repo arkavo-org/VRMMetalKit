@@ -58,11 +58,11 @@ public struct ActiveMorph {
 public class VRMMorphTargetSystem {
     private let device: MTLDevice
     private var morphWeightsBuffer: MTLBuffer?
-    private let maxMorphTargets = 64
+    private let maxMorphTargets = VRMConstants.Rendering.maxMorphTargets
 
     // Active set management
-    public static let maxActiveMorphs = 8
-    public static let morphEpsilon: Float = 1e-4
+    public static let maxActiveMorphs = VRMConstants.Rendering.maxActiveMorphs
+    public static let morphEpsilon = VRMConstants.Physics.morphEpsilon
     private var activeSet: [ActiveMorph] = []
     private var activeSetBuffer: MTLBuffer?
 

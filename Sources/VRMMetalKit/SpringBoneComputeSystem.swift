@@ -113,7 +113,7 @@ final class SpringBoneComputeSystem {
 
         // Fixed timestep accumulation
         timeAccumulator += deltaTime
-        let fixedDeltaTime = 1.0 / 120.0 // 120Hz fixed update
+        let fixedDeltaTime = 1.0 / VRMConstants.Physics.substepRateHz // Fixed update at configured rate
 
         // Process fixed steps
         while timeAccumulator >= fixedDeltaTime {
@@ -134,7 +134,7 @@ final class SpringBoneComputeSystem {
 
             // Debug: Log bone positions occasionally
             updateCounter += 1
-            if updateCounter % 120 == 0, let bonePosCurr = buffers.bonePosCurr {
+            if updateCounter % VRMConstants.Performance.statusLogInterval == 0, let bonePosCurr = buffers.bonePosCurr {
                 let ptr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: 3)
                 let pos = Array(UnsafeBufferPointer(start: ptr, count: min(3, buffers.numBones)))
                 vrmLog("[SpringBone] GPU update \(updateCounter): First 3 positions: \(pos)")
