@@ -1,12 +1,15 @@
-name: PR Checks
+name: Feature Checks
 
 on:
+  push:
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
     types: [opened, synchronize, reopened]
 
 jobs:
   validate:
-    name: Validate PR
+    name: Build & Validate
     runs-on: ubuntu-latest
     container:
       image: swift:6.2
@@ -14,6 +17,9 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+
+    - name: Show Swift version
+      run: swift --version
 
     - name: Check for merge conflicts
       run: |
@@ -38,7 +44,10 @@ jobs:
         exit $missing
 
     - name: Build
-      run: swift build
+      run: swift build -v
 
     - name: Run tests
-      run: swift test
+      run: swift test -v
+
+    - name: Check for build warnings
+      run: swift build --build-tests 2>&1 | tee build.log && ! grep -i "warning:" build.log
