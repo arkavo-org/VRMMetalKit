@@ -64,7 +64,8 @@ public final class SpringBoneBuffers {
 
     func updateBoneParameters(_ parameters: [BoneParams]) {
         guard parameters.count == numBones else {
-            fatalError("Parameter count mismatch")
+            vrmLogPhysics("⚠️ [SpringBoneBuffers] Parameter count mismatch: expected \(numBones), got \(parameters.count)")
+            return
         }
 
         let ptr = boneParams?.contents().bindMemory(to: BoneParams.self, capacity: numBones)
@@ -75,7 +76,8 @@ public final class SpringBoneBuffers {
 
     func updateRestLengths(_ lengths: [Float]) {
         guard lengths.count == numBones else {
-            fatalError("Length count mismatch")
+            vrmLogPhysics("⚠️ [SpringBoneBuffers] Rest length count mismatch: expected \(numBones), got \(lengths.count)")
+            return
         }
 
         let ptr = restLengths?.contents().bindMemory(to: Float.self, capacity: numBones)
@@ -86,7 +88,8 @@ public final class SpringBoneBuffers {
 
     func updateSphereColliders(_ colliders: [SphereCollider]) {
         guard colliders.count == numSpheres else {
-            fatalError("Collider count mismatch")
+            vrmLogPhysics("⚠️ [SpringBoneBuffers] Sphere collider count mismatch: expected \(numSpheres), got \(colliders.count)")
+            return
         }
 
         let ptr = sphereColliders?.contents().bindMemory(to: SphereCollider.self, capacity: numSpheres)
@@ -97,7 +100,8 @@ public final class SpringBoneBuffers {
 
     func updateCapsuleColliders(_ colliders: [CapsuleCollider]) {
         guard colliders.count == numCapsules else {
-            fatalError("Collider count mismatch")
+            vrmLogPhysics("⚠️ [SpringBoneBuffers] Capsule collider count mismatch: expected \(numCapsules), got \(colliders.count)")
+            return
         }
 
         let ptr = capsuleColliders?.contents().bindMemory(to: CapsuleCollider.self, capacity: numCapsules)

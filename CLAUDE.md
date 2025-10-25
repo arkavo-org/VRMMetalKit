@@ -337,3 +337,4 @@ renderer.outlineWidth = 0.02
 ```
 
 Implemented via `Toon2DShader.swift` and `CharacterPrioritySystem.swift` for layer sorting.
+- after selecting a GitHub issue, create a branch.  After fixes, check format, git commit and push.  Create a PR that references the GitHub issue
