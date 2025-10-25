@@ -171,7 +171,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public var disableLegacyAnimation: Bool = true
 
     // Triple-buffered uniforms for avoiding CPU-GPU sync
-    static let maxBufferedFrames = 3
+    static let maxBufferedFrames = VRMConstants.Rendering.maxBufferedFrames
     var uniformsBuffers: [MTLBuffer] = []
     private var currentUniformBufferIndex = 0
     var uniforms = Uniforms()
