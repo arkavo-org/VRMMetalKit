@@ -1,0 +1,6 @@
+{
+  "skeleton": "default_humanoid",
+  "morphs": {
+    "height": 1.15
+  }
+  // Missing closing brace and required fields

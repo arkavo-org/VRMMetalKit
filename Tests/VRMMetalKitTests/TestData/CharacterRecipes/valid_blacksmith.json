@@ -1,0 +1,20 @@
+{
+  "skeleton": "stocky",
+  "morphs": {
+    "height": 0.95,
+    "muscle_definition": 0.8,
+    "shoulder_width": 1.2,
+    "body_width": 1.15,
+    "hair_length": 0.2
+  },
+  "materials": {
+    "hairColor": [0.1, 0.1, 0.1],
+    "eyeColor": [0.5, 0.5, 0.5],
+    "skinTone": 0.4
+  },
+  "expressions": ["neutral", "happy", "angry", "relaxed"],
+  "accessories": {
+    "glasses": false,
+    "beard": true
+  }
+}

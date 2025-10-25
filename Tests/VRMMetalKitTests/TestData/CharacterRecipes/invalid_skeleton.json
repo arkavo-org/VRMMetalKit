@@ -1,0 +1,12 @@
+{
+  "skeleton": "invalid_skeleton_type",
+  "morphs": {
+    "height": 1.0
+  },
+  "materials": {
+    "hairColor": [0.5, 0.5, 0.5],
+    "eyeColor": [0.5, 0.5, 0.5],
+    "skinTone": 0.5
+  },
+  "expressions": ["neutral"]
+}

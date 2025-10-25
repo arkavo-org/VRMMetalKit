@@ -1,0 +1,14 @@
+{
+  "skeleton": "default",
+  "morphs": {
+    "height": 5.0,
+    "muscle_definition": -1.0,
+    "invalid_morph": 0.5
+  },
+  "materials": {
+    "hairColor": [0.5, 0.5, 0.5],
+    "eyeColor": [0.5, 0.5, 0.5],
+    "skinTone": 0.5
+  },
+  "expressions": ["neutral"]
+}

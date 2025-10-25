@@ -1,0 +1,42 @@
+name: PR Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate:
+    name: Validate PR
+    runs-on: macos-14
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Check for merge conflicts
+      run: |
+        if grep -r "<<<<<<< HEAD" --include="*.swift" --include="*.metal" .; then
+          echo "::error::Merge conflict markers found"
+          exit 1
+        fi
+
+    - name: Check file permissions
+      run: |
+        find . -name "*.swift" -perm +111 -exec echo "::warning file={}::Swift file should not be executable" \;
+
+    - name: Verify license headers
+      run: |
+        missing=0
+        for file in $(find Sources -type f \( -name "*.swift" -o -name "*.metal" \)); do
+          if ! grep -q "Apache License" "$file"; then
+            echo "::error file=$file::Missing Apache License header"
+            missing=1
+          fi
+        done
+        exit $missing
+
+    - name: Build
+      run: swift build
+
+    - name: Run tests
+      run: swift test
