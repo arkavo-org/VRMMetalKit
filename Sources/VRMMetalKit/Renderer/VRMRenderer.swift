@@ -262,15 +262,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         self.strictValidator = StrictValidator(config: config)
         self.skinningSystem = VRMSkinningSystem(device: device)
         self.skinningSystem?.testIdentityPalette = config.testIdentityPalette
-        self.morphTargetSystem = VRMMorphTargetSystem(device: device)
+
+        // Initialize morph target system (may fail if GPU compute unavailable)
+        do {
+            self.morphTargetSystem = try VRMMorphTargetSystem(device: device)
+            vrmLog("[VRMRenderer] Morph target system initialized successfully")
+        } catch {
+            vrmLog("⚠️ [VRMRenderer] Failed to create morph target system: \(error)")
+            self.morphTargetSystem = nil
+        }
+
         self.expressionController = VRMExpressionController()
         do {
             self.springBoneComputeSystem = try SpringBoneComputeSystem(device: device)
-            print("[SpringBone] ✅ GPU compute system created successfully")
-            vrmLog("[VRMRenderer] SpringBone GPU compute system created")
+            vrmLogPhysics("[VRMRenderer] SpringBone GPU compute system created")
         } catch {
-            print("[SpringBone] ❌ FAILED to create GPU system: \(error)")
-            vrmLog("[VRMRenderer] Failed to create SpringBone GPU system: \(error)")
+            vrmLogPhysics("⚠️ [VRMRenderer] Failed to create SpringBone GPU system: \(error)")
             self.springBoneComputeSystem = nil
         }
         self.lookAtController = VRMLookAtController()
@@ -634,8 +641,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private func drawCore(in view: MTKView, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
         // DEBUG: Confirm we're in drawCore
         if frameCounter <= 2 || frameCounter % 60 == 0 {
-            print("[VRMRenderer] drawCore() executing, frame \(frameCounter)")
-            print("[VRMRenderer] renderingMode = \(renderingMode), useOrthographic = \(useOrthographic), toonBands = \(toonBands)")
+            vrmLog("[VRMRenderer] drawCore() executing, frame \(frameCounter)")
+            vrmLog("[VRMRenderer] renderingMode = \(renderingMode), useOrthographic = \(useOrthographic), toonBands = \(toonBands)")
         }
 
         // Wait for a free uniform buffer (triple buffering sync)
@@ -806,14 +813,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 // CRITICAL: Propagate spring bone transforms through entire hierarchy before skinning
                 model.updateNodeTransforms()
 
-                // Always-on status log (not behind vrmLog)
+                // Periodic status logging
                 if frameCounter % 120 == 1 {  // Every 2 seconds at 60fps
-                    print("[SpringBone] GPU physics running: \(model.springBoneBuffers?.numBones ?? 0) bones simulated")
+                    vrmLogPhysics("[SpringBone] GPU physics running: \(model.springBoneBuffers?.numBones ?? 0) bones simulated")
                 }
             } else {
-                vrmLog("[VRMRenderer] Warning: SpringBone GPU system is nil despite having SpringBone data")
+                vrmLogPhysics("⚠️ [VRMRenderer] Warning: SpringBone GPU system is nil despite having SpringBone data")
                 if frameCounter % 120 == 1 {
-                    print("[SpringBone] ERROR: GPU system is nil despite Spring Bone data present")
+                    vrmLogPhysics("❌ [SpringBone] ERROR: GPU system is nil despite Spring Bone data present")
                 }
             }
         } else if model.springBone != nil {
@@ -1554,11 +1561,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 // Debug: Check if pipeline state is nil
                 if activePipelineState == nil {
-                    print("[TOON2D ERROR] Pipeline state is NIL! isSkinned=\(isSkinned), alphaMode=\(materialAlphaMode)")
-                    print("[TOON2D ERROR] toon2DOpaquePipelineState=\(toon2DOpaquePipelineState != nil)")
-                    print("[TOON2D ERROR] toon2DBlendPipelineState=\(toon2DBlendPipelineState != nil)")
-                    print("[TOON2D ERROR] toon2DSkinnedOpaquePipelineState=\(toon2DSkinnedOpaquePipelineState != nil)")
-                    print("[TOON2D ERROR] toon2DSkinnedBlendPipelineState=\(toon2DSkinnedBlendPipelineState != nil)")
+                    vrmLog("❌ [TOON2D ERROR] Pipeline state is NIL! isSkinned=\(isSkinned), alphaMode=\(materialAlphaMode)", level: .error)
+                    vrmLog("[TOON2D ERROR] toon2DOpaquePipelineState=\(toon2DOpaquePipelineState != nil)")
+                    vrmLog("[TOON2D ERROR] toon2DBlendPipelineState=\(toon2DBlendPipelineState != nil)")
+                    vrmLog("[TOON2D ERROR] toon2DSkinnedOpaquePipelineState=\(toon2DSkinnedOpaquePipelineState != nil)")
+                    vrmLog("[TOON2D ERROR] toon2DSkinnedBlendPipelineState=\(toon2DSkinnedBlendPipelineState != nil)")
                 }
 
                 if frameCounter % 60 == 0 {
@@ -2222,17 +2229,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     toon2DMaterial.alphaMode = UInt32(mtoonUniforms.alphaMode)
                     toon2DMaterial.alphaCutoff = mtoonUniforms.alphaCutoff
 
+                    #if VRM_METALKIT_ENABLE_LOGS
                     if frameCounter == 0 && index < 3 {
-                        print("[TOON2D MATERIAL] Material \(index): hasBaseColorTexture=\(toon2DMaterial.hasBaseColorTexture) (from mtoon=\(mtoonUniforms.hasBaseColorTexture))")
-                        print("[TOON2D MATERIAL]   baseColorFactor=\(toon2DMaterial.baseColorFactor)")
-                        print("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.size = \(MemoryLayout<Toon2DMaterialCPU>.size)")
-                        print("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.stride = \(MemoryLayout<Toon2DMaterialCPU>.stride)")
+                        vrmLog("[TOON2D MATERIAL] Material \(index): hasBaseColorTexture=\(toon2DMaterial.hasBaseColorTexture) (from mtoon=\(mtoonUniforms.hasBaseColorTexture))")
+                        vrmLog("[TOON2D MATERIAL]   baseColorFactor=\(toon2DMaterial.baseColorFactor)")
+                        vrmLog("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.size = \(MemoryLayout<Toon2DMaterialCPU>.size)")
+                        vrmLog("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.stride = \(MemoryLayout<Toon2DMaterialCPU>.stride)")
                     }
+                    #endif
 
                     let materialBytes = toon2DMaterial.toBytes()
+                    #if VRM_METALKIT_ENABLE_LOGS
                     if frameCounter == 0 && index < 3 {
-                        print("[TOON2D MATERIAL]   materialBytes.count = \(materialBytes.count)")
+                        vrmLog("[TOON2D MATERIAL]   materialBytes.count = \(materialBytes.count)")
                     }
+                    #endif
                     encoder.setVertexBytes(materialBytes, length: materialBytes.count, index: 2)
                     encoder.setFragmentBytes(materialBytes, length: materialBytes.count, index: 2)
                 } else {
@@ -2636,17 +2647,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     toon2DMaterial.alphaMode = UInt32(mtoonUniforms.alphaMode)
                     toon2DMaterial.alphaCutoff = mtoonUniforms.alphaCutoff
 
+                    #if VRM_METALKIT_ENABLE_LOGS
                     if frameCounter == 0 && index < 3 {
-                        print("[TOON2D MATERIAL] Material \(index): hasBaseColorTexture=\(toon2DMaterial.hasBaseColorTexture) (from mtoon=\(mtoonUniforms.hasBaseColorTexture))")
-                        print("[TOON2D MATERIAL]   baseColorFactor=\(toon2DMaterial.baseColorFactor)")
-                        print("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.size = \(MemoryLayout<Toon2DMaterialCPU>.size)")
-                        print("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.stride = \(MemoryLayout<Toon2DMaterialCPU>.stride)")
+                        vrmLog("[TOON2D MATERIAL] Material \(index): hasBaseColorTexture=\(toon2DMaterial.hasBaseColorTexture) (from mtoon=\(mtoonUniforms.hasBaseColorTexture))")
+                        vrmLog("[TOON2D MATERIAL]   baseColorFactor=\(toon2DMaterial.baseColorFactor)")
+                        vrmLog("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.size = \(MemoryLayout<Toon2DMaterialCPU>.size)")
+                        vrmLog("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.stride = \(MemoryLayout<Toon2DMaterialCPU>.stride)")
                     }
+                    #endif
 
                     let materialBytes = toon2DMaterial.toBytes()
+                    #if VRM_METALKIT_ENABLE_LOGS
                     if frameCounter == 0 && index < 3 {
-                        print("[TOON2D MATERIAL]   materialBytes.count = \(materialBytes.count)")
+                        vrmLog("[TOON2D MATERIAL]   materialBytes.count = \(materialBytes.count)")
                     }
+                    #endif
                     encoder.setVertexBytes(materialBytes, length: materialBytes.count, index: 2)
                     encoder.setFragmentBytes(materialBytes, length: materialBytes.count, index: 2)
                 } else {

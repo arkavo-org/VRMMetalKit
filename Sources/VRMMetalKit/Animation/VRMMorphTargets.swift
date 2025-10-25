@@ -20,6 +20,28 @@ import Metal
 import simd
 import QuartzCore
 
+// MARK: - Morph Target Errors
+
+public enum VRMMorphTargetError: Error, LocalizedError {
+    case failedToCreateCommandQueue
+    case failedToCreateComputePipeline(String)
+    case missingShaderFunction(String)
+    case activeSetBufferNotInitialized
+
+    public var errorDescription: String? {
+        switch self {
+        case .failedToCreateCommandQueue:
+            return "❌ [VRMMorphTargetSystem] Failed to create Metal command queue"
+        case .failedToCreateComputePipeline(let reason):
+            return "❌ [VRMMorphTargetSystem] Failed to create morph compute pipeline: \(reason)"
+        case .missingShaderFunction(let name):
+            return "❌ [VRMMorphTargetSystem] Failed to find shader function '\(name)'"
+        case .activeSetBufferNotInitialized:
+            return "❌ [VRMMorphTargetSystem] Active set buffer not initialized"
+        }
+    }
+}
+
 // MARK: - Morph Target System
 
 // Active morph structure for GPU
@@ -52,11 +74,14 @@ public class VRMMorphTargetSystem {
     public var morphAccumulatePipelineState: MTLComputePipelineState!
     private let commandQueue: MTLCommandQueue
 
-    public init(device: MTLDevice) {
+    public init(device: MTLDevice) throws {
         self.device = device
-        self.commandQueue = device.makeCommandQueue()!
+        guard let queue = device.makeCommandQueue() else {
+            throw VRMMorphTargetError.failedToCreateCommandQueue
+        }
+        self.commandQueue = queue
         setupBuffers()
-        setupComputePipeline()
+        try setupComputePipeline()
     }
 
     private func setupBuffers() {
@@ -69,7 +94,7 @@ public class VRMMorphTargetSystem {
         activeSetBuffer = device.makeBuffer(length: activeSetSize, options: .storageModeShared)
     }
 
-    private func setupComputePipeline() {
+    private func setupComputePipeline() throws {
         // Try to load compute pipeline from compiled Metal library
         // First try default library, then fall back to package resources
         var library: MTLLibrary?
@@ -129,17 +154,15 @@ kernel void morph_accumulate_positions(
         do {
             let inlineLibrary = try device.makeLibrary(source: morphAccumulateSource, options: nil)
             guard let inlineFunction = inlineLibrary.makeFunction(name: "morph_accumulate_positions") else {
-                fatalError("[VRMMorphTargetSystem] Failed to find morph_accumulate_positions in inline shader")
+                throw VRMMorphTargetError.missingShaderFunction("morph_accumulate_positions")
             }
             morphAccumulatePipelineState = try device.makeComputePipelineState(function: inlineFunction)
             vrmLog("[VRMMorphTargetSystem] Morph accumulate compute pipeline created from inline source")
+        } catch let error as VRMMorphTargetError {
+            throw error
         } catch {
-            fatalError("[VRMMorphTargetSystem] Failed to create morph compute pipeline: \(error). GPU morphing is required.")
+            throw VRMMorphTargetError.failedToCreateComputePipeline(error.localizedDescription)
         }
-
-        // Fail-fast guard: Ensure compute pipeline is non-nil
-        assert(morphAccumulatePipelineState != nil,
-               "[VRMMorphTargetSystem] Compute pipeline must be initialized for GPU-only morphs")
     }
 
     public func updateMorphWeights(_ weights: [Float]) {
@@ -255,13 +278,16 @@ kernel void morph_accumulate_positions(
         }
 
         guard let activeSetBuffer = activeSetBuffer else {
-            fatalError("[VRMMorphTargetSystem] Active set buffer not initialized")
+            vrmLog("⚠️ [VRMMorphTargetSystem] Active set buffer not initialized, skipping morph compute")
+            return false
         }
 
-        // Fail-fast: Verify delta buffer size matches expected T*V
+        // Verify delta buffer size matches expected T*V (in DEBUG only)
+        #if DEBUG
         let expectedDeltaSize = morphCount * vertexCount * MemoryLayout<SIMD3<Float>>.stride
         assert(deltaPositions.length >= expectedDeltaSize,
                "[VRMMorphTargetSystem] DeltaPos buffer size mismatch: got \(deltaPositions.length), expected \(expectedDeltaSize) for T=\(morphCount) V=\(vertexCount)")
+        #endif
 
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return false

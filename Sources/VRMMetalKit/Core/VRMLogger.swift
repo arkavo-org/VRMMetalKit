@@ -25,6 +25,18 @@ import Foundation
 /// - `VRM_METALKIT_ENABLE_DEBUG_PHYSICS` - Enable verbose physics/SpringBone debugging
 /// - `VRM_METALKIT_ENABLE_DEBUG_LOADER` - Enable verbose loading/parsing debugging
 
+// MARK: - Build Configuration Validation
+
+#if DEBUG && !VRM_METALKIT_ENABLE_LOGS && !VRM_METALKIT_ENABLE_DEBUG_ANIMATION && !VRM_METALKIT_ENABLE_DEBUG_PHYSICS && !VRM_METALKIT_ENABLE_DEBUG_LOADER
+#warning("⚠️ Debug build without any logging enabled - you may want to enable VRM_METALKIT_ENABLE_LOGS for development")
+#endif
+
+#if !DEBUG && (VRM_METALKIT_ENABLE_LOGS || VRM_METALKIT_ENABLE_DEBUG_ANIMATION || VRM_METALKIT_ENABLE_DEBUG_PHYSICS || VRM_METALKIT_ENABLE_DEBUG_LOADER)
+#warning("⚠️ Release build with debug logging enabled - this will impact performance")
+#endif
+
+// MARK: - Logging Infrastructure
+
 enum VRMLogLevel: String {
     case trace = "TRACE"
     case debug = "DEBUG"

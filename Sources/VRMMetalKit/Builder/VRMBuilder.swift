@@ -271,11 +271,11 @@ public class VRMBuilder {
         // Store the binary buffer data so it can be serialized
         document.binaryBufferData = allBufferData
 
-        print("[VRMBuilder] Generated geometry: \(meshData.positions.count/3) vertices, \(meshData.indices.count/3) triangles")
-        print("[VRMBuilder] Binary buffer data: \(allBufferData.count) bytes")
+        vrmLog("[VRMBuilder] Generated geometry: \(meshData.positions.count/3) vertices, \(meshData.indices.count/3) triangles")
+        vrmLog("[VRMBuilder] Binary buffer data: \(allBufferData.count) bytes")
 
         if allBufferData.isEmpty {
-            print("[VRMBuilder] ❌ ERROR: Binary buffer is empty!")
+            vrmLog("❌ [VRMBuilder] ERROR: Binary buffer is empty!", level: .error)
         }
 
         return document
