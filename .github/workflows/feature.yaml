@@ -46,6 +46,53 @@ jobs:
         done
         exit $missing
 
+    - name: Check for hardcoded file paths in code
+      run: |
+        echo "Checking for hardcoded file paths in all Swift files..."
+        errors=0
+
+        # Check for /Users/ paths
+        if grep -r "/Users/" Sources/ Tests/ --include="*.swift" | grep -v "// "; then
+          echo "::error::Hardcoded /Users/ paths found"
+          errors=1
+        fi
+
+        # Check for /home/ paths (Linux)
+        if grep -r "/home/" Sources/ Tests/ --include="*.swift" | grep -v "// "; then
+          echo "::error::Hardcoded /home/ paths found"
+          errors=1
+        fi
+
+        # Check for C:\ or D:\ paths (Windows)
+        if grep -r "[C-D]:\\\\" Sources/ Tests/ --include="*.swift" | grep -v "// "; then
+          echo "::error::Hardcoded Windows drive paths found"
+          errors=1
+        fi
+
+        # Check for absolute paths starting with /
+        if grep -rE "URL\(fileURLWithPath: \"/" Sources/ Tests/ --include="*.swift" | grep -v "temporaryDirectory" | grep -v "// "; then
+          echo "::error::Hardcoded absolute paths found in URL(fileURLWithPath:). Use Bundle.module or FileManager.default.temporaryDirectory"
+          errors=1
+        fi
+
+        # Check for hardcoded project paths
+        if grep -r "Projects/" Sources/ Tests/ --include="*.swift" | grep -v "// "; then
+          echo "::error::Hardcoded project paths found"
+          errors=1
+        fi
+
+        if [ $errors -eq 0 ]; then
+          echo "✅ No hardcoded file paths found"
+        else
+          echo ""
+          echo "Use one of these approaches instead:"
+          echo "  1. Bundle.module.url(forResource:withExtension:subdirectory:) for package resources"
+          echo "  2. FileManager.default.temporaryDirectory for temporary files"
+          echo "  3. Programmatic data generation"
+          echo "  4. Relative paths with proper base directory resolution"
+          exit 1
+        fi
+
     - name: Check for trailing whitespace
       run: |
         if find Sources Tests -type f \( -name "*.swift" -o -name "*.metal" \) -exec grep -l '[[:space:]]$' {} +; then
