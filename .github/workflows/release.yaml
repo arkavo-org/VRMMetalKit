@@ -7,8 +7,8 @@ on:
 
 jobs:
   release:
-    name: Create Release
-    runs-on: macos-14
+    name: Create Release on macOS
+    runs-on: macos-latest
 
     steps:
     - name: Checkout
@@ -18,7 +18,7 @@ jobs:
       id: version
       run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-    - name: Build package
+    - name: Build package (release mode)
       run: swift build -c release
 
     - name: Run tests
