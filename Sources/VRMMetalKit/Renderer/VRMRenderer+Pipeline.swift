@@ -192,7 +192,7 @@ extension VRMRenderer {
             let opaqueDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
             opaqueDescriptor.label = "mtoon_opaque"  // Add label for debugging
             let opaqueColorAttachment = opaqueDescriptor.colorAttachments[0]
-            opaqueColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            opaqueColorAttachment?.pixelFormat = config.colorPixelFormat
             opaqueColorAttachment?.isBlendingEnabled = false
 
             let opaqueState = try device.makeRenderPipelineState(descriptor: opaqueDescriptor)
@@ -203,7 +203,7 @@ extension VRMRenderer {
             let blendDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
             blendDescriptor.label = "mtoon_blend"  // Add label for debugging
             let blendColorAttachment = blendDescriptor.colorAttachments[0]
-            blendColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            blendColorAttachment?.pixelFormat = config.colorPixelFormat
             blendColorAttachment?.isBlendingEnabled = true
             blendColorAttachment?.sourceRGBBlendFactor = .sourceAlpha
             blendColorAttachment?.destinationRGBBlendFactor = .oneMinusSourceAlpha
@@ -220,7 +220,7 @@ extension VRMRenderer {
             let wireframeDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
             wireframeDescriptor.label = "mtoon_wireframe"  // Add label for debugging
             let wireframeColorAttachment = wireframeDescriptor.colorAttachments[0]
-            wireframeColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            wireframeColorAttachment?.pixelFormat = config.colorPixelFormat
             wireframeColorAttachment?.isBlendingEnabled = false
 
             let wireframeState = try device.makeRenderPipelineState(descriptor: wireframeDescriptor)
@@ -340,7 +340,7 @@ extension VRMRenderer {
             let skinnedOpaqueDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
             skinnedOpaqueDescriptor.label = "mtoon_skinned_opaque"  // Add label for debugging
             let skinnedOpaqueColorAttachment = skinnedOpaqueDescriptor.colorAttachments[0]
-            skinnedOpaqueColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            skinnedOpaqueColorAttachment?.pixelFormat = config.colorPixelFormat
             skinnedOpaqueColorAttachment?.isBlendingEnabled = false
 
             let skinnedOpaqueState = try device.makeRenderPipelineState(descriptor: skinnedOpaqueDescriptor)
@@ -352,7 +352,7 @@ extension VRMRenderer {
             let skinnedBlendDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
             skinnedBlendDescriptor.label = "mtoon_skinned_blend"  // Add label for debugging
             let skinnedBlendColorAttachment = skinnedBlendDescriptor.colorAttachments[0]
-            skinnedBlendColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            skinnedBlendColorAttachment?.pixelFormat = config.colorPixelFormat
             skinnedBlendColorAttachment?.isBlendingEnabled = true
             skinnedBlendColorAttachment?.sourceRGBBlendFactor = .sourceAlpha
             skinnedBlendColorAttachment?.destinationRGBBlendFactor = .oneMinusSourceAlpha
@@ -467,7 +467,7 @@ extension VRMRenderer {
             let toon2DOpaqueDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
             toon2DOpaqueDescriptor.label = "toon2D_opaque"
             let toon2DOpaqueColorAttachment = toon2DOpaqueDescriptor.colorAttachments[0]
-            toon2DOpaqueColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            toon2DOpaqueColorAttachment?.pixelFormat = config.colorPixelFormat
             toon2DOpaqueColorAttachment?.isBlendingEnabled = false
 
             let toon2DOpaqueState = try device.makeRenderPipelineState(descriptor: toon2DOpaqueDescriptor)
@@ -478,7 +478,7 @@ extension VRMRenderer {
             let toon2DBlendDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
             toon2DBlendDescriptor.label = "toon2D_blend"
             let toon2DBlendColorAttachment = toon2DBlendDescriptor.colorAttachments[0]
-            toon2DBlendColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            toon2DBlendColorAttachment?.pixelFormat = config.colorPixelFormat
             toon2DBlendColorAttachment?.isBlendingEnabled = true
             toon2DBlendColorAttachment?.sourceRGBBlendFactor = .sourceAlpha
             toon2DBlendColorAttachment?.destinationRGBBlendFactor = .oneMinusSourceAlpha
@@ -500,7 +500,7 @@ extension VRMRenderer {
             outlinePipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
 
             let outlineColorAttachment = outlinePipelineDescriptor.colorAttachments[0]
-            outlineColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            outlineColorAttachment?.pixelFormat = config.colorPixelFormat
             outlineColorAttachment?.isBlendingEnabled = false  // Outlines are opaque
 
             let outlineState = try device.makeRenderPipelineState(descriptor: outlinePipelineDescriptor)
@@ -598,7 +598,7 @@ extension VRMRenderer {
             let toon2DSkinnedOpaqueDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
             toon2DSkinnedOpaqueDescriptor.label = "toon2D_skinned_opaque"
             let toon2DSkinnedOpaqueColorAttachment = toon2DSkinnedOpaqueDescriptor.colorAttachments[0]
-            toon2DSkinnedOpaqueColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            toon2DSkinnedOpaqueColorAttachment?.pixelFormat = config.colorPixelFormat
             toon2DSkinnedOpaqueColorAttachment?.isBlendingEnabled = false
 
             let toon2DSkinnedOpaqueState = try device.makeRenderPipelineState(descriptor: toon2DSkinnedOpaqueDescriptor)
@@ -609,7 +609,7 @@ extension VRMRenderer {
             let toon2DSkinnedBlendDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
             toon2DSkinnedBlendDescriptor.label = "toon2D_skinned_blend"
             let toon2DSkinnedBlendColorAttachment = toon2DSkinnedBlendDescriptor.colorAttachments[0]
-            toon2DSkinnedBlendColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            toon2DSkinnedBlendColorAttachment?.pixelFormat = config.colorPixelFormat
             toon2DSkinnedBlendColorAttachment?.isBlendingEnabled = true
             toon2DSkinnedBlendColorAttachment?.sourceRGBBlendFactor = .sourceAlpha
             toon2DSkinnedBlendColorAttachment?.destinationRGBBlendFactor = .oneMinusSourceAlpha
@@ -631,7 +631,7 @@ extension VRMRenderer {
             outlinePipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
 
             let outlineColorAttachment = outlinePipelineDescriptor.colorAttachments[0]
-            outlineColorAttachment?.pixelFormat = .bgra8Unorm_srgb
+            outlineColorAttachment?.pixelFormat = config.colorPixelFormat
             outlineColorAttachment?.isBlendingEnabled = false
 
             let outlineState = try device.makeRenderPipelineState(descriptor: outlinePipelineDescriptor)
