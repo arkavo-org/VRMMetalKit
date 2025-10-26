@@ -376,6 +376,25 @@ extension VRMRenderer {
 
     // MARK: - Toon2D Pipeline Setup
 
+    /// Ensures Toon2D pipelines are initialized (lazy initialization).
+    /// Only compiles shaders and creates pipeline states if they haven't been created yet.
+    func ensureToon2DPipelinesInitialized() {
+        // Check if any Toon2D pipeline states are nil
+        let needsInitialization = toon2DOpaquePipelineState == nil ||
+                                   toon2DBlendPipelineState == nil ||
+                                   toon2DSkinnedOpaquePipelineState == nil ||
+                                   toon2DSkinnedBlendPipelineState == nil
+
+        guard needsInitialization else {
+            return // Already initialized
+        }
+
+        vrmLog("[VRMRenderer] Lazy initializing Toon2D pipelines...")
+        setupToon2DPipeline()
+        setupToon2DSkinnedPipeline()
+        vrmLog("[VRMRenderer] Toon2D pipelines initialized")
+    }
+
     func setupToon2DPipeline() {
         print("[VRMRenderer] setupToon2DPipeline() called")
         do {
