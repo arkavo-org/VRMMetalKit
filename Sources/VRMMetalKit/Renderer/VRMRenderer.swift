@@ -308,12 +308,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[VRMRenderer] About to setup skinned pipeline...")
         setupSkinnedPipeline()
         vrmLog("[VRMRenderer] Finished setup skinned pipeline")
-        vrmLog("[VRMRenderer] About to setup Toon2D pipeline...")
-        setupToon2DPipeline()
-        vrmLog("[VRMRenderer] Finished setup Toon2D pipeline")
-        vrmLog("[VRMRenderer] About to setup Toon2D skinned pipeline...")
-        setupToon2DSkinnedPipeline()
-        vrmLog("[VRMRenderer] Finished setup Toon2D skinned pipeline")
         vrmLog("[VRMRenderer] About to setup sprite pipeline...")
         setupSpritePipeline()
         vrmLog("[VRMRenderer] Finished setup sprite pipeline")
@@ -643,6 +637,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if frameCounter <= 2 || frameCounter % 60 == 0 {
             vrmLog("[VRMRenderer] drawCore() executing, frame \(frameCounter)")
             vrmLog("[VRMRenderer] renderingMode = \(renderingMode), useOrthographic = \(useOrthographic), toonBands = \(toonBands)")
+        }
+
+        // Lazy initialize Toon2D pipelines if needed
+        if renderingMode == .toon2D {
+            ensureToon2DPipelinesInitialized()
         }
 
         // Wait for a free uniform buffer (triple buffering sync)

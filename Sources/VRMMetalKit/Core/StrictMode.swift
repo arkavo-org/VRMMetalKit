@@ -42,6 +42,9 @@ public struct RendererConfig {
     /// Strict mode level for validation
     public var strict: StrictLevel = .off
 
+    /// Color attachment pixel format for render pipelines (defaults to match MTKView default)
+    public var colorPixelFormat: MTLPixelFormat = .bgra8Unorm
+
     /// Enable Metal validation layers (debug builds only)
     public var enableMetalValidation: Bool = true
 
@@ -66,8 +69,9 @@ public struct RendererConfig {
     /// Use identity matrices for specified skin index (A/B test for palette corruption)
     public var testIdentityPalette: Int? = nil
 
-    public init(strict: StrictLevel = .off, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil) {
+    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil) {
         self.strict = strict
+        self.colorPixelFormat = colorPixelFormat
         self.renderFilter = renderFilter
         self.drawUntil = drawUntil
         self.drawOnlyIndex = drawOnlyIndex
