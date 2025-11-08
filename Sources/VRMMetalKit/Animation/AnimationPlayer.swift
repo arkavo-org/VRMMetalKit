@@ -18,6 +18,44 @@
 import Foundation
 import simd
 
+/// AnimationPlayer controls playback of VRM animations and updates model state.
+///
+/// ## Thread Safety
+/// **NOT thread-safe.** AnimationPlayer must be used from a single thread (typically the main thread).
+///
+/// ### Rationale:
+/// - Mutates internal playback state (currentTime, isPlaying) without synchronization
+/// - Updates VRMModel node transforms directly during `update(deltaTime:model:)`
+/// - Caches node lookups in dictionaries that are not thread-safe
+///
+/// ### Safe Usage Patterns:
+/// ```swift
+/// // ✅ SAFE: Update loop on main thread
+/// func gameLoop(deltaTime: Float) {
+///     animationPlayer.update(deltaTime: deltaTime, model: model)
+/// }
+///
+/// // ✅ SAFE: Control playback from main thread
+/// animationPlayer.play()
+/// animationPlayer.speed = 2.0
+///
+/// // ❌ UNSAFE: Concurrent access from multiple threads
+/// DispatchQueue.global().async {
+///     animationPlayer.pause()  // Data race with update() on main thread!
+/// }
+/// ```
+///
+/// ### Integration with Rendering:
+/// Ensure animation updates happen before rendering on the same thread:
+/// ```swift
+/// // 1. Update animation (modifies model.nodes)
+/// animationPlayer.update(deltaTime: dt, model: model)
+///
+/// // 2. Render with updated transforms
+/// renderer.render(model: model, in: view)
+/// ```
+///
+/// - Note: Loading animation clips (`load(_:)`) is safe from any thread if the player is not active.
 public final class AnimationPlayer {
     public var speed: Float = 1.0
     public var isLooping = true

@@ -342,6 +342,42 @@ public struct VRMMorphTarget {
 
 // MARK: - Expression Controller
 
+/// VRMExpressionController manages VRM facial expressions and morph target weights.
+///
+/// ## Thread Safety
+/// **Partially thread-safe.** Read operations are safe from any thread, but write operations
+/// (setting expression weights, animations) should be performed on the main thread.
+///
+/// This class is marked `@unchecked Sendable` because:
+/// 1. Internal state (dictionaries, arrays) is accessed without locks
+/// 2. Timer-based animations use `@MainActor` isolation for state mutations
+/// 3. The class is designed for single-threaded use in typical rendering scenarios
+///
+/// ### Safe Usage Patterns:
+/// ```swift
+/// // ✅ SAFE: All mutations on main thread
+/// Task { @MainActor in
+///     controller.setExpressionWeight(.happy, weight: 1.0)
+///     controller.blink()
+/// }
+///
+/// // ⚠️ CAUTION: Reads from background thread (no concurrent writes!)
+/// DispatchQueue.global().async {
+///     let weights = controller.weightsForMesh(0, morphCount: 10)  // Safe if no concurrent writes
+/// }
+///
+/// // ❌ UNSAFE: Concurrent writes from multiple threads
+/// DispatchQueue.global().async {
+///     controller.setExpressionWeight(.sad, weight: 0.5)  // Data race!
+/// }
+/// ```
+///
+/// ### Animation Safety:
+/// The `blink()`, `speak()`, and `animateExpression()` methods use Timer and Task
+/// with `@MainActor` to ensure mutations happen on the main thread. Do not call these
+/// methods from background threads.
+///
+/// - Note: Future versions may use actor isolation or locks for full thread-safety.
 public class VRMExpressionController: @unchecked Sendable {
     private var expressions: [VRMExpressionPreset: VRMExpression] = [:]
     private var customExpressions: [String: VRMExpression] = [:]
@@ -593,6 +629,32 @@ private func lerp(_ a: Float, _ b: Float, _ t: Float) -> Float {
 
 // MARK: - Expression Mixer
 
+/// VRMExpressionMixer provides high-level expression control with auto-blink and lip sync.
+///
+/// ## Thread Safety
+/// **NOT thread-safe.** All methods must be called from the main thread due to Timer usage.
+///
+/// This class is marked `@unchecked Sendable` to work with async/await patterns, but:
+/// 1. Internal Timer callbacks execute on the main thread only
+/// 2. The underlying VRMExpressionController requires main-thread access
+/// 3. Auto-blink scheduling uses `@MainActor` tasks for thread safety
+///
+/// ### Safe Usage Patterns:
+/// ```swift
+/// // ✅ SAFE: All operations on main thread
+/// Task { @MainActor in
+///     let mixer = VRMExpressionMixer(controller: controller)
+///     mixer.setAutoBlinkEnabled(true)
+///     mixer.performLipSync(with: audioData)
+/// }
+///
+/// // ❌ UNSAFE: Background thread usage
+/// DispatchQueue.global().async {
+///     mixer.setAutoBlinkEnabled(false)  // Timer operations not thread-safe!
+/// }
+/// ```
+///
+/// - Note: Always create and use VRMExpressionMixer on the main thread.
 public class VRMExpressionMixer: @unchecked Sendable {
     private var controller: VRMExpressionController
     private var autoBlinkEnabled = true

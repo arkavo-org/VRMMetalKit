@@ -19,6 +19,37 @@ import Foundation
 import simd
 import Metal
 
+/// VRMModel represents a loaded VRM avatar with all its data, nodes, meshes, and materials.
+///
+/// ## Thread Safety
+/// **NOT thread-safe.** VRMModel instances must only be accessed from a single thread.
+///
+/// ### Rationale:
+/// - Contains mutable arrays (nodes, meshes, materials) that are modified during loading and animation
+/// - Node world matrices are updated during animation playback without synchronization
+/// - Metal buffer pointers are accessed directly without locks
+///
+/// ### Safe Usage Patterns:
+/// ```swift
+/// // ✅ SAFE: Load and use on main thread
+/// let model = try GLTFParser.loadVRM(from: url, device: device)
+/// animationPlayer.update(deltaTime: dt, model: model)
+///
+/// // ✅ SAFE: Read-only access from rendering thread (if no concurrent writes)
+/// renderer.render(model: model, in: view)  // Safe if animation isn't updating concurrently
+///
+/// // ❌ UNSAFE: Concurrent mutation from multiple threads
+/// DispatchQueue.global().async {
+///     model.nodes[0].localTransform = newTransform  // Data race!
+/// }
+/// ```
+///
+/// ### Concurrency Recommendations:
+/// - Load models on a background thread, but transfer ownership to the rendering thread before use
+/// - If you need to access model data from multiple threads, create a read-only snapshot
+/// - Use explicit synchronization (locks, dispatch queues) if sharing is unavoidable
+///
+/// - Note: The `device` property stores a reference to MTLDevice, which is thread-safe.
 public class VRMModel {
     // MARK: - Properties
 

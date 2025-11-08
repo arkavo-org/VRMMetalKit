@@ -21,6 +21,40 @@ import MetalKit
 import simd
 import QuartzCore  // For CACurrentMediaTime
 
+/// VRMRenderer manages the rendering pipeline for VRM models using Metal.
+///
+/// ## Thread Safety
+/// **NOT thread-safe.** All methods must be called from the same thread (typically the main thread).
+///
+/// This class is marked `@unchecked Sendable` to allow Metal command queue operations
+/// to be scheduled across dispatch boundaries, but actual renderer state (pipeline states,
+/// buffers, model data) must only be accessed from a single thread.
+///
+/// ### Safe Usage Patterns:
+/// ```swift
+/// // ✅ SAFE: All renderer operations on main thread
+/// DispatchQueue.main.async {
+///     let renderer = VRMRenderer(device: device)
+///     renderer.render(in: view, commandBuffer: commandBuffer)
+/// }
+///
+/// // ❌ UNSAFE: Concurrent access from multiple threads
+/// DispatchQueue.global().async {
+///     renderer.renderingMode = .toon2D  // Data race!
+/// }
+/// ```
+///
+/// ### Metal Command Queue Safety:
+/// The internal Metal command queue is thread-safe by design. Command buffers created
+/// from this queue can be encoded on different threads, but you must ensure proper
+/// synchronization when accessing shared renderer state.
+///
+/// ### Rendering from Background Threads:
+/// If you need to perform rendering work on a background thread, create a dedicated
+/// rendering context and avoid sharing renderer instances between threads.
+///
+/// - Note: Future versions may add explicit thread-safety with locks or actor isolation.
+/// - SeeAlso: [Metal Threading Best Practices](https://developer.apple.com/documentation/metal/resource_objects/about_threading_metal)
 public final class VRMRenderer: NSObject, @unchecked Sendable {
     // OPTIMIZATION: Numeric key for morph buffer dictionary (avoids string interpolation)
     typealias MorphKey = UInt64
