@@ -78,7 +78,7 @@ for metal_file in "${METAL_FILES[@]}"; do
         -std=metal3.0 \
         -Wall \
         -Wextra \
-        2>&1 | grep -v "warning: Metal language version 3.0 is not supported"; then
+        2>&1; then
         AIR_FILES+=("$air_file")
     else
         echo "   ❌ Failed to compile $filename.metal"
