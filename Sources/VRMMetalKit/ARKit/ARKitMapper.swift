@@ -45,7 +45,7 @@ import Foundation
 ///     return max(left, right)  // Use stronger blink
 /// }
 /// ```
-public enum BlendShapeFormula {
+public enum BlendShapeFormula: Sendable {
     /// Direct 1:1 mapping from single ARKit blend shape
     case direct(String)
 
@@ -64,7 +64,7 @@ public enum BlendShapeFormula {
 
     /// Custom evaluation function
     /// Note: Cannot be serialized
-    case custom((ARKitFaceBlendShapes) -> Float)
+    case custom(@Sendable (ARKitFaceBlendShapes) -> Float)
 
     /// Evaluate formula against blend shape data
     public func evaluate(_ blendShapes: ARKitFaceBlendShapes) -> Float {
@@ -168,23 +168,23 @@ public struct ARKitToVRMMapper: Sendable {
     public static let `default` = ARKitToVRMMapper(mappings: [
         // Emotions
         "happy": .weighted([
-            (ARKitFaceBlendShapes.mouthSmileLeft, 0.4),
-            (ARKitFaceBlendShapes.mouthSmileRight, 0.4),
-            (ARKitFaceBlendShapes.cheekSquintLeft, 0.1),
-            (ARKitFaceBlendShapes.cheekSquintRight, 0.1)
+            (ARKitFaceBlendShapes.mouthSmileLeft, Float(0.4)),
+            (ARKitFaceBlendShapes.mouthSmileRight, Float(0.4)),
+            (ARKitFaceBlendShapes.cheekSquintLeft, Float(0.1)),
+            (ARKitFaceBlendShapes.cheekSquintRight, Float(0.1))
         ]),
 
         "angry": .weighted([
-            (ARKitFaceBlendShapes.browDownLeft, 0.3),
-            (ARKitFaceBlendShapes.browDownRight, 0.3),
-            (ARKitFaceBlendShapes.mouthFrownLeft, 0.2),
-            (ARKitFaceBlendShapes.mouthFrownRight, 0.2)
+            (ARKitFaceBlendShapes.browDownLeft, Float(0.3)),
+            (ARKitFaceBlendShapes.browDownRight, Float(0.3)),
+            (ARKitFaceBlendShapes.mouthFrownLeft, Float(0.2)),
+            (ARKitFaceBlendShapes.mouthFrownRight, Float(0.2))
         ]),
 
         "sad": .weighted([
-            (ARKitFaceBlendShapes.browInnerUp, 0.4),
-            (ARKitFaceBlendShapes.mouthFrownLeft, 0.3),
-            (ARKitFaceBlendShapes.mouthFrownRight, 0.3)
+            (ARKitFaceBlendShapes.browInnerUp, Float(0.4)),
+            (ARKitFaceBlendShapes.mouthFrownLeft, Float(0.3)),
+            (ARKitFaceBlendShapes.mouthFrownRight, Float(0.3))
         ]),
 
         "relaxed": .custom { shapes in
@@ -196,38 +196,38 @@ public struct ARKitToVRMMapper: Sendable {
         },
 
         "surprised": .weighted([
-            (ARKitFaceBlendShapes.browInnerUp, 0.3),
-            (ARKitFaceBlendShapes.browOuterUpLeft, 0.15),
-            (ARKitFaceBlendShapes.browOuterUpRight, 0.15),
-            (ARKitFaceBlendShapes.eyeWideLeft, 0.2),
-            (ARKitFaceBlendShapes.eyeWideRight, 0.2)
+            (ARKitFaceBlendShapes.browInnerUp, Float(0.3)),
+            (ARKitFaceBlendShapes.browOuterUpLeft, Float(0.15)),
+            (ARKitFaceBlendShapes.browOuterUpRight, Float(0.15)),
+            (ARKitFaceBlendShapes.eyeWideLeft, Float(0.2)),
+            (ARKitFaceBlendShapes.eyeWideRight, Float(0.2))
         ]),
 
         // Visemes (vowel shapes)
         "aa": .weighted([
-            (ARKitFaceBlendShapes.jawOpen, 0.8),
-            (ARKitFaceBlendShapes.mouthFunnel, 0.2)
+            (ARKitFaceBlendShapes.jawOpen, Float(0.8)),
+            (ARKitFaceBlendShapes.mouthFunnel, Float(0.2))
         ]),
 
         "ih": .weighted([
-            (ARKitFaceBlendShapes.jawOpen, 0.3),
-            (ARKitFaceBlendShapes.mouthSmileLeft, 0.35),
-            (ARKitFaceBlendShapes.mouthSmileRight, 0.35)
+            (ARKitFaceBlendShapes.jawOpen, Float(0.3)),
+            (ARKitFaceBlendShapes.mouthSmileLeft, Float(0.35)),
+            (ARKitFaceBlendShapes.mouthSmileRight, Float(0.35))
         ]),
 
         "ou": .weighted([
-            (ARKitFaceBlendShapes.mouthFunnel, 0.5),
-            (ARKitFaceBlendShapes.mouthPucker, 0.5)
+            (ARKitFaceBlendShapes.mouthFunnel, Float(0.5)),
+            (ARKitFaceBlendShapes.mouthPucker, Float(0.5))
         ]),
 
         "ee": .weighted([
-            (ARKitFaceBlendShapes.mouthSmileLeft, 0.5),
-            (ARKitFaceBlendShapes.mouthSmileRight, 0.5)
+            (ARKitFaceBlendShapes.mouthSmileLeft, Float(0.5)),
+            (ARKitFaceBlendShapes.mouthSmileRight, Float(0.5))
         ]),
 
         "oh": .weighted([
-            (ARKitFaceBlendShapes.jawOpen, 0.5),
-            (ARKitFaceBlendShapes.mouthFunnel, 0.5)
+            (ARKitFaceBlendShapes.jawOpen, Float(0.5)),
+            (ARKitFaceBlendShapes.mouthFunnel, Float(0.5))
         ]),
 
         // Blink
@@ -252,13 +252,13 @@ public struct ARKitToVRMMapper: Sendable {
         ]),
 
         "lookLeft": .weighted([
-            (ARKitFaceBlendShapes.eyeLookInLeft, 0.5),
-            (ARKitFaceBlendShapes.eyeLookOutRight, 0.5)
+            (ARKitFaceBlendShapes.eyeLookInLeft, Float(0.5)),
+            (ARKitFaceBlendShapes.eyeLookOutRight, Float(0.5))
         ]),
 
         "lookRight": .weighted([
-            (ARKitFaceBlendShapes.eyeLookOutLeft, 0.5),
-            (ARKitFaceBlendShapes.eyeLookInRight, 0.5)
+            (ARKitFaceBlendShapes.eyeLookOutLeft, Float(0.5)),
+            (ARKitFaceBlendShapes.eyeLookInRight, Float(0.5))
         ]),
 
         // Neutral (default expression)

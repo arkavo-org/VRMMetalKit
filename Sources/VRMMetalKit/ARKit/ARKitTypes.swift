@@ -223,7 +223,7 @@ public enum ARKitJoint: String, CaseIterable, Sendable, Codable {
 ///     isTracked: true
 /// )
 /// ```
-public struct ARKitBodySkeleton: Sendable, Codable {
+public struct ARKitBodySkeleton: Sendable {
     /// Timestamp when this data was captured
     public let timestamp: TimeInterval
 
@@ -267,6 +267,65 @@ public struct ARKitBodySkeleton: Sendable, Codable {
             isTracked: isTracked && !filtered.isEmpty,
             confidence: confidence
         )
+    }
+}
+
+// MARK: - ARKitBodySkeleton Codable Conformance
+
+extension ARKitBodySkeleton: Codable {
+    enum CodingKeys: String, CodingKey {
+        case timestamp
+        case joints
+        case isTracked
+        case confidence
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        timestamp = try container.decode(TimeInterval.self, forKey: .timestamp)
+        isTracked = try container.decode(Bool.self, forKey: .isTracked)
+        confidence = try container.decodeIfPresent(Float.self, forKey: .confidence)
+
+        // Decode dictionary as array of pairs
+        let jointPairs = try container.decode([[String]].self, forKey: .joints)
+        var jointsDict: [ARKitJoint: simd_float4x4] = [:]
+        for pair in jointPairs {
+            guard pair.count == 17 else { continue } // 1 key + 16 matrix values
+            guard let joint = ARKitJoint(rawValue: pair[0]) else { continue }
+
+            // Reconstruct 4x4 matrix from 16 floats
+            let values = pair[1...].compactMap { Float($0) }
+            guard values.count == 16 else { continue }
+
+            let matrix = simd_float4x4(
+                simd_float4(values[0], values[1], values[2], values[3]),
+                simd_float4(values[4], values[5], values[6], values[7]),
+                simd_float4(values[8], values[9], values[10], values[11]),
+                simd_float4(values[12], values[13], values[14], values[15])
+            )
+            jointsDict[joint] = matrix
+        }
+        joints = jointsDict
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(isTracked, forKey: .isTracked)
+        try container.encodeIfPresent(confidence, forKey: .confidence)
+
+        // Encode dictionary as array of pairs
+        let jointPairs: [[String]] = joints.map { joint, matrix in
+            var pair = [joint.rawValue]
+            // Flatten 4x4 matrix to 16 floats
+            for col in 0..<4 {
+                for row in 0..<4 {
+                    pair.append(String(matrix[col][row]))
+                }
+            }
+            return pair
+        }
+        try container.encode(jointPairs, forKey: .joints)
     }
 }
 

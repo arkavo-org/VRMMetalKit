@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import simd
 
 // MARK: - Smoothing Configuration
 
@@ -331,7 +332,7 @@ public final class FilterManager {
     }
 
     /// Update value through appropriate filter
-    public mutating func update(key: String, value: Float) -> Float {
+    public func update(key: String, value: Float) -> Float {
         if filters[key] == nil {
             let filterType = config.filter(for: key)
             filters[key] = filterType.makeFilter()
@@ -340,19 +341,19 @@ public final class FilterManager {
     }
 
     /// Reset specific filter
-    public mutating func reset(key: String) {
+    public func reset(key: String) {
         filters[key]?.reset()
     }
 
     /// Reset all filters
-    public mutating func resetAll() {
+    public func resetAll() {
         for key in filters.keys {
             filters[key]?.reset()
         }
     }
 
     /// Remove unused filters to free memory
-    public mutating func prune(activeKeys: Set<String>) {
+    public func prune(activeKeys: Set<String>) {
         let keysToRemove = filters.keys.filter { !activeKeys.contains($0) }
         for key in keysToRemove {
             filters.removeValue(forKey: key)
@@ -415,7 +416,7 @@ public final class SkeletonFilterManager {
     }
 
     /// Smooth a 3D position vector
-    public mutating func updatePosition(joint: String, position: SIMD3<Float>) -> SIMD3<Float> {
+    public func updatePosition(joint: String, position: SIMD3<Float>) -> SIMD3<Float> {
         if positionFilters[joint] == nil {
             positionFilters[joint] = config.positionFilter.makeFilter()
         }
@@ -430,7 +431,7 @@ public final class SkeletonFilterManager {
     /// Smooth a quaternion rotation
     /// Note: For proper quaternion smoothing, this is simplified.
     /// Full implementation should use SLERP with filter on angle
-    public mutating func updateRotation(joint: String, rotation: simd_quatf) -> simd_quatf {
+    public func updateRotation(joint: String, rotation: simd_quatf) -> simd_quatf {
         if rotationFilters[joint] == nil {
             rotationFilters[joint] = config.rotationFilter.makeFilter()
         }
@@ -446,14 +447,14 @@ public final class SkeletonFilterManager {
     }
 
     /// Reset all filters for a specific joint
-    public mutating func reset(joint: String) {
+    public func reset(joint: String) {
         positionFilters[joint]?.reset()
         rotationFilters[joint]?.reset()
         scaleFilters[joint]?.reset()
     }
 
     /// Reset all filters
-    public mutating func resetAll() {
+    public func resetAll() {
         for key in positionFilters.keys {
             positionFilters[key]?.reset()
         }
