@@ -391,15 +391,95 @@ VRMMetalKit/
 
 ### Key Design Decisions
 
-**Triple-Buffered Uniforms:** Eliminates CPU-GPU sync stalls
+**Triple-Buffered Uniforms:** Eliminates CPU-GPU sync stalls ([ADR-002](docs/adr/002-triple-buffered-uniforms.md))
 
-**GPU Compute for Morphs:** Handles 8+ morph targets efficiently
+**GPU Compute for Morphs:** Handles 8+ morph targets efficiently ([ADR-003](docs/adr/003-gpu-compute-morph-targets.md))
 
-**XPBD SpringBone:** Stable physics with fixed substeps at 120Hz
+**XPBD SpringBone:** Stable physics with fixed substeps at 120Hz ([ADR-004](docs/adr/004-xpbd-springbone-physics.md))
 
-**Strict Resource Indices:** Prevents binding conflicts
+**Strict Resource Indices:** Prevents binding conflicts ([ADR-005](docs/adr/005-strictmode-validation.md))
 
-**Conditional Logging:** Zero overhead in production
+**Conditional Logging:** Zero overhead in production ([ADR-006](docs/adr/006-conditional-compilation-logging.md))
+
+**For detailed rationale and alternatives considered, see [Architecture Decision Records (ADRs)](docs/adr/README.md).**
+
+## Thread Safety and Concurrency
+
+**VRMMetalKit is NOT thread-safe by default.** All public classes are designed for single-threaded use, typically on the main thread.
+
+### Key Points
+
+- **VRMRenderer**, **VRMModel**, and **AnimationPlayer** are **NOT thread-safe**
+- Some classes use `@unchecked Sendable` for async/await compatibility, but this does NOT mean they are thread-safe
+- Metal command queues are thread-safe, but renderer state is not
+- All mutations should happen on the main thread or a dedicated rendering thread
+
+### Safe Pattern: Main Thread
+
+```swift
+// ✅ SAFE: Everything on main thread
+func update(deltaTime: Float) {
+    animationPlayer.update(deltaTime: deltaTime, model: model)
+    renderer.render(model: model, in: metalView)
+}
+```
+
+### Safe Pattern: Background Loading
+
+```swift
+// ✅ SAFE: Load on background, use on main
+Task.detached {
+    let model = try GLTFParser.loadVRM(from: url, device: device)
+
+    await MainActor.run {
+        self.model = model
+        self.renderer.model = model
+    }
+}
+```
+
+### Unsafe Pattern: Concurrent Access
+
+```swift
+// ❌ UNSAFE: Don't access from multiple threads
+DispatchQueue.global().async {
+    renderer.renderingMode = .toon2D  // Data race!
+}
+```
+
+**For detailed guidance, see [CONCURRENCY.md](CONCURRENCY.md).**
+
+## Metal Shader Compilation
+
+VRMMetalKit uses pre-compiled Metal shaders for optimal performance. Shaders are excluded from Swift Package Manager compilation and must be compiled separately.
+
+### Quick Start
+
+```bash
+# Compile all Metal shaders
+./compile-shaders.sh
+```
+
+The script compiles all `.metal` files in `Sources/VRMMetalKit/Shaders/` and creates `VRMMetalKitShaders.metallib` in `Sources/VRMMetalKit/Resources/`.
+
+### Runtime Loading
+
+VRMMetalKit automatically loads shaders with a three-tier fallback:
+
+1. **Default library** (if shaders compiled into app)
+2. **Package `.metallib`** (pre-compiled bundle)
+3. **Inline source** (emergency fallback for critical shaders)
+
+This ensures the library always functions, even if shader compilation was skipped.
+
+### Verification
+
+```bash
+# Verify compiled library
+xcrun metal-nm Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
+```
+
+**For complete compilation instructions, CI integration, and troubleshooting, see [SHADERS.md](SHADERS.md).**
 
 ## Performance Tips
 
