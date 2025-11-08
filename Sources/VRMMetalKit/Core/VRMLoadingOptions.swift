@@ -52,9 +52,9 @@ import Foundation
 /// - `VRMLoadingOptions.desktop`: Generous limits for high-end desktop workstations
 /// - `VRMLoadingOptions.unlimited`: No limits (use with caution!)
 ///
-public struct VRMLoadingOptions {
+public struct VRMLoadingOptions: Sendable {
     /// Enforcement mode for resource limits
-    public enum EnforcementMode {
+    public enum EnforcementMode: Sendable {
         /// Log warnings when limits exceeded but continue loading
         case warn
         /// Throw error when limits exceeded
