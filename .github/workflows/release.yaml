@@ -8,9 +8,7 @@ on:
 jobs:
   release:
     name: Create Release
-    runs-on: ubuntu-latest
-    container:
-      image: swift:6.2
+    runs-on: macos-latest
 
     steps:
     - name: Checkout
