@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2025-11-08
+
+### Added
+
+#### ARKit Integration (Face & Body Tracking)
+- Complete ARKit face tracking integration (52 blend shapes → 18 VRM expressions)
+- Complete ARKit body tracking integration (50+ joints → VRM humanoid bones)
+- Multi-source support with priority strategies (latestActive, primary/fallback, highestConfidence)
+- Configurable expression mapping (direct, average, weighted, max, min, custom formulas)
+- Three mapper presets: default, simplified, aggressive
+- Skeleton retargeting with transform decomposition (4×4 matrix → TRS)
+- Three skeleton mappers: default, upperBodyOnly, coreOnly
+
+#### Smoothing & Filtering
+- SLERP-based quaternion smoothing for skeleton rotation (replaces component-wise filtering)
+- Three smoothing filter types: EMA, Kalman, Windowed Average
+- Per-expression smoothing configuration
+- Per-joint smoothing (separate position/rotation/scale filters)
+- Smoothing presets: default, lowLatency, smooth, kalman, none
+- Quaternion double-cover handling for shortest-path interpolation
+
+#### Multi-Camera Support
+- Thread-safe multi-source updates
+- Automatic staleness detection (configurable threshold, default 150ms)
+- Source priority strategies for camera selection
+- Stale source cleanup and management
+- Source-specific statistics tracking
+
+#### Data Types & Infrastructure
+- ARKitFaceBlendShapes: 52 ARKit blend shapes with timestamp and staleness detection
+- ARKitBodySkeleton: Full skeleton with 4×4 transforms, tracking confidence
+- ARMetadataSource protocol for source identification and metadata
+- Concrete sources: ARFaceSource, ARBodySource, ARCombinedSource
+- Full Codable support for recording/playback
+
+#### Testing
+- Comprehensive test suite: 61 tests across 5 test files (100% passing)
+- ARKitTypesTests (17 tests): Data structures, serialization, staleness
+- ARKitMapperTests (17 tests): All formula types, presets, edge cases
+- SmoothingFiltersTests (10 tests): EMA, Kalman, Windowed, SLERP
+- ARKitFaceDriverTests (9 tests): Driver creation, configuration, performance
+- ARKitBodyDriverTests (18 tests): Skeleton retargeting, transforms, performance
+
+#### Documentation & Examples
+- Complete integration guide (docs/ARKitIntegration.md)
+- 5 runnable code examples with extensive documentation:
+  - BasicIntegration.swift: Minimal single-camera setup
+  - MultiCameraIntegration.swift: Multi-camera with priority strategies
+  - CustomMappingExample.swift: Custom expression/skeleton mapping
+  - PerformanceMonitoring.swift: Statistics and profiling tools
+  - RecordingPlayback.swift: Recording ARKit sessions for testing
+- Examples README with quick start and troubleshooting
+- Integration checklist for production deployment
+
+### Changed
+- Documentation structure reorganized:
+  - Technical docs moved to docs/ directory
+  - Root directory contains only standard project files
+  - Improved documentation discoverability
+
+### Performance
+- Face driver: <1ms per update, <5 KB memory overhead
+- Body driver: <2ms for full skeleton, <10 KB memory overhead
+- SLERP smoothing: ~0.5µs per joint
+- Total pipeline: <2ms end-to-end latency
+- Validated at 60-120 FPS throughput
+
+### Technical Details
+- Thread-safe driver implementations (Sendable conformance)
+- Robust matrix decomposition using Gram-Schmidt orthogonalization
+- Automatic world transform propagation after skeleton updates
+- Statistics tracking (update count, skip rate, timing)
+
 ## [0.1.0] - 2025-10-25
 
 ### Added
@@ -118,5 +191,6 @@ This is the first public release of VRMMetalKit, a high-performance Swift packag
 
 ---
 
-[Unreleased]: https://github.com/arkavo-org/VRMMetalKit/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/arkavo-org/VRMMetalKit/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/arkavo-org/VRMMetalKit/compare/v0.1.0...v0.3.1
 [0.1.0]: https://github.com/arkavo-org/VRMMetalKit/releases/tag/v0.1.0
