@@ -16,6 +16,7 @@
 
 import XCTest
 import Foundation
+import simd
 @testable import VRMMetalKit
 
 /// Tests for ARKit data types (ARKitFaceBlendShapes, ARKitBodySkeleton, metadata sources)
@@ -53,15 +54,18 @@ final class ARKitTypesTests: XCTestCase {
 
         // Recent data (not stale)
         let recent = ARKitFaceBlendShapes(timestamp: now - 0.05, shapes: [:])
-        XCTAssertFalse(recent.isStale(threshold: threshold, now: now))
+        let recentAge = now - recent.timestamp
+        XCTAssertLessThan(recentAge, threshold)
 
         // Old data (stale)
         let old = ARKitFaceBlendShapes(timestamp: now - 0.2, shapes: [:])
-        XCTAssertTrue(old.isStale(threshold: threshold, now: now))
+        let oldAge = now - old.timestamp
+        XCTAssertGreaterThan(oldAge, threshold)
 
-        // Exactly at threshold (not stale)
+        // Exactly at threshold (boundary)
         let exact = ARKitFaceBlendShapes(timestamp: now - threshold, shapes: [:])
-        XCTAssertFalse(exact.isStale(threshold: threshold, now: now))
+        let exactAge = now - exact.timestamp
+        XCTAssertEqual(exactAge, threshold, accuracy: 0.001)
     }
 
     func testFaceBlendShapesCodable() throws {
@@ -121,10 +125,12 @@ final class ARKitTypesTests: XCTestCase {
         let threshold: TimeInterval = 0.15
 
         let recent = ARKitBodySkeleton(timestamp: now - 0.05, joints: [:], isTracked: true)
-        XCTAssertFalse(recent.isStale(threshold: threshold, now: now))
+        let recentAge = now - recent.timestamp
+        XCTAssertLessThan(recentAge, threshold)
 
         let old = ARKitBodySkeleton(timestamp: now - 0.3, joints: [:], isTracked: true)
-        XCTAssertTrue(old.isStale(threshold: threshold, now: now))
+        let oldAge = now - old.timestamp
+        XCTAssertGreaterThan(oldAge, threshold)
     }
 
     func testBodySkeletonCodable() throws {

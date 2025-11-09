@@ -24,6 +24,7 @@ final class SmoothingFiltersTests: XCTestCase {
     // MARK: - EMA Filter Tests
 
     func testEMAFilterBasicSmoothing() {
+        let config = SmoothingConfig(global: .ema(alpha: 0.3))
         var filter = config.filter(for: "test")
         var impl = filter.makeFilter()
 
@@ -223,8 +224,8 @@ final class SmoothingFiltersTests: XCTestCase {
         let config = SkeletonSmoothingConfig(rotationFilter: .ema(alpha: 0.5))
         let manager = SkeletonFilterManager(config: config)
 
-        let identity = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
-        let rotated = simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(0, 1, 0))
+        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)  // Identity quaternion
+        let rotated = simd_quatf(ix: 0, iy: 0.707, iz: 0, r: 0.707)  // 90° around Y axis
 
         // First rotation should pass through
         let result1 = manager.updateRotation(joint: "spine", rotation: identity)
@@ -241,8 +242,8 @@ final class SmoothingFiltersTests: XCTestCase {
         let config = SkeletonSmoothingConfig(rotationFilter: .ema(alpha: 0.5))
         let manager = SkeletonFilterManager(config: config)
 
-        let q1 = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
-        let q2 = simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0))
+        let q1 = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)  // Identity
+        let q2 = simd_quatf(ix: 0, iy: 1, iz: 0, r: 0)  // 180° around Y
         let q2Negated = simd_quatf(vector: -q2.vector)  // Same rotation, opposite hemisphere
 
         _ = manager.updateRotation(joint: "test", rotation: q1)

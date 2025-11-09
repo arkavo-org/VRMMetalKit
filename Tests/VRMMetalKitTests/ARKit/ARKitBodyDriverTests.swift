@@ -167,8 +167,8 @@ final class ARKitBodyDriverTests: XCTestCase {
     }
 
     func testTransformDecompositionRotation() {
-        // Create a transform with rotation
-        let rotation = simd_quatf(angle: .pi / 4, axis: SIMD3<Float>(0, 1, 0))
+        // Create a transform with rotation (45° around Y axis)
+        let rotation = simd_quatf(ix: 0, iy: 0.383, iz: 0, r: 0.924)
         let transform = simd_float4x4(rotation)
 
         let skeleton = ARKitBodySkeleton(

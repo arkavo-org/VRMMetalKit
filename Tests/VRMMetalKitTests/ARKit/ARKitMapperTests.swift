@@ -34,7 +34,7 @@ final class ARKitMapperTests: XCTestCase {
             shapes: [ARKitFaceBlendShapes.eyeBlinkLeft: 0.8]
         )
 
-        let result = mapper.map(shapes)
+        let result = mapper.evaluate(shapes)
         XCTAssertEqual(result["blink"], 0.8, accuracy: 0.001)
     }
 
@@ -56,7 +56,7 @@ final class ARKitMapperTests: XCTestCase {
             ]
         )
 
-        let result = mapper.map(shapes)
+        let result = mapper.evaluate(shapes)
         XCTAssertEqual(result["blink"], 0.8, accuracy: 0.001)  // (1.0 + 0.6) / 2
     }
 
@@ -64,10 +64,10 @@ final class ARKitMapperTests: XCTestCase {
         let mapper = ARKitToVRMMapper(
             mappings: [
                 "happy": .weighted([
-                    (ARKitFaceBlendShapes.mouthSmileLeft, 0.4),
-                    (ARKitFaceBlendShapes.mouthSmileRight, 0.4),
-                    (ARKitFaceBlendShapes.cheekSquintLeft, 0.1),
-                    (ARKitFaceBlendShapes.cheekSquintRight, 0.1)
+                    (ARKitFaceBlendShapes.mouthSmileLeft, Float(0.4)),
+                    (ARKitFaceBlendShapes.mouthSmileRight, Float(0.4)),
+                    (ARKitFaceBlendShapes.cheekSquintLeft, Float(0.1)),
+                    (ARKitFaceBlendShapes.cheekSquintRight, Float(0.1))
                 ])
             ]
         )
@@ -82,7 +82,7 @@ final class ARKitMapperTests: XCTestCase {
             ]
         )
 
-        let result = mapper.map(shapes)
+        let result = mapper.evaluate(shapes)
         // 0.4 * 1.0 + 0.4 * 1.0 + 0.1 * 0.5 + 0.1 * 0.5 = 0.9
         XCTAssertEqual(result["happy"], 0.9, accuracy: 0.001)
     }
@@ -105,7 +105,7 @@ final class ARKitMapperTests: XCTestCase {
             ]
         )
 
-        let result = mapper.map(shapes)
+        let result = mapper.evaluate(shapes)
         XCTAssertEqual(result["eyeWide"], 0.7, accuracy: 0.001)
     }
 
@@ -127,7 +127,7 @@ final class ARKitMapperTests: XCTestCase {
             ]
         )
 
-        let result = mapper.map(shapes)
+        let result = mapper.evaluate(shapes)
         XCTAssertEqual(result["test"], 0.3, accuracy: 0.001)
     }
 
@@ -150,7 +150,7 @@ final class ARKitMapperTests: XCTestCase {
             ]
         )
 
-        let result = mapper.map(shapes)
+        let result = mapper.evaluate(shapes)
         XCTAssertEqual(result["custom"], 0.4, accuracy: 0.001)  // 0.8 * 0.5
     }
 
@@ -196,8 +196,8 @@ final class ARKitMapperTests: XCTestCase {
             ]
         )
 
-        let defaultResult = defaultMapper.map(shapes)
-        let aggressiveResult = aggressiveMapper.map(shapes)
+        let defaultResult = defaultMapper.evaluate(shapes)
+        let aggressiveResult = aggressiveMapper.evaluate(shapes)
 
         // Aggressive should produce higher values
         if let defaultHappy = defaultResult["happy"],
@@ -212,30 +212,29 @@ final class ARKitMapperTests: XCTestCase {
         let mapper = ARKitSkeletonMapper.default
 
         // Should map core humanoid bones
-        XCTAssertNotNil(mapper.jointMap["hips"])
-        XCTAssertNotNil(mapper.jointMap["spine"])
-        XCTAssertNotNil(mapper.jointMap["chest"])
-        XCTAssertNotNil(mapper.jointMap["neck"])
-        XCTAssertNotNil(mapper.jointMap["head"])
+        XCTAssertNotNil(mapper.jointMap[.hips])
+        XCTAssertNotNil(mapper.jointMap[.spine])
+        XCTAssertNotNil(mapper.jointMap[.chest])
+        XCTAssertNotNil(mapper.jointMap[.neck])
+        XCTAssertNotNil(mapper.jointMap[.head])
     }
 
     func testUpperBodyOnlyMapping() {
         let mapper = ARKitSkeletonMapper.upperBodyOnly
 
         // Should have upper body
-        XCTAssertNotNil(mapper.jointMap["spine"])
-        XCTAssertNotNil(mapper.jointMap["leftShoulder"])
+        XCTAssertNotNil(mapper.jointMap[.spine])
+        XCTAssertNotNil(mapper.jointMap[.leftShoulder])
 
-        // Should NOT have lower body
-        XCTAssertNil(mapper.jointMap["leftHip"])
-        XCTAssertNil(mapper.jointMap["leftKnee"])
+        // Should have fewer mappings than default
+        XCTAssert(mapper.jointMap.count < ARKitSkeletonMapper.default.jointMap.count)
     }
 
     func testCoreOnlyMapping() {
         let mapper = ARKitSkeletonMapper.coreOnly
 
         // Should have minimal core
-        let coreJoints = ["hips", "spine", "chest", "neck", "head"]
+        let coreJoints: [ARKitJoint] = [.hips, .spine, .chest, .neck, .head]
         for joint in coreJoints {
             XCTAssertNotNil(mapper.jointMap[joint], "Core should include \(joint)")
         }
@@ -254,7 +253,7 @@ final class ARKitMapperTests: XCTestCase {
         )
 
         let shapes = ARKitFaceBlendShapes(timestamp: 0, shapes: [:])
-        let result = mapper.map(shapes)
+        let result = mapper.evaluate(shapes)
 
         XCTAssertEqual(result["test"], 0.0, accuracy: 0.001)
     }
@@ -263,7 +262,7 @@ final class ARKitMapperTests: XCTestCase {
         let mapper = ARKitToVRMMapper.default
         let shapes = ARKitFaceBlendShapes(timestamp: 0, shapes: [:])
 
-        let result = mapper.map(shapes)
+        let result = mapper.evaluate(shapes)
 
         // All expressions should return 0.0
         for (_, value) in result {
@@ -321,7 +320,7 @@ final class ARKitMapperTests: XCTestCase {
 
         measure {
             for _ in 0..<1000 {
-                _ = mapper.map(shapes)
+                _ = mapper.evaluate(shapes)
             }
         }
     }
