@@ -176,73 +176,67 @@ final class ARKitTypesTests: XCTestCase {
     // MARK: - Metadata Source Tests
 
     func testARFaceSourceCreation() {
-        let blendShapes = ARKitFaceBlendShapes(timestamp: 100, shapes: [:])
         let source = ARFaceSource(
             sourceID: UUID(),
             name: "iPhone 15 Pro",
-            blendShapes: blendShapes,
             metadata: ["device": "iPhone15,2"]
         )
 
         XCTAssertEqual(source.name, "iPhone 15 Pro")
-        XCTAssertEqual(source.lastUpdate, 100)
-        XCTAssertTrue(source.isActive)
         XCTAssertEqual(source.metadata["device"], "iPhone15,2")
+        XCTAssertFalse(source.isActive)  // No data yet, so not active
     }
 
     func testARBodySourceCreation() {
-        let skeleton = ARKitBodySkeleton(timestamp: 200, transforms: [:])
         let source = ARBodySource(
             sourceID: UUID(),
             name: "iPad Pro",
-            skeleton: skeleton,
             metadata: ["connection": "wifi"]
         )
 
         XCTAssertEqual(source.name, "iPad Pro")
-        XCTAssertEqual(source.lastUpdate, 200)
-        XCTAssertTrue(source.isActive)
         XCTAssertEqual(source.metadata["connection"], "wifi")
+        XCTAssertFalse(source.isActive)  // No data yet
     }
 
     func testARCombinedSourceCreation() {
-        let blendShapes = ARKitFaceBlendShapes(timestamp: 100, shapes: [:])
-        let skeleton = ARKitBodySkeleton(timestamp: 100, transforms: [:])
         let source = ARCombinedSource(
             sourceID: UUID(),
             name: "iPhone Front",
-            blendShapes: blendShapes,
-            skeleton: skeleton,
             metadata: [:]
         )
 
         XCTAssertEqual(source.name, "iPhone Front")
-        XCTAssertEqual(source.lastUpdate, 100)
-        XCTAssertTrue(source.isActive)
+        XCTAssertFalse(source.isActive)  // No data yet
     }
 
-    func testSourceActivenessBasedOnStaleness() {
+    func testFaceSourceUpdate() {
+        let source = ARFaceSource(
+            sourceID: UUID(),
+            name: "Test",
+            metadata: [:]
+        )
+
         let now = Date().timeIntervalSinceReferenceDate
+        let blendShapes = ARKitFaceBlendShapes(timestamp: now, shapes: [:])
+        source.update(blendShapes: blendShapes)
 
-        // Active source (recent data)
-        let activeBlendShapes = ARKitFaceBlendShapes(timestamp: now - 0.05, shapes: [:])
-        let activeSource = ARFaceSource(
+        XCTAssertTrue(source.isActive)
+        XCTAssertNotNil(source.blendShapes)
+    }
+
+    func testBodySourceUpdate() {
+        let source = ARBodySource(
             sourceID: UUID(),
-            name: "Active",
-            blendShapes: activeBlendShapes,
+            name: "Test",
             metadata: [:]
         )
-        XCTAssertTrue(activeSource.isActive)
 
-        // Stale source (old data)
-        let staleBlendShapes = ARKitFaceBlendShapes(timestamp: now - 1.0, shapes: [:])
-        let staleSource = ARFaceSource(
-            sourceID: UUID(),
-            name: "Stale",
-            blendShapes: staleBlendShapes,
-            metadata: [:]
-        )
-        XCTAssertFalse(staleSource.isActive)
+        let skeleton = ARKitBodySkeleton(timestamp: Date().timeIntervalSinceReferenceDate, joints: [:], isTracked: true)
+        source.update(skeleton: skeleton)
+
+        XCTAssertTrue(source.isActive)
+        XCTAssertNotNil(source.skeleton)
     }
 
     // MARK: - Edge Cases

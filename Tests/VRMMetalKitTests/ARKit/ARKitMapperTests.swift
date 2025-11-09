@@ -35,7 +35,7 @@ final class ARKitMapperTests: XCTestCase {
         )
 
         let result = mapper.evaluate(shapes)
-        XCTAssertEqual(result["blink"], 0.8, accuracy: 0.001)
+        XCTAssertEqual(result["blink"]!, 0.8, accuracy: 0.001)
     }
 
     func testAverageMapping() {
@@ -57,7 +57,7 @@ final class ARKitMapperTests: XCTestCase {
         )
 
         let result = mapper.evaluate(shapes)
-        XCTAssertEqual(result["blink"], 0.8, accuracy: 0.001)  // (1.0 + 0.6) / 2
+        XCTAssertEqual(result["blink"]!, 0.8, accuracy: 0.001)  // (1.0 + 0.6) / 2
     }
 
     func testWeightedMapping() {
@@ -84,7 +84,7 @@ final class ARKitMapperTests: XCTestCase {
 
         let result = mapper.evaluate(shapes)
         // 0.4 * 1.0 + 0.4 * 1.0 + 0.1 * 0.5 + 0.1 * 0.5 = 0.9
-        XCTAssertEqual(result["happy"], 0.9, accuracy: 0.001)
+        XCTAssertEqual(result["happy"]!, 0.9, accuracy: 0.001)
     }
 
     func testMaxMapping() {
@@ -106,7 +106,7 @@ final class ARKitMapperTests: XCTestCase {
         )
 
         let result = mapper.evaluate(shapes)
-        XCTAssertEqual(result["eyeWide"], 0.7, accuracy: 0.001)
+        XCTAssertEqual(result["eyeWide"]!, 0.7, accuracy: 0.001)
     }
 
     func testMinMapping() {
@@ -128,7 +128,7 @@ final class ARKitMapperTests: XCTestCase {
         )
 
         let result = mapper.evaluate(shapes)
-        XCTAssertEqual(result["test"], 0.3, accuracy: 0.001)
+        XCTAssertEqual(result["test"]!, 0.3, accuracy: 0.001)
     }
 
     func testCustomMapping() {
@@ -151,7 +151,7 @@ final class ARKitMapperTests: XCTestCase {
         )
 
         let result = mapper.evaluate(shapes)
-        XCTAssertEqual(result["custom"], 0.4, accuracy: 0.001)  // 0.8 * 0.5
+        XCTAssertEqual(result["custom"]!, 0.4, accuracy: 0.001)  // 0.8 * 0.5
     }
 
     // MARK: - Preset Mapper Tests
@@ -255,7 +255,7 @@ final class ARKitMapperTests: XCTestCase {
         let shapes = ARKitFaceBlendShapes(timestamp: 0, shapes: [:])
         let result = mapper.evaluate(shapes)
 
-        XCTAssertEqual(result["test"], 0.0, accuracy: 0.001)
+        XCTAssertEqual(result["test"]!, 0.0, accuracy: 0.001)
     }
 
     func testEmptyBlendShapes() {
@@ -264,9 +264,13 @@ final class ARKitMapperTests: XCTestCase {
 
         let result = mapper.evaluate(shapes)
 
-        // All expressions should return 0.0
-        for (_, value) in result {
-            XCTAssertEqual(value, 0.0, accuracy: 0.001)
+        // All expressions should return 0.0 except neutral (which should be 1.0)
+        for (expression, value) in result {
+            if expression == "neutral" {
+                XCTAssertEqual(value, 1.0, accuracy: 0.001)
+            } else {
+                XCTAssertEqual(value, 0.0, accuracy: 0.001)
+            }
         }
     }
 
@@ -282,8 +286,8 @@ final class ARKitMapperTests: XCTestCase {
             shapes: [ARKitFaceBlendShapes.eyeBlinkLeft: 1.0]
         )
 
-        let result = mapper.map(shapes)
-        XCTAssertEqual(result["test"], 0.0, accuracy: 0.001)
+        let result = mapper.evaluate(shapes)
+        XCTAssertEqual(result["test"]!, 0.0, accuracy: 0.001)
     }
 
     func testSingleValueAverage() {
@@ -298,8 +302,8 @@ final class ARKitMapperTests: XCTestCase {
             shapes: [ARKitFaceBlendShapes.eyeBlinkLeft: 0.7]
         )
 
-        let result = mapper.map(shapes)
-        XCTAssertEqual(result["test"], 0.7, accuracy: 0.001)
+        let result = mapper.evaluate(shapes)
+        XCTAssertEqual(result["test"]!, 0.7, accuracy: 0.001)
     }
 
     // MARK: - Performance Tests

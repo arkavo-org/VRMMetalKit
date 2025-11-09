@@ -229,7 +229,7 @@ final class ARKitBodyDriverTests: XCTestCase {
     // MARK: - Priority Strategy Tests
 
     func testPriorityStrategyLatestActive() {
-        let strategy: SourcePriority = .latestActive
+        let strategy: ARKitBodyDriver.SourcePriority = .latestActive
         // Just verify the enum case exists
         switch strategy {
         case .latestActive:
@@ -240,7 +240,7 @@ final class ARKitBodyDriverTests: XCTestCase {
     }
 
     func testPriorityStrategyPrimary() {
-        let strategy: SourcePriority = .primary("FrontCamera", fallback: "SideCamera")
+        let strategy: ARKitBodyDriver.SourcePriority = .primary("FrontCamera", fallback: "SideCamera")
         switch strategy {
         case .primary(let primary, let fallback):
             XCTAssertEqual(primary, "FrontCamera")
