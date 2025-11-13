@@ -15,6 +15,7 @@
 //
 
 
+import Foundation
 import Metal
 import QuartzCore  // For CACurrentMediaTime
 import simd
@@ -39,6 +40,14 @@ final class SpringBoneComputeSystem {
 
     // Store bind-pose direction for each bone (in parent's local space)
     private var boneBindDirections: [SIMD3<Float>] = []
+
+    // Readback + synchronization
+    private let snapshotLock = NSLock()
+    private var latestPositionsSnapshot: [SIMD3<Float>] = []
+    private var simulationFrameCounter: UInt64 = 0
+    private var latestCompletedFrame: UInt64 = 0
+    private var lastAppliedFrame: UInt64 = 0
+    private var skippedReadbacks: Int = 0
 
     init(device: MTLDevice) throws {
         self.device = device
@@ -114,10 +123,13 @@ final class SpringBoneComputeSystem {
         // Fixed timestep accumulation
         timeAccumulator += deltaTime
         let fixedDeltaTime = 1.0 / VRMConstants.Physics.substepRateHz // Fixed update at configured rate
+        let maxSubsteps = VRMConstants.Physics.maxSubstepsPerFrame
+        var stepsThisFrame = 0
 
-        // Process fixed steps
-        while timeAccumulator >= fixedDeltaTime {
+        // Process fixed steps (clamped to avoid spiral-of-death)
+        while timeAccumulator >= fixedDeltaTime && stepsThisFrame < maxSubsteps {
             timeAccumulator -= fixedDeltaTime
+            stepsThisFrame += 1
 
             // Update global params with current time
             var params = globalParams
@@ -139,6 +151,13 @@ final class SpringBoneComputeSystem {
                 let pos = Array(UnsafeBufferPointer(start: ptr, count: min(3, buffers.numBones)))
                 vrmLog("[SpringBone] GPU update \(updateCounter): First 3 positions: \(pos)")
             }
+        }
+
+        if timeAccumulator >= fixedDeltaTime {
+            // We've reached the per-frame cap; carry a single substep forward to avoid runaway accumulation
+            let droppedSteps = Int(timeAccumulator / fixedDeltaTime)
+            timeAccumulator = min(timeAccumulator, fixedDeltaTime)
+            vrmLogPhysics("⚠️ [SpringBone] Hit max substeps (\(maxSubsteps)) this frame. Dropping \(droppedSteps) pending step(s) to stay real-time.")
         }
 
         lastUpdateTime = CACurrentMediaTime()
@@ -211,12 +230,16 @@ final class SpringBoneComputeSystem {
         }
 
         computeEncoder.endEncoding()
-        commandBuffer.commit()
 
-        // CRITICAL: Wait for GPU to finish so CPU can read back updated positions
-        // This is necessary for writeBonesToNodes() to get current frame results
-        // Without this, we read stale data from previous frames
-        commandBuffer.waitUntilCompleted()
+        simulationFrameCounter &+= 1
+        let frameID = simulationFrameCounter
+
+        commandBuffer.addCompletedHandler { [weak self, weak buffers = buffers] _ in
+            guard let self = self, let buffers = buffers else { return }
+            self.captureCompletedPositions(from: buffers, frameID: frameID)
+        }
+
+        commandBuffer.commit()
     }
 
     func populateSpringBoneData(model: VRMModel) throws {
@@ -378,6 +401,12 @@ final class SpringBoneComputeSystem {
                                                   length: MemoryLayout<UInt32>.stride,
                                                   options: [.storageModeShared])
         }
+
+        snapshotLock.lock()
+        latestPositionsSnapshot.removeAll(keepingCapacity: true)
+        latestCompletedFrame = 0
+        lastAppliedFrame = 0
+        snapshotLock.unlock()
     }
 
     private func updateAnimatedPositions(model: VRMModel, buffers: SpringBoneBuffers) {
@@ -436,21 +465,55 @@ final class SpringBoneComputeSystem {
         }
     }
 
+    private func captureCompletedPositions(from buffers: SpringBoneBuffers, frameID: UInt64) {
+        guard let bonePosCurr = buffers.bonePosCurr,
+              buffers.numBones > 0 else {
+            return
+        }
+
+        let sourcePointer = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+
+        snapshotLock.lock()
+        if latestPositionsSnapshot.count != buffers.numBones {
+            latestPositionsSnapshot = Array(repeating: SIMD3<Float>(repeating: 0), count: buffers.numBones)
+        }
+
+        latestPositionsSnapshot.withUnsafeMutableBufferPointer { destination in
+            guard let dst = destination.baseAddress else { return }
+            dst.assign(from: sourcePointer, count: buffers.numBones)
+        }
+        latestCompletedFrame = frameID
+        snapshotLock.unlock()
+    }
+
     /// Read back GPU-computed bone positions and update VRMNode transforms
     func writeBonesToNodes(model: VRMModel) {
         guard let springBone = model.springBone,
-              let buffers = model.springBoneBuffers,
-              let bonePosCurr = buffers.bonePosCurr else {
+              let buffers = model.springBoneBuffers else {
             vrmLog("[SpringBone] writeBonesToNodes: Missing required data")
             return
         }
 
-        // Read back GPU positions
-        let positionsPointer = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
-        let positions = Array(UnsafeBufferPointer(start: positionsPointer, count: buffers.numBones))
+        snapshotLock.lock()
+        let readyFrame = latestCompletedFrame
+        let positions = latestPositionsSnapshot
+        let canApply = readyFrame > lastAppliedFrame && positions.count >= buffers.numBones && !positions.isEmpty
+        if canApply {
+            lastAppliedFrame = readyFrame
+        }
+        snapshotLock.unlock()
+
+        guard canApply else {
+            skippedReadbacks += 1
+            if skippedReadbacks % VRMConstants.Performance.statusLogInterval == 0 {
+                vrmLogPhysics("[SpringBone] ⚠️ Skipping readback (ready=\(readyFrame), applied=\(lastAppliedFrame))")
+            }
+            return
+        }
+        skippedReadbacks = 0
 
         // Check if positions have extreme values
-        let maxMagnitude = positions.map { simd_length($0) }.max() ?? 0
+        let maxMagnitude = positions.prefix(buffers.numBones).map { simd_length($0) }.max() ?? 0
         vrmLog("[SpringBone] Read \(positions.count) positions. Max magnitude: \(maxMagnitude)")
 
         // Map bone index to spring/joint for node updates

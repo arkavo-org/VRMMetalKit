@@ -81,8 +81,11 @@ public class SpriteCacheSystem {
     // MARK: - Cache State
 
     private var cache: [UInt64: CachedPose] = [:]
+    private var pendingRenders: Set<UInt64> = []
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
+    private let callbackQueue: DispatchQueue
+    private let cacheLock = NSLock()
 
     // Statistics
     private var cacheHits: Int = 0
@@ -90,9 +93,29 @@ public class SpriteCacheSystem {
 
     // MARK: - Initialization
 
-    public init(device: MTLDevice, commandQueue: MTLCommandQueue) {
+    public init(device: MTLDevice, commandQueue: MTLCommandQueue, callbackQueue: DispatchQueue = .main) {
         self.device = device
         self.commandQueue = commandQueue
+        self.callbackQueue = callbackQueue
+    }
+
+    private struct PendingPose {
+        let texture: MTLTexture
+        let poseHash: UInt64
+        let characterID: String
+        let resolution: CGSize
+    }
+
+    private func locked<T>(_ body: () -> T) -> T {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return body()
+    }
+
+    private func cancelPendingRender(for poseHash: UInt64) {
+        locked {
+            pendingRenders.remove(poseHash)
+        }
     }
 
     // MARK: - Pose Hashing
@@ -157,26 +180,54 @@ public class SpriteCacheSystem {
 
     /// Check if a pose is cached
     public func isCached(poseHash: UInt64) -> Bool {
-        return cache[poseHash] != nil
+        return locked {
+            cache[poseHash] != nil
+        }
     }
 
     /// Retrieve cached pose if available
     /// - Parameter poseHash: Pose hash to lookup
     /// - Returns: Cached pose texture or nil if not found
     public func getCachedPose(poseHash: UInt64) -> CachedPose? {
-        if var pose = cache[poseHash] {
-            // Update timestamp for LRU
-            pose.timestamp = Date().timeIntervalSince1970
-            cache[poseHash] = pose
-            cacheHits += 1
-            return pose
-        } else {
-            cacheMisses += 1
-            return nil
+        return locked {
+            if var pose = cache[poseHash] {
+                pose.timestamp = Date().timeIntervalSince1970
+                cache[poseHash] = pose
+                cacheHits += 1
+                return pose
+            } else {
+                cacheMisses += 1
+                return nil
+            }
         }
     }
 
     // MARK: - Cache Storage
+
+    @discardableResult
+    private func storePoseLocked(_ pose: CachedPose) -> Bool {
+        while shouldEvictLocked(additionalBytes: pose.memoryBytes) {
+            evictLRULocked()
+        }
+        cache[pose.poseHash] = pose
+        pendingRenders.remove(pose.poseHash)
+        return true
+    }
+
+    private func finalizePendingPose(_ pending: PendingPose) -> CachedPose? {
+        let pose = CachedPose(
+            texture: pending.texture,
+            poseHash: pending.poseHash,
+            timestamp: Date().timeIntervalSince1970,
+            resolution: pending.resolution,
+            characterID: pending.characterID
+        )
+
+        return locked {
+            _ = storePoseLocked(pose)
+            return cache[pose.poseHash]
+        }
+    }
 
     /// Add a rendered pose to the cache
     /// - Parameters:
@@ -203,13 +254,9 @@ public class SpriteCacheSystem {
             characterID: characterID
         )
 
-        // Check if we need to evict
-        while shouldEvict(additionalBytes: pose.memoryBytes) {
-            evictLRU()
+        return locked {
+            storePoseLocked(pose)
         }
-
-        cache[poseHash] = pose
-        return true
     }
 
     // MARK: - Rendering to Cache
@@ -221,13 +268,31 @@ public class SpriteCacheSystem {
     ///   - resolution: Texture resolution (nil = use default)
     ///   - renderBlock: Closure that performs the actual rendering
     /// - Returns: Cached pose or nil on failure
+    @discardableResult
     public func renderToCache(
         characterID: String,
         poseHash: UInt64,
         resolution: CGSize? = nil,
+        commandBuffer externalCommandBuffer: MTLCommandBuffer? = nil,
+        waitUntilCompleted: Bool = false,
+        completion: ((CachedPose?) -> Void)? = nil,
         renderBlock: (MTLRenderCommandEncoder, MTLTexture) -> Void
     ) -> CachedPose? {
         let targetResolution = resolution ?? defaultResolution
+
+        var insertedPending = false
+        let alreadyPending = locked {
+            if pendingRenders.contains(poseHash) {
+                return true
+            }
+            pendingRenders.insert(poseHash)
+            insertedPending = true
+            return false
+        }
+
+        if alreadyPending {
+            return nil
+        }
 
         // Create texture descriptor for sprite
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -241,6 +306,9 @@ public class SpriteCacheSystem {
 
         guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
             vrmLog("[SpriteCacheSystem] Failed to create texture")
+            if insertedPending {
+                cancelPendingRender(for: poseHash)
+            }
             return nil
         }
 
@@ -263,6 +331,9 @@ public class SpriteCacheSystem {
 
         guard let depthTexture = device.makeTexture(descriptor: depthDescriptor) else {
             vrmLog("[SpriteCacheSystem] Failed to create depth texture")
+            if insertedPending {
+                cancelPendingRender(for: poseHash)
+            }
             return nil
         }
 
@@ -271,10 +342,19 @@ public class SpriteCacheSystem {
         renderPassDescriptor.depthAttachment.clearDepth = 1.0
         renderPassDescriptor.depthAttachment.storeAction = .dontCare
 
-        // Render to texture
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-            vrmLog("[SpriteCacheSystem] Failed to create command buffer/encoder")
+        guard let commandBuffer = externalCommandBuffer ?? commandQueue.makeCommandBuffer() else {
+            vrmLog("[SpriteCacheSystem] Failed to create command buffer")
+            if insertedPending {
+                cancelPendingRender(for: poseHash)
+            }
+            return nil
+        }
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+            vrmLog("[SpriteCacheSystem] Failed to create render encoder")
+            if insertedPending {
+                cancelPendingRender(for: poseHash)
+            }
             return nil
         }
 
@@ -284,15 +364,35 @@ public class SpriteCacheSystem {
         renderBlock(encoder, texture)
 
         encoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
 
-        // Cache the result
-        if cachePose(texture: texture, poseHash: poseHash, characterID: characterID) {
-            return cache[poseHash]
+        let pending = PendingPose(texture: texture, poseHash: poseHash, characterID: characterID, resolution: targetResolution)
+        let shouldSynchronize = waitUntilCompleted && externalCommandBuffer == nil
+
+        if waitUntilCompleted && externalCommandBuffer != nil {
+            vrmLog("[SpriteCacheSystem] waitUntilCompleted ignored when external command buffer is supplied.")
         }
 
-        return nil
+        if shouldSynchronize {
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            let cached = finalizePendingPose(pending)
+            completion?(cached)
+            return cached
+        } else {
+            commandBuffer.addCompletedHandler { [weak self] _ in
+                guard let self = self else { return }
+                let cached = self.finalizePendingPose(pending)
+                if let completion = completion {
+                    self.callbackQueue.async {
+                        completion(cached)
+                    }
+                }
+            }
+            if externalCommandBuffer == nil {
+                commandBuffer.commit()
+            }
+            return nil
+        }
     }
 
     /// Get cached pose or render and cache if missing
@@ -300,12 +400,18 @@ public class SpriteCacheSystem {
     ///   - characterID: Character identifier
     ///   - poseHash: Pose hash
     ///   - resolution: Target resolution
+    ///   - commandBuffer: Optional command buffer to encode into (nil = system creates one)
+    ///   - waitForCompletion: If true and the system creates the command buffer, block until the sprite is ready
+    ///   - completion: Invoked when the sprite finishes rendering (async path)
     ///   - renderBlock: Rendering closure (called only on cache miss)
     /// - Returns: Cached pose (existing or newly rendered)
     public func getOrRender(
         characterID: String,
         poseHash: UInt64,
         resolution: CGSize? = nil,
+        commandBuffer: MTLCommandBuffer? = nil,
+        waitForCompletion: Bool = false,
+        completion: ((CachedPose?) -> Void)? = nil,
         renderBlock: (MTLRenderCommandEncoder, MTLTexture) -> Void
     ) -> CachedPose? {
         // Check cache first
@@ -318,6 +424,9 @@ public class SpriteCacheSystem {
             characterID: characterID,
             poseHash: poseHash,
             resolution: resolution,
+            commandBuffer: commandBuffer,
+            waitUntilCompleted: waitForCompletion,
+            completion: completion,
             renderBlock: renderBlock
         )
     }
@@ -325,7 +434,7 @@ public class SpriteCacheSystem {
     // MARK: - Cache Management
 
     /// Check if we should evict entries to make room
-    private func shouldEvict(additionalBytes: Int) -> Bool {
+    private func shouldEvictLocked(additionalBytes: Int) -> Bool {
         let currentMemory = cache.values.reduce(0) { $0 + $1.memoryBytes }
 
         // Evict if over memory limit or cache size limit
@@ -333,7 +442,7 @@ public class SpriteCacheSystem {
     }
 
     /// Evict least recently used entry
-    private func evictLRU() {
+    private func evictLRULocked() {
         guard let lruEntry = cache.values.min(by: { $0.timestamp < $1.timestamp }) else {
             return
         }
@@ -344,44 +453,56 @@ public class SpriteCacheSystem {
 
     /// Clear entire cache
     public func clearCache() {
-        cache.removeAll()
-        cacheHits = 0
-        cacheMisses = 0
+        locked {
+            cache.removeAll()
+            pendingRenders.removeAll()
+            cacheHits = 0
+            cacheMisses = 0
+        }
         vrmLog("[SpriteCacheSystem] Cache cleared")
     }
 
     /// Clear cache entries for a specific character
     public func clearCharacter(_ characterID: String) {
-        let removed = cache.filter { $0.value.characterID == characterID }
-        for (hash, _) in removed {
-            cache.removeValue(forKey: hash)
+        let removedCount = locked {
+            let removed = cache.filter { $0.value.characterID == characterID }
+            for (hash, _) in removed {
+                cache.removeValue(forKey: hash)
+                pendingRenders.remove(hash)
+            }
+            return removed.count
         }
-        vrmLog("[SpriteCacheSystem] Cleared \(removed.count) entries for character '\(characterID)'")
+        vrmLog("[SpriteCacheSystem] Cleared \(removedCount) entries for character '\(characterID)'")
     }
 
     // MARK: - Statistics
 
     /// Get cache statistics
     public func getStatistics() -> CacheStatistics {
-        let totalMemory = cache.values.reduce(0) { $0 + $1.memoryBytes }
-        let hitRate = cacheHits + cacheMisses > 0
-            ? Float(cacheHits) / Float(cacheHits + cacheMisses)
-            : 0.0
+        return locked {
+            let totalMemory = cache.values.reduce(0) { $0 + $1.memoryBytes }
+            let hitRate = cacheHits + cacheMisses > 0
+                ? Float(cacheHits) / Float(cacheHits + cacheMisses)
+                : 0.0
 
-        return CacheStatistics(
-            entryCount: cache.count,
-            totalMemoryBytes: totalMemory,
-            maxMemoryBytes: maxMemoryBytes,
-            cacheHits: cacheHits,
-            cacheMisses: cacheMisses,
-            hitRate: hitRate
-        )
+            return CacheStatistics(
+                entryCount: cache.count,
+                totalMemoryBytes: totalMemory,
+                maxMemoryBytes: maxMemoryBytes,
+                cacheHits: cacheHits,
+                cacheMisses: cacheMisses,
+                hitRate: hitRate,
+                pendingRenders: pendingRenders.count
+            )
+        }
     }
 
     /// Reset statistics counters
     public func resetStatistics() {
-        cacheHits = 0
-        cacheMisses = 0
+        locked {
+            cacheHits = 0
+            cacheMisses = 0
+        }
     }
 
     /// Cache statistics snapshot
@@ -392,6 +513,7 @@ public class SpriteCacheSystem {
         public let cacheHits: Int
         public let cacheMisses: Int
         public let hitRate: Float
+        public let pendingRenders: Int
 
         public var memoryUsagePercent: Float {
             return Float(totalMemoryBytes) / Float(maxMemoryBytes) * 100
