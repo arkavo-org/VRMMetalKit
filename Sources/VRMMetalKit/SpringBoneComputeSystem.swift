@@ -20,7 +20,7 @@ import Metal
 import QuartzCore  // For CACurrentMediaTime
 import simd
 
-final class SpringBoneComputeSystem {
+final class SpringBoneComputeSystem: @unchecked Sendable {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
 

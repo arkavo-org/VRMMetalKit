@@ -17,7 +17,7 @@
 
 import Metal
 
-public final class SpringBoneBuffers {
+public final class SpringBoneBuffers: @unchecked Sendable {
     let device: MTLDevice
 
     // SoA buffers for SpringBone data
