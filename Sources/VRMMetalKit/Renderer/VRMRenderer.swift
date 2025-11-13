@@ -75,7 +75,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // Pipeline states for different alpha modes (skinned)
     var skinnedOpaquePipelineState: MTLRenderPipelineState?  // OPAQUE/MASK (no blending)
     var skinnedBlendPipelineState: MTLRenderPipelineState?   // BLEND (blending enabled)
-    var depthState: MTLDepthStencilState?
 
     // Strict Mode
     public var config = RendererConfig(strict: .off)
@@ -907,7 +906,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // We'll set the pipeline per-mesh based on whether it has a skin
-        encoder.setDepthStencilState(depthState)
+        encoder.setDepthStencilState(depthStencilStates["opaque"])
 
         // Enable back-face culling for proper rendering
         encoder.setCullMode(.back)
@@ -2116,7 +2115,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 switch faceCategory {
                 case "skin":
                     // OPAQUE PSO, depthWrite=ON, cull=back
-                    encoder.setDepthStencilState(depthState)
+                    encoder.setDepthStencilState(depthStencilStates["opaque"])
                     encoder.setCullMode(.back)
                     encoder.setFrontFacing(.counterClockwise)
                     encoder.setDepthBias(-0.0001, slopeScale: -1.0, clamp: -0.01)
@@ -2126,7 +2125,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 case "eyebrow", "eyeline":
                     // OPAQUE PSO with alphaCutoff, depthWrite=ON, cull=none
-                    encoder.setDepthStencilState(depthState)
+                    encoder.setDepthStencilState(depthStencilStates["mask"])
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
                     encoder.setDepthBias(-0.0002, slopeScale: -1.0, clamp: -0.01)
@@ -2140,7 +2139,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let faceState = depthStencilStates["face"] {
                         encoder.setDepthStencilState(faceState)
                     } else {
-                        encoder.setDepthStencilState(depthState)
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
@@ -2153,7 +2152,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let blendDepthState = depthStencilStates["blend"] {
                         encoder.setDepthStencilState(blendDepthState)
                     } else {
-                        encoder.setDepthStencilState(depthState)
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
@@ -2164,7 +2163,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 default:
                     // Unknown face category - fallback to opaque
-                    encoder.setDepthStencilState(depthState)
+                    encoder.setDepthStencilState(depthStencilStates["opaque"])
                     encoder.setCullMode(.back)
                     encoder.setFrontFacing(.counterClockwise)
                 }
@@ -2172,13 +2171,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 // NON-FACE rendering: use standard alpha mode logic
                 switch materialAlphaMode {
                 case "opaque":
-                    encoder.setDepthStencilState(depthState)
+                    encoder.setDepthStencilState(depthStencilStates["opaque"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
 
                 case "mask":
-                    encoder.setDepthStencilState(depthState)
+                    encoder.setDepthStencilState(depthStencilStates["mask"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
@@ -2187,12 +2186,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let blendDepthState = depthStencilStates["blend"] {
                         encoder.setDepthStencilState(blendDepthState)
                     } else {
-                        encoder.setDepthStencilState(depthState)
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
                     }
                     encoder.setCullMode(.none)
 
                 default:
-                    encoder.setDepthStencilState(depthState)
+                    encoder.setDepthStencilState(depthStencilStates["opaque"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                 }
