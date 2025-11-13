@@ -42,7 +42,12 @@ let package = Package(
                 "Shaders/SpringBoneDistance.metal",
                 "Shaders/SpringBoneCollision.metal",
                 "Shaders/SpringBoneKinematic.metal",
-                "Shaders/DebugShaders.metal"
+                "Shaders/DebugShaders.metal",
+                "Shaders/MToonShader.metal",
+                "Shaders/SkinnedShader.metal",
+                "Shaders/Toon2DShader.metal",
+                "Shaders/Toon2DSkinnedShader.metal",
+                "Shaders/SpriteShader.metal"
             ],
             resources: [
                 .process("Resources")
