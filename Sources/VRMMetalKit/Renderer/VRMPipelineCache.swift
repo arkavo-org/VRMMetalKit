@@ -185,11 +185,11 @@ extension NSLock {
 
 // MARK: - Error Types
 
-enum PipelineCacheError: Error, LocalizedError {
+public enum PipelineCacheError: Error, LocalizedError {
     case shaderLibraryNotFound
     case shaderLibraryLoadFailed(Error)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .shaderLibraryNotFound:
             return "VRMMetalKitShaders.metallib not found in package resources"
