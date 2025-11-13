@@ -405,9 +405,29 @@ public struct SkeletonSmoothingConfig: Sendable {
 /// Handles smoothing of position, rotation (quaternion), and scale components separately.
 /// Rotation smoothing uses quaternion SLERP for proper angular interpolation.
 public final class SkeletonFilterManager {
-    private var positionFilters: [String: any SmoothingFilterProtocol] = [:]
+    private struct Vec3FilterState {
+        var x: any SmoothingFilterProtocol
+        var y: any SmoothingFilterProtocol
+        var z: any SmoothingFilterProtocol
+
+        mutating func update(_ value: SIMD3<Float>) -> SIMD3<Float> {
+            return SIMD3<Float>(
+                x.update(value.x),
+                y.update(value.y),
+                z.update(value.z)
+            )
+        }
+
+        mutating func reset() {
+            x.reset()
+            y.reset()
+            z.reset()
+        }
+    }
+
+    private var positionFilters: [String: Vec3FilterState] = [:]
     private var rotationFilters: [String: any SmoothingFilterProtocol] = [:]
-    private var scaleFilters: [String: any SmoothingFilterProtocol] = [:]
+    private var scaleFilters: [String: Vec3FilterState] = [:]
 
     // Store previous quaternions for SLERP interpolation
     private var previousRotations: [String: simd_quatf] = [:]
@@ -421,14 +441,21 @@ public final class SkeletonFilterManager {
     /// Smooth a 3D position vector
     public func updatePosition(joint: String, position: SIMD3<Float>) -> SIMD3<Float> {
         if positionFilters[joint] == nil {
-            positionFilters[joint] = config.positionFilter.makeFilter()
+            let filterType = config.positionFilter
+            positionFilters[joint] = Vec3FilterState(
+                x: filterType.makeFilter(),
+                y: filterType.makeFilter(),
+                z: filterType.makeFilter()
+            )
         }
 
-        return SIMD3<Float>(
-            positionFilters[joint]!.update(position.x),
-            positionFilters[joint]!.update(position.y),
-            positionFilters[joint]!.update(position.z)
-        )
+        guard var state = positionFilters[joint] else {
+            return position
+        }
+
+        let filtered = state.update(position)
+        positionFilters[joint] = state
+        return filtered
     }
 
     /// Smooth a quaternion rotation using SLERP interpolation
@@ -450,7 +477,10 @@ public final class SkeletonFilterManager {
     public func updateRotation(joint: String, rotation: simd_quatf) -> simd_quatf {
         // Initialize filter on first use
         if rotationFilters[joint] == nil {
-            rotationFilters[joint] = config.rotationFilter.makeFilter()
+            var filter = config.rotationFilter.makeFilter()
+            // Prime blend factor at 0 so the first smoothed update lerps partway to the target
+            _ = filter.update(0.0)
+            rotationFilters[joint] = filter
         }
 
         // Get previous rotation (or use current if first frame)
@@ -471,8 +501,9 @@ public final class SkeletonFilterManager {
         // Filter outputs value in [0, 1] where:
         // - 0 = use previous rotation (maximum smoothing)
         // - 1 = use new rotation (no smoothing)
-        // We filter the value 1.0 to get the smoothed interpolation parameter
-        let t = rotationFilters[joint]!.update(1.0)
+        var filter = rotationFilters[joint]!
+        let t = filter.update(1.0)
+        rotationFilters[joint] = filter
 
         // SLERP between previous and new rotation
         let smoothed = simd_slerp(previous, adjustedRotation, t)
@@ -485,23 +516,17 @@ public final class SkeletonFilterManager {
 
     /// Reset all filters for a specific joint
     public func reset(joint: String) {
-        positionFilters[joint]?.reset()
-        rotationFilters[joint]?.reset()
-        scaleFilters[joint]?.reset()
+        positionFilters.removeValue(forKey: joint)
+        rotationFilters.removeValue(forKey: joint)
+        scaleFilters.removeValue(forKey: joint)
         previousRotations.removeValue(forKey: joint)
     }
 
     /// Reset all filters
     public func resetAll() {
-        for key in positionFilters.keys {
-            positionFilters[key]?.reset()
-        }
-        for key in rotationFilters.keys {
-            rotationFilters[key]?.reset()
-        }
-        for key in scaleFilters.keys {
-            scaleFilters[key]?.reset()
-        }
+        positionFilters.removeAll()
+        rotationFilters.removeAll()
+        scaleFilters.removeAll()
         previousRotations.removeAll()
     }
 }

@@ -25,7 +25,7 @@ final class SmoothingFiltersTests: XCTestCase {
 
     func testEMAFilterBasicSmoothing() {
         let config = SmoothingConfig(global: .ema(alpha: 0.3))
-        var filter = config.filter(for: "test")
+        let filter = config.filter(for: "test")
         var impl = filter.makeFilter()
 
         // First value should pass through
@@ -325,7 +325,7 @@ final class SmoothingFiltersTests: XCTestCase {
 
     func testPerExpressionOverride() {
         var config = SmoothingConfig.default
-        config.perExpression["blink"] = .none
+        config.perExpression["blink"] = SmoothingFilter.none
 
         let blinkFilter = config.filter(for: "blink")
         let otherFilter = config.filter(for: "happy")

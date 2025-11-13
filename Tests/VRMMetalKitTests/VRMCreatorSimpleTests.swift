@@ -80,7 +80,7 @@ final class VRMCreatorSimpleTests: XCTestCase {
         let recipe = try CharacterRecipe.from(json: recipeJSON)
         XCTAssertThrowsError(try recipe.validate()) { error in
             XCTAssertTrue(error is RecipeError)
-            if case RecipeError.morphOutOfRange(let name, let value, let range) = error {
+            if case RecipeError.morphOutOfRange(let name, let value, _) = error {
                 XCTAssertEqual(name, "height")
                 XCTAssertEqual(value, 5.0)
             } else {
