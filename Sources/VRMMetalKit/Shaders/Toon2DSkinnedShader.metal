@@ -71,7 +71,7 @@ struct VertexOut {
 
 // MARK: - Toon Shading Utilities (shared with non-skinned)
 
-float quantizeLighting(float nDotL, int bands) {
+static inline float quantizeLighting(float nDotL, int bands) {
  if (bands <= 0) {
  return nDotL;
  }
@@ -83,7 +83,7 @@ float quantizeLighting(float nDotL, int bands) {
  return quantized;
 }
 
-float3 applyCelShading(
+static inline float3 applyCelShading(
  float3 baseColor,
  float3 shadeColor,
  float nDotL,
@@ -97,7 +97,7 @@ float3 applyCelShading(
  return mix(baseColor, shadeColor, shadeMix);
 }
 
-float3 applyQuantizedRim(
+static inline float3 applyQuantizedRim(
  float3 color,
  float3 rimColor,
  float3 normal,

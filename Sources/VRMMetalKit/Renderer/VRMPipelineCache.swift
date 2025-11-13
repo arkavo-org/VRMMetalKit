@@ -17,6 +17,7 @@
 
 import Foundation
 import Metal
+import QuartzCore
 
 /// Global pipeline state cache to avoid recompiling shaders and recreating pipeline states
 /// Shared across all VRMRenderer instances for optimal performance
@@ -79,10 +80,10 @@ public final class VRMPipelineCache: @unchecked Sendable {
             }
             
             // Load from packaged metallib (production)
-            guard let url = Bundle.module.url(forResource: "VRMMetalKitShaders", 
+            guard let url = Bundle.module.url(forResource: "VRMMetalKitShaders",
                                              withExtension: "metallib") else {
                 vrmLog("[VRMPipelineCache] ❌ VRMMetalKitShaders.metallib not found in package resources")
-                throw VRMError.shaderLibraryNotFound
+                throw PipelineCacheError.shaderLibraryNotFound
             }
             
             do {
@@ -92,7 +93,7 @@ public final class VRMPipelineCache: @unchecked Sendable {
                 return library
             } catch {
                 vrmLog("[VRMPipelineCache] ❌ Failed to load metallib: \(error)")
-                throw VRMError.shaderLibraryLoadFailed(error)
+                throw PipelineCacheError.shaderLibraryLoadFailed(error)
             }
         }
     }
@@ -182,16 +183,18 @@ extension NSLock {
     }
 }
 
-// MARK: - Error Extensions
+// MARK: - Error Types
 
-extension VRMError {
-    static let shaderLibraryNotFound = VRMError.loadingFailed(
-        reason: "VRMMetalKitShaders.metallib not found in package resources"
-    )
-    
-    static func shaderLibraryLoadFailed(_ error: Error) -> VRMError {
-        return VRMError.loadingFailed(
-            reason: "Failed to load VRMMetalKitShaders.metallib: \(error.localizedDescription)"
-        )
+enum PipelineCacheError: Error, LocalizedError {
+    case shaderLibraryNotFound
+    case shaderLibraryLoadFailed(Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .shaderLibraryNotFound:
+            return "VRMMetalKitShaders.metallib not found in package resources"
+        case .shaderLibraryLoadFailed(let error):
+            return "Failed to load VRMMetalKitShaders.metallib: \(error.localizedDescription)"
+        }
     }
 }

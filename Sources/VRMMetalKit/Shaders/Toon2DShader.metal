@@ -70,7 +70,7 @@ struct VertexOut {
 // MARK: - Toon Shading Utilities
 
 /// Quantize lighting to discrete bands
-float quantizeLighting(float nDotL, int bands) {
+static inline float quantizeLighting(float nDotL, int bands) {
  if (bands <= 0) {
  return nDotL;  // No quantization
  }
@@ -86,7 +86,7 @@ float quantizeLighting(float nDotL, int bands) {
 }
 
 /// Apply cel-shaded lighting
-float3 applyCelShading(
+static inline float3 applyCelShading(
  float3 baseColor,
  float3 shadeColor,
  float nDotL,
@@ -105,7 +105,7 @@ float3 applyCelShading(
 }
 
 /// Quantized rim lighting (stepped Fresnel)
-float3 applyQuantizedRim(
+static inline float3 applyQuantizedRim(
  float3 color,
  float3 rimColor,
  float3 normal,

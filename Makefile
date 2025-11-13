@@ -13,8 +13,11 @@ help:
 shaders:
 	@echo "🔨 Compiling Metal shaders..."
 	@mkdir -p /tmp/vrm-shaders
-	@xcrun metal -c Sources/VRMMetalKit/Shaders/*.metal -o /tmp/vrm-shaders/shaders.air
-	@xcrun metallib /tmp/vrm-shaders/shaders.air -o Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
+	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
+		echo "  Compiling $$file..."; \
+		xcrun metal -c $$file -o /tmp/vrm-shaders/$$(basename $$file .metal).air; \
+	done
+	@xcrun metallib /tmp/vrm-shaders/*.air -o Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
 	@echo "✅ Shaders compiled successfully"
 	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib"
 	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib

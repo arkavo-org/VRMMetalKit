@@ -97,7 +97,7 @@ struct VertexOut {
 };
 
 // UV Animation utility function (rotation first, then scroll)
-float2 animateUV(float2 uv, constant MToonMaterial& material) {
+static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
  float2 result = uv;
 
  // UV rotation animation around center (0.5, 0.5) - FIRST

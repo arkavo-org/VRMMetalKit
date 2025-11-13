@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-VRMMetalKit is a high-performance Swift Package for loading and rendering VRM 1.0 avatars using Apple's Metal framework. Supports macOS 14+ and iOS 17+, built with Swift 6.2.
+VRMMetalKit is a high-performance Swift Package for loading and rendering VRM 1.0 avatars using Apple's Metal framework. Supports macOS 26+ and iOS 26+, built with Swift 6.2.
 
 ## Build & Test Commands
 
@@ -507,28 +507,43 @@ final class MyTests: XCTestCase {
 Metal shaders are excluded from SPM compilation (see `Package.swift` exclude list) and must be pre-compiled to `.metallib`:
 
 ```bash
-# Compile individual shader
-xcrun -sdk macosx metal -c SpringBonePredict.metal -o SpringBonePredict.air
+# Compile all shaders at once (recommended)
+make shaders
 
-# Link to metallib
-xcrun -sdk macosx metallib SpringBone*.air -o VRMMetalKitShaders.metallib
+# Clean temporary build files
+make clean
+
+# List functions in compiled metallib
+make list-functions
 ```
 
-The compiled `.metallib` goes in `Sources/VRMMetalKit/Resources/`.
+The Makefile compiles all `.metal` files in `Sources/VRMMetalKit/Shaders/` into `VRMMetalKitShaders.metallib` in `Sources/VRMMetalKit/Resources/`.
 
-### Shader Loading Pattern
+**Current shaders:**
+- **Rendering:** MToonShader.metal, SkinnedShader.metal, Toon2DShader.metal, Toon2DSkinnedShader.metal, SpriteShader.metal
+- **Compute:** MorphTargetCompute.metal, MorphAccumulate.metal
+- **Physics:** SpringBonePredict.metal, SpringBoneDistance.metal, SpringBoneCollision.metal, SpringBoneKinematic.metal
+- **Debug:** DebugShaders.metal
+
+### Pipeline Caching
+VRMRenderer uses `VRMPipelineCache` to eliminate runtime shader compilation (50-100x faster):
+
 ```swift
-// 1. Try default library (if shaders compiled into app)
-var library = device.makeDefaultLibrary()
+// Load precompiled shader library (cached globally)
+let library = try VRMPipelineCache.shared.getLibrary(device: device)
 
-// 2. Fallback to package .metallib
-if library == nil {
-    let url = Bundle.module.url(forResource: "VRMMetalKitShaders", withExtension: "metallib")!
-    library = try device.makeLibrary(URL: url)
-}
-
-let function = library.makeFunction(name: "mtoon_vertex")!
+// Create cached pipeline state
+let pipelineState = try VRMPipelineCache.shared.getPipelineState(
+    device: device,
+    descriptor: pipelineDescriptor,
+    key: "mtoon_opaque"  // Unique cache key
+)
 ```
+
+**Performance:**
+- First renderer: ~1-2ms (load metallib once)
+- Subsequent renderers: ~0.1ms (cache hit)
+- No runtime shader compilation in production
 
 ## Character Builder System
 
