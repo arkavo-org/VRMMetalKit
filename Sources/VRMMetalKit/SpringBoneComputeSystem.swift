@@ -480,7 +480,7 @@ final class SpringBoneComputeSystem {
 
         latestPositionsSnapshot.withUnsafeMutableBufferPointer { destination in
             guard let dst = destination.baseAddress else { return }
-            dst.assign(from: sourcePointer, count: buffers.numBones)
+            dst.update(from: sourcePointer, count: buffers.numBones)
         }
         latestCompletedFrame = frameID
         snapshotLock.unlock()
