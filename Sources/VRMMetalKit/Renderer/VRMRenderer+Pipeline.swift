@@ -292,9 +292,8 @@ extension VRMRenderer {
                 throw StrictModeError.missingVertexFunction(name: "skinned_mtoon_vertex")
             }
 
-            // Use MToon fragment shader for proper rendering (load from cached library)
-            let mtoonLibrary = try VRMPipelineCache.shared.getLibrary(device: device)
-            let fragmentFunction = mtoonLibrary.makeFunction(name: "mtoon_fragment_v2")
+            // Use MToon fragment shader for proper rendering (reuse library from above)
+            let fragmentFunction = library.makeFunction(name: "mtoon_fragment_v2")
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
             guard let fragmentFunc = fragmentFunction else {
                 if config.strict == .off {
@@ -414,11 +413,10 @@ extension VRMRenderer {
     }
 
     func setupToon2DPipeline() {
-        print("[VRMRenderer] setupToon2DPipeline() called")
+        vrmLog("[VRMRenderer] setupToon2DPipeline() called")
         do {
             // Load precompiled shader library
             let library = try VRMPipelineCache.shared.getLibrary(device: device)
-            print("[VRMRenderer] Successfully loaded Toon2D shaders from metallib")
             vrmLog("[VRMRenderer] Successfully loaded Toon2D shaders from metallib")
 
             // Validate vertex function
@@ -538,8 +536,7 @@ extension VRMRenderer {
             vrmLog("[VRMRenderer] Created toon2D outline pipeline successfully")
 
         } catch {
-            print("[TOON2D ERROR] Failed to setup Toon2D pipeline: \(error)")
-            vrmLog("[VRMRenderer] Failed to setup Toon2D pipeline: \(error)")
+            vrmLog("[VRMRenderer] ❌ Failed to setup Toon2D pipeline: \(error)")
             if config.strict == .fail {
                 fatalError("Failed to setup Toon2D pipeline: \(error)")
             }
@@ -681,8 +678,7 @@ extension VRMRenderer {
             vrmLog("[VRMRenderer] Created toon2D skinned outline pipeline successfully")
 
         } catch {
-            print("[TOON2D ERROR] Failed to setup Toon2D skinned pipeline: \(error)")
-            vrmLog("[VRMRenderer] Failed to setup Toon2D skinned pipeline: \(error)")
+            vrmLog("[VRMRenderer] ❌ Failed to setup Toon2D skinned pipeline: \(error)")
             if config.strict == .fail {
                 fatalError("Failed to setup Toon2D skinned pipeline: \(error)")
             }
