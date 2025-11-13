@@ -53,6 +53,16 @@ public enum VRMConstants {
         public static let substepRateHz: Double = 120.0
 
         /// Maximum number of substeps to process per frame to avoid spiral of death
+        ///
+        /// **Rationale for value of 10:**
+        /// - At 120Hz substep rate: 10 substeps = 83ms worst-case processing time
+        /// - Allows frame spikes up to 83ms before dropping physics steps (handles 2-3 dropped frames at 60 FPS)
+        /// - Higher values risk CPU starvation and runaway accumulation in low-FPS scenarios
+        /// - Lower values reduce simulation accuracy during transient lag spikes
+        /// - Value of 10 balances stability (tolerates lag) with real-time performance (prevents infinite loop)
+        ///
+        /// Without this limit, a 1-second frame spike would attempt 120 substeps, causing further lag
+        /// and spiraling into unrecoverable performance degradation ("spiral of death").
         public static let maxSubstepsPerFrame: Int = 10
 
         /// Default gravity vector in world space (m/s²)

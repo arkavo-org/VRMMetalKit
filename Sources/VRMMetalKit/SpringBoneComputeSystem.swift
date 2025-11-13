@@ -262,8 +262,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         simulationFrameCounter &+= 1
         let frameID = simulationFrameCounter
 
-        commandBuffer.addCompletedHandler { [weak self, weak buffers = buffers] _ in
+        commandBuffer.addCompletedHandler { [weak self, weak buffers = buffers] buffer in
             guard let self = self, let buffers = buffers else { return }
+
+            // Check for GPU errors before reading back data
+            if buffer.status == .error {
+                if let error = buffer.error {
+                    vrmLogPhysics("[SpringBone] GPU command buffer failed: \(error.localizedDescription)")
+                }
+                return
+            }
+
             self.captureCompletedPositions(from: buffers, frameID: frameID)
         }
 

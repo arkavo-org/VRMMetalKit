@@ -366,17 +366,13 @@ public class SpriteCacheSystem: @unchecked Sendable {
     ) -> CachedPose? {
         let targetResolution = resolution ?? defaultResolution
 
-        var insertedPending = false
-        let alreadyPending = locked {
-            if pendingRenders.contains(poseHash) {
-                return true
-            }
+        // Atomic check-and-set to prevent duplicate renders
+        let (inserted, _) = locked {
             pendingRenders.insert(poseHash)
-            insertedPending = true
-            return false
         }
 
-        if alreadyPending {
+        if !inserted {
+            // Already rendering this pose
             return nil
         }
 
@@ -392,9 +388,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
 
         guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
             vrmLog("[SpriteCacheSystem] Failed to create texture")
-            if insertedPending {
-                cancelPendingRender(for: poseHash)
-            }
+            cancelPendingRender(for: poseHash)
             return nil
         }
 
@@ -417,9 +411,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
 
         guard let depthTexture = device.makeTexture(descriptor: depthDescriptor) else {
             vrmLog("[SpriteCacheSystem] Failed to create depth texture")
-            if insertedPending {
-                cancelPendingRender(for: poseHash)
-            }
+            cancelPendingRender(for: poseHash)
             return nil
         }
 
@@ -430,17 +422,13 @@ public class SpriteCacheSystem: @unchecked Sendable {
 
         guard let commandBuffer = externalCommandBuffer ?? commandQueue.makeCommandBuffer() else {
             vrmLog("[SpriteCacheSystem] Failed to create command buffer")
-            if insertedPending {
-                cancelPendingRender(for: poseHash)
-            }
+            cancelPendingRender(for: poseHash)
             return nil
         }
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             vrmLog("[SpriteCacheSystem] Failed to create render encoder")
-            if insertedPending {
-                cancelPendingRender(for: poseHash)
-            }
+            cancelPendingRender(for: poseHash)
             return nil
         }
 
@@ -465,8 +453,24 @@ public class SpriteCacheSystem: @unchecked Sendable {
             completion?(cached)
             return cached
         } else {
-            commandBuffer.addCompletedHandler { [weak self] _ in
+            commandBuffer.addCompletedHandler { [weak self] buffer in
                 guard let self = self else { return }
+
+                // Check for GPU errors before finalizing
+                if buffer.status == .error {
+                    if let error = buffer.error {
+                        vrmLog("[SpriteCacheSystem] GPU command buffer failed: \(error.localizedDescription)")
+                    }
+                    // Clean up pending render on error
+                    self.cancelPendingRender(for: pending.poseHash)
+                    if let completion = completion {
+                        self.callbackQueue.async {
+                            completion(nil)
+                        }
+                    }
+                    return
+                }
+
                 let cached = self.finalizePendingPose(pending)
                 if let completion = completion {
                     self.callbackQueue.async {
