@@ -129,8 +129,8 @@ extension VRMRenderer {
         // Use MToon shader for proper VRM rendering
 
         do {
-            // Create library from MToon shader source
-            let library = try device.makeLibrary(source: MToonShader.shaderSource, options: nil)
+            // Load precompiled shader library (50-100x faster than runtime compilation)
+            let library = try VRMPipelineCache.shared.getLibrary(device: device)
 
             // Validate vertex function
             let vertexFunction = library.makeFunction(name: "mtoon_vertex")
@@ -195,7 +195,12 @@ extension VRMRenderer {
             opaqueColorAttachment?.pixelFormat = config.colorPixelFormat
             opaqueColorAttachment?.isBlendingEnabled = false
 
-            let opaqueState = try device.makeRenderPipelineState(descriptor: opaqueDescriptor)
+            // Use cached pipeline state for better performance
+            let opaqueState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: opaqueDescriptor,
+                key: "mtoon_opaque"
+            )
             try strictValidator?.validatePipelineState(opaqueState, name: "mtoon_opaque_pipeline")
             opaquePipelineState = opaqueState
 
@@ -212,7 +217,12 @@ extension VRMRenderer {
             blendColorAttachment?.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             blendColorAttachment?.alphaBlendOperation = .add
 
-            let blendState = try device.makeRenderPipelineState(descriptor: blendDescriptor)
+            // Use cached pipeline state for better performance
+            let blendState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: blendDescriptor,
+                key: "mtoon_blend"
+            )
             try strictValidator?.validatePipelineState(blendState, name: "mtoon_blend_pipeline")
             blendPipelineState = blendState
 
@@ -223,7 +233,12 @@ extension VRMRenderer {
             wireframeColorAttachment?.pixelFormat = config.colorPixelFormat
             wireframeColorAttachment?.isBlendingEnabled = false
 
-            let wireframeState = try device.makeRenderPipelineState(descriptor: wireframeDescriptor)
+            // Use cached pipeline state for better performance
+            let wireframeState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: wireframeDescriptor,
+                key: "mtoon_wireframe"
+            )
             try strictValidator?.validatePipelineState(wireframeState, name: "mtoon_wireframe_pipeline")
             wireframePipelineState = wireframeState
 
@@ -261,14 +276,9 @@ extension VRMRenderer {
         do {
             // For now, use the same MToon shader for skinned meshes
             // TODO: Create a proper skinned MToon vertex shader
-            let library: MTLLibrary
-            do {
-                library = try device.makeLibrary(source: MToonSkinnedShader.source, options: nil)
-                vrmLog("[VRMRenderer] Successfully compiled MToonSkinnedShader")
-            } catch {
-                vrmLog("[VRMRenderer] ❌ Failed to compile MToonSkinnedShader: \(error)")
-                throw error
-            }
+            // Load precompiled shader library (reuses cached library from setupPipeline)
+            let library = try VRMPipelineCache.shared.getLibrary(device: device)
+            vrmLog("[VRMRenderer] Successfully loaded precompiled shader library")
 
             // Validate skinned vertex function for MToon
             let skinnedVertexFunction = library.makeFunction(name: "skinned_mtoon_vertex")
@@ -282,9 +292,8 @@ extension VRMRenderer {
                 throw StrictModeError.missingVertexFunction(name: "skinned_mtoon_vertex")
             }
 
-            // Use MToon fragment shader for proper rendering
-            let mtoonLibrary = try device.makeLibrary(source: MToonShader.shaderSource, options: nil)
-            let fragmentFunction = mtoonLibrary.makeFunction(name: "mtoon_fragment_v2")
+            // Use MToon fragment shader for proper rendering (reuse library from above)
+            let fragmentFunction = library.makeFunction(name: "mtoon_fragment_v2")
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
             guard let fragmentFunc = fragmentFunction else {
                 if config.strict == .off {
@@ -343,7 +352,11 @@ extension VRMRenderer {
             skinnedOpaqueColorAttachment?.pixelFormat = config.colorPixelFormat
             skinnedOpaqueColorAttachment?.isBlendingEnabled = false
 
-            let skinnedOpaqueState = try device.makeRenderPipelineState(descriptor: skinnedOpaqueDescriptor)
+            let skinnedOpaqueState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: skinnedOpaqueDescriptor,
+                key: "mtoon_skinned_opaque"
+            )
             try strictValidator?.validatePipelineState(skinnedOpaqueState, name: "skinned_opaque_pipeline")
             skinnedOpaquePipelineState = skinnedOpaqueState
             vrmLog("[SKINNED PSO] Created skinned opaque pipeline successfully")
@@ -361,7 +374,11 @@ extension VRMRenderer {
             skinnedBlendColorAttachment?.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             skinnedBlendColorAttachment?.alphaBlendOperation = .add
 
-            let skinnedBlendState = try device.makeRenderPipelineState(descriptor: skinnedBlendDescriptor)
+            let skinnedBlendState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: skinnedBlendDescriptor,
+                key: "mtoon_skinned_blend"
+            )
             try strictValidator?.validatePipelineState(skinnedBlendState, name: "skinned_blend_pipeline")
             skinnedBlendPipelineState = skinnedBlendState
             vrmLog("[SKINNED PSO] Created skinned blend pipeline successfully")
@@ -396,12 +413,11 @@ extension VRMRenderer {
     }
 
     func setupToon2DPipeline() {
-        print("[VRMRenderer] setupToon2DPipeline() called")
+        vrmLog("[VRMRenderer] setupToon2DPipeline() called")
         do {
-            // Create library from Toon2D shader source
-            let library = try device.makeLibrary(source: Toon2DShader.shaderSource, options: nil)
-            print("[VRMRenderer] Successfully compiled Toon2DShader")
-            vrmLog("[VRMRenderer] Successfully compiled Toon2DShader")
+            // Load precompiled shader library
+            let library = try VRMPipelineCache.shared.getLibrary(device: device)
+            vrmLog("[VRMRenderer] Successfully loaded Toon2D shaders from metallib")
 
             // Validate vertex function
             let vertexFunction = library.makeFunction(name: "vertex_main")
@@ -470,7 +486,11 @@ extension VRMRenderer {
             toon2DOpaqueColorAttachment?.pixelFormat = config.colorPixelFormat
             toon2DOpaqueColorAttachment?.isBlendingEnabled = false
 
-            let toon2DOpaqueState = try device.makeRenderPipelineState(descriptor: toon2DOpaqueDescriptor)
+            let toon2DOpaqueState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: toon2DOpaqueDescriptor,
+                key: "toon2d_opaque"
+            )
             toon2DOpaquePipelineState = toon2DOpaqueState
             vrmLog("[VRMRenderer] Created toon2D opaque pipeline successfully")
 
@@ -487,7 +507,11 @@ extension VRMRenderer {
             toon2DBlendColorAttachment?.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             toon2DBlendColorAttachment?.alphaBlendOperation = .add
 
-            let toon2DBlendState = try device.makeRenderPipelineState(descriptor: toon2DBlendDescriptor)
+            let toon2DBlendState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: toon2DBlendDescriptor,
+                key: "toon2d_blend"
+            )
             toon2DBlendPipelineState = toon2DBlendState
             vrmLog("[VRMRenderer] Created toon2D blend pipeline successfully")
 
@@ -503,13 +527,16 @@ extension VRMRenderer {
             outlineColorAttachment?.pixelFormat = config.colorPixelFormat
             outlineColorAttachment?.isBlendingEnabled = false  // Outlines are opaque
 
-            let outlineState = try device.makeRenderPipelineState(descriptor: outlinePipelineDescriptor)
+            let outlineState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: outlinePipelineDescriptor,
+                key: "toon2d_outline"
+            )
             toon2DOutlinePipelineState = outlineState
             vrmLog("[VRMRenderer] Created toon2D outline pipeline successfully")
 
         } catch {
-            print("[TOON2D ERROR] Failed to setup Toon2D pipeline: \(error)")
-            vrmLog("[VRMRenderer] Failed to setup Toon2D pipeline: \(error)")
+            vrmLog("[VRMRenderer] ❌ Failed to setup Toon2D pipeline: \(error)")
             if config.strict == .fail {
                 fatalError("Failed to setup Toon2D pipeline: \(error)")
             }
@@ -521,8 +548,8 @@ extension VRMRenderer {
     func setupToon2DSkinnedPipeline() {
         do {
             // Create library from Toon2D skinned shader source
-            let library = try device.makeLibrary(source: Toon2DSkinnedShader.shaderSource, options: nil)
-            vrmLog("[VRMRenderer] Successfully compiled Toon2DSkinnedShader")
+            let library = try VRMPipelineCache.shared.getLibrary(device: device)
+            vrmLog("[VRMRenderer] Successfully loaded Toon2DSkinnedShader from metallib")
 
             // Validate skinned vertex function
             let skinnedVertexFunction = library.makeFunction(name: "skinned_toon2d_vertex")
@@ -601,7 +628,11 @@ extension VRMRenderer {
             toon2DSkinnedOpaqueColorAttachment?.pixelFormat = config.colorPixelFormat
             toon2DSkinnedOpaqueColorAttachment?.isBlendingEnabled = false
 
-            let toon2DSkinnedOpaqueState = try device.makeRenderPipelineState(descriptor: toon2DSkinnedOpaqueDescriptor)
+            let toon2DSkinnedOpaqueState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: toon2DSkinnedOpaqueDescriptor,
+                key: "toon2d_skinned_opaque"
+            )
             toon2DSkinnedOpaquePipelineState = toon2DSkinnedOpaqueState
             vrmLog("[VRMRenderer] Created toon2D skinned opaque pipeline successfully")
 
@@ -618,7 +649,11 @@ extension VRMRenderer {
             toon2DSkinnedBlendColorAttachment?.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             toon2DSkinnedBlendColorAttachment?.alphaBlendOperation = .add
 
-            let toon2DSkinnedBlendState = try device.makeRenderPipelineState(descriptor: toon2DSkinnedBlendDescriptor)
+            let toon2DSkinnedBlendState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: toon2DSkinnedBlendDescriptor,
+                key: "toon2d_skinned_blend"
+            )
             toon2DSkinnedBlendPipelineState = toon2DSkinnedBlendState
             vrmLog("[VRMRenderer] Created toon2D skinned blend pipeline successfully")
 
@@ -634,13 +669,16 @@ extension VRMRenderer {
             outlineColorAttachment?.pixelFormat = config.colorPixelFormat
             outlineColorAttachment?.isBlendingEnabled = false
 
-            let outlineState = try device.makeRenderPipelineState(descriptor: outlinePipelineDescriptor)
+            let outlineState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: outlinePipelineDescriptor,
+                key: "toon2d_skinned_outline"
+            )
             toon2DSkinnedOutlinePipelineState = outlineState
             vrmLog("[VRMRenderer] Created toon2D skinned outline pipeline successfully")
 
         } catch {
-            print("[TOON2D ERROR] Failed to setup Toon2D skinned pipeline: \(error)")
-            vrmLog("[VRMRenderer] Failed to setup Toon2D skinned pipeline: \(error)")
+            vrmLog("[VRMRenderer] ❌ Failed to setup Toon2D skinned pipeline: \(error)")
             if config.strict == .fail {
                 fatalError("Failed to setup Toon2D skinned pipeline: \(error)")
             }
@@ -652,7 +690,7 @@ extension VRMRenderer {
     func setupSpritePipeline() {
         do {
             // Create shader library
-            let library = try device.makeLibrary(source: SpriteShader.shaderSource, options: nil)
+            let library = try VRMPipelineCache.shared.getLibrary(device: device)
 
             guard let vertexFunction = library.makeFunction(name: "sprite_vertex"),
                   let fragmentFunction = library.makeFunction(name: "sprite_fragment") else {
@@ -699,7 +737,11 @@ extension VRMRenderer {
             pipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
 
             // Create pipeline state
-            spritePipelineState = try device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+            spritePipelineState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: pipelineDescriptor,
+                key: "sprite"
+            )
             vrmLog("[VRMRenderer] Created sprite pipeline successfully")
 
             // Create sprite quad buffers
