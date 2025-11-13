@@ -20,6 +20,34 @@ import Metal
 import QuartzCore  // For CACurrentMediaTime
 import simd
 
+/// GPU-accelerated SpringBone physics system using XPBD (Extended Position-Based Dynamics)
+///
+/// ## Thread Safety (@unchecked Sendable)
+///
+/// This class is marked `@unchecked Sendable` because:
+/// 1. **Metal types are not Sendable**: `MTLDevice`, `MTLCommandQueue`, `MTLBuffer`, and `MTLComputePipelineState`
+///    do not conform to `Sendable`, but Metal's thread-safety guarantees allow concurrent access:
+///    - Command buffer creation is thread-safe (Metal docs)
+///    - Pipeline states are immutable after creation
+///    - Buffers are only mutated via GPU commands, not direct CPU writes after initialization
+///
+/// 2. **NSLock protection for readback**: All CPU-side mutable state related to async GPU readback
+///    (`latestPositionsSnapshot`, `simulationFrameCounter`, `latestCompletedFrame`, `lastAppliedFrame`)
+///    is protected by `snapshotLock`.
+///
+/// 3. **Async snapshot pattern (PR #38)**: GPU completion handlers use `[weak self, weak buffers]` capture
+///    to safely access GPU results without blocking. The `captureCompletedPositions()` method copies GPU
+///    data into `latestPositionsSnapshot` under lock, then `writeBonesToNodes()` consumes it when ready.
+///
+/// 4. **Immutable after init**: `device`, `commandQueue`, and pipeline states are immutable.
+///    Per-model state (`globalParamsBuffer`, `rootBoneIndices`, etc.) is logically associated with
+///    the `VRMModel` and not shared across threads.
+///
+/// 5. **Frame versioning**: `simulationFrameCounter` prevents stale readback data from being applied.
+///    Only the latest completed frame is used.
+///
+/// **Safety contract**: `update()` and `writeBonesToNodes()` may be called from any thread (typically
+/// the main/render thread). GPU work is asynchronous and completion handlers are serialized per command buffer.
 final class SpringBoneComputeSystem: @unchecked Sendable {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
@@ -41,7 +69,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // Store bind-pose direction for each bone (in parent's local space)
     private var boneBindDirections: [SIMD3<Float>] = []
 
-    // Readback + synchronization
+    // Readback + synchronization (protected by snapshotLock)
     private let snapshotLock = NSLock()
     private var latestPositionsSnapshot: [SIMD3<Float>] = []
     private var simulationFrameCounter: UInt64 = 0

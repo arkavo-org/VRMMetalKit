@@ -17,10 +17,33 @@
 
 import Metal
 
+/// GPU buffer storage for SpringBone physics simulation state
+///
+/// ## Thread Safety (@unchecked Sendable)
+///
+/// This class is marked `@unchecked Sendable` because:
+/// 1. **Metal types are not Sendable**: `MTLDevice` and `MTLBuffer` do not conform to `Sendable`,
+///    but Metal's guarantees allow safe concurrent access:
+///    - `MTLDevice` is thread-safe for buffer creation (Metal docs)
+///    - `MTLBuffer` instances are thread-safe for GPU command encoding
+///
+/// 2. **GPU-owned mutable state**: All `var` buffer properties (`bonePosPrev`, `bonePosCurr`, etc.)
+///    are mutated exclusively by GPU compute shaders after initialization. CPU-side code only reads
+///    via async completion handlers in `SpringBoneComputeSystem.captureCompletedPositions()`.
+///
+/// 3. **Initialization phase**: Buffer allocation happens once in `allocateBuffers()` before any
+///    concurrent access. Subsequent access is read-only from CPU or GPU-write-only.
+///
+/// 4. **SoA (Structure of Arrays) layout**: Buffers store physics state in GPU-friendly format
+///    for parallel compute shader processing. Each buffer is independent and accessed via compute
+///    encoder setBuffer() calls, which Metal serializes internally.
+///
+/// **Safety contract**: After initialization, buffers are effectively immutable from CPU perspective.
+/// GPU writes are synchronized via command buffer completion handlers.
 public final class SpringBoneBuffers: @unchecked Sendable {
     let device: MTLDevice
 
-    // SoA buffers for SpringBone data
+    // SoA buffers for SpringBone data (GPU-owned after allocation)
     var bonePosPrev: MTLBuffer?
     var bonePosCurr: MTLBuffer?
     var boneParams: MTLBuffer?

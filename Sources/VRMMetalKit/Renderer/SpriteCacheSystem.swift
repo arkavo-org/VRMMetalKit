@@ -21,11 +21,33 @@ import simd
 
 /// Sprite cache system for optimizing multi-character 2.5D rendering
 /// Caches pre-rendered character poses as textures to achieve 60 FPS with 5+ characters
+///
+/// ## Thread Safety (@unchecked Sendable)
+///
+/// This class is marked `@unchecked Sendable` because:
+/// 1. **Metal types are not Sendable**: `MTLDevice` and `MTLCommandQueue` do not conform to `Sendable`,
+///    but Metal documentation guarantees they are thread-safe for command buffer creation.
+/// 2. **NSLock protection**: All mutable state (`cache`, `pendingRenders`, statistics) is protected
+///    by `cacheLock` using the `locked { }` helper for scoped access.
+/// 3. **Async completion handlers**: GPU completion handlers use `[weak self]` capture and dispatch
+///    callbacks to `callbackQueue` (default `.main`) to avoid race conditions.
+/// 4. **Immutable after init**: `device`, `commandQueue`, and `callbackQueue` are immutable and
+///    thread-safe by design.
+///
+/// **Safety contract**: Callers may invoke methods from any thread. Internal synchronization ensures
+/// correctness. Completion callbacks are serialized on `callbackQueue`.
 public class SpriteCacheSystem: @unchecked Sendable {
 
     // MARK: - Cache Entry
 
     /// A cached sprite representing a specific character pose
+    ///
+    /// ## Thread Safety (@unchecked Sendable)
+    ///
+    /// Marked `@unchecked Sendable` because:
+    /// - `MTLTexture` is not `Sendable` but is thread-safe for read-only access per Metal docs
+    /// - All fields except `timestamp` are immutable (`let`)
+    /// - `timestamp` is only mutated under `SpriteCacheSystem.cacheLock` protection
     public struct CachedPose: @unchecked Sendable {
         /// Rendered sprite texture (RGBA8 or BGRA8)
         public let texture: MTLTexture
@@ -263,12 +285,76 @@ public class SpriteCacheSystem: @unchecked Sendable {
     // MARK: - Rendering to Cache
 
     /// Render a character pose directly to a cached texture
+    ///
+    /// **Breaking Change (PR #38)**: This method now supports async GPU rendering and returns `nil`
+    /// when using the async path. Use the `completion` handler to receive the cached pose when ready.
+    ///
+    /// **Thread Safety**: This method is thread-safe and prevents duplicate renders for the same `poseHash`.
+    /// If a render is already pending for the given pose, returns `nil` immediately.
+    ///
+    /// ## Usage Patterns
+    ///
+    /// ### Synchronous (Blocking)
+    /// ```swift
+    /// let pose = cache.renderToCache(
+    ///     characterID: "avatar1",
+    ///     poseHash: hash,
+    ///     waitUntilCompleted: true  // Blocks until GPU finishes
+    /// ) { encoder, texture in
+    ///     // Render your character here
+    /// }
+    /// // pose is non-nil and ready to use
+    /// ```
+    ///
+    /// ### Asynchronous (Non-Blocking, Recommended)
+    /// ```swift
+    /// cache.renderToCache(
+    ///     characterID: "avatar1",
+    ///     poseHash: hash,
+    ///     completion: { cachedPose in
+    ///         // Called on callbackQueue when GPU finishes
+    ///         if let pose = cachedPose {
+    ///             // Use cached pose here
+    ///         }
+    ///     }
+    /// ) { encoder, texture in
+    ///     // Render your character here
+    /// }
+    /// // Returns nil immediately, continues on GPU
+    /// ```
+    ///
+    /// ### Shared Command Buffer (Batching)
+    /// ```swift
+    /// let commandBuffer = queue.makeCommandBuffer()!
+    ///
+    /// // Batch multiple renders into same command buffer
+    /// cache.renderToCache(characterID: "avatar1", poseHash: hash1,
+    ///                     commandBuffer: commandBuffer) { ... }
+    /// cache.renderToCache(characterID: "avatar2", poseHash: hash2,
+    ///                     commandBuffer: commandBuffer) { ... }
+    ///
+    /// commandBuffer.commit()  // Submit all renders at once
+    /// ```
+    ///
     /// - Parameters:
-    ///   - characterID: Character identifier
-    ///   - poseHash: Pose hash for cache key
-    ///   - resolution: Texture resolution (nil = use default)
-    ///   - renderBlock: Closure that performs the actual rendering
-    /// - Returns: Cached pose or nil on failure
+    ///   - characterID: Character identifier for cache management
+    ///   - poseHash: Unique pose hash for cache key (use `computePoseHash()`)
+    ///   - resolution: Texture resolution (nil = use `defaultResolution` of 512×512)
+    ///   - externalCommandBuffer: Optional command buffer to encode into. If `nil`, system creates one.
+    ///     When provided, you must call `commit()` yourself. The system will NOT commit it.
+    ///   - waitUntilCompleted: If `true` and no `externalCommandBuffer` provided, blocks until GPU finishes.
+    ///     Ignored if `externalCommandBuffer` is provided (blocking with external buffers is caller's responsibility).
+    ///     Default is `false` (async).
+    ///   - completion: Optional callback invoked on `callbackQueue` (default `.main`) when render completes.
+    ///     Receives `CachedPose?` - `nil` if caching failed.
+    ///   - renderBlock: Closure that performs the actual rendering. Receives encoder and target texture.
+    ///     Must be `@Sendable` for thread safety.
+    ///
+    /// - Returns:
+    ///   - **Synchronous path** (`waitUntilCompleted: true`, no external buffer): Returns `CachedPose?` immediately.
+    ///   - **Async path** (default): Returns `nil`. Use `completion` handler to receive result.
+    ///   - **Already pending**: Returns `nil` if this `poseHash` is already being rendered.
+    ///   - **Failure**: Returns `nil` if texture allocation or encoding fails.
     public func renderToCache(
         characterID: String,
         poseHash: UInt64,
@@ -395,16 +481,54 @@ public class SpriteCacheSystem: @unchecked Sendable {
         }
     }
 
-    /// Get cached pose or render and cache if missing
+    /// Get cached pose or render and cache if missing (cache-or-render pattern)
+    ///
+    /// **Breaking Change (PR #38)**: This method now returns `nil` for async renders (cache miss).
+    /// Use the `completion` handler to receive the result when rendering completes.
+    ///
+    /// ## Behavior
+    ///
+    /// - **Cache hit**: Returns `CachedPose` immediately (no rendering, no async operation)
+    /// - **Cache miss (sync)**: With `waitForCompletion: true`, blocks until render completes, returns `CachedPose?`
+    /// - **Cache miss (async)**: Returns `nil` immediately, invokes `completion` when ready (recommended)
+    ///
+    /// ## Usage
+    ///
+    /// ```swift
+    /// // Attempt cache lookup with async fallback
+    /// if let cached = cache.getOrRender(
+    ///     characterID: "avatar1",
+    ///     poseHash: hash,
+    ///     completion: { pose in
+    ///         // Only called on cache miss after render completes
+    ///         guard let pose = pose else { return }
+    ///         // Use freshly rendered pose
+    ///     }
+    /// ) { encoder, texture in
+    ///     // Only called on cache miss
+    ///     renderCharacter(encoder: encoder, texture: texture)
+    /// } {
+    ///     // Cache hit - use cached pose immediately
+    ///     useCachedPose(cached)
+    /// } else {
+    ///     // Cache miss - rendering in progress, wait for completion callback
+    /// }
+    /// ```
+    ///
     /// - Parameters:
-    ///   - characterID: Character identifier
-    ///   - poseHash: Pose hash
-    ///   - resolution: Target resolution
-    ///   - commandBuffer: Optional command buffer to encode into (nil = system creates one)
-    ///   - waitForCompletion: If true and the system creates the command buffer, block until the sprite is ready
-    ///   - completion: Invoked when the sprite finishes rendering (async path)
-    ///   - renderBlock: Rendering closure (called only on cache miss)
-    /// - Returns: Cached pose (existing or newly rendered)
+    ///   - characterID: Character identifier for cache management
+    ///   - poseHash: Pose hash (use `computePoseHash()`)
+    ///   - resolution: Target resolution (nil = 512×512 default)
+    ///   - commandBuffer: Optional command buffer for batching (nil = system creates one)
+    ///   - waitForCompletion: If `true` with no external buffer, blocks on cache miss. Default `false`.
+    ///   - completion: Callback invoked on cache miss after render completes (runs on `callbackQueue`)
+    ///   - renderBlock: Rendering closure, called only on cache miss
+    ///
+    /// - Returns:
+    ///   - **Cache hit**: `CachedPose` (ready to use immediately)
+    ///   - **Cache miss (async)**: `nil` (use `completion` handler)
+    ///   - **Cache miss (sync)**: `CachedPose?` after blocking render
+    ///   - **Already rendering**: `nil`
     public func getOrRender(
         characterID: String,
         poseHash: UInt64,
