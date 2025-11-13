@@ -242,16 +242,7 @@ extension VRMRenderer {
             try strictValidator?.validatePipelineState(wireframeState, name: "mtoon_wireframe_pipeline")
             wireframePipelineState = wireframeState
 
-            // Create depth state
-            let depthDescriptor = MTLDepthStencilDescriptor()
-            depthDescriptor.depthCompareFunction = .less
-            depthDescriptor.isDepthWriteEnabled = true
-            depthState = device.makeDepthStencilState(descriptor: depthDescriptor)
-
-            if config.strict != .off && depthState == nil {
-                throw StrictModeError.depthStencilCreationFailed
-            }
-
+            // Note: Depth stencil states are created in setupCachedStates()
             // Note: Uniforms buffers are created in setupTripleBuffering()
             // Validate uniform size in strict mode
             let uniformSize = MemoryLayout<Uniforms>.size

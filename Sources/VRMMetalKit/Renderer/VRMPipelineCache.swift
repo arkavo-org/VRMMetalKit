@@ -74,9 +74,14 @@ public final class VRMPipelineCache: @unchecked Sendable {
             // Try loading from default library first (for development with Xcode)
             // This allows shader debugging and hot-reloading during development
             if let defaultLib = device.makeDefaultLibrary() {
-                vrmLog("[VRMPipelineCache] ✅ Loaded from default library (development mode)")
-                libraries[key] = defaultLib
-                return defaultLib
+                // Check if it has VRM shaders
+                if defaultLib.makeFunction(name: "mtoon_vertex") != nil {
+                    vrmLog("[VRMPipelineCache] ✅ Loaded from default library (development mode) - has VRM shaders")
+                    libraries[key] = defaultLib
+                    return defaultLib
+                } else {
+                    vrmLog("[VRMPipelineCache] ⚠️ Default library exists but missing VRM shaders, trying package bundle...")
+                }
             }
             
             // Load from packaged metallib (production)
