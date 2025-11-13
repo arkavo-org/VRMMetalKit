@@ -28,11 +28,15 @@ import Foundation
 // MARK: - Build Configuration Validation
 
 #if DEBUG && !VRM_METALKIT_ENABLE_LOGS && !VRM_METALKIT_ENABLE_DEBUG_ANIMATION && !VRM_METALKIT_ENABLE_DEBUG_PHYSICS && !VRM_METALKIT_ENABLE_DEBUG_LOADER
-#warning("⚠️ Debug build without any logging enabled - you may want to enable VRM_METALKIT_ENABLE_LOGS for development")
+private let __vrmLoggerDebugNotice: Void = {
+    fputs("⚠️ VRMMetalKit: Debug build without logging. Define VRM_METALKIT_ENABLE_LOGS to re-enable debug output.\n", stderr)
+} ()
 #endif
 
 #if !DEBUG && (VRM_METALKIT_ENABLE_LOGS || VRM_METALKIT_ENABLE_DEBUG_ANIMATION || VRM_METALKIT_ENABLE_DEBUG_PHYSICS || VRM_METALKIT_ENABLE_DEBUG_LOADER)
-#warning("⚠️ Release build with debug logging enabled - this will impact performance")
+private let __vrmLoggerReleaseNotice: Void = {
+    fputs("⚠️ VRMMetalKit: Release build with debug logging enabled. Disable VRM_METALKIT_ENABLE_* flags for best performance.\n", stderr)
+} ()
 #endif
 
 // MARK: - Logging Infrastructure

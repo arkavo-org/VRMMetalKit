@@ -57,7 +57,7 @@ final class ARKitBodyDriverTests: XCTestCase {
         )
 
         let now = Date().timeIntervalSinceReferenceDate
-        let staleSkeleton = ARKitBodySkeleton(
+        _ = ARKitBodySkeleton(
             timestamp: now - 1.0,  // 1 second old
             joints: [.hips: simd_float4x4(1)],
             isTracked: true
@@ -72,7 +72,7 @@ final class ARKitBodyDriverTests: XCTestCase {
     // MARK: - Multi-Source Priority Tests
 
     func testMultiSourcePrioritySelection() {
-        let driver = ARKitBodyDriver(
+        _ = ARKitBodyDriver(
             mapper: .default,
             smoothing: SkeletonSmoothingConfig.default,
             priority: .latestActive

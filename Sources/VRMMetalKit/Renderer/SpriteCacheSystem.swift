@@ -21,12 +21,12 @@ import simd
 
 /// Sprite cache system for optimizing multi-character 2.5D rendering
 /// Caches pre-rendered character poses as textures to achieve 60 FPS with 5+ characters
-public class SpriteCacheSystem {
+public class SpriteCacheSystem: @unchecked Sendable {
 
     // MARK: - Cache Entry
 
     /// A cached sprite representing a specific character pose
-    public struct CachedPose {
+    public struct CachedPose: @unchecked Sendable {
         /// Rendered sprite texture (RGBA8 or BGRA8)
         public let texture: MTLTexture
 
@@ -99,13 +99,14 @@ public class SpriteCacheSystem {
         self.callbackQueue = callbackQueue
     }
 
-    private struct PendingPose {
+    private struct PendingPose: @unchecked Sendable {
         let texture: MTLTexture
         let poseHash: UInt64
         let characterID: String
         let resolution: CGSize
     }
 
+    @discardableResult
     private func locked<T>(_ body: () -> T) -> T {
         cacheLock.lock()
         defer { cacheLock.unlock() }
@@ -268,15 +269,14 @@ public class SpriteCacheSystem {
     ///   - resolution: Texture resolution (nil = use default)
     ///   - renderBlock: Closure that performs the actual rendering
     /// - Returns: Cached pose or nil on failure
-    @discardableResult
     public func renderToCache(
         characterID: String,
         poseHash: UInt64,
         resolution: CGSize? = nil,
         commandBuffer externalCommandBuffer: MTLCommandBuffer? = nil,
         waitUntilCompleted: Bool = false,
-        completion: ((CachedPose?) -> Void)? = nil,
-        renderBlock: (MTLRenderCommandEncoder, MTLTexture) -> Void
+        completion: (@Sendable (CachedPose?) -> Void)? = nil,
+        renderBlock: @Sendable (MTLRenderCommandEncoder, MTLTexture) -> Void
     ) -> CachedPose? {
         let targetResolution = resolution ?? defaultResolution
 
@@ -411,8 +411,8 @@ public class SpriteCacheSystem {
         resolution: CGSize? = nil,
         commandBuffer: MTLCommandBuffer? = nil,
         waitForCompletion: Bool = false,
-        completion: ((CachedPose?) -> Void)? = nil,
-        renderBlock: (MTLRenderCommandEncoder, MTLTexture) -> Void
+        completion: (@Sendable (CachedPose?) -> Void)? = nil,
+        renderBlock: @Sendable (MTLRenderCommandEncoder, MTLTexture) -> Void
     ) -> CachedPose? {
         // Check cache first
         if let cached = getCachedPose(poseHash: poseHash) {
