@@ -215,7 +215,7 @@ func onBodyTracking(_ skeleton: ARKitBodySkeleton) {
   - `.coreOnly`: Minimal tracking for performance
 - **SkeletonFilterManager**: Per-joint smoothing
   - Position smoothing: EMA/Kalman/Windowed per-axis
-  - Rotation smoothing: Currently per-component (TODO: SLERP for better quaternion interpolation)
+  - Rotation smoothing: Uses SLERP (spherical linear interpolation) for artifact-free quaternion interpolation
   - Scale smoothing: Available but typically unused
 - **ARKitBodyDriver**: Primary API with transform decomposition
   - Retargets ARKit 4×4 matrices to VRM TRS (translation/rotation/scale)
@@ -396,9 +396,8 @@ bodyDriver.resetStatistics()
 **Phase 4: QoS & Advanced Features** (deferred)
 - `QoSController`: Timestamp interpolation for jitter handling
 - `ARMetadataSourceManager`: Centralized multi-source management
-- Weighted blending of skeleton transforms (complex, needs quaternion SLERP)
+- Weighted blending of skeleton transforms (complex, quaternion SLERP available but multi-source blending deferred)
 - Adaptive staleness thresholds based on connection quality
-- Proper SLERP-based rotation smoothing (marked TODO in `SkeletonFilterManager.updateRotation`)
 
 **Phase 5: Comprehensive Testing** (in progress)
 - Full unit test suite for all ARKit components (planned)
@@ -423,7 +422,6 @@ bodyDriver.resetStatistics()
 
 🔄 **In Progress:**
 - Comprehensive test suite
-- SLERP quaternion smoothing
 - Full documentation and examples
 
 ⏸️ **Deferred:**

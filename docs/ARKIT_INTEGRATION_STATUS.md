@@ -203,12 +203,12 @@ class VRMAvatarController {
 
 ## 🔄 Remaining Work
 
-### Phase 3: Body Tracking (Next)
-- [ ] `ARKitBodyDriver`: Skeleton retargeting to VRM humanoid
-- [ ] Transform matrix decomposition (position, rotation, scale)
-- [ ] Partial skeleton support (upper body only)
-- [ ] Skeleton smoothing with SLERP for rotations
-- **Estimate:** 1-2 days
+### Phase 3: Body Tracking (Complete)
+- [x] `ARKitBodyDriver`: Skeleton retargeting to VRM humanoid
+- [x] Transform matrix decomposition (position, rotation, scale)
+- [x] Partial skeleton support (upper body only)
+- [x] Skeleton smoothing with SLERP for rotations (implemented in c170ce3)
+- **Status:** Complete
 
 ### Phase 4: QoS & Multi-Source
 - [ ] `QoSController`: Timestamp interpolation and jitter handling
