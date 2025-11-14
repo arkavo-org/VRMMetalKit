@@ -89,6 +89,11 @@ public final class ARKitBodyDriver: @unchecked Sendable {
     private var skipCount: Int = 0
     private var lastUpdateTime: TimeInterval = 0
 
+    /// Cached node lookups (invalidated on model change)
+    private var cachedNodesByName: [String: VRMNode]?
+    private var cachedHumanoidNodes: [String: VRMNode]?
+    private var cachedRootNodes: [VRMNode]?
+
     /// Lock for thread safety
     private let lock = NSLock()
 
@@ -133,24 +138,30 @@ public final class ARKitBodyDriver: @unchecked Sendable {
             filterManager = SkeletonFilterManager(config: smoothing)
         }
 
-        // Build node lookup (name -> node)
-        var nodesByName: [String: VRMNode] = [:]
-        for node in nodes {
-            if let name = node.name {
-                nodesByName[name] = node
+        // Build node lookup lazily (cached across frames)
+        if cachedNodesByName == nil {
+            var lookup: [String: VRMNode] = [:]
+            for node in nodes {
+                if let name = node.name {
+                    lookup[name] = node
+                }
             }
+            cachedNodesByName = lookup
         }
+        let nodesByName = cachedNodesByName!
 
-        // If humanoid mapping exists, build humanoid bone name -> node
-        var humanoidNodes: [String: VRMNode] = [:]
-        if let humanoid = humanoid {
+        // Build humanoid nodes lazily (cached across frames)
+        if cachedHumanoidNodes == nil, let humanoid = humanoid {
+            var lookup: [String: VRMNode] = [:]
             for (boneType, boneInfo) in humanoid.humanBones {
                 let nodeIndex = boneInfo.node
                 if nodeIndex >= 0 && nodeIndex < nodes.count {
-                    humanoidNodes[boneType.rawValue] = nodes[nodeIndex]
+                    lookup[boneType.rawValue] = nodes[nodeIndex]
                 }
             }
+            cachedHumanoidNodes = lookup
         }
+        let humanoidNodes = cachedHumanoidNodes ?? [:]
 
         // Retarget each ARKit joint to VRM bone
         for (arkitJoint, transform) in skeleton.joints {
@@ -191,8 +202,11 @@ public final class ARKitBodyDriver: @unchecked Sendable {
         }
 
         // Update world matrices for all affected nodes
-        // Find root nodes and update their hierarchies
-        let rootNodes = nodes.filter { $0.parent == nil }
+        // Find root nodes lazily (cached across frames)
+        if cachedRootNodes == nil {
+            cachedRootNodes = nodes.filter { $0.parent == nil }
+        }
+        let rootNodes = cachedRootNodes!
         for root in rootNodes {
             root.updateWorldTransform()
         }
@@ -333,6 +347,20 @@ public final class ARKitBodyDriver: @unchecked Sendable {
     public func resetFilters(for joint: String) {
         lock.lock()
         filterManager?.reset(joint: joint)
+        lock.unlock()
+    }
+
+    /// Invalidate cached node lookups
+    ///
+    /// Call this method when the VRM model changes (e.g., new model loaded,
+    /// nodes added/removed, humanoid mapping changed).
+    ///
+    /// Thread-safe: Uses internal lock for synchronization.
+    public func invalidateCache() {
+        lock.lock()
+        cachedNodesByName = nil
+        cachedHumanoidNodes = nil
+        cachedRootNodes = nil
         lock.unlock()
     }
 

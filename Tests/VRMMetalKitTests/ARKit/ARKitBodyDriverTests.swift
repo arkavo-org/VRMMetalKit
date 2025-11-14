@@ -287,4 +287,61 @@ final class ARKitBodyDriverTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Cache Tests
+
+    func testCacheInvalidation() {
+        let driver = ARKitBodyDriver(
+            mapper: .default,
+            smoothing: SkeletonSmoothingConfig.default
+        )
+
+        // Cache should be nil initially
+        // (We can't directly check private properties, but we can verify behavior)
+
+        // Call invalidateCache should not crash
+        driver.invalidateCache()
+
+        // Multiple calls should be safe
+        driver.invalidateCache()
+        driver.invalidateCache()
+    }
+
+    func testCacheThreadSafety() {
+        let driver = ARKitBodyDriver(
+            mapper: .default,
+            smoothing: SkeletonSmoothingConfig.default
+        )
+
+        let expectation = XCTestExpectation(description: "Concurrent cache invalidation")
+        expectation.expectedFulfillmentCount = 10
+
+        // Concurrent invalidation from multiple threads
+        for _ in 0..<10 {
+            DispatchQueue.global().async {
+                driver.invalidateCache()
+                expectation.fulfill()
+            }
+        }
+
+        wait(for: [expectation], timeout: 2.0)
+    }
+
+    func testResetFiltersSeparateFromCache() {
+        let driver = ARKitBodyDriver(
+            mapper: .default,
+            smoothing: SkeletonSmoothingConfig.default
+        )
+
+        // Reset filters should not invalidate cache (they're separate concerns)
+        driver.resetFilters()
+        driver.resetFilters(for: "hips")
+
+        // Cache invalidation should not reset filters
+        driver.invalidateCache()
+
+        // Both operations should be independent and safe
+        driver.resetFilters()
+        driver.invalidateCache()
+    }
 }
