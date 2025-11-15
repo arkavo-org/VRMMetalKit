@@ -111,12 +111,20 @@ public class VRMBuilder {
             gltf: gltfDocument
         )
 
+        // Parse nodes from glTF document
+        if let gltfNodes = gltfDocument.nodes {
+            for (index, gltfNode) in gltfNodes.enumerated() {
+                let node = VRMNode(index: index, gltfNode: gltfNode)
+                model.nodes.append(node)
+            }
+        }
+
         // Set expressions
         if !expressions.isEmpty {
             model.expressions = buildExpressions()
         }
 
-        vrmLog("[VRMBuilder] VRM model built successfully")
+        vrmLog("[VRMBuilder] VRM model built successfully with \(model.nodes.count) nodes")
         return model
     }
 

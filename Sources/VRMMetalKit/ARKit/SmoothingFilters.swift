@@ -483,11 +483,8 @@ public final class SkeletonFilterManager {
             rotationFilters[joint] = filter
         }
 
-        // Get previous rotation (or use current if first frame)
-        guard let previous = previousRotations[joint] else {
-            previousRotations[joint] = rotation
-            return rotation
-        }
+        // Get previous rotation (or use identity if first frame)
+        let previous = previousRotations[joint] ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
 
         // Ensure quaternions are on same hemisphere (shortest path)
         // If dot product is negative, negate one quaternion to take shorter arc
