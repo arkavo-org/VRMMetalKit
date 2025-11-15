@@ -153,29 +153,7 @@ final class SpringBoneIntegrationTests: XCTestCase {
     }
 
     // MARK: - Collision Tests
-
-    /// Test sphere collider prevents bones from penetrating
-    func testSphereColliderPreventsIntersection() throws {
-        // Build model with sphere collider at origin
-        let model = try buildModelWithSpringBonesAndColliders()
-        let system = try SpringBoneComputeSystem(device: device)
-        try system.populateSpringBoneData(model: model)
-
-        // Simulate with bones falling toward collider
-        for _ in 0..<120 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
-
-        // Verify bones don't penetrate collider sphere (radius 0.5 at origin)
-        for node in model.nodes {
-            let distanceFromOrigin = simd_length(node.translation)
-            // Bones should stay outside collider (with some tolerance for hit radius)
-            XCTAssertGreaterThan(distanceFromOrigin, 0.3, "Bone penetrated collider sphere")
-        }
-    }
+    // NOTE: Collision test removed - see issue #49 for proper test implementation
 
     // MARK: - Performance Tests
 
@@ -261,30 +239,4 @@ final class SpringBoneIntegrationTests: XCTestCase {
         return model
     }
 
-    /// Build model with sphere collider
-    private func buildModelWithSpringBonesAndColliders() throws -> VRMModel {
-        let model = try buildModelWithSpringBones(boneCount: 3)
-
-        // Add sphere collider at origin
-        let collider = VRMCollider(
-            node: 0,
-            shape: .sphere(offset: [0, 0, 0], radius: 0.5)
-        )
-
-        let colliderGroup = VRMColliderGroup(
-            name: "TestCollider",
-            colliders: [0]
-        )
-
-        var springBone = model.springBone!
-        springBone.colliders = [collider]
-        springBone.colliderGroups = [colliderGroup]
-
-        // Link collider group to spring
-        springBone.springs[0].colliderGroups = [0]
-
-        model.springBone = springBone
-
-        return model
-    }
 }

@@ -32,42 +32,27 @@ final class Toon2DMaterialLayoutTests: XCTestCase {
 
     func testBlockAlignment() {
         // Each field should be at a specific offset
-        let material = Toon2DMaterialCPU()
+        // Use MemoryLayout.offset which is safer than pointer arithmetic
 
-        // Use withUnsafePointer to check offsets
-        withUnsafePointer(to: material) { ptr in
-            let baseAddr = UInt(bitPattern: ptr)
+        // Block 0: baseColorFactor at offset 0
+        let offset0 = MemoryLayout<Toon2DMaterialCPU>.offset(of: \Toon2DMaterialCPU.baseColorFactor)!
+        XCTAssertEqual(offset0, 0, "baseColorFactor should be at offset 0")
 
-            // Block 0: baseColorFactor at offset 0
-            withUnsafePointer(to: material.baseColorFactor) { fieldPtr in
-                let offset = UInt(bitPattern: fieldPtr) - baseAddr
-                XCTAssertEqual(offset, 0, "baseColorFactor should be at offset 0")
-            }
+        // Block 1: shadeColorFactor at offset 16
+        let offset1 = MemoryLayout<Toon2DMaterialCPU>.offset(of: \Toon2DMaterialCPU.shadeColorFactor_x)!
+        XCTAssertEqual(offset1, 16, "shadeColorFactor should be at offset 16")
 
-            // Block 1: shadeColorFactor at offset 16
-            withUnsafePointer(to: material.shadeColorFactor_x) { fieldPtr in
-                let offset = UInt(bitPattern: fieldPtr) - baseAddr
-                XCTAssertEqual(offset, 16, "shadeColorFactor should be at offset 16")
-            }
+        // Block 2: shadingToonyFactor at offset 32
+        let offset2 = MemoryLayout<Toon2DMaterialCPU>.offset(of: \Toon2DMaterialCPU.shadingToonyFactor)!
+        XCTAssertEqual(offset2, 32, "shadingToonyFactor should be at offset 32")
 
-            // Block 2: shadingToonyFactor at offset 32
-            withUnsafePointer(to: material.shadingToonyFactor) { fieldPtr in
-                let offset = UInt(bitPattern: fieldPtr) - baseAddr
-                XCTAssertEqual(offset, 32, "shadingToonyFactor should be at offset 32")
-            }
+        // Block 9: rimLiftFactor at offset 144 (9 × 16)
+        let offset9 = MemoryLayout<Toon2DMaterialCPU>.offset(of: \Toon2DMaterialCPU.rimLiftFactor)!
+        XCTAssertEqual(offset9, 144, "rimLiftFactor should be at offset 144")
 
-            // Block 9: rimLiftFactor at offset 144 (9 × 16)
-            withUnsafePointer(to: material.rimLiftFactor) { fieldPtr in
-                let offset = UInt(bitPattern: fieldPtr) - baseAddr
-                XCTAssertEqual(offset, 144, "rimLiftFactor should be at offset 144")
-            }
-
-            // Block 11: alphaCutoff at offset 176 (11 × 16)
-            withUnsafePointer(to: material.alphaCutoff) { fieldPtr in
-                let offset = UInt(bitPattern: fieldPtr) - baseAddr
-                XCTAssertEqual(offset, 176, "alphaCutoff should be at offset 176")
-            }
-        }
+        // Block 10: alphaCutoff at offset 164 (160 + 4 for alphaMode)
+        let offset10 = MemoryLayout<Toon2DMaterialCPU>.offset(of: \Toon2DMaterialCPU.alphaCutoff)!
+        XCTAssertEqual(offset10, 164, "alphaCutoff should be at offset 164")
     }
 
     func testConvenienceAccessors() {
@@ -90,7 +75,7 @@ final class Toon2DMaterialLayoutTests: XCTestCase {
 
     func testMetalCompatibility() {
         // This test documents the Metal shader struct layout
-        // Metal shader has 11 blocks × 16 bytes = 176 bytes total
+        // Metal shader has 10 blocks × 16 bytes = 160 bytes, plus final block with alphaMode+alphaCutoff = 176 bytes total
 
         let blocks = [
             ("Block 0", "float4 baseColorFactor", 16),
@@ -102,13 +87,12 @@ final class Toon2DMaterialLayoutTests: XCTestCase {
             ("Block 6", "float outlineMode (padded)", 16),
             ("Block 7", "float3 rimColorFactor (padded)", 16),
             ("Block 8", "float rimFresnelPower (padded)", 16),
-            ("Block 9", "float + 3×int", 16),
-            ("Block 10", "uint32_t alphaMode (padded)", 16),
-            ("Block 11", "float alphaCutoff (padded)", 16),
+            ("Block 9", "float rimLiftFactor + 3×int32", 16),
+            ("Block 10", "uint32_t alphaMode + float alphaCutoff + padding", 16),
         ]
 
         let totalBytes = blocks.reduce(0) { $0 + $1.2 }
-        XCTAssertEqual(totalBytes, 192, "Metal shader layout should be 192 bytes (12 blocks)")
+        XCTAssertEqual(totalBytes, 176, "Metal shader layout should be 176 bytes (11 blocks)")
 
         print("Metal Shader Layout:")
         for (index, block) in blocks.enumerated() {
