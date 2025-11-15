@@ -335,7 +335,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         validateMaterialUniformAlignment()
 
         // Set up expression controller with morph target system
-        self.expressionController?.setMorphTargetSystem(morphTargetSystem!)
+        if let morphTargetSystem = morphTargetSystem {
+            self.expressionController?.setMorphTargetSystem(morphTargetSystem)
+        } else {
+            vrmLog("⚠️ [VRMRenderer] Morph target system unavailable, expressions may be limited")
+        }
 
         setupPipeline()
         vrmLog("[VRMRenderer] About to setup skinned pipeline...")
