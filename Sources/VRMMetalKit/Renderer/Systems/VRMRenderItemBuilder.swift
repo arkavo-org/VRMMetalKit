@@ -1,3 +1,19 @@
+//
+// Copyright 2025 Arkavo
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
 import Foundation
 import Metal
 
@@ -62,7 +78,7 @@ final class VRMRenderItemBuilder {
 
         for (nodeIndex, node) in model.nodes.enumerated() {
             if frameCounter <= 2 {
-                vrmLog("[NODE SCAN] Node \(nodeIndex) '(node.name ?? "unnamed")': mesh=\(node.mesh ?? -1)")
+                vrmLog("[NODE SCAN] Node \(nodeIndex) '\(node.name ?? "unnamed")': mesh=\(node.mesh ?? -1)")
             }
 
             guard let meshIndex = node.mesh,
@@ -72,7 +88,7 @@ final class VRMRenderItemBuilder {
 
             let mesh = model.meshes[meshIndex]
             if frameCounter <= 2 {
-                vrmLog("[DRAW LIST] Node[\(nodeIndex)] '(node.name ?? "?")' → mesh[\(meshIndex)] '(mesh.name ?? "?")' skin=\(node.skin ?? -1)")
+                vrmLog("[DRAW LIST] Node[\(nodeIndex)] '\(node.name ?? "?")' → mesh[\(meshIndex)] '\(mesh.name ?? "?")' skin=\(node.skin ?? -1)")
             }
             totalMeshes += 1
 
@@ -142,7 +158,7 @@ final class VRMRenderItemBuilder {
                 var effectiveAlphaMode = alpha
                 var effectiveAlphaCutoff = primitive.materialIndex.flatMap { idx in idx < model.materials.count ? model.materials[idx].alphaCutoff : nil } ?? 0.5
                 if effectiveAlphaMode == "opaque" && faceCategory == "eyebrow" {
-                    vrmLog("[FACE FIX] Forcing eyebrow material '(materialName)' to MASK mode")
+                    vrmLog("[FACE FIX] Forcing eyebrow material '\(materialName)' to MASK mode")
                     effectiveAlphaMode = "mask"
                     effectiveAlphaCutoff = 0.35
                 }
@@ -153,7 +169,7 @@ final class VRMRenderItemBuilder {
                 let isFaceMaterial = faceCategory != nil
                 let isEyeMaterial = faceCategory == "eye" || faceCategory == "highlight"
 
-                var item = RenderItem(
+                let item = RenderItem(
                     node: node,
                     mesh: mesh,
                     primitive: primitive,
@@ -179,7 +195,7 @@ final class VRMRenderItemBuilder {
         allItems.sort { $0.renderOrder < $1.renderOrder }
 
         if frameCounter % 60 == 0 {
-            vrmLog("[RenderItemBuilder] Sorted render items: opaque=\\(opaqueCount) mask=\\(maskCount) blend=\\(blendCount) faceSkin=\\(faceSkinCount)")
+            vrmLog("[RenderItemBuilder] Sorted render items: opaque=\(opaqueCount) mask=\(maskCount) blend=\(blendCount) faceSkin=\(faceSkinCount)")
         }
 
         cachedRenderItems = allItems
@@ -191,9 +207,9 @@ final class VRMRenderItemBuilder {
 
     private func logFaceCandidate(nodeName: String, meshName: String, materialName: String, alpha: String, primitive: VRMPrimitive) {
         vrmLog("[FACE MATERIAL DEBUG] Potential face material detected:")
-        vrmLog("  - Node: '(nodeName)'")
-        vrmLog("  - Mesh: '(meshName)'")
-        vrmLog("  - Material: '(materialName)'")
+        vrmLog("  - Node: '\(nodeName)'")
+        vrmLog("  - Mesh: '\(meshName)'")
+        vrmLog("  - Material: '\(materialName)'")
         vrmLog("  - Alpha mode: \(alpha)")
         vrmLog("  - IndexCount: \(primitive.indexCount)")
     }
