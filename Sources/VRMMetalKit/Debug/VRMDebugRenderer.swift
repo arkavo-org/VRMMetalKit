@@ -238,21 +238,51 @@ public class VRMDebugRenderer {
         materials: [VRMMaterial]? = nil,
         jointBuffer: MTLBuffer? = nil
     ) {
-        // CRITICAL ASSERTIONS - Catch problems early!
-        assert(primitive.vertexBuffer != nil, "[VRMDebugRenderer] FATAL: vertexBuffer is nil!")
-        assert(primitive.indexBuffer != nil, "[VRMDebugRenderer] FATAL: indexBuffer is nil!")
-        assert(primitive.indexCount > 0, "[VRMDebugRenderer] FATAL: indexCount is 0!")
+        // Validate buffers - log and return instead of crashing
+        let primitiveName = node.name ?? "unnamed"
+
+        guard let vertexBuffer = primitive.vertexBuffer else {
+            let error = VRMDebugRendererError.vertexBufferNil(primitive: primitiveName)
+            vrmLog("❌ \(error.localizedDescription)")
+            return
+        }
+
+        guard let indexBuffer = primitive.indexBuffer else {
+            let error = VRMDebugRendererError.indexBufferNil(primitive: primitiveName)
+            vrmLog("❌ \(error.localizedDescription)")
+            return
+        }
+
+        guard primitive.indexCount > 0 else {
+            let error = VRMDebugRendererError.zeroIndexCount(primitive: primitiveName)
+            vrmLog("❌ \(error.localizedDescription)")
+            return
+        }
 
         // Verify index buffer size
         let indexStride = primitive.indexType == .uint16 ? 2 : 4
         let requiredIndexBufferSize = primitive.indexCount * indexStride
-        assert(primitive.indexBuffer!.length >= requiredIndexBufferSize,
-               "[VRMDebugRenderer] FATAL: Index buffer too small! Required: \(requiredIndexBufferSize), Actual: \(primitive.indexBuffer!.length)")
+        guard indexBuffer.length >= requiredIndexBufferSize else {
+            let error = VRMDebugRendererError.indexBufferTooSmall(
+                primitive: primitiveName,
+                required: requiredIndexBufferSize,
+                actual: indexBuffer.length
+            )
+            vrmLog("❌ \(error.localizedDescription)")
+            return
+        }
 
         // Verify vertex buffer size
         let requiredVertexBufferSize = primitive.vertexCount * MemoryLayout<VRMVertex>.stride
-        assert(primitive.vertexBuffer!.length >= requiredVertexBufferSize,
-               "[VRMDebugRenderer] FATAL: Vertex buffer too small! Required: \(requiredVertexBufferSize), Actual: \(primitive.vertexBuffer!.length)")
+        guard vertexBuffer.length >= requiredVertexBufferSize else {
+            let error = VRMDebugRendererError.vertexBufferTooSmall(
+                primitive: primitiveName,
+                required: requiredVertexBufferSize,
+                actual: vertexBuffer.length
+            )
+            vrmLog("❌ \(error.localizedDescription)")
+            return
+        }
 
         // Select pipeline based on current phase
         let pipelineState: MTLRenderPipelineState?

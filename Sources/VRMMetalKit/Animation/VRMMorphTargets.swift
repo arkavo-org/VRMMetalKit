@@ -285,8 +285,13 @@ kernel void morph_accumulate_positions(
         // Verify delta buffer size matches expected T*V (in DEBUG only)
         #if DEBUG
         let expectedDeltaSize = morphCount * vertexCount * MemoryLayout<SIMD3<Float>>.stride
-        assert(deltaPositions.length >= expectedDeltaSize,
-               "[VRMMorphTargetSystem] DeltaPos buffer size mismatch: got \(deltaPositions.length), expected \(expectedDeltaSize) for T=\(morphCount) V=\(vertexCount)")
+        if deltaPositions.length < expectedDeltaSize {
+            vrmLog("❌ [VRMMorphTargetSystem] DeltaPos buffer size mismatch")
+            vrmLog("  Expected: \(expectedDeltaSize) bytes for T=\(morphCount) V=\(vertexCount)")
+            vrmLog("  Actual: \(deltaPositions.length) bytes")
+            // Return false to skip compute dispatch and fall back to CPU path
+            return false
+        }
         #endif
 
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {

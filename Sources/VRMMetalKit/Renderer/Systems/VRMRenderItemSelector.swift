@@ -101,10 +101,17 @@ final class VRMRenderItemSelector {
         if let indexBuffer = prim.indexBuffer {
             vrmLog("Index buffer length: \(indexBuffer.length) bytes")
 
-            assert(prim.indexBufferOffset % indexElemSize == 0,
-                   "❌ Index buffer offset \(prim.indexBufferOffset) not aligned to element size \(indexElemSize)")
-            assert(prim.indexBufferOffset + prim.indexCount * indexElemSize <= indexBuffer.length,
-                   "❌ Index buffer overflow: offset(\(prim.indexBufferOffset)) + count(\(prim.indexCount)) * elemSize(\(indexElemSize)) > buffer.length(\(indexBuffer.length))")
+            // Validate alignment - log error instead of crashing
+            if prim.indexBufferOffset % indexElemSize != 0 {
+                vrmLog("❌ Index buffer offset \(prim.indexBufferOffset) not aligned to element size \(indexElemSize)")
+                return  // Exit diagnostic function
+            }
+
+            // Validate buffer size - log error instead of crashing
+            if prim.indexBufferOffset + prim.indexCount * indexElemSize > indexBuffer.length {
+                vrmLog("❌ Index buffer overflow: offset(\(prim.indexBufferOffset)) + count(\(prim.indexCount)) * elemSize(\(indexElemSize)) > buffer.length(\(indexBuffer.length))")
+                return  // Exit diagnostic function
+            }
 
             vrmLog("\nFirst 24 indices:")
             let indicesToRead = min(24, prim.indexCount)
@@ -132,10 +139,13 @@ final class VRMRenderItemSelector {
             vrmLog("  Max index in sample: \(maxIndex)")
 
             vrmLog("\nPOSITION.count (vertexCount): \(prim.vertexCount)")
-            assert(maxIndex < prim.vertexCount,
-                   "❌ Max index \(maxIndex) >= vertex count \(prim.vertexCount)")
+            // Validate vertex count - log error instead of crashing
+            if maxIndex >= prim.vertexCount {
+                vrmLog("❌ Max index \(maxIndex) >= vertex count \(prim.vertexCount)")
+                return  // Exit diagnostic function
+            }
 
-            vrmLog("\n✅ All assertions pass for primitive \(meshPrimIndex)")
+            vrmLog("\n✅ All validations pass for primitive \(meshPrimIndex)")
         }
     }
 }

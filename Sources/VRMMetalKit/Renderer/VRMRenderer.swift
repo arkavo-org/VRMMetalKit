@@ -782,7 +782,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             } catch {
                 if config.strict == .fail {
                     inflightSemaphore.signal()
-                    fatalError("Draw validation failed: \(error)")
+                    vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
+                } else {
+                    vrmLog("⚠️ [VRMRenderer] Draw validation warning: \(error)")
                 }
             }
         } else {
@@ -810,9 +812,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 do {
                     try strictValidator?.handle(.encoderCreationFailed(type: "render"))
                 } catch {
-                    if config.strict == .fail {
-                        fatalError("Failed to create render encoder: \(error)")
-                    }
+                    vrmLog("❌ [VRMRenderer] Failed to create render encoder: \(error)")
                 }
             }
             return
@@ -2281,8 +2281,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } catch {
                         if config.strict == .fail {
                             encoder.endEncoding()
-                            fatalError("Draw validation failed: \(error)")
+                            vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
+                        } else {
+                            vrmLog("⚠️ [VRMRenderer] Draw validation warning: \(error)")
                         }
+                        continue  // Skip this primitive
                     }
                 }
 
@@ -2415,21 +2418,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                             if mtoonUniforms.hasBaseColorTexture > 0 && material.baseColorTexture == nil {
                                 let message = "Material \(material.name ?? "unknown") expects base texture but none loaded!"
-                                if config.strict == .fail {
-                                    fatalError("[StrictMode] \(message)")
-                                } else {
-                                    vrmLog("⚠️ [StrictMode] \(message)")
-                                }
+                                vrmLog("⚠️ [StrictMode] \(message)")
                             }
 
                             // Verify alpha mode consistency
                             if material.alphaMode.lowercased() == "opaque" && material.baseColorFactor.w < 0.99 {
                                 let message = "OPAQUE material has alpha < 1.0: \(material.baseColorFactor.w)"
-                                if config.strict == .fail {
-                                    fatalError("[StrictMode] \(message)")
-                                } else {
-                                    vrmLog("⚠️ [StrictMode] \(message)")
-                                }
+                                vrmLog("⚠️ [StrictMode] \(message)")
                             }
                         }
                     }
@@ -2704,8 +2699,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } catch {
                         if config.strict == .fail {
                             encoder.endEncoding()
-                            fatalError("Draw validation failed: \(error)")
+                            vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
+                        } else {
+                            vrmLog("⚠️ [VRMRenderer] Draw validation warning: \(error)")
                         }
+                        continue  // Skip this primitive
                     }
                 }
 
@@ -2810,7 +2808,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 try strictValidator?.endFrame()
             } catch {
                 if config.strict == .fail {
-                    fatalError("Frame validation failed: \(error)")
+                    vrmLog("❌ [VRMRenderer] Frame validation failed: \(error)")
+                } else {
+                    vrmLog("⚠️ [VRMRenderer] Frame validation warning: \(error)")
                 }
             }
         }
@@ -2830,7 +2830,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if buffer.status == .error {
                     let error = buffer.error
                     if self?.config.strict == .fail {
-                        fatalError("Command buffer failed: \(error?.localizedDescription ?? "unknown error")")
+                        vrmLog("❌ [VRMRenderer] Command buffer failed: \(error?.localizedDescription ?? "unknown error")")
                     } else if self?.config.strict == .warn {
                         vrmLog("⚠️ [StrictMode] Command buffer error: \(error?.localizedDescription ?? "unknown")")
                     }

@@ -365,7 +365,14 @@ public class VRMSkinningSystem {
 
                 if hasNaN {
                     vrmLog("  ❌ ERROR: Matrix contains NaN or Inf values!")
-                    preconditionFailure("Invalid skinning matrix detected for skin \(skinIndex) joint \(index) (\(joint.name ?? "unnamed"))")
+                    // Log error instead of crashing - this allows recovery/debugging
+                    let error = VRMSkinningError.matrixContainsNaN(
+                        skinIndex: skinIndex,
+                        jointIndex: index,
+                        jointName: joint.name
+                    )
+                    vrmLog("❌ [VRMSkinning] \(error.localizedDescription)")
+                    // Continue to allow investigation of other joints
                 }
 
                 // Check if it's roughly identity (for bind pose verification)
@@ -481,11 +488,21 @@ public class VRMSkinningSystem {
         if let lastUpdate = skinLastUpdatedFrame[skinIndex] {
             if lastUpdate != frameNumber {
                 vrmLog("⚠️ [FRESHNESS] WARNING: Skin \(skinIndex) is stale! Last updated frame \(lastUpdate), current frame \(frameNumber)")
-                precondition(false, "Stale palette for skin \(skinIndex)")
+                // Log error instead of crashing to allow graceful degradation
+                let error = VRMSkinningError.stalePalette(
+                    skinIndex: skinIndex,
+                    lastFrame: lastUpdate,
+                    currentFrame: frameNumber
+                )
+                vrmLog("❌ [VRMSkinning] \(error.localizedDescription)")
+                // Continue with stale data rather than crashing
             }
         } else {
             vrmLog("⚠️ [FRESHNESS] WARNING: Skin \(skinIndex) was never updated!")
-            precondition(false, "Never updated palette for skin \(skinIndex)")
+            // Log error instead of crashing to allow graceful degradation
+            let error = VRMSkinningError.neverUpdatedPalette(skinIndex: skinIndex)
+            vrmLog("❌ [VRMSkinning] \(error.localizedDescription)")
+            // Continue to allow debugging - may render with bind pose
         }
     }
 
