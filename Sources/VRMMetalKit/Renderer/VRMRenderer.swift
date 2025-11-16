@@ -138,8 +138,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public var fovDegrees: Float = 60.0 {
         didSet {
             if fovDegrees <= 0 || fovDegrees >= 180 {
-                vrmLog("[VRMRenderer] Warning: fovDegrees must be in range (0, 180), clamping \(fovDegrees) to valid range")
-                fovDegrees = max(1.0, min(179.0, fovDegrees))
+                let clampedValue = max(1.0, min(179.0, fovDegrees))
+                vrmLog("[VRMRenderer] Warning: fovDegrees \(fovDegrees) out of range (0, 180), clamped to \(clampedValue)")
+                fovDegrees = clampedValue
             }
         }
     }
