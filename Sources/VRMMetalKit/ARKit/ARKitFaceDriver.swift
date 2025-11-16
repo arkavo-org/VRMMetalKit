@@ -275,6 +275,7 @@ public final class ARKitFaceDriver: @unchecked Sendable {
     ) -> ARKitFaceBlendShapes? {
         var mergedShapes: [String: Float] = [:]
         var totalWeight: Float = 0
+        var latestTimestamp: TimeInterval = 0
 
         for source in sources {
             guard let blendShapes = source.blendShapes,
@@ -286,6 +287,8 @@ public final class ARKitFaceDriver: @unchecked Sendable {
                 mergedShapes[key, default: 0] += value * weight
             }
             totalWeight += weight
+            // Track timestamp from blend shapes that actually contributed to merge
+            latestTimestamp = max(latestTimestamp, blendShapes.timestamp)
         }
 
         guard totalWeight > 0 else { return nil }
@@ -294,9 +297,6 @@ public final class ARKitFaceDriver: @unchecked Sendable {
         for key in mergedShapes.keys {
             mergedShapes[key]! /= totalWeight
         }
-
-        // Use timestamp from most recent source
-        let latestTimestamp = sources.map { $0.lastUpdate }.max() ?? 0
 
         return ARKitFaceBlendShapes(timestamp: latestTimestamp, shapes: mergedShapes)
     }

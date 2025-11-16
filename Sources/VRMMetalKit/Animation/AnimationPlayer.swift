@@ -57,7 +57,15 @@ import simd
 ///
 /// - Note: Loading animation clips (`load(_:)`) is safe from any thread if the player is not active.
 public final class AnimationPlayer {
-    public var speed: Float = 1.0
+    /// Playback speed multiplier (must be non-negative)
+    public var speed: Float = 1.0 {
+        didSet {
+            if speed < 0 || speed.isNaN || speed.isInfinite {
+                vrmLog("[AnimationPlayer] Warning: speed must be non-negative and finite, clamping \(speed) to 1.0")
+                speed = 1.0
+            }
+        }
+    }
     public var isLooping = true
     public var applyRootMotion = false
 

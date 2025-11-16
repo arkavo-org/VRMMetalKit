@@ -99,13 +99,34 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public var renderingMode: RenderingMode = .standard
 
     /// Orthographic camera height in world units (for toon2D mode)
-    public var orthoSize: Float = 1.7
+    public var orthoSize: Float = 1.7 {
+        didSet {
+            if orthoSize <= 0 {
+                vrmLog("[VRMRenderer] Warning: orthoSize must be positive, clamping \(orthoSize) to 0.1")
+                orthoSize = max(0.1, orthoSize)
+            }
+        }
+    }
 
     /// Number of cel-shading bands (1-5, only for toon2D mode)
-    public var toonBands: Int = 3
+    public var toonBands: Int = 3 {
+        didSet {
+            if toonBands < 1 || toonBands > 5 {
+                vrmLog("[VRMRenderer] Warning: toonBands must be in range 1-5, clamping \(toonBands) to valid range")
+                toonBands = max(1, min(5, toonBands))
+            }
+        }
+    }
 
     /// Outline width (world-space or screen-space depending on mode)
-    public var outlineWidth: Float = 0.02
+    public var outlineWidth: Float = 0.02 {
+        didSet {
+            if outlineWidth < 0 {
+                vrmLog("[VRMRenderer] Warning: outlineWidth cannot be negative, clamping \(outlineWidth) to 0")
+                outlineWidth = max(0, outlineWidth)
+            }
+        }
+    }
 
     /// Outline color (RGB)
     public var outlineColor: SIMD3<Float> = SIMD3<Float>(0, 0, 0)
@@ -117,6 +138,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// - Parameter aspectRatio: Viewport aspect ratio (width / height)
     /// - Returns: Projection matrix for current settings
     public func makeProjectionMatrix(aspectRatio: Float) -> matrix_float4x4 {
+        // Validate aspect ratio
+        guard aspectRatio > 0 && aspectRatio.isFinite else {
+            vrmLog("[VRMRenderer] Warning: Invalid aspectRatio \(aspectRatio), using default 1.0")
+            return makeProjectionMatrix(aspectRatio: 1.0)
+        }
+
         if useOrthographic {
             let halfHeight = orthoSize / 2.0
             let halfWidth = halfHeight * aspectRatio
