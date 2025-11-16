@@ -153,7 +153,81 @@ final class SpringBoneIntegrationTests: XCTestCase {
     }
 
     // MARK: - Collision Tests
-    // NOTE: Collision test removed - see issue #49 for proper test implementation
+
+    /// Test that sphere collider prevents bone penetration
+    ///
+    /// Properly designed test: Collider is positioned away from initial bone positions,
+    /// gravity pulls bones toward collider, and we verify they stop at safe distance.
+    func testSphereColliderPreventsIntersection() throws {
+        // Build model with bones starting at origin
+        let model = try buildModelWithSpringBones(boneCount: 3)
+
+        // Position bones vertically above ground
+        model.nodes[0].translation = SIMD3<Float>(0, 1.0, 0)  // Bone 0 at y=1.0
+        model.nodes[1].translation = SIMD3<Float>(0, 0.8, 0)  // Bone 1 at y=0.8
+        model.nodes[2].translation = SIMD3<Float>(0, 0.6, 0)  // Bone 2 at y=0.6
+
+        // Add sphere collider at ground level (y=0)
+        var collider = VRMCollider()
+        collider.shape = .sphere(radius: 0.2)  // radius = 0.2
+        collider.node = 0  // Attached to node 0 but positioned at origin
+        collider.offset = SIMD3<Float>(0, -1.0, 0)  // Offset to place at y=0 (ground)
+
+        var springBone = model.springBone ?? VRMSpringBone()
+        springBone.colliders = [collider]
+
+        // Update spring to reference collider
+        if var spring = springBone.springs.first {
+            spring.colliderGroups = [[0]]  // Reference collider 0
+            springBone.springs = [spring]
+        }
+        model.springBone = springBone
+
+        // Create physics system
+        let system = try SpringBoneComputeSystem(device: device)
+
+        // Allocate buffers with collider
+        let buffers = SpringBoneBuffers(device: device)
+        buffers.allocateBuffers(numBones: 3, numSpheres: 1, numCapsules: 0)
+        model.springBoneBuffers = buffers
+
+        try system.populateSpringBoneData(model: model)
+
+        // Simulate long enough for bones to fall toward ground
+        for _ in 0..<120 {  // 2 seconds at 60 FPS
+            system.update(model: model, deltaTime: 1.0 / 60.0)
+        }
+
+        // Wait for GPU completion
+        Thread.sleep(forTimeInterval: 0.2)
+
+        // Read back bone positions
+        system.writeBonesToNodes(model: model)
+
+        // Calculate expected safe distance
+        let colliderRadius: Float = 0.2
+        let boneHitRadius: Float = 0.05  // From buildModelWithSpringBones
+        let safeDistance = colliderRadius + boneHitRadius  // 0.25
+        let colliderCenter = SIMD3<Float>(0, 0, 0)  // Ground level
+
+        // Verify bones stopped outside collider
+        for (index, node) in model.nodes.prefix(3).enumerated() {
+            let distance = simd_distance(node.translation, colliderCenter)
+
+            XCTAssertGreaterThanOrEqual(
+                distance,
+                safeDistance * 0.9,  // Allow 10% tolerance for numerical precision
+                "Bone \(index) penetrated collider: distance=\(distance), safe=\(safeDistance)"
+            )
+
+            // Also verify bones did move downward (gravity worked)
+            XCTAssertLessThan(
+                node.translation.y,
+                0.5,  // Should have fallen significantly from initial positions (0.6-1.0)
+                "Bone \(index) did not fall under gravity: y=\(node.translation.y)"
+            )
+        }
+    }
 
     // MARK: - Performance Tests
 
