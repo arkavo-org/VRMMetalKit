@@ -34,6 +34,8 @@ struct BoneParams {
     float drag;
     float radius;
     uint parentIndex;
+    float gravityPower;  // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
+    float3 gravityDir;   // Direction vector (normalized, typically [0, -1, 0])
 };
 
 kernel void springBonePredict(
@@ -66,8 +68,12 @@ kernel void springBonePredict(
     float3 velocity = bonePosCurr[id] - bonePosPrev[id];
     float dragFactor = 1.0 - boneParams[id].drag;
 
+    // Apply per-joint gravity: global gravity scaled by gravityPower and rotated by gravityDir
+    // gravityDir is typically [0, -1, 0] but can be customized per bone for artistic control
+    float3 effectiveGravity = globalParams.gravity * boneParams[id].gravityPower * boneParams[id].gravityDir;
+
     float3 newPos = bonePosCurr[id] + velocity * dragFactor +
-                    (globalParams.gravity + windForce) *
+                    (effectiveGravity + windForce) *
                     globalParams.dtSub * globalParams.dtSub;
 
     // Clamp step size to prevent explosion (not world position)
