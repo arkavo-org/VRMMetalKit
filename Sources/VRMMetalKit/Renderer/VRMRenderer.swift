@@ -134,6 +134,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Use orthographic projection instead of perspective
     public var useOrthographic: Bool = false
 
+    /// Field of view in degrees (for perspective projection)
+    public var fovDegrees: Float = 60.0 {
+        didSet {
+            if fovDegrees <= 0 || fovDegrees >= 180 {
+                let clampedValue = max(1.0, min(179.0, fovDegrees))
+                vrmLog("[VRMRenderer] Warning: fovDegrees \(fovDegrees) out of range (0, 180), clamped to \(clampedValue)")
+                fovDegrees = clampedValue
+            }
+        }
+    }
+
     /// Calculate projection matrix based on useOrthographic flag
     /// - Parameter aspectRatio: Viewport aspect ratio (width / height)
     /// - Returns: Projection matrix for current settings
@@ -149,15 +160,20 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let halfWidth = halfHeight * aspectRatio
             let width = halfWidth * 2.0
             let height = halfHeight * 2.0
-            let depth = Float(100.0 - 0.1)
+            let nearZ: Float = 0.1
+            let farZ: Float = 100.0
+            let depth = farZ - nearZ
+            // Metal uses reverse-Z with NDC Z in [0, 1]
+            // Maps nearZ -> 1.0, farZ -> 0.0 in clip space
             return matrix_float4x4(columns: (
                 SIMD4<Float>(2.0 / width, 0, 0, 0),
                 SIMD4<Float>(0, 2.0 / height, 0, 0),
-                SIMD4<Float>(0, 0, -2.0 / depth, 0),
-                SIMD4<Float>(0, 0, -(100.0 + 0.1) / depth, 1)
+                SIMD4<Float>(0, 0, -1.0 / depth, 0),
+                SIMD4<Float>(0, 0, farZ / depth, 1)
             ))
         } else {
-            let fovy = Float.pi / 3.0
+            // Convert FOV from degrees to radians
+            let fovy = fovDegrees * Float.pi / 180.0
             let ys = 1.0 / tan(fovy * 0.5)
             let xs = ys / aspectRatio
             let nearZ: Float = 0.1
