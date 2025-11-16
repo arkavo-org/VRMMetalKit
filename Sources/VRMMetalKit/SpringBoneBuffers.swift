@@ -149,12 +149,17 @@ public struct BoneParams {
     public var drag: Float
     public var radius: Float
     public var parentIndex: UInt32
+    public var gravityPower: Float      // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
+    public var gravityDir: SIMD3<Float> // Direction vector (normalized, typically [0, -1, 0])
 
-    public init(stiffness: Float, drag: Float, radius: Float, parentIndex: UInt32) {
+    public init(stiffness: Float, drag: Float, radius: Float, parentIndex: UInt32,
+                gravityPower: Float = 1.0, gravityDir: SIMD3<Float> = SIMD3<Float>(0, -1, 0)) {
         self.stiffness = stiffness
         self.drag = drag
         self.radius = radius
         self.parentIndex = parentIndex
+        self.gravityPower = gravityPower
+        self.gravityDir = gravityDir
     }
 }
 

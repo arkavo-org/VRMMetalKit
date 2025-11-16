@@ -313,12 +313,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     rootBoneIndices.append(UInt32(boneIndex))
                 }
 
+                // Normalize gravity direction to ensure unit vector for GPU
+                let normalizedGravityDir = simd_length(joint.gravityDir) > 0.001
+                    ? simd_normalize(joint.gravityDir)
+                    : SIMD3<Float>(0, -1, 0) // Default downward if zero vector
+
                 let params = BoneParams(
                     stiffness: joint.stiffness,
                     drag: joint.dragForce,
                     radius: joint.hitRadius,
                     // Only set parent for non-root bones within the same chain
-                    parentIndex: (isRootBone || jointIndexInChain == 0) ? 0xFFFFFFFF : UInt32(boneIndex - 1)
+                    parentIndex: (isRootBone || jointIndexInChain == 0) ? 0xFFFFFFFF : UInt32(boneIndex - 1),
+                    gravityPower: joint.gravityPower,
+                    gravityDir: normalizedGravityDir
                 )
                 boneParams.append(params)
 
@@ -383,18 +390,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         for (chainIndex, gravityPowers) in chainGravityPowers.enumerated() {
             let allZeroGravity = gravityPowers.allSatisfy { $0 == 0 }
             if allZeroGravity && !gravityPowers.isEmpty {
-                // Update global params gravity multiplier for these bones
-                // Note: In GPU version, we modify globalParams.gravity instead of per-bone gravityPower
-                // This is simpler and equivalent for all-zero chains
+                // Fix: Set gravityPower to 1.0 for all bones in this chain
+                for i in 0..<gravityPowers.count {
+                    let globalBoneIndex = boneIndexForFix + i
+                    if globalBoneIndex < boneParams.count {
+                        boneParams[globalBoneIndex].gravityPower = 1.0
+                    }
+                }
                 fixedChainCount += 1
-
-                vrmLog("⚠️ [SpringBone GPU] Chain \(chainIndex) has gravityPower=0. Gravity will be applied globally.")
+                vrmLog("⚠️ [SpringBone GPU] Chain \(chainIndex) has gravityPower=0. Auto-fixed to 1.0 for \(gravityPowers.count) bones.")
             }
             boneIndexForFix += gravityPowers.count
         }
 
         if fixedChainCount > 0 {
-            vrmLog("⚠️ [SpringBone GPU] Model has \(fixedChainCount) spring chain(s) with gravityPower=0. Using global gravity setting.")
+            vrmLog("✅ [SpringBone GPU] Auto-fixed \(fixedChainCount) spring chain(s) with zero gravityPower.")
         }
 
         // Process colliders
