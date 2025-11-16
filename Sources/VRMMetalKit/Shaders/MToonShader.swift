@@ -606,23 +606,46 @@ public struct MToonMaterialUniforms {
     }
 
     // Validation function to check for correctness
-    public func validate() {
-        precondition(outlineMode == 0 || outlineMode == 1 || outlineMode == 2,
-                    "Invalid outline mode: \(outlineMode)")
-        precondition(all(matcapFactor .>= 0) && all(matcapFactor .<= 4),
-                    "Matcap factor out of range: \(matcapFactor)")
-        precondition(parametricRimFresnelPowerFactor >= 0,
-                    "Rim fresnel power must be non-negative: \(parametricRimFresnelPowerFactor)")
-        precondition(rimLightingMixFactor >= 0 && rimLightingMixFactor <= 1,
-                    "Rim lighting mix factor out of range: \(rimLightingMixFactor)")
-        precondition(outlineLightingMixFactor >= 0 && outlineLightingMixFactor <= 1,
-                    "Outline lighting mix factor out of range: \(outlineLightingMixFactor)")
-        precondition(giIntensityFactor >= 0 && giIntensityFactor <= 1,
-                    "GI intensity factor out of range: \(giIntensityFactor)")
-        precondition(shadingToonyFactor >= 0 && shadingToonyFactor <= 1,
-                    "Shading toony factor out of range: \(shadingToonyFactor)")
-        precondition(shadingShiftFactor >= -1 && shadingShiftFactor <= 1,
-                    "Shading shift factor out of range: \(shadingShiftFactor)")
+    public func validate() throws {
+        // Validate outline mode
+        guard outlineMode == 0 || outlineMode == 1 || outlineMode == 2 else {
+            throw VRMMaterialValidationError.invalidOutlineMode(Int(outlineMode))
+        }
+
+        // Validate matcap factor
+        guard all(matcapFactor .>= 0) && all(matcapFactor .<= 4) else {
+            throw VRMMaterialValidationError.matcapFactorOutOfRange(matcapFactor)
+        }
+
+        // Validate rim fresnel power
+        guard parametricRimFresnelPowerFactor >= 0 else {
+            throw VRMMaterialValidationError.rimFresnelPowerNegative(parametricRimFresnelPowerFactor)
+        }
+
+        // Validate rim lighting mix
+        guard rimLightingMixFactor >= 0 && rimLightingMixFactor <= 1 else {
+            throw VRMMaterialValidationError.rimLightingMixOutOfRange(rimLightingMixFactor)
+        }
+
+        // Validate outline lighting mix
+        guard outlineLightingMixFactor >= 0 && outlineLightingMixFactor <= 1 else {
+            throw VRMMaterialValidationError.outlineLightingMixOutOfRange(outlineLightingMixFactor)
+        }
+
+        // Validate GI intensity
+        guard giIntensityFactor >= 0 && giIntensityFactor <= 1 else {
+            throw VRMMaterialValidationError.giIntensityOutOfRange(giIntensityFactor)
+        }
+
+        // Validate shading toony factor
+        guard shadingToonyFactor >= 0 && shadingToonyFactor <= 1 else {
+            throw VRMMaterialValidationError.shadingToonyOutOfRange(shadingToonyFactor)
+        }
+
+        // Validate shading shift factor
+        guard shadingShiftFactor >= -1 && shadingShiftFactor <= 1 else {
+            throw VRMMaterialValidationError.shadingShiftOutOfRange(shadingShiftFactor)
+        }
 
         #if DEBUG
         // Additional debug checks

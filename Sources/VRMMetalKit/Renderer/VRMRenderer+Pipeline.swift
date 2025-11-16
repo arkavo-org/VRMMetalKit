@@ -54,7 +54,11 @@ extension VRMRenderer {
             if swiftStride != expectedMetalSize {
                 let message = "MToonMaterialUniforms stride mismatch! Swift: \(swiftStride), Expected: \(expectedMetalSize)"
                 if config.strict == .fail {
-                    fatalError("[StrictMode] \(message)")
+                    do {
+                        try strictValidator?.handle(.uniformLayoutMismatch(swift: swiftStride, metal: expectedMetalSize, type: "MToonMaterialUniforms"))
+                    } catch {
+                        vrmLog("⚠️ [StrictMode] Error handling validation: \(error)")
+                    }
                 } else {
                     vrmLog("⚠️ [StrictMode] \(message)")
                 }
@@ -256,7 +260,13 @@ extension VRMRenderer {
 
         } catch {
             if config.strict == .fail {
-                fatalError("Failed to setup pipeline: \(error)")
+                vrmLog("❌ [VRMRenderer] Failed to setup pipeline: \(error)")
+                // In strict mode, propagate the error through validator
+                do {
+                    try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))
+                } catch {
+                    vrmLog("❌ [VRMRenderer] StrictMode validation failed: \(error)")
+                }
             } else {
                 vrmLog("Failed to setup pipeline: \(error)")
             }
@@ -375,7 +385,13 @@ extension VRMRenderer {
             vrmLog("[SKINNED PSO] Created skinned blend pipeline successfully")
         } catch {
             if config.strict == .fail {
-                fatalError("Failed to setup skinned pipeline: \(error)")
+                vrmLog("❌ [VRMRenderer] Failed to setup skinned pipeline: \(error)")
+                // In strict mode, propagate the error through validator
+                do {
+                    try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))
+                } catch {
+                    vrmLog("❌ [VRMRenderer] StrictMode validation failed: \(error)")
+                }
             } else {
                 vrmLog("Failed to setup skinned pipeline: \(error)")
             }
@@ -529,7 +545,12 @@ extension VRMRenderer {
         } catch {
             vrmLog("[VRMRenderer] ❌ Failed to setup Toon2D pipeline: \(error)")
             if config.strict == .fail {
-                fatalError("Failed to setup Toon2D pipeline: \(error)")
+                // In strict mode, propagate the error through validator
+                do {
+                    try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))
+                } catch {
+                    vrmLog("❌ [VRMRenderer] StrictMode validation failed: \(error)")
+                }
             }
         }
     }
@@ -671,7 +692,12 @@ extension VRMRenderer {
         } catch {
             vrmLog("[VRMRenderer] ❌ Failed to setup Toon2D skinned pipeline: \(error)")
             if config.strict == .fail {
-                fatalError("Failed to setup Toon2D skinned pipeline: \(error)")
+                // In strict mode, propagate the error through validator
+                do {
+                    try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))
+                } catch {
+                    vrmLog("❌ [VRMRenderer] StrictMode validation failed: \(error)")
+                }
             }
         }
     }
@@ -747,7 +773,12 @@ extension VRMRenderer {
         } catch {
             vrmLog("[VRMRenderer] Failed to setup sprite pipeline: \(error)")
             if config.strict == .fail {
-                fatalError("Failed to setup sprite pipeline: \(error)")
+                // In strict mode, propagate the error through validator
+                do {
+                    try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))
+                } catch {
+                    vrmLog("❌ [VRMRenderer] StrictMode validation failed: \(error)")
+                }
             }
         }
     }
