@@ -314,4 +314,113 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertEqual(perspMatrix.columns.2.z, expectedZs, accuracy: 0.001,
                        "Perspective should use Metal reverse-Z convention")
     }
+
+    // MARK: - Lighting API Tests
+
+    /// Test setting individual lights with valid values
+    func testSetLightValidValues() {
+        // Test light 0 (key light)
+        renderer.setLight(0, direction: SIMD3(0, 1, 0), color: SIMD3(1, 0, 0), intensity: 1.0)
+        XCTAssertEqual(renderer.uniforms.lightColor, SIMD3<Float>(1, 0, 0), "Light 0 color should be set")
+
+        // Test light 1 (fill light)
+        renderer.setLight(1, direction: SIMD3(1, 0, 0), color: SIMD3(0, 1, 0), intensity: 0.5)
+        XCTAssertEqual(renderer.uniforms.light1Color, SIMD3<Float>(0, 0.5, 0), "Light 1 color should be set with intensity")
+
+        // Test light 2 (rim light)
+        renderer.setLight(2, direction: SIMD3(0, 0, 1), color: SIMD3(0, 0, 1), intensity: 0.3)
+        XCTAssertEqual(renderer.uniforms.light2Color, SIMD3<Float>(0, 0, 0.3), "Light 2 color should be set with intensity")
+    }
+
+    /// Test that light directions are normalized
+    func testLightDirectionNormalization() {
+        renderer.setLight(0, direction: SIMD3(1, 1, 1), color: SIMD3(1, 1, 1), intensity: 1.0)
+        let length = simd_length(renderer.uniforms.lightDirection)
+        XCTAssertEqual(length, 1.0, accuracy: 0.001, "Light direction should be normalized")
+
+        // Test with non-uniform vector
+        renderer.setLight(1, direction: SIMD3(3, 4, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        let length1 = simd_length(renderer.uniforms.light1Direction)
+        XCTAssertEqual(length1, 1.0, accuracy: 0.001, "Light 1 direction should be normalized")
+    }
+
+    /// Test that zero-length directions are handled gracefully
+    func testLightZeroDirectionHandling() {
+        renderer.setLight(0, direction: SIMD3(0, 0, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        // Should fall back to (0, 1, 0)
+        XCTAssertEqual(renderer.uniforms.lightDirection, SIMD3<Float>(0, 1, 0), "Zero direction should use fallback")
+
+        // Near-zero direction
+        renderer.setLight(1, direction: SIMD3(0.00001, 0, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        XCTAssertEqual(renderer.uniforms.light1Direction, SIMD3<Float>(0, 1, 0), "Near-zero direction should use fallback")
+    }
+
+    /// Test disabling lights
+    func testDisableLights() {
+        // Enable all lights first
+        renderer.setLight(0, direction: SIMD3(1, 0, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(1, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(2, direction: SIMD3(0, 0, 1), color: SIMD3(1, 1, 1), intensity: 1.0)
+
+        // Disable light 1
+        renderer.disableLight(1)
+        XCTAssertEqual(renderer.uniforms.light1Color, SIMD3<Float>(0, 0, 0), "Disabled light should have zero color")
+
+        // Other lights should remain active
+        XCTAssertNotEqual(renderer.uniforms.lightColor, SIMD3<Float>(0, 0, 0), "Light 0 should still be active")
+        XCTAssertNotEqual(renderer.uniforms.light2Color, SIMD3<Float>(0, 0, 0), "Light 2 should still be active")
+    }
+
+    /// Test 3-point lighting setup
+    func testSetup3PointLighting() {
+        renderer.setup3PointLighting()
+
+        // All lights should be enabled (non-zero color)
+        XCTAssertGreaterThan(simd_length(renderer.uniforms.lightColor), 0, "Key light should be enabled")
+        XCTAssertGreaterThan(simd_length(renderer.uniforms.light1Color), 0, "Fill light should be enabled")
+        XCTAssertGreaterThan(simd_length(renderer.uniforms.light2Color), 0, "Rim light should be enabled")
+
+        // Directions should be normalized
+        XCTAssertEqual(simd_length(renderer.uniforms.lightDirection), 1.0, accuracy: 0.001, "Key direction normalized")
+        XCTAssertEqual(simd_length(renderer.uniforms.light1Direction), 1.0, accuracy: 0.001, "Fill direction normalized")
+        XCTAssertEqual(simd_length(renderer.uniforms.light2Direction), 1.0, accuracy: 0.001, "Rim direction normalized")
+    }
+
+    /// Test 3-point lighting with custom intensities
+    func testSetup3PointLightingCustomIntensities() {
+        renderer.setup3PointLighting(keyIntensity: 1.5, fillIntensity: 0.3, rimIntensity: 0.8)
+
+        // Key light should be brighter than default (1.5 vs 1.0)
+        let keyBrightness = simd_length(renderer.uniforms.lightColor)
+        XCTAssertGreaterThan(keyBrightness, 1.0, "Key light should be brighter with intensity 1.5")
+
+        // Fill and rim should have correct relative intensities
+        let fillBrightness = simd_length(renderer.uniforms.light1Color)
+        let rimBrightness = simd_length(renderer.uniforms.light2Color)
+        XCTAssertLessThan(fillBrightness, keyBrightness, "Fill should be dimmer than key")
+        XCTAssertGreaterThan(rimBrightness, fillBrightness, "Rim should be brighter than fill")
+    }
+
+    /// Test that invalid light indices are handled gracefully
+    func testInvalidLightIndex() {
+        // Set valid state first
+        renderer.setLight(0, direction: SIMD3(1, 0, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        let originalColor = renderer.uniforms.lightColor
+
+        // Try invalid indices (should log warning but not crash)
+        renderer.setLight(-1, direction: SIMD3(0, 1, 0), color: SIMD3(0, 0, 0), intensity: 1.0)
+        renderer.setLight(3, direction: SIMD3(0, 1, 0), color: SIMD3(0, 0, 0), intensity: 1.0)
+        renderer.setLight(100, direction: SIMD3(0, 1, 0), color: SIMD3(0, 0, 0), intensity: 1.0)
+
+        // Valid light should remain unchanged
+        XCTAssertEqual(renderer.uniforms.lightColor, originalColor, "Invalid indices should not affect existing lights")
+    }
+
+    /// Test Uniforms struct size matches StrictMode constant
+    func testUniformsStructSize() {
+        let actualSize = MemoryLayout<Uniforms>.size
+        let expectedSize = MetalSizeConstants.uniformsSize
+        XCTAssertEqual(actualSize, expectedSize,
+                       "Uniforms struct size (\(actualSize)) must match MetalSizeConstants.uniformsSize (\(expectedSize))")
+    }
 }
