@@ -512,22 +512,55 @@ final class VRMRendererTests: XCTestCase {
         // In automatic mode (default), normalization factor should prevent over-brightness
         renderer.setLightNormalizationMode(.automatic)
 
-        // Calculate total light intensity
-        let totalIntensity = simd_length(renderer.uniforms.lightColor)
-                           + simd_length(renderer.uniforms.light1Color)
-                           + simd_length(renderer.uniforms.light2Color)
+        // Calculate total per-component (correct approach)
+        let totalR = renderer.uniforms.lightColor.x + renderer.uniforms.light1Color.x + renderer.uniforms.light2Color.x
+        let totalG = renderer.uniforms.lightColor.y + renderer.uniforms.light1Color.y + renderer.uniforms.light2Color.y
+        let totalB = renderer.uniforms.lightColor.z + renderer.uniforms.light1Color.z + renderer.uniforms.light2Color.z
+        let maxComponent = max(totalR, max(totalG, totalB))
 
-        XCTAssertGreaterThan(totalIntensity, 1.0, "Total light intensity should exceed 1.0 before normalization")
+        XCTAssertGreaterThan(maxComponent, 1.0, "Max component should exceed 1.0 before normalization")
+        XCTAssertEqual(maxComponent, 3.0, accuracy: 0.001, "With three (1,1,1) lights, max component should be 3.0")
 
-        // Expected normalization factor = 1.0 / totalIntensity
-        let expectedFactor = 1.0 / totalIntensity
+        // Expected normalization factor = 1.0 / maxComponent
+        let expectedFactor = 1.0 / maxComponent
 
         // Simulate what render() would calculate
-        let calculatedFactor = (totalIntensity > 1.0) ? (1.0 / totalIntensity) : 1.0
+        let calculatedFactor = (maxComponent > 1.0) ? (1.0 / maxComponent) : 1.0
 
         XCTAssertEqual(calculatedFactor, expectedFactor, accuracy: 0.001,
-                       "Normalization factor should be 1.0 / totalIntensity")
+                       "Normalization factor should be 1.0 / maxComponent")
+        XCTAssertEqual(calculatedFactor, 1.0/3.0, accuracy: 0.001, "Factor should be 1/3 for three equal lights")
         XCTAssertLessThan(calculatedFactor, 1.0, "Normalization factor should be < 1.0 when lights are bright")
+    }
+
+    /// Test per-component normalization with asymmetric colors
+    func testPerComponentNormalization() {
+        // Set up lights with asymmetric colors (red-heavy)
+        renderer.setLight(0, direction: SIMD3(0, 1, 0), color: SIMD3(1.0, 0.2, 0.2), intensity: 1.0)
+        renderer.setLight(1, direction: SIMD3(0, 1, 0), color: SIMD3(1.0, 0.2, 0.2), intensity: 1.0)
+        renderer.setLight(2, direction: SIMD3(0, 1, 0), color: SIMD3(1.0, 0.2, 0.2), intensity: 1.0)
+
+        renderer.setLightNormalizationMode(.automatic)
+
+        // Calculate per-component totals
+        let totalR = renderer.uniforms.lightColor.x + renderer.uniforms.light1Color.x + renderer.uniforms.light2Color.x
+        let totalG = renderer.uniforms.lightColor.y + renderer.uniforms.light1Color.y + renderer.uniforms.light2Color.y
+        let totalB = renderer.uniforms.lightColor.z + renderer.uniforms.light1Color.z + renderer.uniforms.light2Color.z
+
+        XCTAssertEqual(totalR, 3.0, accuracy: 0.001, "Red channel sums to 3.0")
+        XCTAssertEqual(totalG, 0.6, accuracy: 0.001, "Green channel sums to 0.6")
+        XCTAssertEqual(totalB, 0.6, accuracy: 0.001, "Blue channel sums to 0.6")
+
+        // Max component is red
+        let maxComponent = max(totalR, max(totalG, totalB))
+        XCTAssertEqual(maxComponent, 3.0, accuracy: 0.001, "Max component is red (3.0)")
+
+        // Normalization should be based on red channel
+        let expectedFactor: Float = 1.0 / 3.0
+        let calculatedFactor: Float = (maxComponent > 1.0) ? (1.0 / maxComponent) : 1.0
+
+        XCTAssertEqual(calculatedFactor, expectedFactor, accuracy: 0.001,
+                       "Normalization should be based on max component (red)")
     }
 
     /// Test manual normalization factor clamping
