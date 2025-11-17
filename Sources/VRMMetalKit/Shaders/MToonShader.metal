@@ -369,6 +369,10 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Final color output
  litColor = saturate(litColor);
 
+ #if 1  // DEBUG: Output unlit baseColor to diagnose clipping
+ return float4(baseColor.rgb * 0.5, baseColor.a);
+ #endif
+
  #if 0  // DEBUG: Visualize vertex attributes
  // Show joint indices and weights to verify skinning data
  return float4(float(in.joints[0]) / 255.0, in.weights[0], 0.0, 1.0);
