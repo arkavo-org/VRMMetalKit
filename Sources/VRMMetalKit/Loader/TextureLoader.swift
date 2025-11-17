@@ -267,6 +267,9 @@ public class TextureLoader {
 
         vrmLog("[TextureLoader] Creating CGContext...")
         let colorSpace = CGColorSpaceCreateDeviceRGB()
+
+        // Use straight alpha (not premultiplied) to avoid double-multiplication in shader
+        // The shader will multiply texture * baseColorFactor, so texture should not be premultiplied
         guard let context = CGContext(
             data: bitmapData,
             width: width,
@@ -274,12 +277,12 @@ public class TextureLoader {
             bitsPerComponent: 8,
             bytesPerRow: bytesPerRow,
             space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue  // Straight alpha, not premultiplied
         ) else {
             vrmLog("[TextureLoader] Failed to create bitmap context")
             return nil
         }
-        vrmLog("[TextureLoader] CGContext created")
+        vrmLog("[TextureLoader] CGContext created with straight alpha")
 
         vrmLog("[TextureLoader] Drawing image to context...")
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
@@ -294,6 +297,19 @@ public class TextureLoader {
             bytesPerRow: bytesPerRow
         )
         vrmLog("[TextureLoader] Texture data replaced")
+
+        // DEBUG: Sample first pixel to check for extreme values
+        #if DEBUG
+        let firstPixel = bitmapData.assumingMemoryBound(to: UInt8.self)
+        let r = Float(firstPixel[0]) / 255.0
+        let g = Float(firstPixel[1]) / 255.0
+        let b = Float(firstPixel[2]) / 255.0
+        let a = Float(firstPixel[3]) / 255.0
+        vrmLog("[TextureLoader] First pixel RGBA: (\(String(format: "%.3f", r)), \(String(format: "%.3f", g)), \(String(format: "%.3f", b)), \(String(format: "%.3f", a)))")
+        if r > 1.0 || g > 1.0 || b > 1.0 {
+            vrmLog("  ⚠️ WARNING: Pixel values exceed 1.0!")
+        }
+        #endif
 
         vrmLog("[TextureLoader] Texture created successfully")
         return texture

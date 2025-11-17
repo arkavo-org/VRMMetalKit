@@ -927,7 +927,28 @@ public class VRMMaterial {
 
         if let pbr = gltfMaterial.pbrMetallicRoughness {
             if let baseColor = pbr.baseColorFactor, baseColor.count == 4 {
-                baseColorFactor = SIMD4<Float>(baseColor[0], baseColor[1], baseColor[2], baseColor[3])
+                let unclamped = SIMD4<Float>(baseColor[0], baseColor[1], baseColor[2], baseColor[3])
+
+                // DEBUG: Log parsed values before clamping
+                #if DEBUG
+                vrmLog("[VRMMaterial] Parsed '\(gltfMaterial.name ?? "unnamed")' baseColorFactor: \(unclamped)")
+                if unclamped.x > 10.0 || unclamped.y > 10.0 || unclamped.z > 10.0 || unclamped.w > 10.0 {
+                    vrmLog("  ⚠️ WARNING: Extreme baseColorFactor detected (>10.0)!")
+                }
+                if unclamped.x < 0.0 || unclamped.y < 0.0 || unclamped.z < 0.0 || unclamped.w < 0.0 {
+                    vrmLog("  ⚠️ WARNING: Negative baseColorFactor detected!")
+                }
+                if unclamped.x.isNaN || unclamped.y.isNaN || unclamped.z.isNaN || unclamped.w.isNaN {
+                    vrmLog("  ⚠️ ERROR: NaN detected in baseColorFactor!")
+                }
+                #endif
+
+                // Clamp to valid range [0.0, 1.0] per glTF 2.0 spec
+                baseColorFactor = simd_clamp(unclamped, SIMD4<Float>(repeating: 0.0), SIMD4<Float>(repeating: 1.0))
+
+                if baseColorFactor != unclamped {
+                    vrmLog("  🔧 Clamped baseColorFactor from \(unclamped) to \(baseColorFactor)")
+                }
             }
             metallicFactor = pbr.metallicFactor ?? 0.0
             roughnessFactor = pbr.roughnessFactor ?? 1.0
