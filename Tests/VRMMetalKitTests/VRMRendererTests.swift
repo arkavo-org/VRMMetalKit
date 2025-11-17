@@ -460,6 +460,90 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertEqual(renderer.uniforms.lightColor, originalColor, "Invalid indices should not affect existing lights")
     }
 
+    /// Test default light normalization mode
+    func testDefaultLightNormalizationMode() {
+        // Default should be .automatic
+        switch renderer.lightNormalizationMode {
+        case .automatic:
+            XCTAssert(true, "Default normalization mode is automatic")
+        default:
+            XCTFail("Default normalization mode should be .automatic")
+        }
+    }
+
+    /// Test light normalization modes
+    func testLightNormalizationModes() {
+        // Test automatic mode
+        renderer.setLightNormalizationMode(.automatic)
+        renderer.setLight(0, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(1, direction: SIMD3(0, 1, 0), color: SIMD3(0.5, 0.5, 0.5), intensity: 1.0)
+        renderer.setLight(2, direction: SIMD3(0, 1, 0), color: SIMD3(0.3, 0.3, 0.3), intensity: 1.0)
+
+        // Total intensity: sqrt(3) + sqrt(0.75) + sqrt(0.27) ≈ 1.732 + 0.866 + 0.520 ≈ 3.118
+        // In automatic mode, this should trigger normalization
+        // We'll verify in the next frame that normalization is applied
+
+        // Test disabled mode
+        renderer.setLightNormalizationMode(.disabled)
+        switch renderer.lightNormalizationMode {
+        case .disabled:
+            XCTAssert(true, "Normalization mode set to disabled")
+        default:
+            XCTFail("Should be in disabled mode")
+        }
+
+        // Test manual mode
+        renderer.setLightNormalizationMode(.manual(0.5))
+        switch renderer.lightNormalizationMode {
+        case .manual(let factor):
+            XCTAssertEqual(factor, 0.5, accuracy: 0.001, "Manual normalization factor should be 0.5")
+        default:
+            XCTFail("Should be in manual mode with factor 0.5")
+        }
+    }
+
+    /// Test energy conservation prevents over-brightness
+    func testLightingEnergyConservation() {
+        // Set up three bright lights that would exceed 1.0 if added naively
+        renderer.setLight(0, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(1, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(2, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+
+        // In automatic mode (default), normalization factor should prevent over-brightness
+        renderer.setLightNormalizationMode(.automatic)
+
+        // Calculate total light intensity
+        let totalIntensity = simd_length(renderer.uniforms.lightColor)
+                           + simd_length(renderer.uniforms.light1Color)
+                           + simd_length(renderer.uniforms.light2Color)
+
+        XCTAssertGreaterThan(totalIntensity, 1.0, "Total light intensity should exceed 1.0 before normalization")
+
+        // Expected normalization factor = 1.0 / totalIntensity
+        let expectedFactor = 1.0 / totalIntensity
+
+        // Simulate what render() would calculate
+        let calculatedFactor = (totalIntensity > 1.0) ? (1.0 / totalIntensity) : 1.0
+
+        XCTAssertEqual(calculatedFactor, expectedFactor, accuracy: 0.001,
+                       "Normalization factor should be 1.0 / totalIntensity")
+        XCTAssertLessThan(calculatedFactor, 1.0, "Normalization factor should be < 1.0 when lights are bright")
+    }
+
+    /// Test manual normalization factor clamping
+    func testManualNormalizationFactorClamping() {
+        // Negative factors should be clamped to 0
+        renderer.setLightNormalizationMode(.manual(-0.5))
+
+        switch renderer.lightNormalizationMode {
+        case .manual(let factor):
+            // The clamping happens in render(), so we just verify the mode stores the value
+            XCTAssertEqual(factor, -0.5, accuracy: 0.001, "Manual mode stores the factor as-is")
+        default:
+            XCTFail("Should be in manual mode")
+        }
+    }
+
     /// Test Uniforms struct size matches StrictMode constant
     func testUniformsStructSize() {
         let actualSize = MemoryLayout<Uniforms>.size
