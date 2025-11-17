@@ -246,7 +246,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  if (material.hasBaseColorTexture > 0) {
  float4 texColor = baseColorTexture.sample(textureSampler, uv);
 
- #if 1  // DEBUG: Output raw texture value (before material factor multiplication)
+ #if 0  // DEBUG: Output raw texture value (before material factor multiplication) - DISABLED
  return float4(texColor.rgb, 1.0);
  #endif
 
