@@ -264,6 +264,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                  intensity: rimIntensity)
     }
 
+    /// Set ambient light color
+    /// - Parameter color: Ambient light color (RGB, will be clamped to 0-1 range)
+    public func setAmbientColor(_ color: SIMD3<Float>) {
+        uniforms.ambientColor = simd_clamp(color, SIMD3<Float>(repeating: 0.0), SIMD3<Float>(repeating: 1.0))
+    }
+
     // Pipeline states for 2.5D rendering (non-skinned)
     var toon2DOpaquePipelineState: MTLRenderPipelineState?
     var toon2DBlendPipelineState: MTLRenderPipelineState?
@@ -3335,7 +3341,7 @@ struct Uniforms {
     // Light 0 (key light)
     var lightDirection_packed = SIMD4<Float>(0.5, 1.0, 0.5, 0.0) // 16 bytes, offset 256 (SIMD3 + padding)
     var lightColor_packed = SIMD4<Float>(1.0, 1.0, 1.0, 0.0)      // 16 bytes, offset 272 (SIMD3 + padding)
-    var ambientColor_packed = SIMD4<Float>(0.4, 0.4, 0.4, 0.0)   // 16 bytes, offset 288 (SIMD3 + padding)
+    var ambientColor_packed = SIMD4<Float>(0.05, 0.05, 0.05, 0.0)   // 16 bytes, offset 288 (SIMD3 + padding)
 
     // Light 1 (fill light)
     var light1Direction_packed = SIMD4<Float>(0, 0, 0, 0)         // 16 bytes, offset 304 (disabled by default)
