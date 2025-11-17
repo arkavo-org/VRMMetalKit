@@ -401,6 +401,50 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertGreaterThan(rimBrightness, fillBrightness, "Rim should be brighter than fill")
     }
 
+    /// Test default ambient color value
+    func testDefaultAmbientColor() {
+        // Verify default ambient color is 0.05
+        let ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 0.05, accuracy: 0.001, "Default ambient R should be 0.05")
+        XCTAssertEqual(ambient.y, 0.05, accuracy: 0.001, "Default ambient G should be 0.05")
+        XCTAssertEqual(ambient.z, 0.05, accuracy: 0.001, "Default ambient B should be 0.05")
+    }
+
+    /// Test setAmbientColor() with valid values
+    func testSetAmbientColorValid() {
+        // Set custom ambient color
+        renderer.setAmbientColor(SIMD3<Float>(0.1, 0.2, 0.3))
+
+        let ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 0.1, accuracy: 0.001, "Ambient R should be 0.1")
+        XCTAssertEqual(ambient.y, 0.2, accuracy: 0.001, "Ambient G should be 0.2")
+        XCTAssertEqual(ambient.z, 0.3, accuracy: 0.001, "Ambient B should be 0.3")
+    }
+
+    /// Test setAmbientColor() clamping behavior
+    func testSetAmbientColorClamping() {
+        // Test negative values are clamped to 0
+        renderer.setAmbientColor(SIMD3<Float>(-0.5, -1.0, -0.1))
+        var ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 0.0, accuracy: 0.001, "Negative ambient R should be clamped to 0")
+        XCTAssertEqual(ambient.y, 0.0, accuracy: 0.001, "Negative ambient G should be clamped to 0")
+        XCTAssertEqual(ambient.z, 0.0, accuracy: 0.001, "Negative ambient B should be clamped to 0")
+
+        // Test values > 1.0 are clamped to 1.0
+        renderer.setAmbientColor(SIMD3<Float>(1.5, 2.0, 10.0))
+        ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 1.0, accuracy: 0.001, "Ambient R > 1 should be clamped to 1")
+        XCTAssertEqual(ambient.y, 1.0, accuracy: 0.001, "Ambient G > 1 should be clamped to 1")
+        XCTAssertEqual(ambient.z, 1.0, accuracy: 0.001, "Ambient B > 1 should be clamped to 1")
+
+        // Test mixed values (some in range, some out)
+        renderer.setAmbientColor(SIMD3<Float>(-0.1, 0.5, 1.5))
+        ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 0.0, accuracy: 0.001, "Negative value clamped to 0")
+        XCTAssertEqual(ambient.y, 0.5, accuracy: 0.001, "In-range value unchanged")
+        XCTAssertEqual(ambient.z, 1.0, accuracy: 0.001, "Value > 1 clamped to 1")
+    }
+
     /// Test that invalid light indices are handled gracefully
     func testInvalidLightIndex() {
         // Set valid state first
