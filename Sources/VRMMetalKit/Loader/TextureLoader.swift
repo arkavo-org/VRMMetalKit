@@ -236,9 +236,10 @@ public class TextureLoader {
         vrmLog("[TextureLoader] Image size: \(width)x\(height)")
 
         vrmLog("[TextureLoader] Creating texture descriptor...")
-        // Use sRGB for color textures (most VRM textures are color maps)
+        // Use linear format - CGImage already handles sRGB conversion when reading files
+        // Using .rgba8Unorm_srgb would apply sRGB conversion TWICE, causing over-bright textures
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba8Unorm_srgb,  // sRGB for proper color rendering
+            pixelFormat: .rgba8Unorm,  // Linear format to avoid double sRGB conversion
             width: width,
             height: height,
             mipmapped: false
