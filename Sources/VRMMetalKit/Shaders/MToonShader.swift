@@ -614,7 +614,7 @@ public struct MToonMaterialUniforms {
 
         // Validate matcap factor
         guard all(matcapFactor .>= 0) && all(matcapFactor .<= 4) else {
-            throw VRMMaterialValidationError.matcapFactorOutOfRange(SIMD4(matcapFactor, 1.0))
+            throw VRMMaterialValidationError.matcapFactorOutOfRange(SIMD4<Float>(matcapFactor, 1.0))
         }
 
         // Validate rim fresnel power

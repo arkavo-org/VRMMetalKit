@@ -23,9 +23,17 @@ struct Uniforms {
  float4x4 viewMatrix;
  float4x4 projectionMatrix;
  float4x4 normalMatrix;
+ // Light 0 (key light)
  float3 lightDirection;
  float3 lightColor;
  float3 ambientColor;
+ // Light 1 (fill light)
+ float3 light1Direction;
+ float3 light1Color;
+ // Light 2 (rim/back light)
+ float3 light2Direction;
+ float3 light2Color;
+ // Other fields
  float2 viewportSize;
  float nearPlane;
  float farPlane;

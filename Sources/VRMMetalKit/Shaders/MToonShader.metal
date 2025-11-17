@@ -23,9 +23,17 @@ struct Uniforms {
  float4x4 viewMatrix;
  float4x4 projectionMatrix;
  float4x4 normalMatrix;
+ // Light 0 (key light)
  float3 lightDirection;
  float3 lightColor;
  float3 ambientColor;
+ // Light 1 (fill light)
+ float3 light1Direction;
+ float3 light1Color;
+ // Light 2 (rim/back light)
+ float3 light2Direction;
+ float3 light2Color;
+ // Other fields
  float2 viewportSize;          // For screen-space outline calculation
  float nearPlane;              // Camera near plane
  float farPlane;               // Camera far plane
@@ -270,19 +278,39 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  shadingShift += (shiftTexValue - 0.5) * material.shadingShiftTextureScale;
  }
 
- // MToon toon shading
- float NdotL = dot(normal, uniforms.lightDirection);
+ // MToon toon shading with 3-point lighting
  float toony = material.shadingToonyFactor;
+ float3 litColor = float3(0.0);
 
+ // Light 0 (key light)
+ if (any(uniforms.lightColor > 0.0)) {
+ float NdotL = dot(normal, uniforms.lightDirection);
  float shadowStep = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL);
+ float3 lit = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor;
+ litColor += lit;
+ }
 
- // Mix lit and shade colors
- float3 litColor = mix(shadeColor, baseColor.rgb, shadowStep);
+ // Light 1 (fill light)
+ if (any(uniforms.light1Color > 0.0)) {
+ float NdotL1 = dot(normal, uniforms.light1Direction);
+ float shadowStep1 = smoothstep(shadingShift - toony * 0.5,
+                          shadingShift + toony * 0.5,
+                          NdotL1);
+ float3 lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color;
+ litColor += lit1;
+ }
 
- // Apply lighting
- litColor *= uniforms.lightColor;
+ // Light 2 (rim/back light)
+ if (any(uniforms.light2Color > 0.0)) {
+ float NdotL2 = dot(normal, uniforms.light2Direction);
+ float shadowStep2 = smoothstep(shadingShift - toony * 0.5,
+                          shadingShift + toony * 0.5,
+                          NdotL2);
+ float3 lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color;
+ litColor += lit2;
+ }
 
  // Global illumination equalization - mix toward balanced lighting
  float3 giColor = uniforms.ambientColor * baseColor.rgb;
