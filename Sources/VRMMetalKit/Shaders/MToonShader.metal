@@ -23,16 +23,28 @@ struct Uniforms {
  float4x4 viewMatrix;
  float4x4 projectionMatrix;
  float4x4 normalMatrix;
+ // Light 0 (key light)
  float3 lightDirection;
  float3 lightColor;
  float3 ambientColor;
+ // Light 1 (fill light)
+ float3 light1Direction;
+ float3 light1Color;
+ // Light 2 (rim/back light)
+ float3 light2Direction;
+ float3 light2Color;
+ // Other fields
  float2 viewportSize;          // For screen-space outline calculation
  float nearPlane;              // Camera near plane
  float farPlane;               // Camera far plane
  int debugUVs;                 // Debug flag: 1 = show UVs as colors, 0 = normal rendering
- float _padding1;              // Align to 16 bytes
+ float lightNormalizationFactor;  // Multi-light normalization factor
  float _padding2;
  float _padding3;
+ int toonBands;                // Number of cel-shading bands
+ float _padding5;
+ float _padding6;
+ float _padding7;
 };
 
 struct MToonMaterial {
@@ -233,6 +245,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float4 baseColor = material.baseColorFactor;
  if (material.hasBaseColorTexture > 0) {
  float4 texColor = baseColorTexture.sample(textureSampler, uv);
+
+ #if 0  // DEBUG: Output raw texture value (before material factor multiplication) - DISABLED
+ return float4(texColor.rgb, 1.0);
+ #endif
+
  baseColor *= texColor;
  }
 
@@ -270,19 +287,39 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  shadingShift += (shiftTexValue - 0.5) * material.shadingShiftTextureScale;
  }
 
- // MToon toon shading
- float NdotL = dot(normal, uniforms.lightDirection);
+ // MToon toon shading with energy-conserving 3-point lighting
  float toony = material.shadingToonyFactor;
 
+ // Calculate individual light contributions
+ float3 lit0 = float3(0.0);
+ if (any(uniforms.lightColor > 0.0)) {
+ float NdotL = dot(normal, uniforms.lightDirection);
  float shadowStep = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL);
+ lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor;
+ }
 
- // Mix lit and shade colors
- float3 litColor = mix(shadeColor, baseColor.rgb, shadowStep);
+ float3 lit1 = float3(0.0);
+ if (any(uniforms.light1Color > 0.0)) {
+ float NdotL1 = dot(normal, uniforms.light1Direction);
+ float shadowStep1 = smoothstep(shadingShift - toony * 0.5,
+                          shadingShift + toony * 0.5,
+                          NdotL1);
+ lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color;
+ }
 
- // Apply lighting
- litColor *= uniforms.lightColor;
+ float3 lit2 = float3(0.0);
+ if (any(uniforms.light2Color > 0.0)) {
+ float NdotL2 = dot(normal, uniforms.light2Direction);
+ float shadowStep2 = smoothstep(shadingShift - toony * 0.5,
+                          shadingShift + toony * 0.5,
+                          NdotL2);
+ lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color;
+ }
+
+ // Energy-conserving accumulation with normalization
+ float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
  // Global illumination equalization - mix toward balanced lighting
  float3 giColor = uniforms.ambientColor * baseColor.rgb;
@@ -333,17 +370,13 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  litColor = mix(litColor, litColor + rimColor, material.rimLightingMixFactor);
  }
 
-
- // TEMPORARY DEBUG: Test if lighting is washing out textures
- if (material.hasBaseColorTexture > 0) {
- // For textured materials, return simple textured result for now
- float4 texColor = baseColorTexture.sample(textureSampler, uv);
- return float4(texColor.rgb * material.baseColorFactor.rgb, baseColor.a);
- }
-
- #if 1  // ENABLED: Full MToon lighting for non-textured materials
+ #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
  // Final color output
  litColor = saturate(litColor);
+
+ #if 0  // DEBUG: Output unlit baseColor to diagnose clipping (DISABLED - using raw texture debug instead)
+ return float4(baseColor.rgb * 0.5, baseColor.a);
+ #endif
 
  #if 0  // DEBUG: Visualize vertex attributes
  // Show joint indices and weights to verify skinning data
