@@ -2049,11 +2049,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     mtoonUniforms.roughnessFactor = material.roughnessFactor
                     mtoonUniforms.emissiveFactor = material.emissiveFactor
 
+                    // DEBUG: Log original baseColorFactor for all materials
+                    #if DEBUG
+                    if frameCounter <= 2 {
+                        vrmLog("[Material] '\(item.materialName)' baseColorFactor: \(material.baseColorFactor)")
+                        if material.baseColorFactor.x > 10.0 || material.baseColorFactor.y > 10.0 ||
+                           material.baseColorFactor.z > 10.0 || material.baseColorFactor.w > 10.0 {
+                            vrmLog("  ⚠️ WARNING: baseColorFactor has extreme values!")
+                        }
+                    }
+                    #endif
+
                     // PHASE 4 FIX: Force face materials to render with full brightness
                     if isFaceMaterial {
                         // AGGRESSIVE FIX: Always force white baseColorFactor for face materials
                         // This ensures the texture shows at full brightness
-                        if frameCounter % 60 == 0 {
+                        if frameCounter <= 2 {
                             vrmLog("  🔧 [FACE FIX] Forcing baseColorFactor to white for '\(item.materialName)'")
                             vrmLog("     - Original: \(mtoonUniforms.baseColorFactor)")
                         }
