@@ -245,6 +245,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float4 baseColor = material.baseColorFactor;
  if (material.hasBaseColorTexture > 0) {
  float4 texColor = baseColorTexture.sample(textureSampler, uv);
+
+ #if 1  // DEBUG: Output raw texture value (before material factor multiplication)
+ return float4(texColor.rgb, 1.0);
+ #endif
+
  baseColor *= texColor;
  }
 
@@ -369,7 +374,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Final color output
  litColor = saturate(litColor);
 
- #if 1  // DEBUG: Output unlit baseColor to diagnose clipping
+ #if 0  // DEBUG: Output unlit baseColor to diagnose clipping (DISABLED - using raw texture debug instead)
  return float4(baseColor.rgb * 0.5, baseColor.a);
  #endif
 
