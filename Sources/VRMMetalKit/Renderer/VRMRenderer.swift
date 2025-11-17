@@ -1035,13 +1035,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         encoder.setCullMode(.back)
         encoder.setFrontFacing(.counterClockwise) // glTF uses CCW winding
 
-        // Update uniforms with lighting information
+        // Update uniforms with camera matrices
         uniforms.viewMatrix = viewMatrix
         uniforms.projectionMatrix = projectionMatrix
-        // Light coming from front-right-top for better form definition
-        uniforms.lightDirection = SIMD3<Float>(0.4, 0.8, -0.4).normalized
-        uniforms.lightColor = SIMD3<Float>(1.0, 1.0, 1.0)
-        uniforms.ambientColor = SIMD3<Float>(0.3, 0.3, 0.3)  // Slightly darker ambient for more contrast
+        // Lighting is configured via setup3PointLighting() or setLight() - don't override here
+        // Ambient color default is set in Uniforms struct initialization
         // Get viewport size from view
         let viewportSize: CGSize
         if let dummyView = view as? DummyView {
@@ -1073,6 +1071,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if frameCounter <= 2 {
             vrmLog("[UNIFORMS] Setting debugUVs uniform to \(uniforms.debugUVs) (from debugUVs flag: \(debugUVs))")
         }
+
+        // DEBUG: Log lighting values to verify 3-point lighting is configured
+        #if DEBUG
+        if frameCounter % 60 == 0 {  // Log every second at 60fps
+            vrmLog("[Lighting] Frame \(frameCounter) GPU upload:")
+            vrmLog("  Light 0 (key):  dir=\(uniforms.lightDirection), color=\(uniforms.lightColor)")
+            vrmLog("  Light 1 (fill): dir=\(uniforms.light1Direction), color=\(uniforms.light1Color)")
+            vrmLog("  Light 2 (rim):  dir=\(uniforms.light2Direction), color=\(uniforms.light2Color)")
+            vrmLog("  Ambient: \(uniforms.ambientColor)")
+        }
+        #endif
 
         // Copy uniforms to the current buffer
         uniformsBuffer.contents().copyMemory(from: &uniforms, byteCount: MemoryLayout<Uniforms>.size)
