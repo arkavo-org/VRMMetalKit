@@ -238,14 +238,51 @@ public class VRMModel {
 
     public static func load(from url: URL, device: MTLDevice? = nil) async throws -> VRMModel {
         let data = try Data(contentsOf: url)
-        let model = try await load(from: data, filePath: url.path, device: device)
+
+        // Detect file format
+        let format = FileFormat.detect(from: url, data: data)
+        vrmLog("[VRMModel] Detected file format: \(format.description)")
+
+        // Route to appropriate loader based on format
+        let model: VRMModel
+        switch format {
+        case .vrm, .glb:
+            model = try await loadFromGLB(data: data, filePath: url.path, device: device)
+        case .usdz:
+            model = try await loadFromUSDZ(url: url, device: device)
+        case .gltf:
+            throw VRMError.unsupportedFormat(format: format, filePath: url.path)
+        case .unknown:
+            throw VRMError.unsupportedFormat(format: format, filePath: url.path)
+        }
+
         // Store the base URL for loading external resources
         model.baseURL = url.deletingLastPathComponent()
         return model
     }
 
     public static func load(from data: Data, filePath: String? = nil, device: MTLDevice? = nil) async throws -> VRMModel {
-        vrmLog("[VRMModel] Starting load from data")
+        // Detect format from data
+        let format = FileFormat.detect(from: data)
+        vrmLog("[VRMModel] Detected file format from data: \(format.description)")
+
+        // Route to appropriate loader
+        switch format {
+        case .vrm, .glb:
+            return try await loadFromGLB(data: data, filePath: filePath, device: device)
+        case .usdz:
+            return try await loadFromUSDZ(data: data, filePath: filePath, device: device)
+        case .gltf:
+            throw VRMError.unsupportedFormat(format: format, filePath: filePath)
+        case .unknown:
+            throw VRMError.unsupportedFormat(format: format, filePath: filePath)
+        }
+    }
+
+    // MARK: - Format-Specific Loaders
+
+    private static func loadFromGLB(data: Data, filePath: String?, device: MTLDevice?) async throws -> VRMModel {
+        vrmLog("[VRMModel] Starting GLB/VRM load from data")
         let parser = GLTFParser()
         let (document, binaryData) = try parser.parse(data: data, filePath: filePath)
         vrmLog("[VRMModel] Parsed GLTF document")
@@ -257,6 +294,60 @@ public class VRMModel {
             vrmLog("[VRMModel] No extensions found in document")
         }
 
+        // Check for VRM 1.0 (VRMC_vrm) or VRM 0.0 (VRM)
+        let vrmExtension = document.extensions?["VRMC_vrm"] ?? document.extensions?["VRM"]
+        guard let vrmExtension = vrmExtension else {
+            throw VRMError.missingVRMExtension(
+                filePath: filePath,
+                suggestion: "Ensure this file is a VRM model exported with proper VRM extensions. If it's a regular glTF/GLB file, convert it to VRM format using VRM exporter tools."
+            )
+        }
+
+        vrmLog("[VRMModel] Parsing VRM extension")
+        let vrmParser = VRMExtensionParser()
+        let model = try vrmParser.parseVRMExtension(vrmExtension, document: document, filePath: filePath)
+        model.device = device
+        vrmLog("[VRMModel] VRM extension parsed, starting loadResources")
+
+        // Load resources with buffer data
+        try await model.loadResources(binaryData: binaryData)
+
+        // Initialize SpringBone GPU system if device and spring bone data present
+        if let device = device, model.springBone != nil {
+            try model.initializeSpringBoneGPUSystem(device: device)
+            vrmLog("[VRMModel] SpringBone GPU buffers initialized: \(model.springBoneBuffers?.numBones ?? 0) bones")
+        }
+
+        return model
+    }
+
+    private static func loadFromUSDZ(url: URL, device: MTLDevice?) async throws -> VRMModel {
+        vrmLog("[VRMModel] Starting USDZ load from URL: \(url.path)")
+
+        guard let device = device else {
+            throw VRMError.deviceNotSet(context: "USDZ loading requires a Metal device")
+        }
+
+        let parser = USDZParser(device: device)
+        let (document, binaryData) = try parser.parse(from: url)
+
+        return try await finalizeLoading(document: document, binaryData: binaryData, filePath: url.path, device: device)
+    }
+
+    private static func loadFromUSDZ(data: Data, filePath: String?, device: MTLDevice?) async throws -> VRMModel {
+        vrmLog("[VRMModel] Starting USDZ load from data")
+
+        guard let device = device else {
+            throw VRMError.deviceNotSet(context: "USDZ loading requires a Metal device")
+        }
+
+        let parser = USDZParser(device: device)
+        let (document, binaryData) = try parser.parse(from: data, filePath: filePath)
+
+        return try await finalizeLoading(document: document, binaryData: binaryData, filePath: filePath, device: device)
+    }
+
+    private static func finalizeLoading(document: GLTFDocument, binaryData: Data?, filePath: String?, device: MTLDevice?) async throws -> VRMModel {
         // Check for VRM 1.0 (VRMC_vrm) or VRM 0.0 (VRM)
         let vrmExtension = document.extensions?["VRMC_vrm"] ?? document.extensions?["VRM"]
         guard let vrmExtension = vrmExtension else {
@@ -500,6 +591,35 @@ public class VRMModel {
             vrmLog("  ✅ AUDIT PASSED - All primitives have valid index/accessor data")
         }
         vrmLog(String(repeating: "=", count: 80) + "\n")
+    }
+
+    // MARK: - Export
+
+    /// Export model to USDZ format
+    /// - Parameters:
+    ///   - url: Destination URL for USDZ file
+    ///   - options: Export configuration options
+    /// - Throws: VRMError if export fails
+    public func exportUSDZ(to url: URL, options: USDZExporter.ExportOptions = USDZExporter.ExportOptions()) throws {
+        guard let device = device else {
+            throw VRMError.deviceNotSet(context: "USDZ export requires a Metal device")
+        }
+
+        let exporter = USDZExporter(device: device)
+        try exporter.export(model: self, to: url, options: options)
+    }
+
+    /// Export model to USDZ data
+    /// - Parameter options: Export configuration options
+    /// - Returns: USDZ binary data
+    /// - Throws: VRMError if export fails
+    public func exportUSDZ(options: USDZExporter.ExportOptions = USDZExporter.ExportOptions()) throws -> Data {
+        guard let device = device else {
+            throw VRMError.deviceNotSet(context: "USDZ export requires a Metal device")
+        }
+
+        let exporter = USDZExporter(device: device)
+        return try exporter.export(model: self, options: options)
     }
 }
 

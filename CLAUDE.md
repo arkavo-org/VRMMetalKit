@@ -63,6 +63,8 @@ The codebase is organized into logical subsystems:
 - `VRMExtensionParser.swift`: VRM extension extraction (VRMC_vrm, VRMC_springBone, VRMC_node_constraint)
 - `BufferLoader.swift`: Binary buffer data loading and accessor handling
 - `TextureLoader.swift`: Image loading and Metal texture creation
+- `FileFormat.swift`: File format detection utility (VRM, GLB, USDZ, glTF)
+- `USDZParser.swift`: USDZ import using ModelIO with VRM metadata generation
 
 **Renderer/** - GPU rendering pipeline
 - `VRMRenderer.swift`: Main renderer with triple-buffered uniforms, dual pipeline states (skinned/non-skinned)
@@ -95,9 +97,10 @@ The codebase is organized into logical subsystems:
 - `SpringBoneDebug.swift`: Visualization and debugging utilities
 - Compute shaders: `SpringBoneKinematic.metal`, `SpringBonePredict.metal`, `SpringBoneDistance.metal`
 
-**Builder/** - Programmatic model creation
+**Builder/** - Programmatic model creation and export
 - `VRMBuilder.swift`: Fluent API for creating VRM models from code
 - `CharacterRecipe.swift`: Character templates and presets
+- `USDZExporter.swift`: Export VRM models to USDZ format for AR Quick Look
 - `GLTFDocumentBuilder.swift`: Low-level glTF construction
 - `VRMModel+Serialization.swift`: Binary .vrm export
 
@@ -138,6 +141,113 @@ The codebase is organized into logical subsystems:
 4. **Physics Flow**: `SpringBoneComputeSystem` → compute shaders → `SpringBoneBuffers` → `SpringBoneSkinningSystem` → final joint matrices
 5. **ARKit Face Tracking Flow**: `ARKitFaceBlendShapes` → `ARKitFaceDriver` → `ARKitToVRMMapper` + `SmoothingFilters` → `VRMExpressionController`
 6. **ARKit Body Tracking Flow**: `ARKitBodySkeleton` → `ARKitBodyDriver` → `ARKitSkeletonMapper` + `SkeletonFilterManager` → `VRMNode` (TRS updates) → `updateWorldTransform()`
+7. **USDZ Import Flow**: `USDZParser` → ModelIO MDLAsset → glTF conversion → VRM metadata generation → `VRMModel`
+8. **USDZ Export Flow**: `VRMModel` → `USDZExporter` → ModelIO MDLAsset conversion → USDZ file
+
+## File Format Support
+
+VRMMetalKit supports multiple 3D file formats with automatic detection and conversion.
+
+### Supported Formats
+
+**Import:**
+- **VRM (.vrm, .vrm.glb)**: Native VRM 1.0/0.0 models with full support for humanoid bones, expressions, spring bones, and MToon materials
+- **GLB (.glb)**: Binary glTF files with optional VRM extensions
+- **USDZ (.usdz)**: Apple's Universal Scene Description format for AR Quick Look
+  - Converted to VRM with generated metadata and default humanoid mapping
+  - Does not preserve VRM-specific features from source
+
+**Export:**
+- **VRM (.vrm)**: Native binary VRM format (see `VRMModel+Serialization.swift`)
+- **USDZ (.usdz)**: Export for iOS/macOS AR Quick Look
+  - Loses VRM-specific features (humanoid bones, expressions, spring bones, MToon)
+  - Useful for AR preview and iOS integration
+
+**Planned:**
+- **glTF (.gltf)**: JSON glTF with external resources (not yet implemented)
+
+### File Format Detection
+
+`FileFormat.swift` provides automatic format detection:
+
+```swift
+// Detect from URL extension
+let format = FileFormat.detect(from: url)
+
+// Detect from binary data (magic numbers)
+let format = FileFormat.detect(from: data)
+
+// Combined detection (prefers magic number)
+let format = FileFormat.detect(from: url, data: data)
+```
+
+**Magic Numbers:**
+- GLB/VRM: `0x46546C67` ("glTF" in little-endian)
+- USDZ: `0x504B` (ZIP file header "PK")
+- glTF JSON: Starts with `{`
+
+**Compound Extensions:**
+Files with `.vrm.glb` extension are correctly detected as VRM format.
+
+### Usage Examples
+
+**Load any supported format:**
+```swift
+let device = MTLCreateSystemDefaultDevice()!
+
+// Automatic format detection
+let model = try await VRMModel.load(from: url, device: device)
+
+// Works with VRM, GLB, or USDZ
+```
+
+**USDZ Import with Options:**
+```swift
+var options = USDZParser.ImportOptions()
+options.generateHumanoidBones = true      // Best-effort bone mapping
+options.createDefaultVRMMetadata = true   // Add minimal VRM metadata
+options.scaleFactor = 1.0                 // Unit conversion
+options.useDefaultMToonMaterial = true    // Convert to MToon
+
+let model = try await VRMModel.load(from: usdzURL, device: device)
+```
+
+**USDZ Export:**
+```swift
+var options = USDZExporter.ExportOptions()
+options.bakeCurrentPose = false           // Export T-pose or current animation frame
+options.includeTextures = true            // Embed textures in USDZ
+options.scaleFactor = 1.0                 // Unit conversion
+options.optimizeForAR = true              // AR Quick Look optimizations
+options.maxTextureResolution = 2048       // Downscale large textures
+
+// Export to file
+try model.exportUSDZ(to: outputURL, options: options)
+
+// Or get data
+let usdzData = try model.exportUSDZ(options: options)
+```
+
+### USDZ Import Limitations
+
+When importing USDZ files, the following limitations apply:
+
+1. **No VRM Metadata**: USDZ has no concept of VRM avatars, so humanoid bone mapping is best-effort based on node names
+2. **Material Conversion**: Physical materials are converted to MToon with default settings
+3. **No Expressions**: USDZ blend shapes are imported as mesh morphs but not mapped to VRM expressions
+4. **No Spring Bones**: USDZ has no physics simulation metadata
+5. **Single Mesh**: Complex USDZ hierarchies may not preserve all scene structure
+
+### USDZ Export Limitations
+
+When exporting to USDZ:
+
+1. **Loses VRM Features**: Humanoid bones, expressions, spring bones, and MToon properties are not preserved
+2. **Static Pose**: Only the current pose is exported (animation not supported)
+3. **Material Simplification**: MToon materials converted to basic PBR materials
+4. **No Retargeting**: Exported skeleton may not be compatible with ARKit body tracking
+
+**Use Case:** USDZ export is primarily for AR preview on iOS/macOS using AR Quick Look, not for preserving VRM functionality.
 
 ## ARKit Integration (Continuity Camera Support)
 
