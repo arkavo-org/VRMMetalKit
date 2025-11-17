@@ -361,15 +361,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  litColor = mix(litColor, litColor + rimColor, material.rimLightingMixFactor);
  }
 
-
- // TEMPORARY DEBUG: Test if lighting is washing out textures
- if (material.hasBaseColorTexture > 0) {
- // For textured materials, return simple textured result for now
- float4 texColor = baseColorTexture.sample(textureSampler, uv);
- return float4(texColor.rgb * material.baseColorFactor.rgb, baseColor.a);
- }
-
- #if 1  // ENABLED: Full MToon lighting for non-textured materials
+ #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
  // Final color output
  litColor = saturate(litColor);
 
