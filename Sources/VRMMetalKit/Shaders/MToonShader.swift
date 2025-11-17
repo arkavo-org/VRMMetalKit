@@ -30,16 +30,28 @@ public class MToonShader {
         float4x4 viewMatrix;
         float4x4 projectionMatrix;
         float4x4 normalMatrix;
+        // Light 0 (key light)
         float3 lightDirection;
         float3 lightColor;
         float3 ambientColor;
+        // Light 1 (fill light)
+        float3 light1Direction;
+        float3 light1Color;
+        // Light 2 (rim/back light)
+        float3 light2Direction;
+        float3 light2Color;
+        // Other fields
         float2 viewportSize;          // For screen-space outline calculation
         float nearPlane;              // Camera near plane
         float farPlane;               // Camera far plane
         int debugUVs;                 // Debug flag: 1 = show UVs as colors, 0 = normal rendering
-        float _padding1;              // Align to 16 bytes
+        float lightNormalizationFactor;  // Multi-light normalization factor
         float _padding2;
         float _padding3;
+        int toonBands;                // Number of cel-shading bands
+        float _padding5;
+        float _padding6;
+        float _padding7;
     };
 
     struct MToonMaterial {

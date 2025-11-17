@@ -38,11 +38,13 @@ struct Uniforms {
  float nearPlane;
  float farPlane;
  int debugUVs;
- int toonBands;
- int isOrthographic;
- float _padding1;
- float3 cameraWorldPosition;   // Camera position in world space (for rim lighting)
+ float lightNormalizationFactor;  // Multi-light normalization factor
  float _padding2;
+ float _padding3;
+ int toonBands;
+ float _padding5;
+ float _padding6;
+ float _padding7;
 };
 
 struct Toon2DMaterial {
@@ -255,17 +257,51 @@ fragment float4 skinned_toon2d_fragment(
  shadeColor *= shadeTex;
  }
 
- // Apply cel shading
- float3 litColor = applyCelShading(
+ // Apply cel shading with energy-conserving 3-point lighting
+
+ // Light 0 (key light)
+ float3 lit0 = float3(0.0);
+ if (any(uniforms.lightColor > 0.0)) {
+ float3 celShaded0 = applyCelShading(
  baseColor.rgb,
  shadeColor,
  nDotL,
  uniforms.toonBands,
  material.shadingToonyFactor
  );
+ lit0 = celShaded0 * uniforms.lightColor;
+ }
 
- // Apply quantized lighting
- float3 lightContribution = litColor * uniforms.lightColor;
+ // Light 1 (fill light)
+ float3 lit1 = float3(0.0);
+ if (any(uniforms.light1Color > 0.0)) {
+ float nDotL1 = dot(normal, uniforms.light1Direction);
+ float3 celShaded1 = applyCelShading(
+ baseColor.rgb,
+ shadeColor,
+ nDotL1,
+ uniforms.toonBands,
+ material.shadingToonyFactor
+ );
+ lit1 = celShaded1 * uniforms.light1Color;
+ }
+
+ // Light 2 (rim/back light)
+ float3 lit2 = float3(0.0);
+ if (any(uniforms.light2Color > 0.0)) {
+ float nDotL2 = dot(normal, uniforms.light2Direction);
+ float3 celShaded2 = applyCelShading(
+ baseColor.rgb,
+ shadeColor,
+ nDotL2,
+ uniforms.toonBands,
+ material.shadingToonyFactor
+ );
+ lit2 = celShaded2 * uniforms.light2Color;
+ }
+
+ // Energy-conserving accumulation with normalization
+ float3 lightContribution = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
  // Add ambient
  float3 ambient = baseColor.rgb * uniforms.ambientColor;
@@ -274,7 +310,7 @@ fragment float4 skinned_toon2d_fragment(
 
  // Optional rim lighting
  if (length(material.rimColorFactor) > 0.01) {
- float3 viewDir = normalize(uniforms.cameraWorldPosition - in.worldPosition);
+ float3 viewDir = normalize(-in.worldPosition);
  finalColor = applyQuantizedRim(
      finalColor,
      material.rimColorFactor,

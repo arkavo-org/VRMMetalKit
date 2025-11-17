@@ -38,9 +38,13 @@ struct Uniforms {
  float nearPlane;              // Camera near plane
  float farPlane;               // Camera far plane
  int debugUVs;                 // Debug flag: 1 = show UVs as colors, 0 = normal rendering
- float _padding1;              // Align to 16 bytes
+ float lightNormalizationFactor;  // Multi-light normalization factor
  float _padding2;
  float _padding3;
+ int toonBands;                // Number of cel-shading bands
+ float _padding5;
+ float _padding6;
+ float _padding7;
 };
 
 struct MToonMaterial {
@@ -278,39 +282,39 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  shadingShift += (shiftTexValue - 0.5) * material.shadingShiftTextureScale;
  }
 
- // MToon toon shading with 3-point lighting
+ // MToon toon shading with energy-conserving 3-point lighting
  float toony = material.shadingToonyFactor;
- float3 litColor = float3(0.0);
 
- // Light 0 (key light)
+ // Calculate individual light contributions
+ float3 lit0 = float3(0.0);
  if (any(uniforms.lightColor > 0.0)) {
  float NdotL = dot(normal, uniforms.lightDirection);
  float shadowStep = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL);
- float3 lit = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor;
- litColor += lit;
+ lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor;
  }
 
- // Light 1 (fill light)
+ float3 lit1 = float3(0.0);
  if (any(uniforms.light1Color > 0.0)) {
  float NdotL1 = dot(normal, uniforms.light1Direction);
  float shadowStep1 = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL1);
- float3 lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color;
- litColor += lit1;
+ lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color;
  }
 
- // Light 2 (rim/back light)
+ float3 lit2 = float3(0.0);
  if (any(uniforms.light2Color > 0.0)) {
  float NdotL2 = dot(normal, uniforms.light2Direction);
  float shadowStep2 = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL2);
- float3 lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color;
- litColor += lit2;
+ lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color;
  }
+
+ // Energy-conserving accumulation with normalization
+ float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
  // Global illumination equalization - mix toward balanced lighting
  float3 giColor = uniforms.ambientColor * baseColor.rgb;

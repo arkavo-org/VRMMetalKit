@@ -27,12 +27,28 @@ public struct MToonSkinnedShader {
         float4x4 viewMatrix;
         float4x4 projectionMatrix;
         float4x4 normalMatrix;
+        // Light 0 (key light)
         float3 lightDirection;
         float3 lightColor;
         float3 ambientColor;
+        // Light 1 (fill light)
+        float3 light1Direction;
+        float3 light1Color;
+        // Light 2 (rim/back light)
+        float3 light2Direction;
+        float3 light2Color;
+        // Other fields
         float2 viewportSize;
         float nearPlane;
         float farPlane;
+        int debugUVs;
+        float lightNormalizationFactor;
+        float _padding2;
+        float _padding3;
+        int toonBands;
+        float _padding5;
+        float _padding6;
+        float _padding7;
     };
 
     struct MToonMaterial {

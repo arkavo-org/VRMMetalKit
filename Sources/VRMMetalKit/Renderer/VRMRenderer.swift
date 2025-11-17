@@ -95,8 +95,18 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         case toon2D        // 2.5D cel-shaded rendering with outlines
     }
 
+    /// Light normalization mode for multi-light setups
+    public enum LightNormalizationMode {
+        case automatic              // Auto-normalize when total intensity > 1.0 (default)
+        case disabled               // No normalization (naive additive, for testing)
+        case manual(Float)          // Custom normalization factor
+    }
+
     /// Current rendering mode
     public var renderingMode: RenderingMode = .standard
+
+    /// Current light normalization mode
+    public var lightNormalizationMode: LightNormalizationMode = .automatic
 
     /// Orthographic camera height in world units (for toon2D mode)
     public var orthoSize: Float = 1.7 {
@@ -268,6 +278,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// - Parameter color: Ambient light color (RGB, will be clamped to 0-1 range)
     public func setAmbientColor(_ color: SIMD3<Float>) {
         uniforms.ambientColor = simd_clamp(color, SIMD3<Float>(repeating: 0.0), SIMD3<Float>(repeating: 1.0))
+    }
+
+    /// Set light normalization mode for multi-light setups
+    /// - Parameter mode: Normalization mode (.automatic, .disabled, or .manual(factor))
+    ///
+    /// # Modes:
+    /// - `.automatic`: Normalize when total light intensity > 1.0 (prevents over-brightness)
+    /// - `.disabled`: No normalization (naive additive accumulation, for testing)
+    /// - `.manual(factor)`: Custom normalization factor (for artistic control)
+    public func setLightNormalizationMode(_ mode: LightNormalizationMode) {
+        lightNormalizationMode = mode
     }
 
     // Pipeline states for 2.5D rendering (non-skinned)
@@ -1059,23 +1080,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Set debug mode
         uniforms.debugUVs = debugUVs ? 1 : 0
 
-        // Set Toon2D fields
-        uniforms.toonBands = Int32(toonBands)
-        uniforms.isOrthographic = useOrthographic ? 1 : 0
-
-        // Extract camera world position from view matrix for correct rim lighting
-        // View matrix transforms from world to view space: viewPos = viewMatrix * worldPos
-        // To get camera position in world space, invert the view matrix and extract translation
-        let viewMatrixInverse = viewMatrix.inverse
-        uniforms.cameraWorldPosition = SIMD3<Float>(
-            viewMatrixInverse[3][0],
-            viewMatrixInverse[3][1],
-            viewMatrixInverse[3][2]
-        )
-
         // DEBUG: Log what's being set to track UV debug issue
         if frameCounter <= 2 {
             vrmLog("[UNIFORMS] Setting debugUVs uniform to \(uniforms.debugUVs) (from debugUVs flag: \(debugUVs))")
+        }
+
+        // Calculate light normalization factor based on mode
+        switch lightNormalizationMode {
+        case .automatic:
+            let totalIntensity = simd_length(uniforms.lightColor)
+                               + simd_length(uniforms.light1Color)
+                               + simd_length(uniforms.light2Color)
+            uniforms.lightNormalizationFactor = (totalIntensity > 1.0) ? (1.0 / totalIntensity) : 1.0
+        case .disabled:
+            uniforms.lightNormalizationFactor = 1.0
+        case .manual(let factor):
+            uniforms.lightNormalizationFactor = max(0.0, factor)  // Clamp to non-negative
         }
 
         // DEBUG: Log lighting values to verify 3-point lighting is configured
@@ -1086,6 +1106,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             vrmLog("  Light 1 (fill): dir=\(uniforms.light1Direction), color=\(uniforms.light1Color)")
             vrmLog("  Light 2 (rim):  dir=\(uniforms.light2Direction), color=\(uniforms.light2Color)")
             vrmLog("  Ambient: \(uniforms.ambientColor)")
+            vrmLog("  Normalization: \(uniforms.lightNormalizationFactor) (mode: \(lightNormalizationMode))")
         }
         #endif
 
@@ -3355,10 +3376,13 @@ struct Uniforms {
     var viewportSize_packed = SIMD4<Float>(1280, 720, 0.0, 0.0)   // 16 bytes, offset 368 (SIMD2 + padding)
     var nearPlane_packed = SIMD4<Float>(0.1, 100.0, 0.0, 0.0)    // 16 bytes, offset 384 (2 floats + padding)
     var debugUVs: Int32 = 0                                       // 4 bytes, offset 400
-    var toonBands: Int32 = 3                                      // 4 bytes, offset 404 (Toon2D cel-shading bands)
-    var isOrthographic: Int32 = 0                                 // 4 bytes, offset 408 (1 = orthographic, 0 = perspective)
-    var _padding1: Float = 0                                      // 4 bytes padding, offset 412
-    var cameraWorldPosition_packed = SIMD4<Float>(0, 0, 0, 0)    // 16 bytes, offset 416 (SIMD3 + padding)
+    var lightNormalizationFactor: Float = 1.0                     // 4 bytes, offset 404
+    var _padding2: Float = 0                                      // 4 bytes padding
+    var _padding3: Float = 0                                      // 4 bytes padding to align to 16 bytes
+    var toonBands: Int32 = 3                                      // 4 bytes, offset 416
+    var _padding5: Float = 0                                      // 4 bytes padding
+    var _padding6: Float = 0                                      // 4 bytes padding
+    var _padding7: Float = 0                                      // 4 bytes padding to align to 16 bytes
     // Total: 432 bytes (27 x 16-byte blocks)
 
     // Computed properties for easy access
@@ -3410,11 +3434,6 @@ struct Uniforms {
     var farPlane: Float {
         get { nearPlane_packed.y }
         set { nearPlane_packed.y = newValue }
-    }
-
-    var cameraWorldPosition: SIMD3<Float> {
-        get { SIMD3<Float>(cameraWorldPosition_packed.x, cameraWorldPosition_packed.y, cameraWorldPosition_packed.z) }
-        set { cameraWorldPosition_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
     }
 
 }
