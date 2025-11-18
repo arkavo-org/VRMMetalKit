@@ -82,7 +82,7 @@ The codebase is organized into logical subsystems:
 
 **Animation/** - Animation and deformation systems
 - `AnimationPlayer.swift`: Playback controller with looping, speed control, root motion
-- `VRMAnimationLoader.swift`: VRMA file loading with intelligent humanoid bone retargeting
+- `VRMAnimationLoader.swift`: VRMA file loading with spec-compliant humanoid bone retargeting (preserves authored animation data)
 - `VRMSkinning.swift`: Skeletal animation with up to 256 joints
 - `VRMMorphTargets.swift`: Blend shape system with GPU acceleration
 - `VRMLookAtController.swift`: Eye/head tracking system
@@ -428,6 +428,67 @@ bodyDriver.resetStatistics()
 - QoS controller with timestamp interpolation
 - Weighted skeleton blending
 - Adaptive thresholds
+
+## VRM Animation (VRMA) Loading - Design Decision
+
+**VRMMetalKit preserves VRMA animation data as authored.** It does NOT force the first frame to T-pose.
+
+### Core Principles
+
+1. **T-pose is the VRM model's humanoid rest pose** (from `VRMC_vrm.humanoid`), NOT a requirement on animation data
+2. **VRMA first frame can be any pose**: idle, crouch, wave, etc. — all valid per spec
+3. **Retargeting operates in local space**: `result = modelRest * inverse(animRest) * animRotation`
+4. **Hierarchy is correctly applied**: Parent transforms propagate via `VRMNode.updateWorldTransform()`
+5. **Consistent with official tools**: UniVRM and VRM Blender Add-on
+
+### Implementation Details
+
+**File:** `Sources/VRMMetalKit/Animation/VRMAnimationLoader.swift`
+
+**Coordinate Spaces:**
+- All rotations are in **local space** (relative to parent bone)
+- `animationRest`: First keyframe rotation from VRMA file
+- `modelRest`: VRM humanoid bone rest pose (T-pose) from model
+- Formula: `delta = inverse(animationRest) * animationRotation`, then `final = modelRest * delta`
+
+**World Transform Propagation:**
+- `AnimationPlayer` updates `VRMNode.rotation` (local transform)
+- `VRMNode.updateWorldTransform()` recursively computes: `worldMatrix = parent.worldMatrix * localMatrix`
+- Children automatically inherit parent transforms
+
+**Root Motion Handling:**
+- Hips translation applied only if `applyRootMotion` flag enabled
+- Separate code path for root vs regular bones (AnimationPlayer.swift:193)
+
+### Why This Matters
+
+**Incorrect Assumption (removed in #64):**
+> "VRMA files must have first frame = T-pose. If arms have Z-rotation > 0.3, the file is non-compliant."
+
+This was **never part of the VRM spec**. It caused:
+- Silent modification of artist-authored animations
+- Divergence from official tooling (UniVRM, VRM Blender Add-on)
+- Incorrect "correction" of intentionally non-T-pose first frames
+
+**Correct Behavior (current):**
+- Use the first keyframe exactly as authored
+- Retarget rotations from animation rest space to model rest space
+- Preserve animation intent while adapting to different skeleton proportions
+
+### Spec References
+
+- [VRM Animation Spec](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/): Defines retargeting, supports "unnormalized skeleton/motion"
+- [VRM Humanoid Spec](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/humanoid.md): Defines T-pose as **model** rest pose
+- [VRM Posing Desktop](https://vrm-c.github.io/vrm.dev/docs/vrm1/vrm1_posing_desktop/): Official exporter that creates these VRMA files
+- [VRM Blender Add-on](https://vrm-c.github.io/vrm.dev/docs/vrm1/blender_importer/): Official importer (File > Import > VRM Animation)
+
+### Validation Approach
+
+For numerical validation against official implementations:
+1. Load same VRMA file in UniVRM (Unity) and VRM Blender Add-on
+2. Extract joint rotations (quaternions) at key frames (0, mid, last)
+3. Compare VRMMetalKit output numerically (epsilon < 0.001)
+4. Test with varied animation types: T-pose start, idle, action poses, looping
 
 ## StrictMode Validation System
 
