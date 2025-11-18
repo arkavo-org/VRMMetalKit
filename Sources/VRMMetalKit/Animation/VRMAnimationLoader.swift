@@ -44,8 +44,24 @@ private struct KeyTrack {
 
 public enum VRMAnimationLoader {
     // Load a VRMC_vrm_animation-1.0 (.vrma) clip from a GLB file
-    public static func loadVRMA(from url: URL, model: VRMModel? = nil) throws -> AnimationClip {
+    //
+    // IMPORTANT: VRMA animations should NOT use rest pose retargeting by default.
+    // Unlike general glTF animations, VRMA animations are designed to be applied
+    // directly to the target model without retargeting. Set applyRetargeting=true
+    // only if you're loading a generic animation that needs adaptation.
+    //
+    // COORDINATE SYSTEM:
+    // - convertCoordinateSystem: If true, converts from Unity left-handed (Y-up) to Metal right-handed (Y-up)
+    //   This inverts the X-axis (mirrors rotations across YZ plane) to match Unity's behavior
+    //   Default is false - VRMA files should already be in the correct coordinate system
+    public static func loadVRMA(from url: URL, model: VRMModel? = nil, applyRetargeting: Bool = false, convertCoordinateSystem: Bool = false) throws -> AnimationClip {
         let data = try Data(contentsOf: url)
+
+        #if VRM_METALKIT_ENABLE_DEBUG_LOADER
+        vrmLogLoader("[VRMAnimationLoader] Loading VRMA from \(url.lastPathComponent)")
+        vrmLogLoader("[VRMAnimationLoader] Apply retargeting: \(applyRetargeting)")
+        vrmLogLoader("[VRMAnimationLoader] Convert coordinate system: \(convertCoordinateSystem)")
+        #endif
 
         let parser = GLTFParser()
         let (document, binary) = try parser.parse(data: data)
@@ -193,12 +209,14 @@ public enum VRMAnimationLoader {
                 processHumanoidTrack(bone: boneUnwrapped, nodeName: nodeName, tracks: tracks,
                                     animationRestTransforms: animationRestTransforms,
                                     modelRestTransforms: modelRestTransforms,
-                                    nodeIndex: nodeIndex, clip: &clip)
+                                    nodeIndex: nodeIndex, clip: &clip, applyRetargeting: applyRetargeting,
+                                    convertCoordinateSystem: convertCoordinateSystem)
             } else {
                 // NON-HUMANOID NODE TRACK (hair, bust, accessories)
                 processNonHumanoidTrack(nodeName: nodeName, tracks: tracks,
                                        animationRestTransforms: animationRestTransforms,
-                                       nodeIndex: nodeIndex, clip: &clip)
+                                       nodeIndex: nodeIndex, clip: &clip, applyRetargeting: applyRetargeting,
+                                       convertCoordinateSystem: convertCoordinateSystem)
             }
         }
 
@@ -214,7 +232,9 @@ public enum VRMAnimationLoader {
         animationRestTransforms: [Int: RestTransform],
         modelRestTransforms: [VRMHumanoidBone: RestTransform],
         nodeIndex: Int,
-        clip: inout AnimationClip
+        clip: inout AnimationClip,
+        applyRetargeting: Bool,
+        convertCoordinateSystem: Bool
     ) {
         // Prepare samplers
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
@@ -228,21 +248,22 @@ public enum VRMAnimationLoader {
         if let rot = tracks["rotation"] {
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: modelRest?.rotation)
+                                                  modelRestRotation: applyRetargeting ? modelRest?.rotation : nil,
+                                                  convertCoordinateSystem: convertCoordinateSystem)
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
         if let trans = tracks["translation"] {
             translationSampler = makeTranslationSampler(track: trans,
                                                         animationRestTranslation: translationRest,
-                                                        modelRestTranslation: modelRest?.translation)
+                                                        modelRestTranslation: applyRetargeting ? modelRest?.translation : nil)
         }
 
         var scaleSampler: ((Float) -> simd_float3)? = nil
         if let scl = tracks["scale"] {
             scaleSampler = makeScaleSampler(track: scl,
                                             animationRestScale: scaleRest,
-                                            modelRestScale: modelRest?.scale)
+                                            modelRestScale: applyRetargeting ? modelRest?.scale : nil)
         }
 
         #if DEBUG
@@ -273,10 +294,12 @@ public enum VRMAnimationLoader {
         tracks: [String: KeyTrack],
         animationRestTransforms: [Int: RestTransform],
         nodeIndex: Int,
-        clip: inout AnimationClip
+        clip: inout AnimationClip,
+        applyRetargeting: Bool,
+        convertCoordinateSystem: Bool
     ) {
-        // For non-humanoid nodes, we don't do rest-pose retargeting
-        // We just pass through the animation data as-is
+        // For non-humanoid nodes, retargeting is never applied (applyRetargeting is ignored)
+        // We always pass through the animation data as-is
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
 
         let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
@@ -288,7 +311,8 @@ public enum VRMAnimationLoader {
             // No model rest for non-humanoid - use animation data directly
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: nil)
+                                                  modelRestRotation: nil,
+                                                  convertCoordinateSystem: convertCoordinateSystem)
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
@@ -366,20 +390,79 @@ private func componentCount(for path: String) -> Int? {
 
 private func makeRotationSampler(track: KeyTrack,
                                  animationRestRotation: simd_quatf,
-                                 modelRestRotation: simd_quatf?) -> ((Float) -> simd_quatf)? {
+                                 modelRestRotation: simd_quatf?,
+                                 convertCoordinateSystem: Bool) -> ((Float) -> simd_quatf)? {
     let modelRest = modelRestRotation
     let rotationRest = simd_normalize(animationRestRotation)
 
+    #if VRM_METALKIT_ENABLE_DEBUG_LOADER
     if modelRest == nil {
-        return { t in sampleQuaternion(track, at: t) }
+        vrmLogLoader("[RETARGET] NO retargeting - using animation data directly")
+    } else {
+        vrmLogLoader("[RETARGET] APPLYING retargeting")
+        vrmLogLoader("[RETARGET]   Animation rest: \(rotationRest)")
+        vrmLogLoader("[RETARGET]   Model rest: \(modelRest!)")
+    }
+    if convertCoordinateSystem {
+        vrmLogLoader("[COORD] Converting Unity left-handed → Metal right-handed (inverting X-axis)")
+    }
+    #endif
+
+    if modelRest == nil {
+        // No retargeting - use animation data directly
+        return { t in
+            var quat = sampleQuaternion(track, at: t)
+
+            #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
+            if t < 0.01 {  // Log first frame
+                vrmLogLoader("[COORD] Animation rotation (raw): \(quat)")
+            }
+            #endif
+
+            // Convert coordinate system if needed
+            if convertCoordinateSystem {
+                quat = convertUnityToMetalRotation(quat)
+                #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
+                if t < 0.01 {
+                    vrmLogLoader("[COORD] After conversion: \(quat)")
+                }
+                #endif
+            }
+
+            return quat
+        }
     }
 
+    // Retargeting - apply delta transformation
     let modelRestNormalized = simd_normalize(modelRest!)
     return { t in
-        let animRotation = sampleQuaternion(track, at: t)
+        var animRotation = sampleQuaternion(track, at: t)
+
+        // Convert coordinate system if needed (before retargeting)
+        if convertCoordinateSystem {
+            animRotation = convertUnityToMetalRotation(animRotation)
+        }
+
         let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
-        return simd_normalize(modelRestNormalized * delta)
+        let result = simd_normalize(modelRestNormalized * delta)
+
+        #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
+        if t < 0.01 {  // Log first frame
+            vrmLogLoader("[RETARGET] t=\(t): animRotation=\(animRotation), delta=\(delta), result=\(result)")
+        }
+        #endif
+
+        return result
     }
+}
+
+/// Converts a quaternion from Unity left-handed (Y-up) to Metal right-handed (Y-up)
+/// This inverts the X-axis, mirroring rotations across the YZ plane
+private func convertUnityToMetalRotation(_ q: simd_quatf) -> simd_quatf {
+    // Unity (left-handed): quat(x, y, z, w)
+    // Metal (right-handed): quat(-x, y, z, w)
+    // This mirrors rotations across the YZ plane (inverts X-axis)
+    return simd_quatf(ix: -q.imag.x, iy: q.imag.y, iz: q.imag.z, r: q.real)
 }
 
 // Translation Retargeting with Delta-Based Alignment
@@ -456,8 +539,22 @@ private func sampleQuaternion(_ track: KeyTrack, at time: Float) -> simd_quatf {
         let q0 = quaternionValue(from: track, keyIndex: index)
         if index + 1 >= track.times.count { return q0 }
         var q1 = quaternionValue(from: track, keyIndex: index + 1)
-        if simd_dot(q0.vector, q1.vector) < 0 {
+
+        // Check dot product and take shortest path
+        let dot = simd_dot(q0.vector, q1.vector)
+        #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
+        if time < 0.01 && index == 0 {
+            vrmLogLoader("[INTERP] Quaternion dot product: \(dot)")
+        }
+        #endif
+
+        if dot < 0 {
             q1 = simd_quatf(vector: -q1.vector)
+            #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
+            if time < 0.01 && index == 0 {
+                vrmLogLoader("[INTERP] Using shortest path (negating q1)")
+            }
+            #endif
         }
         return simd_normalize(simd_slerp(q0, q1, frac))
     case .cubicSpline:
