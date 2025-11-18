@@ -226,9 +226,11 @@ public enum VRMAnimationLoader {
 
         var rotationSampler: ((Float) -> simd_quatf)? = nil
         if let rot = tracks["rotation"] {
+            // VRMA animations preserve authored poses - do NOT retarget rotations
+            // The animation data is already in the correct space for the humanoid
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: modelRest?.rotation)
+                                                  modelRestRotation: nil)  // nil = no retargeting
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
