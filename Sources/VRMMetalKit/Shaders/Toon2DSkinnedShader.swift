@@ -37,6 +37,7 @@ public class Toon2DSkinnedShader {
         float2 viewportSize;
         float nearPlane;
         float farPlane;
+        float3 cameraWorldPosition;   // Camera position in world space for correct rim lighting
         int debugUVs;
         int toonBands;
         int isOrthographic;
@@ -272,7 +273,7 @@ public class Toon2DSkinnedShader {
 
         // Optional rim lighting
         if (length(material.rimColorFactor) > 0.01) {
-            float3 viewDir = normalize(-in.worldPosition);
+            float3 viewDir = normalize(uniforms.cameraWorldPosition - in.worldPosition);
             finalColor = applyQuantizedRim(
                 finalColor,
                 material.rimColorFactor,

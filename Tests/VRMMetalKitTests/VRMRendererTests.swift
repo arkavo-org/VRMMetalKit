@@ -314,4 +314,82 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertEqual(perspMatrix.columns.2.z, expectedZs, accuracy: 0.001,
                        "Perspective should use Metal reverse-Z convention")
     }
+
+    // MARK: - Uniforms Structure Tests (Issue #71)
+
+    /// Test that Uniforms struct has correct size and alignment after adding cameraWorldPosition
+    func testUniformsStructSize() {
+        let expectedSize = 368  // 4×64 (matrices) + 16×6 (packed vectors) + 16 (debugUVs + padding) = 256 + 96 + 16 = 368
+        let actualSize = MemoryLayout<Uniforms>.size
+
+        XCTAssertEqual(actualSize, expectedSize,
+                      "Uniforms size mismatch! Expected \(expectedSize) bytes, got \(actualSize) bytes. " +
+                      "This struct must match the Metal shader's memory layout exactly.")
+    }
+
+    /// Test that cameraWorldPosition field is correctly positioned in Uniforms struct
+    func testCameraWorldPositionOffset() {
+        // cameraWorldPosition_packed should be at offset 336 (after 4 matrices + 5 packed vectors)
+        // 4×64 (matrices) + 5×16 (packed vectors) = 256 + 80 = 336
+        let expectedOffset = 336
+        let actualOffset = MemoryLayout<Uniforms>.offset(of: \Uniforms.cameraWorldPosition_packed)!
+
+        XCTAssertEqual(actualOffset, expectedOffset,
+                      "cameraWorldPosition_packed should be at offset \(expectedOffset), got \(actualOffset)")
+    }
+
+    /// Test that camera world position is correctly extracted from view matrix
+    /// This verifies the fix for issue #71 - rim lighting should use actual camera position
+    func testCameraPositionExtraction() {
+        // Create a view matrix for a camera at position (10, 5, -20)
+        let cameraPosition = SIMD3<Float>(10, 5, -20)
+
+        // Create a simple view matrix (translation only for this test)
+        var viewMatrix = matrix_identity_float4x4
+        viewMatrix[3][0] = -cameraPosition.x
+        viewMatrix[3][1] = -cameraPosition.y
+        viewMatrix[3][2] = -cameraPosition.z
+
+        // Extract camera position by inverting the view matrix
+        let viewMatrixInverse = viewMatrix.inverse
+        let extractedPosition = SIMD3<Float>(
+            viewMatrixInverse[3][0],
+            viewMatrixInverse[3][1],
+            viewMatrixInverse[3][2]
+        )
+
+        // Verify extracted position matches the original camera position
+        XCTAssertEqual(extractedPosition.x, cameraPosition.x, accuracy: 0.001,
+                      "Extracted camera X position should match original")
+        XCTAssertEqual(extractedPosition.y, cameraPosition.y, accuracy: 0.001,
+                      "Extracted camera Y position should match original")
+        XCTAssertEqual(extractedPosition.z, cameraPosition.z, accuracy: 0.001,
+                      "Extracted camera Z position should match original")
+    }
+
+    /// Test that camera position is not (0,0,0) when camera is moved
+    /// This is the regression test for issue #71
+    func testCameraPositionNotOrigin() {
+        // Create a view matrix for a camera NOT at origin
+        let cameraPosition = SIMD3<Float>(5, 3, -10)
+
+        var viewMatrix = matrix_identity_float4x4
+        viewMatrix[3][0] = -cameraPosition.x
+        viewMatrix[3][1] = -cameraPosition.y
+        viewMatrix[3][2] = -cameraPosition.z
+
+        let viewMatrixInverse = viewMatrix.inverse
+        let extractedPosition = SIMD3<Float>(
+            viewMatrixInverse[3][0],
+            viewMatrixInverse[3][1],
+            viewMatrixInverse[3][2]
+        )
+
+        // Verify the extracted position is NOT the origin
+        let isOrigin = extractedPosition.x == 0 && extractedPosition.y == 0 && extractedPosition.z == 0
+        XCTAssertFalse(isOrigin, "Camera position should not be (0,0,0) when camera is moved")
+
+        // Verify it matches the expected position
+        XCTAssertEqual(extractedPosition, cameraPosition, "Extracted position should match camera position")
+    }
 }

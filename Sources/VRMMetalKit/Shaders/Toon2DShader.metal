@@ -29,6 +29,7 @@ struct Uniforms {
  float2 viewportSize;          // For screen-space outline calculation
  float nearPlane;              // Camera near plane
  float farPlane;               // Camera far plane
+ float3 cameraWorldPosition;   // Camera position in world space for correct rim lighting
  int debugUVs;                 // Debug flag: 1 = show UVs as colors, 0 = normal rendering
  int toonBands;                // Number of cel-shading bands (1-5)
  int isOrthographic;           // 1 = orthographic projection, 0 = perspective
@@ -245,7 +246,7 @@ fragment float4 fragment_main(
 
  // Optional: Quantized rim lighting
  if (length(material.rimColorFactor) > 0.01) {
- float3 viewDir = normalize(-in.worldPosition);  // Camera assumed at origin
+ float3 viewDir = normalize(uniforms.cameraWorldPosition - in.worldPosition);
  finalColor = applyQuantizedRim(
      finalColor,
      material.rimColorFactor,

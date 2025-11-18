@@ -962,6 +962,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Update uniforms with lighting information
         uniforms.viewMatrix = viewMatrix
         uniforms.projectionMatrix = projectionMatrix
+        // Extract camera world position from view matrix inverse
+        // The view matrix transforms from world to view space, so its inverse gives us the camera transform
+        let viewMatrixInverse = viewMatrix.inverse
+        uniforms.cameraWorldPosition = SIMD3<Float>(viewMatrixInverse[3][0], viewMatrixInverse[3][1], viewMatrixInverse[3][2])
         // Light coming from front-right-top for better form definition
         uniforms.lightDirection = SIMD3<Float>(0.4, 0.8, -0.4).normalized
         uniforms.lightColor = SIMD3<Float>(1.0, 1.0, 1.0)
@@ -3237,7 +3241,8 @@ struct Uniforms {
     var ambientColor_packed = SIMD4<Float>(0.4, 0.4, 0.4, 0.0)   // 16 bytes, offset 288 (SIMD3 + padding)
     var viewportSize_packed = SIMD4<Float>(1280, 720, 0.0, 0.0)   // 16 bytes, offset 304 (SIMD2 + padding)
     var nearPlane_packed = SIMD4<Float>(0.1, 100.0, 0.0, 0.0)    // 16 bytes, offset 320 (2 floats + padding)
-    var debugUVs: Int32 = 0                                       // 4 bytes, offset 336
+    var cameraWorldPosition_packed = SIMD4<Float>(0.0, 0.0, 0.0, 0.0) // 16 bytes, offset 336 (SIMD3 + padding)
+    var debugUVs: Int32 = 0                                       // 4 bytes, offset 352
     var _padding1: Float = 0                                      // 4 bytes padding
     var _padding2: Float = 0                                      // 4 bytes padding
     var _padding3: Float = 0                                      // 4 bytes padding to align to 16 bytes
@@ -3271,6 +3276,11 @@ struct Uniforms {
     var farPlane: Float {
         get { nearPlane_packed.y }
         set { nearPlane_packed.y = newValue }
+    }
+
+    var cameraWorldPosition: SIMD3<Float> {
+        get { SIMD3<Float>(cameraWorldPosition_packed.x, cameraWorldPosition_packed.y, cameraWorldPosition_packed.z) }
+        set { cameraWorldPosition_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
     }
 
 }
