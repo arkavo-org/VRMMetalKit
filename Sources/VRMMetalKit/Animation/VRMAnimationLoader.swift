@@ -226,9 +226,12 @@ public enum VRMAnimationLoader {
 
         var rotationSampler: ((Float) -> simd_quatf)? = nil
         if let rot = tracks["rotation"] {
+            // Skip rest-pose retargeting - apply animation data directly
+            // This avoids issues with mismatched bind poses between animation and model
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: modelRest?.rotation)
+                                                  modelRestRotation: nil,  // Pass nil to skip retargeting
+                                                  bone: bone)
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
@@ -366,7 +369,8 @@ private func componentCount(for path: String) -> Int? {
 
 private func makeRotationSampler(track: KeyTrack,
                                  animationRestRotation: simd_quatf,
-                                 modelRestRotation: simd_quatf?) -> ((Float) -> simd_quatf)? {
+                                 modelRestRotation: simd_quatf?,
+                                 bone: VRMHumanoidBone? = nil) -> ((Float) -> simd_quatf)? {
     let modelRest = modelRestRotation
     let rotationRest = simd_normalize(animationRestRotation)
 
