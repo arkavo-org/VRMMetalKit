@@ -226,11 +226,9 @@ public enum VRMAnimationLoader {
 
         var rotationSampler: ((Float) -> simd_quatf)? = nil
         if let rot = tracks["rotation"] {
-            // SPEC: Both VRMA and VRM use "VRM T-pose" as rest pose
-            // So we should be able to use animation rotations directly without retargeting
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: nil,  // Skip retargeting - both use T-pose
+                                                  modelRestRotation: modelRest?.rotation,
                                                   bone: bone)
         }
 
@@ -380,14 +378,20 @@ private func makeRotationSampler(track: KeyTrack,
 
     let modelRestNormalized = simd_normalize(modelRest!)
 
+    // WORKAROUND: Some VRMA files don't follow VRM T-pose spec
+    // If animation rest has arms up (large Z rotation), we need to neutralize it
+    // by using identity as animation rest instead of the actual first frame
+    let shouldUseIdentityAnimRest = (bone == .leftUpperArm || bone == .rightUpperArm) &&
+                                     abs(rotationRest.imag.z) > 0.3  // Significant Z rotation (lowered to 0.3)
+
     return { t in
         let animRotation = sampleQuaternion(track, at: t)
-        let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
 
-        // EXPERIMENTAL: Try swapping multiplication order
-        // Original: modelRestNormalized * delta
-        // New: delta * modelRestNormalized
-        return simd_normalize(delta * modelRestNormalized)
+        // If animation violates T-pose spec, treat it as if rest was identity
+        let effectiveAnimRest = shouldUseIdentityAnimRest ? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) : rotationRest
+
+        let delta = simd_normalize(simd_inverse(effectiveAnimRest) * animRotation)
+        return simd_normalize(modelRestNormalized * delta)
     }
 }
 
