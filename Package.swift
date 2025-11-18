@@ -29,6 +29,10 @@ let package = Package(
             name: "VRMMetalKit",
             targets: ["VRMMetalKit"]
         ),
+        .executable(
+            name: "VRMAValidator",
+            targets: ["VRMAValidator"]
+        ),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -52,6 +56,10 @@ let package = Package(
             resources: [
                 .process("Resources")
             ]
+        ),
+        .executableTarget(
+            name: "VRMAValidator",
+            dependencies: ["VRMMetalKit"]
         ),
         .testTarget(
             name: "VRMMetalKitTests",

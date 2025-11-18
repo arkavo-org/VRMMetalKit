@@ -220,17 +220,17 @@ public enum VRMAnimationLoader {
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
         let modelRest = modelRestTransforms[bone]
 
-        let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
-        let translationRest = tracks["translation"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.translation
-        let scaleRest = tracks["scale"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.scale
+        // CRITICAL: Use VRMA scene node rest pose, NOT first keyframe
+        // The first keyframe is animation data; the scene node defines the source rest pose
+        let rotationRest = animationRest.rotation
+        let translationRest = animationRest.translation
+        let scaleRest = animationRest.scale
 
         var rotationSampler: ((Float) -> simd_quatf)? = nil
         if let rot = tracks["rotation"] {
-            // VRMA animations preserve authored poses - do NOT retarget rotations
-            // The animation data is already in the correct space for the humanoid
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: nil)  // nil = no retargeting
+                                                  modelRestRotation: modelRest?.rotation)
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
@@ -398,7 +398,38 @@ private func makeRotationSampler(track: KeyTrack,
     return { t in
         let animRotation = sampleQuaternion(track, at: t)
         let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
-        return simd_normalize(modelRestNormalized * delta)
+        let result = simd_normalize(modelRestNormalized * delta)
+
+        #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
+        // Log retargeting math for debugging
+        if t < 0.1 {  // Only log first frame
+            vrmLogAnimation("""
+                [RETARGET] t=\(String(format: "%.3f", t))
+                  rotationRest:  quat(\(String(format: "% .6f", rotationRest.imag.x)), \
+                \(String(format: "% .6f", rotationRest.imag.y)), \
+                \(String(format: "% .6f", rotationRest.imag.z)), \
+                \(String(format: "% .6f", rotationRest.real)))
+                  animRotation:  quat(\(String(format: "% .6f", animRotation.imag.x)), \
+                \(String(format: "% .6f", animRotation.imag.y)), \
+                \(String(format: "% .6f", animRotation.imag.z)), \
+                \(String(format: "% .6f", animRotation.real)))
+                  modelRest:     quat(\(String(format: "% .6f", modelRestNormalized.imag.x)), \
+                \(String(format: "% .6f", modelRestNormalized.imag.y)), \
+                \(String(format: "% .6f", modelRestNormalized.imag.z)), \
+                \(String(format: "% .6f", modelRestNormalized.real)))
+                  delta:         quat(\(String(format: "% .6f", delta.imag.x)), \
+                \(String(format: "% .6f", delta.imag.y)), \
+                \(String(format: "% .6f", delta.imag.z)), \
+                \(String(format: "% .6f", delta.real)))
+                  RESULT:        quat(\(String(format: "% .6f", result.imag.x)), \
+                \(String(format: "% .6f", result.imag.y)), \
+                \(String(format: "% .6f", result.imag.z)), \
+                \(String(format: "% .6f", result.real)))
+                """)
+        }
+        #endif
+
+        return result
     }
 }
 
