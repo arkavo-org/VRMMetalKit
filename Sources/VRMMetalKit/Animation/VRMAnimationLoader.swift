@@ -226,11 +226,11 @@ public enum VRMAnimationLoader {
 
         var rotationSampler: ((Float) -> simd_quatf)? = nil
         if let rot = tracks["rotation"] {
-            // Skip rest-pose retargeting - apply animation data directly
-            // This avoids issues with mismatched bind poses between animation and model
+            // SPEC: Both VRMA and VRM use "VRM T-pose" as rest pose
+            // So we should be able to use animation rotations directly without retargeting
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: nil,  // Pass nil to skip retargeting
+                                                  modelRestRotation: nil,  // Skip retargeting - both use T-pose
                                                   bone: bone)
         }
 
@@ -379,10 +379,15 @@ private func makeRotationSampler(track: KeyTrack,
     }
 
     let modelRestNormalized = simd_normalize(modelRest!)
+
     return { t in
         let animRotation = sampleQuaternion(track, at: t)
         let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
-        return simd_normalize(modelRestNormalized * delta)
+
+        // EXPERIMENTAL: Try swapping multiplication order
+        // Original: modelRestNormalized * delta
+        // New: delta * modelRestNormalized
+        return simd_normalize(delta * modelRestNormalized)
     }
 }
 
