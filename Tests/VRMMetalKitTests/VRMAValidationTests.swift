@@ -28,13 +28,48 @@ final class VRMAValidationTests: XCTestCase {
 
     // MARK: - Configuration
 
-    // Use current directory for test files (can be overridden via environment)
+    /// Find project root by checking known locations
+    var projectRoot: String {
+        let fileManager = FileManager.default
+
+        // Known locations to check (in priority order)
+        let candidates = [
+            // From environment variable (highest priority)
+            ProcessInfo.processInfo.environment["PROJECT_ROOT"],
+            // Relative to test file (#file)
+            URL(fileURLWithPath: #file)
+                .deletingLastPathComponent()  // VRMAValidationTests.swift
+                .deletingLastPathComponent()  // VRMMetalKitTests
+                .deletingLastPathComponent()  // Tests
+                .path,
+            // Current directory
+            fileManager.currentDirectoryPath
+        ].compactMap { $0 }
+
+        // Return first valid project root (has Package.swift and test files)
+        for candidate in candidates {
+            let packagePath = "\(candidate)/Package.swift"
+            let vrmPath = "\(candidate)/AliciaSolid.vrm"
+            if fileManager.fileExists(atPath: packagePath) &&
+               fileManager.fileExists(atPath: vrmPath) {
+                return candidate
+            }
+        }
+
+        // Fallback: just use current directory (tests will skip if files not found)
+        return fileManager.currentDirectoryPath
+    }
+
+    // Use project root for test files (can be overridden via environment)
     var vrmaBasePath: String {
-        ProcessInfo.processInfo.environment["VRMA_TEST_PATH"] ?? "."
+        ProcessInfo.processInfo.environment["VRMA_TEST_PATH"] ?? projectRoot
     }
 
     var vrmModelPath: String {
-        ProcessInfo.processInfo.environment["VRM_MODEL_PATH"] ?? "AliciaSolid.vrm"
+        if let envPath = ProcessInfo.processInfo.environment["VRM_MODEL_PATH"] {
+            return envPath
+        }
+        return "\(projectRoot)/AliciaSolid.vrm"
     }
 
     /// Bones to validate (critical for animation retargeting)
@@ -79,6 +114,16 @@ final class VRMAValidationTests: XCTestCase {
 
     /// Load VRMA animation, apply it to VRM model, and extract joint rotations
     private func extractAndPrintJointRotations(vrmaFile: String) async throws {
+        // Check if test files exist (they're in .gitignore, so only available locally)
+        let modelPath = vrmModelPath
+        let vrmaPath = "\(vrmaBasePath)/\(vrmaFile)"
+
+        let modelExists = FileManager.default.fileExists(atPath: modelPath)
+        let vrmaExists = FileManager.default.fileExists(atPath: vrmaPath)
+
+        try XCTSkipIf(!modelExists, "VRM model not found at \(modelPath). These validation tests require local test files (not in repo).")
+        try XCTSkipIf(!vrmaExists, "VRMA file not found at \(vrmaPath). These validation tests require local test files (not in repo).")
+
         guard let device = MTLCreateSystemDefaultDevice() else {
             XCTFail("Metal device not available")
             return

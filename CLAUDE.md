@@ -658,6 +658,28 @@ This is part of the "Game of Mods" character creator integration.
 3. Profile GPU vs CPU bottlenecks
 4. Consider: morph compute threshold, state change batching, draw call count
 
+### Pre-Commit Checklist
+Before committing changes, run the following tests to ensure compatibility with both SPM and Xcode:
+
+```bash
+# 1. Build with Swift Package Manager
+swift build
+
+# 2. Run tests with xcodebuild (more comprehensive than swift test)
+xcodebuild test -scheme VRMMetalKit-Package -destination 'platform=macOS'
+
+# 3. Check for warnings
+swift build --build-tests 2>&1 | tee build.log && ! grep -i "warning:" build.log
+
+# 4. Format check (if applicable)
+# Run any code formatting tools
+```
+
+**Why xcodebuild test?**
+- `swift test` provides limited output and may miss Xcode-specific issues
+- `xcodebuild test` validates the package works correctly in Xcode
+- Catches Swift 6/Xcode compatibility issues (e.g., `@main` attribute handling)
+
 ## CI/CD Pipeline
 
 GitHub Actions workflows in `.github/workflows/`:
