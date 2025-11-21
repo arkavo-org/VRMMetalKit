@@ -103,6 +103,12 @@ public final class AnimationPlayer {
         currentTime = 0
     }
 
+    /// Seek to a specific time in the animation
+    /// - Parameter time: The time to seek to (in seconds)
+    public func seek(to time: Float) {
+        currentTime = time
+    }
+
     public func update(deltaTime: Float, model: VRMModel) {
         guard isPlaying, let clip = clip else {
             if currentTime < 0.1 {

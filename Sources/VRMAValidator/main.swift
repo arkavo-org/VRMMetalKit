@@ -81,11 +81,17 @@ func extractJointRotations(vrmaPath: String, vrmPath: String) async throws {
         print("FRAME \(index): t=\(String(format: "%.3f", time))s")
         print(String(repeating: "-", count: 80))
 
-        // Apply animation
+        // Apply animation by seeking to specific time
         let player = AnimationPlayer()
         player.load(clip)
         player.isLooping = false
-        player.update(deltaTime: time, model: model)
+        player.play()
+
+        // Seek to the desired time point
+        player.seek(to: time)
+
+        // Sample animation at this time point (deltaTime=0 to prevent further time advancement)
+        player.update(deltaTime: 0, model: model)
 
         // Update world transforms
         for node in model.nodes where node.parent == nil {
@@ -103,9 +109,12 @@ func extractJointRotations(vrmaPath: String, vrmPath: String) async throws {
             let node = model.nodes[nodeIndex]
             let q = node.rotation
 
-            print(String(format: "%-20s quat(% .6f, % .6f, % .6f, % .6f)",
-                        "\(bone):",
-                        q.imag.x, q.imag.y, q.imag.z, q.real))
+            // Format output using NSString to avoid C-style formatting issues
+            let boneName = "\(bone):".padding(toLength: 20, withPad: " ", startingAt: 0)
+            let formatted = String(format: "%@ quat(% .6f, % .6f, % .6f, % .6f)",
+                                  boneName as NSString,
+                                  q.imag.x, q.imag.y, q.imag.z, q.real)
+            print(formatted)
         }
     }
 

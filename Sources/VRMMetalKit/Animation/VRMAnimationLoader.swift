@@ -218,33 +218,37 @@ public enum VRMAnimationLoader {
     ) {
         // Prepare samplers
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
-        let modelRest = modelRestTransforms[bone]
 
-        // CRITICAL: Use VRMA scene node rest pose, NOT first keyframe
-        // The first keyframe is animation data; the scene node defines the source rest pose
-        let rotationRest = animationRest.rotation
-        let translationRest = animationRest.translation
-        let scaleRest = animationRest.scale
+        // VRMA HUMANOID BONE POLICY: NO RETARGETING
+        // Per VRM spec, VRMA animation data for humanoid bones is already in VRM humanoid space.
+        // Apply animation rotations/translations/scales directly without retargeting to preserve
+        // authored poses (Y-pose, A-pose, idle, etc.) exactly as created.
+        // See CLAUDE.md "VRM Animation (VRMA) Loading - Design Decision" section.
+
+        // Use first keyframe as rest pose fallback (for delta calculations in samplers)
+        let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
+        let translationRest = tracks["translation"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.translation
+        let scaleRest = tracks["scale"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.scale
 
         var rotationSampler: ((Float) -> simd_quatf)? = nil
         if let rot = tracks["rotation"] {
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: modelRest?.rotation)
+                                                  modelRestRotation: nil)  // NO retargeting for humanoid bones
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
         if let trans = tracks["translation"] {
             translationSampler = makeTranslationSampler(track: trans,
                                                         animationRestTranslation: translationRest,
-                                                        modelRestTranslation: modelRest?.translation)
+                                                        modelRestTranslation: nil)  // NO retargeting for humanoid bones
         }
 
         var scaleSampler: ((Float) -> simd_float3)? = nil
         if let scl = tracks["scale"] {
             scaleSampler = makeScaleSampler(track: scl,
                                             animationRestScale: scaleRest,
-                                            modelRestScale: modelRest?.scale)
+                                            modelRestScale: nil)  // NO retargeting for humanoid bones
         }
 
         #if DEBUG

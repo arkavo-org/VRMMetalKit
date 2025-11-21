@@ -437,7 +437,7 @@ bodyDriver.resetStatistics()
 
 1. **T-pose is the VRM model's humanoid rest pose** (from `VRMC_vrm.humanoid`), NOT a requirement on animation data
 2. **VRMA first frame can be any pose**: idle, crouch, wave, etc. — all valid per spec
-3. **Retargeting operates in local space**: `result = modelRest * inverse(animRest) * animRotation`
+3. **NO retargeting for humanoid bones**: Animation data is applied directly, preserving authored poses exactly
 4. **Hierarchy is correctly applied**: Parent transforms propagate via `VRMNode.updateWorldTransform()`
 5. **Consistent with official tools**: UniVRM and VRM Blender Add-on
 
@@ -445,20 +445,30 @@ bodyDriver.resetStatistics()
 
 **File:** `Sources/VRMMetalKit/Animation/VRMAnimationLoader.swift`
 
-**Coordinate Spaces:**
-- All rotations are in **local space** (relative to parent bone)
-- `animationRest`: First keyframe rotation from VRMA file
-- `modelRest`: VRM humanoid bone rest pose (T-pose) from model
-- Formula: `delta = inverse(animationRest) * animationRotation`, then `final = modelRest * delta`
+**No Retargeting for Humanoid Bones:**
+```swift
+// VRMAnimationLoader.swift:237
+rotationSampler = makeRotationSampler(track: rot,
+                                      animationRestRotation: rotationRest,
+                                      modelRestRotation: nil)  // NO retargeting
+```
+
+When `modelRestRotation` is `nil`, the sampler returns animation data directly:
+```swift
+// VRMAnimationLoader.swift:392-394
+if modelRest == nil {
+    return { t in sampleQuaternion(track, at: t) }  // Direct passthrough
+}
+```
 
 **World Transform Propagation:**
 - `AnimationPlayer` updates `VRMNode.rotation` (local transform)
 - `VRMNode.updateWorldTransform()` recursively computes: `worldMatrix = parent.worldMatrix * localMatrix`
-- Children automatically inherit parent transforms
+- Children automatically inherit parent transforms via hierarchy
 
 **Root Motion Handling:**
 - Hips translation applied only if `applyRootMotion` flag enabled
-- Separate code path for root vs regular bones (AnimationPlayer.swift:193)
+- Separate code path for root vs regular bones (AnimationPlayer.swift)
 
 ### Why This Matters
 
@@ -471,9 +481,9 @@ This was **never part of the VRM spec**. It caused:
 - Incorrect "correction" of intentionally non-T-pose first frames
 
 **Correct Behavior (current):**
-- Use the first keyframe exactly as authored
-- Retarget rotations from animation rest space to model rest space
-- Preserve animation intent while adapting to different skeleton proportions
+- Apply animation data directly without retargeting
+- Preserve authored poses exactly (Y-pose, A-pose, idle, etc.)
+- Hierarchy and parent transforms are applied correctly via world transform propagation
 
 ### Spec References
 
