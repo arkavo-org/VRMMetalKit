@@ -33,6 +33,8 @@ struct Uniforms {
  int toonBands;
  int isOrthographic;
  float _padding1;
+ float3 cameraWorldPosition;   // Camera position in world space (for rim lighting)
+ float _padding2;
 };
 
 struct Toon2DMaterial {
@@ -264,7 +266,7 @@ fragment float4 skinned_toon2d_fragment(
 
  // Optional rim lighting
  if (length(material.rimColorFactor) > 0.01) {
- float3 viewDir = normalize(-in.worldPosition);
+ float3 viewDir = normalize(uniforms.cameraWorldPosition - in.worldPosition);
  finalColor = applyQuantizedRim(
      finalColor,
      material.rimColorFactor,

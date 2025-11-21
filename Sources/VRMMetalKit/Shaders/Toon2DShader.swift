@@ -41,6 +41,8 @@ public class Toon2DShader {
         int toonBands;                // Number of cel-shading bands (1-5)
         int isOrthographic;           // 1 = orthographic projection, 0 = perspective
         float _padding1;              // Align to 16 bytes
+        float3 cameraWorldPosition;   // Camera position in world space (for rim lighting)
+        float _padding2;              // Align to 16 bytes
     };
 
     struct Toon2DMaterial {
@@ -253,7 +255,7 @@ public class Toon2DShader {
 
         // Optional: Quantized rim lighting
         if (length(material.rimColorFactor) > 0.01) {
-            float3 viewDir = normalize(-in.worldPosition);  // Camera assumed at origin
+            float3 viewDir = normalize(uniforms.cameraWorldPosition - in.worldPosition);
             finalColor = applyQuantizedRim(
                 finalColor,
                 material.rimColorFactor,
