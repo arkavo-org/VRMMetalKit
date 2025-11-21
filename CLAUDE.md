@@ -556,6 +556,29 @@ Test models and assets live in `Tests/VRMMetalKitTests/TestData/`
 - `ExpressionTests.swift`: VRMExpressions and morph targets
 - `VRMCreatorSimpleTests.swift`: VRMBuilder API tests
 - `Toon2DMaterialLayoutTests.swift`: 2.5D rendering mode
+- `VRMAValidationTests.swift`: Animation validation (requires test files, see below)
+
+### VRMA Validation Tests
+
+These tests validate animation loading by extracting joint rotations for comparison with official VRM tooling (UniVRM, VRM Blender Add-on).
+
+**Test files (in `.gitignore`):**
+- `AliciaSolid.vrm` - Base model
+- `VRMA_*.vrma` - Animation files
+
+**Running validation tests:**
+
+In Xcode, tests automatically find files via `SRCROOT`:
+```bash
+xcodebuild test -scheme VRMMetalKit-Package -destination 'platform=macOS'
+```
+
+From command line, set `PROJECT_ROOT`:
+```bash
+PROJECT_ROOT="$PWD" swift test --filter VRMAValidationTests
+```
+
+Tests skip gracefully when files unavailable (CI-friendly).
 
 ### Writing Tests
 ```swift

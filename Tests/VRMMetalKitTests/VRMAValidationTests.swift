@@ -34,8 +34,9 @@ final class VRMAValidationTests: XCTestCase {
 
         // Known locations to check (in priority order)
         let candidates: [String?] = [
-            // From environment variable (highest priority)
+            // From environment variables (highest priority)
             ProcessInfo.processInfo.environment["PROJECT_ROOT"],
+            ProcessInfo.processInfo.environment["SRCROOT"],  // Xcode standard variable
             // Relative to test file (#file)
             URL(fileURLWithPath: #file)
                 .deletingLastPathComponent()  // VRMAValidationTests.swift
