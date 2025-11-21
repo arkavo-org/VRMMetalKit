@@ -421,16 +421,7 @@ private func makeRotationSampler(track: KeyTrack,
 
     return { t in
         let animRotation = sampleQuaternion(track, at: t)
-
-        // COORDINATE SYSTEM FIX: VRM spec uses +Z forward (glTF right-handed)
-        // If animation was authored for opposite facing direction, flip Z rotation
-        // This prevents leg crossing and unnatural clipping
-        let zFlip = simd_quatf(ix: animRotation.imag.x,
-                               iy: animRotation.imag.y,
-                               iz: -animRotation.imag.z,  // Negate Z component
-                               r: animRotation.real)
-
-        let delta = simd_normalize(simd_inverse(rotationRest) * zFlip)
+        let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
         let result = simd_normalize(modelRestNormalized * delta)
 
         #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
