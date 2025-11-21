@@ -429,37 +429,45 @@ bodyDriver.resetStatistics()
 - Weighted skeleton blending
 - Adaptive thresholds
 
-## VRM Animation (VRMA) Loading - Design Decision
+## VRM Animation (VRMA) Loading - Retargeting System
 
-**VRMMetalKit preserves VRMA animation data as authored.** It does NOT force the first frame to T-pose.
+**VRMMetalKit applies intelligent retargeting to handle bind pose mismatches between animations and models.**
 
 ### Core Principles
 
 1. **T-pose is the VRM model's humanoid rest pose** (from `VRMC_vrm.humanoid`), NOT a requirement on animation data
 2. **VRMA first frame can be any pose**: idle, crouch, wave, etc. — all valid per spec
-3. **NO retargeting for humanoid bones**: Animation data is applied directly, preserving authored poses exactly
+3. **Retargeting for humanoid bones**: Animation data is retargeted from animation rest space to model rest space
 4. **Hierarchy is correctly applied**: Parent transforms propagate via `VRMNode.updateWorldTransform()`
-5. **Consistent with official tools**: UniVRM and VRM Blender Add-on
+5. **Prevents skeletal deformation**: Compensates for different skeleton proportions between animation and model
 
 ### Implementation Details
 
 **File:** `Sources/VRMMetalKit/Animation/VRMAnimationLoader.swift`
 
-**No Retargeting for Humanoid Bones:**
+**Retargeting for Humanoid Bones:**
 ```swift
-// VRMAnimationLoader.swift:237
+// VRMAnimationLoader.swift:255
 rotationSampler = makeRotationSampler(track: rot,
                                       animationRestRotation: rotationRest,
-                                      modelRestRotation: nil)  // NO retargeting
+                                      modelRestRotation: modelRest?.rotation)  // Enable retargeting
 ```
 
-When `modelRestRotation` is `nil`, the sampler returns animation data directly:
+**Retargeting Formula:**
+The sampler applies retargeting when `modelRestRotation` is provided:
 ```swift
-// VRMAnimationLoader.swift:392-394
-if modelRest == nil {
-    return { t in sampleQuaternion(track, at: t) }  // Direct passthrough
+// VRMAnimationLoader.swift:402-406
+return { t in
+    let animRotation = sampleQuaternion(track, at: t)
+    let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
+    let result = simd_normalize(modelRestNormalized * delta)
+    return result
 }
 ```
+
+This formula transforms animation data from the animation's rest space to the model's rest space:
+- `delta = inverse(animRest) * animRotation` - Extract the rotation delta from animation rest pose
+- `result = modelRest * delta` - Apply delta in model's rest space
 
 **World Transform Propagation:**
 - `AnimationPlayer` updates `VRMNode.rotation` (local transform)
@@ -470,20 +478,27 @@ if modelRest == nil {
 - Hips translation applied only if `applyRootMotion` flag enabled
 - Separate code path for root vs regular bones (AnimationPlayer.swift)
 
-### Why This Matters
+### Why Retargeting Matters
 
-**Incorrect Assumption (removed in #64):**
-> "VRMA files must have first frame = T-pose. If arms have Z-rotation > 0.3, the file is non-compliant."
+**Without retargeting**, when animation rest pose differs from model bind pose:
+- Arms may be raised or stretched unnaturally
+- Legs may be elongated or compressed
+- Character proportions become distorted
+- Example: Animation with arms at 45° applied to model with arms at 0° causes raised arms
 
-This was **never part of the VRM spec**. It caused:
-- Silent modification of artist-authored animations
-- Divergence from official tooling (UniVRM, VRM Blender Add-on)
-- Incorrect "correction" of intentionally non-T-pose first frames
-
-**Correct Behavior (current):**
-- Apply animation data directly without retargeting
-- Preserve authored poses exactly (Y-pose, A-pose, idle, etc.)
+**With retargeting** (current behavior):
+- Animation intent is preserved while adapting to model's skeleton
+- Prevents skeletal deformation from bind pose mismatches
+- Animations work correctly across different VRM models
 - Hierarchy and parent transforms are applied correctly via world transform propagation
+
+### Historical Context
+
+**Previous approach (removed):**
+A previous version disabled retargeting entirely, attempting to apply animation data directly. This caused skeletal deformation when VRMA animations were authored with different skeleton proportions than the target model.
+
+**Current approach:**
+Retargeting is enabled by default to handle the common case where animations and models have different rest poses. This prevents deformation while still preserving the animation's artistic intent.
 
 ### Spec References
 

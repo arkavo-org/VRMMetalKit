@@ -218,37 +218,57 @@ public enum VRMAnimationLoader {
     ) {
         // Prepare samplers
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
+        let modelRest = modelRestTransforms[bone]
 
-        // VRMA HUMANOID BONE POLICY: NO RETARGETING
-        // Per VRM spec, VRMA animation data for humanoid bones is already in VRM humanoid space.
-        // Apply animation rotations/translations/scales directly without retargeting to preserve
-        // authored poses (Y-pose, A-pose, idle, etc.) exactly as created.
-        // See CLAUDE.md "VRM Animation (VRMA) Loading - Design Decision" section.
+        // VRMA HUMANOID BONE RETARGETING POLICY:
+        // Enable retargeting to handle cases where animation rest pose differs from model bind pose.
+        // This prevents skeletal deformation when VRMA animations were authored with different skeleton proportions.
+        //
+        // Retargeting formula (applied in samplers):
+        //   delta = inverse(animationRest) * animationRotation
+        //   result = modelRest * delta
+        //
+        // This transforms animation data from the animation's rest space to the model's rest space,
+        // preserving the animation's intent while adapting to different bind poses.
 
         // Use first keyframe as rest pose fallback (for delta calculations in samplers)
         let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
         let translationRest = tracks["translation"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.translation
         let scaleRest = tracks["scale"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.scale
 
+        // Validate rest pose mismatch for debugging
+        if let modelRest = modelRest {
+            // Calculate angle between quaternions using dot product
+            let dot = abs(simd_dot(rotationRest, modelRest.rotation))
+            let rotationDiff = acos(min(1.0, dot)) * 2.0  // Angle in radians
+            if rotationDiff > 0.1 {  // ~5.7 degrees
+                vrmLogAnimation("[VRMA Retargeting] Bone \(bone): rest pose mismatch detected")
+                vrmLogAnimation("  Animation rest rotation: \(rotationRest)")
+                vrmLogAnimation("  Model rest rotation: \(modelRest.rotation)")
+                vrmLogAnimation("  Angle difference: \(String(format: "%.2f", rotationDiff * 180.0 / .pi))°")
+                vrmLogAnimation("  → Retargeting will be applied")
+            }
+        }
+
         var rotationSampler: ((Float) -> simd_quatf)? = nil
         if let rot = tracks["rotation"] {
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: nil)  // NO retargeting for humanoid bones
+                                                  modelRestRotation: modelRest?.rotation)  // Enable retargeting
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
         if let trans = tracks["translation"] {
             translationSampler = makeTranslationSampler(track: trans,
                                                         animationRestTranslation: translationRest,
-                                                        modelRestTranslation: nil)  // NO retargeting for humanoid bones
+                                                        modelRestTranslation: modelRest?.translation)  // Enable retargeting
         }
 
         var scaleSampler: ((Float) -> simd_float3)? = nil
         if let scl = tracks["scale"] {
             scaleSampler = makeScaleSampler(track: scl,
                                             animationRestScale: scaleRest,
-                                            modelRestScale: nil)  // NO retargeting for humanoid bones
+                                            modelRestScale: modelRest?.scale)  // Enable retargeting
         }
 
         #if DEBUG
