@@ -28,8 +28,14 @@ final class VRMAValidationTests: XCTestCase {
 
     // MARK: - Configuration
 
-    let vrmaBasePath = "/Users/paul/Projects/GameOfMods/Muse"
-    let vrmModelPath = "/Users/paul/Projects/GameOfMods/Muse/AliciaSolid.vrm"
+    // Use current directory for test files (can be overridden via environment)
+    var vrmaBasePath: String {
+        ProcessInfo.processInfo.environment["VRMA_TEST_PATH"] ?? "."
+    }
+
+    var vrmModelPath: String {
+        ProcessInfo.processInfo.environment["VRM_MODEL_PATH"] ?? "AliciaSolid.vrm"
+    }
 
     /// Bones to validate (critical for animation retargeting)
     let keyBones: [VRMHumanoidBone] = [
