@@ -568,17 +568,28 @@ These tests validate animation loading by extracting joint rotations for compari
 
 **Running validation tests:**
 
-In Xcode, tests automatically find files via `SRCROOT`:
+In Xcode (uses `SRCROOT` automatically):
 ```bash
 xcodebuild test -scheme VRMMetalKit-Package -destination 'platform=macOS'
 ```
 
-From command line, set `PROJECT_ROOT`:
+From command line (run from project root):
 ```bash
+# Option 1: Run from project root (auto-detects)
+swift test --filter VRMAValidationTests
+
+# Option 2: Explicit PROJECT_ROOT
 PROJECT_ROOT="$PWD" swift test --filter VRMAValidationTests
 ```
 
 Tests skip gracefully when files unavailable (CI-friendly).
+
+**Path resolution priority:**
+1. `PROJECT_ROOT` environment variable
+2. `SRCROOT` environment variable (Xcode)
+3. Relative to test file via `#file`
+4. Current working directory
+5. Parent of current directory
 
 ### Writing Tests
 ```swift

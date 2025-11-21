@@ -37,14 +37,17 @@ final class VRMAValidationTests: XCTestCase {
             // From environment variables (highest priority)
             ProcessInfo.processInfo.environment["PROJECT_ROOT"],
             ProcessInfo.processInfo.environment["SRCROOT"],  // Xcode standard variable
-            // Relative to test file (#file)
+            // Relative to test file (#file) - navigate up to project root
             URL(fileURLWithPath: #file)
                 .deletingLastPathComponent()  // VRMAValidationTests.swift
                 .deletingLastPathComponent()  // VRMMetalKitTests
                 .deletingLastPathComponent()  // Tests
                 .path,
-            // Current directory
-            fileManager.currentDirectoryPath
+            // Relative paths from common working directories
+            fileManager.currentDirectoryPath,  // When run from project root
+            URL(fileURLWithPath: fileManager.currentDirectoryPath)
+                .deletingLastPathComponent()  // When run from .build or subdirectory
+                .path
         ]
 
         // Return first valid project root (has Package.swift and test files)
