@@ -556,6 +556,40 @@ Test models and assets live in `Tests/VRMMetalKitTests/TestData/`
 - `ExpressionTests.swift`: VRMExpressions and morph targets
 - `VRMCreatorSimpleTests.swift`: VRMBuilder API tests
 - `Toon2DMaterialLayoutTests.swift`: 2.5D rendering mode
+- `VRMAValidationTests.swift`: Animation validation (requires test files, see below)
+
+### VRMA Validation Tests
+
+These tests validate animation loading by extracting joint rotations for comparison with official VRM tooling (UniVRM, VRM Blender Add-on).
+
+**Test files (in `.gitignore`):**
+- `AliciaSolid.vrm` - Base model
+- `VRMA_*.vrma` - Animation files
+
+**Running validation tests:**
+
+In Xcode (uses `SRCROOT` automatically):
+```bash
+xcodebuild test -scheme VRMMetalKit-Package -destination 'platform=macOS'
+```
+
+From command line (run from project root):
+```bash
+# Option 1: Run from project root (auto-detects)
+swift test --filter VRMAValidationTests
+
+# Option 2: Explicit PROJECT_ROOT
+PROJECT_ROOT="$PWD" swift test --filter VRMAValidationTests
+```
+
+Tests skip gracefully when files unavailable (CI-friendly).
+
+**Path resolution priority:**
+1. `PROJECT_ROOT` environment variable
+2. `SRCROOT` environment variable (Xcode)
+3. Relative to test file via `#file`
+4. Current working directory
+5. Parent of current directory
 
 ### Writing Tests
 ```swift
@@ -657,6 +691,28 @@ This is part of the "Game of Mods" character creator integration.
 2. Check metrics: `renderer.getPerformanceMetrics()`
 3. Profile GPU vs CPU bottlenecks
 4. Consider: morph compute threshold, state change batching, draw call count
+
+### Pre-Commit Checklist
+Before committing changes, run the following tests to ensure compatibility with both SPM and Xcode:
+
+```bash
+# 1. Build with Swift Package Manager
+swift build
+
+# 2. Run tests with xcodebuild (more comprehensive than swift test)
+xcodebuild test -scheme VRMMetalKit-Package -destination 'platform=macOS'
+
+# 3. Check for warnings
+swift build --build-tests 2>&1 | tee build.log && ! grep -i "warning:" build.log
+
+# 4. Format check (if applicable)
+# Run any code formatting tools
+```
+
+**Why xcodebuild test?**
+- `swift test` provides limited output and may miss Xcode-specific issues
+- `xcodebuild test` validates the package works correctly in Xcode
+- Catches Swift 6/Xcode compatibility issues (e.g., `@main` attribute handling)
 
 ## CI/CD Pipeline
 

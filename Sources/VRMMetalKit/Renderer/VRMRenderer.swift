@@ -979,6 +979,20 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Set debug mode
         uniforms.debugUVs = debugUVs ? 1 : 0
 
+        // Set Toon2D fields
+        uniforms.toonBands = Int32(toonBands)
+        uniforms.isOrthographic = useOrthographic ? 1 : 0
+
+        // Extract camera world position from view matrix for correct rim lighting
+        // View matrix transforms from world to view space: viewPos = viewMatrix * worldPos
+        // To get camera position in world space, invert the view matrix and extract translation
+        let viewMatrixInverse = viewMatrix.inverse
+        uniforms.cameraWorldPosition = SIMD3<Float>(
+            viewMatrixInverse[3][0],
+            viewMatrixInverse[3][1],
+            viewMatrixInverse[3][2]
+        )
+
         // DEBUG: Log what's being set to track UV debug issue
         if frameCounter <= 2 {
             vrmLog("[UNIFORMS] Setting debugUVs uniform to \(uniforms.debugUVs) (from debugUVs flag: \(debugUVs))")
@@ -3238,9 +3252,10 @@ struct Uniforms {
     var viewportSize_packed = SIMD4<Float>(1280, 720, 0.0, 0.0)   // 16 bytes, offset 304 (SIMD2 + padding)
     var nearPlane_packed = SIMD4<Float>(0.1, 100.0, 0.0, 0.0)    // 16 bytes, offset 320 (2 floats + padding)
     var debugUVs: Int32 = 0                                       // 4 bytes, offset 336
-    var _padding1: Float = 0                                      // 4 bytes padding
-    var _padding2: Float = 0                                      // 4 bytes padding
-    var _padding3: Float = 0                                      // 4 bytes padding to align to 16 bytes
+    var toonBands: Int32 = 3                                      // 4 bytes, offset 340 (Toon2D cel-shading bands)
+    var isOrthographic: Int32 = 0                                 // 4 bytes, offset 344 (1 = orthographic, 0 = perspective)
+    var _padding1: Float = 0                                      // 4 bytes padding, offset 348
+    var cameraWorldPosition_packed = SIMD4<Float>(0, 0, 0, 0)    // 16 bytes, offset 352 (SIMD3 + padding)
 
     // Computed properties for easy access
     var lightDirection: SIMD3<Float> {
@@ -3271,6 +3286,11 @@ struct Uniforms {
     var farPlane: Float {
         get { nearPlane_packed.y }
         set { nearPlane_packed.y = newValue }
+    }
+
+    var cameraWorldPosition: SIMD3<Float> {
+        get { SIMD3<Float>(cameraWorldPosition_packed.x, cameraWorldPosition_packed.y, cameraWorldPosition_packed.z) }
+        set { cameraWorldPosition_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
     }
 
 }
