@@ -33,7 +33,7 @@ final class VRMAValidationTests: XCTestCase {
         let fileManager = FileManager.default
 
         // Known locations to check (in priority order)
-        let candidates = [
+        let candidates: [String?] = [
             // From environment variable (highest priority)
             ProcessInfo.processInfo.environment["PROJECT_ROOT"],
             // Relative to test file (#file)
@@ -44,10 +44,10 @@ final class VRMAValidationTests: XCTestCase {
                 .path,
             // Current directory
             fileManager.currentDirectoryPath
-        ].compactMap { $0 }
+        ]
 
         // Return first valid project root (has Package.swift and test files)
-        for candidate in candidates {
+        for candidate in candidates.compactMap({ $0 }) {
             let packagePath = "\(candidate)/Package.swift"
             let vrmPath = "\(candidate)/AliciaSolid.vrm"
             if fileManager.fileExists(atPath: packagePath) &&
