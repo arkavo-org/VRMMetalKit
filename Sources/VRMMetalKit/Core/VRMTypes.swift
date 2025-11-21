@@ -138,6 +138,7 @@ public enum VRMExpressionPreset: String, CaseIterable, Sendable {
     case lookRight
 
     case neutral
+    case custom  // VRM 1.0 spec: User-defined expressions not covered by standard presets
 }
 
 public struct VRMExpression {
