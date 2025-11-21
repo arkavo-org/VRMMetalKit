@@ -218,8 +218,14 @@ public enum VRMAnimationLoader {
     ) {
         // Prepare samplers
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
-        let modelRest = modelRestTransforms[bone]
 
+        // VRMA HUMANOID BONE POLICY: NO RETARGETING
+        // Per VRM spec, VRMA animation data for humanoid bones is already in VRM humanoid space.
+        // Apply animation rotations/translations/scales directly without retargeting to preserve
+        // authored poses (Y-pose, A-pose, idle, etc.) exactly as created.
+        // See CLAUDE.md "VRM Animation (VRMA) Loading - Design Decision" section.
+
+        // Use first keyframe as rest pose fallback (for delta calculations in samplers)
         let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
         let translationRest = tracks["translation"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.translation
         let scaleRest = tracks["scale"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.scale
@@ -228,21 +234,21 @@ public enum VRMAnimationLoader {
         if let rot = tracks["rotation"] {
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: modelRest?.rotation)
+                                                  modelRestRotation: nil)  // NO retargeting for humanoid bones
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
         if let trans = tracks["translation"] {
             translationSampler = makeTranslationSampler(track: trans,
                                                         animationRestTranslation: translationRest,
-                                                        modelRestTranslation: modelRest?.translation)
+                                                        modelRestTranslation: nil)  // NO retargeting for humanoid bones
         }
 
         var scaleSampler: ((Float) -> simd_float3)? = nil
         if let scl = tracks["scale"] {
             scaleSampler = makeScaleSampler(track: scl,
                                             animationRestScale: scaleRest,
-                                            modelRestScale: modelRest?.scale)
+                                            modelRestScale: nil)  // NO retargeting for humanoid bones
         }
 
         #if DEBUG
@@ -364,6 +370,23 @@ private func componentCount(for path: String) -> Int? {
     }
 }
 
+// Rotation Retargeting with Delta-Based Alignment
+//
+// VRM ANIMATION SPEC:
+// ------------------
+// VRMA animation data is preserved as authored. The first keyframe can be any pose
+// (T-pose, idle, crouch, wave, etc.). T-pose is the VRM model's humanoid rest pose,
+// NOT a requirement on the animation's first frame.
+//
+// Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/
+//
+// Retargeting Formula (local space):
+//   delta = inverse(animationRest) * animationRotation
+//   result = modelRest * delta
+//
+// This transforms the animation rotation from the animation's rest pose space
+// to the target VRM model's rest pose space, preserving the animation's intent
+// while adapting to different skeleton proportions.
 private func makeRotationSampler(track: KeyTrack,
                                  animationRestRotation: simd_quatf,
                                  modelRestRotation: simd_quatf?) -> ((Float) -> simd_quatf)? {
@@ -375,10 +398,42 @@ private func makeRotationSampler(track: KeyTrack,
     }
 
     let modelRestNormalized = simd_normalize(modelRest!)
+
     return { t in
         let animRotation = sampleQuaternion(track, at: t)
         let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
-        return simd_normalize(modelRestNormalized * delta)
+        let result = simd_normalize(modelRestNormalized * delta)
+
+        #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
+        // Log retargeting math for debugging
+        if t < 0.1 {  // Only log first frame
+            vrmLogAnimation("""
+                [RETARGET] t=\(String(format: "%.3f", t))
+                  rotationRest:  quat(\(String(format: "% .6f", rotationRest.imag.x)), \
+                \(String(format: "% .6f", rotationRest.imag.y)), \
+                \(String(format: "% .6f", rotationRest.imag.z)), \
+                \(String(format: "% .6f", rotationRest.real)))
+                  animRotation:  quat(\(String(format: "% .6f", animRotation.imag.x)), \
+                \(String(format: "% .6f", animRotation.imag.y)), \
+                \(String(format: "% .6f", animRotation.imag.z)), \
+                \(String(format: "% .6f", animRotation.real)))
+                  modelRest:     quat(\(String(format: "% .6f", modelRestNormalized.imag.x)), \
+                \(String(format: "% .6f", modelRestNormalized.imag.y)), \
+                \(String(format: "% .6f", modelRestNormalized.imag.z)), \
+                \(String(format: "% .6f", modelRestNormalized.real)))
+                  delta:         quat(\(String(format: "% .6f", delta.imag.x)), \
+                \(String(format: "% .6f", delta.imag.y)), \
+                \(String(format: "% .6f", delta.imag.z)), \
+                \(String(format: "% .6f", delta.real)))
+                  RESULT:        quat(\(String(format: "% .6f", result.imag.x)), \
+                \(String(format: "% .6f", result.imag.y)), \
+                \(String(format: "% .6f", result.imag.z)), \
+                \(String(format: "% .6f", result.real)))
+                """)
+        }
+        #endif
+
+        return result
     }
 }
 
