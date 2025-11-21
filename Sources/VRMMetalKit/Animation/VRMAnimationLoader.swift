@@ -742,11 +742,17 @@ private func buildAnimationRestTransforms(document: GLTFDocument) -> [Int: RestT
 
 private func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: RestTransform] {
     guard let model, let humanoid = model.humanoid else { return [:] }
+    guard let gltfNodes = model.gltf.nodes else { return [:] }
+
     var map: [VRMHumanoidBone: RestTransform] = [:]
     for bone in VRMHumanoidBone.allCases {
-        guard let nodeIndex = humanoid.getBoneNode(bone), nodeIndex < model.nodes.count else { continue }
-        let node = model.nodes[nodeIndex]
-        map[bone] = RestTransform(node: node)
+        guard let nodeIndex = humanoid.getBoneNode(bone),
+              nodeIndex < gltfNodes.count else { continue }
+
+        // CRITICAL: Use the ORIGINAL glTF node data (bind pose from file),
+        // NOT the runtime VRMNode transform (which may have been modified by animations)
+        let gltfNode = gltfNodes[nodeIndex]
+        map[bone] = RestTransform(node: gltfNode)
     }
     return map
 }
