@@ -702,6 +702,174 @@ final class AnimationTests: XCTestCase {
         XCTAssertEqual(scale!.z, 2.0, accuracy: 0.001)
     }
 
+    // MARK: - VRMA Keyframe Analysis Tests
+
+    /// Analyze VRMA keyframe data to identify unusual patterns
+    func testAnalyzeVRMAKeyframePatterns() async throws {
+        let modelPath = "\(projectRoot)/AliciaSolid.vrm"
+
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
+                      "VRM model not found at \(modelPath)")
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            XCTFail("Metal device not available")
+            return
+        }
+
+        let modelURL = URL(fileURLWithPath: modelPath)
+        let model = try await VRMModel.load(from: modelURL, device: device)
+
+        let vrmaFiles = ["VRMA_01.vrma", "VRMA_02.vrma", "VRMA_03.vrma",
+                         "VRMA_04.vrma", "VRMA_05.vrma", "VRMA_06.vrma", "VRMA_07.vrma"]
+
+        // Key bones to analyze
+        let analyzeBones: [VRMHumanoidBone] = [
+            .hips, .spine, .chest, .neck, .head,
+            .leftUpperArm, .leftLowerArm, .rightUpperArm, .rightLowerArm,
+            .leftUpperLeg, .leftLowerLeg, .rightUpperLeg, .rightLowerLeg
+        ]
+
+        print("\n" + String(repeating: "=", count: 120))
+        print("VRMA KEYFRAME PATTERN ANALYSIS")
+        print(String(repeating: "=", count: 120))
+
+        for vrmaFile in vrmaFiles {
+            let vrmaPath = "\(projectRoot)/\(vrmaFile)"
+            guard FileManager.default.fileExists(atPath: vrmaPath) else {
+                print("\n⚠️  \(vrmaFile): NOT FOUND")
+                continue
+            }
+
+            let vrmaURL = URL(fileURLWithPath: vrmaPath)
+            let clip = try VRMAnimationLoader.loadVRMA(from: vrmaURL, model: model)
+
+            print("\n" + String(repeating: "-", count: 120))
+            print("📁 \(vrmaFile) | Duration: \(String(format: "%.2f", clip.duration))s | Tracks: \(clip.jointTracks.count)")
+            print(String(repeating: "-", count: 120))
+
+            // Sample at key times: 0%, 25%, 50%, 75%, 100%
+            let sampleTimes: [Float] = [0, clip.duration * 0.25, clip.duration * 0.5, clip.duration * 0.75, clip.duration - 0.001]
+
+            for bone in analyzeBones {
+                // Find track for this bone
+                guard let track = clip.jointTracks.first(where: { $0.bone == bone }) else {
+                    continue
+                }
+
+                var rotationRange: (min: Float, max: Float) = (Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)
+                var hasLargeRotation = false
+
+                print("\n  \(bone):")
+                for (i, t) in sampleTimes.enumerated() {
+                    let (rotation, translation, _) = track.sample(at: t)
+
+                    if let r = rotation {
+                        let (axis, angleDeg) = quaternionToAxisAngle(r)
+                        rotationRange.min = min(rotationRange.min, angleDeg)
+                        rotationRange.max = max(rotationRange.max, angleDeg)
+
+                        if angleDeg > 90 {
+                            hasLargeRotation = true
+                        }
+
+                        let timePercent = Int((t / clip.duration) * 100)
+                        print("    t=\(timePercent)%: \(String(format: "%6.1f", angleDeg))° around (\(String(format: "%.2f", axis.x)), \(String(format: "%.2f", axis.y)), \(String(format: "%.2f", axis.z)))")
+                    }
+
+                    if let tr = translation, bone == .hips {
+                        print("         translation: (\(String(format: "%.3f", tr.x)), \(String(format: "%.3f", tr.y)), \(String(format: "%.3f", tr.z)))")
+                    }
+                }
+
+                // Flag unusual patterns
+                let rotationDelta = rotationRange.max - rotationRange.min
+                if hasLargeRotation {
+                    print("    ⚠️  Large rotation detected (>90°)")
+                }
+                if rotationDelta > 60 {
+                    print("    📈 High rotation variance: \(String(format: "%.1f", rotationDelta))° range")
+                }
+            }
+        }
+
+        print("\n" + String(repeating: "=", count: 120))
+    }
+
+    /// Compare first frame vs middle frame to detect static vs dynamic animations
+    func testDetectStaticVsDynamicAnimations() async throws {
+        let modelPath = "\(projectRoot)/AliciaSolid.vrm"
+
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
+                      "VRM model not found at \(modelPath)")
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            XCTFail("Metal device not available")
+            return
+        }
+
+        let modelURL = URL(fileURLWithPath: modelPath)
+        let model = try await VRMModel.load(from: modelURL, device: device)
+
+        let vrmaFiles = ["VRMA_01.vrma", "VRMA_02.vrma", "VRMA_03.vrma",
+                         "VRMA_04.vrma", "VRMA_05.vrma", "VRMA_06.vrma", "VRMA_07.vrma"]
+
+        print("\n" + String(repeating: "=", count: 100))
+        print("STATIC VS DYNAMIC ANIMATION ANALYSIS")
+        print(String(repeating: "=", count: 100))
+
+        for vrmaFile in vrmaFiles {
+            let vrmaPath = "\(projectRoot)/\(vrmaFile)"
+            guard FileManager.default.fileExists(atPath: vrmaPath) else { continue }
+
+            let vrmaURL = URL(fileURLWithPath: vrmaPath)
+            let clip = try VRMAnimationLoader.loadVRMA(from: vrmaURL, model: model)
+
+            var staticTracks = 0
+            var dynamicTracks = 0
+            var totalRotationChange: Float = 0
+
+            for track in clip.jointTracks {
+                let (rot0, _, _) = track.sample(at: 0)
+                let (rotMid, _, _) = track.sample(at: clip.duration / 2)
+                let (rotEnd, _, _) = track.sample(at: clip.duration - 0.001)
+
+                if let r0 = rot0, let rMid = rotMid, let rEnd = rotEnd {
+                    // Calculate rotation difference using quaternion dot product
+                    let dot0Mid = abs(simd_dot(r0, rMid))
+                    let dot0End = abs(simd_dot(r0, rEnd))
+
+                    // If dot product is close to 1, rotations are similar
+                    let threshold: Float = 0.999
+                    if dot0Mid > threshold && dot0End > threshold {
+                        staticTracks += 1
+                    } else {
+                        dynamicTracks += 1
+                        // Estimate rotation change in degrees
+                        let angle0Mid = 2 * acos(min(1, dot0Mid)) * 180 / .pi
+                        let angle0End = 2 * acos(min(1, dot0End)) * 180 / .pi
+                        totalRotationChange += max(angle0Mid, angle0End)
+                    }
+                }
+            }
+
+            let avgRotationChange = dynamicTracks > 0 ? totalRotationChange / Float(dynamicTracks) : 0
+
+            print("\n📁 \(vrmaFile)")
+            print("   Static tracks:  \(staticTracks) (no movement)")
+            print("   Dynamic tracks: \(dynamicTracks) (animated)")
+            print("   Avg rotation change: \(String(format: "%.1f", avgRotationChange))°")
+
+            if staticTracks > dynamicTracks {
+                print("   ⚠️  Mostly static animation - may appear stiff")
+            }
+            if avgRotationChange < 10 {
+                print("   ⚠️  Low rotation variance - subtle movements")
+            }
+        }
+
+        print("\n" + String(repeating: "=", count: 100))
+    }
+
     // MARK: - Tier 3: Real VRMA File Integration Tests
 
     /// Find project root for test files
