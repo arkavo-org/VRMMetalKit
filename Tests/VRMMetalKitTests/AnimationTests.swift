@@ -701,4 +701,288 @@ final class AnimationTests: XCTestCase {
         XCTAssertEqual(scale!.y, 2.0, accuracy: 0.001)
         XCTAssertEqual(scale!.z, 2.0, accuracy: 0.001)
     }
+
+    // MARK: - Tier 3: Real VRMA File Integration Tests
+
+    /// Find project root for test files
+    private var projectRoot: String {
+        let fileManager = FileManager.default
+        let candidates: [String?] = [
+            ProcessInfo.processInfo.environment["PROJECT_ROOT"],
+            ProcessInfo.processInfo.environment["SRCROOT"],
+            URL(fileURLWithPath: #file)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .path,
+            fileManager.currentDirectoryPath
+        ]
+
+        for candidate in candidates.compactMap({ $0 }) {
+            let packagePath = "\(candidate)/Package.swift"
+            let vrmPath = "\(candidate)/AliciaSolid.vrm"
+            if fileManager.fileExists(atPath: packagePath) &&
+               fileManager.fileExists(atPath: vrmPath) {
+                return candidate
+            }
+        }
+        return fileManager.currentDirectoryPath
+    }
+
+    /// Test VRMA loading and verify parsed joint track data
+    func testVRMALoadingParsesJointTracks() async throws {
+        let modelPath = "\(projectRoot)/AliciaSolid.vrm"
+        let vrmaPath = "\(projectRoot)/VRMA_01.vrma"
+
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
+                      "VRM model not found at \(modelPath)")
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: vrmaPath),
+                      "VRMA file not found at \(vrmaPath)")
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            XCTFail("Metal device not available")
+            return
+        }
+
+        // Load VRM model
+        let modelURL = URL(fileURLWithPath: modelPath)
+        let model = try await VRMModel.load(from: modelURL, device: device)
+
+        // Load VRMA animation
+        let vrmaURL = URL(fileURLWithPath: vrmaPath)
+        let clip = try VRMAnimationLoader.loadVRMA(from: vrmaURL, model: model)
+
+        // Verify animation was loaded
+        XCTAssertGreaterThan(clip.duration, 0.0, "Animation should have duration")
+        XCTAssertGreaterThan(clip.jointTracks.count, 0, "Animation should have joint tracks")
+
+        print("\n=== VRMA_01.vrma Parsed Data ===")
+        print("Duration: \(clip.duration)s")
+        print("Joint tracks: \(clip.jointTracks.count)")
+
+        // Sample each joint track at frame 0 and print
+        for track in clip.jointTracks {
+            let (rotation, translation, scale) = track.sample(at: 0.0)
+
+            print("\nBone: \(track.bone)")
+            if let r = rotation {
+                print("  Rotation (t=0): quat(\(r.imag.x), \(r.imag.y), \(r.imag.z), \(r.real))")
+            }
+            if let t = translation {
+                print("  Translation (t=0): (\(t.x), \(t.y), \(t.z))")
+            }
+            if let s = scale {
+                print("  Scale (t=0): (\(s.x), \(s.y), \(s.z))")
+            }
+        }
+    }
+
+    /// Test that VRMA applies to model nodes correctly
+    func testVRMAApplicationToModelNodes() async throws {
+        let modelPath = "\(projectRoot)/AliciaSolid.vrm"
+        let vrmaPath = "\(projectRoot)/VRMA_01.vrma"
+
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
+                      "VRM model not found at \(modelPath)")
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: vrmaPath),
+                      "VRMA file not found at \(vrmaPath)")
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            XCTFail("Metal device not available")
+            return
+        }
+
+        // Load model and animation
+        let modelURL = URL(fileURLWithPath: modelPath)
+        let model = try await VRMModel.load(from: modelURL, device: device)
+
+        let vrmaURL = URL(fileURLWithPath: vrmaPath)
+        let clip = try VRMAnimationLoader.loadVRMA(from: vrmaURL, model: model)
+
+        guard let humanoid = model.humanoid else {
+            XCTFail("Model should have humanoid")
+            return
+        }
+
+        // Record initial poses
+        var initialRotations: [VRMHumanoidBone: simd_quatf] = [:]
+        let keyBones: [VRMHumanoidBone] = [.hips, .spine, .chest, .leftUpperArm, .rightUpperArm]
+
+        for bone in keyBones {
+            if let nodeIndex = humanoid.getBoneNode(bone) {
+                initialRotations[bone] = model.nodes[nodeIndex].rotation
+            }
+        }
+
+        print("\n=== Initial Bone Rotations ===")
+        for (bone, rot) in initialRotations {
+            print("\(bone): quat(\(rot.imag.x), \(rot.imag.y), \(rot.imag.z), \(rot.real))")
+        }
+
+        // Apply animation at frame 0
+        let player = AnimationPlayer()
+        player.load(clip)
+        player.isLooping = false
+        player.update(deltaTime: 0.0, model: model)
+
+        // Update world transforms
+        for node in model.nodes where node.parent == nil {
+            node.updateWorldTransform()
+        }
+
+        print("\n=== After Animation (t=0) ===")
+        for bone in keyBones {
+            if let nodeIndex = humanoid.getBoneNode(bone) {
+                let rot = model.nodes[nodeIndex].rotation
+                print("\(bone): quat(\(rot.imag.x), \(rot.imag.y), \(rot.imag.z), \(rot.real))")
+            }
+        }
+
+        // Apply animation at middle frame
+        player.update(deltaTime: clip.duration / 2, model: model)
+        for node in model.nodes where node.parent == nil {
+            node.updateWorldTransform()
+        }
+
+        print("\n=== After Animation (t=\(clip.duration / 2)) ===")
+        for bone in keyBones {
+            if let nodeIndex = humanoid.getBoneNode(bone) {
+                let rot = model.nodes[nodeIndex].rotation
+                print("\(bone): quat(\(rot.imag.x), \(rot.imag.y), \(rot.imag.z), \(rot.real))")
+            }
+        }
+    }
+
+    /// Convert quaternion to axis-angle for debugging
+    private func quaternionToAxisAngle(_ q: simd_quatf) -> (axis: SIMD3<Float>, angleDegrees: Float) {
+        let angle = 2 * acos(min(1, max(-1, q.real)))
+        let sinHalfAngle = sin(angle / 2)
+        var axis = SIMD3<Float>(0, 1, 0)
+        if abs(sinHalfAngle) > 0.0001 {
+            axis = q.imag / sinHalfAngle
+        }
+        return (axis, angle * 180 / Float.pi)
+    }
+
+    /// Test VRMA arm rotations and hierarchy propagation
+    func testVRMAArmRotationsAndHierarchy() async throws {
+        let modelPath = "\(projectRoot)/AliciaSolid.vrm"
+        let vrmaPath = "\(projectRoot)/VRMA_01.vrma"
+
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
+                      "VRM model not found at \(modelPath)")
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: vrmaPath),
+                      "VRMA file not found at \(vrmaPath)")
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            XCTFail("Metal device not available")
+            return
+        }
+
+        // Load model and animation
+        let modelURL = URL(fileURLWithPath: modelPath)
+        let model = try await VRMModel.load(from: modelURL, device: device)
+
+        let vrmaURL = URL(fileURLWithPath: vrmaPath)
+        let clip = try VRMAnimationLoader.loadVRMA(from: vrmaURL, model: model)
+
+        guard let humanoid = model.humanoid else {
+            XCTFail("Model should have humanoid")
+            return
+        }
+
+        // Apply animation at frame 0
+        let player = AnimationPlayer()
+        player.load(clip)
+        player.isLooping = false
+        player.update(deltaTime: 0.0, model: model)
+
+        // Update world transforms
+        for node in model.nodes where node.parent == nil {
+            node.updateWorldTransform()
+        }
+
+        print("\n=== Arm Hierarchy Analysis at t=0 ===")
+
+        // Check left arm chain
+        let leftArmBones: [VRMHumanoidBone] = [.leftShoulder, .leftUpperArm, .leftLowerArm, .leftHand]
+        print("\nLeft Arm Chain:")
+        for bone in leftArmBones {
+            if let nodeIndex = humanoid.getBoneNode(bone) {
+                let node = model.nodes[nodeIndex]
+                let localRot = node.rotation
+                let (axis, angleDeg) = quaternionToAxisAngle(localRot)
+                let worldPos = worldPosition(node.worldMatrix)
+
+                print("  \(bone):")
+                print("    Local rotation: quat(\(localRot.imag.x), \(localRot.imag.y), \(localRot.imag.z), \(localRot.real))")
+                print("    Axis-angle: axis(\(axis.x), \(axis.y), \(axis.z)) angle=\(angleDeg)°")
+                print("    World position: (\(worldPos.x), \(worldPos.y), \(worldPos.z))")
+                print("    Parent: \(node.parent?.name ?? "none")")
+            }
+        }
+
+        // Check right arm chain
+        let rightArmBones: [VRMHumanoidBone] = [.rightShoulder, .rightUpperArm, .rightLowerArm, .rightHand]
+        print("\nRight Arm Chain:")
+        for bone in rightArmBones {
+            if let nodeIndex = humanoid.getBoneNode(bone) {
+                let node = model.nodes[nodeIndex]
+                let localRot = node.rotation
+                let (axis, angleDeg) = quaternionToAxisAngle(localRot)
+                let worldPos = worldPosition(node.worldMatrix)
+
+                print("  \(bone):")
+                print("    Local rotation: quat(\(localRot.imag.x), \(localRot.imag.y), \(localRot.imag.z), \(localRot.real))")
+                print("    Axis-angle: axis(\(axis.x), \(axis.y), \(axis.z)) angle=\(angleDeg)°")
+                print("    World position: (\(worldPos.x), \(worldPos.y), \(worldPos.z))")
+                print("    Parent: \(node.parent?.name ?? "none")")
+            }
+        }
+
+        // Verify hierarchy is correct
+        for bone in leftArmBones + rightArmBones {
+            if let nodeIndex = humanoid.getBoneNode(bone) {
+                let node = model.nodes[nodeIndex]
+                XCTAssertNotNil(node.parent, "\(bone) should have a parent in the hierarchy")
+            }
+        }
+    }
+
+    /// Verify quaternion values in VRMA match reasonable ranges
+    func testVRMAQuaternionRanges() async throws {
+        let modelPath = "\(projectRoot)/AliciaSolid.vrm"
+        let vrmaPath = "\(projectRoot)/VRMA_01.vrma"
+
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
+                      "VRM model not found at \(modelPath)")
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: vrmaPath),
+                      "VRMA file not found at \(vrmaPath)")
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            XCTFail("Metal device not available")
+            return
+        }
+
+        // Load model and animation
+        let modelURL = URL(fileURLWithPath: modelPath)
+        let model = try await VRMModel.load(from: modelURL, device: device)
+
+        let vrmaURL = URL(fileURLWithPath: vrmaPath)
+        let clip = try VRMAnimationLoader.loadVRMA(from: vrmaURL, model: model)
+
+        // Check all quaternions are normalized
+        for track in clip.jointTracks {
+            // Sample at multiple times
+            for t in stride(from: Float(0), through: clip.duration, by: clip.duration / 10) {
+                let (rotation, _, _) = track.sample(at: t)
+                if let r = rotation {
+                    let length = sqrt(r.imag.x * r.imag.x + r.imag.y * r.imag.y +
+                                     r.imag.z * r.imag.z + r.real * r.real)
+                    XCTAssertEqual(length, 1.0, accuracy: 0.01,
+                        "Quaternion for \(track.bone) at t=\(t) should be normalized, got length=\(length)")
+                }
+            }
+        }
+    }
 }
