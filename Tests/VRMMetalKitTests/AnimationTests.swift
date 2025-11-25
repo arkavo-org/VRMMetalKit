@@ -729,6 +729,81 @@ final class AnimationTests: XCTestCase {
         return fileManager.currentDirectoryPath
     }
 
+    /// Test all available VRMA files and compare their characteristics
+    func testAllVRMAFilesComparison() async throws {
+        let modelPath = "\(projectRoot)/AliciaSolid.vrm"
+
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
+                      "VRM model not found at \(modelPath)")
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            XCTFail("Metal device not available")
+            return
+        }
+
+        // Load VRM model
+        let modelURL = URL(fileURLWithPath: modelPath)
+        let model = try await VRMModel.load(from: modelURL, device: device)
+
+        guard let humanoid = model.humanoid else {
+            XCTFail("Model should have humanoid")
+            return
+        }
+
+        let vrmaFiles = ["VRMA_01.vrma", "VRMA_02.vrma", "VRMA_03.vrma",
+                         "VRMA_04.vrma", "VRMA_05.vrma", "VRMA_06.vrma", "VRMA_07.vrma"]
+
+        let keyBones: [VRMHumanoidBone] = [.hips, .spine, .chest, .leftUpperArm, .rightUpperArm,
+                                            .leftLowerArm, .rightLowerArm, .leftUpperLeg, .rightUpperLeg]
+
+        print("\n" + String(repeating: "=", count: 100))
+        print("VRMA FILES COMPARISON - Upper Arm Z-Rotation at t=0")
+        print(String(repeating: "=", count: 100))
+
+        for vrmaFile in vrmaFiles {
+            let vrmaPath = "\(projectRoot)/\(vrmaFile)"
+            guard FileManager.default.fileExists(atPath: vrmaPath) else {
+                print("\n⚠️  \(vrmaFile): NOT FOUND")
+                continue
+            }
+
+            let vrmaURL = URL(fileURLWithPath: vrmaPath)
+            let clip = try VRMAnimationLoader.loadVRMA(from: vrmaURL, model: model)
+
+            // Reset model to identity
+            for node in model.nodes {
+                node.rotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+                node.translation = .zero
+                node.scale = SIMD3<Float>(1, 1, 1)
+            }
+
+            // Apply animation at frame 0
+            let player = AnimationPlayer()
+            player.load(clip)
+            player.isLooping = false
+            player.update(deltaTime: 0.0, model: model)
+
+            // Update world transforms
+            for node in model.nodes where node.parent == nil {
+                node.updateWorldTransform()
+            }
+
+            print("\n📁 \(vrmaFile)")
+            print("   Duration: \(String(format: "%.2f", clip.duration))s | Tracks: \(clip.jointTracks.count)")
+
+            // Show key bone rotations
+            for bone in [VRMHumanoidBone.leftUpperArm, .rightUpperArm, .hips] {
+                if let nodeIndex = humanoid.getBoneNode(bone) {
+                    let rot = model.nodes[nodeIndex].rotation
+                    let (axis, angleDeg) = quaternionToAxisAngle(rot)
+                    print("   \(bone): \(String(format: "%6.1f", angleDeg))° around (\(String(format: "%.2f", axis.x)), \(String(format: "%.2f", axis.y)), \(String(format: "%.2f", axis.z)))")
+                }
+            }
+        }
+
+        print("\n" + String(repeating: "=", count: 100))
+    }
+
     /// Test VRMA loading and verify parsed joint track data
     func testVRMALoadingParsesJointTracks() async throws {
         let modelPath = "\(projectRoot)/AliciaSolid.vrm"
