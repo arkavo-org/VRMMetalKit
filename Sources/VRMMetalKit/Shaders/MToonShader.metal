@@ -244,6 +244,16 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 3) {
  // Show baseColorFactor directly
  return material.baseColorFactor;
+ } else if (uniforms.debugUVs == 4) {
+ // Show sampled texture directly
+ float4 texColor = baseColorTexture.sample(textureSampler, in.texCoord);
+ return float4(texColor.rgb, 1.0);
+ } else if (uniforms.debugUVs == 5) {
+ // Show normal direction as color
+ return float4(normalize(in.worldNormal) * 0.5 + 0.5, 1.0);
+ } else if (uniforms.debugUVs == 6) {
+ // Show light color
+ return float4(uniforms.lightColor.xyz, 1.0);
  }
 
  // Choose UV coordinates (animated or static)
