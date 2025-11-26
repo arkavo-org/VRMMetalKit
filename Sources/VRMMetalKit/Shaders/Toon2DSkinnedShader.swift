@@ -31,20 +31,19 @@ public class Toon2DSkinnedShader {
         float4x4 viewMatrix;
         float4x4 projectionMatrix;
         float4x4 normalMatrix;
-        // Light 0 (key light)
-        float3 lightDirection;
-        float3 lightColor;
-        float3 ambientColor;
+        // Light 0 (key light) - using float4 for Swift SIMD4 alignment
+        float4 lightDirection;        // xyz = direction, w = padding
+        float4 lightColor;            // xyz = color, w = padding
+        float4 ambientColor;          // xyz = color, w = padding
         // Light 1 (fill light)
-        float3 light1Direction;
-        float3 light1Color;
+        float4 light1Direction;       // xyz = direction, w = padding
+        float4 light1Color;           // xyz = color, w = padding
         // Light 2 (rim/back light)
-        float3 light2Direction;
-        float3 light2Color;
-        // Other fields
-        float2 viewportSize;
-        float nearPlane;
-        float farPlane;
+        float4 light2Direction;       // xyz = direction, w = padding
+        float4 light2Color;           // xyz = color, w = padding
+        // Other fields - packed into float4 for alignment
+        float4 viewportSize;          // xy = size, zw = padding
+        float4 nearFarPlane;          // x = near, y = far, zw = padding
         int debugUVs;
         float lightNormalizationFactor;
         float _padding2;
