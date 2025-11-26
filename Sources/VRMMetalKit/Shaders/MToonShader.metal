@@ -408,6 +408,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
 
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
+ // Debug mode 9: Show litColor before saturation (scaled down to see overbright)
+ if (uniforms.debugUVs == 9) {
+ return float4(litColor * 0.25, 1.0);  // Scale by 0.25 to see values > 1
+ }
+
  // Final color output
  litColor = saturate(litColor);
 
