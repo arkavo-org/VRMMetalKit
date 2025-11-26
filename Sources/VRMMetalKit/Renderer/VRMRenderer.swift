@@ -84,7 +84,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public var model: VRMModel?
 
     // Debug modes
-    public var debugUVs: Bool = false  // Enable UV visualization mode
+    // 0=off, 1=UV gradient, 2=hasBaseColorTexture flag (red=no, green=yes), 3=baseColorFactor
+    public var debugUVs: Int32 = 0
     public var debugWireframe: Bool = false  // Enable wireframe rendering mode
 
     // MARK: - 2.5D Rendering Mode
@@ -1077,12 +1078,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             viewportSize = MainActor.assumeIsolated { view.drawableSize }
         }
         uniforms.viewportSize = SIMD2<Float>(Float(viewportSize.width), Float(viewportSize.height))
-        // Set debug mode
-        uniforms.debugUVs = debugUVs ? 1 : 0
+        // Set debug mode (0=off, 1=UV, 2=hasBaseColorTexture, 3=baseColorFactor)
+        uniforms.debugUVs = debugUVs
 
         // DEBUG: Log what's being set to track UV debug issue
         if frameCounter <= 2 {
-            vrmLog("[UNIFORMS] Setting debugUVs uniform to \(uniforms.debugUVs) (from debugUVs flag: \(debugUVs))")
+            vrmLog("[UNIFORMS] Setting debugUVs uniform to \(uniforms.debugUVs)")
         }
 
         // Calculate light normalization factor based on mode

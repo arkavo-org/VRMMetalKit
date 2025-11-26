@@ -233,9 +233,17 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
                         texture2d<float> uvAnimationMaskTexture [[texture(7)]],
                         sampler textureSampler [[sampler(0)]]) {
 
- // 🎯 UV DEBUG MODE
- if (uniforms.debugUVs > 0) {
+ // 🎯 DEBUG MODES
+ if (uniforms.debugUVs == 1) {
+ // UV debug - red/green gradient
  return float4(in.texCoord.x, in.texCoord.y, 0.0, 1.0);
+ } else if (uniforms.debugUVs == 2) {
+ // Show hasBaseColorTexture flag: red=0, green=1
+ return float4(material.hasBaseColorTexture > 0 ? 0.0 : 1.0,
+               material.hasBaseColorTexture > 0 ? 1.0 : 0.0, 0.0, 1.0);
+ } else if (uniforms.debugUVs == 3) {
+ // Show baseColorFactor directly
+ return material.baseColorFactor;
  }
 
  // Choose UV coordinates (animated or static)
