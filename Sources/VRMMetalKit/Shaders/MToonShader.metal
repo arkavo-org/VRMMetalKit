@@ -254,6 +254,16 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 6) {
  // Show light color
  return float4(uniforms.lightColor.xyz, 1.0);
+ } else if (uniforms.debugUVs == 7) {
+ // Show NdotL (diffuse lighting term)
+ float3 normal = normalize(in.worldNormal);
+ float NdotL = dot(normal, uniforms.lightDirection.xyz);
+ // Map from [-1,1] to [0,1] for visualization
+ float mapped = NdotL * 0.5 + 0.5;
+ return float4(mapped, mapped, mapped, 1.0);
+ } else if (uniforms.debugUVs == 8) {
+ // Show light direction
+ return float4(uniforms.lightDirection.xyz * 0.5 + 0.5, 1.0);
  }
 
  // Choose UV coordinates (animated or static)
