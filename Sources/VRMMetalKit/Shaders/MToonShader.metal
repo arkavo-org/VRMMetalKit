@@ -233,13 +233,10 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
                         texture2d<float> uvAnimationMaskTexture [[texture(7)]],
                         sampler textureSampler [[sampler(0)]]) {
 
- // 🎯 UV DEBUG MODE: DISABLED IN PRODUCTION
- // CRITICAL: This debug code is completely disabled to prevent UV color output
- /*
+ // 🎯 UV DEBUG MODE
  if (uniforms.debugUVs > 0) {
  return float4(in.texCoord.x, in.texCoord.y, 0.0, 1.0);
  }
- */
 
  // Choose UV coordinates (animated or static)
  float2 uv = in.texCoord;
