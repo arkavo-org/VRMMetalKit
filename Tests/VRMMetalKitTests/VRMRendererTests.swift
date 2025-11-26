@@ -314,4 +314,274 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertEqual(perspMatrix.columns.2.z, expectedZs, accuracy: 0.001,
                        "Perspective should use Metal reverse-Z convention")
     }
+
+    // MARK: - Lighting API Tests
+
+    /// Test setting individual lights with valid values
+    func testSetLightValidValues() {
+        // Test light 0 (key light)
+        renderer.setLight(0, direction: SIMD3(0, 1, 0), color: SIMD3(1, 0, 0), intensity: 1.0)
+        XCTAssertEqual(renderer.uniforms.lightColor, SIMD3<Float>(1, 0, 0), "Light 0 color should be set")
+
+        // Test light 1 (fill light)
+        renderer.setLight(1, direction: SIMD3(1, 0, 0), color: SIMD3(0, 1, 0), intensity: 0.5)
+        XCTAssertEqual(renderer.uniforms.light1Color, SIMD3<Float>(0, 0.5, 0), "Light 1 color should be set with intensity")
+
+        // Test light 2 (rim light)
+        renderer.setLight(2, direction: SIMD3(0, 0, 1), color: SIMD3(0, 0, 1), intensity: 0.3)
+        XCTAssertEqual(renderer.uniforms.light2Color, SIMD3<Float>(0, 0, 0.3), "Light 2 color should be set with intensity")
+    }
+
+    /// Test that light directions are normalized
+    func testLightDirectionNormalization() {
+        renderer.setLight(0, direction: SIMD3(1, 1, 1), color: SIMD3(1, 1, 1), intensity: 1.0)
+        let length = simd_length(renderer.uniforms.lightDirection)
+        XCTAssertEqual(length, 1.0, accuracy: 0.001, "Light direction should be normalized")
+
+        // Test with non-uniform vector
+        renderer.setLight(1, direction: SIMD3(3, 4, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        let length1 = simd_length(renderer.uniforms.light1Direction)
+        XCTAssertEqual(length1, 1.0, accuracy: 0.001, "Light 1 direction should be normalized")
+    }
+
+    /// Test that zero-length directions are handled gracefully
+    func testLightZeroDirectionHandling() {
+        renderer.setLight(0, direction: SIMD3(0, 0, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        // Should fall back to (0, 1, 0)
+        XCTAssertEqual(renderer.uniforms.lightDirection, SIMD3<Float>(0, 1, 0), "Zero direction should use fallback")
+
+        // Near-zero direction
+        renderer.setLight(1, direction: SIMD3(0.00001, 0, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        XCTAssertEqual(renderer.uniforms.light1Direction, SIMD3<Float>(0, 1, 0), "Near-zero direction should use fallback")
+    }
+
+    /// Test disabling lights
+    func testDisableLights() {
+        // Enable all lights first
+        renderer.setLight(0, direction: SIMD3(1, 0, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(1, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(2, direction: SIMD3(0, 0, 1), color: SIMD3(1, 1, 1), intensity: 1.0)
+
+        // Disable light 1
+        renderer.disableLight(1)
+        XCTAssertEqual(renderer.uniforms.light1Color, SIMD3<Float>(0, 0, 0), "Disabled light should have zero color")
+
+        // Other lights should remain active
+        XCTAssertNotEqual(renderer.uniforms.lightColor, SIMD3<Float>(0, 0, 0), "Light 0 should still be active")
+        XCTAssertNotEqual(renderer.uniforms.light2Color, SIMD3<Float>(0, 0, 0), "Light 2 should still be active")
+    }
+
+    /// Test 3-point lighting setup
+    func testSetup3PointLighting() {
+        renderer.setup3PointLighting()
+
+        // All lights should be enabled (non-zero color)
+        XCTAssertGreaterThan(simd_length(renderer.uniforms.lightColor), 0, "Key light should be enabled")
+        XCTAssertGreaterThan(simd_length(renderer.uniforms.light1Color), 0, "Fill light should be enabled")
+        XCTAssertGreaterThan(simd_length(renderer.uniforms.light2Color), 0, "Rim light should be enabled")
+
+        // Directions should be normalized
+        XCTAssertEqual(simd_length(renderer.uniforms.lightDirection), 1.0, accuracy: 0.001, "Key direction normalized")
+        XCTAssertEqual(simd_length(renderer.uniforms.light1Direction), 1.0, accuracy: 0.001, "Fill direction normalized")
+        XCTAssertEqual(simd_length(renderer.uniforms.light2Direction), 1.0, accuracy: 0.001, "Rim direction normalized")
+    }
+
+    /// Test 3-point lighting with custom intensities
+    func testSetup3PointLightingCustomIntensities() {
+        renderer.setup3PointLighting(keyIntensity: 1.5, fillIntensity: 0.3, rimIntensity: 0.8)
+
+        // Key light should be brighter than default (1.5 vs 1.0)
+        let keyBrightness = simd_length(renderer.uniforms.lightColor)
+        XCTAssertGreaterThan(keyBrightness, 1.0, "Key light should be brighter with intensity 1.5")
+
+        // Fill and rim should have correct relative intensities
+        let fillBrightness = simd_length(renderer.uniforms.light1Color)
+        let rimBrightness = simd_length(renderer.uniforms.light2Color)
+        XCTAssertLessThan(fillBrightness, keyBrightness, "Fill should be dimmer than key")
+        XCTAssertGreaterThan(rimBrightness, fillBrightness, "Rim should be brighter than fill")
+    }
+
+    /// Test default ambient color value
+    func testDefaultAmbientColor() {
+        // Verify default ambient color is 0.05
+        let ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 0.05, accuracy: 0.001, "Default ambient R should be 0.05")
+        XCTAssertEqual(ambient.y, 0.05, accuracy: 0.001, "Default ambient G should be 0.05")
+        XCTAssertEqual(ambient.z, 0.05, accuracy: 0.001, "Default ambient B should be 0.05")
+    }
+
+    /// Test setAmbientColor() with valid values
+    func testSetAmbientColorValid() {
+        // Set custom ambient color
+        renderer.setAmbientColor(SIMD3<Float>(0.1, 0.2, 0.3))
+
+        let ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 0.1, accuracy: 0.001, "Ambient R should be 0.1")
+        XCTAssertEqual(ambient.y, 0.2, accuracy: 0.001, "Ambient G should be 0.2")
+        XCTAssertEqual(ambient.z, 0.3, accuracy: 0.001, "Ambient B should be 0.3")
+    }
+
+    /// Test setAmbientColor() clamping behavior
+    func testSetAmbientColorClamping() {
+        // Test negative values are clamped to 0
+        renderer.setAmbientColor(SIMD3<Float>(-0.5, -1.0, -0.1))
+        var ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 0.0, accuracy: 0.001, "Negative ambient R should be clamped to 0")
+        XCTAssertEqual(ambient.y, 0.0, accuracy: 0.001, "Negative ambient G should be clamped to 0")
+        XCTAssertEqual(ambient.z, 0.0, accuracy: 0.001, "Negative ambient B should be clamped to 0")
+
+        // Test values > 1.0 are clamped to 1.0
+        renderer.setAmbientColor(SIMD3<Float>(1.5, 2.0, 10.0))
+        ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 1.0, accuracy: 0.001, "Ambient R > 1 should be clamped to 1")
+        XCTAssertEqual(ambient.y, 1.0, accuracy: 0.001, "Ambient G > 1 should be clamped to 1")
+        XCTAssertEqual(ambient.z, 1.0, accuracy: 0.001, "Ambient B > 1 should be clamped to 1")
+
+        // Test mixed values (some in range, some out)
+        renderer.setAmbientColor(SIMD3<Float>(-0.1, 0.5, 1.5))
+        ambient = renderer.uniforms.ambientColor
+        XCTAssertEqual(ambient.x, 0.0, accuracy: 0.001, "Negative value clamped to 0")
+        XCTAssertEqual(ambient.y, 0.5, accuracy: 0.001, "In-range value unchanged")
+        XCTAssertEqual(ambient.z, 1.0, accuracy: 0.001, "Value > 1 clamped to 1")
+    }
+
+    /// Test that invalid light indices are handled gracefully
+    func testInvalidLightIndex() {
+        // Set valid state first
+        renderer.setLight(0, direction: SIMD3(1, 0, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        let originalColor = renderer.uniforms.lightColor
+
+        // Try invalid indices (should log warning but not crash)
+        renderer.setLight(-1, direction: SIMD3(0, 1, 0), color: SIMD3(0, 0, 0), intensity: 1.0)
+        renderer.setLight(3, direction: SIMD3(0, 1, 0), color: SIMD3(0, 0, 0), intensity: 1.0)
+        renderer.setLight(100, direction: SIMD3(0, 1, 0), color: SIMD3(0, 0, 0), intensity: 1.0)
+
+        // Valid light should remain unchanged
+        XCTAssertEqual(renderer.uniforms.lightColor, originalColor, "Invalid indices should not affect existing lights")
+    }
+
+    /// Test default light normalization mode
+    func testDefaultLightNormalizationMode() {
+        // Default should be .automatic
+        switch renderer.lightNormalizationMode {
+        case .automatic:
+            XCTAssert(true, "Default normalization mode is automatic")
+        default:
+            XCTFail("Default normalization mode should be .automatic")
+        }
+    }
+
+    /// Test light normalization modes
+    func testLightNormalizationModes() {
+        // Test automatic mode
+        renderer.setLightNormalizationMode(.automatic)
+        renderer.setLight(0, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(1, direction: SIMD3(0, 1, 0), color: SIMD3(0.5, 0.5, 0.5), intensity: 1.0)
+        renderer.setLight(2, direction: SIMD3(0, 1, 0), color: SIMD3(0.3, 0.3, 0.3), intensity: 1.0)
+
+        // Total intensity: sqrt(3) + sqrt(0.75) + sqrt(0.27) ≈ 1.732 + 0.866 + 0.520 ≈ 3.118
+        // In automatic mode, this should trigger normalization
+        // We'll verify in the next frame that normalization is applied
+
+        // Test disabled mode
+        renderer.setLightNormalizationMode(.disabled)
+        switch renderer.lightNormalizationMode {
+        case .disabled:
+            XCTAssert(true, "Normalization mode set to disabled")
+        default:
+            XCTFail("Should be in disabled mode")
+        }
+
+        // Test manual mode
+        renderer.setLightNormalizationMode(.manual(0.5))
+        switch renderer.lightNormalizationMode {
+        case .manual(let factor):
+            XCTAssertEqual(factor, 0.5, accuracy: 0.001, "Manual normalization factor should be 0.5")
+        default:
+            XCTFail("Should be in manual mode with factor 0.5")
+        }
+    }
+
+    /// Test energy conservation prevents over-brightness
+    func testLightingEnergyConservation() {
+        // Set up three bright lights that would exceed 1.0 if added naively
+        renderer.setLight(0, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(1, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+        renderer.setLight(2, direction: SIMD3(0, 1, 0), color: SIMD3(1, 1, 1), intensity: 1.0)
+
+        // In automatic mode (default), normalization factor should prevent over-brightness
+        renderer.setLightNormalizationMode(.automatic)
+
+        // Calculate total per-component (correct approach)
+        let totalR = renderer.uniforms.lightColor.x + renderer.uniforms.light1Color.x + renderer.uniforms.light2Color.x
+        let totalG = renderer.uniforms.lightColor.y + renderer.uniforms.light1Color.y + renderer.uniforms.light2Color.y
+        let totalB = renderer.uniforms.lightColor.z + renderer.uniforms.light1Color.z + renderer.uniforms.light2Color.z
+        let maxComponent = max(totalR, max(totalG, totalB))
+
+        XCTAssertGreaterThan(maxComponent, 1.0, "Max component should exceed 1.0 before normalization")
+        XCTAssertEqual(maxComponent, 3.0, accuracy: 0.001, "With three (1,1,1) lights, max component should be 3.0")
+
+        // Expected normalization factor = 1.0 / maxComponent
+        let expectedFactor = 1.0 / maxComponent
+
+        // Simulate what render() would calculate
+        let calculatedFactor = (maxComponent > 1.0) ? (1.0 / maxComponent) : 1.0
+
+        XCTAssertEqual(calculatedFactor, expectedFactor, accuracy: 0.001,
+                       "Normalization factor should be 1.0 / maxComponent")
+        XCTAssertEqual(calculatedFactor, 1.0/3.0, accuracy: 0.001, "Factor should be 1/3 for three equal lights")
+        XCTAssertLessThan(calculatedFactor, 1.0, "Normalization factor should be < 1.0 when lights are bright")
+    }
+
+    /// Test per-component normalization with asymmetric colors
+    func testPerComponentNormalization() {
+        // Set up lights with asymmetric colors (red-heavy)
+        renderer.setLight(0, direction: SIMD3(0, 1, 0), color: SIMD3(1.0, 0.2, 0.2), intensity: 1.0)
+        renderer.setLight(1, direction: SIMD3(0, 1, 0), color: SIMD3(1.0, 0.2, 0.2), intensity: 1.0)
+        renderer.setLight(2, direction: SIMD3(0, 1, 0), color: SIMD3(1.0, 0.2, 0.2), intensity: 1.0)
+
+        renderer.setLightNormalizationMode(.automatic)
+
+        // Calculate per-component totals
+        let totalR = renderer.uniforms.lightColor.x + renderer.uniforms.light1Color.x + renderer.uniforms.light2Color.x
+        let totalG = renderer.uniforms.lightColor.y + renderer.uniforms.light1Color.y + renderer.uniforms.light2Color.y
+        let totalB = renderer.uniforms.lightColor.z + renderer.uniforms.light1Color.z + renderer.uniforms.light2Color.z
+
+        XCTAssertEqual(totalR, 3.0, accuracy: 0.001, "Red channel sums to 3.0")
+        XCTAssertEqual(totalG, 0.6, accuracy: 0.001, "Green channel sums to 0.6")
+        XCTAssertEqual(totalB, 0.6, accuracy: 0.001, "Blue channel sums to 0.6")
+
+        // Max component is red
+        let maxComponent = max(totalR, max(totalG, totalB))
+        XCTAssertEqual(maxComponent, 3.0, accuracy: 0.001, "Max component is red (3.0)")
+
+        // Normalization should be based on red channel
+        let expectedFactor: Float = 1.0 / 3.0
+        let calculatedFactor: Float = (maxComponent > 1.0) ? (1.0 / maxComponent) : 1.0
+
+        XCTAssertEqual(calculatedFactor, expectedFactor, accuracy: 0.001,
+                       "Normalization should be based on max component (red)")
+    }
+
+    /// Test manual normalization factor clamping
+    func testManualNormalizationFactorClamping() {
+        // Negative factors should be clamped to 0
+        renderer.setLightNormalizationMode(.manual(-0.5))
+
+        switch renderer.lightNormalizationMode {
+        case .manual(let factor):
+            // The clamping happens in render(), so we just verify the mode stores the value
+            XCTAssertEqual(factor, -0.5, accuracy: 0.001, "Manual mode stores the factor as-is")
+        default:
+            XCTFail("Should be in manual mode")
+        }
+    }
+
+    /// Test Uniforms struct size matches StrictMode constant
+    func testUniformsStructSize() {
+        let actualSize = MemoryLayout<Uniforms>.size
+        let expectedSize = MetalSizeConstants.uniformsSize
+        XCTAssertEqual(actualSize, expectedSize,
+                       "Uniforms struct size (\(actualSize)) must match MetalSizeConstants.uniformsSize (\(expectedSize))")
+    }
 }

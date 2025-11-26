@@ -398,7 +398,7 @@ public class StrictValidator {
 /// Size constants that must match Metal shader structs
 public struct MetalSizeConstants {
     // Must match shader Uniforms struct
-    public static let uniformsSize = 336  // sizeof(Uniforms) in Metal (4x 64-byte matrices + aligned fields)
+    public static let uniformsSize = 432  // sizeof(Uniforms) in Metal (4x 64-byte matrices + 3 lights + normalization + aligned fields)
 
     // Must match shader MToonMaterial struct
     public static let mtoonMaterialSize = 192  // sizeof(MToonMaterial) in Metal (12 blocks × 16 bytes)

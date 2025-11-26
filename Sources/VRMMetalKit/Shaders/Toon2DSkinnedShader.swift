@@ -31,18 +31,28 @@ public class Toon2DSkinnedShader {
         float4x4 viewMatrix;
         float4x4 projectionMatrix;
         float4x4 normalMatrix;
+        // Light 0 (key light)
         float3 lightDirection;
         float3 lightColor;
         float3 ambientColor;
+        // Light 1 (fill light)
+        float3 light1Direction;
+        float3 light1Color;
+        // Light 2 (rim/back light)
+        float3 light2Direction;
+        float3 light2Color;
+        // Other fields
         float2 viewportSize;
         float nearPlane;
         float farPlane;
         int debugUVs;
-        int toonBands;
-        int isOrthographic;
-        float _padding1;
-        float3 cameraWorldPosition;   // Camera position in world space (for rim lighting)
+        float lightNormalizationFactor;
         float _padding2;
+        float _padding3;
+        int toonBands;
+        float _padding5;
+        float _padding6;
+        float _padding7;
     };
 
     struct Toon2DMaterial {
@@ -274,7 +284,7 @@ public class Toon2DSkinnedShader {
 
         // Optional rim lighting
         if (length(material.rimColorFactor) > 0.01) {
-            float3 viewDir = normalize(uniforms.cameraWorldPosition - in.worldPosition);
+            float3 viewDir = normalize(-in.worldPosition);
             finalColor = applyQuantizedRim(
                 finalColor,
                 material.rimColorFactor,

@@ -95,8 +95,18 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         case toon2D        // 2.5D cel-shaded rendering with outlines
     }
 
+    /// Light normalization mode for multi-light setups
+    public enum LightNormalizationMode {
+        case automatic              // Auto-normalize when total intensity > 1.0 (default)
+        case disabled               // No normalization (naive additive, for testing)
+        case manual(Float)          // Custom normalization factor
+    }
+
     /// Current rendering mode
     public var renderingMode: RenderingMode = .standard
+
+    /// Current light normalization mode
+    public var lightNormalizationMode: LightNormalizationMode = .automatic
 
     /// Orthographic camera height in world units (for toon2D mode)
     public var orthoSize: Float = 1.7 {
@@ -186,6 +196,99 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 SIMD4<Float>(0, 0, zs * nearZ, 0)
             ))
         }
+    }
+
+    // MARK: - Lighting API
+
+    /// Set a light source (0 = key, 1 = fill, 2 = rim/back)
+    /// - Parameters:
+    ///   - index: Light index (0-2)
+    ///   - direction: Light direction in world space (will be normalized)
+    ///   - color: Light color (RGB, typically 0-1 range)
+    ///   - intensity: Light intensity multiplier (default 1.0)
+    public func setLight(
+        _ index: Int,
+        direction: SIMD3<Float>,
+        color: SIMD3<Float>,
+        intensity: Float = 1.0
+    ) {
+        // Validate direction vector
+        var normalizedDir = direction
+        let length = simd_length(direction)
+        if length < 0.0001 {
+            vrmLog("[VRMRenderer] Warning: Light \(index) direction near zero, using default (0,1,0)")
+            normalizedDir = SIMD3<Float>(0, 1, 0)
+        } else {
+            normalizedDir = simd_normalize(direction)
+        }
+
+        let finalColor = color * intensity
+
+        switch index {
+        case 0:
+            uniforms.lightDirection = normalizedDir
+            uniforms.lightColor = finalColor
+        case 1:
+            uniforms.light1Direction = normalizedDir
+            uniforms.light1Color = finalColor
+        case 2:
+            uniforms.light2Direction = normalizedDir
+            uniforms.light2Color = finalColor
+        default:
+            vrmLog("[VRMRenderer] Warning: Invalid light index \(index), must be 0-2")
+        }
+    }
+
+    /// Disable a light source by setting its color to black
+    /// - Parameter index: Light index (0-2)
+    public func disableLight(_ index: Int) {
+        setLight(index, direction: SIMD3<Float>(0, 1, 0), color: SIMD3<Float>(0, 0, 0))
+    }
+
+    /// Configure classic 3-point lighting setup for VTuber/character rendering
+    /// - Parameters:
+    ///   - keyIntensity: Key light intensity (default 1.0)
+    ///   - fillIntensity: Fill light intensity (default 0.5)
+    ///   - rimIntensity: Rim light intensity (default 0.3)
+    public func setup3PointLighting(
+        keyIntensity: Float = 1.0,
+        fillIntensity: Float = 0.5,
+        rimIntensity: Float = 0.3
+    ) {
+        // Key light: front-right-top (main light)
+        setLight(0,
+                 direction: SIMD3<Float>(0.4, 0.8, -0.4),
+                 color: SIMD3<Float>(1.0, 1.0, 1.0),
+                 intensity: keyIntensity)
+
+        // Fill light: front-left at eye level (softer, slightly cool)
+        setLight(1,
+                 direction: SIMD3<Float>(-0.5, 0.0, -0.5),
+                 color: SIMD3<Float>(0.8, 0.85, 0.9),
+                 intensity: fillIntensity)
+
+        // Rim/back light: behind and above (edge highlight, cool accent)
+        setLight(2,
+                 direction: SIMD3<Float>(0.0, 0.3, 1.0),
+                 color: SIMD3<Float>(0.9, 0.95, 1.0),
+                 intensity: rimIntensity)
+    }
+
+    /// Set ambient light color
+    /// - Parameter color: Ambient light color (RGB, will be clamped to 0-1 range)
+    public func setAmbientColor(_ color: SIMD3<Float>) {
+        uniforms.ambientColor = simd_clamp(color, SIMD3<Float>(repeating: 0.0), SIMD3<Float>(repeating: 1.0))
+    }
+
+    /// Set light normalization mode for multi-light setups
+    /// - Parameter mode: Normalization mode (.automatic, .disabled, or .manual(factor))
+    ///
+    /// # Modes:
+    /// - `.automatic`: Normalize when total light intensity > 1.0 (prevents over-brightness)
+    /// - `.disabled`: No normalization (naive additive accumulation, for testing)
+    /// - `.manual(factor)`: Custom normalization factor (for artistic control)
+    public func setLightNormalizationMode(_ mode: LightNormalizationMode) {
+        lightNormalizationMode = mode
     }
 
     // Pipeline states for 2.5D rendering (non-skinned)
@@ -959,13 +1062,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         encoder.setCullMode(.back)
         encoder.setFrontFacing(.counterClockwise) // glTF uses CCW winding
 
-        // Update uniforms with lighting information
+        // Update uniforms with camera matrices
         uniforms.viewMatrix = viewMatrix
         uniforms.projectionMatrix = projectionMatrix
-        // Light coming from front-right-top for better form definition
-        uniforms.lightDirection = SIMD3<Float>(0.4, 0.8, -0.4).normalized
-        uniforms.lightColor = SIMD3<Float>(1.0, 1.0, 1.0)
-        uniforms.ambientColor = SIMD3<Float>(0.3, 0.3, 0.3)  // Slightly darker ambient for more contrast
+        // Lighting is configured via setup3PointLighting() or setLight() - don't override here
+        // Ambient color default is set in Uniforms struct initialization
         // Get viewport size from view
         let viewportSize: CGSize
         if let dummyView = view as? DummyView {
@@ -979,24 +1080,37 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Set debug mode
         uniforms.debugUVs = debugUVs ? 1 : 0
 
-        // Set Toon2D fields
-        uniforms.toonBands = Int32(toonBands)
-        uniforms.isOrthographic = useOrthographic ? 1 : 0
-
-        // Extract camera world position from view matrix for correct rim lighting
-        // View matrix transforms from world to view space: viewPos = viewMatrix * worldPos
-        // To get camera position in world space, invert the view matrix and extract translation
-        let viewMatrixInverse = viewMatrix.inverse
-        uniforms.cameraWorldPosition = SIMD3<Float>(
-            viewMatrixInverse[3][0],
-            viewMatrixInverse[3][1],
-            viewMatrixInverse[3][2]
-        )
-
         // DEBUG: Log what's being set to track UV debug issue
         if frameCounter <= 2 {
             vrmLog("[UNIFORMS] Setting debugUVs uniform to \(uniforms.debugUVs) (from debugUVs flag: \(debugUVs))")
         }
+
+        // Calculate light normalization factor based on mode
+        switch lightNormalizationMode {
+        case .automatic:
+            // Sum RGB components independently to find maximum channel that would exceed 1.0
+            let totalR = uniforms.lightColor.x + uniforms.light1Color.x + uniforms.light2Color.x
+            let totalG = uniforms.lightColor.y + uniforms.light1Color.y + uniforms.light2Color.y
+            let totalB = uniforms.lightColor.z + uniforms.light1Color.z + uniforms.light2Color.z
+            let maxComponent = max(totalR, max(totalG, totalB))
+            uniforms.lightNormalizationFactor = (maxComponent > 1.0) ? (1.0 / maxComponent) : 1.0
+        case .disabled:
+            uniforms.lightNormalizationFactor = 1.0
+        case .manual(let factor):
+            uniforms.lightNormalizationFactor = max(0.0, factor)  // Clamp to non-negative
+        }
+
+        // DEBUG: Log lighting values to verify 3-point lighting is configured
+        #if DEBUG
+        if frameCounter % 60 == 0 {  // Log every second at 60fps
+            vrmLog("[Lighting] Frame \(frameCounter) GPU upload:")
+            vrmLog("  Light 0 (key):  dir=\(uniforms.lightDirection), color=\(uniforms.lightColor)")
+            vrmLog("  Light 1 (fill): dir=\(uniforms.light1Direction), color=\(uniforms.light1Color)")
+            vrmLog("  Light 2 (rim):  dir=\(uniforms.light2Direction), color=\(uniforms.light2Color)")
+            vrmLog("  Ambient: \(uniforms.ambientColor)")
+            vrmLog("  Normalization: \(uniforms.lightNormalizationFactor) (mode: \(lightNormalizationMode))")
+        }
+        #endif
 
         // Copy uniforms to the current buffer
         uniformsBuffer.contents().copyMemory(from: &uniforms, byteCount: MemoryLayout<Uniforms>.size)
@@ -1935,11 +2049,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     mtoonUniforms.roughnessFactor = material.roughnessFactor
                     mtoonUniforms.emissiveFactor = material.emissiveFactor
 
+                    // DEBUG: Log original baseColorFactor for all materials
+                    #if DEBUG
+                    if frameCounter <= 2 {
+                        vrmLog("[Material] '\(item.materialName)' baseColorFactor: \(material.baseColorFactor)")
+                        if material.baseColorFactor.x > 10.0 || material.baseColorFactor.y > 10.0 ||
+                           material.baseColorFactor.z > 10.0 || material.baseColorFactor.w > 10.0 {
+                            vrmLog("  ⚠️ WARNING: baseColorFactor has extreme values!")
+                        }
+                    }
+                    #endif
+
                     // PHASE 4 FIX: Force face materials to render with full brightness
                     if isFaceMaterial {
                         // AGGRESSIVE FIX: Always force white baseColorFactor for face materials
                         // This ensures the texture shows at full brightness
-                        if frameCounter % 60 == 0 {
+                        if frameCounter <= 2 {
                             vrmLog("  🔧 [FACE FIX] Forcing baseColorFactor to white for '\(item.materialName)'")
                             vrmLog("     - Original: \(mtoonUniforms.baseColorFactor)")
                         }
@@ -3246,16 +3371,32 @@ struct Uniforms {
     var viewMatrix = matrix_identity_float4x4                     // 64 bytes, offset 64
     var projectionMatrix = matrix_identity_float4x4               // 64 bytes, offset 128
     var normalMatrix = matrix_identity_float4x4                   // 64 bytes, offset 192
+
+    // Light 0 (key light)
     var lightDirection_packed = SIMD4<Float>(0.5, 1.0, 0.5, 0.0) // 16 bytes, offset 256 (SIMD3 + padding)
     var lightColor_packed = SIMD4<Float>(1.0, 1.0, 1.0, 0.0)      // 16 bytes, offset 272 (SIMD3 + padding)
-    var ambientColor_packed = SIMD4<Float>(0.4, 0.4, 0.4, 0.0)   // 16 bytes, offset 288 (SIMD3 + padding)
-    var viewportSize_packed = SIMD4<Float>(1280, 720, 0.0, 0.0)   // 16 bytes, offset 304 (SIMD2 + padding)
-    var nearPlane_packed = SIMD4<Float>(0.1, 100.0, 0.0, 0.0)    // 16 bytes, offset 320 (2 floats + padding)
-    var debugUVs: Int32 = 0                                       // 4 bytes, offset 336
-    var toonBands: Int32 = 3                                      // 4 bytes, offset 340 (Toon2D cel-shading bands)
-    var isOrthographic: Int32 = 0                                 // 4 bytes, offset 344 (1 = orthographic, 0 = perspective)
-    var _padding1: Float = 0                                      // 4 bytes padding, offset 348
-    var cameraWorldPosition_packed = SIMD4<Float>(0, 0, 0, 0)    // 16 bytes, offset 352 (SIMD3 + padding)
+    var ambientColor_packed = SIMD4<Float>(0.05, 0.05, 0.05, 0.0)   // 16 bytes, offset 288 (SIMD3 + padding)
+
+    // Light 1 (fill light)
+    var light1Direction_packed = SIMD4<Float>(0, 0, 0, 0)         // 16 bytes, offset 304 (disabled by default)
+    var light1Color_packed = SIMD4<Float>(0, 0, 0, 0)             // 16 bytes, offset 320 (disabled by default)
+
+    // Light 2 (rim/back light)
+    var light2Direction_packed = SIMD4<Float>(0, 0, 0, 0)         // 16 bytes, offset 336 (disabled by default)
+    var light2Color_packed = SIMD4<Float>(0, 0, 0, 0)             // 16 bytes, offset 352 (disabled by default)
+
+    // Other fields
+    var viewportSize_packed = SIMD4<Float>(1280, 720, 0.0, 0.0)   // 16 bytes, offset 368 (SIMD2 + padding)
+    var nearPlane_packed = SIMD4<Float>(0.1, 100.0, 0.0, 0.0)    // 16 bytes, offset 384 (2 floats + padding)
+    var debugUVs: Int32 = 0                                       // 4 bytes, offset 400
+    var lightNormalizationFactor: Float = 1.0                     // 4 bytes, offset 404
+    var _padding2: Float = 0                                      // 4 bytes padding
+    var _padding3: Float = 0                                      // 4 bytes padding to align to 16 bytes
+    var toonBands: Int32 = 3                                      // 4 bytes, offset 416
+    var _padding5: Float = 0                                      // 4 bytes padding
+    var _padding6: Float = 0                                      // 4 bytes padding
+    var _padding7: Float = 0                                      // 4 bytes padding to align to 16 bytes
+    // Total: 432 bytes (27 x 16-byte blocks)
 
     // Computed properties for easy access
     var lightDirection: SIMD3<Float> {
@@ -3273,6 +3414,26 @@ struct Uniforms {
         set { ambientColor_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
     }
 
+    var light1Direction: SIMD3<Float> {
+        get { SIMD3<Float>(light1Direction_packed.x, light1Direction_packed.y, light1Direction_packed.z) }
+        set { light1Direction_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
+    }
+
+    var light1Color: SIMD3<Float> {
+        get { SIMD3<Float>(light1Color_packed.x, light1Color_packed.y, light1Color_packed.z) }
+        set { light1Color_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
+    }
+
+    var light2Direction: SIMD3<Float> {
+        get { SIMD3<Float>(light2Direction_packed.x, light2Direction_packed.y, light2Direction_packed.z) }
+        set { light2Direction_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
+    }
+
+    var light2Color: SIMD3<Float> {
+        get { SIMD3<Float>(light2Color_packed.x, light2Color_packed.y, light2Color_packed.z) }
+        set { light2Color_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
+    }
+
     var viewportSize: SIMD2<Float> {
         get { SIMD2<Float>(viewportSize_packed.x, viewportSize_packed.y) }
         set { viewportSize_packed = SIMD4<Float>(newValue.x, newValue.y, 0.0, 0.0) }
@@ -3286,11 +3447,6 @@ struct Uniforms {
     var farPlane: Float {
         get { nearPlane_packed.y }
         set { nearPlane_packed.y = newValue }
-    }
-
-    var cameraWorldPosition: SIMD3<Float> {
-        get { SIMD3<Float>(cameraWorldPosition_packed.x, cameraWorldPosition_packed.y, cameraWorldPosition_packed.z) }
-        set { cameraWorldPosition_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
     }
 
 }

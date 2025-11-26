@@ -23,18 +23,28 @@ struct Uniforms {
  float4x4 viewMatrix;
  float4x4 projectionMatrix;
  float4x4 normalMatrix;
+ // Light 0 (key light)
  float3 lightDirection;
  float3 lightColor;
  float3 ambientColor;
+ // Light 1 (fill light)
+ float3 light1Direction;
+ float3 light1Color;
+ // Light 2 (rim/back light)
+ float3 light2Direction;
+ float3 light2Color;
+ // Other fields
  float2 viewportSize;          // For screen-space outline calculation
  float nearPlane;              // Camera near plane
  float farPlane;               // Camera far plane
  int debugUVs;                 // Debug flag: 1 = show UVs as colors, 0 = normal rendering
+ float lightNormalizationFactor;  // Multi-light normalization factor
+ float _padding2;
+ float _padding3;
  int toonBands;                // Number of cel-shading bands (1-5)
- int isOrthographic;           // 1 = orthographic projection, 0 = perspective
- float _padding1;              // Align to 16 bytes
- float3 cameraWorldPosition;   // Camera position in world space (for rim lighting)
- float _padding2;              // Align to 16 bytes
+ float _padding5;
+ float _padding6;
+ float _padding7;
 };
 
 struct Toon2DMaterial {
@@ -228,17 +238,51 @@ fragment float4 fragment_main(
  shadeColor *= shadeTex;
  }
 
- // Apply cel shading
- float3 litColor = applyCelShading(
+ // Apply cel shading with energy-conserving 3-point lighting
+
+ // Light 0 (key light)
+ float3 lit0 = float3(0.0);
+ if (any(uniforms.lightColor > 0.0)) {
+ float3 celShaded0 = applyCelShading(
  baseColor.rgb,
  shadeColor,
  nDotL,
  uniforms.toonBands,
  material.shadingToonyFactor
  );
+ lit0 = celShaded0 * uniforms.lightColor;
+ }
 
- // Apply quantized lighting from directional light
- float3 lightContribution = litColor * uniforms.lightColor;
+ // Light 1 (fill light)
+ float3 lit1 = float3(0.0);
+ if (any(uniforms.light1Color > 0.0)) {
+ float nDotL1 = dot(normal, uniforms.light1Direction);
+ float3 celShaded1 = applyCelShading(
+ baseColor.rgb,
+ shadeColor,
+ nDotL1,
+ uniforms.toonBands,
+ material.shadingToonyFactor
+ );
+ lit1 = celShaded1 * uniforms.light1Color;
+ }
+
+ // Light 2 (rim/back light)
+ float3 lit2 = float3(0.0);
+ if (any(uniforms.light2Color > 0.0)) {
+ float nDotL2 = dot(normal, uniforms.light2Direction);
+ float3 celShaded2 = applyCelShading(
+ baseColor.rgb,
+ shadeColor,
+ nDotL2,
+ uniforms.toonBands,
+ material.shadingToonyFactor
+ );
+ lit2 = celShaded2 * uniforms.light2Color;
+ }
+
+ // Energy-conserving accumulation with normalization
+ float3 lightContribution = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
  // Add ambient (unquantized for fill)
  float3 ambient = baseColor.rgb * uniforms.ambientColor;
@@ -247,7 +291,7 @@ fragment float4 fragment_main(
 
  // Optional: Quantized rim lighting
  if (length(material.rimColorFactor) > 0.01) {
- float3 viewDir = normalize(uniforms.cameraWorldPosition - in.worldPosition);
+ float3 viewDir = normalize(-in.worldPosition);  // Camera assumed at origin
  finalColor = applyQuantizedRim(
      finalColor,
      material.rimColorFactor,
