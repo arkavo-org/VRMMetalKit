@@ -413,6 +413,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  return float4(litColor * 0.25, 1.0);  // Scale by 0.25 to see values > 1
  }
 
+ // Fix overbright: scale down by 4x to compensate for MToon lighting calculation
+ litColor *= 0.25;
+
  // Final color output
  litColor = saturate(litColor);
 
