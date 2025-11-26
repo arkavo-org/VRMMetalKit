@@ -58,12 +58,13 @@ public class MToonShader {
         float4 baseColorFactor;                    // 16 bytes
 
         // Block 1: 16 bytes - Shade and basic factors
-        float3 shadeColorFactor;                   // 12 bytes
+        // Note: packed_float3 used to avoid 16-byte alignment padding
+        packed_float3 shadeColorFactor;            // 12 bytes
         float shadingToonyFactor;                  // 4 bytes
 
         // Block 2: 16 bytes - Material factors
         float shadingShiftFactor;                  // 4 bytes
-        float3 emissiveFactor;                     // 12 bytes
+        packed_float3 emissiveFactor;              // 12 bytes (packed to avoid alignment)
 
         // Block 3: 16 bytes - PBR factors
         float metallicFactor;                      // 4 bytes
@@ -72,11 +73,11 @@ public class MToonShader {
         float shadingShiftTextureScale;            // 4 bytes
 
         // Block 4: 16 bytes - MatCap properties
-        float3 matcapFactor;                       // 12 bytes
+        packed_float3 matcapFactor;                // 12 bytes
         int hasMatcapTexture;                      // 4 bytes
 
         // Block 5: 16 bytes - Rim lighting part 1
-        float3 parametricRimColorFactor;           // 12 bytes
+        packed_float3 parametricRimColorFactor;    // 12 bytes
         float parametricRimFresnelPowerFactor;     // 4 bytes
 
         // Block 6: 16 bytes - Rim lighting part 2
@@ -87,7 +88,7 @@ public class MToonShader {
 
         // Block 7: 16 bytes - Outline properties part 1
         float outlineWidthFactor;                  // 4 bytes
-        float3 outlineColorFactor;                 // 12 bytes
+        packed_float3 outlineColorFactor;          // 12 bytes (packed to avoid alignment)
 
         // Block 8: 16 bytes - Outline properties part 2
         float outlineLightingMixFactor;            // 4 bytes

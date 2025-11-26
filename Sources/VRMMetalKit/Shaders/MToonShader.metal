@@ -46,17 +46,23 @@ struct Uniforms {
  float _padding7;
 };
 
+// Use packed_float3 to match Swift's Float component layout (no 16-byte alignment)
+// This ensures Metal struct size (192 bytes) matches Swift struct stride exactly
 struct MToonMaterial {
  // Block 0: 16 bytes - Base material properties
  float4 baseColorFactor;                    // 16 bytes
 
- // Block 1: 16 bytes - Shade and basic factors
- float3 shadeColorFactor;                   // 12 bytes
+ // Block 1: 16 bytes - Shade and basic factors (packed float3 + float)
+ float shadeColorR;                         // 4 bytes
+ float shadeColorG;                         // 4 bytes
+ float shadeColorB;                         // 4 bytes
  float shadingToonyFactor;                  // 4 bytes
 
- // Block 2: 16 bytes - Material factors
+ // Block 2: 16 bytes - Material factors (float + packed float3)
  float shadingShiftFactor;                  // 4 bytes
- float3 emissiveFactor;                     // 12 bytes
+ float emissiveR;                           // 4 bytes
+ float emissiveG;                           // 4 bytes
+ float emissiveB;                           // 4 bytes
 
  // Block 3: 16 bytes - PBR factors
  float metallicFactor;                      // 4 bytes
@@ -64,12 +70,16 @@ struct MToonMaterial {
  float giIntensityFactor;                   // 4 bytes
  float shadingShiftTextureScale;            // 4 bytes
 
- // Block 4: 16 bytes - MatCap properties
- float3 matcapFactor;                       // 12 bytes
+ // Block 4: 16 bytes - MatCap properties (packed float3 + int)
+ float matcapR;                             // 4 bytes
+ float matcapG;                             // 4 bytes
+ float matcapB;                             // 4 bytes
  int hasMatcapTexture;                      // 4 bytes
 
- // Block 5: 16 bytes - Rim lighting part 1
- float3 parametricRimColorFactor;           // 12 bytes
+ // Block 5: 16 bytes - Rim lighting part 1 (packed float3 + float)
+ float parametricRimColorR;                 // 4 bytes
+ float parametricRimColorG;                 // 4 bytes
+ float parametricRimColorB;                 // 4 bytes
  float parametricRimFresnelPowerFactor;     // 4 bytes
 
  // Block 6: 16 bytes - Rim lighting part 2
@@ -78,9 +88,11 @@ struct MToonMaterial {
  int hasRimMultiplyTexture;                 // 4 bytes
  float _padding1;                           // 4 bytes padding
 
- // Block 7: 16 bytes - Outline properties part 1
+ // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
  float outlineWidthFactor;                  // 4 bytes
- float3 outlineColorFactor;                 // 12 bytes
+ float outlineColorR;                       // 4 bytes
+ float outlineColorG;                       // 4 bytes
+ float outlineColorB;                       // 4 bytes
 
  // Block 8: 16 bytes - Outline properties part 2
  float outlineLightingMixFactor;            // 4 bytes
@@ -264,7 +276,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
 
  // Calculate shade color
- float3 shadeColor = material.shadeColorFactor;
+ float3 shadeColor = float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
  if (material.hasShadeMultiplyTexture > 0) {
  float3 shadeTexColor = shadeMultiplyTexture.sample(textureSampler, uv).rgb;
  shadeColor *= shadeTexColor;
@@ -325,7 +337,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  litColor = mix(litColor, (litColor + giColor) * 0.5, material.giIntensityFactor);
 
  // Emissive
- float3 emissive = material.emissiveFactor;
+ float3 emissive = float3(material.emissiveR, material.emissiveG, material.emissiveB);
  if (material.hasEmissiveTexture > 0) {
  float3 emissiveTexColor = emissiveTexture.sample(textureSampler, uv).rgb;
  emissive *= emissiveTexColor;
@@ -336,12 +348,13 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  if (material.hasMatcapTexture > 0) {
  float2 matcapUV = calculateMatCapUV(in.viewNormal);
  float3 matcapColor = matcapTexture.sample(textureSampler, matcapUV).rgb;
- litColor += matcapColor * material.matcapFactor;
+ litColor += matcapColor * float3(material.matcapR, material.matcapG, material.matcapB);
  }
 
  // Parametric rim lighting - using view-space normal for consistent calculation
  float3 rimColor = float3(0.0);
- if (any(material.parametricRimColorFactor > 0.0)) {
+ float3 parametricRimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
+ if (any(parametricRimColorFactor > 0.0)) {
  // Use view-space normal and view direction for proper fresnel
  float3 Nv = in.viewNormal;  // Already in view space
  float3 Vv = normalize(-in.worldPosition); // View direction in world space
@@ -350,7 +363,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float rimF = pow(vf, material.parametricRimFresnelPowerFactor);
  rimF = saturate(rimF + material.parametricRimLiftFactor);
 
- rimColor = material.parametricRimColorFactor * rimF;
+ rimColor = parametricRimColorFactor * rimF;
 
  // Apply rim multiply texture for masking
  if (material.hasRimMultiplyTexture > 0) {
@@ -459,7 +472,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 fragment float4 mtoon_outline_fragment(VertexOut in [[stage_in]],
                                 constant MToonMaterial& material [[buffer(8)]],
                                 constant Uniforms& uniforms [[buffer(1)]]) {
- float3 outlineColor = material.outlineColorFactor;
+ float3 outlineColor = float3(material.outlineColorR, material.outlineColorG, material.outlineColorB);
 
  // Apply outline lighting mix
  if (material.outlineLightingMixFactor < 1.0) {
@@ -502,7 +515,8 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
 fragment float4 mtoon_debug_rim(VertexOut in [[stage_in]],
                          constant MToonMaterial& material [[buffer(8)]],
                          constant Uniforms& uniforms [[buffer(1)]]) {
- if (any(material.parametricRimColorFactor <= 0.0)) {
+ float3 rimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
+ if (any(rimColorFactor <= 0.0)) {
  return float4(0, 0, 0, 1);
  }
 
