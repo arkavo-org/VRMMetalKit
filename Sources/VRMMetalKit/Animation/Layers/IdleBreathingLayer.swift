@@ -24,7 +24,8 @@ public class IdleBreathingLayer: AnimationLayer {
     public var isEnabled = true
 
     public var affectedBones: Set<VRMHumanoidBone> {
-        [.chest, .spine, .upperChest, .leftShoulder, .rightShoulder, .hips]
+        [.chest, .spine, .upperChest, .leftShoulder, .rightShoulder, .hips,
+         .leftUpperArm, .rightUpperArm, .leftLowerArm, .rightLowerArm]
     }
 
     // MARK: - Breathing Parameters
@@ -122,6 +123,26 @@ public class IdleBreathingLayer: AnimationLayer {
         var spineTransform = ProceduralBoneTransform.identity
         spineTransform.rotation = simd_quatf(angle: -swayValue * 0.5, axis: SIMD3<Float>(0, 0, 1))
         cachedOutput.bones[.spine] = spineTransform
+
+        // Arms down from T-pose - rotate upper arms down ~70 degrees
+        // In VRM, upper arm X-axis points along the arm, Z-axis points forward
+        // Rotate around Z-axis to bring arms down to sides
+        var leftUpperArmTransform = ProceduralBoneTransform.identity
+        leftUpperArmTransform.rotation = simd_quatf(angle: 1.2, axis: SIMD3<Float>(0, 0, 1))  // ~70° down
+        cachedOutput.bones[.leftUpperArm] = leftUpperArmTransform
+
+        var rightUpperArmTransform = ProceduralBoneTransform.identity
+        rightUpperArmTransform.rotation = simd_quatf(angle: -1.2, axis: SIMD3<Float>(0, 0, 1))  // ~70° down (opposite direction)
+        cachedOutput.bones[.rightUpperArm] = rightUpperArmTransform
+
+        // Bend elbows slightly for natural pose (~20 degrees)
+        var leftLowerArmTransform = ProceduralBoneTransform.identity
+        leftLowerArmTransform.rotation = simd_quatf(angle: -0.35, axis: SIMD3<Float>(0, 1, 0))  // Bend elbow
+        cachedOutput.bones[.leftLowerArm] = leftLowerArmTransform
+
+        var rightLowerArmTransform = ProceduralBoneTransform.identity
+        rightLowerArmTransform.rotation = simd_quatf(angle: 0.35, axis: SIMD3<Float>(0, 1, 0))  // Bend elbow (opposite)
+        cachedOutput.bones[.rightLowerArm] = rightLowerArmTransform
 
         return cachedOutput
     }

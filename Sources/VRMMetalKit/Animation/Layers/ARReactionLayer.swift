@@ -29,6 +29,10 @@ public enum ARReaction: String, Sendable {
     case anticipate
     /// User too close (defensive)
     case retreat
+    /// Friendly wave gesture
+    case wave
+    /// Acknowledgment nod
+    case nod
 }
 
 /// AR reaction layer providing automatic proximity-based reactions
@@ -38,7 +42,7 @@ public class ARReactionLayer: AnimationLayer {
     public var isEnabled = true
 
     public var affectedBones: Set<VRMHumanoidBone> {
-        [.head, .neck, .chest, .spine, .leftUpperArm, .rightUpperArm]
+        [.head, .neck, .chest, .spine, .leftUpperArm, .rightUpperArm, .rightLowerArm]
     }
 
     // MARK: - Proximity Thresholds (meters)
@@ -164,6 +168,12 @@ public class ARReactionLayer: AnimationLayer {
         case .retreat:
             evaluateRetreat(intensity: intensity)
 
+        case .wave:
+            evaluateWave(intensity: intensity, progress: t)
+
+        case .nod:
+            evaluateNod(intensity: intensity, progress: t)
+
         case .none:
             break
         }
@@ -242,6 +252,33 @@ public class ARReactionLayer: AnimationLayer {
         var rightArmTransform = ProceduralBoneTransform.identity
         rightArmTransform.rotation = simd_quatf(angle: -0.1 * intensity, axis: SIMD3<Float>(0, 0, 1))
         cachedOutput.bones[.rightUpperArm] = rightArmTransform
+    }
+
+    private func evaluateWave(intensity: Float, progress: Float) {
+        // Right arm raises for wave
+        var rightUpperArmTransform = ProceduralBoneTransform.identity
+        rightUpperArmTransform.rotation = simd_quatf(angle: -0.8 * intensity, axis: SIMD3<Float>(0, 0, 1))
+        cachedOutput.bones[.rightUpperArm] = rightUpperArmTransform
+
+        // Lower arm waves back and forth
+        let wavePhase = sin(progress * .pi * 4) // Multiple waves during the reaction
+        var rightLowerArmTransform = ProceduralBoneTransform.identity
+        rightLowerArmTransform.rotation = simd_quatf(angle: wavePhase * 0.3 * intensity, axis: SIMD3<Float>(0, 1, 0))
+        cachedOutput.bones[.rightLowerArm] = rightLowerArmTransform
+
+        // Happy expression during wave
+        cachedOutput.morphWeights[VRMExpressionPreset.happy.rawValue] = intensity * 0.5
+    }
+
+    private func evaluateNod(intensity: Float, progress: Float) {
+        // Quick nod motion - head bobs down and up
+        let nodPhase = sin(progress * .pi * 2)
+        var headTransform = ProceduralBoneTransform.identity
+        headTransform.rotation = simd_quatf(angle: 0.1 * nodPhase, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.head] = headTransform
+
+        // Slight smile during nod
+        cachedOutput.morphWeights[VRMExpressionPreset.happy.rawValue] = intensity * 0.3
     }
 
     private func easeInOut(_ t: Float) -> Float {

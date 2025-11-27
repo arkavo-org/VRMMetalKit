@@ -148,11 +148,27 @@ public class AnimationLayerCompositor {
     private var compositedBones: [VRMHumanoidBone: ProceduralBoneTransform] = [:]
     private var compositedMorphs: [String: Float] = [:]
 
+    // Base pose storage - the original rotations from the VRM model
+    private var basePoseRotations: [VRMHumanoidBone: simd_quatf] = [:]
+    private var basePoseTranslations: [VRMHumanoidBone: SIMD3<Float>] = [:]
+    private var basePoseScales: [VRMHumanoidBone: SIMD3<Float>] = [:]
+
     public init() {}
 
-    /// Setup with VRM model reference
+    /// Setup with VRM model reference and capture base pose
     public func setup(model: VRMModel) {
         self.model = model
+
+        // Capture base pose rotations for all humanoid bones
+        guard let humanoid = model.humanoid else { return }
+        for bone in VRMHumanoidBone.allCases {
+            if let nodeIndex = humanoid.getBoneNode(bone), nodeIndex < model.nodes.count {
+                let node = model.nodes[nodeIndex]
+                basePoseRotations[bone] = node.rotation
+                basePoseTranslations[bone] = node.translation
+                basePoseScales[bone] = node.scale
+            }
+        }
     }
 
     /// Add an animation layer (automatically sorted by priority)
@@ -263,15 +279,22 @@ public class AnimationLayerCompositor {
     private func applyToModel(model: VRMModel) {
         guard let humanoid = model.humanoid else { return }
 
-        // Apply bone transforms
-        for (bone, transform) in compositedBones {
+        // Apply bone transforms by composing procedural deltas with base pose
+        for (bone, proceduralTransform) in compositedBones {
             guard let nodeIndex = humanoid.getBoneNode(bone),
                   nodeIndex < model.nodes.count else { continue }
 
             let node = model.nodes[nodeIndex]
-            node.rotation = transform.rotation
-            node.translation = transform.translation
-            node.scale = transform.scale
+
+            // Get base pose (default to identity if not captured)
+            let baseRotation = basePoseRotations[bone] ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+            let baseTranslation = basePoseTranslations[bone] ?? .zero
+            let baseScale = basePoseScales[bone] ?? SIMD3<Float>(1, 1, 1)
+
+            // Compose: final = basePose * proceduralDelta
+            node.rotation = simd_mul(baseRotation, proceduralTransform.rotation)
+            node.translation = baseTranslation + proceduralTransform.translation
+            node.scale = baseScale * proceduralTransform.scale
             node.updateLocalMatrix()
         }
 
