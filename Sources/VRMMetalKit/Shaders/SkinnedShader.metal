@@ -23,37 +23,46 @@ struct Uniforms {
  float4x4 viewMatrix;
  float4x4 projectionMatrix;
  float4x4 normalMatrix;
- // Light 0 (key light)
- float3 lightDirection;
- float3 lightColor;
- float3 ambientColor;
+ // Light 0 (key light) - using float4 for Swift SIMD4 alignment
+ float4 lightDirection;        // xyz = direction, w = padding
+ float4 lightColor;            // xyz = color, w = padding
+ float4 ambientColor;          // xyz = color, w = padding
  // Light 1 (fill light)
- float3 light1Direction;
- float3 light1Color;
+ float4 light1Direction;       // xyz = direction, w = padding
+ float4 light1Color;           // xyz = color, w = padding
  // Light 2 (rim/back light)
- float3 light2Direction;
- float3 light2Color;
- // Other fields
- float2 viewportSize;
- float nearPlane;
- float farPlane;
+ float4 light2Direction;       // xyz = direction, w = padding
+ float4 light2Color;           // xyz = color, w = padding
+ // Other fields - packed into float4 for alignment
+ float4 viewportSize;          // xy = size, zw = padding
+ float4 nearFarPlane;          // x = near, y = far, zw = padding
  int debugUVs;
- float _padding1;
+ float lightNormalizationFactor;
  float _padding2;
  float _padding3;
+ int toonBands;
+ float _padding5;
+ float _padding6;
+ float _padding7;
 };
 
+// Use packed floats to match Swift struct layout (192 bytes total)
+// Note: Metal's float3 has 16-byte alignment which causes padding
 struct MToonMaterial {
  // Block 0: 16 bytes - Base material properties
  float4 baseColorFactor;                    // 16 bytes
 
- // Block 1: 16 bytes - Shade and basic factors
- float3 shadeColorFactor;                   // 12 bytes
+ // Block 1: 16 bytes - Shade and basic factors (packed float3 + float)
+ float shadeColorR;                         // 4 bytes
+ float shadeColorG;                         // 4 bytes
+ float shadeColorB;                         // 4 bytes
  float shadingToonyFactor;                  // 4 bytes
 
- // Block 2: 16 bytes - Material factors
+ // Block 2: 16 bytes - Material factors (float + packed float3)
  float shadingShiftFactor;                  // 4 bytes
- float3 emissiveFactor;                     // 12 bytes
+ float emissiveR;                           // 4 bytes
+ float emissiveG;                           // 4 bytes
+ float emissiveB;                           // 4 bytes
 
  // Block 3: 16 bytes - PBR factors
  float metallicFactor;                      // 4 bytes
@@ -61,12 +70,16 @@ struct MToonMaterial {
  float giIntensityFactor;                   // 4 bytes
  float shadingShiftTextureScale;            // 4 bytes
 
- // Block 4: 16 bytes - MatCap properties
- float3 matcapFactor;                       // 12 bytes
+ // Block 4: 16 bytes - MatCap properties (packed float3 + int)
+ float matcapR;                             // 4 bytes
+ float matcapG;                             // 4 bytes
+ float matcapB;                             // 4 bytes
  int hasMatcapTexture;                      // 4 bytes
 
- // Block 5: 16 bytes - Rim lighting part 1
- float3 parametricRimColorFactor;           // 12 bytes
+ // Block 5: 16 bytes - Rim lighting part 1 (packed float3 + float)
+ float parametricRimColorR;                 // 4 bytes
+ float parametricRimColorG;                 // 4 bytes
+ float parametricRimColorB;                 // 4 bytes
  float parametricRimFresnelPowerFactor;     // 4 bytes
 
  // Block 6: 16 bytes - Rim lighting part 2
@@ -75,9 +88,11 @@ struct MToonMaterial {
  int hasRimMultiplyTexture;                 // 4 bytes
  float _padding1;                           // 4 bytes padding
 
- // Block 7: 16 bytes - Outline properties part 1
+ // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
  float outlineWidthFactor;                  // 4 bytes
- float3 outlineColorFactor;                 // 12 bytes
+ float outlineColorR;                       // 4 bytes
+ float outlineColorG;                       // 4 bytes
+ float outlineColorB;                       // 4 bytes
 
  // Block 8: 16 bytes - Outline properties part 2
  float outlineLightingMixFactor;            // 4 bytes
@@ -97,11 +112,11 @@ struct MToonMaterial {
  int hasShadeMultiplyTexture;               // 4 bytes
  int hasShadingShiftTexture;                // 4 bytes
 
- // Block 11: 16 bytes - More texture flags
+ // Block 11: 16 bytes - More texture flags and alpha
  int hasNormalTexture;                      // 4 bytes
  int hasEmissiveTexture;                    // 4 bytes
- int _padding3;                             // 4 bytes padding
- int _padding4;                             // 4 bytes padding
+ uint32_t alphaMode;                        // 4 bytes
+ float alphaCutoff;                         // 4 bytes
 };
 
 struct VertexIn {

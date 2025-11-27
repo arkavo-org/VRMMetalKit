@@ -30,20 +30,19 @@ public class MToonShader {
         float4x4 viewMatrix;
         float4x4 projectionMatrix;
         float4x4 normalMatrix;
-        // Light 0 (key light)
-        float3 lightDirection;
-        float3 lightColor;
-        float3 ambientColor;
+        // Light 0 (key light) - using float4 for Swift SIMD4 alignment
+        float4 lightDirection;        // xyz = direction, w = padding
+        float4 lightColor;            // xyz = color, w = padding
+        float4 ambientColor;          // xyz = color, w = padding
         // Light 1 (fill light)
-        float3 light1Direction;
-        float3 light1Color;
+        float4 light1Direction;       // xyz = direction, w = padding
+        float4 light1Color;           // xyz = color, w = padding
         // Light 2 (rim/back light)
-        float3 light2Direction;
-        float3 light2Color;
-        // Other fields
-        float2 viewportSize;          // For screen-space outline calculation
-        float nearPlane;              // Camera near plane
-        float farPlane;               // Camera far plane
+        float4 light2Direction;       // xyz = direction, w = padding
+        float4 light2Color;           // xyz = color, w = padding
+        // Other fields - packed into float4 for alignment
+        float4 viewportSize;          // xy = size, zw = padding
+        float4 nearFarPlane;          // x = near, y = far, zw = padding
         int debugUVs;                 // Debug flag: 1 = show UVs as colors, 0 = normal rendering
         float lightNormalizationFactor;  // Multi-light normalization factor
         float _padding2;
@@ -59,12 +58,13 @@ public class MToonShader {
         float4 baseColorFactor;                    // 16 bytes
 
         // Block 1: 16 bytes - Shade and basic factors
-        float3 shadeColorFactor;                   // 12 bytes
+        // Note: packed_float3 used to avoid 16-byte alignment padding
+        packed_float3 shadeColorFactor;            // 12 bytes
         float shadingToonyFactor;                  // 4 bytes
 
         // Block 2: 16 bytes - Material factors
         float shadingShiftFactor;                  // 4 bytes
-        float3 emissiveFactor;                     // 12 bytes
+        packed_float3 emissiveFactor;              // 12 bytes (packed to avoid alignment)
 
         // Block 3: 16 bytes - PBR factors
         float metallicFactor;                      // 4 bytes
@@ -73,11 +73,11 @@ public class MToonShader {
         float shadingShiftTextureScale;            // 4 bytes
 
         // Block 4: 16 bytes - MatCap properties
-        float3 matcapFactor;                       // 12 bytes
+        packed_float3 matcapFactor;                // 12 bytes
         int hasMatcapTexture;                      // 4 bytes
 
         // Block 5: 16 bytes - Rim lighting part 1
-        float3 parametricRimColorFactor;           // 12 bytes
+        packed_float3 parametricRimColorFactor;    // 12 bytes
         float parametricRimFresnelPowerFactor;     // 4 bytes
 
         // Block 6: 16 bytes - Rim lighting part 2
@@ -88,7 +88,7 @@ public class MToonShader {
 
         // Block 7: 16 bytes - Outline properties part 1
         float outlineWidthFactor;                  // 4 bytes
-        float3 outlineColorFactor;                 // 12 bytes
+        packed_float3 outlineColorFactor;          // 12 bytes (packed to avoid alignment)
 
         // Block 8: 16 bytes - Outline properties part 2
         float outlineLightingMixFactor;            // 4 bytes
@@ -515,67 +515,104 @@ public class MToonShader {
 }
 
 // MToon material properties for rendering - exactly matches Metal struct layout
+// IMPORTANT: Uses explicit packed floats instead of SIMD3 to match Metal's float3 packing
 public struct MToonMaterialUniforms {
     // Block 0: 16 bytes - Base material properties
     public var baseColorFactor: SIMD4<Float> = [1, 1, 1, 1]        // 16 bytes
 
-    // Block 1: 16 bytes - Shade and basic factors
-    public var shadeColorFactor: SIMD3<Float> = [0.9, 0.9, 0.9]    // 12 bytes
-    public var shadingToonyFactor: Float = 0.9                      // 4 bytes
+    // Block 1: 16 bytes - Shade and basic factors (packed float3 + float)
+    public var shadeColorR: Float = 0.9
+    public var shadeColorG: Float = 0.9
+    public var shadeColorB: Float = 0.9
+    public var shadingToonyFactor: Float = 0.9
 
-    // Block 2: 16 bytes - Material factors
-    public var shadingShiftFactor: Float = 0.0                      // 4 bytes
-    public var emissiveFactor: SIMD3<Float> = [0, 0, 0]            // 12 bytes
+    // Block 2: 16 bytes - Material factors (float + packed float3)
+    public var shadingShiftFactor: Float = 0.0
+    public var emissiveR: Float = 0.0
+    public var emissiveG: Float = 0.0
+    public var emissiveB: Float = 0.0
 
     // Block 3: 16 bytes - PBR factors
-    public var metallicFactor: Float = 0.0                          // 4 bytes
-    public var roughnessFactor: Float = 1.0                         // 4 bytes
-    public var giIntensityFactor: Float = 0.05                      // 4 bytes (reduced from 0.1)
-    public var shadingShiftTextureScale: Float = 1.0                // 4 bytes
+    public var metallicFactor: Float = 0.0
+    public var roughnessFactor: Float = 1.0
+    public var giIntensityFactor: Float = 0.05
+    public var shadingShiftTextureScale: Float = 1.0
 
-    // Block 4: 16 bytes - MatCap properties
-    public var matcapFactor: SIMD3<Float> = [1, 1, 1]              // 12 bytes
-    public var hasMatcapTexture: Int32 = 0                          // 4 bytes
+    // Block 4: 16 bytes - MatCap properties (packed float3 + int)
+    public var matcapR: Float = 1.0
+    public var matcapG: Float = 1.0
+    public var matcapB: Float = 1.0
+    public var hasMatcapTexture: Int32 = 0
 
-    // Block 5: 16 bytes - Rim lighting part 1
-    public var parametricRimColorFactor: SIMD3<Float> = [0, 0, 0]   // 12 bytes
-    public var parametricRimFresnelPowerFactor: Float = 1.0         // 4 bytes
+    // Block 5: 16 bytes - Rim lighting part 1 (packed float3 + float)
+    public var rimColorR: Float = 0.0
+    public var rimColorG: Float = 0.0
+    public var rimColorB: Float = 0.0
+    public var parametricRimFresnelPowerFactor: Float = 1.0
 
     // Block 6: 16 bytes - Rim lighting part 2
-    public var parametricRimLiftFactor: Float = 0.0                 // 4 bytes
-    public var rimLightingMixFactor: Float = 0.0                    // 4 bytes
-    public var hasRimMultiplyTexture: Int32 = 0                     // 4 bytes
-    private var _padding1: Float = 0.0                              // 4 bytes padding
+    public var parametricRimLiftFactor: Float = 0.0
+    public var rimLightingMixFactor: Float = 0.0
+    public var hasRimMultiplyTexture: Int32 = 0
+    private var _padding1: Float = 0.0
 
-    // Block 7: 16 bytes - Outline properties part 1
-    public var outlineWidthFactor: Float = 0.0                      // 4 bytes
-    public var outlineColorFactor: SIMD3<Float> = [1, 1, 1]        // 12 bytes
+    // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
+    public var outlineWidthFactor: Float = 0.0
+    public var outlineColorR: Float = 1.0
+    public var outlineColorG: Float = 1.0
+    public var outlineColorB: Float = 1.0
 
     // Block 8: 16 bytes - Outline properties part 2
-    public var outlineLightingMixFactor: Float = 1.0                // 4 bytes
-    public var outlineMode: Float = 0.0                             // 4 bytes (0: None, 1: World, 2: Screen)
-    public var hasOutlineWidthMultiplyTexture: Int32 = 0            // 4 bytes
-    private var _padding2: Float = 0.0                              // 4 bytes padding
+    public var outlineLightingMixFactor: Float = 1.0
+    public var outlineMode: Float = 0.0
+    public var hasOutlineWidthMultiplyTexture: Int32 = 0
+    private var _padding2: Float = 0.0
 
     // Block 9: 16 bytes - UV Animation
-    public var uvAnimationScrollXSpeedFactor: Float = 0.0           // 4 bytes
-    public var uvAnimationScrollYSpeedFactor: Float = 0.0           // 4 bytes
-    public var uvAnimationRotationSpeedFactor: Float = 0.0          // 4 bytes
-    public var time: Float = 0.0                                    // 4 bytes
+    public var uvAnimationScrollXSpeedFactor: Float = 0.0
+    public var uvAnimationScrollYSpeedFactor: Float = 0.0
+    public var uvAnimationRotationSpeedFactor: Float = 0.0
+    public var time: Float = 0.0
 
     // Block 10: 16 bytes - Texture flags
-    public var hasUvAnimationMaskTexture: Int32 = 0                 // 4 bytes
-    public var hasBaseColorTexture: Int32 = 0                       // 4 bytes
-    public var hasShadeMultiplyTexture: Int32 = 0                   // 4 bytes
-    public var hasShadingShiftTexture: Int32 = 0                    // 4 bytes
+    public var hasUvAnimationMaskTexture: Int32 = 0
+    public var hasBaseColorTexture: Int32 = 0
+    public var hasShadeMultiplyTexture: Int32 = 0
+    public var hasShadingShiftTexture: Int32 = 0
 
     // Block 11: 16 bytes - More texture flags
-    public var hasNormalTexture: Int32 = 0                          // 4 bytes
-    public var hasEmissiveTexture: Int32 = 0                        // 4 bytes
-    public var alphaMode: UInt32 = 0                                // 4 bytes (0: OPAQUE, 1: MASK, 2: BLEND)
-    public var alphaCutoff: Float = 0.5                             // 4 bytes
+    public var hasNormalTexture: Int32 = 0
+    public var hasEmissiveTexture: Int32 = 0
+    public var alphaMode: UInt32 = 0
+    public var alphaCutoff: Float = 0.5
 
     public init() {}
+
+    // Computed properties for convenient SIMD3 access
+    public var shadeColorFactor: SIMD3<Float> {
+        get { SIMD3<Float>(shadeColorR, shadeColorG, shadeColorB) }
+        set { shadeColorR = newValue.x; shadeColorG = newValue.y; shadeColorB = newValue.z }
+    }
+
+    public var emissiveFactor: SIMD3<Float> {
+        get { SIMD3<Float>(emissiveR, emissiveG, emissiveB) }
+        set { emissiveR = newValue.x; emissiveG = newValue.y; emissiveB = newValue.z }
+    }
+
+    public var matcapFactor: SIMD3<Float> {
+        get { SIMD3<Float>(matcapR, matcapG, matcapB) }
+        set { matcapR = newValue.x; matcapG = newValue.y; matcapB = newValue.z }
+    }
+
+    public var parametricRimColorFactor: SIMD3<Float> {
+        get { SIMD3<Float>(rimColorR, rimColorG, rimColorB) }
+        set { rimColorR = newValue.x; rimColorG = newValue.y; rimColorB = newValue.z }
+    }
+
+    public var outlineColorFactor: SIMD3<Float> {
+        get { SIMD3<Float>(outlineColorR, outlineColorG, outlineColorB) }
+        set { outlineColorR = newValue.x; outlineColorG = newValue.y; outlineColorB = newValue.z }
+    }
 
     // Helper to create from VRMMToonMaterial
     public init(from mtoon: VRMMToonMaterial, time: Float = 0.0) {

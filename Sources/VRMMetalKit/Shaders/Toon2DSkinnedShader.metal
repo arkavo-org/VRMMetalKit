@@ -23,20 +23,19 @@ struct Uniforms {
  float4x4 viewMatrix;
  float4x4 projectionMatrix;
  float4x4 normalMatrix;
- // Light 0 (key light)
- float3 lightDirection;
- float3 lightColor;
- float3 ambientColor;
+ // Light 0 (key light) - using float4 for Swift SIMD4 alignment
+ float4 lightDirection;        // xyz = direction, w = padding
+ float4 lightColor;            // xyz = color, w = padding
+ float4 ambientColor;          // xyz = color, w = padding
  // Light 1 (fill light)
- float3 light1Direction;
- float3 light1Color;
+ float4 light1Direction;       // xyz = direction, w = padding
+ float4 light1Color;           // xyz = color, w = padding
  // Light 2 (rim/back light)
- float3 light2Direction;
- float3 light2Color;
- // Other fields
- float2 viewportSize;
- float nearPlane;
- float farPlane;
+ float4 light2Direction;       // xyz = direction, w = padding
+ float4 light2Color;           // xyz = color, w = padding
+ // Other fields - packed into float4 for alignment
+ float4 viewportSize;          // xy = size, zw = padding
+ float4 nearFarPlane;          // x = near, y = far, zw = padding
  int debugUVs;
  float lightNormalizationFactor;  // Multi-light normalization factor
  float _padding2;
@@ -247,7 +246,7 @@ fragment float4 skinned_toon2d_fragment(
 
  // Calculate lighting
  float3 normal = normalize(in.worldNormal);
- float3 lightDir = normalize(-uniforms.lightDirection);
+ float3 lightDir = normalize(-uniforms.lightDirection.xyz);
  float nDotL = dot(normal, lightDir);
 
  // Shade color
@@ -261,7 +260,7 @@ fragment float4 skinned_toon2d_fragment(
 
  // Light 0 (key light)
  float3 lit0 = float3(0.0);
- if (any(uniforms.lightColor > 0.0)) {
+ if (any(uniforms.lightColor.xyz > 0.0)) {
  float3 celShaded0 = applyCelShading(
  baseColor.rgb,
  shadeColor,
@@ -269,13 +268,13 @@ fragment float4 skinned_toon2d_fragment(
  uniforms.toonBands,
  material.shadingToonyFactor
  );
- lit0 = celShaded0 * uniforms.lightColor;
+ lit0 = celShaded0 * uniforms.lightColor.xyz;
  }
 
  // Light 1 (fill light)
  float3 lit1 = float3(0.0);
- if (any(uniforms.light1Color > 0.0)) {
- float nDotL1 = dot(normal, uniforms.light1Direction);
+ if (any(uniforms.light1Color.xyz > 0.0)) {
+ float nDotL1 = dot(normal, uniforms.light1Direction.xyz);
  float3 celShaded1 = applyCelShading(
  baseColor.rgb,
  shadeColor,
@@ -283,13 +282,13 @@ fragment float4 skinned_toon2d_fragment(
  uniforms.toonBands,
  material.shadingToonyFactor
  );
- lit1 = celShaded1 * uniforms.light1Color;
+ lit1 = celShaded1 * uniforms.light1Color.xyz;
  }
 
  // Light 2 (rim/back light)
  float3 lit2 = float3(0.0);
- if (any(uniforms.light2Color > 0.0)) {
- float nDotL2 = dot(normal, uniforms.light2Direction);
+ if (any(uniforms.light2Color.xyz > 0.0)) {
+ float nDotL2 = dot(normal, uniforms.light2Direction.xyz);
  float3 celShaded2 = applyCelShading(
  baseColor.rgb,
  shadeColor,
@@ -297,14 +296,14 @@ fragment float4 skinned_toon2d_fragment(
  uniforms.toonBands,
  material.shadingToonyFactor
  );
- lit2 = celShaded2 * uniforms.light2Color;
+ lit2 = celShaded2 * uniforms.light2Color.xyz;
  }
 
  // Energy-conserving accumulation with normalization
  float3 lightContribution = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
  // Add ambient
- float3 ambient = baseColor.rgb * uniforms.ambientColor;
+ float3 ambient = baseColor.rgb * uniforms.ambientColor.xyz;
 
  float3 finalColor = lightContribution + ambient;
 

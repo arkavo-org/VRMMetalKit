@@ -23,20 +23,19 @@ struct Uniforms {
  float4x4 viewMatrix;
  float4x4 projectionMatrix;
  float4x4 normalMatrix;
- // Light 0 (key light)
- float3 lightDirection;
- float3 lightColor;
- float3 ambientColor;
+ // Light 0 (key light) - using float4 for Swift SIMD4 alignment
+ float4 lightDirection;        // xyz = direction, w = padding
+ float4 lightColor;            // xyz = color, w = padding
+ float4 ambientColor;          // xyz = color, w = padding
  // Light 1 (fill light)
- float3 light1Direction;
- float3 light1Color;
+ float4 light1Direction;       // xyz = direction, w = padding
+ float4 light1Color;           // xyz = color, w = padding
  // Light 2 (rim/back light)
- float3 light2Direction;
- float3 light2Color;
- // Other fields
- float2 viewportSize;          // For screen-space outline calculation
- float nearPlane;              // Camera near plane
- float farPlane;               // Camera far plane
+ float4 light2Direction;       // xyz = direction, w = padding
+ float4 light2Color;           // xyz = color, w = padding
+ // Other fields - packed into float4 for alignment
+ float4 viewportSize;          // xy = size, zw = padding
+ float4 nearFarPlane;          // x = near, y = far, zw = padding
  int debugUVs;                 // Debug flag: 1 = show UVs as colors, 0 = normal rendering
  float lightNormalizationFactor;  // Multi-light normalization factor
  float _padding2;
@@ -47,17 +46,23 @@ struct Uniforms {
  float _padding7;
 };
 
+// Use packed_float3 to match Swift's Float component layout (no 16-byte alignment)
+// This ensures Metal struct size (192 bytes) matches Swift struct stride exactly
 struct MToonMaterial {
  // Block 0: 16 bytes - Base material properties
  float4 baseColorFactor;                    // 16 bytes
 
- // Block 1: 16 bytes - Shade and basic factors
- float3 shadeColorFactor;                   // 12 bytes
+ // Block 1: 16 bytes - Shade and basic factors (packed float3 + float)
+ float shadeColorR;                         // 4 bytes
+ float shadeColorG;                         // 4 bytes
+ float shadeColorB;                         // 4 bytes
  float shadingToonyFactor;                  // 4 bytes
 
- // Block 2: 16 bytes - Material factors
+ // Block 2: 16 bytes - Material factors (float + packed float3)
  float shadingShiftFactor;                  // 4 bytes
- float3 emissiveFactor;                     // 12 bytes
+ float emissiveR;                           // 4 bytes
+ float emissiveG;                           // 4 bytes
+ float emissiveB;                           // 4 bytes
 
  // Block 3: 16 bytes - PBR factors
  float metallicFactor;                      // 4 bytes
@@ -65,12 +70,16 @@ struct MToonMaterial {
  float giIntensityFactor;                   // 4 bytes
  float shadingShiftTextureScale;            // 4 bytes
 
- // Block 4: 16 bytes - MatCap properties
- float3 matcapFactor;                       // 12 bytes
+ // Block 4: 16 bytes - MatCap properties (packed float3 + int)
+ float matcapR;                             // 4 bytes
+ float matcapG;                             // 4 bytes
+ float matcapB;                             // 4 bytes
  int hasMatcapTexture;                      // 4 bytes
 
- // Block 5: 16 bytes - Rim lighting part 1
- float3 parametricRimColorFactor;           // 12 bytes
+ // Block 5: 16 bytes - Rim lighting part 1 (packed float3 + float)
+ float parametricRimColorR;                 // 4 bytes
+ float parametricRimColorG;                 // 4 bytes
+ float parametricRimColorB;                 // 4 bytes
  float parametricRimFresnelPowerFactor;     // 4 bytes
 
  // Block 6: 16 bytes - Rim lighting part 2
@@ -79,9 +88,11 @@ struct MToonMaterial {
  int hasRimMultiplyTexture;                 // 4 bytes
  float _padding1;                           // 4 bytes padding
 
- // Block 7: 16 bytes - Outline properties part 1
+ // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
  float outlineWidthFactor;                  // 4 bytes
- float3 outlineColorFactor;                 // 12 bytes
+ float outlineColorR;                       // 4 bytes
+ float outlineColorG;                       // 4 bytes
+ float outlineColorB;                       // 4 bytes
 
  // Block 8: 16 bytes - Outline properties part 2
  float outlineLightingMixFactor;            // 4 bytes
@@ -222,13 +233,38 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
                         texture2d<float> uvAnimationMaskTexture [[texture(7)]],
                         sampler textureSampler [[sampler(0)]]) {
 
- // 🎯 UV DEBUG MODE: DISABLED IN PRODUCTION
- // CRITICAL: This debug code is completely disabled to prevent UV color output
- /*
- if (uniforms.debugUVs > 0) {
+ // 🎯 DEBUG MODES
+ if (uniforms.debugUVs == 1) {
+ // UV debug - red/green gradient
  return float4(in.texCoord.x, in.texCoord.y, 0.0, 1.0);
+ } else if (uniforms.debugUVs == 2) {
+ // Show hasBaseColorTexture flag: red=0, green=1
+ return float4(material.hasBaseColorTexture > 0 ? 0.0 : 1.0,
+               material.hasBaseColorTexture > 0 ? 1.0 : 0.0, 0.0, 1.0);
+ } else if (uniforms.debugUVs == 3) {
+ // Show baseColorFactor directly
+ return material.baseColorFactor;
+ } else if (uniforms.debugUVs == 4) {
+ // Show sampled texture directly
+ float4 texColor = baseColorTexture.sample(textureSampler, in.texCoord);
+ return float4(texColor.rgb, 1.0);
+ } else if (uniforms.debugUVs == 5) {
+ // Show normal direction as color
+ return float4(normalize(in.worldNormal) * 0.5 + 0.5, 1.0);
+ } else if (uniforms.debugUVs == 6) {
+ // Show light color
+ return float4(uniforms.lightColor.xyz, 1.0);
+ } else if (uniforms.debugUVs == 7) {
+ // Show NdotL (diffuse lighting term)
+ float3 normal = normalize(in.worldNormal);
+ float NdotL = dot(normal, uniforms.lightDirection.xyz);
+ // Map from [-1,1] to [0,1] for visualization
+ float mapped = NdotL * 0.5 + 0.5;
+ return float4(mapped, mapped, mapped, 1.0);
+ } else if (uniforms.debugUVs == 8) {
+ // Show light direction
+ return float4(uniforms.lightDirection.xyz * 0.5 + 0.5, 1.0);
  }
- */
 
  // Choose UV coordinates (animated or static)
  float2 uv = in.texCoord;
@@ -265,7 +301,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
 
  // Calculate shade color
- float3 shadeColor = material.shadeColorFactor;
+ float3 shadeColor = float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
  if (material.hasShadeMultiplyTexture > 0) {
  float3 shadeTexColor = shadeMultiplyTexture.sample(textureSampler, uv).rgb;
  shadeColor *= shadeTexColor;
@@ -292,41 +328,41 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  // Calculate individual light contributions
  float3 lit0 = float3(0.0);
- if (any(uniforms.lightColor > 0.0)) {
- float NdotL = dot(normal, uniforms.lightDirection);
+ if (any(uniforms.lightColor.xyz > 0.0)) {
+ float NdotL = dot(normal, uniforms.lightDirection.xyz);
  float shadowStep = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL);
- lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor;
+ lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor.xyz;
  }
 
  float3 lit1 = float3(0.0);
- if (any(uniforms.light1Color > 0.0)) {
- float NdotL1 = dot(normal, uniforms.light1Direction);
+ if (any(uniforms.light1Color.xyz > 0.0)) {
+ float NdotL1 = dot(normal, uniforms.light1Direction.xyz);
  float shadowStep1 = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL1);
- lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color;
+ lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color.xyz;
  }
 
  float3 lit2 = float3(0.0);
- if (any(uniforms.light2Color > 0.0)) {
- float NdotL2 = dot(normal, uniforms.light2Direction);
+ if (any(uniforms.light2Color.xyz > 0.0)) {
+ float NdotL2 = dot(normal, uniforms.light2Direction.xyz);
  float shadowStep2 = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL2);
- lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color;
+ lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz;
  }
 
  // Energy-conserving accumulation with normalization
  float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
  // Global illumination equalization - mix toward balanced lighting
- float3 giColor = uniforms.ambientColor * baseColor.rgb;
+ float3 giColor = uniforms.ambientColor.xyz * baseColor.rgb;
  litColor = mix(litColor, (litColor + giColor) * 0.5, material.giIntensityFactor);
 
  // Emissive
- float3 emissive = material.emissiveFactor;
+ float3 emissive = float3(material.emissiveR, material.emissiveG, material.emissiveB);
  if (material.hasEmissiveTexture > 0) {
  float3 emissiveTexColor = emissiveTexture.sample(textureSampler, uv).rgb;
  emissive *= emissiveTexColor;
@@ -337,12 +373,13 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  if (material.hasMatcapTexture > 0) {
  float2 matcapUV = calculateMatCapUV(in.viewNormal);
  float3 matcapColor = matcapTexture.sample(textureSampler, matcapUV).rgb;
- litColor += matcapColor * material.matcapFactor;
+ litColor += matcapColor * float3(material.matcapR, material.matcapG, material.matcapB);
  }
 
  // Parametric rim lighting - using view-space normal for consistent calculation
  float3 rimColor = float3(0.0);
- if (any(material.parametricRimColorFactor > 0.0)) {
+ float3 parametricRimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
+ if (any(parametricRimColorFactor > 0.0)) {
  // Use view-space normal and view direction for proper fresnel
  float3 Nv = in.viewNormal;  // Already in view space
  float3 Vv = normalize(-in.worldPosition); // View direction in world space
@@ -351,7 +388,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float rimF = pow(vf, material.parametricRimFresnelPowerFactor);
  rimF = saturate(rimF + material.parametricRimLiftFactor);
 
- rimColor = material.parametricRimColorFactor * rimF;
+ rimColor = parametricRimColorFactor * rimF;
 
  // Apply rim multiply texture for masking
  if (material.hasRimMultiplyTexture > 0) {
@@ -362,7 +399,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  // Apply rim lighting mix - blend between lit and unlit rim
  if (any(rimColor > 0.0)) {
- float3 rimLit = rimColor * uniforms.lightColor;  // Lit rim
+ float3 rimLit = rimColor * uniforms.lightColor.xyz;  // Lit rim
  float3 rimUnlit = rimColor;                       // Unlit rim
  rimColor = mix(rimLit, rimUnlit, material.rimLightingMixFactor);
 
@@ -371,6 +408,14 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
 
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
+ // Debug mode 9: Show litColor before saturation (scaled down to see overbright)
+ if (uniforms.debugUVs == 9) {
+ return float4(litColor * 0.25, 1.0);  // Scale by 0.25 to see values > 1
+ }
+
+ // Fix overbright: scale down to compensate for MToon lighting calculation
+ litColor *= 0.20;
+
  // Final color output
  litColor = saturate(litColor);
 
@@ -430,7 +475,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  float2 screenNormal = normalize(viewNormal.xy);
 
  // Convert outline width from pixels to NDC
- float2 pixelsToNDC = 2.0 / uniforms.viewportSize;
+ float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
  float2 offsetNDC = screenNormal * outlineWidth * pixelsToNDC;
 
  // Apply screen-space offset, scaled by clip.w for perspective-correct width
@@ -460,11 +505,11 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 fragment float4 mtoon_outline_fragment(VertexOut in [[stage_in]],
                                 constant MToonMaterial& material [[buffer(8)]],
                                 constant Uniforms& uniforms [[buffer(1)]]) {
- float3 outlineColor = material.outlineColorFactor;
+ float3 outlineColor = float3(material.outlineColorR, material.outlineColorG, material.outlineColorB);
 
  // Apply outline lighting mix
  if (material.outlineLightingMixFactor < 1.0) {
- float3 lightInfluence = uniforms.lightColor * uniforms.ambientColor;
+ float3 lightInfluence = uniforms.lightColor.xyz * uniforms.ambientColor.xyz;
  outlineColor = mix(outlineColor * lightInfluence, outlineColor, material.outlineLightingMixFactor);
  }
 
@@ -476,7 +521,7 @@ fragment float4 mtoon_debug_nl(VertexOut in [[stage_in]],
                         constant MToonMaterial& material [[buffer(8)]],
                         constant Uniforms& uniforms [[buffer(1)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, uniforms.lightDirection));
+ float nl = saturate(dot(normal, uniforms.lightDirection.xyz));
  return float4(nl, nl, nl, 1.0);
 }
 
@@ -486,7 +531,7 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
                           texture2d<float> shadingShiftTexture [[texture(2)]],
                           sampler textureSampler [[sampler(0)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, uniforms.lightDirection));
+ float nl = saturate(dot(normal, uniforms.lightDirection.xyz));
 
  float shadingShift = material.shadingShiftFactor;
  if (material.hasShadingShiftTexture > 0) {
@@ -503,7 +548,8 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
 fragment float4 mtoon_debug_rim(VertexOut in [[stage_in]],
                          constant MToonMaterial& material [[buffer(8)]],
                          constant Uniforms& uniforms [[buffer(1)]]) {
- if (any(material.parametricRimColorFactor <= 0.0)) {
+ float3 rimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
+ if (any(rimColorFactor <= 0.0)) {
  return float4(0, 0, 0, 1);
  }
 
