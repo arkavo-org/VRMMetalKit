@@ -24,37 +24,29 @@ import QuartzCore  // For CACurrentMediaTime
 /// VRMRenderer manages the rendering pipeline for VRM models using Metal.
 ///
 /// ## Thread Safety
-/// **NOT thread-safe.** All methods must be called from the same thread (typically the main thread).
+/// **Thread-safe (with conditions).** The renderer itself is thread-safe for command encoding,
+/// and safe to use concurrently with `AnimationPlayer` updates on the same model because `VRMModel`
+/// is now protected by an internal lock.
 ///
-/// This class is marked `@unchecked Sendable` to allow Metal command queue operations
-/// to be scheduled across dispatch boundaries, but actual renderer state (pipeline states,
-/// buffers, model data) must only be accessed from a single thread.
+/// ### Concurrency Model:
+/// - **Animation/Render Sync**: `VRMModel` uses an internal lock. `VRMRenderer` acquires this lock
+///   during the draw command encoding phase. `AnimationPlayer` acquires it during updates.
+///   This prevents data races on node transforms.
+/// - **Metal Context**: You can encode commands from any thread.
 ///
 /// ### Safe Usage Patterns:
 /// ```swift
-/// // ✅ SAFE: All renderer operations on main thread
-/// DispatchQueue.main.async {
-///     let renderer = VRMRenderer(device: device)
-///     renderer.render(in: view, commandBuffer: commandBuffer)
+/// // ✅ SAFE: Animation on background thread
+/// DispatchQueue.global().async {
+///     animationPlayer.update(deltaTime: dt, model: model)
 /// }
 ///
-/// // ❌ UNSAFE: Concurrent access from multiple threads
-/// DispatchQueue.global().async {
-///     renderer.renderingMode = .toon2D  // Data race!
-/// }
+/// // ✅ SAFE: Rendering on main thread (concurrently)
+/// renderer.render(in: view, commandBuffer: commandBuffer)
 /// ```
 ///
-/// ### Metal Command Queue Safety:
-/// The internal Metal command queue is thread-safe by design. Command buffers created
-/// from this queue can be encoded on different threads, but you must ensure proper
-/// synchronization when accessing shared renderer state.
-///
-/// ### Rendering from Background Threads:
-/// If you need to perform rendering work on a background thread, create a dedicated
-/// rendering context and avoid sharing renderer instances between threads.
-///
-/// - Note: Future versions may add explicit thread-safety with locks or actor isolation.
-/// - SeeAlso: [Metal Threading Best Practices](https://developer.apple.com/documentation/metal/resource_objects/about_threading_metal)
+/// - Note: Rendering blocks animation updates on the model for the duration of command encoding.
+///   This is necessary to ensure the scene graph is consistent during drawing.
 public final class VRMRenderer: NSObject, @unchecked Sendable {
     // OPTIMIZATION: Numeric key for morph buffer dictionary (avoids string interpolation)
     typealias MorphKey = UInt64
@@ -848,6 +840,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             inflightSemaphore.signal()
             return
         }
+
+        // LOCK THE MODEL: Prevent animation updates while we encode draw commands
+        model.lock.lock()
+        defer { model.lock.unlock() }
 
         vrmLog("[VRMRenderer] Model has \(model.nodes.count) nodes, \(model.meshes.count) meshes")
 

@@ -400,7 +400,7 @@ public class GLTFParser {
             )
         }
 
-        let magic = data.withUnsafeBytes { $0.load(fromByteOffset: 0, as: UInt32.self) }
+        let magic = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self) }
         guard magic == 0x46546C67 else { // "glTF" in little-endian
             throw VRMError.invalidGLBFormat(
                 reason: "Invalid magic number 0x\(String(format: "%08X", magic)). Expected 0x46546C67 ('glTF').",
@@ -408,7 +408,7 @@ public class GLTFParser {
             )
         }
 
-        let version = data.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt32.self) }
+        let version = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
         guard version == 2 else {
             throw VRMError.unsupportedVersion(
                 version: "GLB \(version)",
@@ -429,8 +429,8 @@ public class GLTFParser {
                 break
             }
 
-            let chunkLength = data.withUnsafeBytes { $0.load(fromByteOffset: offset, as: UInt32.self) }
-            let chunkType = data.withUnsafeBytes { $0.load(fromByteOffset: offset + 4, as: UInt32.self) }
+            let chunkLength = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self) }
+            let chunkType = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 4, as: UInt32.self) }
 
             // Validate chunk data range
             let chunkStart = offset + 8

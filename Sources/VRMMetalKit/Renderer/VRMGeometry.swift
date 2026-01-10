@@ -825,22 +825,50 @@ public class VRMNode {
 
     public func updateLocalMatrix() {
         let t = float4x4(translation: translation)
-        let r = float4x4(rotation)
+        
+        // Manual quaternion to matrix conversion (Column-Major)
+        let x = rotation.imag.x
+        let y = rotation.imag.y
+        let z = rotation.imag.z
+        let w = rotation.real
+        
+        let xx = x * x
+        let yy = y * y
+        let zz = z * z
+        let xy = x * y
+        let xz = x * z
+        let yz = y * z
+        let wx = w * x
+        let wy = w * y
+        let wz = w * z
+
+        let col0 = SIMD4<Float>(1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy), 0.0)
+        let col1 = SIMD4<Float>(2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx), 0.0)
+        let col2 = SIMD4<Float>(2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy), 0.0)
+        let col3 = SIMD4<Float>(0.0, 0.0, 0.0, 1.0)
+        
+        let r = float4x4([col0, col1, col2, col3])
+
         let s = float4x4(scaling: scale)
         localMatrix = t * r * s
     }
 
     public func updateWorldTransform() {
+        // Check for NaNs before using localMatrix
+        if localMatrix[0][0].isNaN || localMatrix[0][1].isNaN || localMatrix[0][2].isNaN || localMatrix[0][3].isNaN ||
+           localMatrix[1][0].isNaN || localMatrix[1][1].isNaN || localMatrix[1][2].isNaN || localMatrix[1][3].isNaN ||
+           localMatrix[2][0].isNaN || localMatrix[2][1].isNaN || localMatrix[2][2].isNaN || localMatrix[2][3].isNaN ||
+           localMatrix[3][0].isNaN || localMatrix[3][1].isNaN || localMatrix[3][2].isNaN || localMatrix[3][3].isNaN {
+            vrmLogAnimation("!!! CRITICAL ERROR: NaN detected in localMatrix for node \(name ?? "unnamed") BEFORE world transform update")
+            // Optionally, reset localMatrix to identity to prevent crash
+            localMatrix = matrix_identity_float4x4
+        }
+
         if let parent = parent {
             worldMatrix = parent.worldMatrix * localMatrix
         } else {
             worldMatrix = localMatrix
         }
-
-        // Debug root nodes
-        // if parent == nil && (name?.contains("Face") ?? false || name?.contains("Body") ?? false || name?.contains("Hair") ?? false) {
-        //     vrmLog("[WORLD TRANSFORM] Root node '\(name ?? "unnamed")': local=(\(localMatrix[3][0]), \(localMatrix[3][1]), \(localMatrix[3][2])), world=(\(worldMatrix[3][0]), \(worldMatrix[3][1]), \(worldMatrix[3][2]))")
-        // }
 
         for child in children {
             child.updateWorldTransform()

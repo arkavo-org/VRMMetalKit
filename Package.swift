@@ -24,19 +24,12 @@ let package = Package(
         .iOS(.v26)
     ],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
             name: "VRMMetalKit",
             targets: ["VRMMetalKit"]
-        ),
-        .executable(
-            name: "VRMAValidator",
-            targets: ["VRMAValidator"]
-        ),
+        )
     ],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
         .target(
             name: "VRMMetalKit",
             exclude: [
@@ -54,7 +47,11 @@ let package = Package(
                 "Shaders/SpriteShader.metal"
             ],
             resources: [
-                .process("Resources")
+                .copy("Resources")
+            ],
+            swiftSettings: [
+                .define("VRM_METALKIT_ENABLE_DEBUG_ANIMATION"),
+                .enableExperimentalFeature("StrictConcurrency")
             ]
         ),
         .executableTarget(
