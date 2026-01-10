@@ -22,35 +22,44 @@ import Metal
 /// VRMModel represents a loaded VRM avatar with all its data, nodes, meshes, and materials.
 ///
 /// ## Thread Safety
-/// **NOT thread-safe.** VRMModel instances must only be accessed from a single thread.
+/// **Thread-safe (with locking).** VRMModel is marked `@unchecked Sendable` and uses internal locking
+/// to allow concurrent access from animation and rendering threads.
 ///
-/// ### Rationale:
-/// - Contains mutable arrays (nodes, meshes, materials) that are modified during loading and animation
-/// - Node world matrices are updated during animation playback without synchronization
-/// - Metal buffer pointers are accessed directly without locks
+/// ### Concurrency Model:
+/// - **Coarse-Grained Locking**: The entire model is protected by a single `NSLock`.
+/// - **Animation**: `AnimationPlayer` automatically acquires the lock during updates.
+/// - **Rendering**: `VRMRenderer` automatically acquires the lock during draw command encoding.
+/// - **Manual Access**: If you need to read/write model data from multiple threads manually,
+///   use the `withLock { ... }` method to ensure safety.
 ///
-/// ### Safe Usage Patterns:
+/// ### Usage Example:
 /// ```swift
-/// // ✅ SAFE: Load and use on main thread
-/// let model = try GLTFParser.loadVRM(from: url, device: device)
-/// animationPlayer.update(deltaTime: dt, model: model)
-///
-/// // ✅ SAFE: Read-only access from rendering thread (if no concurrent writes)
-/// renderer.render(model: model, in: view)  // Safe if animation isn't updating concurrently
-///
-/// // ❌ UNSAFE: Concurrent mutation from multiple threads
+/// // ✅ SAFE: Animation on background thread
 /// DispatchQueue.global().async {
-///     model.nodes[0].localTransform = newTransform  // Data race!
+///     animationPlayer.update(deltaTime: dt, model: model) // Internally locks
+/// }
+///
+/// // ✅ SAFE: Rendering on main thread
+/// draw(in: view) {
+///     renderer.render(model: model, ...) // Internally locks
+/// }
+///
+/// // ✅ SAFE: Manual thread-safe access
+/// model.withLock {
+///     model.nodes[0].translation = SIMD3<Float>(0, 1, 0)
 /// }
 /// ```
-///
-/// ### Concurrency Recommendations:
-/// - Load models on a background thread, but transfer ownership to the rendering thread before use
-/// - If you need to access model data from multiple threads, create a read-only snapshot
-/// - Use explicit synchronization (locks, dispatch queues) if sharing is unavoidable
-///
-/// - Note: The `device` property stores a reference to MTLDevice, which is thread-safe.
-public class VRMModel {
+public class VRMModel: @unchecked Sendable {
+    // MARK: - Thread Safety
+    let lock = NSLock()
+    
+    /// Execute a closure while holding the model's lock
+    public func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try body()
+    }
+
     // MARK: - Properties
 
     public let specVersion: VRMSpecVersion

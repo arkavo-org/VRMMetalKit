@@ -50,7 +50,8 @@ let package = Package(
                 .copy("Resources")
             ],
             swiftSettings: [
-                .define("VRM_METALKIT_ENABLE_DEBUG_ANIMATION")
+                .define("VRM_METALKIT_ENABLE_DEBUG_ANIMATION"),
+                .enableExperimentalFeature("StrictConcurrency")
             ]
         ),
         .executableTarget(

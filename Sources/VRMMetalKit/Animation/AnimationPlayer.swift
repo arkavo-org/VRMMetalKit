@@ -19,14 +19,32 @@ import Foundation
 import simd
 
 /// AnimationPlayer controls playback of VRM animations and updates model state.
-public final class AnimationPlayer {
-    public var speed: Float = 1.0 {
-        didSet {
-            if speed < 0 || speed.isNaN || speed.isInfinite {
-                speed = 1.0
+///
+/// ## Thread Safety
+/// **Thread-safe.** The `update` method is thread-safe as it acquires the `VRMModel`'s internal lock.
+/// You can safely call `update` from a background thread while the model is being rendered on the main thread.
+///
+/// - Note: Playback control methods (`play`, `pause`, `seek`) modify internal state and are generally
+///   safe to call from any thread, but consistent ordering depends on caller synchronization if
+///   multiple threads control the *same* player instance.
+public final class AnimationPlayer: @unchecked Sendable {
+    // Internal lock for player state (speed, time, clip)
+    private let playerLock = NSLock()
+    
+    public var speed: Float {
+        get { playerLock.withLock { _speed } }
+        set { 
+            playerLock.withLock {
+                if newValue < 0 || newValue.isNaN || newValue.isInfinite {
+                    _speed = 1.0
+                } else {
+                    _speed = newValue 
+                }
             }
         }
     }
+    private var _speed: Float = 1.0
+    
     public var isLooping = true
     public var applyRootMotion = false
 
@@ -39,78 +57,74 @@ public final class AnimationPlayer {
     public init() {}
 
     public func load(_ clip: AnimationClip) {
-        self.clip = clip
-        self.currentTime = 0
-        self.isPlaying = true
+        playerLock.withLock {
+            self.clip = clip
+            self.currentTime = 0
+            self.isPlaying = true
+        }
     }
 
     public func play() {
-        isPlaying = true
+        playerLock.withLock { isPlaying = true }
     }
 
     public func pause() {
-        isPlaying = false
+        playerLock.withLock { isPlaying = false }
     }
 
     public func stop() {
-        isPlaying = false
-        currentTime = 0
+        playerLock.withLock {
+            isPlaying = false
+            currentTime = 0
+        }
     }
 
     public func seek(to time: Float) {
-        currentTime = time
+        playerLock.withLock { currentTime = time }
     }
 
     public func update(deltaTime: Float, model: VRMModel) {
-        guard isPlaying, let clip = clip else {
-            return
+        // 1. Capture player state (thread-safe)
+        let (currentClip, currentSpeed, shouldUpdate) = playerLock.withLock {
+            (clip, _speed, isPlaying && clip != nil)
         }
+        
+        guard shouldUpdate, let clip = currentClip else { return }
 
-        currentTime += deltaTime * speed
-        let localTime: Float
-        if isLooping {
-            localTime = fmodf(currentTime, clip.duration)
-        } else {
-            localTime = min(currentTime, clip.duration)
-            if currentTime >= clip.duration {
-                isPlaying = false
+        // 2. Lock the MODEL for the duration of the update to prevent conflicts with Renderer
+        model.withLock {
+            playerLock.withLock {
+                currentTime += deltaTime * currentSpeed
             }
-        }
-
-        let debugFirstFrame = !hasLoggedFirstFrame
-        var updatedCount = 0
-
-        // 1. Process Humanoid Tracks
-        for track in clip.jointTracks {
-            guard let humanoid = model.humanoid,
-                  let nodeIndex = humanoid.getBoneNode(track.bone),
-                  nodeIndex < model.nodes.count else { continue }
-
-            let node = model.nodes[nodeIndex]
-            let (rotation, translation, scale) = track.sample(at: localTime)
-
-            if let rotation = rotation {
-                node.rotation = rotation
+            // Use local copy of time to avoid frequent locking
+            let time = playerLock.withLock { currentTime }
+            
+            let localTime: Float
+            if isLooping {
+                localTime = fmodf(time, clip.duration)
+            } else {
+                localTime = min(time, clip.duration)
+                if time >= clip.duration {
+                    playerLock.withLock { isPlaying = false }
+                }
             }
-            if let translation = translation, (applyRootMotion || track.bone != .hips) {
-                node.translation = translation
-            }
-            if let scale = scale {
-                node.scale = scale
-            }
-            node.updateLocalMatrix()
-            updatedCount += 1
-        }
 
-        // 2. Process Non-Humanoid Node Tracks (hair, accessories, etc.)
-        for track in clip.nodeTracks {
-            if let node = model.findNodeByNormalizedName(track.nodeNameNormalized) {
+            let debugFirstFrame = !hasLoggedFirstFrame
+            var updatedCount = 0
+
+            // 1. Process Humanoid Tracks
+            for track in clip.jointTracks {
+                guard let humanoid = model.humanoid,
+                      let nodeIndex = humanoid.getBoneNode(track.bone),
+                      nodeIndex < model.nodes.count else { continue }
+
+                let node = model.nodes[nodeIndex]
                 let (rotation, translation, scale) = track.sample(at: localTime)
 
                 if let rotation = rotation {
                     node.rotation = rotation
                 }
-                if let translation = translation {
+                if let translation = translation, (applyRootMotion || track.bone != .hips) {
                     node.translation = translation
                 }
                 if let scale = scale {
@@ -118,33 +132,61 @@ public final class AnimationPlayer {
                 }
                 node.updateLocalMatrix()
                 updatedCount += 1
-                
-                if debugFirstFrame {
-                    vrmLogAnimation("[NON-HUMANOID] Animated '\(track.nodeName)' -> node '\(node.name ?? "unnamed")'")
+            }
+
+            // 2. Process Non-Humanoid Node Tracks (hair, accessories, etc.)
+            for track in clip.nodeTracks {
+                if let node = model.findNodeByNormalizedName(track.nodeNameNormalized) {
+                    let (rotation, translation, scale) = track.sample(at: localTime)
+
+                    if let rotation = rotation {
+                        node.rotation = rotation
+                    }
+                    if let translation = translation {
+                        node.translation = translation
+                    }
+                    if let scale = scale {
+                        node.scale = scale
+                    }
+                    node.updateLocalMatrix()
+                    updatedCount += 1
+                    
+                    if debugFirstFrame {
+                        vrmLogAnimation("[NON-HUMANOID] Animated '\(track.nodeName)' -> node '\(node.name ?? "unnamed")'")
+                    }
                 }
             }
-        }
 
-        // 3. Process Morph Tracks
-        currentMorphWeights.removeAll()
-        for track in clip.morphTracks {
-            let weight = track.sample(at: localTime)
-            currentMorphWeights[track.key] = weight
-        }
+            // 3. Process Morph Tracks
+            // We need to write to currentMorphWeights (AnimationPlayer state) but it's used later
+            // by applyMorphWeights. Since this method updates state based on time, we can update it here.
+            // Note: currentMorphWeights is local to AnimationPlayer, so we need playerLock to write it?
+            // Actually, currentMorphWeights is read by applyMorphWeights which might be called from another thread.
+            // So we should protect it.
+            playerLock.withLock {
+                currentMorphWeights.removeAll()
+                for track in clip.morphTracks {
+                    let weight = track.sample(at: localTime)
+                    currentMorphWeights[track.key] = weight
+                }
+            }
 
-        // 4. Propagate World Transforms
-        model.updateNodeTransforms()
+            // 4. Propagate World Transforms
+            model.updateNodeTransforms()
 
-        if debugFirstFrame {
-            vrmLogAnimation("[AnimationPlayer] Updated \(updatedCount) node matrices")
-            hasLoggedFirstFrame = true
+            if debugFirstFrame {
+                vrmLogAnimation("[AnimationPlayer] Updated \(updatedCount) node matrices")
+                hasLoggedFirstFrame = true
+            }
         }
     }
 
     public func applyMorphWeights(to expressionController: VRMExpressionController?) {
         guard let controller = expressionController else { return }
 
-        for (key, weight) in currentMorphWeights {
+        let weights = playerLock.withLock { currentMorphWeights }
+        
+        for (key, weight) in weights {
             if let preset = VRMExpressionPreset(rawValue: key) {
                 controller.setExpressionWeight(preset, weight: weight)
             } else {
@@ -154,12 +196,23 @@ public final class AnimationPlayer {
     }
 
     public var progress: Float {
-        guard let clip = clip else { return 0 }
-        return currentTime / clip.duration
+        guard let clip = playerLock.withLock({ clip }) else { return 0 }
+        return playerLock.withLock { currentTime } / clip.duration
     }
 
     public var isFinished: Bool {
-        guard let clip = clip, !isLooping else { return false }
-        return currentTime >= clip.duration
+        return playerLock.withLock {
+            guard let clip = clip, !isLooping else { return false }
+            return currentTime >= clip.duration
+        }
+    }
+}
+
+// Internal helper extension
+extension NSLock {
+    func withLock<T>(_ body: () throws -> T) rethrows -> T {
+        lock()
+        defer { unlock() }
+        return try body()
     }
 }
