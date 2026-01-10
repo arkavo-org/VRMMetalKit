@@ -767,6 +767,11 @@ public class VRMNode {
     public var rotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
     public var scale: SIMD3<Float> = [1, 1, 1]
 
+    // Initial Bind Pose (for resetting or procedural animation reference)
+    public let initialTranslation: SIMD3<Float>
+    public let initialRotation: simd_quatf
+    public let initialScale: SIMD3<Float>
+
     // Computed transforms
     public var localMatrix: float4x4 = matrix_identity_float4x4
     public var worldMatrix: float4x4 = matrix_identity_float4x4
@@ -796,16 +801,21 @@ public class VRMNode {
 
         // Parse transform
         if let matrix = gltfNode.matrix, matrix.count == 16 {
-            // vrmLog("[NODE INIT] Node '\(name ?? "unnamed")' has matrix: \(matrix)")
             // GLTF matrices are stored in column-major order
-            // Swift float4x4 init takes rows, so we need to transpose
-            localMatrix = float4x4(
+            let m = float4x4(
                 SIMD4<Float>(matrix[0], matrix[4], matrix[8], matrix[12]),   // row 0
                 SIMD4<Float>(matrix[1], matrix[5], matrix[9], matrix[13]),   // row 1
                 SIMD4<Float>(matrix[2], matrix[6], matrix[10], matrix[14]),  // row 2
                 SIMD4<Float>(matrix[3], matrix[7], matrix[11], matrix[15])   // row 3 (translation)
             )
-            // vrmLog("[NODE INIT] Resulting localMatrix translation: (\(localMatrix[3][0]), \(localMatrix[3][1]), \(localMatrix[3][2]))")
+            
+            // Decompose matrix to get T/R/S
+            // This ensures that even if initialized with a matrix, we have valid T/R/S components
+            // for the animation system to work with.
+            let decomp = decomposeMatrix(m)
+            self.translation = decomp.translation
+            self.rotation = decomp.rotation
+            self.scale = decomp.scale
         } else {
             if let t = gltfNode.translation, t.count == 3 {
                 translation = SIMD3<Float>(t[0], t[1], t[2])
@@ -816,11 +826,23 @@ public class VRMNode {
             if let s = gltfNode.scale, s.count == 3 {
                 scale = SIMD3<Float>(s[0], s[1], s[2])
             }
-            // if hadTransform {
-            //     vrmLog("[NODE INIT] Node '\(name ?? "unnamed")' T:\(translation), R:\(rotation), S:\(scale)")
-            // }
-            updateLocalMatrix()
         }
+        
+        // Store initial values as bind pose
+        self.initialTranslation = translation
+        self.initialRotation = rotation
+        self.initialScale = scale
+        
+        // Update local matrix from T/R/S
+        updateLocalMatrix()
+    }
+    
+    /// Reset node transform to its initial bind pose (as defined in the file)
+    public func resetToBindPose() {
+        translation = initialTranslation
+        rotation = initialRotation
+        scale = initialScale
+        updateLocalMatrix()
     }
 
     public func updateLocalMatrix() {
@@ -1119,4 +1141,35 @@ extension float4x4 {
         columns.1.y = s.y
         columns.2.z = s.z
     }
+}
+
+// MARK: - Matrix Decomposition
+
+private func decomposeMatrix(_ matrix: float4x4) -> (translation: SIMD3<Float>, rotation: simd_quatf, scale: SIMD3<Float>) {
+    let translation = SIMD3<Float>(matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z)
+
+    var column0 = SIMD3<Float>(matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z)
+    var column1 = SIMD3<Float>(matrix.columns.1.x, matrix.columns.1.y, matrix.columns.1.z)
+    var column2 = SIMD3<Float>(matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z)
+
+    var scaleX = length(column0)
+    var scaleY = length(column1)
+    var scaleZ = length(column2)
+
+    if scaleX > 1e-6 { column0 /= scaleX } else { scaleX = 1 }
+    if scaleY > 1e-6 { column1 /= scaleY } else { scaleY = 1 }
+    if scaleZ > 1e-6 { column2 /= scaleZ } else { scaleZ = 1 }
+
+    var rotationMatrix = float3x3(columns: (column0, column1, column2))
+
+    // Correct for negative scale
+    if simd_determinant(rotationMatrix) < 0 {
+        scaleX = -scaleX
+        rotationMatrix.columns.0 = -rotationMatrix.columns.0
+    }
+
+    let rotation = simd_quatf(rotationMatrix)
+    let scale = SIMD3<Float>(scaleX, scaleY, scaleZ)
+
+    return (translation, rotation, scale)
 }
