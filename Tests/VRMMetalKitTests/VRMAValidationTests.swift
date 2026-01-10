@@ -164,13 +164,14 @@ final class VRMAValidationTests: XCTestCase {
             print("Frame \(frameInfo.index): t=\(String(format: "%.3f", frameInfo.time))s")
             print(String(repeating: "-", count: 80))
 
-            // Apply animation at this specific time by using delta from start
+            // Apply animation at this specific time
             let player = AnimationPlayer()
             player.load(clip)
             player.isLooping = false
 
-            // Advance to target time
-            player.update(deltaTime: frameInfo.time, model: model)
+            // Use same pattern as VRMAValidator: seek to target time, then update with deltaTime=0
+            player.seek(to: frameInfo.time)
+            player.update(deltaTime: 0, model: model)
 
             // Update world transforms
             for node in model.nodes where node.parent == nil {

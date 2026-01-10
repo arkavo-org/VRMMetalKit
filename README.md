@@ -8,7 +8,7 @@ A high-performance Swift Package for loading and rendering VRM 1.0 avatars using
 [![Models License](https://img.shields.io/badge/Models-VPL%201.0-green.svg)](LICENSE-MODELS.md)
 
 ## Features
-
+check
 ✨ **VRM 1.0 Specification Support**
 - Full VRM 1.0 (VRMC_vrm) and VRM 0.0 fallback support
 - MToon shader implementation with all features

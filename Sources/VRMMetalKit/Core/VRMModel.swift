@@ -351,13 +351,27 @@ public class VRMModel {
             nodes.append(node)
         }
 
-        // Build parent-child relationships
+        // Build parent-child relationships with validation
         for (index, gltfNode) in gltfNodes.enumerated() {
             if let childIndices = gltfNode.children {
                 for childIndex in childIndices {
                     if childIndex < nodes.count {
-                        nodes[childIndex].parent = nodes[index]
-                        nodes[index].children.append(nodes[childIndex])
+                        let childNode = nodes[childIndex]
+                        
+                        // Validation: Prevent multiple parents (graph cycles/dag)
+                        if let existingParent = childNode.parent {
+                            vrmLog("⚠️ [HIERARCHY] Node \(childIndex) ('\(childNode.name ?? "unnamed")') already has parent '\(existingParent.name ?? "unnamed")'. Skipping re-parenting to '\(nodes[index].name ?? "unnamed")'.")
+                            continue
+                        }
+                        
+                        // Validation: Prevent duplicate children
+                        if nodes[index].children.contains(where: { $0 === childNode }) {
+                            vrmLog("⚠️ [HIERARCHY] Node \(childIndex) is already a child of '\(nodes[index].name ?? "unnamed")'. Skipping duplicate add.")
+                            continue
+                        }
+
+                        childNode.parent = nodes[index]
+                        nodes[index].children.append(childNode)
                     }
                 }
             }
