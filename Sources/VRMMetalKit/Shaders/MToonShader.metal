@@ -24,15 +24,15 @@ struct Uniforms {
  float4x4 projectionMatrix;
  float4x4 normalMatrix;
  // Light 0 (key light) - using float4 for Swift SIMD4 alignment
- float4 lightDirection;        // xyz = direction, w = padding
- float4 lightColor;            // xyz = color, w = padding
- float4 ambientColor;          // xyz = color, w = padding
+ float4 lightDirection;        // xyz = direction, w = unused
+ float4 lightColor;            // xyz = color, w = pre-calculated intensity
+ float4 ambientColor;          // xyz = color, w = unused
  // Light 1 (fill light)
- float4 light1Direction;       // xyz = direction, w = padding
- float4 light1Color;           // xyz = color, w = padding
+ float4 light1Direction;       // xyz = direction, w = unused
+ float4 light1Color;           // xyz = color, w = pre-calculated intensity
  // Light 2 (rim/back light)
- float4 light2Direction;       // xyz = direction, w = padding
- float4 light2Color;           // xyz = color, w = padding
+ float4 light2Direction;       // xyz = direction, w = unused
+ float4 light2Color;           // xyz = color, w = pre-calculated intensity
  // Other fields - packed into float4 for alignment
  float4 viewportSize;          // xy = size, zw = padding
  float4 nearFarPlane;          // x = near, y = far, zw = padding
@@ -326,11 +326,12 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // MToon toon shading with energy-conserving 3-point lighting
  float toony = material.shadingToonyFactor;
 
- // Calculate total light intensity for proper weighting
- float intensity0 = length(uniforms.lightColor.xyz);
- float intensity1 = length(uniforms.light1Color.xyz);
- float intensity2 = length(uniforms.light2Color.xyz);
- float totalIntensity = max(intensity0 + intensity1 + intensity2, 0.001);
+ // Use pre-calculated intensities from CPU (stored in lightColor.w)
+ constexpr float MIN_TOTAL_INTENSITY = 0.001;
+ float intensity0 = uniforms.lightColor.w;
+ float intensity1 = uniforms.light1Color.w;
+ float intensity2 = uniforms.light2Color.w;
+ float totalIntensity = max(intensity0 + intensity1 + intensity2, MIN_TOTAL_INTENSITY);
 
  // Calculate weighted light contributions
  float3 lit0 = float3(0.0);
@@ -363,7 +364,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
  }
 
- // Accumulate (already energy-conserving, normalization factor for artistic control)
+ // Accumulate weighted contributions (manual normalization factor allows artistic control)
  float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
  // Global illumination equalization - mix toward balanced lighting
