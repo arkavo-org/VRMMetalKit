@@ -40,12 +40,13 @@ struct BoneParams {
 };
 
 // Updates root bone positions from animated transforms
+// Buffer indices 8-10 are dedicated to kinematic kernel to avoid conflicts with colliders (5-7)
 kernel void springBoneKinematic(
     device float3* bonePosCurr [[buffer(1)]],
     device float3* bonePosPrev [[buffer(0)]],
-    constant float3* animatedRootPositions [[buffer(5)]], // New buffer for animated positions
-    constant uint* rootBoneIndices [[buffer(6)]], // Indices of root bones
-    constant uint& numRootBones [[buffer(7)]],
+    constant float3* animatedRootPositions [[buffer(8)]], // Animated root positions
+    constant uint* rootBoneIndices [[buffer(9)]],         // Indices of root bones
+    constant uint& numRootBones [[buffer(10)]],           // Number of root bones
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= numRootBones) return;

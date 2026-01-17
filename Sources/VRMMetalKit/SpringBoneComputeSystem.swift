@@ -70,6 +70,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // Store bind-pose direction for each bone (in parent's local space)
     private var boneBindDirections: [SIMD3<Float>] = []
 
+    // Teleportation detection
+    private var lastRootPositions: [SIMD3<Float>] = []
+    private let teleportationThreshold: Float = 1.0  // 1 meter threshold
+
     // Readback + synchronization (protected by snapshotLock)
     private let snapshotLock = NSLock()
     private var latestPositionsSnapshot: [SIMD3<Float>] = []
@@ -234,14 +238,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         // First update kinematic root bones with animated positions
+        // Note: Kinematic kernel uses buffer indices 8-10 to avoid conflicts with colliders (5-7)
         if !rootBoneIndices.isEmpty,
            let animatedRootPositionsBuffer = animatedRootPositionsBuffer,
            let rootBoneIndicesBuffer = rootBoneIndicesBuffer,
            let numRootBonesBuffer = numRootBonesBuffer {
             computeEncoder.setComputePipelineState(kinematicPipeline)
-            computeEncoder.setBuffer(animatedRootPositionsBuffer, offset: 0, index: 5)
-            computeEncoder.setBuffer(rootBoneIndicesBuffer, offset: 0, index: 6)
-            computeEncoder.setBuffer(numRootBonesBuffer, offset: 0, index: 7)
+            computeEncoder.setBuffer(animatedRootPositionsBuffer, offset: 0, index: 8)
+            computeEncoder.setBuffer(rootBoneIndicesBuffer, offset: 0, index: 9)
+            computeEncoder.setBuffer(numRootBonesBuffer, offset: 0, index: 10)
             let rootGridSize = MTLSize(width: rootBoneIndices.count, height: 1, depth: 1)
             computeEncoder.dispatchThreads(rootGridSize, threadsPerThreadgroup: threadgroupSize)
         }
@@ -270,10 +275,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
 
             if globalParams.numPlanes > 0 {
-                // Re-set plane colliders buffer - it was overwritten by kinematic kernel at index 7
-                if let planeColliders = buffers.planeColliders {
-                    computeEncoder.setBuffer(planeColliders, offset: 0, index: 7)
-                }
+                // Plane colliders use dedicated buffer index 7 (no longer conflicts with kinematic kernel)
                 computeEncoder.setComputePipelineState(collidePlanesPipeline)
                 computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             }
@@ -423,8 +425,20 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                         vrmLog("[SpringBone] Bone \(boneIndex): bindDirWorld=\(bindDirWorld), bindDirLocal (bone space)=\(bindDirLocal)")
                     }
                 } else {
-                    // Last bone in chain has no child - use default
-                    boneBindDirections.append(SIMD3<Float>(0, 1, 0))
+                    // Last bone in chain has no child - use direction from parent to this bone
+                    // This provides a more accurate bind direction than a fixed default
+                    if jointIndexInChain > 0,
+                       let prevJoint = spring.joints[safe: jointIndexInChain - 1],
+                       let prevNode = model.nodes[safe: prevJoint.node] {
+                        // Use parent-to-current direction
+                        let bindDirWorld = simd_normalize(currentNode.worldPosition - prevNode.worldPosition)
+                        let currentRotInv = simd_conjugate(extractRotation(from: currentNode.worldMatrix))
+                        let bindDirLocal = simd_act(currentRotInv, bindDirWorld)
+                        boneBindDirections.append(bindDirLocal)
+                    } else {
+                        // Ultimate fallback for single-bone chains
+                        boneBindDirections.append(SIMD3<Float>(0, 1, 0))
+                    }
                 }
 
                 boneIndex += 1
@@ -560,6 +574,16 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 rootIndex += 1
             }
         }
+
+        // Teleportation detection: check if any root bone moved more than threshold
+        let shouldResetPhysics = detectTeleportation(currentPositions: animatedPositions, buffers: buffers)
+        if shouldResetPhysics {
+            resetPhysicsState(model: model, buffers: buffers, animatedPositions: animatedPositions)
+            vrmLog("⚠️ [SpringBone] Teleportation detected - physics state reset")
+        }
+
+        // Update last root positions for next frame's teleportation check
+        lastRootPositions = animatedPositions
 
         // Copy to GPU buffer
         if animatedPositions.count > 0 {
@@ -771,6 +795,70 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     private func clamp(_ value: Float, _ min: Float, _ max: Float) -> Float {
         return Swift.max(min, Swift.min(max, value))
+    }
+
+    // MARK: - Teleportation Detection
+
+    /// Detects if the model has teleported (moved more than threshold distance)
+    /// This prevents physics explosion when character is repositioned instantly
+    private func detectTeleportation(currentPositions: [SIMD3<Float>], buffers: SpringBoneBuffers) -> Bool {
+        // Skip detection on first frame or if no previous positions
+        guard !lastRootPositions.isEmpty,
+              lastRootPositions.count == currentPositions.count else {
+            return false
+        }
+
+        // Check if any root bone moved more than the threshold
+        for i in 0..<currentPositions.count {
+            let distance = simd_distance(currentPositions[i], lastRootPositions[i])
+            if distance > teleportationThreshold {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Resets physics state after teleportation to prevent spring explosion
+    /// Sets all bone positions to their animated/rest positions
+    private func resetPhysicsState(model: VRMModel, buffers: SpringBoneBuffers, animatedPositions: [SIMD3<Float>]) {
+        guard let springBone = model.springBone,
+              let bonePosPrev = buffers.bonePosPrev,
+              let bonePosCurr = buffers.bonePosCurr else {
+            return
+        }
+
+        // Collect all bone positions from current node transforms
+        var allBonePositions: [SIMD3<Float>] = []
+        for spring in springBone.springs {
+            for joint in spring.joints {
+                if let node = model.nodes[safe: joint.node] {
+                    allBonePositions.append(node.worldPosition)
+                } else {
+                    allBonePositions.append(SIMD3<Float>(0, 0, 0))
+                }
+            }
+        }
+
+        // Reset both previous and current positions to eliminate velocity
+        if !allBonePositions.isEmpty && allBonePositions.count == buffers.numBones {
+            let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+            let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+            for i in 0..<buffers.numBones {
+                prevPtr[i] = allBonePositions[i]
+                currPtr[i] = allBonePositions[i]
+            }
+        }
+
+        // Reset time accumulator to prevent multiple substeps after teleport
+        timeAccumulator = 0
+
+        // Reset readback state
+        snapshotLock.lock()
+        latestPositionsSnapshot.removeAll(keepingCapacity: true)
+        latestCompletedFrame = 0
+        lastAppliedFrame = 0
+        snapshotLock.unlock()
     }
 }
 
