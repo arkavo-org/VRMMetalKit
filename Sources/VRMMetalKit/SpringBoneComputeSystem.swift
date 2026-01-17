@@ -57,6 +57,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var distancePipeline: MTLComputePipelineState?
     private var collideSpheresPipeline: MTLComputePipelineState?
     private var collideCapsulesPipeline: MTLComputePipelineState?
+    private var collidePlanesPipeline: MTLComputePipelineState?
 
     private var globalParamsBuffer: MTLBuffer?
     private var animatedRootPositionsBuffer: MTLBuffer?
@@ -124,7 +125,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               let predictFunction = library.makeFunction(name: "springBonePredict"),
               let distanceFunction = library.makeFunction(name: "springBoneDistance"),
               let collideSpheresFunction = library.makeFunction(name: "springBoneCollideSpheres"),
-              let collideCapsulesFunction = library.makeFunction(name: "springBoneCollideCapsules") else {
+              let collideCapsulesFunction = library.makeFunction(name: "springBoneCollideCapsules"),
+              let collidePlanesFunction = library.makeFunction(name: "springBoneCollidePlanes") else {
             vrmLog("[SpringBone] ❌ Failed to find shader functions in library")
             throw SpringBoneError.failedToLoadShaders
         }
@@ -134,6 +136,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         distancePipeline = try device.makeComputePipelineState(function: distanceFunction)
         collideSpheresPipeline = try device.makeComputePipelineState(function: collideSpheresFunction)
         collideCapsulesPipeline = try device.makeComputePipelineState(function: collideCapsulesFunction)
+        collidePlanesPipeline = try device.makeComputePipelineState(function: collidePlanesFunction)
 
         // Create global params buffer
         globalParamsBuffer = device.makeBuffer(length: MemoryLayout<SpringBoneGlobalParams>.stride, options: [.storageModeShared])
@@ -197,7 +200,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               let predictPipeline = predictPipeline,
               let distancePipeline = distancePipeline,
               let collideSpheresPipeline = collideSpheresPipeline,
-              let collideCapsulesPipeline = collideCapsulesPipeline else {
+              let collideCapsulesPipeline = collideCapsulesPipeline,
+              let collidePlanesPipeline = collidePlanesPipeline else {
             return
         }
 
@@ -225,6 +229,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.setBuffer(capsuleColliders, offset: 0, index: 6)
         }
 
+        if let planeColliders = buffers.planeColliders, globalParams.numPlanes > 0 {
+            computeEncoder.setBuffer(planeColliders, offset: 0, index: 7)
+        }
+
         // First update kinematic root bones with animated positions
         if !rootBoneIndices.isEmpty,
            let animatedRootPositionsBuffer = animatedRootPositionsBuffer,
@@ -242,19 +250,29 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         computeEncoder.setComputePipelineState(predictPipeline)
         computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
 
-        // Execute distance constraint kernel
-        computeEncoder.setComputePipelineState(distancePipeline)
-        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-
-        // Execute collision kernels only if colliders exist
-        if globalParams.numSpheres > 0 {
-            computeEncoder.setComputePipelineState(collideSpheresPipeline)
+        // XPBD constraint solving with configurable iterations
+        // More iterations = better constraint enforcement at cost of GPU time
+        let iterations = VRMConstants.Physics.constraintIterations
+        for _ in 0..<iterations {
+            // Execute distance constraint kernel
+            computeEncoder.setComputePipelineState(distancePipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-        }
 
-        if globalParams.numCapsules > 0 {
-            computeEncoder.setComputePipelineState(collideCapsulesPipeline)
-            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            // Execute collision kernels only if colliders exist
+            if globalParams.numSpheres > 0 {
+                computeEncoder.setComputePipelineState(collideSpheresPipeline)
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            }
+
+            if globalParams.numCapsules > 0 {
+                computeEncoder.setComputePipelineState(collideCapsulesPipeline)
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            }
+
+            if globalParams.numPlanes > 0 {
+                computeEncoder.setComputePipelineState(collidePlanesPipeline)
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            }
         }
 
         computeEncoder.endEncoding()
@@ -290,7 +308,20 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var restLengths: [Float] = []
         var sphereColliders: [SphereCollider] = []
         var capsuleColliders: [CapsuleCollider] = []
+        var planeColliders: [PlaneCollider] = []
         boneBindDirections = [] // Reset bind directions
+
+        // Build collider-to-group index mapping
+        // Each collider can belong to multiple groups, but we assign the first group index for GPU filtering
+        var colliderToGroupIndex: [Int: UInt32] = [:]
+        for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+            for colliderIndex in group.colliders {
+                // Use first group if collider belongs to multiple groups
+                if colliderToGroupIndex[colliderIndex] == nil {
+                    colliderToGroupIndex[colliderIndex] = UInt32(groupIndex)
+                }
+            }
+        }
 
         // Process spring chains to extract bone parameters
         var boneIndex = 0
@@ -302,6 +333,20 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         for spring in springBone.springs {
             var jointIndexInChain = 0
             var chainGravityPower: [Float] = []
+
+            // Build collision group mask for this spring chain
+            // Each bit represents a collision group that this spring interacts with
+            var colliderGroupMask: UInt32 = 0
+            if spring.colliderGroups.isEmpty {
+                // No groups specified - collide with all groups (backward compatible default)
+                colliderGroupMask = 0xFFFFFFFF
+            } else {
+                for groupIndex in spring.colliderGroups {
+                    if groupIndex < 32 {
+                        colliderGroupMask |= (1 << groupIndex)
+                    }
+                }
+            }
 
             for joint in spring.joints {
                 chainGravityPower.append(joint.gravityPower)
@@ -325,6 +370,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     // Only set parent for non-root bones within the same chain
                     parentIndex: (isRootBone || jointIndexInChain == 0) ? 0xFFFFFFFF : UInt32(boneIndex - 1),
                     gravityPower: joint.gravityPower,
+                    colliderGroupMask: colliderGroupMask,
                     gravityDir: normalizedGravityDir
                 )
                 boneParams.append(params)
@@ -407,19 +453,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             vrmLog("✅ [SpringBone GPU] Auto-fixed \(fixedChainCount) spring chain(s) with zero gravityPower.")
         }
 
-        // Process colliders
-        for collider in springBone.colliders {
+        // Process colliders with group index assignment
+        for (colliderIndex, collider) in springBone.colliders.enumerated() {
             guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+            let groupIndex = colliderToGroupIndex[colliderIndex] ?? 0
 
             switch collider.shape {
             case .sphere(let offset, let radius):
                 let worldCenter = colliderNode.worldPosition + offset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius))
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
 
             case .capsule(let offset, let radius, let tail):
                 let worldP0 = colliderNode.worldPosition + offset
                 let worldP1 = colliderNode.worldPosition + tail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius))
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+
+            case .plane(let offset, let normal):
+                let worldPoint = colliderNode.worldPosition + offset
+                let normalizedNormal = simd_length(normal) > 0.001 ? simd_normalize(normal) : SIMD3<Float>(0, 1, 0)
+                planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
             }
         }
 
@@ -433,6 +485,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         if !capsuleColliders.isEmpty {
             buffers.updateCapsuleColliders(capsuleColliders)
+        }
+
+        if !planeColliders.isEmpty {
+            buffers.updatePlaneColliders(planeColliders)
         }
 
         // Initialize buffers for root bone kinematic updates
@@ -483,22 +539,39 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             )
         }
 
+        // Build collider-to-group index mapping for animated updates
+        var colliderToGroupIndex: [Int: UInt32] = [:]
+        for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+            for colliderIndex in group.colliders {
+                if colliderToGroupIndex[colliderIndex] == nil {
+                    colliderToGroupIndex[colliderIndex] = UInt32(groupIndex)
+                }
+            }
+        }
+
         // Update collider positions (they can move with animation)
         var sphereColliders: [SphereCollider] = []
         var capsuleColliders: [CapsuleCollider] = []
+        var planeColliders: [PlaneCollider] = []
 
-        for collider in springBone.colliders {
+        for (colliderIndex, collider) in springBone.colliders.enumerated() {
             guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+            let groupIndex = colliderToGroupIndex[colliderIndex] ?? 0
 
             switch collider.shape {
             case .sphere(let offset, let radius):
                 let worldCenter = colliderNode.worldPosition + offset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius))
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
 
             case .capsule(let offset, let radius, let tail):
                 let worldP0 = colliderNode.worldPosition + offset
                 let worldP1 = colliderNode.worldPosition + tail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius))
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+
+            case .plane(let offset, let normal):
+                let worldPoint = colliderNode.worldPosition + offset
+                let normalizedNormal = simd_length(normal) > 0.001 ? simd_normalize(normal) : SIMD3<Float>(0, 1, 0)
+                planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
             }
         }
 
@@ -509,6 +582,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         if !capsuleColliders.isEmpty {
             buffers.updateCapsuleColliders(capsuleColliders)
+        }
+
+        if !planeColliders.isEmpty {
+            buffers.updatePlaneColliders(planeColliders)
         }
     }
 

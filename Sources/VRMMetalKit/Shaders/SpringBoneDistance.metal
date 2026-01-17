@@ -34,8 +34,9 @@ struct BoneParams {
     float drag;
     float radius;
     uint parentIndex;
-    float gravityPower;  // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
-    float3 gravityDir;   // Direction vector (normalized, typically [0, -1, 0])
+    float gravityPower;       // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
+    uint colliderGroupMask;   // Bitmask of collision groups this bone collides with
+    float3 gravityDir;        // Direction vector (normalized, typically [0, -1, 0])
 };
 
 kernel void springBoneDistance(

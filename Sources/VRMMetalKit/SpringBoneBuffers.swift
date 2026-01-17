@@ -50,19 +50,22 @@ public final class SpringBoneBuffers: @unchecked Sendable {
     var restLengths: MTLBuffer?
     var sphereColliders: MTLBuffer?
     var capsuleColliders: MTLBuffer?
+    var planeColliders: MTLBuffer?
 
     var numBones: Int = 0
     var numSpheres: Int = 0
     var numCapsules: Int = 0
+    var numPlanes: Int = 0
 
     init(device: MTLDevice) {
         self.device = device
     }
 
-    func allocateBuffers(numBones: Int, numSpheres: Int, numCapsules: Int) {
+    func allocateBuffers(numBones: Int, numSpheres: Int, numCapsules: Int, numPlanes: Int = 0) {
         self.numBones = numBones
         self.numSpheres = numSpheres
         self.numCapsules = numCapsules
+        self.numPlanes = numPlanes
 
         // Allocate SoA buffers with proper alignment
         let bonePosSize = MemoryLayout<SIMD3<Float>>.stride * numBones
@@ -70,6 +73,7 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         let restLengthSize = MemoryLayout<Float>.stride * numBones
         let sphereColliderSize = MemoryLayout<SphereCollider>.stride * numSpheres
         let capsuleColliderSize = MemoryLayout<CapsuleCollider>.stride * numCapsules
+        let planeColliderSize = MemoryLayout<PlaneCollider>.stride * numPlanes
 
         bonePosPrev = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])
         bonePosCurr = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])
@@ -82,6 +86,10 @@ public final class SpringBoneBuffers: @unchecked Sendable {
 
         if numCapsules > 0 {
             capsuleColliders = device.makeBuffer(length: capsuleColliderSize, options: [.storageModeShared])
+        }
+
+        if numPlanes > 0 {
+            planeColliders = device.makeBuffer(length: planeColliderSize, options: [.storageModeShared])
         }
     }
 
@@ -133,6 +141,18 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         }
     }
 
+    func updatePlaneColliders(_ colliders: [PlaneCollider]) {
+        guard colliders.count == numPlanes else {
+            vrmLogPhysics("⚠️ [SpringBoneBuffers] Plane collider count mismatch: expected \(numPlanes), got \(colliders.count)")
+            return
+        }
+
+        let ptr = planeColliders?.contents().bindMemory(to: PlaneCollider.self, capacity: numPlanes)
+        for i in 0..<numPlanes {
+            ptr?[i] = colliders[i]
+        }
+    }
+
     func getCurrentPositions() -> [SIMD3<Float>] {
         guard let buffer = bonePosCurr, numBones > 0 else {
             return []
@@ -150,15 +170,18 @@ public struct BoneParams {
     public var radius: Float
     public var parentIndex: UInt32
     public var gravityPower: Float      // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
+    public var colliderGroupMask: UInt32 // Bitmask of collision groups this bone collides with (0xFFFFFFFF = all)
     public var gravityDir: SIMD3<Float> // Direction vector (normalized, typically [0, -1, 0])
 
     public init(stiffness: Float, drag: Float, radius: Float, parentIndex: UInt32,
-                gravityPower: Float = 1.0, gravityDir: SIMD3<Float> = SIMD3<Float>(0, -1, 0)) {
+                gravityPower: Float = 1.0, colliderGroupMask: UInt32 = 0xFFFFFFFF,
+                gravityDir: SIMD3<Float> = SIMD3<Float>(0, -1, 0)) {
         self.stiffness = stiffness
         self.drag = drag
         self.radius = radius
         self.parentIndex = parentIndex
         self.gravityPower = gravityPower
+        self.colliderGroupMask = colliderGroupMask
         self.gravityDir = gravityDir
     }
 }
@@ -166,10 +189,12 @@ public struct BoneParams {
 public struct SphereCollider {
     public var center: SIMD3<Float>
     public var radius: Float
+    public var groupIndex: UInt32  // Index of the collision group this collider belongs to
 
-    public init(center: SIMD3<Float>, radius: Float) {
+    public init(center: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
         self.center = center
         self.radius = radius
+        self.groupIndex = groupIndex
     }
 }
 
@@ -177,11 +202,25 @@ public struct CapsuleCollider {
     public var p0: SIMD3<Float>
     public var p1: SIMD3<Float>
     public var radius: Float
+    public var groupIndex: UInt32  // Index of the collision group this collider belongs to
 
-    public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float) {
+    public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
         self.p0 = p0
         self.p1 = p1
         self.radius = radius
+        self.groupIndex = groupIndex
+    }
+}
+
+public struct PlaneCollider {
+    public var point: SIMD3<Float>   // Point on the plane
+    public var normal: SIMD3<Float>  // Plane normal (normalized)
+    public var groupIndex: UInt32    // Index of the collision group this collider belongs to
+
+    public init(point: SIMD3<Float>, normal: SIMD3<Float>, groupIndex: UInt32 = 0) {
+        self.point = point
+        self.normal = normal
+        self.groupIndex = groupIndex
     }
 }
 
@@ -196,10 +235,11 @@ public struct SpringBoneGlobalParams {
     public var numBones: UInt32
     public var numSpheres: UInt32
     public var numCapsules: UInt32
+    public var numPlanes: UInt32
 
     public init(gravity: SIMD3<Float>, dtSub: Float, windAmplitude: Float, windFrequency: Float,
          windPhase: Float, windDirection: SIMD3<Float>, substeps: UInt32,
-         numBones: UInt32, numSpheres: UInt32, numCapsules: UInt32) {
+         numBones: UInt32, numSpheres: UInt32, numCapsules: UInt32, numPlanes: UInt32 = 0) {
         self.gravity = gravity
         self.dtSub = dtSub
         self.windAmplitude = windAmplitude
@@ -210,5 +250,6 @@ public struct SpringBoneGlobalParams {
         self.numBones = numBones
         self.numSpheres = numSpheres
         self.numCapsules = numCapsules
+        self.numPlanes = numPlanes
     }
 }

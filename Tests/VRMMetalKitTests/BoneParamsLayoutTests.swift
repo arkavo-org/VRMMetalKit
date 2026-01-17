@@ -10,9 +10,9 @@ import simd
 final class BoneParamsLayoutTests: XCTestCase {
 
     func testStructSize() {
-        // Metal pads float3 to 16 bytes, so:
-        // 4 floats (16) + uint (4) + float (4) + float3 (12) = 36 bytes
-        // But float3 forces next struct to 16-byte boundary: 48 bytes total
+        // Metal layout with collision group mask:
+        // 4 floats (16) + uint (4) + float (4) + uint (4) + float3 (12) = 40 bytes
+        // But float3 forces 16-byte alignment: padded to 48 bytes total
         let expectedSize = 48
         let actualSize = MemoryLayout<BoneParams>.size
 
@@ -50,6 +50,31 @@ final class BoneParamsLayoutTests: XCTestCase {
                       "Default gravityDir should be [0, -1, 0] (downward)")
     }
 
+    func testDefaultColliderGroupMask() {
+        // Test that default collider group mask allows collision with all groups
+        let params = BoneParams(stiffness: 1.0, drag: 0.4, radius: 0.05, parentIndex: 0)
+
+        XCTAssertEqual(params.colliderGroupMask, 0xFFFFFFFF,
+                      "Default colliderGroupMask should be 0xFFFFFFFF (collide with all groups)")
+    }
+
+    func testCustomColliderGroupMask() {
+        // Test custom collider group mask for selective collision
+        let params = BoneParams(
+            stiffness: 1.0,
+            drag: 0.4,
+            radius: 0.05,
+            parentIndex: 0,
+            gravityPower: 1.0,
+            colliderGroupMask: 0b0011  // Only collide with groups 0 and 1
+        )
+
+        XCTAssertEqual(params.colliderGroupMask, 0b0011)
+        XCTAssertTrue(params.colliderGroupMask & (1 << 0) != 0, "Should collide with group 0")
+        XCTAssertTrue(params.colliderGroupMask & (1 << 1) != 0, "Should collide with group 1")
+        XCTAssertFalse(params.colliderGroupMask & (1 << 2) != 0, "Should NOT collide with group 2")
+    }
+
     func testCustomGravityValues() {
         // Test custom gravity parameters for hair/cloth
         let hairParams = BoneParams(
@@ -77,13 +102,15 @@ final class BoneParamsLayoutTests: XCTestCase {
 
     func testMetalCompatibility() {
         // This test documents the Metal shader struct layout
-        // Metal BoneParams has 6 fields with padding:
-        //   Offset 0:  float stiffness        (4 bytes)
-        //   Offset 4:  float drag             (4 bytes)
-        //   Offset 8:  float radius           (4 bytes)
-        //   Offset 12: uint parentIndex       (4 bytes)
-        //   Offset 16: float gravityPower     (4 bytes)
-        //   Offset 20: float3 gravityDir      (12 bytes, but padded to 16)
+        // Metal BoneParams has 7 fields with padding:
+        //   Offset 0:  float stiffness           (4 bytes)
+        //   Offset 4:  float drag                (4 bytes)
+        //   Offset 8:  float radius              (4 bytes)
+        //   Offset 12: uint parentIndex          (4 bytes)
+        //   Offset 16: float gravityPower        (4 bytes)
+        //   Offset 20: uint colliderGroupMask    (4 bytes)
+        //   Offset 24: (padding for float3)      (8 bytes)
+        //   Offset 32: float3 gravityDir         (12 bytes, padded to 16)
         //   Total: 48 bytes (16-byte aligned)
 
         let layout = [
@@ -92,7 +119,8 @@ final class BoneParamsLayoutTests: XCTestCase {
             (offset: 8, field: "radius", bytes: 4),
             (offset: 12, field: "parentIndex", bytes: 4),
             (offset: 16, field: "gravityPower", bytes: 4),
-            (offset: 20, field: "gravityDir", bytes: 12),  // padded to 16
+            (offset: 20, field: "colliderGroupMask", bytes: 4),
+            (offset: 32, field: "gravityDir", bytes: 12),  // padded to 16
         ]
 
         print("\nMetal Shader Layout:")
@@ -134,5 +162,102 @@ final class BoneParamsLayoutTests: XCTestCase {
 
         XCTAssertEqual(defaultDir, SIMD3<Float>(0, -1, 0),
                       "Zero gravity direction should default to [0, -1, 0]")
+    }
+
+    // MARK: - Collider Struct Layout Tests
+
+    func testSphereColliderLayout() {
+        // SphereCollider: center (float3, 16 bytes with padding) + radius (4) + groupIndex (4) + padding (8)
+        // Total: 32 bytes (16-byte aligned)
+        let expectedStride = 32
+        let actualStride = MemoryLayout<SphereCollider>.stride
+
+        XCTAssertEqual(actualStride, expectedStride,
+                      "SphereCollider stride mismatch! Expected \(expectedStride), got \(actualStride)")
+    }
+
+    func testSphereColliderGroupIndex() {
+        let collider = SphereCollider(center: SIMD3<Float>(0, 1, 0), radius: 0.1, groupIndex: 5)
+        XCTAssertEqual(collider.groupIndex, 5)
+        XCTAssertEqual(collider.center, SIMD3<Float>(0, 1, 0))
+        XCTAssertEqual(collider.radius, 0.1, accuracy: 0.001)
+    }
+
+    func testCapsuleColliderLayout() {
+        // CapsuleCollider: p0 (float3, 16) + p1 (float3, 16) + radius (4) + groupIndex (4) + padding (8)
+        // Total: 48 bytes (16-byte aligned)
+        let expectedStride = 48
+        let actualStride = MemoryLayout<CapsuleCollider>.stride
+
+        XCTAssertEqual(actualStride, expectedStride,
+                      "CapsuleCollider stride mismatch! Expected \(expectedStride), got \(actualStride)")
+    }
+
+    func testCapsuleColliderGroupIndex() {
+        let collider = CapsuleCollider(
+            p0: SIMD3<Float>(0, 0, 0),
+            p1: SIMD3<Float>(0, 1, 0),
+            radius: 0.05,
+            groupIndex: 3
+        )
+        XCTAssertEqual(collider.groupIndex, 3)
+        XCTAssertEqual(collider.p0, SIMD3<Float>(0, 0, 0))
+        XCTAssertEqual(collider.p1, SIMD3<Float>(0, 1, 0))
+    }
+
+    func testPlaneColliderLayout() {
+        // PlaneCollider: point (float3, 16) + normal (float3, 16) + groupIndex (4) + padding (12)
+        // Total: 48 bytes (16-byte aligned)
+        let expectedStride = 48
+        let actualStride = MemoryLayout<PlaneCollider>.stride
+
+        XCTAssertEqual(actualStride, expectedStride,
+                      "PlaneCollider stride mismatch! Expected \(expectedStride), got \(actualStride)")
+    }
+
+    func testPlaneColliderGroupIndex() {
+        let collider = PlaneCollider(
+            point: SIMD3<Float>(0, 0, 0),
+            normal: SIMD3<Float>(0, 1, 0),
+            groupIndex: 2
+        )
+        XCTAssertEqual(collider.groupIndex, 2)
+        XCTAssertEqual(collider.point, SIMD3<Float>(0, 0, 0))
+        XCTAssertEqual(collider.normal, SIMD3<Float>(0, 1, 0))
+    }
+
+    // MARK: - Collision Group Mask Tests
+
+    func testCollisionGroupMaskBitOperations() {
+        // Simulate GPU collision group filtering logic
+        let boneMask: UInt32 = 0b0101  // Groups 0 and 2
+        let colliderGroup0: UInt32 = 0
+        let colliderGroup1: UInt32 = 1
+        let colliderGroup2: UInt32 = 2
+
+        // Test mask check: boneMask & (1 << groupIndex)
+        XCTAssertTrue(boneMask & (1 << colliderGroup0) != 0, "Should collide with group 0")
+        XCTAssertFalse(boneMask & (1 << colliderGroup1) != 0, "Should NOT collide with group 1")
+        XCTAssertTrue(boneMask & (1 << colliderGroup2) != 0, "Should collide with group 2")
+    }
+
+    func testAllGroupsMaskCollision() {
+        // 0xFFFFFFFF should collide with all groups (backward compatibility)
+        let allGroupsMask: UInt32 = 0xFFFFFFFF
+
+        for group in 0..<32 {
+            XCTAssertTrue(allGroupsMask & (1 << UInt32(group)) != 0,
+                         "All groups mask should collide with group \(group)")
+        }
+    }
+
+    func testNoGroupsMaskCollision() {
+        // Empty mask (0) should collide with nothing
+        let noGroupsMask: UInt32 = 0
+
+        for group in 0..<32 {
+            XCTAssertFalse(noGroupsMask & (1 << UInt32(group)) != 0,
+                          "Empty mask should not collide with group \(group)")
+        }
     }
 }
