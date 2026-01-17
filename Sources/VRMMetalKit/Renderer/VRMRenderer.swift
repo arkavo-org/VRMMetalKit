@@ -101,6 +101,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Current light normalization mode
     public var lightNormalizationMode: LightNormalizationMode = .automatic
 
+    /// Stored light directions (view-relative, transformed each frame by camera)
+    private var storedLightDirections: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) = (
+        SIMD3<Float>(0, 1, 0),  // Key light default
+        SIMD3<Float>(0, 1, 0),  // Fill light default
+        SIMD3<Float>(0, 1, 0)   // Rim light default
+    )
+
     /// Orthographic camera height in world units (for toon2D mode)
     public var orthoSize: Float = 1.7 {
         didSet {
@@ -217,15 +224,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         let finalColor = color * intensity
 
+        // Store directions separately - they'll be transformed by camera each frame
+        // Only store colors in uniforms directly
         switch index {
         case 0:
-            uniforms.lightDirection = normalizedDir
+            storedLightDirections.0 = normalizedDir
             uniforms.lightColor = finalColor
         case 1:
-            uniforms.light1Direction = normalizedDir
+            storedLightDirections.1 = normalizedDir
             uniforms.light1Color = finalColor
         case 2:
-            uniforms.light2Direction = normalizedDir
+            storedLightDirections.2 = normalizedDir
             uniforms.light2Color = finalColor
         default:
             vrmLog("[VRMRenderer] Warning: Invalid light index \(index), must be 0-2")
@@ -248,10 +257,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         fillIntensity: Float = 0.5,
         rimIntensity: Float = 0.3
     ) {
-        // Key light: front-right-top (main light)
+        // Key light: front-right-top (main light, warm tone for natural skin)
         setLight(0,
                  direction: SIMD3<Float>(0.4, 0.8, -0.4),
-                 color: SIMD3<Float>(1.0, 1.0, 1.0),
+                 color: SIMD3<Float>(1.0, 0.93, 0.85),
                  intensity: keyIntensity)
 
         // Fill light: front-left at eye level (softer, slightly cool)
@@ -293,6 +302,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var toon2DSkinnedOpaquePipelineState: MTLRenderPipelineState?
     var toon2DSkinnedBlendPipelineState: MTLRenderPipelineState?
     var toon2DSkinnedOutlinePipelineState: MTLRenderPipelineState?
+
+    // Pipeline states for MToon outline rendering (standard mode)
+    var mtoonOutlinePipelineState: MTLRenderPipelineState?
+    var mtoonSkinnedOutlinePipelineState: MTLRenderPipelineState?
 
     // Sprite Cache System for multi-character optimization
     public var spriteCacheSystem: SpriteCacheSystem?
@@ -392,6 +405,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // OPTIMIZATION: Render order for single-array sorting (avoids concatenation)
         var renderOrder: Int  // 0=opaque, 1=faceSkin, 2=faceEyebrow, 3=faceEyeline, 4=mask, 5=faceEye, 6=faceHighlight, 7=blend
+
+        // VRM material renderQueue for secondary sorting (Unity renderQueue values)
+        // Default 2000 (geometry), transparent materials typically 3000+
+        let materialRenderQueue: Int
     }
 
     /// Set the debug phase for systematic testing
@@ -1062,7 +1079,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Update uniforms with camera matrices
         uniforms.viewMatrix = viewMatrix
         uniforms.projectionMatrix = projectionMatrix
-        // Lighting is configured via setup3PointLighting() or setLight() - don't override here
+
+        // Use stored light directions directly (world-space lighting)
+        // Camera-following lights caused washout - reverting to fixed world-space
+        uniforms.lightDirection = storedLightDirections.0
+        uniforms.light1Direction = storedLightDirections.1
+        uniforms.light2Direction = storedLightDirections.2
+
+        // Lighting colors are configured via setup3PointLighting() or setLight()
         // Ambient color default is set in Uniforms struct initialization
         // Get viewport size from view
         let viewportSize: CGSize
@@ -1212,6 +1236,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     idx < model.materials.count ? model.materials[idx].alphaCutoff : 0.5
                 } ?? 0.5
 
+                // Get renderQueue from VRM material (for sorting face/transparent materials)
+                let materialRenderQueue = primitive.materialIndex.flatMap { idx in
+                    idx < model.materials.count ? model.materials[idx].renderQueue : 2000
+                } ?? 2000
+
                 // OPTIMIZATION: Single face/body detection pass (consolidates 3 separate checks)
                 let isFaceMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
                                     nodeNameLower.contains("face") || nodeNameLower.contains("eye")
@@ -1237,7 +1266,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     meshNameLower: meshNameLower,
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
-                    renderOrder: 0  // Will be set based on category
+                    renderOrder: 0,  // Will be set based on category
+                    materialRenderQueue: materialRenderQueue
                 )
 
                 // Enhanced face/body material detection and overrides
@@ -1368,7 +1398,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 return a.renderOrder < b.renderOrder
             }
 
-            // Secondary sort for BLEND items (renderOrder=7): by view-space Z
+            // Secondary sort: by VRM materialRenderQueue (Unity render queue values)
+            // This fixes z-fighting for eyebrows/eyelashes which have higher renderQueue
+            // (e.g., eyebrows at 2100 render after face skin at 2000)
+            if a.materialRenderQueue != b.materialRenderQueue {
+                return a.materialRenderQueue < b.materialRenderQueue
+            }
+
+            // Tertiary sort for BLEND items (renderOrder=7): by view-space Z
             if a.renderOrder == 7 {
                 let aWorldPos = a.node.worldMatrix.columns.3
                 let aViewZ = (viewMatrix * aWorldPos).z
@@ -1377,7 +1414,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 return aViewZ < bViewZ  // Far to near
             }
 
-            // Tertiary sort within opaque face materials: use cached isEyeMaterial
+            // Quaternary sort within opaque face materials: use cached isEyeMaterial
             if a.isFaceMaterial && b.isFaceMaterial {
                 if a.isEyeMaterial != b.isEyeMaterial {
                     return !a.isEyeMaterial  // Eyes render last
@@ -2042,6 +2079,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     mtoonUniforms.roughnessFactor = material.roughnessFactor
                     mtoonUniforms.emissiveFactor = material.emissiveFactor
 
+                    // LIGHTING FIX: Zero out emissive to prevent washout
+                    mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
+
                     // DEBUG: Log original baseColorFactor for all materials
                     #if DEBUG
                     if frameCounter <= 2 {
@@ -2063,8 +2103,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
                         mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)
 
-                        // Boost emissive to ensure visibility even in dark lighting
-                        mtoonUniforms.emissiveFactor = SIMD3<Float>(0.3, 0.3, 0.3)
+                        // LIGHTING FIX: Improve face shading for contours (skin only, not eyes)
+                        if item.faceCategory != "eye" {
+                            mtoonUniforms.shadeColorFactor = SIMD3<Float>(0.78, 0.65, 0.60)  // Stronger warm shadow
+                            mtoonUniforms.shadingToonyFactor = 0.3  // Even softer transition
+                            mtoonUniforms.shadingShiftFactor = -0.2  // More shadow for contours
+                        }
 
                         // Ensure texture flag is set
                         if material.baseColorTexture != nil {
@@ -2104,6 +2148,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         mtoonUniforms = MToonMaterialUniforms(from: mtoon)
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
 
+                        // LIGHTING FIX: Zero emissive AFTER MToon init to prevent washout
+                        mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
+
+                    } else {
+                        // NO MToon extension - use default PBR values
                         // Apply SELECTIVE alpha mode override for face/body materials AFTER MToon init
                         if isFaceOrBodyMaterial && materialAlphaMode == "mask" {
                             // Only override MASK mode to prevent incorrect discard
@@ -2131,10 +2180,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         mtoonUniforms.rimLightingMixFactor = 0.0
                         mtoonUniforms.parametricRimColorFactor = SIMD3<Float>(repeating: 0.0)
                         mtoonUniforms.hasMatcapTexture = 0
-                        // Slight emissive boost so iris/sclera read clearly under flat light
-                        if all(mtoonUniforms.emissiveFactor .< SIMD3<Float>(repeating: 0.2)) {
-                            mtoonUniforms.emissiveFactor = SIMD3<Float>(repeating: 0.2)
-                        }
+                        // LIGHTING FIX: Don't boost emissive - let lighting handle visibility
+                        // if all(mtoonUniforms.emissiveFactor .< SIMD3<Float>(repeating: 0.2)) {
+                        //     mtoonUniforms.emissiveFactor = SIMD3<Float>(repeating: 0.2)
+                        // }
                     }
 
                         // Log MToon material properties (commented out to reduce noise)
@@ -2161,20 +2210,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         mtoonUniforms.hasBaseColorTexture = 1
                         textureCount += 1
                         performanceTracker?.recordStateChange(type: .texture)
-
-                        // PHASE 4: Log texture binding for face materials
-                        if isFaceMaterial && frameCounter % 60 == 0 {
-                            vrmLog("  ✅ [FACE TEXTURE] Bound base color texture at index 0 for '\(item.materialName)'")
-                            vrmLog("     - Texture size: \(mtlTexture.width)x\(mtlTexture.height)")
-                            vrmLog("     - Pixel format: \(mtlTexture.pixelFormat.rawValue)")
-                        }
-                    } else if isFaceMaterial && frameCounter % 60 == 0 {
-                        vrmLog("  ❌ [FACE TEXTURE] NO base color texture for '\(item.materialName)'")
-                        if material.baseColorTexture == nil {
-                            vrmLog("     - material.baseColorTexture is nil")
-                        } else if material.baseColorTexture?.mtlTexture == nil {
-                            vrmLog("     - mtlTexture not loaded")
-                        }
                     }
 
                     // Index 1: Shade multiply texture (from MToon)
@@ -2200,9 +2235,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // vrmLog("[VRMRenderer] Bound shading shift texture at index 2")
                     }
 
-                    // Index 3: Normal texture
-                    // Note: Normal texture typically comes from the base material, not MToon
-                    // Could add support for normalTexture if needed
+                    // Index 3: Normal texture (provides surface detail)
+                    if let mtlTexture = material.normalTexture?.mtlTexture {
+                        encoder.setFragmentTexture(mtlTexture, index: 3)
+                        mtoonUniforms.hasNormalTexture = 1
+                        textureCount += 1
+                    }
 
                     // Index 4: Emissive texture
                     // Note: Emissive texture typically comes from the base material, not MToon
@@ -2929,6 +2967,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             )
         }
 
+        // Render outlines for standard MToon mode (inverted hull technique)
+        if renderingMode == .standard {
+            renderMToonOutlines(
+                encoder: encoder,
+                renderItems: allItems,
+                model: model
+            )
+        }
+
         encoder.endEncoding()
 
         // End performance tracking
@@ -3076,6 +3123,105 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if frameCounter % 60 == 0 {
             vrmLog("[OUTLINE] Rendered outlines for \(renderItems.count) items with width \(outlineWidth)")
         }
+    }
+
+    // MARK: - MToon Outline Rendering (Standard Mode)
+
+    private func renderMToonOutlines(
+        encoder: MTLRenderCommandEncoder,
+        renderItems: [RenderItem],
+        model: VRMModel
+    ) {
+        // Only render outlines if we have a pipeline
+        guard mtoonOutlinePipelineState != nil || mtoonSkinnedOutlinePipelineState != nil else {
+            return
+        }
+
+        let hasSkinning = !model.skins.isEmpty
+
+        // Cull front faces for inverted hull technique
+        encoder.setCullMode(.front)
+        encoder.setFrontFacing(.counterClockwise)
+
+        var outlinesRendered = 0
+
+        for item in renderItems {
+            let primitive = item.primitive
+
+            // Check if material has outline enabled
+            guard let materialIndex = primitive.materialIndex,
+                  materialIndex < model.materials.count else {
+                continue
+            }
+
+            let material = model.materials[materialIndex]
+
+            // Skip if no MToon data or outline disabled
+            guard let mtoon = material.mtoon,
+                  mtoon.outlineWidthMode != .none,
+                  mtoon.outlineWidthFactor > 0.0001 else {
+                continue
+            }
+
+            guard let vertexBuffer = primitive.vertexBuffer,
+                  let indexBuffer = primitive.indexBuffer else {
+                continue
+            }
+
+            // Determine if this mesh needs skinning
+            let nodeHasSkin = item.node.skin != nil && hasSkinning
+            let meshUsesSkinning = primitive.hasJoints && primitive.hasWeights
+            let isSkinned = (nodeHasSkin || meshUsesSkinning) && hasSkinning
+
+            // Select appropriate outline pipeline
+            let outlinePipeline: MTLRenderPipelineState?
+            if isSkinned {
+                outlinePipeline = mtoonSkinnedOutlinePipelineState
+            } else {
+                outlinePipeline = mtoonOutlinePipelineState
+            }
+
+            guard let pipeline = outlinePipeline else {
+                continue
+            }
+
+            encoder.setRenderPipelineState(pipeline)
+
+            // Set vertex buffer
+            encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+
+            // Set uniforms
+            encoder.setVertexBuffer(uniformsBuffers[currentUniformBufferIndex], offset: 0, index: 1)
+
+            // Set MToon material uniforms
+            var mtoonUniforms = MToonMaterialUniforms(from: mtoon)
+            mtoonUniforms.baseColorFactor = material.baseColorFactor
+            encoder.setVertexBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 2)
+            encoder.setFragmentBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
+
+            // Set joint matrices for skinned meshes
+            if isSkinned, let skinIndex = item.node.skin, skinIndex < model.skins.count {
+                let skin = model.skins[skinIndex]
+                if let jointBuffer = skinningSystem?.getJointMatricesBuffer() {
+                    let byteOffset = skin.matrixOffset * MemoryLayout<float4x4>.stride
+                    encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: 3)
+                }
+            }
+
+            // Draw the outline
+            encoder.drawIndexedPrimitives(
+                type: primitive.primitiveType,
+                indexCount: primitive.indexCount,
+                indexType: primitive.indexType,
+                indexBuffer: indexBuffer,
+                indexBufferOffset: 0
+            )
+
+            outlinesRendered += 1
+        }
+
+        // Restore default cull mode
+        encoder.setCullMode(.back)
     }
 
     // MARK: - Skinning Input Validation

@@ -36,7 +36,11 @@ public class TextureLoader {
         self.baseURL = baseURL
     }
 
-    public func loadTexture(at index: Int) async throws -> MTLTexture? {
+    /// Load a texture at the given index
+    /// - Parameters:
+    ///   - index: The texture index in the glTF document
+    ///   - sRGB: If true, texture is treated as sRGB color data (default). If false, treated as linear data (normal maps, etc.)
+    public func loadTexture(at index: Int, sRGB: Bool = true) async throws -> MTLTexture? {
         guard let gltfTexture = document.textures?[safe: index] else {
             vrmLog("[TextureLoader] Warning: No texture at index \(index)")
             return nil
@@ -73,7 +77,7 @@ public class TextureLoader {
         }
 
         // Create texture from image data
-        return try await createTexture(from: imageData, mimeType: image.mimeType, textureIndex: index)
+        return try await createTexture(from: imageData, mimeType: image.mimeType, textureIndex: index, sRGB: sRGB)
     }
 
     private func loadImageFromBufferView(_ bufferViewIndex: Int, textureIndex: Int) throws -> Data {
@@ -185,11 +189,11 @@ public class TextureLoader {
         }
     }
 
-    private func createTexture(from imageData: Data, mimeType: String?, textureIndex: Int) async throws -> MTLTexture? {
+    private func createTexture(from imageData: Data, mimeType: String?, textureIndex: Int, sRGB: Bool) async throws -> MTLTexture? {
         // Try using CGImage directly to avoid MTKTextureLoader async crash
         if let cgImage = createCGImage(from: imageData) {
             do {
-                let texture = try createTexture(from: cgImage, textureIndex: textureIndex)
+                let texture = try createTexture(from: cgImage, textureIndex: textureIndex, sRGB: sRGB)
                 return texture
             } catch {
                 vrmLog("[TextureLoader] Failed to create texture from CGImage: \(error)")
@@ -200,7 +204,7 @@ public class TextureLoader {
         let options: [MTKTextureLoader.Option: Any] = [
             .textureUsage: MTLTextureUsage.shaderRead.rawValue,
             .textureStorageMode: MTLStorageMode.private.rawValue,
-            .SRGB: false
+            .SRGB: sRGB
         ]
 
         do {
@@ -224,8 +228,8 @@ public class TextureLoader {
         return cgImage
     }
 
-    private func createTexture(from cgImage: CGImage, textureIndex: Int) throws -> MTLTexture? {
-        vrmLog("[TextureLoader] createTexture(from CGImage) called")
+    private func createTexture(from cgImage: CGImage, textureIndex: Int, sRGB: Bool) throws -> MTLTexture? {
+        vrmLog("[TextureLoader] createTexture(from CGImage) called, sRGB=\(sRGB)")
 
         // MTKTextureLoader seems to crash when called from background async context
         // Let's create the texture manually instead
@@ -236,10 +240,9 @@ public class TextureLoader {
         vrmLog("[TextureLoader] Image size: \(width)x\(height)")
 
         vrmLog("[TextureLoader] Creating texture descriptor...")
-        // Use linear format - CGImage already handles sRGB conversion when reading files
-        // Using .rgba8Unorm_srgb would apply sRGB conversion TWICE, causing over-bright textures
+        let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
         let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba8Unorm,  // Linear format to avoid double sRGB conversion
+            pixelFormat: pixelFormat,
             width: width,
             height: height,
             mipmapped: false
@@ -269,8 +272,8 @@ public class TextureLoader {
         vrmLog("[TextureLoader] Creating CGContext...")
         let colorSpace = CGColorSpaceCreateDeviceRGB()
 
-        // Use straight alpha (not premultiplied) to avoid double-multiplication in shader
-        // The shader will multiply texture * baseColorFactor, so texture should not be premultiplied
+        // Use premultiplied alpha for proper blending
+        // Metal expects premultiplied alpha for correct transparency compositing
         guard let context = CGContext(
             data: bitmapData,
             width: width,
@@ -278,12 +281,12 @@ public class TextureLoader {
             bitsPerComponent: 8,
             bytesPerRow: bytesPerRow,
             space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue  // Straight alpha, not premultiplied
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else {
             vrmLog("[TextureLoader] Failed to create bitmap context")
             return nil
         }
-        vrmLog("[TextureLoader] CGContext created with straight alpha")
+        vrmLog("[TextureLoader] CGContext created with premultiplied alpha")
 
         vrmLog("[TextureLoader] Drawing image to context...")
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))

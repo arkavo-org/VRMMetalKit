@@ -307,13 +307,14 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  shadeColor *= shadeTexColor;
  }
 
- // Normal mapping
+ // Normal mapping - perturb the surface normal for detail like nose contours
  float3 normal = normalize(in.worldNormal);
  if (material.hasNormalTexture > 0) {
  float3 normalMapSample = normalTexture.sample(textureSampler, uv).xyz;
  normalMapSample = normalMapSample * 2.0 - 1.0;
- // TODO: Proper tangent space transformation
- normal = normalize(normal + normalMapSample * 0.3);
+ // Approximate normal perturbation (proper tangent space would be more accurate)
+ // Using higher strength (0.8) for more visible facial contours
+ normal = normalize(normal + normalMapSample * 0.8);
  }
 
  // Shading shift calculation

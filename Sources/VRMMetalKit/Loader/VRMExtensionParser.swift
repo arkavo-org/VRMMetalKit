@@ -105,7 +105,84 @@ public class VRMExtensionParser {
             model.springBone = parseSecondaryAnimation(secondaryAnimation)
         }
 
+        // Parse VRM 0.x materialProperties (MToon data at document level)
+        if let materialProperties = vrmDict["materialProperties"] as? [[String: Any]] {
+            vrmLog("[VRMExtensionParser] Found \(materialProperties.count) VRM 0.x material properties")
+            model.vrm0MaterialProperties = parseMaterialProperties(materialProperties)
+        }
+
         return model
+    }
+
+    // MARK: - VRM 0.x Material Properties Parsing
+
+    private func parseMaterialProperties(_ properties: [[String: Any]]) -> [VRM0MaterialProperty] {
+        var result: [VRM0MaterialProperty] = []
+
+        for (index, propDict) in properties.enumerated() {
+            var prop = VRM0MaterialProperty()
+
+            prop.name = propDict["name"] as? String
+            prop.shader = propDict["shader"] as? String
+            prop.renderQueue = propDict["renderQueue"] as? Int
+
+            // Parse float properties
+            if let floatProps = propDict["floatProperties"] as? [String: Any] {
+                for (key, value) in floatProps {
+                    if let floatValue = value as? Double {
+                        prop.floatProperties[key] = Float(floatValue)
+                    } else if let floatValue = value as? Float {
+                        prop.floatProperties[key] = floatValue
+                    } else if let intValue = value as? Int {
+                        prop.floatProperties[key] = Float(intValue)
+                    }
+                }
+            }
+
+            // Parse vector properties
+            if let vectorProps = propDict["vectorProperties"] as? [String: Any] {
+                for (key, value) in vectorProps {
+                    if let arrayValue = value as? [Double] {
+                        prop.vectorProperties[key] = arrayValue.map { Float($0) }
+                    } else if let arrayValue = value as? [Float] {
+                        prop.vectorProperties[key] = arrayValue
+                    } else if let arrayValue = value as? [Int] {
+                        prop.vectorProperties[key] = arrayValue.map { Float($0) }
+                    }
+                }
+            }
+
+            // Parse texture properties
+            if let textureProps = propDict["textureProperties"] as? [String: Any] {
+                for (key, value) in textureProps {
+                    if let intValue = value as? Int {
+                        prop.textureProperties[key] = intValue
+                    }
+                }
+            }
+
+            // Parse keyword map
+            if let keywordMap = propDict["keywordMap"] as? [String: Bool] {
+                prop.keywordMap = keywordMap
+            }
+
+            // Parse tag map
+            if let tagMap = propDict["tagMap"] as? [String: String] {
+                prop.tagMap = tagMap
+            }
+
+            // Log important values for debugging
+            if let shadeColor = prop.vectorProperties["_ShadeColor"] {
+                vrmLog("[VRMExtensionParser] Material[\(index)] '\(prop.name ?? "unnamed")' shadeColor=\(shadeColor)")
+            }
+            if let shadeToony = prop.floatProperties["_ShadeToony"] {
+                vrmLog("[VRMExtensionParser] Material[\(index)] '\(prop.name ?? "unnamed")' shadeToony=\(shadeToony)")
+            }
+
+            result.append(prop)
+        }
+
+        return result
     }
 
     private func parseMeta(_ dict: [String: Any]) throws -> VRMMeta {
