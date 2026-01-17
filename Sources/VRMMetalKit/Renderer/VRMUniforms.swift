@@ -25,17 +25,17 @@ struct Uniforms {
     var normalMatrix = matrix_identity_float4x4                   // 64 bytes, offset 192
 
     // Light 0 (key light)
-    var lightDirection_packed = SIMD4<Float>(0.5, 1.0, 0.5, 0.0) // 16 bytes, offset 256 (SIMD3 + padding)
-    var lightColor_packed = SIMD4<Float>(1.0, 1.0, 1.0, 0.0)      // 16 bytes, offset 272 (SIMD3 + padding)
+    var lightDirection_packed = SIMD4<Float>(0.5, 1.0, 0.5, 0.0) // 16 bytes, offset 256 (xyz = direction)
+    var lightColor_packed = SIMD4<Float>(1.0, 1.0, 1.0, 1.732)    // 16 bytes, offset 272 (xyz = color, w = intensity)
     var ambientColor_packed = SIMD4<Float>(0.05, 0.05, 0.05, 0.0)   // 16 bytes, offset 288 (SIMD3 + padding)
 
     // Light 1 (fill light)
-    var light1Direction_packed = SIMD4<Float>(0, 0, 0, 0)         // 16 bytes, offset 304 (disabled by default)
-    var light1Color_packed = SIMD4<Float>(0, 0, 0, 0)             // 16 bytes, offset 320 (disabled by default)
+    var light1Direction_packed = SIMD4<Float>(0, 0, 0, 0)         // 16 bytes, offset 304 (xyz = direction)
+    var light1Color_packed = SIMD4<Float>(0, 0, 0, 0)             // 16 bytes, offset 320 (xyz = color, w = intensity)
 
     // Light 2 (rim/back light)
-    var light2Direction_packed = SIMD4<Float>(0, 0, 0, 0)         // 16 bytes, offset 336 (disabled by default)
-    var light2Color_packed = SIMD4<Float>(0, 0, 0, 0)             // 16 bytes, offset 352 (disabled by default)
+    var light2Direction_packed = SIMD4<Float>(0, 0, 0, 0)         // 16 bytes, offset 336 (xyz = direction)
+    var light2Color_packed = SIMD4<Float>(0, 0, 0, 0)             // 16 bytes, offset 352 (xyz = color, w = intensity)
 
     // Other fields
     var viewportSize_packed = SIMD4<Float>(1280, 720, 0.0, 0.0)   // 16 bytes, offset 368 (SIMD2 + padding)
@@ -58,7 +58,7 @@ struct Uniforms {
 
     var lightColor: SIMD3<Float> {
         get { SIMD3<Float>(lightColor_packed.x, lightColor_packed.y, lightColor_packed.z) }
-        set { lightColor_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
+        set { lightColor_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, simd_length(newValue)) }
     }
 
     var ambientColor: SIMD3<Float> {
@@ -73,7 +73,7 @@ struct Uniforms {
 
     var light1Color: SIMD3<Float> {
         get { SIMD3<Float>(light1Color_packed.x, light1Color_packed.y, light1Color_packed.z) }
-        set { light1Color_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
+        set { light1Color_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, simd_length(newValue)) }
     }
 
     var light2Direction: SIMD3<Float> {
@@ -83,7 +83,7 @@ struct Uniforms {
 
     var light2Color: SIMD3<Float> {
         get { SIMD3<Float>(light2Color_packed.x, light2Color_packed.y, light2Color_packed.z) }
-        set { light2Color_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
+        set { light2Color_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, simd_length(newValue)) }
     }
 
     var viewportSize: SIMD2<Float> {
