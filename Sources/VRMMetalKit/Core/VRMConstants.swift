@@ -69,10 +69,11 @@ public enum VRMConstants {
         ///
         /// Higher values improve constraint enforcement (stiffer springs, better collision response)
         /// at the cost of additional GPU dispatches per substep.
-        /// - 1: Fast, suitable for soft/bouncy physics (default for backward compatibility)
-        /// - 2: Balanced, good for hair and light cloth
-        /// - 3-4: Stiff, good for rigid accessories and tight cloth
-        public static let constraintIterations: Int = 2
+        /// For parallel GPU solving, need iterations >= chain length for full propagation.
+        /// - 2: Fast but chains may stretch (only for very short chains)
+        /// - 4-6: Balanced for responsive motion without overshoot
+        /// - 10+: Stiff, for long chains or rigid accessories
+        public static let constraintIterations: Int = 4
 
         /// Default gravity vector in world space (m/s²)
         public static let defaultGravity = SIMD3<Float>(0, -9.8, 0)

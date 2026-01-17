@@ -33,6 +33,8 @@ public enum ARReaction: String, Sendable {
     case wave
     /// Acknowledgment nod
     case nod
+    /// Gleeful jump (showcases physics)
+    case jump
 }
 
 /// AR reaction layer providing automatic proximity-based reactions
@@ -42,7 +44,7 @@ public class ARReactionLayer: AnimationLayer {
     public var isEnabled = true
 
     public var affectedBones: Set<VRMHumanoidBone> {
-        [.head, .neck, .chest, .spine, .leftUpperArm, .rightUpperArm, .rightLowerArm]
+        [.head, .neck, .chest, .spine, .hips, .leftUpperArm, .rightUpperArm, .leftLowerArm, .rightLowerArm]
     }
 
     // MARK: - Proximity Thresholds (meters)
@@ -61,8 +63,11 @@ public class ARReactionLayer: AnimationLayer {
 
     // MARK: - Reaction Parameters
 
-    /// Duration of reaction animation (seconds)
+    /// Default duration of reaction animation (seconds)
     public var reactionDuration: Float = 0.4
+
+    /// Duration for jump reaction (longer to showcase physics)
+    public var jumpDuration: Float = 1.2
 
     /// Enable automatic reaction triggering
     public var autoTriggerEnabled = true
@@ -130,7 +135,9 @@ public class ARReactionLayer: AnimationLayer {
 
         // Progress current reaction
         if currentReaction != .none {
-            reactionProgress += deltaTime / reactionDuration
+            // Use longer duration for jump to showcase physics
+            let duration = currentReaction == .jump ? jumpDuration : reactionDuration
+            reactionProgress += deltaTime / duration
 
             if reactionProgress >= 1.0 {
                 // Reaction complete
@@ -173,6 +180,9 @@ public class ARReactionLayer: AnimationLayer {
 
         case .nod:
             evaluateNod(intensity: intensity, progress: t)
+
+        case .jump:
+            evaluateJump(intensity: intensity, progress: t)
 
         case .none:
             break
@@ -279,6 +289,63 @@ public class ARReactionLayer: AnimationLayer {
 
         // Slight smile during nod
         cachedOutput.morphWeights[VRMExpressionPreset.happy.rawValue] = intensity * 0.3
+    }
+
+    private func evaluateJump(intensity: Float, progress: Float) {
+        // Parabolic jump curve: starts at 0, peaks at 0.5, returns to 0
+        let jumpPhase = sin(progress * .pi)  // 0 -> 1 -> 0
+
+        // Hips translate up for the jump - large value for visible jump
+        let jumpHeight: Float = 0.25 * intensity  // 25cm jump height
+
+        // Debug: Log jump parameters
+        if jumpPhase > 0.1 {
+            print("🦘 Jump: progress=\(progress), intensity=\(intensity), jumpPhase=\(jumpPhase), height=\(jumpHeight * jumpPhase)m")
+        }
+
+        var hipsTransform = ProceduralBoneTransform.identity
+        hipsTransform.translation = SIMD3<Float>(0, jumpHeight * jumpPhase, 0)
+        cachedOutput.bones[.hips] = hipsTransform
+
+        // Spine bends back during jump
+        var spineTransform = ProceduralBoneTransform.identity
+        spineTransform.rotation = simd_quatf(angle: -0.15 * jumpPhase * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.spine] = spineTransform
+
+        // Chest arches back during jump peak
+        var chestTransform = ProceduralBoneTransform.identity
+        chestTransform.rotation = simd_quatf(angle: -0.1 * jumpPhase * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.chest] = chestTransform
+
+        // Head tilts back with joy
+        var headTransform = ProceduralBoneTransform.identity
+        headTransform.rotation = simd_quatf(angle: -0.2 * jumpPhase * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.head] = headTransform
+
+        // Arms raise up and out gleefully (rotate around Z to raise, X to spread)
+        let armRaise = jumpPhase * 1.2 * intensity  // Increased arm raise
+        var leftArmTransform = ProceduralBoneTransform.identity
+        // Rotate around Z (roll) to raise arm up, positive for left arm
+        leftArmTransform.rotation = simd_quatf(angle: armRaise, axis: SIMD3<Float>(0, 0, 1))
+        cachedOutput.bones[.leftUpperArm] = leftArmTransform
+
+        var rightArmTransform = ProceduralBoneTransform.identity
+        // Rotate around Z (roll) to raise arm up, negative for right arm
+        rightArmTransform.rotation = simd_quatf(angle: -armRaise, axis: SIMD3<Float>(0, 0, 1))
+        cachedOutput.bones[.rightUpperArm] = rightArmTransform
+
+        // Forearms bend for excited gesture
+        let forearmBend = jumpPhase * 0.5 * intensity
+        var leftLowerArmTransform = ProceduralBoneTransform.identity
+        leftLowerArmTransform.rotation = simd_quatf(angle: -forearmBend, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.leftLowerArm] = leftLowerArmTransform
+
+        var rightLowerArmTransform = ProceduralBoneTransform.identity
+        rightLowerArmTransform.rotation = simd_quatf(angle: -forearmBend, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.rightLowerArm] = rightLowerArmTransform
+
+        // Big happy expression during jump
+        cachedOutput.morphWeights[VRMExpressionPreset.happy.rawValue] = intensity * 0.95
     }
 
     private func easeInOut(_ t: Float) -> Float {

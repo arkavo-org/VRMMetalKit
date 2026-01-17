@@ -446,24 +446,90 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - SpringBone GPU System
 
+    /// Expand VRM 0.0 spring bone chains by traversing node hierarchy
+    /// In VRM 0.0, the bones array contains ROOT bone indices, and all descendants should become joints
+    /// This mimics three-vrm's root.traverse() behavior
+    /// IMPORTANT: Uses DFS to maintain parent-child ordering within each chain
+    public func expandVRM0SpringBoneChains() {
+        guard var springBone = springBone else { return }
+
+        var expandedSprings: [VRMSpring] = []
+
+        for spring in springBone.springs {
+            // For each root in the spring, create a separate chain with proper ordering
+            for rootJoint in spring.joints {
+                guard rootJoint.node < nodes.count else { continue }
+                let rootNode = nodes[rootJoint.node]
+
+                // DFS traversal to build chain in parent-child order
+                var chainJoints: [VRMSpringJoint] = []
+                traverseChainDFS(node: rootNode, settings: rootJoint, joints: &chainJoints)
+
+                if chainJoints.count >= 2 {
+                    // Create a new spring for this chain
+                    var chainSpring = spring
+                    chainSpring.joints = chainJoints
+                    expandedSprings.append(chainSpring)
+                    vrmLog("[SpringBone] Created chain from root '\(rootNode.name ?? "?")': \(chainJoints.count) joints")
+                }
+            }
+        }
+
+        // Only replace if we expanded
+        if !expandedSprings.isEmpty {
+            let originalCount = springBone.springs.reduce(0) { $0 + $1.joints.count }
+            let expandedCount = expandedSprings.reduce(0) { $0 + $1.joints.count }
+            if expandedCount > originalCount {
+                springBone.springs = expandedSprings
+                self.springBone = springBone
+                vrmLog("[SpringBone] Expanded VRM 0.0: \(originalCount) → \(expandedCount) joints across \(expandedSprings.count) chains")
+            }
+        }
+    }
+
+    /// DFS traversal to build a chain in correct parent-child order
+    private func traverseChainDFS(node: VRMNode, settings: VRMSpringJoint, joints: inout [VRMSpringJoint]) {
+        guard let nodeIndex = nodes.firstIndex(where: { $0 === node }) else { return }
+
+        // Create joint for this node
+        var joint = VRMSpringJoint(node: nodeIndex)
+        joint.stiffness = settings.stiffness
+        joint.gravityPower = settings.gravityPower
+        joint.dragForce = settings.dragForce
+        joint.hitRadius = settings.hitRadius
+        joint.gravityDir = settings.gravityDir
+        joints.append(joint)
+
+        // Recurse to children (DFS maintains order)
+        for child in node.children {
+            traverseChainDFS(node: child, settings: settings, joints: &joints)
+        }
+    }
+
     public func initializeSpringBoneGPUSystem(device: MTLDevice) throws {
         guard let springBone = springBone else {
             return // No SpringBone data in this model
         }
 
+        // Expand VRM 0.0 chains (no-op for VRM 1.0 which already has full joint lists)
+        expandVRM0SpringBoneChains()
+
+        // Re-read after expansion
+        guard let expandedSpringBone = self.springBone else { return }
+
         // Count total bones from all springs
         var totalBones = 0
-        for spring in springBone.springs {
+        for spring in expandedSpringBone.springs {
             totalBones += spring.joints.count
         }
 
         // Count colliders
-        let totalSpheres = springBone.colliders.filter {
+        let totalSpheres = expandedSpringBone.colliders.filter {
             if case .sphere = $0.shape { return true }
             return false
         }.count
 
-        let totalCapsules = springBone.colliders.filter {
+        let totalCapsules = expandedSpringBone.colliders.filter {
             if case .capsule = $0.shape { return true }
             return false
         }.count
@@ -499,11 +565,15 @@ public class VRMModel: @unchecked Sendable {
     /// Set floor plane collider at specified Y position
     /// - Parameter floorY: The Y position of the floor plane in world space
     public func setFloorPlane(at floorY: Float) {
-        let floor = PlaneCollider(
-            point: SIMD3<Float>(0, floorY, 0),
-            normal: SIMD3<Float>(0, 1, 0),
-            groupIndex: 0
-        )
+        let floor = PlaneCollider(floorY: floorY)
+        springBoneBuffers?.setPlaneColliders([floor])
+        springBoneGlobalParams?.numPlanes = 1
+    }
+
+    /// Set floor plane collider from an ARKit plane anchor transform
+    /// - Parameter transform: The ARPlaneAnchor's transform (simd_float4x4)
+    public func setFloorPlane(arkitTransform transform: simd_float4x4) {
+        let floor = PlaneCollider(arkitTransform: transform)
         springBoneBuffers?.setPlaneColliders([floor])
         springBoneGlobalParams?.numPlanes = 1
     }

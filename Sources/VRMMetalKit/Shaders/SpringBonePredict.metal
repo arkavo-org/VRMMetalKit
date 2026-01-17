@@ -56,7 +56,11 @@ kernel void springBonePredict(
         return;
     }
 
-    // Save current position as previous
+    // CRITICAL: Calculate velocity BEFORE saving previous position
+    // This is the core of Verlet integration - velocity is implicit in position difference
+    float3 velocity = bonePosCurr[id] - bonePosPrev[id];
+
+    // Now save current position as previous for next frame
     bonePosPrev[id] = bonePosCurr[id];
 
     // Calculate wind force with time-based oscillation
@@ -66,14 +70,20 @@ kernel void springBonePredict(
                       sin(globalParams.windFrequency * time);
 
     // Verlet integration with drag and external forces
-    float3 velocity = bonePosCurr[id] - bonePosPrev[id];
     float dragFactor = 1.0 - boneParams[id].drag;
 
-    // Apply per-joint gravity: global gravity scaled by gravityPower and rotated by gravityDir
-    // gravityDir is typically [0, -1, 0] but can be customized per bone for artistic control
-    float3 effectiveGravity = globalParams.gravity * boneParams[id].gravityPower * boneParams[id].gravityDir;
+    // Apply per-joint gravity: use gravityDir as direction, gravityPower as magnitude
+    // gravityDir is the direction gravity pulls (typically [0, -1, 0] for downward)
+    // gravityPower scales the effect (0.0 = no gravity, 1.0 = full gravity)
+    float gravityMagnitude = length(globalParams.gravity);  // Usually 9.8
+    float3 effectiveGravity = boneParams[id].gravityDir * gravityMagnitude * boneParams[id].gravityPower;
 
-    float3 newPos = bonePosCurr[id] + velocity * dragFactor +
+    // Apply stiffness damping - higher stiffness reduces velocity more
+    // This helps prevent accumulating drift and keeps bones closer to rest pose
+    // Stiffness typically ranges from 0.0 (no resistance) to 1.0 (high resistance)
+    float stiffnessDamping = 1.0 - boneParams[id].stiffness;
+
+    float3 newPos = bonePosCurr[id] + velocity * dragFactor * stiffnessDamping +
                     (effectiveGravity + windForce) *
                     globalParams.dtSub * globalParams.dtSub;
 

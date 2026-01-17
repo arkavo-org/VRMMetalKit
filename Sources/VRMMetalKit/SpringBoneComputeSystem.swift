@@ -270,6 +270,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
 
             if globalParams.numPlanes > 0 {
+                // Re-set plane colliders buffer - it was overwritten by kinematic kernel at index 7
+                if let planeColliders = buffers.planeColliders {
+                    computeEncoder.setBuffer(planeColliders, offset: 0, index: 7)
+                }
                 computeEncoder.setComputePipelineState(collidePlanesPipeline)
                 computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             }
@@ -489,6 +493,32 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         if !planeColliders.isEmpty {
             buffers.updatePlaneColliders(planeColliders)
+        }
+
+        // CRITICAL: Initialize bone positions from node world positions
+        // Without this, bones start at origin (0,0,0) and collapse
+        var initialPositions: [SIMD3<Float>] = []
+        for spring in springBone.springs {
+            for joint in spring.joints {
+                if let node = model.nodes[safe: joint.node] {
+                    initialPositions.append(node.worldPosition)
+                } else {
+                    initialPositions.append(SIMD3<Float>(0, 0, 0))
+                }
+            }
+        }
+
+        // Copy initial positions to both prev and curr buffers
+        if let bonePosPrev = buffers.bonePosPrev,
+           let bonePosCurr = buffers.bonePosCurr,
+           !initialPositions.isEmpty {
+            let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: initialPositions.count)
+            let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: initialPositions.count)
+            for i in 0..<initialPositions.count {
+                prevPtr[i] = initialPositions[i]
+                currPtr[i] = initialPositions[i]
+            }
+            vrmLog("[SpringBone] Initialized \(initialPositions.count) bone positions from node world transforms")
         }
 
         // Initialize buffers for root bone kinematic updates

@@ -51,30 +51,19 @@ kernel void springBoneDistance(
     uint parentIndex = boneParams[id].parentIndex;
     if (parentIndex == 0xFFFFFFFF) return; // Skip root bones
 
-    // Distance constraint: only prevent over-stretching, allow compression for natural hanging
+    // Distance constraint: ALWAYS enforce rest length to prevent stretching/compression
     float3 delta = bonePosCurr[id] - bonePosCurr[parentIndex];
     float currentLength = length(delta);
     float restLength = restLengths[id];
 
-    // Only apply constraint when stretched beyond rest length
-    // This allows hair/cloth to compress naturally under gravity
     const float epsilon = 1e-6;
-    if (currentLength > restLength && currentLength > epsilon) {
-        // XPBD constraint solving
-        float constraint = currentLength - restLength;
-
-        // Compliance α = 1/(stiffness * dt²)
-        float alpha = 1.0 / (boneParams[id].stiffness * globalParams.dtSub * globalParams.dtSub);
-
-        // For hierarchical chains, parent bones are kinematically driven (infinite mass)
-        // Only move the child bone, not the parent
-        float invMassSum = 1.0; // Only the child moves
-        float lambda = -constraint / (invMassSum + alpha);
-
-        float3 correction = (lambda / currentLength) * delta;
-
-        // Apply correction only to child bone (current bone)
-        // Parent maintains its position (driven by animation or its own parent constraint)
-        bonePosCurr[id] += correction;
+    if (currentLength > epsilon && restLength > epsilon) {
+        // Simple but robust: position bone at exact rest length from parent
+        // This is the standard approach used by three-vrm and other implementations
+        float3 direction = delta / currentLength;
+        bonePosCurr[id] = bonePosCurr[parentIndex] + direction * restLength;
+    } else if (restLength > epsilon) {
+        // If bone collapsed to parent position, push it down by rest length
+        bonePosCurr[id] = bonePosCurr[parentIndex] + float3(0, -restLength, 0);
     }
 }
