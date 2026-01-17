@@ -200,6 +200,81 @@ hitRadius: 0.01-0.03
 
 ---
 
+## ARKit Integration
+
+### Floor Plane from Detected Surfaces
+
+When using VRM avatars in AR, you can create floor plane colliders from ARKit's detected horizontal surfaces to prevent hair and cloth from clipping through the ground.
+
+### Using ARPlaneAnchor Transform
+
+ARKit provides plane anchors with a 4x4 transform matrix. Use the convenience initializer:
+
+```swift
+import ARKit
+
+class ARViewController: UIViewController, ARSessionDelegate {
+    var model: VRMModel?
+
+    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+        for anchor in anchors {
+            guard let planeAnchor = anchor as? ARPlaneAnchor,
+                  planeAnchor.alignment == .horizontal,
+                  planeAnchor.classification == .floor else { continue }
+
+            // Create floor plane from ARKit transform
+            let floorPlane = PlaneCollider(arkitTransform: planeAnchor.transform)
+            model?.springBoneBuffers?.setPlaneColliders([floorPlane])
+        }
+    }
+
+    func session(_ session: ARSession, didUpdate anchors: [ARAnchor]) {
+        // Update floor plane as ARKit refines its estimate
+        for anchor in anchors {
+            guard let planeAnchor = anchor as? ARPlaneAnchor,
+                  planeAnchor.alignment == .horizontal,
+                  planeAnchor.classification == .floor else { continue }
+
+            let floorPlane = PlaneCollider(arkitTransform: planeAnchor.transform)
+            model?.springBoneBuffers?.setPlaneColliders([floorPlane])
+        }
+    }
+}
+```
+
+### Simple Floor at Known Height
+
+If you know the floor Y position (e.g., from placing the avatar at a hit test result):
+
+```swift
+// Avatar placed at a specific world position
+let avatarPosition = hitTestResult.worldTransform.columns.3
+let floorY = avatarPosition.y  // Floor is at avatar's feet
+
+let floorPlane = PlaneCollider(floorY: floorY)
+model.springBoneBuffers?.setPlaneColliders([floorPlane])
+```
+
+### Coordinate System Notes
+
+- **ARKit uses right-handed Y-up**: Positive Y points up, matching VRM's coordinate system
+- **Physics runs in world space**: Plane colliders must be in world coordinates
+- **Normal direction matters**: Floor planes use normal `[0, 1, 0]` (pointing up)
+
+### Performance with ARKit
+
+- Update plane colliders only when ARKit reports anchor updates, not every frame
+- For multiple detected floors, choose the one closest to the avatar
+- Clear plane colliders when tracking is lost:
+
+```swift
+func sessionWasInterrupted(_ session: ARSession) {
+    model?.springBoneBuffers?.setPlaneColliders([])  // Clear floor plane
+}
+```
+
+---
+
 ## Debugging Physics
 
 ### Enable Physics Logging

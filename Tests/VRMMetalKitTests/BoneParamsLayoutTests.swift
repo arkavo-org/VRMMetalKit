@@ -260,4 +260,76 @@ final class BoneParamsLayoutTests: XCTestCase {
                           "Empty mask should not collide with group \(group)")
         }
     }
+
+    // MARK: - ARKit Floor Plane Helper Tests
+
+    func testPlaneColliderFloorYInitializer() {
+        // Test simple floor plane at a given Y height
+        let floor = PlaneCollider(floorY: 0.5)
+
+        XCTAssertEqual(floor.point.y, 0.5, accuracy: 0.001, "Floor Y should be 0.5")
+        XCTAssertEqual(floor.point.x, 0.0, accuracy: 0.001, "Floor X should be 0")
+        XCTAssertEqual(floor.point.z, 0.0, accuracy: 0.001, "Floor Z should be 0")
+        XCTAssertEqual(floor.normal, SIMD3<Float>(0, 1, 0), "Normal should point up")
+        XCTAssertEqual(floor.groupIndex, 0, "Default group should be 0")
+    }
+
+    func testPlaneColliderFloorYWithGroup() {
+        // Test floor plane with custom collision group
+        let floor = PlaneCollider(floorY: -1.0, groupIndex: 5)
+
+        XCTAssertEqual(floor.point.y, -1.0, accuracy: 0.001)
+        XCTAssertEqual(floor.normal, SIMD3<Float>(0, 1, 0))
+        XCTAssertEqual(floor.groupIndex, 5)
+    }
+
+    func testPlaneColliderARKitTransformHorizontal() {
+        // Simulate ARKit horizontal plane transform
+        // ARKit horizontal planes have Y-axis as the normal (pointing up)
+        var transform = simd_float4x4(1)  // Identity
+        transform.columns.3 = SIMD4<Float>(1.0, 0.25, 2.0, 1.0)  // Position at (1, 0.25, 2)
+
+        let floor = PlaneCollider(arkitTransform: transform)
+
+        XCTAssertEqual(floor.point.x, 1.0, accuracy: 0.001, "X position from transform")
+        XCTAssertEqual(floor.point.y, 0.25, accuracy: 0.001, "Y position from transform")
+        XCTAssertEqual(floor.point.z, 2.0, accuracy: 0.001, "Z position from transform")
+
+        // Identity matrix has Y-axis = (0, 1, 0)
+        XCTAssertEqual(floor.normal.x, 0.0, accuracy: 0.001, "Normal X")
+        XCTAssertEqual(floor.normal.y, 1.0, accuracy: 0.001, "Normal Y (up)")
+        XCTAssertEqual(floor.normal.z, 0.0, accuracy: 0.001, "Normal Z")
+    }
+
+    func testPlaneColliderARKitTransformTilted() {
+        // Simulate a slightly tilted plane (rotated 30 degrees around Z)
+        let angle: Float = .pi / 6  // 30 degrees
+        var transform = simd_float4x4(1)
+
+        // Rotate Y-axis (the normal) around Z-axis
+        transform.columns.1 = SIMD4<Float>(-sin(angle), cos(angle), 0, 0)
+        transform.columns.3 = SIMD4<Float>(0, 1.0, 0, 1.0)
+
+        let plane = PlaneCollider(arkitTransform: transform)
+
+        XCTAssertEqual(plane.point.y, 1.0, accuracy: 0.001)
+
+        // Normal should be tilted
+        XCTAssertEqual(plane.normal.x, -0.5, accuracy: 0.01, "Normal X tilted")
+        XCTAssertEqual(plane.normal.y, 0.866, accuracy: 0.01, "Normal Y (cos 30)")
+        XCTAssertEqual(plane.normal.z, 0.0, accuracy: 0.01, "Normal Z")
+
+        // Verify normal is normalized
+        let length = simd_length(plane.normal)
+        XCTAssertEqual(length, 1.0, accuracy: 0.001, "Normal should be normalized")
+    }
+
+    func testPlaneColliderARKitTransformWithGroupIndex() {
+        var transform = simd_float4x4(1)
+        transform.columns.3 = SIMD4<Float>(0, 0.5, 0, 1.0)
+
+        let floor = PlaneCollider(arkitTransform: transform, groupIndex: 3)
+
+        XCTAssertEqual(floor.groupIndex, 3, "Should use provided group index")
+    }
 }

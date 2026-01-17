@@ -494,6 +494,26 @@ public class VRMModel: @unchecked Sendable {
         // This will be implemented in the compute system
     }
 
+    // MARK: - Floor Plane Colliders
+
+    /// Set floor plane collider at specified Y position
+    /// - Parameter floorY: The Y position of the floor plane in world space
+    public func setFloorPlane(at floorY: Float) {
+        let floor = PlaneCollider(
+            point: SIMD3<Float>(0, floorY, 0),
+            normal: SIMD3<Float>(0, 1, 0),
+            groupIndex: 0
+        )
+        springBoneBuffers?.setPlaneColliders([floor])
+        springBoneGlobalParams?.numPlanes = 1
+    }
+
+    /// Remove floor plane collider
+    public func removeFloorPlane() {
+        springBoneBuffers?.setPlaneColliders([])
+        springBoneGlobalParams?.numPlanes = 0
+    }
+
     /// Update all node world transforms based on their local transforms
     public func updateNodeTransforms() {
         // Update root nodes first, then children recursively

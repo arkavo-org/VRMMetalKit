@@ -16,6 +16,7 @@
 
 
 import Metal
+import simd
 
 /// GPU buffer storage for SpringBone physics simulation state
 ///
@@ -153,6 +154,30 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         }
     }
 
+    /// Set plane colliders with dynamic buffer allocation
+    /// - Parameter colliders: Array of plane colliders (empty array to clear)
+    public func setPlaneColliders(_ colliders: [PlaneCollider]) {
+        let newCount = colliders.count
+
+        // Reallocate buffer if count changed
+        if newCount != numPlanes {
+            numPlanes = newCount
+            if newCount > 0 {
+                let size = MemoryLayout<PlaneCollider>.stride * newCount
+                planeColliders = device.makeBuffer(length: size, options: [.storageModeShared])
+            } else {
+                planeColliders = nil
+            }
+        }
+
+        // Copy data to buffer
+        guard newCount > 0, let buffer = planeColliders else { return }
+        let ptr = buffer.contents().bindMemory(to: PlaneCollider.self, capacity: newCount)
+        for i in 0..<newCount {
+            ptr[i] = colliders[i]
+        }
+    }
+
     func getCurrentPositions() -> [SIMD3<Float>] {
         guard let buffer = bonePosCurr, numBones > 0 else {
             return []
@@ -220,6 +245,60 @@ public struct PlaneCollider {
     public init(point: SIMD3<Float>, normal: SIMD3<Float>, groupIndex: UInt32 = 0) {
         self.point = point
         self.normal = normal
+        self.groupIndex = groupIndex
+    }
+
+    /// Create a floor plane collider from an ARKit plane anchor transform
+    ///
+    /// ARKit horizontal planes have their Y-axis pointing up (the plane normal).
+    /// The transform's translation gives the plane's position in world space.
+    ///
+    /// - Parameters:
+    ///   - transform: The ARPlaneAnchor's transform (simd_float4x4)
+    ///   - groupIndex: Collision group for this plane (default 0)
+    /// - Returns: A PlaneCollider configured for the detected floor
+    ///
+    /// ## Usage with ARKit
+    /// ```swift
+    /// func renderer(_ renderer: SCNSceneRenderer, didAdd node: SCNNode, for anchor: ARAnchor) {
+    ///     guard let planeAnchor = anchor as? ARPlaneAnchor,
+    ///           planeAnchor.alignment == .horizontal else { return }
+    ///
+    ///     let floorPlane = PlaneCollider(arkitTransform: planeAnchor.transform)
+    ///     model.springBoneBuffers?.setPlaneColliders([floorPlane])
+    /// }
+    /// ```
+    public init(arkitTransform transform: simd_float4x4, groupIndex: UInt32 = 0) {
+        // Extract position from transform's translation column
+        self.point = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
+
+        // For horizontal planes, the Y-axis (columns[1]) is the normal pointing up
+        let rawNormal = SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
+        self.normal = simd_length(rawNormal) > 0.001 ? simd_normalize(rawNormal) : SIMD3<Float>(0, 1, 0)
+
+        self.groupIndex = groupIndex
+    }
+
+    /// Create a simple floor plane at a specified Y height
+    ///
+    /// Convenience initializer for creating a horizontal floor plane.
+    ///
+    /// - Parameters:
+    ///   - floorY: The Y coordinate of the floor in world space
+    ///   - groupIndex: Collision group for this plane (default 0)
+    ///
+    /// ## Usage
+    /// ```swift
+    /// // Floor at Y = 0 (world origin)
+    /// let floor = PlaneCollider(floorY: 0)
+    ///
+    /// // Floor at ARKit-detected height
+    /// let floor = PlaneCollider(floorY: detectedFloorHeight)
+    /// model.springBoneBuffers?.setPlaneColliders([floor])
+    /// ```
+    public init(floorY: Float, groupIndex: UInt32 = 0) {
+        self.point = SIMD3<Float>(0, floorY, 0)
+        self.normal = SIMD3<Float>(0, 1, 0)
         self.groupIndex = groupIndex
     }
 }
