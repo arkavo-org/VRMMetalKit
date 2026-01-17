@@ -207,12 +207,3 @@ public final class AnimationPlayer: @unchecked Sendable {
         }
     }
 }
-
-// Internal helper extension
-extension NSLock {
-    func withLock<T>(_ body: () throws -> T) rethrows -> T {
-        lock()
-        defer { unlock() }
-        return try body()
-    }
-}

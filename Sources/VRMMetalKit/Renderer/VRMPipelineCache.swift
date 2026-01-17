@@ -176,18 +176,6 @@ public final class VRMPipelineCache: @unchecked Sendable {
     }
 }
 
-// MARK: - NSLock Extension
-
-extension NSLock {
-    /// Execute a closure while holding the lock
-    @discardableResult
-    func withLock<T>(_ body: () throws -> T) rethrows -> T {
-        lock()
-        defer { unlock() }
-        return try body()
-    }
-}
-
 // MARK: - Error Types
 
 public enum PipelineCacheError: Error, LocalizedError {

@@ -884,19 +884,3 @@ public class VRMAnimationPresets {
         }
     }
 }
-
-// MARK: - Quaternion Extensions
-
-extension simd_quatf {
-    init(angle: Float, axis: SIMD3<Float>) {
-        let halfAngle = angle * 0.5
-        let sinHalf = sin(halfAngle)
-        let normalizedAxis = normalize(axis)
-        self.init(
-            ix: normalizedAxis.x * sinHalf,
-            iy: normalizedAxis.y * sinHalf,
-            iz: normalizedAxis.z * sinHalf,
-            r: cos(halfAngle)
-        )
-    }
-}
