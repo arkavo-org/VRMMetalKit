@@ -1085,12 +1085,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Calculate light normalization factor based on mode
         switch lightNormalizationMode {
         case .automatic:
-            // Sum RGB components independently to find maximum channel that would exceed 1.0
-            let totalR = uniforms.lightColor.x + uniforms.light1Color.x + uniforms.light2Color.x
-            let totalG = uniforms.lightColor.y + uniforms.light1Color.y + uniforms.light2Color.y
-            let totalB = uniforms.lightColor.z + uniforms.light1Color.z + uniforms.light2Color.z
-            let maxComponent = max(totalR, max(totalG, totalB))
-            uniforms.lightNormalizationFactor = (maxComponent > 1.0) ? (1.0 / maxComponent) : 1.0
+            // Shader handles energy conservation internally via intensity-weighted lighting
+            uniforms.lightNormalizationFactor = 1.0
         case .disabled:
             uniforms.lightNormalizationFactor = 1.0
         case .manual(let factor):

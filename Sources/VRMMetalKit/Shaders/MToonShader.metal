@@ -326,35 +326,44 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // MToon toon shading with energy-conserving 3-point lighting
  float toony = material.shadingToonyFactor;
 
- // Calculate individual light contributions
+ // Calculate total light intensity for proper weighting
+ float intensity0 = length(uniforms.lightColor.xyz);
+ float intensity1 = length(uniforms.light1Color.xyz);
+ float intensity2 = length(uniforms.light2Color.xyz);
+ float totalIntensity = max(intensity0 + intensity1 + intensity2, 0.001);
+
+ // Calculate weighted light contributions
  float3 lit0 = float3(0.0);
- if (any(uniforms.lightColor.xyz > 0.0)) {
+ if (intensity0 > 0.0) {
  float NdotL = dot(normal, uniforms.lightDirection.xyz);
  float shadowStep = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL);
- lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor.xyz;
+ float weight = intensity0 / totalIntensity;
+ lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor.xyz * weight;
  }
 
  float3 lit1 = float3(0.0);
- if (any(uniforms.light1Color.xyz > 0.0)) {
+ if (intensity1 > 0.0) {
  float NdotL1 = dot(normal, uniforms.light1Direction.xyz);
  float shadowStep1 = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL1);
- lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color.xyz;
+ float weight1 = intensity1 / totalIntensity;
+ lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color.xyz * weight1;
  }
 
  float3 lit2 = float3(0.0);
- if (any(uniforms.light2Color.xyz > 0.0)) {
+ if (intensity2 > 0.0) {
  float NdotL2 = dot(normal, uniforms.light2Direction.xyz);
  float shadowStep2 = smoothstep(shadingShift - toony * 0.5,
                           shadingShift + toony * 0.5,
                           NdotL2);
- lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz;
+ float weight2 = intensity2 / totalIntensity;
+ lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
  }
 
- // Energy-conserving accumulation with normalization
+ // Accumulate (already energy-conserving, normalization factor for artistic control)
  float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
  // Global illumination equalization - mix toward balanced lighting
@@ -412,9 +421,6 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  if (uniforms.debugUVs == 9) {
  return float4(litColor * 0.25, 1.0);  // Scale by 0.25 to see values > 1
  }
-
- // Fix overbright: scale down to compensate for MToon lighting calculation
- litColor *= 0.20;
 
  // Final color output
  litColor = saturate(litColor);
