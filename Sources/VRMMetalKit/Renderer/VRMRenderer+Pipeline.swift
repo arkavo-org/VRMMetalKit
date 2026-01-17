@@ -246,6 +246,33 @@ extension VRMRenderer {
             try strictValidator?.validatePipelineState(wireframeState, name: "mtoon_wireframe_pipeline")
             wireframePipelineState = wireframeState
 
+            // Create MToon OUTLINE pipeline (inverted hull technique)
+            let outlineVertexFunction = library.makeFunction(name: "mtoon_outline_vertex")
+            let outlineFragmentFunction = library.makeFunction(name: "mtoon_outline_fragment")
+            if let outlineVertexFunc = outlineVertexFunction,
+               let outlineFragmentFunc = outlineFragmentFunction {
+                let outlineDescriptor = MTLRenderPipelineDescriptor()
+                outlineDescriptor.label = "mtoon_outline"
+                outlineDescriptor.vertexFunction = outlineVertexFunc
+                outlineDescriptor.fragmentFunction = outlineFragmentFunc
+                outlineDescriptor.vertexDescriptor = vertexDescriptor
+                outlineDescriptor.depthAttachmentPixelFormat = .depth32Float
+
+                let outlineColorAttachment = outlineDescriptor.colorAttachments[0]
+                outlineColorAttachment?.pixelFormat = config.colorPixelFormat
+                outlineColorAttachment?.isBlendingEnabled = false  // Outlines are opaque
+
+                let outlineState = try VRMPipelineCache.shared.getPipelineState(
+                    device: device,
+                    descriptor: outlineDescriptor,
+                    key: "mtoon_outline"
+                )
+                mtoonOutlinePipelineState = outlineState
+                vrmLog("[VRMRenderer] Created MToon outline pipeline successfully")
+            } else {
+                vrmLog("[VRMRenderer] MToon outline shaders not found - outlines will be disabled")
+            }
+
             // Note: Depth stencil states are created in setupCachedStates()
             // Note: Uniforms buffers are created in setupTripleBuffering()
             // Validate uniform size in strict mode
@@ -383,6 +410,33 @@ extension VRMRenderer {
             try strictValidator?.validatePipelineState(skinnedBlendState, name: "skinned_blend_pipeline")
             skinnedBlendPipelineState = skinnedBlendState
             vrmLog("[SKINNED PSO] Created skinned blend pipeline successfully")
+
+            // Create SKINNED MToon OUTLINE pipeline (inverted hull technique)
+            let skinnedOutlineVertexFunction = library.makeFunction(name: "skinned_mtoon_outline_vertex")
+            let skinnedOutlineFragmentFunction = library.makeFunction(name: "mtoon_outline_fragment")
+            if let skinnedOutlineVertexFunc = skinnedOutlineVertexFunction,
+               let skinnedOutlineFragmentFunc = skinnedOutlineFragmentFunction {
+                let skinnedOutlineDescriptor = MTLRenderPipelineDescriptor()
+                skinnedOutlineDescriptor.label = "mtoon_skinned_outline"
+                skinnedOutlineDescriptor.vertexFunction = skinnedOutlineVertexFunc
+                skinnedOutlineDescriptor.fragmentFunction = skinnedOutlineFragmentFunc
+                skinnedOutlineDescriptor.vertexDescriptor = vertexDescriptor
+                skinnedOutlineDescriptor.depthAttachmentPixelFormat = .depth32Float
+
+                let skinnedOutlineColorAttachment = skinnedOutlineDescriptor.colorAttachments[0]
+                skinnedOutlineColorAttachment?.pixelFormat = config.colorPixelFormat
+                skinnedOutlineColorAttachment?.isBlendingEnabled = false
+
+                let skinnedOutlineState = try VRMPipelineCache.shared.getPipelineState(
+                    device: device,
+                    descriptor: skinnedOutlineDescriptor,
+                    key: "mtoon_skinned_outline"
+                )
+                mtoonSkinnedOutlinePipelineState = skinnedOutlineState
+                vrmLog("[SKINNED PSO] Created skinned MToon outline pipeline successfully")
+            } else {
+                vrmLog("[SKINNED PSO] Skinned MToon outline shaders not found - outlines will be disabled for skinned meshes")
+            }
         } catch {
             if config.strict == .fail {
                 vrmLog("❌ [VRMRenderer] Failed to setup skinned pipeline: \(error)")

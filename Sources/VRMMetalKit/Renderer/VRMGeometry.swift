@@ -962,6 +962,7 @@ public class VRMMaterial {
     public let name: String?
     public var baseColorFactor: SIMD4<Float> = [1, 1, 1, 1]
     public var baseColorTexture: VRMTexture?
+    public var normalTexture: VRMTexture?  // Normal map for surface detail
     public var metallicFactor: Float = 0.0
     public var roughnessFactor: Float = 1.0
     public var emissiveFactor: SIMD3<Float> = [0, 0, 0]
@@ -972,7 +973,11 @@ public class VRMMaterial {
     // MToon properties
     public var mtoon: VRMMToonMaterial?
 
-    public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture]) {
+    // Render queue for sorting (VRM 0.x: Unity render queue values, higher = render later)
+    // Default is 2000 (geometry), transparent materials typically 3000+
+    public var renderQueue: Int = 2000
+
+    public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil) {
         self.name = gltfMaterial.name
 
         if let pbr = gltfMaterial.pbrMetallicRoughness {
@@ -1008,6 +1013,12 @@ public class VRMMaterial {
             }
         }
 
+        // Load normal texture (provides surface detail like nose contours)
+        if let normalTextureInfo = gltfMaterial.normalTexture,
+           normalTextureInfo.index < textures.count {
+            normalTexture = textures[normalTextureInfo.index]
+        }
+
         if let emissive = gltfMaterial.emissiveFactor, emissive.count == 3 {
             emissiveFactor = SIMD3<Float>(emissive[0], emissive[1], emissive[2])
         }
@@ -1017,10 +1028,35 @@ public class VRMMaterial {
         alphaCutoff = gltfMaterial.alphaCutoff ?? 0.5
 
         // Parse MToon extension if present
+        // VRM 1.0: per-material VRMC_materials_mtoon extension
         if let extensions = gltfMaterial.extensions,
            let mtoonExt = extensions["VRMC_materials_mtoon"] as? [String: Any] {
             mtoon = parseMToonExtension(mtoonExt, textures: textures)
         }
+        // VRM 0.x: material properties from document-level VRM extension
+        else if let vrm0Prop = vrm0MaterialProperty {
+            mtoon = vrm0Prop.toMToonMaterial()
+
+            // Also get base color from VRM 0.x _Color vector property if present (sRGB to Linear)
+            if let colorVec = vrm0Prop.vectorProperties["_Color"], colorVec.count >= 4 {
+                // Convert RGB from sRGB to linear, alpha stays linear
+                let r = sRGBToLinear(colorVec[0])
+                let g = sRGBToLinear(colorVec[1])
+                let b = sRGBToLinear(colorVec[2])
+                let a = colorVec[3]  // Alpha stays linear
+                baseColorFactor = SIMD4<Float>(r, g, b, a)
+            }
+
+            // Get renderQueue from VRM 0.x material (used for sorting transparent materials)
+            if let queue = vrm0Prop.renderQueue {
+                renderQueue = queue
+            }
+        }
+    }
+
+    /// Helper to convert sRGB color value to linear (gamma decoding)
+    private func sRGBToLinear(_ value: Float) -> Float {
+        return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
     }
 
     private func parseMToonExtension(_ mtoonExt: [String: Any], textures: [VRMTexture]) -> VRMMToonMaterial {

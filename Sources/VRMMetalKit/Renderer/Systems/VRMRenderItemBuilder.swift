@@ -34,6 +34,9 @@ struct RenderItem {
     let isFaceMaterial: Bool
     let isEyeMaterial: Bool
     var renderOrder: Int
+    // VRM material renderQueue for secondary sorting (Unity renderQueue values)
+    // Default 2000 (geometry), transparent materials typically 3000+
+    let materialRenderQueue: Int
 }
 
 final class VRMRenderItemBuilder {
@@ -169,6 +172,11 @@ final class VRMRenderItemBuilder {
                 let isFaceMaterial = faceCategory != nil
                 let isEyeMaterial = faceCategory == "eye" || faceCategory == "highlight"
 
+                // Get renderQueue from VRM material (for sorting face/transparent materials)
+                let materialRenderQueue = primitive.materialIndex.flatMap { idx in
+                    idx < model.materials.count ? model.materials[idx].renderQueue : 2000
+                } ?? 2000
+
                 let item = RenderItem(
                     node: node,
                     mesh: mesh,
@@ -185,14 +193,22 @@ final class VRMRenderItemBuilder {
                     meshNameLower: meshLower,
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
-                    renderOrder: renderOrder
+                    renderOrder: renderOrder,
+                    materialRenderQueue: materialRenderQueue
                 )
 
                 allItems.append(item)
             }
         }
 
-        allItems.sort { $0.renderOrder < $1.renderOrder }
+        // Sort by renderOrder first, then by materialRenderQueue for items with the same renderOrder
+        allItems.sort { a, b in
+            if a.renderOrder != b.renderOrder {
+                return a.renderOrder < b.renderOrder
+            }
+            // Secondary sort by VRM materialRenderQueue (fixes z-fighting for eyebrows/eyelashes)
+            return a.materialRenderQueue < b.materialRenderQueue
+        }
 
         if frameCounter % 60 == 0 {
             vrmLog("[RenderItemBuilder] Sorted render items: opaque=\(opaqueCount) mask=\(maskCount) blend=\(blendCount) faceSkin=\(faceSkinCount)")

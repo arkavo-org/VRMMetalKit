@@ -47,7 +47,7 @@ let package = Package(
                 "Shaders/SpriteShader.metal"
             ],
             resources: [
-                .copy("Resources")
+                .copy("Resources/VRMMetalKitShaders.metallib")
             ],
             swiftSettings: [
                 .define("VRM_METALKIT_ENABLE_DEBUG_ANIMATION"),

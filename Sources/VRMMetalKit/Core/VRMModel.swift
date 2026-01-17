@@ -70,6 +70,9 @@ public class VRMModel: @unchecked Sendable {
     public var expressions: VRMExpressions?
     public var springBone: VRMSpringBone?
 
+    // VRM 0.x material properties (MToon data stored at document level)
+    public var vrm0MaterialProperties: [VRM0MaterialProperty] = []
+
     // glTF Data
     public var gltf: GLTFDocument
     public var meshes: [VRMMesh] = []
@@ -297,20 +300,42 @@ public class VRMModel: @unchecked Sendable {
         vrmLog("[VRMModel] Starting loadResources")
         let bufferLoader = BufferLoader(document: gltf, binaryData: binaryData, baseURL: baseURL)
 
+        // Identify which textures are used as normal maps (need linear format, not sRGB)
+        var normalMapTextureIndices = Set<Int>()
+        vrmLog("[VRMModel] 🔍 Scanning \(gltf.materials?.count ?? 0) materials for normal map textures...")
+        for (matIdx, material) in (gltf.materials ?? []).enumerated() {
+            let matName = material.name ?? "material_\(matIdx)"
+            if let normalTexture = material.normalTexture {
+                normalMapTextureIndices.insert(normalTexture.index)
+                vrmLog("[VRMModel] ⚠️ Material '\(matName)' uses texture \(normalTexture.index) as NORMAL MAP (will use linear format)")
+            }
+            // Log base color texture for comparison
+            if let baseColorTex = material.pbrMetallicRoughness?.baseColorTexture {
+                vrmLog("[VRMModel] ✅ Material '\(matName)' uses texture \(baseColorTex.index) as BASE COLOR (will use sRGB)")
+            }
+        }
+        vrmLog("[VRMModel] 📊 Normal map texture indices: \(normalMapTextureIndices.sorted())")
+
         // Load ALL textures first - must complete before materials reference them
         vrmLog("[VRMModel] Loading \(gltf.textures?.count ?? 0) textures")
         if let device = device {
             let textureLoader = TextureLoader(device: device, bufferLoader: bufferLoader, document: gltf, baseURL: baseURL)
             for textureIndex in 0..<(gltf.textures?.count ?? 0) {
-                vrmLog("[VRMModel] Loading texture \(textureIndex)")
-                let textureName = gltf.textures?[safe: textureIndex]?.name
-                if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex) {
+                // Normal maps should be linear (sRGB=false), color textures should be sRGB (sRGB=true)
+                let isNormalMap = normalMapTextureIndices.contains(textureIndex)
+                let useSRGB = !isNormalMap
+                let textureName = gltf.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
+                let formatStr = useSRGB ? "sRGB" : "LINEAR"
+                vrmLog("[VRMModel] Loading texture \(textureIndex) '\(textureName)' as \(formatStr)")
+                if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
                     let vrmTexture = VRMTexture(name: textureName)
                     vrmTexture.mtlTexture = mtlTexture
                     textures.append(vrmTexture)
+                    vrmLog("[VRMModel] ✅ Texture \(textureIndex) loaded: \(mtlTexture.width)x\(mtlTexture.height) format=\(mtlTexture.pixelFormat.rawValue)")
                 } else {
                     // Add placeholder texture
                     textures.append(VRMTexture(name: textureName))
+                    vrmLog("[VRMModel] ❌ Texture \(textureIndex) FAILED to load - using placeholder!")
                 }
             }
         } else {
@@ -322,10 +347,12 @@ public class VRMModel: @unchecked Sendable {
         }
 
         // Load materials AFTER all textures are loaded to avoid index out of bounds
-        vrmLog("[VRMModel] Loading \(gltf.materials?.count ?? 0) materials")
+        vrmLog("[VRMModel] Loading \(gltf.materials?.count ?? 0) materials (VRM 0.x props: \(vrm0MaterialProperties.count))")
         for materialIndex in 0..<(gltf.materials?.count ?? 0) {
             if let gltfMaterial = gltf.materials?[safe: materialIndex] {
-                let material = VRMMaterial(from: gltfMaterial, textures: textures)
+                // Pass VRM 0.x material property if available (MToon data at document level)
+                let vrm0Prop = materialIndex < vrm0MaterialProperties.count ? vrm0MaterialProperties[materialIndex] : nil
+                let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop)
                 materials.append(material)
             }
         }

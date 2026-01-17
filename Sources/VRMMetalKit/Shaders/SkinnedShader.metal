@@ -177,14 +177,6 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                uint vertexID [[vertex_id]]) {
  VertexOut out;
 
- // 🔍 SHADER PROBE: Debug first vertex to see what GPU reads
- if (vertexID == 0) {
- // This will cause a visible artifact if joints/weights are wrong
- // Expected: joints.x in [0..30], weights.x in [0..1]
- // If we see huge values, the vertex descriptor is wrong
- // Output as color for visibility
- }
-
  // Use morphed positions if available, otherwise use original
  float3 basePosition;
  if (hasMorphed > 0) {
@@ -287,6 +279,63 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
 
  // Calculate view-space normal for MatCap
+ out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
+
+ // Pass through texture coordinates and vertex color
+ out.texCoord = in.texCoord;
+ out.animatedTexCoord = in.texCoord;
+ out.color = in.color;
+
+ return out;
+}
+
+// Skinned MToon outline vertex shader (inverted hull technique)
+vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
+                                              constant Uniforms& uniforms [[buffer(1)]],
+                                              constant MToonMaterial& material [[buffer(2)]],
+                                              constant float4x4* jointMatrices [[buffer(3)]]) {
+ VertexOut out;
+
+ // Apply skeletal skinning
+ float4x4 skinMatrix = float4x4(0.0);
+ if (in.weights[0] > 0.0) skinMatrix += jointMatrices[in.joints[0]] * in.weights[0];
+ if (in.weights[1] > 0.0) skinMatrix += jointMatrices[in.joints[1]] * in.weights[1];
+ if (in.weights[2] > 0.0) skinMatrix += jointMatrices[in.joints[2]] * in.weights[2];
+ if (in.weights[3] > 0.0) skinMatrix += jointMatrices[in.joints[3]] * in.weights[3];
+
+ // Apply skinning to position and normal
+ float4 skinnedPosition = skinMatrix * float4(in.position, 1.0);
+ float3 skinnedNormal = normalize((skinMatrix * float4(in.normal, 0.0)).xyz);
+
+ // Transform to world space
+ float4 worldPos = uniforms.modelMatrix * skinnedPosition;
+ float3 worldNormal = normalize((uniforms.normalMatrix * float4(skinnedNormal, 0.0)).xyz);
+
+ // Get outline width from material
+ float outlineWidth = material.outlineWidthFactor;
+
+ // Apply outline extrusion along normal in world space
+ // outlineMode: 0=none, 1=worldCoordinates, 2=screenCoordinates
+ if (material.outlineMode == 1) {
+  // World coordinates: fixed width in world units
+  worldPos.xyz += worldNormal * outlineWidth;
+ } else if (material.outlineMode == 2) {
+  // Screen coordinates: width scales with distance from camera
+  float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
+  float screenScale = clipPos.w * 0.01; // Scale factor for screen-space width
+  worldPos.xyz += worldNormal * outlineWidth * screenScale;
+ }
+
+ out.worldPosition = worldPos.xyz;
+ out.worldNormal = worldNormal;
+
+ // Transform to clip space
+ float4 viewPosition = uniforms.viewMatrix * worldPos;
+ out.position = uniforms.projectionMatrix * viewPosition;
+
+ // Calculate view direction and view normal
+ float3 cameraWorldPos = -uniforms.viewMatrix[3].xyz;
+ out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
  out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
 
  // Pass through texture coordinates and vertex color
