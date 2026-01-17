@@ -20,154 +20,191 @@ import Metal
 
 // MARK: - Strict Mode Configuration
 
-/// Validation strictness levels for renderer operations
-public enum StrictLevel: Sendable {
-    /// No validation - soft fallbacks, logs only (production default)
+/// Level of strictness for renderer validation
+public enum StrictLevel: String, CaseIterable, Sendable {
+    /// Default behavior - soft fallbacks, logs only
     case off
-    /// Log errors and mark frame invalid, but continue rendering
+    /// No fallbacks - log errors and mark frame invalid
     case warn
-    /// Throw/abort on first violation (development mode)
+    /// Fail fast - throw/abort on first violation
     case fail
 }
 
-/// Renderer configuration with strict mode settings
-public struct RendererConfig: Sendable {
-    /// Validation strictness level
-    public var strict: StrictLevel
+/// Render filter for debugging specific primitives
+public enum RenderFilter: Sendable {
+    case mesh(String)
+    case material(String)
+    case primitive(Int)
+}
 
-    /// Optional: Only render specific mesh by name (for debugging)
-    public var renderFilter: RenderFilter?
+/// Renderer configuration including strict mode settings
+public struct RendererConfig {
+    /// Strict mode level for validation
+    public var strict: StrictLevel = .off
 
-    /// Optional: Stop rendering after N draw calls (for debugging)
-    public var drawUntil: Int?
+    /// Color attachment pixel format for render pipelines (defaults to match MTKView default)
+    public var colorPixelFormat: MTLPixelFormat = .bgra8Unorm
 
-    /// Optional: Only render draw call at index K (for debugging)
-    public var drawOnlyIndex: Int?
+    /// Enable Metal validation layers (debug builds only)
+    public var enableMetalValidation: Bool = true
 
-    /// Optional: Test with identity joint matrices for skin N (for debugging)
-    public var testIdentityPalette: Int?
+    /// Enable command buffer error checking
+    public var checkCommandBufferErrors: Bool = true
 
-    /// Enable wireframe rendering (for debugging)
-    public var debugWireframe: Bool
+    /// Minimum draw calls per frame (0 = disabled)
+    public var minDrawCallsPerFrame: Int = 0
 
-    /// Disable skinning (for debugging)
-    public var disableSkinning: Bool
+    /// Maximum average luma for frame validation (1.0 = white)
+    public var maxFrameLuma: Float = 0.95
 
-    /// Disable morph targets (for debugging)
-    public var disableMorphs: Bool
+    /// Filter to render only specific mesh/material/primitive (for debugging)
+    public var renderFilter: RenderFilter? = nil
 
-    public init(
-        strict: StrictLevel = .off,
-        renderFilter: RenderFilter? = nil,
-        drawUntil: Int? = nil,
-        drawOnlyIndex: Int? = nil,
-        testIdentityPalette: Int? = nil,
-        debugWireframe: Bool = false,
-        disableSkinning: Bool = false,
-        disableMorphs: Bool = false
-    ) {
+    /// Render only draw calls [0..N] from sorted draw list (for debugging)
+    public var drawUntil: Int? = nil
+
+    /// Render only draw call K from sorted draw list (for debugging)
+    public var drawOnlyIndex: Int? = nil
+
+    /// Use identity matrices for specified skin index (A/B test for palette corruption)
+    public var testIdentityPalette: Int? = nil
+
+    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil) {
         self.strict = strict
+        self.colorPixelFormat = colorPixelFormat
         self.renderFilter = renderFilter
         self.drawUntil = drawUntil
         self.drawOnlyIndex = drawOnlyIndex
         self.testIdentityPalette = testIdentityPalette
-        self.debugWireframe = debugWireframe
-        self.disableSkinning = disableSkinning
-        self.disableMorphs = disableMorphs
     }
-
-    /// Default configuration for production
-    public static let production = RendererConfig(strict: .off)
-
-    /// Default configuration for development
-    public static let development = RendererConfig(strict: .warn)
-
-    /// Strict configuration for debugging
-    public static let debug = RendererConfig(strict: .fail)
-}
-
-/// Filter for selective rendering
-public enum RenderFilter: Sendable {
-    /// Render only meshes matching this name
-    case mesh(String)
-    /// Render only primitives with this material name
-    case material(String)
-    /// Render only specific node index
-    case node(Int)
 }
 
 // MARK: - Strict Mode Errors
 
 /// Errors that can occur during strict mode validation
-public enum StrictModeError: Error, LocalizedError {
+public enum StrictModeError: LocalizedError {
     // Pipeline errors
-    case shaderFunctionNotFound(name: String)
-    case pipelineCreationFailed(reason: String)
-    case depthStencilCreationFailed(reason: String)
+    case missingVertexFunction(name: String)
+    case missingFragmentFunction(name: String)
+    case missingComputeFunction(name: String)
+    case pipelineCreationFailed(String)
+    case depthStencilCreationFailed
 
     // Uniform errors
-    case uniformSizeMismatch(expected: Int, actual: Int, structName: String)
-    case bufferTooSmall(required: Int, actual: Int, bufferName: String)
-    case bufferIndexConflict(index: Int, existingUsage: String, newUsage: String)
+    case uniformLayoutMismatch(swift: Int, metal: Int, type: String)
+    case uniformBufferTooSmall(required: Int, actual: Int)
+    case uniformIndexConflict(index: Int, usage: String)
 
     // Resource errors
-    case bufferIndexOutOfBounds(index: Int, maxIndex: Int)
-    case textureSlotConflict(slot: Int, existingTexture: String, newTexture: String)
-    case samplerSlotConflict(slot: Int)
+    case resourceIndexOutOfBounds(index: Int, max: Int)
+    case bufferIndexConflict(index: Int, existing: String, new: String)
+    case textureIndexConflict(index: Int)
+    case samplerIndexConflict(index: Int)
+
+    // Vertex format errors
     case invalidVertexFormat(attribute: String, expected: String, actual: String)
+    case vertexBufferTooSmall(required: Int, actual: Int)
+    case vertexStrideInvalid(expected: Int, actual: Int)
+    case missingVertexAttribute(name: String)
 
     // Draw call errors
-    case zeroVertexCount(meshName: String, primitiveIndex: Int)
-    case zeroIndexCount(meshName: String, primitiveIndex: Int)
-    case indexOutOfBounds(index: Int, vertexCount: Int, meshName: String)
-    case noDrawCalls
+    case noDrawCalls(expected: Int)
+    case zeroVertices(primitive: Int)
+    case zeroIndices(primitive: Int)
+    case invalidIndexRange(max: Int, vertexCount: Int)
 
-    // Frame errors
-    case commandBufferFailed(reason: String)
-    case frameContentInvalid(reason: String)
+    // Frame validation errors
+    case frameAllWhite(luma: Float)
+    case frameAllBlack
+    case commandBufferFailed(error: Error?)
+    case encoderCreationFailed(type: String)
+
+    // Skinning errors
+    case missingSkinningData
+    case jointIndexOutOfBounds(joint: Int, max: Int)
+    case invalidJointCount(expected: Int, actual: Int)
+
+    // Morph target errors
+    case morphIndexOutOfBounds(index: Int, max: Int)
+    case morphBufferSizeMismatch(expected: Int, actual: Int)
+    case morphWeightInvalid(index: Int, weight: Float)
 
     public var errorDescription: String? {
         switch self {
-        case .shaderFunctionNotFound(let name):
-            return "Shader function '\(name)' not found in Metal library"
+        case .missingVertexFunction(let name):
+            return "❌ [StrictMode] Missing vertex function '\(name)' in shader library"
+        case .missingFragmentFunction(let name):
+            return "❌ [StrictMode] Missing fragment function '\(name)' in shader library"
+        case .missingComputeFunction(let name):
+            return "❌ [StrictMode] Missing compute function '\(name)' in shader library"
         case .pipelineCreationFailed(let reason):
-            return "Failed to create render pipeline: \(reason)"
-        case .depthStencilCreationFailed(let reason):
-            return "Failed to create depth stencil state: \(reason)"
-        case .uniformSizeMismatch(let expected, let actual, let structName):
-            return "Uniform size mismatch for '\(structName)': expected \(expected) bytes, got \(actual)"
-        case .bufferTooSmall(let required, let actual, let bufferName):
-            return "Buffer '\(bufferName)' too small: requires \(required) bytes, has \(actual)"
-        case .bufferIndexConflict(let index, let existingUsage, let newUsage):
-            return "Buffer index \(index) conflict: already used for '\(existingUsage)', attempting to use for '\(newUsage)'"
-        case .bufferIndexOutOfBounds(let index, let maxIndex):
-            return "Buffer index \(index) out of bounds (max: \(maxIndex))"
-        case .textureSlotConflict(let slot, let existingTexture, let newTexture):
-            return "Texture slot \(slot) conflict: '\(existingTexture)' vs '\(newTexture)'"
-        case .samplerSlotConflict(let slot):
-            return "Sampler slot \(slot) already in use"
+            return "❌ [StrictMode] Pipeline state creation failed: \(reason)"
+        case .depthStencilCreationFailed:
+            return "❌ [StrictMode] Depth stencil state creation failed"
+
+        case .uniformLayoutMismatch(let swift, let metal, let type):
+            return "❌ [StrictMode] Uniform struct size mismatch for \(type): Swift=\(swift) bytes, Metal=\(metal) bytes"
+        case .uniformBufferTooSmall(let required, let actual):
+            return "❌ [StrictMode] Uniform buffer too small: required=\(required), actual=\(actual)"
+        case .uniformIndexConflict(let index, let usage):
+            return "❌ [StrictMode] Buffer index \(index) conflict: already used for \(usage)"
+
+        case .resourceIndexOutOfBounds(let index, let max):
+            return "❌ [StrictMode] Resource index \(index) out of bounds (max: \(max))"
+        case .bufferIndexConflict(let index, let existing, let new):
+            return "❌ [StrictMode] Buffer index \(index) conflict: existing=\(existing), new=\(new)"
+        case .textureIndexConflict(let index):
+            return "❌ [StrictMode] Texture index \(index) already in use"
+        case .samplerIndexConflict(let index):
+            return "❌ [StrictMode] Sampler index \(index) already in use"
+
         case .invalidVertexFormat(let attribute, let expected, let actual):
-            return "Invalid vertex format for '\(attribute)': expected \(expected), got \(actual)"
-        case .zeroVertexCount(let meshName, let primitiveIndex):
-            return "Zero vertex count for mesh '\(meshName)' primitive \(primitiveIndex)"
-        case .zeroIndexCount(let meshName, let primitiveIndex):
-            return "Zero index count for mesh '\(meshName)' primitive \(primitiveIndex)"
-        case .indexOutOfBounds(let index, let vertexCount, let meshName):
-            return "Index \(index) out of bounds (vertex count: \(vertexCount)) in mesh '\(meshName)'"
-        case .noDrawCalls:
-            return "Frame completed with no draw calls"
-        case .commandBufferFailed(let reason):
-            return "Command buffer failed: \(reason)"
-        case .frameContentInvalid(let reason):
-            return "Frame content invalid: \(reason)"
+            return "❌ [StrictMode] Invalid vertex format for \(attribute): expected=\(expected), actual=\(actual)"
+        case .vertexBufferTooSmall(let required, let actual):
+            return "❌ [StrictMode] Vertex buffer too small: required=\(required), actual=\(actual)"
+        case .vertexStrideInvalid(let expected, let actual):
+            return "❌ [StrictMode] Invalid vertex stride: expected=\(expected), actual=\(actual)"
+        case .missingVertexAttribute(let name):
+            return "❌ [StrictMode] Missing required vertex attribute: \(name)"
+
+        case .noDrawCalls(let expected):
+            return "❌ [StrictMode] No draw calls in frame (expected >= \(expected))"
+        case .zeroVertices(let primitive):
+            return "❌ [StrictMode] Primitive \(primitive) has zero vertices"
+        case .zeroIndices(let primitive):
+            return "❌ [StrictMode] Primitive \(primitive) has zero indices"
+        case .invalidIndexRange(let max, let vertexCount):
+            return "❌ [StrictMode] Index \(max) exceeds vertex count \(vertexCount)"
+
+        case .frameAllWhite(let luma):
+            return "❌ [StrictMode] Frame is all white (luma=\(luma))"
+        case .frameAllBlack:
+            return "❌ [StrictMode] Frame is all black"
+        case .commandBufferFailed(let error):
+            return "❌ [StrictMode] Command buffer failed: \(error?.localizedDescription ?? "unknown")"
+        case .encoderCreationFailed(let type):
+            return "❌ [StrictMode] Failed to create \(type) encoder"
+
+        case .missingSkinningData:
+            return "❌ [StrictMode] Missing skinning data for skinned mesh"
+        case .jointIndexOutOfBounds(let joint, let max):
+            return "❌ [StrictMode] Joint index \(joint) out of bounds (max: \(max))"
+        case .invalidJointCount(let expected, let actual):
+            return "❌ [StrictMode] Invalid joint count: expected=\(expected), actual=\(actual)"
+
+        case .morphIndexOutOfBounds(let index, let max):
+            return "❌ [StrictMode] Morph target index \(index) out of bounds (max: \(max))"
+        case .morphBufferSizeMismatch(let expected, let actual):
+            return "❌ [StrictMode] Morph buffer size mismatch: expected=\(expected), actual=\(actual)"
+        case .morphWeightInvalid(let index, let weight):
+            return "❌ [StrictMode] Invalid morph weight at index \(index): \(weight)"
         }
     }
 }
 
 // MARK: - Resource Index Contract
 
-/// Defines the contract for buffer and texture indices used by VRMMetalKit.
-/// This prevents conflicts between different systems (rendering, morphs, physics).
+/// Single source of truth for buffer/texture indices
 public struct ResourceIndices {
     // Vertex shader buffer indices
     public static let vertexBuffer = 0
@@ -249,89 +286,151 @@ public class StrictValidator {
             // Log only
             vrmLog(error.localizedDescription)
         case .warn:
-            // Log and record
-            vrmLog("⚠️ [StrictMode] \(error.localizedDescription)")
+            // Log and track
+            vrmLog("⚠️ [StrictMode.warn] \(error.localizedDescription)")
             frameErrors.append(error)
         case .fail:
-            // Throw immediately
-            vrmLog("❌ [StrictMode] \(error.localizedDescription)")
+            // Fail immediately
             throw error
         }
     }
 
-    // MARK: - Draw Call Tracking
-
-    /// Called before each draw call
-    public func willDraw() -> Bool {
-        drawCallCount += 1
-
-        // Check drawUntil limit
-        if let limit = config.drawUntil, drawCallCount > limit {
-            return false
-        }
-
-        // Check drawOnlyIndex
-        if let onlyIndex = config.drawOnlyIndex, drawCallCount != onlyIndex {
-            return false
-        }
-
-        return true
-    }
-
-    /// Reset for new frame
+    /// Reset frame tracking
     public func beginFrame() {
         drawCallCount = 0
-        frameErrors.removeAll()
+        frameErrors = []
     }
 
     /// Validate frame completion
     public func endFrame() throws {
-        if config.strict != .off && drawCallCount == 0 {
-            try handle(.noDrawCalls)
+        // Check minimum draw calls
+        if config.minDrawCallsPerFrame > 0 && drawCallCount < config.minDrawCallsPerFrame {
+            try handle(.noDrawCalls(expected: config.minDrawCallsPerFrame))
+        }
+
+        // In warn mode, report all collected errors
+        if config.strict == .warn && !frameErrors.isEmpty {
+            vrmLog("⚠️ [StrictMode] Frame completed with \(frameErrors.count) errors")
         }
     }
 
-    /// Get errors from current frame
-    public var errors: [StrictModeError] {
-        return frameErrors
+    // MARK: - Pipeline Validation
+
+    /// Validate shader function exists
+    public func validateFunction(_ function: MTLFunction?, name: String, type: String) throws {
+        guard function != nil else {
+            switch type {
+            case "vertex":
+                try handle(.missingVertexFunction(name: name))
+            case "fragment":
+                try handle(.missingFragmentFunction(name: name))
+            case "compute":
+                try handle(.missingComputeFunction(name: name))
+            default:
+                try handle(.pipelineCreationFailed("Unknown function type: \(type)"))
+            }
+            return
+        }
     }
 
-    /// Check if frame had any errors
-    public var hasErrors: Bool {
-        return !frameErrors.isEmpty
+    /// Validate pipeline state creation
+    public func validatePipelineState(_ state: MTLRenderPipelineState?, name: String) throws {
+        guard state != nil else {
+            try handle(.pipelineCreationFailed(name))
+            return
+        }
+    }
+
+    // MARK: - Uniform Validation
+
+    /// Validate uniform struct size matches between Swift and Metal
+    public func validateUniformSize(swift: Int, metal: Int, type: String) throws {
+        guard swift == metal else {
+            try handle(.uniformLayoutMismatch(swift: swift, metal: metal, type: type))
+            return
+        }
+    }
+
+    /// Validate buffer size for uniforms
+    public func validateUniformBuffer(_ buffer: MTLBuffer?, requiredSize: Int) throws {
+        guard let buffer = buffer else {
+            try handle(.uniformBufferTooSmall(required: requiredSize, actual: 0))
+            return
+        }
+
+        guard buffer.length >= requiredSize else {
+            try handle(.uniformBufferTooSmall(required: requiredSize, actual: buffer.length))
+            return
+        }
+    }
+
+    // MARK: - Draw Call Validation
+
+    /// Track a draw call
+    public func recordDrawCall(vertexCount: Int, indexCount: Int, primitiveIndex: Int) throws {
+        drawCallCount += 1
+
+        if vertexCount == 0 {
+            try handle(.zeroVertices(primitive: primitiveIndex))
+        }
+
+        if indexCount == 0 {
+            try handle(.zeroIndices(primitive: primitiveIndex))
+        }
+    }
+
+    // MARK: - Command Buffer Validation
+
+    /// Validate command buffer completed successfully
+    public func validateCommandBuffer(_ buffer: MTLCommandBuffer) throws {
+        guard config.checkCommandBufferErrors else { return }
+
+        if buffer.status == .error {
+            try handle(.commandBufferFailed(error: buffer.error))
+        }
+    }
+
+    // MARK: - Vertex Format Validation
+
+    /// Validate vertex attribute format
+    public func validateVertexFormat(attribute: String, expected: MTLVertexFormat, actual: MTLVertexFormat) throws {
+        guard expected == actual else {
+            try handle(.invalidVertexFormat(
+                attribute: attribute,
+                expected: String(describing: expected),
+                actual: String(describing: actual)
+            ))
+            return
+        }
+    }
+
+    /// Validate vertex buffer size
+    public func validateVertexBuffer(_ buffer: MTLBuffer?, vertexCount: Int, stride: Int) throws {
+        let requiredSize = vertexCount * stride
+
+        guard let buffer = buffer else {
+            try handle(.vertexBufferTooSmall(required: requiredSize, actual: 0))
+            return
+        }
+
+        guard buffer.length >= requiredSize else {
+            try handle(.vertexBufferTooSmall(required: requiredSize, actual: buffer.length))
+            return
+        }
     }
 }
 
-// MARK: - Validation Helpers
+// MARK: - Metal Size Constants
 
-extension StrictValidator {
-    /// Validate buffer size
-    public func validateBufferSize(buffer: MTLBuffer?, required: Int, name: String) throws {
-        guard let buffer = buffer else { return }
-        if buffer.length < required {
-            try handle(.bufferTooSmall(required: required, actual: buffer.length, bufferName: name))
-        }
-    }
+/// Size constants that must match Metal shader structs
+public struct MetalSizeConstants {
+    // Must match shader Uniforms struct
+    public static let uniformsSize = 432  // sizeof(Uniforms) in Metal (4x 64-byte matrices + 3 lights + normalization + aligned fields)
 
-    /// Validate uniform struct size matches Metal expectations
-    public func validateUniformSize<T>(type: T.Type, expected: Int, name: String) throws {
-        let actual = MemoryLayout<T>.stride
-        if actual != expected {
-            try handle(.uniformSizeMismatch(expected: expected, actual: actual, structName: name))
-        }
-    }
+    // Must match shader MToonMaterial struct
+    public static let mtoonMaterialSize = 192  // sizeof(MToonMaterial) in Metal (12 blocks × 16 bytes)
 
-    /// Validate vertex count is non-zero
-    public func validateVertexCount(_ count: Int, meshName: String, primitiveIndex: Int) throws {
-        if count == 0 {
-            try handle(.zeroVertexCount(meshName: meshName, primitiveIndex: primitiveIndex))
-        }
-    }
-
-    /// Validate index count is non-zero
-    public func validateIndexCount(_ count: Int, meshName: String, primitiveIndex: Int) throws {
-        if count == 0 {
-            try handle(.zeroIndexCount(meshName: meshName, primitiveIndex: primitiveIndex))
-        }
-    }
+    // Vertex struct sizes
+    public static let vertexSize = 44  // sizeof(Vertex) in Metal
+    public static let skinnedVertexSize = 60  // sizeof(SkinnedVertex) in Metal
 }
