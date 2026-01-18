@@ -611,7 +611,9 @@ public class VRMExtensionParser {
                         var joint = VRMSpringJoint(node: node)
                         joint.hitRadius = jointDict["hitRadius"] as? Float ?? 0.0
                         joint.stiffness = jointDict["stiffness"] as? Float ?? 1.0
-                        joint.gravityPower = jointDict["gravityPower"] as? Float ?? 0.0
+                        // Apply minimum gravityPower of 1.0 when model specifies 0
+                        let rawGravityPower = jointDict["gravityPower"] as? Float ?? 0.0
+                        joint.gravityPower = rawGravityPower > 0 ? rawGravityPower : 1.0
                         joint.dragForce = jointDict["dragForce"] as? Float ?? 0.4
 
                         if let gravityDir = jointDict["gravityDir"] as? [Float], gravityDir.count == 3 {
@@ -632,15 +634,26 @@ public class VRMExtensionParser {
     private func parseColliderShape(_ dict: [String: Any]) -> VRMColliderShape? {
         if let sphereDict = dict["sphere"] as? [String: Any] {
             let offset = parseVector3(sphereDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-            let radius = sphereDict["radius"] as? Float ?? 0.0
+            let radius = parseFloatValue(sphereDict["radius"]) ?? 0.0
             return .sphere(offset: offset, radius: radius)
         } else if let capsuleDict = dict["capsule"] as? [String: Any] {
             let offset = parseVector3(capsuleDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-            let radius = capsuleDict["radius"] as? Float ?? 0.0
+            let radius = parseFloatValue(capsuleDict["radius"]) ?? 0.0
             let tail = parseVector3(capsuleDict["tail"]) ?? SIMD3<Float>(0, 0, 0)
             return .capsule(offset: offset, radius: radius, tail: tail)
         }
 
+        return nil
+    }
+
+    private func parseFloatValue(_ value: Any?) -> Float? {
+        if let floatVal = value as? Float {
+            return floatVal
+        } else if let doubleVal = value as? Double {
+            return Float(doubleVal)
+        } else if let numVal = value as? NSNumber {
+            return numVal.floatValue
+        }
         return nil
     }
 
@@ -673,11 +686,54 @@ public class VRMExtensionParser {
                         var joint = VRMSpringJoint(node: boneIndex)
 
                         // VRM 0.0 physics parameters - handle both correct and typo versions
-                        joint.stiffness = (groupDict["stiffness"] as? Float) ??
-                                         (groupDict["stiffiness"] as? Float) ?? 1.0  // Legacy typo support
-                        joint.gravityPower = groupDict["gravityPower"] as? Float ?? 0.0
-                        joint.dragForce = groupDict["dragForce"] as? Float ?? 0.4
-                        joint.hitRadius = groupDict["hitRadius"] as? Float ?? 0.0
+                        // JSON numbers may come as Double or NSNumber, so try multiple casts
+                        if let stiffFloat = groupDict["stiffness"] as? Float {
+                            joint.stiffness = stiffFloat
+                        } else if let stiffDouble = groupDict["stiffness"] as? Double {
+                            joint.stiffness = Float(stiffDouble)
+                        } else if let stiffNum = groupDict["stiffness"] as? NSNumber {
+                            joint.stiffness = stiffNum.floatValue
+                        } else if let stiffFloat = groupDict["stiffiness"] as? Float {  // Legacy typo
+                            joint.stiffness = stiffFloat
+                        } else if let stiffDouble = groupDict["stiffiness"] as? Double {
+                            joint.stiffness = Float(stiffDouble)
+                        } else {
+                            joint.stiffness = 1.0  // Default only if not found at all
+                        }
+
+                        // Apply minimum gravityPower of 1.0 when model specifies 0
+                        // Many VRM 0.x models have gravityPower=0 but expect gravity to work
+                        let rawGravityPower: Float
+                        if let gpFloat = groupDict["gravityPower"] as? Float {
+                            rawGravityPower = gpFloat
+                        } else if let gpDouble = groupDict["gravityPower"] as? Double {
+                            rawGravityPower = Float(gpDouble)
+                        } else if let gpNum = groupDict["gravityPower"] as? NSNumber {
+                            rawGravityPower = gpNum.floatValue
+                        } else {
+                            rawGravityPower = 0.0
+                        }
+                        joint.gravityPower = rawGravityPower > 0 ? rawGravityPower : 1.0
+
+                        if let dragFloat = groupDict["dragForce"] as? Float {
+                            joint.dragForce = dragFloat
+                        } else if let dragDouble = groupDict["dragForce"] as? Double {
+                            joint.dragForce = Float(dragDouble)
+                        } else if let dragNum = groupDict["dragForce"] as? NSNumber {
+                            joint.dragForce = dragNum.floatValue
+                        } else {
+                            joint.dragForce = 0.4
+                        }
+
+                        if let hitFloat = groupDict["hitRadius"] as? Float {
+                            joint.hitRadius = hitFloat
+                        } else if let hitDouble = groupDict["hitRadius"] as? Double {
+                            joint.hitRadius = Float(hitDouble)
+                        } else if let hitNum = groupDict["hitRadius"] as? NSNumber {
+                            joint.hitRadius = hitNum.floatValue
+                        } else {
+                            joint.hitRadius = 0.0
+                        }
 
                         // Gravity direction
                         if let gravityDir = groupDict["gravityDir"] as? [String: Any] {
@@ -720,7 +776,7 @@ public class VRMExtensionParser {
 
                         // VRM 0.0 collider format
                         let offset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-                        let radius = colliderDict["radius"] as? Float ?? 0.0
+                        let radius = parseFloatValue(colliderDict["radius"]) ?? 0.0
 
                         // VRM 0.0 only supports spheres in most implementations
                         let shape = VRMColliderShape.sphere(offset: offset, radius: radius)

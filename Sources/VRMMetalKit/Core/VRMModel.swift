@@ -543,6 +543,7 @@ public class VRMModel: @unchecked Sendable {
         )
 
         // Initialize global parameters
+        // settlingFrames: 120 frames (~1 second) to let bones settle with gravity before enabling inertia compensation
         springBoneGlobalParams = SpringBoneGlobalParams(
             gravity: SIMD3<Float>(0, -9.8, 0), // Standard gravity
             dtSub: 1.0 / 120.0, // 120Hz fixed substeps
@@ -553,7 +554,8 @@ public class VRMModel: @unchecked Sendable {
             substeps: 2,
             numBones: UInt32(totalBones),
             numSpheres: UInt32(totalSpheres),
-            numCapsules: UInt32(totalCapsules)
+            numCapsules: UInt32(totalCapsules),
+            settlingFrames: 120
         )
 
         // TODO: Populate bone parameters, rest lengths, and colliders

@@ -30,6 +30,7 @@ struct SpringBoneParams {
     uint numSpheres;      // offset 56
     uint numCapsules;     // offset 60
     uint numPlanes;       // offset 64
+    uint settlingFrames;  // offset 68 - frames remaining in settling period
 };
 
 struct BoneParams {

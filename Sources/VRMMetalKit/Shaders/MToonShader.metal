@@ -211,8 +211,13 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  out.animatedTexCoord = animateUV(in.texCoord, material);
  out.color = in.color;
 
- // Calculate view direction
- float3 cameraPos = -uniforms.viewMatrix[3].xyz;
+ // Calculate view direction - extract camera world position from view matrix
+ // View matrix = [R | -R*t] where R is rotation, t is camera position
+ // So cameraPos = -R^T * translation = -transpose(R) * viewMatrix[3].xyz
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  out.viewDirection = normalize(cameraPos - out.worldPosition);
 
  return out;
@@ -221,6 +226,7 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
 // Fragment shader with complete MToon 1.0 shading
 // VERSION 2: Fixed white textures
 fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
+                        bool isFrontFace [[front_facing]],
                         constant MToonMaterial& material [[buffer(8)]],
                         constant Uniforms& uniforms [[buffer(1)]],
                         texture2d<float> baseColorTexture [[texture(0)]],
@@ -264,6 +270,25 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 8) {
  // Show light direction
  return float4(uniforms.lightDirection.xyz * 0.5 + 0.5, 1.0);
+ } else if (uniforms.debugUVs == 9) {
+ // Show normal flip: RED = normal was flipped (faces away), GREEN = not flipped
+ float3 normal = normalize(in.worldNormal);
+ float3 viewDir = normalize(in.viewDirection);
+ bool needsFlip = dot(normal, viewDir) < 0.0;
+ return float4(needsFlip ? 1.0 : 0.0, needsFlip ? 0.0 : 1.0, 0.0, 1.0);
+ } else if (uniforms.debugUVs == 10) {
+ // Show view direction (should point from vertex toward camera)
+ return float4(normalize(in.viewDirection) * 0.5 + 0.5, 1.0);
+ } else if (uniforms.debugUVs == 12) {
+ // Show raw base color (texture * factor, no lighting) - debug black triangles
+ float4 debugBaseColor = material.baseColorFactor;
+ if (material.hasBaseColorTexture > 0) {
+     debugBaseColor *= baseColorTexture.sample(textureSampler, in.texCoord);
+ }
+ return float4(debugBaseColor.rgb, 1.0);
+ } else if (uniforms.debugUVs == 13) {
+ // Show vertex color only
+ return float4(in.color.rgb, 1.0);
  }
 
  // Choose UV coordinates (animated or static)
@@ -315,6 +340,22 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Approximate normal perturbation (proper tangent space would be more accurate)
  // Using higher strength (0.8) for more visible facial contours
  normal = normalize(normal + normalMapSample * 0.8);
+ }
+
+ // Two-sided lighting: flip normal if it faces away from camera
+ // This handles both backfaces AND front faces with inverted normals (common in cloth/ruffles)
+ float3 viewDir = normalize(in.viewDirection);
+ float3 viewNormal = in.viewNormal;
+ bool normalWasFlipped = false;
+ if (dot(normal, viewDir) < 0.0) {
+     normal = -normal;
+     viewNormal = -viewNormal;
+     normalWasFlipped = true;
+ }
+
+ // DEBUG: Show magenta where normal was flipped (enable with debugUVs=11)
+ if (uniforms.debugUVs == 11 && normalWasFlipped) {
+     return float4(1.0, 0.0, 1.0, 1.0);  // Magenta for flipped normals
  }
 
  // Shading shift calculation
@@ -380,9 +421,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
  litColor += emissive;
 
- // MatCap
+ // MatCap (use flipped viewNormal for back faces)
  if (material.hasMatcapTexture > 0) {
- float2 matcapUV = calculateMatCapUV(in.viewNormal);
+ float2 matcapUV = calculateMatCapUV(viewNormal);
  float3 matcapColor = matcapTexture.sample(textureSampler, matcapUV).rgb;
  litColor += matcapColor * float3(material.matcapR, material.matcapG, material.matcapB);
  }
@@ -392,7 +433,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float3 parametricRimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
  if (any(parametricRimColorFactor > 0.0)) {
  // Use view-space normal and view direction for proper fresnel
- float3 Nv = in.viewNormal;  // Already in view space
+ float3 Nv = viewNormal;  // Use flipped viewNormal for back faces
  float3 Vv = normalize(-in.worldPosition); // View direction in world space
 
  float vf = 1.0 - saturate(dot(Nv, normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz)));
@@ -423,6 +464,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  if (uniforms.debugUVs == 9) {
  return float4(litColor * 0.25, 1.0);  // Scale by 0.25 to see values > 1
  }
+
+ // Minimum light floor to prevent completely black surfaces
+ // This handles edge cases where NdotL is negative for all lights and ambient is zero
+ float3 minLight = baseColor.rgb * 0.08;  // 8% of base color as minimum
+ litColor = max(litColor, minLight);
 
  // Final color output
  litColor = saturate(litColor);
@@ -503,7 +549,11 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.animatedTexCoord = animateUV(in.texCoord, material);
  out.color = in.color;
 
- float3 cameraPos = -uniforms.viewMatrix[3].xyz;
+ // Calculate view direction - extract camera world position from view matrix
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  out.viewDirection = normalize(cameraPos - out.worldPosition);
 
  return out;

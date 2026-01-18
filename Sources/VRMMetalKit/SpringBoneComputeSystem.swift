@@ -95,6 +95,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         self.device = device
         self.commandQueue = device.makeCommandQueue()!
 
+
         // Load compute shaders from pre-compiled .metallib
         var library: MTLLibrary?
 
@@ -179,6 +180,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             var params = globalParams
             params.windPhase += Float(fixedDeltaTime)
 
+            // Decrement settling frames counter (allows bones to settle with gravity before inertia compensation)
+            if params.settlingFrames > 0 {
+                params.settlingFrames -= 1
+                // Persist back to model so it carries across frames
+                model.springBoneGlobalParams?.settlingFrames = params.settlingFrames
+            }
+
             // Copy updated params to GPU
             globalParamsBuffer?.contents().copyMemory(from: &params, byteCount: MemoryLayout<SpringBoneGlobalParams>.stride)
 
@@ -190,6 +198,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             // Debug: Log bone positions occasionally
             updateCounter += 1
+
+            // EARLY FRAME DEBUG: Log detailed physics for skirt bone in first 10 frames
+            if updateCounter <= 10, let bonePosCurr = buffers.bonePosCurr, let bonePosPrev = buffers.bonePosPrev {
+                // Log skirt bone (index 23 = chain 5 joint 1, first non-root skirt bone)
+                let skirtBoneIndex = 23
+                if skirtBoneIndex < buffers.numBones {
+                    let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+                    let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+                    let curr = currPtr[skirtBoneIndex]
+                    let prev = prevPtr[skirtBoneIndex]
+                    let velocity = curr - prev
+                    print("[PHYS frame=\(updateCounter)] skirt bone=\(skirtBoneIndex)")
+                    print("  prevPos=(\(String(format: "%.4f", prev.x)), \(String(format: "%.4f", prev.y)), \(String(format: "%.4f", prev.z)))")
+                    print("  currPos=(\(String(format: "%.4f", curr.x)), \(String(format: "%.4f", curr.y)), \(String(format: "%.4f", curr.z)))")
+                    print("  velocity=(\(String(format: "%.4f", velocity.x)), \(String(format: "%.4f", velocity.y)), \(String(format: "%.4f", velocity.z))) mag=\(String(format: "%.4f", simd_length(velocity)))")
+                    print("  settlingFrames=\(params.settlingFrames)")
+                }
+            }
+
             if updateCounter % VRMConstants.Performance.statusLogInterval == 0, let bonePosCurr = buffers.bonePosCurr {
                 let ptr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: 3)
                 let pos = Array(UnsafeBufferPointer(start: ptr, count: min(3, buffers.numBones)))
@@ -462,19 +489,32 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             guard let colliderNode = model.nodes[safe: collider.node] else { continue }
             let groupIndex = colliderToGroupIndex[colliderIndex] ?? 0
 
+            // Extract rotation from world matrix (upper 3x3) to transform local offsets
+            let wm = colliderNode.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+
             switch collider.shape {
             case .sphere(let offset, let radius):
-                let worldCenter = colliderNode.worldPosition + offset
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
                 sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
 
             case .capsule(let offset, let radius, let tail):
-                let worldP0 = colliderNode.worldPosition + offset
-                let worldP1 = colliderNode.worldPosition + offset + tail
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
                 capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
 
             case .plane(let offset, let normal):
-                let worldPoint = colliderNode.worldPosition + offset
-                let normalizedNormal = simd_length(normal) > 0.001 ? simd_normalize(normal) : SIMD3<Float>(0, 1, 0)
+                let worldOffset = worldRotation * offset
+                let worldNormal = worldRotation * normal
+                let worldPoint = colliderNode.worldPosition + worldOffset
+                let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
                 planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
             }
         }
@@ -500,16 +540,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             buffers.updatePlaneColliders(planeColliders)
         }
 
-        // CRITICAL: Initialize bone positions from node world positions
-        // Without this, bones start at origin (0,0,0) and collapse
+        // Initialize bone positions from bind pose (node world positions)
+        // Physics will naturally settle bones to their hanging position during settling period
         var initialPositions: [SIMD3<Float>] = []
+        boneIndex = 0
         for spring in springBone.springs {
             for joint in spring.joints {
                 if let node = model.nodes[safe: joint.node] {
                     initialPositions.append(node.worldPosition)
                 } else {
-                    initialPositions.append(SIMD3<Float>(0, 0, 0))
+                    initialPositions.append(.zero)
                 }
+                boneIndex += 1
             }
         }
 
@@ -523,8 +565,51 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 prevPtr[i] = initialPositions[i]
                 currPtr[i] = initialPositions[i]
             }
-            vrmLog("[SpringBone] Initialized \(initialPositions.count) bone positions from node world transforms")
         }
+
+        // DEBUG: Log spring bone setup details
+        print("[SpringBone DEBUG] === Spring Bone Setup ===")
+        var debugBoneIndex = 0
+        for (springIndex, spring) in springBone.springs.enumerated() {
+            let springName = spring.name ?? ""
+            // Recalculate mask for debug output
+            var debugMask: UInt32 = 0
+            if spring.colliderGroups.isEmpty {
+                debugMask = 0xFFFFFFFF
+            } else {
+                for groupIdx in spring.colliderGroups {
+                    if groupIdx < 32 { debugMask |= (1 << groupIdx) }
+                }
+            }
+            print("[SpringBone DEBUG] Chain \(springIndex): '\(springName)' joints=\(spring.joints.count) colliderGroups=\(spring.colliderGroups) mask=0x\(String(debugMask, radix: 16))")
+
+            for (jointIdx, joint) in spring.joints.enumerated() {
+                let pos = initialPositions[safe: debugBoneIndex] ?? .zero
+                let restLen = restLengths[safe: debugBoneIndex] ?? 0
+                let params = boneParams[safe: debugBoneIndex]
+                let parentIdx = parentIndices[safe: debugBoneIndex] ?? -1
+
+                if jointIdx < 3 || spring.joints.count <= 5 {
+                    let gravDir = params?.gravityDir ?? .zero
+                    let bindDir = boneBindDirections[safe: debugBoneIndex] ?? .zero
+                    print("  Joint \(jointIdx): node=\(joint.node) pos=(\(String(format: "%.3f", pos.x)), \(String(format: "%.3f", pos.y)), \(String(format: "%.3f", pos.z))) restLen=\(String(format: "%.4f", restLen)) parent=\(parentIdx) gravPow=\(params?.gravityPower ?? 0) gravDir=(\(String(format: "%.2f", gravDir.x)), \(String(format: "%.2f", gravDir.y)), \(String(format: "%.2f", gravDir.z))) bindDir=(\(String(format: "%.2f", bindDir.x)), \(String(format: "%.2f", bindDir.y)), \(String(format: "%.2f", bindDir.z))) stiff=\(params?.stiffness ?? 0)")
+                }
+                debugBoneIndex += 1
+            }
+        }
+        print("[SpringBone DEBUG] Total bones: \(initialPositions.count), settling frames: \(model.springBoneGlobalParams?.settlingFrames ?? 0)")
+
+        // DEBUG: Log collider setup
+        print("[SpringBone DEBUG] === Colliders ===")
+        print("[SpringBone DEBUG] Spheres: \(sphereColliders.count)")
+        for (i, sphere) in sphereColliders.enumerated() {
+            print("  Sphere \(i): center=(\(String(format: "%.3f", sphere.center.x)), \(String(format: "%.3f", sphere.center.y)), \(String(format: "%.3f", sphere.center.z))) radius=\(String(format: "%.3f", sphere.radius)) group=\(sphere.groupIndex)")
+        }
+        print("[SpringBone DEBUG] Capsules: \(capsuleColliders.count)")
+        for (i, capsule) in capsuleColliders.enumerated() {
+            print("  Capsule \(i): p0=(\(String(format: "%.3f", capsule.p0.x)), \(String(format: "%.3f", capsule.p0.y)), \(String(format: "%.3f", capsule.p0.z))) p1=(\(String(format: "%.3f", capsule.p1.x)), \(String(format: "%.3f", capsule.p1.y)), \(String(format: "%.3f", capsule.p1.z))) radius=\(String(format: "%.3f", capsule.radius)) group=\(capsule.groupIndex)")
+        }
+        print("[SpringBone DEBUG] Planes: \(planeColliders.count)")
 
         // Initialize buffers for root bone kinematic updates
         let numRootBones = rootBoneIndices.count
@@ -609,20 +694,49 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             guard let colliderNode = model.nodes[safe: collider.node] else { continue }
             let groupIndex = colliderToGroupIndex[colliderIndex] ?? 0
 
+            // Extract rotation from world matrix (upper 3x3) to transform local offsets
+            let wm = colliderNode.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+
+            // Debug: Log transformation details for first few frames
+            if updateCounter < 5 {
+                print("[Collider \(colliderIndex)] node=\(collider.node) '\(colliderNode.name ?? "")' nodePos=(\(String(format: "%.3f", colliderNode.worldPosition.x)), \(String(format: "%.3f", colliderNode.worldPosition.y)), \(String(format: "%.3f", colliderNode.worldPosition.z)))")
+            }
+
             switch collider.shape {
             case .sphere(let offset, let radius):
-                let worldCenter = colliderNode.worldPosition + offset
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
+                if updateCounter < 5 {
+                    print("  localOffset=(\(String(format: "%.3f", offset.x)), \(String(format: "%.3f", offset.y)), \(String(format: "%.3f", offset.z))) -> worldOffset=(\(String(format: "%.3f", worldOffset.x)), \(String(format: "%.3f", worldOffset.y)), \(String(format: "%.3f", worldOffset.z))) -> center=(\(String(format: "%.3f", worldCenter.x)), \(String(format: "%.3f", worldCenter.y)), \(String(format: "%.3f", worldCenter.z)))")
+                }
                 sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
 
             case .capsule(let offset, let radius, let tail):
-                let worldP0 = colliderNode.worldPosition + offset
-                let worldP1 = colliderNode.worldPosition + offset + tail
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
                 capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
 
             case .plane(let offset, let normal):
-                let worldPoint = colliderNode.worldPosition + offset
-                let normalizedNormal = simd_length(normal) > 0.001 ? simd_normalize(normal) : SIMD3<Float>(0, 1, 0)
+                let worldOffset = worldRotation * offset
+                let worldNormal = worldRotation * normal
+                let worldPoint = colliderNode.worldPosition + worldOffset
+                let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
                 planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
+            }
+        }
+
+        // Debug: Log animated collider positions occasionally
+        if updateCounter % 600 == 1 && !sphereColliders.isEmpty {
+            print("[SpringBone DEBUG] === Animated Collider Positions (frame \(updateCounter)) ===")
+            for (i, sphere) in sphereColliders.enumerated() {
+                print("  Sphere \(i): center=(\(String(format: "%.3f", sphere.center.x)), \(String(format: "%.3f", sphere.center.y)), \(String(format: "%.3f", sphere.center.z))) group=\(sphere.groupIndex)")
             }
         }
 
@@ -719,6 +833,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let (currentNode, currentPos, globalIndex) = nodePositions[i]
             let (_, nextPos, _) = nodePositions[i + 1]
 
+            // NaN guard: skip if positions are invalid
+            if currentPos.x.isNaN || currentPos.y.isNaN || currentPos.z.isNaN ||
+               nextPos.x.isNaN || nextPos.y.isNaN || nextPos.z.isNaN {
+                continue
+            }
+
             // Calculate direction vector from current bone to next bone
             let toNext = nextPos - currentPos
             let distance = length(toNext)
@@ -728,57 +848,104 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let targetDir = toNext / distance
 
             // Get the bone's bind-pose direction using GLOBAL bone index
-            // This is in the bone's own local space (rotation-invariant)
             guard globalIndex < boneBindDirections.count else { continue }
             let bindDirLocal = boneBindDirections[globalIndex]
 
+            // NaN guard: skip if bind direction is invalid
+            if bindDirLocal.x.isNaN || bindDirLocal.y.isNaN || bindDirLocal.z.isNaN ||
+               simd_length(bindDirLocal) < 0.001 {
+                continue
+            }
+
             // Transform bind direction from bone's local space to world space
             let currentRot = extractRotation(from: currentNode.worldMatrix)
+
+            // NaN guard: skip if extracted rotation is invalid
+            if currentRot.real.isNaN || currentRot.imag.x.isNaN ||
+               currentRot.imag.y.isNaN || currentRot.imag.z.isNaN {
+                continue
+            }
+
             let bindDirWorld = simd_act(currentRot, bindDirLocal)
+
+            // NaN guard: skip if transformed direction is invalid
+            if bindDirWorld.x.isNaN || bindDirWorld.y.isNaN || bindDirWorld.z.isNaN ||
+               simd_length(bindDirWorld) < 0.001 {
+                continue
+            }
 
             // Calculate rotation DELTA needed to align bind direction with physics direction
             let rotationDelta = quaternionFromTo(from: bindDirWorld, to: targetDir)
 
-            // Debug first bone every 60 frames
-            if globalIndex == 0 {
-                let dotProd = dot(bindDirWorld, targetDir)
-                vrmLog("[SpringBone] Bone \(globalIndex): bindDir=\(bindDirWorld), target=\(targetDir), dot=\(dotProd)")
+            // NaN guard: skip if rotation delta is invalid
+            if rotationDelta.real.isNaN || rotationDelta.imag.x.isNaN ||
+               rotationDelta.imag.y.isNaN || rotationDelta.imag.z.isNaN {
+                continue
             }
 
             // Apply rotation delta ON TOP OF current rotation
             // Convert world-space delta to local space
+            var newRotation: simd_quatf
             if let parent = currentNode.parent {
                 let parentRot = extractRotation(from: parent.worldMatrix)
+                // NaN guard for parent rotation
+                if parentRot.real.isNaN || parentRot.imag.x.isNaN ||
+                   parentRot.imag.y.isNaN || parentRot.imag.z.isNaN {
+                    continue
+                }
                 let parentRotInv = simd_conjugate(parentRot)
                 let localDelta = parentRotInv * rotationDelta * parentRot
-                currentNode.localRotation = localDelta * currentNode.localRotation
+                newRotation = localDelta * currentNode.localRotation
             } else {
-                // No parent - world delta equals local delta
-                currentNode.localRotation = rotationDelta * currentNode.localRotation
+                newRotation = rotationDelta * currentNode.localRotation
             }
 
+            // Final NaN guard before applying
+            if newRotation.real.isNaN || newRotation.imag.x.isNaN ||
+               newRotation.imag.y.isNaN || newRotation.imag.z.isNaN {
+                continue
+            }
+
+            currentNode.localRotation = newRotation
             currentNode.updateLocalMatrix()
             currentNode.updateWorldTransform()
         }
     }
 
     private func quaternionFromTo(from: SIMD3<Float>, to: SIMD3<Float>) -> simd_quatf {
-        let axis = cross(from, to)
-        let angle = acos(clamp(dot(from, to), -1, 1))
+        // Input validation
+        let fromLen = simd_length(from)
+        let toLen = simd_length(to)
+        if fromLen < 0.0001 || toLen < 0.0001 {
+            return simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+        }
 
-        if length(axis) < 0.0001 {
+        // Normalize inputs
+        let fromNorm = from / fromLen
+        let toNorm = to / toLen
+
+        let axis = cross(fromNorm, toNorm)
+        let dotProduct = clamp(dot(fromNorm, toNorm), -1, 1)
+        let axisLen = length(axis)
+
+        if axisLen < 0.0001 {
             // Vectors are parallel
-            if dot(from, to) > 0 {
+            if dotProduct > 0 {
                 return simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
             } else {
-                // Find perpendicular axis
-                let perpendicular = abs(from.x) < 0.9 ? SIMD3<Float>(1, 0, 0) : SIMD3<Float>(0, 1, 0)
-                let axis = normalize(cross(from, perpendicular))
-                return simd_quatf(angle: .pi, axis: axis)
+                // Find perpendicular axis for 180° rotation
+                let perpendicular = abs(fromNorm.x) < 0.9 ? SIMD3<Float>(1, 0, 0) : SIMD3<Float>(0, 1, 0)
+                let perpAxis = cross(fromNorm, perpendicular)
+                let perpAxisLen = length(perpAxis)
+                if perpAxisLen < 0.0001 {
+                    return simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+                }
+                return simd_quatf(angle: .pi, axis: perpAxis / perpAxisLen)
             }
         }
 
-        return simd_quatf(angle: angle, axis: normalize(axis))
+        let angle = acos(dotProduct)
+        return simd_quatf(angle: angle, axis: axis / axisLen)
     }
 
     private func extractRotation(from matrix: float4x4) -> simd_quatf {
@@ -868,6 +1035,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Reset time accumulator to prevent multiple substeps after teleport
         timeAccumulator = 0
+
+        // Reset settling period to allow bones to settle after teleport/reset
+        model.springBoneGlobalParams?.settlingFrames = 120
 
         // Reset readback state
         snapshotLock.lock()

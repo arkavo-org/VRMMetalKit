@@ -30,6 +30,7 @@ struct SpringBoneParams {
     uint numSpheres;      // offset 56
     uint numCapsules;     // offset 60
     uint numPlanes;       // offset 64
+    uint settlingFrames;  // offset 68 - frames remaining in settling period
 };
 
 struct BoneParams {
@@ -63,23 +64,24 @@ kernel void springBoneDistance(
         float error = currentLength - restLength;
         float3 direction = delta / currentLength;
 
-        // Only correct if bone is STRETCHED beyond rest length (error > 0)
-        // This allows gravity to pull bones down while preventing excessive stretch
-        // Compression (error < 0) is allowed - it's how physics moves bones
-        if (error > 0) {
-            // Stiffness controls how strongly stretched bones snap back
-            // Using quadratic scaling so low stiffness gives much weaker correction:
-            // stiffness=1.0 → correction = 0.1 (moderate correction)
-            // stiffness=0.5 → correction = 0.025 (weak correction)
-            // stiffness=0.0 → correction = 0 (no correction, fully floppy)
-            // This allows velocity to accumulate naturally before reaching equilibrium.
-            float stiffness = boneParams[id].stiffness;
-            float correctionFactor = stiffness * stiffness * 0.1;
+        // DISTANCE CONSTRAINT: Prevent excessive stretching
+        // This is independent of stiffness (stiffness is for bind pose return)
+        //
+        // Only correct STRETCH (error > 0), not compression.
+        // This allows gravity to pull bones down naturally while preventing
+        // the chain from stretching infinitely (which happens when stiffness=0).
+        //
+        // Allow small amount of stretch (5% tolerance) for natural physics,
+        // then apply full correction for anything beyond.
+        float stretchTolerance = restLength * 0.05;
 
-            // Apply correction to bring bone back toward rest length
-            float3 correction = direction * error * correctionFactor;
+        if (error > stretchTolerance) {
+            // Correct stretch beyond tolerance - move bone back toward parent
+            float correctionAmount = error - stretchTolerance;
+            float3 correction = direction * correctionAmount;
             bonePosCurr[id] = bonePosCurr[id] - correction;
         }
+        // Compression (error < 0) is allowed - this is how gravity pulls bones down
     } else if (restLength > epsilon && currentLength < epsilon) {
         // If bone collapsed to parent position, push it out by rest length
         bonePosCurr[id] = bonePosCurr[parentIndex] + float3(0, -restLength, 0);

@@ -49,6 +49,7 @@ struct SpringBoneParams {
     uint numSpheres;
     uint numCapsules;
     uint numPlanes;
+    uint settlingFrames;  // Frames remaining in settling period
 };
 
 struct BoneParams {

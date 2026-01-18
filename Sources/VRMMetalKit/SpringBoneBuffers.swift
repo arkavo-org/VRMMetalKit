@@ -340,10 +340,12 @@ public struct SpringBoneGlobalParams {
     public var numSpheres: UInt32
     public var numCapsules: UInt32
     public var numPlanes: UInt32
+    public var settlingFrames: UInt32  // Frames remaining in settling period (skip inertia compensation when > 0)
 
     public init(gravity: SIMD3<Float>, dtSub: Float, windAmplitude: Float, windFrequency: Float,
          windPhase: Float, windDirection: SIMD3<Float>, substeps: UInt32,
-         numBones: UInt32, numSpheres: UInt32, numCapsules: UInt32, numPlanes: UInt32 = 0) {
+         numBones: UInt32, numSpheres: UInt32, numCapsules: UInt32, numPlanes: UInt32 = 0,
+         settlingFrames: UInt32 = 0) {
         self.gravity = gravity
         self.dtSub = dtSub
         self.windAmplitude = windAmplitude
@@ -355,5 +357,6 @@ public struct SpringBoneGlobalParams {
         self.numSpheres = numSpheres
         self.numCapsules = numCapsules
         self.numPlanes = numPlanes
+        self.settlingFrames = settlingFrames
     }
 }

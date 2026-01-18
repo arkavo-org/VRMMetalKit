@@ -220,8 +220,11 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  out.position = uniforms.projectionMatrix * viewPosition;
 
  // Calculate view direction (from vertex to camera)
- // Camera position is at origin in view space
- float3 cameraWorldPos = -uniforms.viewMatrix[3].xyz;
+ // Extract camera world position from view matrix: cameraPos = -R^T * translation
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
 
  // Calculate view-space normal for MatCap
@@ -274,8 +277,11 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
  float4 viewPosition = uniforms.viewMatrix * worldPos;
  out.position = uniforms.projectionMatrix * viewPosition;
 
- // Calculate view direction
- float3 cameraWorldPos = -uniforms.viewMatrix[3].xyz;
+ // Calculate view direction - extract camera world position from view matrix
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
 
  // Calculate view-space normal for MatCap
@@ -334,7 +340,11 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.position = uniforms.projectionMatrix * viewPosition;
 
  // Calculate view direction and view normal
- float3 cameraWorldPos = -uniforms.viewMatrix[3].xyz;
+ // Extract camera world position from view matrix: cameraPos = -R^T * translation
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
  out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
 

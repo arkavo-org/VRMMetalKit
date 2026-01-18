@@ -71,20 +71,8 @@ public final class VRMPipelineCache: @unchecked Sendable {
                 return cached
             }
             
-            // Try loading from default library first (for development with Xcode)
-            // This allows shader debugging and hot-reloading during development
-            if let defaultLib = device.makeDefaultLibrary() {
-                // Check if it has VRM shaders
-                if defaultLib.makeFunction(name: "mtoon_vertex") != nil {
-                    vrmLog("[VRMPipelineCache] ✅ Loaded from default library (development mode) - has VRM shaders")
-                    libraries[key] = defaultLib
-                    return defaultLib
-                } else {
-                    vrmLog("[VRMPipelineCache] ⚠️ Default library exists but missing VRM shaders, trying package bundle...")
-                }
-            }
-            
-            // Load from packaged metallib (production)
+            // Always load from packaged metallib for consistency
+            // This ensures the same shaders are used regardless of app configuration
             guard let url = Bundle.module.url(forResource: "VRMMetalKitShaders",
                                              withExtension: "metallib") else {
                 vrmLog("[VRMPipelineCache] ❌ VRMMetalKitShaders.metallib not found in package resources")
@@ -93,11 +81,11 @@ public final class VRMPipelineCache: @unchecked Sendable {
             
             do {
                 let library = try device.makeLibrary(URL: url)
-                vrmLog("[VRMPipelineCache] ✅ Loaded from VRMMetalKitShaders.metallib")
+                print("[VRMPipelineCache] ✅ Loaded from VRMMetalKitShaders.metallib at: \(url.path)")
                 libraries[key] = library
                 return library
             } catch {
-                vrmLog("[VRMPipelineCache] ❌ Failed to load metallib: \(error)")
+                print("[VRMPipelineCache] ❌ Failed to load metallib: \(error)")
                 throw PipelineCacheError.shaderLibraryLoadFailed(error)
             }
         }
