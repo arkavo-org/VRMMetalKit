@@ -496,6 +496,7 @@ public struct VRMCollider {
 public enum VRMColliderShape {
     case sphere(offset: SIMD3<Float>, radius: Float)
     case capsule(offset: SIMD3<Float>, radius: Float, tail: SIMD3<Float>)
+    case plane(offset: SIMD3<Float>, normal: SIMD3<Float>)
 }
 
 public struct VRMColliderGroup {

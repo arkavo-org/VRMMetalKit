@@ -52,7 +52,7 @@ import Metal
 public class VRMModel: @unchecked Sendable {
     // MARK: - Thread Safety
     let lock = NSLock()
-    
+
     /// Execute a closure while holding the model's lock
     public func withLock<T>(_ body: () throws -> T) rethrows -> T {
         lock.lock()
@@ -393,13 +393,13 @@ public class VRMModel: @unchecked Sendable {
                 for childIndex in childIndices {
                     if childIndex < nodes.count {
                         let childNode = nodes[childIndex]
-                        
+
                         // Validation: Prevent multiple parents (graph cycles/dag)
                         if let existingParent = childNode.parent {
                             vrmLog("⚠️ [HIERARCHY] Node \(childIndex) ('\(childNode.name ?? "unnamed")') already has parent '\(existingParent.name ?? "unnamed")'. Skipping re-parenting to '\(nodes[index].name ?? "unnamed")'.")
                             continue
                         }
-                        
+
                         // Validation: Prevent duplicate children
                         if nodes[index].children.contains(where: { $0 === childNode }) {
                             vrmLog("⚠️ [HIERARCHY] Node \(childIndex) is already a child of '\(nodes[index].name ?? "unnamed")'. Skipping duplicate add.")
@@ -446,24 +446,90 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - SpringBone GPU System
 
+    /// Expand VRM 0.0 spring bone chains by traversing node hierarchy
+    /// In VRM 0.0, the bones array contains ROOT bone indices, and all descendants should become joints
+    /// This mimics three-vrm's root.traverse() behavior
+    /// IMPORTANT: Uses DFS to maintain parent-child ordering within each chain
+    public func expandVRM0SpringBoneChains() {
+        guard var springBone = springBone else { return }
+
+        var expandedSprings: [VRMSpring] = []
+
+        for spring in springBone.springs {
+            // For each root in the spring, create a separate chain with proper ordering
+            for rootJoint in spring.joints {
+                guard rootJoint.node < nodes.count else { continue }
+                let rootNode = nodes[rootJoint.node]
+
+                // DFS traversal to build chain in parent-child order
+                var chainJoints: [VRMSpringJoint] = []
+                traverseChainDFS(node: rootNode, settings: rootJoint, joints: &chainJoints)
+
+                if chainJoints.count >= 2 {
+                    // Create a new spring for this chain
+                    var chainSpring = spring
+                    chainSpring.joints = chainJoints
+                    expandedSprings.append(chainSpring)
+                    vrmLog("[SpringBone] Created chain from root '\(rootNode.name ?? "?")': \(chainJoints.count) joints")
+                }
+            }
+        }
+
+        // Only replace if we expanded
+        if !expandedSprings.isEmpty {
+            let originalCount = springBone.springs.reduce(0) { $0 + $1.joints.count }
+            let expandedCount = expandedSprings.reduce(0) { $0 + $1.joints.count }
+            if expandedCount > originalCount {
+                springBone.springs = expandedSprings
+                self.springBone = springBone
+                vrmLog("[SpringBone] Expanded VRM 0.0: \(originalCount) → \(expandedCount) joints across \(expandedSprings.count) chains")
+            }
+        }
+    }
+
+    /// DFS traversal to build a chain in correct parent-child order
+    private func traverseChainDFS(node: VRMNode, settings: VRMSpringJoint, joints: inout [VRMSpringJoint]) {
+        guard let nodeIndex = nodes.firstIndex(where: { $0 === node }) else { return }
+
+        // Create joint for this node
+        var joint = VRMSpringJoint(node: nodeIndex)
+        joint.stiffness = settings.stiffness
+        joint.gravityPower = settings.gravityPower
+        joint.dragForce = settings.dragForce
+        joint.hitRadius = settings.hitRadius
+        joint.gravityDir = settings.gravityDir
+        joints.append(joint)
+
+        // Recurse to children (DFS maintains order)
+        for child in node.children {
+            traverseChainDFS(node: child, settings: settings, joints: &joints)
+        }
+    }
+
     public func initializeSpringBoneGPUSystem(device: MTLDevice) throws {
         guard let springBone = springBone else {
             return // No SpringBone data in this model
         }
 
+        // Expand VRM 0.0 chains (no-op for VRM 1.0 which already has full joint lists)
+        expandVRM0SpringBoneChains()
+
+        // Re-read after expansion
+        guard let expandedSpringBone = self.springBone else { return }
+
         // Count total bones from all springs
         var totalBones = 0
-        for spring in springBone.springs {
+        for spring in expandedSpringBone.springs {
             totalBones += spring.joints.count
         }
 
         // Count colliders
-        let totalSpheres = springBone.colliders.filter {
+        let totalSpheres = expandedSpringBone.colliders.filter {
             if case .sphere = $0.shape { return true }
             return false
         }.count
 
-        let totalCapsules = springBone.colliders.filter {
+        let totalCapsules = expandedSpringBone.colliders.filter {
             if case .capsule = $0.shape { return true }
             return false
         }.count
@@ -477,6 +543,7 @@ public class VRMModel: @unchecked Sendable {
         )
 
         // Initialize global parameters
+        // settlingFrames: 120 frames (~1 second) to let bones settle with gravity before enabling inertia compensation
         springBoneGlobalParams = SpringBoneGlobalParams(
             gravity: SIMD3<Float>(0, -9.8, 0), // Standard gravity
             dtSub: 1.0 / 120.0, // 120Hz fixed substeps
@@ -487,11 +554,36 @@ public class VRMModel: @unchecked Sendable {
             substeps: 2,
             numBones: UInt32(totalBones),
             numSpheres: UInt32(totalSpheres),
-            numCapsules: UInt32(totalCapsules)
+            numCapsules: UInt32(totalCapsules),
+            settlingFrames: 120
         )
 
         // TODO: Populate bone parameters, rest lengths, and colliders
         // This will be implemented in the compute system
+    }
+
+    // MARK: - Floor Plane Colliders
+
+    /// Set floor plane collider at specified Y position
+    /// - Parameter floorY: The Y position of the floor plane in world space
+    public func setFloorPlane(at floorY: Float) {
+        let floor = PlaneCollider(floorY: floorY)
+        springBoneBuffers?.setPlaneColliders([floor])
+        springBoneGlobalParams?.numPlanes = 1
+    }
+
+    /// Set floor plane collider from an ARKit plane anchor transform
+    /// - Parameter transform: The ARPlaneAnchor's transform (simd_float4x4)
+    public func setFloorPlane(arkitTransform transform: simd_float4x4) {
+        let floor = PlaneCollider(arkitTransform: transform)
+        springBoneBuffers?.setPlaneColliders([floor])
+        springBoneGlobalParams?.numPlanes = 1
+    }
+
+    /// Remove floor plane collider
+    public func removeFloorPlane() {
+        springBoneBuffers?.setPlaneColliders([])
+        springBoneGlobalParams?.numPlanes = 0
     }
 
     /// Update all node world transforms based on their local transforms

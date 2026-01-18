@@ -95,6 +95,7 @@ struct VertexOut {
  float2 texCoord;
  float4 color;
  float depth;
+ float3 viewDirection;         // Direction from vertex to camera
 };
 
 // MARK: - Toon Shading Utilities (shared with non-skinned)
@@ -205,6 +206,13 @@ vertex VertexOut skinned_toon2d_vertex(
  // Calculate depth for outline width scaling
  out.depth = viewPosition.z;
 
+ // Calculate view direction - extract camera world position from view matrix
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+ out.viewDirection = normalize(cameraPos - out.worldPosition);
+
  return out;
 }
 
@@ -212,6 +220,7 @@ vertex VertexOut skinned_toon2d_vertex(
 
 fragment float4 skinned_toon2d_fragment(
  VertexOut in [[stage_in]],
+ bool isFrontFace [[front_facing]],
  constant Uniforms &uniforms [[buffer(1)]],
  constant Toon2DMaterial &material [[buffer(2)]],
  texture2d<float> baseColorTexture [[texture(0)]],
@@ -246,6 +255,11 @@ fragment float4 skinned_toon2d_fragment(
 
  // Calculate lighting
  float3 normal = normalize(in.worldNormal);
+ // Two-sided lighting: flip normal if it faces away from camera
+ float3 viewDir = normalize(in.viewDirection);
+ if (dot(normal, viewDir) < 0.0) {
+     normal = -normal;
+ }
  float3 lightDir = normalize(-uniforms.lightDirection.xyz);
  float nDotL = dot(normal, lightDir);
 
@@ -309,7 +323,7 @@ fragment float4 skinned_toon2d_fragment(
 
  // Optional rim lighting
  if (length(material.rimColorFactor) > 0.01) {
- float3 viewDir = normalize(-in.worldPosition);
+ float3 viewDir = normalize(in.viewDirection);
  finalColor = applyQuantizedRim(
      finalColor,
      material.rimColorFactor,
@@ -414,6 +428,7 @@ vertex VertexOut skinned_toon2d_outline_vertex(
  out.texCoord = float2(0.0);
  out.color = float4(1.0);
  out.depth = 0.0;
+ out.viewDirection = float3(0.0);
 
  return out;
 }

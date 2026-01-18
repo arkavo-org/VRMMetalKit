@@ -128,6 +128,10 @@ final class VRMRenderItemBuilder {
                     faceCategory = "eyeline"
                     renderOrder = 3
                     faceEyelineCount += 1
+                } else if materialLower.contains("eyelash") || materialLower.contains("lash") {
+                    faceCategory = "eyelash"
+                    renderOrder = 3  // Same as eyeline, render after eyebrows
+                    faceEyelineCount += 1  // Reuse counter
                 } else if materialLower.contains("highlight") || materialLower.contains("catchlight") {
                     faceCategory = "highlight"
                     renderOrder = 6
@@ -160,8 +164,8 @@ final class VRMRenderItemBuilder {
 
                 var effectiveAlphaMode = alpha
                 var effectiveAlphaCutoff = primitive.materialIndex.flatMap { idx in idx < model.materials.count ? model.materials[idx].alphaCutoff : nil } ?? 0.5
-                if effectiveAlphaMode == "opaque" && faceCategory == "eyebrow" {
-                    vrmLog("[FACE FIX] Forcing eyebrow material '\(materialName)' to MASK mode")
+                if effectiveAlphaMode == "opaque" && (faceCategory == "eyebrow" || faceCategory == "eyelash") {
+                    vrmLog("[FACE FIX] Forcing \(faceCategory!) material '\(materialName)' to MASK mode")
                     effectiveAlphaMode = "mask"
                     effectiveAlphaCutoff = 0.35
                 }
@@ -212,6 +216,14 @@ final class VRMRenderItemBuilder {
 
         if frameCounter % 60 == 0 {
             vrmLog("[RenderItemBuilder] Sorted render items: opaque=\(opaqueCount) mask=\(maskCount) blend=\(blendCount) faceSkin=\(faceSkinCount)")
+        }
+
+        // One-time diagnostic log for all materials
+        if frameCounter == 0 {
+            vrmLog("[MATERIAL DIAGNOSTIC] All materials in model:")
+            for item in allItems {
+                vrmLog("  - '\(item.materialName)' alpha=\(item.alphaMode) effective=\(item.effectiveAlphaMode) category=\(item.faceCategory ?? "none")")
+            }
         }
 
         cachedRenderItems = allItems

@@ -19,14 +19,18 @@
 using namespace metal;
 
 struct SpringBoneParams {
-    float3 gravity;
-    float dtSub;
-    float windAmplitude;
-    float windFrequency;
-    float windPhase;
-    float3 windDirection;
-    uint substeps;
-    uint numBones;
+    float3 gravity;       // offset 0
+    float dtSub;          // offset 16 (after float3 padding)
+    float windAmplitude;  // offset 20
+    float windFrequency;  // offset 24
+    float windPhase;      // offset 28
+    float3 windDirection; // offset 32
+    uint substeps;        // offset 48
+    uint numBones;        // offset 52
+    uint numSpheres;      // offset 56
+    uint numCapsules;     // offset 60
+    uint numPlanes;       // offset 64
+    uint settlingFrames;  // offset 68 - frames remaining in settling period
 };
 
 struct BoneParams {
@@ -34,8 +38,9 @@ struct BoneParams {
     float drag;
     float radius;
     uint parentIndex;
-    float gravityPower;  // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
-    float3 gravityDir;   // Direction vector (normalized, typically [0, -1, 0])
+    float gravityPower;       // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
+    uint colliderGroupMask;   // Bitmask of collision groups this bone collides with
+    float3 gravityDir;        // Direction vector (normalized, typically [0, -1, 0])
 };
 
 kernel void springBoneDistance(
@@ -50,30 +55,35 @@ kernel void springBoneDistance(
     uint parentIndex = boneParams[id].parentIndex;
     if (parentIndex == 0xFFFFFFFF) return; // Skip root bones
 
-    // Distance constraint: only prevent over-stretching, allow compression for natural hanging
     float3 delta = bonePosCurr[id] - bonePosCurr[parentIndex];
     float currentLength = length(delta);
     float restLength = restLengths[id];
 
-    // Only apply constraint when stretched beyond rest length
-    // This allows hair/cloth to compress naturally under gravity
     const float epsilon = 1e-6;
-    if (currentLength > restLength && currentLength > epsilon) {
-        // XPBD constraint solving
-        float constraint = currentLength - restLength;
+    if (currentLength > epsilon && restLength > epsilon) {
+        float error = currentLength - restLength;
+        float3 direction = delta / currentLength;
 
-        // Compliance α = 1/(stiffness * dt²)
-        float alpha = 1.0 / (boneParams[id].stiffness * globalParams.dtSub * globalParams.dtSub);
+        // DISTANCE CONSTRAINT: Prevent excessive stretching
+        // This is independent of stiffness (stiffness is for bind pose return)
+        //
+        // Only correct STRETCH (error > 0), not compression.
+        // This allows gravity to pull bones down naturally while preventing
+        // the chain from stretching infinitely (which happens when stiffness=0).
+        //
+        // Allow small amount of stretch (5% tolerance) for natural physics,
+        // then apply full correction for anything beyond.
+        float stretchTolerance = restLength * 0.05;
 
-        // For hierarchical chains, parent bones are kinematically driven (infinite mass)
-        // Only move the child bone, not the parent
-        float invMassSum = 1.0; // Only the child moves
-        float lambda = -constraint / (invMassSum + alpha);
-
-        float3 correction = (lambda / currentLength) * delta;
-
-        // Apply correction only to child bone (current bone)
-        // Parent maintains its position (driven by animation or its own parent constraint)
-        bonePosCurr[id] += correction;
+        if (error > stretchTolerance) {
+            // Correct stretch beyond tolerance - move bone back toward parent
+            float correctionAmount = error - stretchTolerance;
+            float3 correction = direction * correctionAmount;
+            bonePosCurr[id] = bonePosCurr[id] - correction;
+        }
+        // Compression (error < 0) is allowed - this is how gravity pulls bones down
+    } else if (restLength > epsilon && currentLength < epsilon) {
+        // If bone collapsed to parent position, push it out by rest length
+        bonePosCurr[id] = bonePosCurr[parentIndex] + float3(0, -restLength, 0);
     }
 }

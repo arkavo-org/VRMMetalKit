@@ -61,11 +61,11 @@ final class VRMNodeResetTests: XCTestCase {
         XCTAssertEqual(node.translation.x, 1.0)
         XCTAssertEqual(node.translation.y, 2.0)
         XCTAssertEqual(node.translation.z, 3.0)
-        
+
         // Quaternion equality check (dot product close to 1 or -1)
         let dot = abs(simd_dot(node.rotation, simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)))
         XCTAssertGreaterThan(dot, 0.999)
-        
+
         XCTAssertEqual(node.scale.x, 1.0)
     }
 

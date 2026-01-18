@@ -217,6 +217,7 @@ public class MToonShader {
     // Fragment shader with complete MToon 1.0 shading
     // VERSION 2: Fixed white textures
     fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
+                                   bool isFrontFace [[front_facing]],
                                    constant MToonMaterial& material [[buffer(8)]],
                                    constant Uniforms& uniforms [[buffer(1)]],
                                    texture2d<float> baseColorTexture [[texture(0)]],

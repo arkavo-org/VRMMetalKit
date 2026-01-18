@@ -24,11 +24,18 @@ import Foundation
 import Metal
 
 public struct VRMMetalKit {
-    public static let version = "1.0.0"
+    public static let version = "1.0.1"
+    public static let buildDate = "2026-01-18"
+    public static let shaderVersion = "v10-collider-world-rotation"
 
     /// Initialize VRMMetalKit with a Metal device
     public static func initialize(device: MTLDevice) {
         // Future: Global initialization if needed
+    }
+
+    /// Log version information to console
+    public static func logVersion() {
+        print("[VRMMetalKit] Version: \(version) (\(buildDate)) Shader: \(shaderVersion)")
     }
 
     /// Load a VRM model from a file URL

@@ -65,6 +65,17 @@ public enum VRMConstants {
         /// and spiraling into unrecoverable performance degradation ("spiral of death").
         public static let maxSubstepsPerFrame: Int = 10
 
+        /// Number of XPBD constraint iterations per substep
+        ///
+        /// Higher values improve constraint enforcement (stiffer springs, better collision response)
+        /// at the cost of additional GPU dispatches per substep.
+        /// Note: Each constraint iteration modifies position without updating prev, which affects
+        /// Verlet velocity. Fewer iterations allow more natural velocity accumulation.
+        /// - 1: Minimal - collision may not fully resolve if distance constraint fights it
+        /// - 2-3: Balanced for responsive motion with good collision
+        /// - 4+: Stiffer response, reaches equilibrium faster
+        public static let constraintIterations: Int = 4
+
         /// Default gravity vector in world space (m/s²)
         public static let defaultGravity = SIMD3<Float>(0, -9.8, 0)
 
