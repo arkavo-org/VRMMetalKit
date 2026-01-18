@@ -19,14 +19,17 @@
 using namespace metal;
 
 struct SpringBoneParams {
-    float3 gravity;
-    float dtSub;
-    float windAmplitude;
-    float windFrequency;
-    float windPhase;
-    float3 windDirection;
-    uint substeps;
-    uint numBones;
+    float3 gravity;       // offset 0
+    float dtSub;          // offset 16 (after float3 padding)
+    float windAmplitude;  // offset 20
+    float windFrequency;  // offset 24
+    float windPhase;      // offset 28
+    float3 windDirection; // offset 32
+    uint substeps;        // offset 48
+    uint numBones;        // offset 52
+    uint numSpheres;      // offset 56
+    uint numCapsules;     // offset 60
+    uint numPlanes;       // offset 64
 };
 
 struct BoneParams {

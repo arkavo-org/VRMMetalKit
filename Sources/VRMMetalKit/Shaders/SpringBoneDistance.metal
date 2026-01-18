@@ -19,14 +19,17 @@
 using namespace metal;
 
 struct SpringBoneParams {
-    float3 gravity;
-    float dtSub;
-    float windAmplitude;
-    float windFrequency;
-    float windPhase;
-    float3 windDirection;
-    uint substeps;
-    uint numBones;
+    float3 gravity;       // offset 0
+    float dtSub;          // offset 16 (after float3 padding)
+    float windAmplitude;  // offset 20
+    float windFrequency;  // offset 24
+    float windPhase;      // offset 28
+    float3 windDirection; // offset 32
+    uint substeps;        // offset 48
+    uint numBones;        // offset 52
+    uint numSpheres;      // offset 56
+    uint numCapsules;     // offset 60
+    uint numPlanes;       // offset 64
 };
 
 struct BoneParams {
@@ -51,19 +54,34 @@ kernel void springBoneDistance(
     uint parentIndex = boneParams[id].parentIndex;
     if (parentIndex == 0xFFFFFFFF) return; // Skip root bones
 
-    // Distance constraint: ALWAYS enforce rest length to prevent stretching/compression
     float3 delta = bonePosCurr[id] - bonePosCurr[parentIndex];
     float currentLength = length(delta);
     float restLength = restLengths[id];
 
     const float epsilon = 1e-6;
     if (currentLength > epsilon && restLength > epsilon) {
-        // Simple but robust: position bone at exact rest length from parent
-        // This is the standard approach used by three-vrm and other implementations
+        float error = currentLength - restLength;
         float3 direction = delta / currentLength;
-        bonePosCurr[id] = bonePosCurr[parentIndex] + direction * restLength;
-    } else if (restLength > epsilon) {
-        // If bone collapsed to parent position, push it down by rest length
+
+        // Only correct if bone is STRETCHED beyond rest length (error > 0)
+        // This allows gravity to pull bones down while preventing excessive stretch
+        // Compression (error < 0) is allowed - it's how physics moves bones
+        if (error > 0) {
+            // Stiffness controls how strongly stretched bones snap back
+            // Using quadratic scaling so low stiffness gives much weaker correction:
+            // stiffness=1.0 → correction = 0.1 (moderate correction)
+            // stiffness=0.5 → correction = 0.025 (weak correction)
+            // stiffness=0.0 → correction = 0 (no correction, fully floppy)
+            // This allows velocity to accumulate naturally before reaching equilibrium.
+            float stiffness = boneParams[id].stiffness;
+            float correctionFactor = stiffness * stiffness * 0.1;
+
+            // Apply correction to bring bone back toward rest length
+            float3 correction = direction * error * correctionFactor;
+            bonePosCurr[id] = bonePosCurr[id] - correction;
+        }
+    } else if (restLength > epsilon && currentLength < epsilon) {
+        // If bone collapsed to parent position, push it out by rest length
         bonePosCurr[id] = bonePosCurr[parentIndex] + float3(0, -restLength, 0);
     }
 }

@@ -69,11 +69,12 @@ public enum VRMConstants {
         ///
         /// Higher values improve constraint enforcement (stiffer springs, better collision response)
         /// at the cost of additional GPU dispatches per substep.
-        /// For parallel GPU solving, need iterations >= chain length for full propagation.
-        /// - 2: Fast but chains may stretch (only for very short chains)
-        /// - 4-6: Balanced for responsive motion without overshoot
-        /// - 10+: Stiff, for long chains or rigid accessories
-        public static let constraintIterations: Int = 4
+        /// Note: Each constraint iteration modifies position without updating prev, which affects
+        /// Verlet velocity. Fewer iterations allow more natural velocity accumulation.
+        /// - 1: Minimal constraint damping - allows velocity to accumulate naturally
+        /// - 2-3: Balanced for responsive motion
+        /// - 4+: Stiffer response, reaches equilibrium faster
+        public static let constraintIterations: Int = 1
 
         /// Default gravity vector in world space (m/s²)
         public static let defaultGravity = SIMD3<Float>(0, -9.8, 0)

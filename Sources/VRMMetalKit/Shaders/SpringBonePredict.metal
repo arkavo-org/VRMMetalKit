@@ -19,14 +19,17 @@
 using namespace metal;
 
 struct SpringBoneParams {
-    float3 gravity;
-    float dtSub;
-    float windAmplitude;
-    float windFrequency;
-    float windPhase;
-    float3 windDirection;
-    uint substeps;
-    uint numBones;
+    float3 gravity;       // offset 0
+    float dtSub;          // offset 16 (after float3 padding)
+    float windAmplitude;  // offset 20
+    float windFrequency;  // offset 24
+    float windPhase;      // offset 28
+    float3 windDirection; // offset 32
+    uint substeps;        // offset 48
+    uint numBones;        // offset 52
+    uint numSpheres;      // offset 56
+    uint numCapsules;     // offset 60
+    uint numPlanes;       // offset 64
 };
 
 struct BoneParams {
@@ -78,12 +81,10 @@ kernel void springBonePredict(
     float gravityMagnitude = length(globalParams.gravity);  // Usually 9.8
     float3 effectiveGravity = boneParams[id].gravityDir * gravityMagnitude * boneParams[id].gravityPower;
 
-    // Apply stiffness damping - higher stiffness reduces velocity more
-    // This helps prevent accumulating drift and keeps bones closer to rest pose
-    // Stiffness typically ranges from 0.0 (no resistance) to 1.0 (high resistance)
-    float stiffnessDamping = 1.0 - boneParams[id].stiffness;
-
-    float3 newPos = bonePosCurr[id] + velocity * dragFactor * stiffnessDamping +
+    // Verlet integration: position += velocity * drag + acceleration * dt²
+    // NOTE: Stiffness is NOT applied here - it controls the distance constraint only.
+    // Drag is the velocity damping factor (0.0 = no drag, full velocity; 1.0 = full drag, no velocity)
+    float3 newPos = bonePosCurr[id] + velocity * dragFactor +
                     (effectiveGravity + windForce) *
                     globalParams.dtSub * globalParams.dtSub;
 

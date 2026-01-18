@@ -448,28 +448,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             chainGravityPowers.append(chainGravityPower)
         }
 
-        // Auto-fix broken VRM physics: apply minimum gravity to chains with all-zero gravityPower
-        var fixedChainCount = 0
-        var boneIndexForFix = 0
-        for (chainIndex, gravityPowers) in chainGravityPowers.enumerated() {
-            let allZeroGravity = gravityPowers.allSatisfy { $0 == 0 }
-            if allZeroGravity && !gravityPowers.isEmpty {
-                // Fix: Set gravityPower to 1.0 for all bones in this chain
-                for i in 0..<gravityPowers.count {
-                    let globalBoneIndex = boneIndexForFix + i
-                    if globalBoneIndex < boneParams.count {
-                        boneParams[globalBoneIndex].gravityPower = 1.0
-                    }
-                }
-                fixedChainCount += 1
-                vrmLog("⚠️ [SpringBone GPU] Chain \(chainIndex) has gravityPower=0. Auto-fixed to 1.0 for \(gravityPowers.count) bones.")
-            }
-            boneIndexForFix += gravityPowers.count
-        }
-
-        if fixedChainCount > 0 {
-            vrmLog("✅ [SpringBone GPU] Auto-fixed \(fixedChainCount) spring chain(s) with zero gravityPower.")
-        }
+        // NOTE: Auto-fix for zero gravityPower removed - it was overriding intentional zero gravity
+        // Real VRM files with broken physics should be fixed at the source or use a dedicated flag
+        // to enable auto-fixing behavior rather than applying it unconditionally.
 
         // Process colliders with group index assignment
         for (colliderIndex, collider) in springBone.colliders.enumerated() {
