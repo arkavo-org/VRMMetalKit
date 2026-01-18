@@ -260,34 +260,34 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.dispatchThreads(rootGridSize, threadsPerThreadgroup: threadgroupSize)
         }
 
-        // Execute predict kernel
+        // Execute predict kernel (step 1: predict new tip position)
         computeEncoder.setComputePipelineState(predictPipeline)
         computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
 
-        // XPBD constraint solving with configurable iterations
-        // More iterations = better constraint enforcement at cost of GPU time
+        // Distance constraint iterations (step 2: enforce bone length)
+        // VRM spec: run distance constraint BEFORE collision, do not run it after
         let iterations = VRMConstants.Physics.constraintIterations
         for _ in 0..<iterations {
-            // Execute distance constraint kernel
             computeEncoder.setComputePipelineState(distancePipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+        }
 
-            // Execute collision kernels only if colliders exist
-            if globalParams.numSpheres > 0 {
-                computeEncoder.setComputePipelineState(collideSpheresPipeline)
-                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-            }
+        // Collision resolution (step 3: push tips out of colliders)
+        // VRM spec: collision runs AFTER distance constraint and is the FINAL step
+        // This prevents distance constraint from pulling hair back into colliders
+        if globalParams.numSpheres > 0 {
+            computeEncoder.setComputePipelineState(collideSpheresPipeline)
+            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+        }
 
-            if globalParams.numCapsules > 0 {
-                computeEncoder.setComputePipelineState(collideCapsulesPipeline)
-                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-            }
+        if globalParams.numCapsules > 0 {
+            computeEncoder.setComputePipelineState(collideCapsulesPipeline)
+            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+        }
 
-            if globalParams.numPlanes > 0 {
-                // Plane colliders use dedicated buffer index 7 (no longer conflicts with kinematic kernel)
-                computeEncoder.setComputePipelineState(collidePlanesPipeline)
-                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-            }
+        if globalParams.numPlanes > 0 {
+            computeEncoder.setComputePipelineState(collidePlanesPipeline)
+            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
         }
 
         computeEncoder.endEncoding()
