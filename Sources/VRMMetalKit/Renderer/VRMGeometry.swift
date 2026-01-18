@@ -808,7 +808,7 @@ public class VRMNode {
                 SIMD4<Float>(matrix[2], matrix[6], matrix[10], matrix[14]),  // row 2
                 SIMD4<Float>(matrix[3], matrix[7], matrix[11], matrix[15])   // row 3 (translation)
             )
-            
+
             // Decompose matrix to get T/R/S
             // This ensures that even if initialized with a matrix, we have valid T/R/S components
             // for the animation system to work with.
@@ -827,16 +827,16 @@ public class VRMNode {
                 scale = SIMD3<Float>(s[0], s[1], s[2])
             }
         }
-        
+
         // Store initial values as bind pose
         self.initialTranslation = translation
         self.initialRotation = rotation
         self.initialScale = scale
-        
+
         // Update local matrix from T/R/S
         updateLocalMatrix()
     }
-    
+
     /// Reset node transform to its initial bind pose (as defined in the file)
     public func resetToBindPose() {
         translation = initialTranslation
@@ -847,13 +847,13 @@ public class VRMNode {
 
     public func updateLocalMatrix() {
         let t = float4x4(translation: translation)
-        
+
         // Manual quaternion to matrix conversion (Column-Major)
         let x = rotation.imag.x
         let y = rotation.imag.y
         let z = rotation.imag.z
         let w = rotation.real
-        
+
         let xx = x * x
         let yy = y * y
         let zz = z * z
@@ -868,7 +868,7 @@ public class VRMNode {
         let col1 = SIMD4<Float>(2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx), 0.0)
         let col2 = SIMD4<Float>(2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy), 0.0)
         let col3 = SIMD4<Float>(0.0, 0.0, 0.0, 1.0)
-        
+
         let r = float4x4([col0, col1, col2, col3])
 
         let s = float4x4(scaling: scale)

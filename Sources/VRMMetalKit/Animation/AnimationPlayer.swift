@@ -30,21 +30,21 @@ import simd
 public final class AnimationPlayer: @unchecked Sendable {
     // Internal lock for player state (speed, time, clip)
     private let playerLock = NSLock()
-    
+
     public var speed: Float {
         get { playerLock.withLock { _speed } }
-        set { 
+        set {
             playerLock.withLock {
                 if newValue < 0 || newValue.isNaN || newValue.isInfinite {
                     _speed = 1.0
                 } else {
-                    _speed = newValue 
+                    _speed = newValue
                 }
             }
         }
     }
     private var _speed: Float = 1.0
-    
+
     public var isLooping = true
     public var applyRootMotion = false
 
@@ -88,7 +88,7 @@ public final class AnimationPlayer: @unchecked Sendable {
         let (currentClip, currentSpeed, shouldUpdate) = playerLock.withLock {
             (clip, _speed, isPlaying && clip != nil)
         }
-        
+
         guard shouldUpdate, let clip = currentClip else { return }
 
         // 2. Lock the MODEL for the duration of the update to prevent conflicts with Renderer
@@ -98,7 +98,7 @@ public final class AnimationPlayer: @unchecked Sendable {
             }
             // Use local copy of time to avoid frequent locking
             let time = playerLock.withLock { currentTime }
-            
+
             let localTime: Float
             if isLooping {
                 localTime = fmodf(time, clip.duration)
@@ -150,7 +150,7 @@ public final class AnimationPlayer: @unchecked Sendable {
                     }
                     node.updateLocalMatrix()
                     updatedCount += 1
-                    
+
                     if debugFirstFrame {
                         vrmLogAnimation("[NON-HUMANOID] Animated '\(track.nodeName)' -> node '\(node.name ?? "unnamed")'")
                     }
@@ -185,7 +185,7 @@ public final class AnimationPlayer: @unchecked Sendable {
         guard let controller = expressionController else { return }
 
         let weights = playerLock.withLock { currentMorphWeights }
-        
+
         for (key, weight) in weights {
             if let preset = VRMExpressionPreset(rawValue: key) {
                 controller.setExpressionWeight(preset, weight: weight)

@@ -52,7 +52,7 @@ import Metal
 public class VRMModel: @unchecked Sendable {
     // MARK: - Thread Safety
     let lock = NSLock()
-    
+
     /// Execute a closure while holding the model's lock
     public func withLock<T>(_ body: () throws -> T) rethrows -> T {
         lock.lock()
@@ -393,13 +393,13 @@ public class VRMModel: @unchecked Sendable {
                 for childIndex in childIndices {
                     if childIndex < nodes.count {
                         let childNode = nodes[childIndex]
-                        
+
                         // Validation: Prevent multiple parents (graph cycles/dag)
                         if let existingParent = childNode.parent {
                             vrmLog("⚠️ [HIERARCHY] Node \(childIndex) ('\(childNode.name ?? "unnamed")') already has parent '\(existingParent.name ?? "unnamed")'. Skipping re-parenting to '\(nodes[index].name ?? "unnamed")'.")
                             continue
                         }
-                        
+
                         // Validation: Prevent duplicate children
                         if nodes[index].children.contains(where: { $0 === childNode }) {
                             vrmLog("⚠️ [HIERARCHY] Node \(childIndex) is already a child of '\(nodes[index].name ?? "unnamed")'. Skipping duplicate add.")

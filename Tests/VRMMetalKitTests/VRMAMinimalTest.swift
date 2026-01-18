@@ -47,7 +47,7 @@ final class VRMAMinimalTest: XCTestCase {
 
         print("[TEST] Loading model...")
         let model = try await VRMModel.load(from: URL(fileURLWithPath: modelPath), device: device)
-        
+
         print("[TEST] Loading VRMA...")
         let clip = try VRMAnimationLoader.loadVRMA(from: URL(fileURLWithPath: vrmaPath), model: model)
 
@@ -59,7 +59,7 @@ final class VRMAMinimalTest: XCTestCase {
 
             print("[TEST] Creating AnimationPlayer...")
             let player = AnimationPlayer()
-            player.load(clip) 
+            player.load(clip)
             player.isLooping = false
 
             print("[TEST] Calling player.update()...")

@@ -42,15 +42,15 @@ import QuartzCore
 public final class VRMPipelineCache: @unchecked Sendable {
     /// Shared singleton instance
     public static let shared = VRMPipelineCache()
-    
+
     private let lock = NSLock()
     private var libraries: [String: MTLLibrary] = [:]
     private var pipelineStates: [String: MTLRenderPipelineState] = [:]
-    
+
     private init() {
         lock.name = "com.arkavo.VRMMetalKit.PipelineCache"
     }
-    
+
     /// Load or retrieve cached shader library
     ///
     /// This method attempts to load shaders in the following order:
@@ -64,13 +64,13 @@ public final class VRMPipelineCache: @unchecked Sendable {
     public func getLibrary(device: MTLDevice) throws -> MTLLibrary {
         return try lock.withLock {
             let key = "VRMMetalKitShaders"
-            
+
             // Return cached library if available
             if let cached = libraries[key] {
                 vrmLog("[VRMPipelineCache] ✅ Using cached shader library")
                 return cached
             }
-            
+
             // Always load from packaged metallib for consistency
             // This ensures the same shaders are used regardless of app configuration
             guard let url = Bundle.module.url(forResource: "VRMMetalKitShaders",
@@ -78,7 +78,7 @@ public final class VRMPipelineCache: @unchecked Sendable {
                 vrmLog("[VRMPipelineCache] ❌ VRMMetalKitShaders.metallib not found in package resources")
                 throw PipelineCacheError.shaderLibraryNotFound
             }
-            
+
             do {
                 let library = try device.makeLibrary(URL: url)
                 print("[VRMPipelineCache] ✅ Loaded from VRMMetalKitShaders.metallib at: \(url.path)")
@@ -90,7 +90,7 @@ public final class VRMPipelineCache: @unchecked Sendable {
             }
         }
     }
-    
+
     /// Get or create cached pipeline state
     ///
     /// Pipeline states are expensive to create, so we cache them by a unique key.
@@ -114,21 +114,21 @@ public final class VRMPipelineCache: @unchecked Sendable {
                 vrmLog("[VRMPipelineCache] ✅ Using cached pipeline state: \(key)")
                 return cached
             }
-            
+
             // Create new pipeline state
             vrmLog("[VRMPipelineCache] 🔨 Creating new pipeline state: \(key)")
             let startTime = CACurrentMediaTime()
-            
+
             let state = try device.makeRenderPipelineState(descriptor: descriptor)
-            
+
             let elapsed = (CACurrentMediaTime() - startTime) * 1000
             vrmLog("[VRMPipelineCache] ✅ Pipeline state created in \(String(format: "%.2f", elapsed))ms")
-            
+
             pipelineStates[key] = state
             return state
         }
     }
-    
+
     /// Clear all cached libraries and pipeline states
     ///
     /// This is useful for:
@@ -139,14 +139,14 @@ public final class VRMPipelineCache: @unchecked Sendable {
         lock.withLock {
             let libraryCount = libraries.count
             let pipelineCount = pipelineStates.count
-            
+
             libraries.removeAll()
             pipelineStates.removeAll()
-            
+
             vrmLog("[VRMPipelineCache] 🗑️ Cache cleared: \(libraryCount) libraries, \(pipelineCount) pipeline states")
         }
     }
-    
+
     /// Get cache statistics for monitoring
     public func getStatistics() -> CacheStatistics {
         return lock.withLock {
@@ -156,7 +156,7 @@ public final class VRMPipelineCache: @unchecked Sendable {
             )
         }
     }
-    
+
     /// Cache statistics snapshot
     public struct CacheStatistics {
         public let libraryCount: Int
