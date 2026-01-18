@@ -2156,6 +2156,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // LIGHTING FIX: Zero emissive AFTER MToon init to prevent washout
                         mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
 
+                        // ALPHA FIX: Restore effectiveAlphaMode AFTER MToon init
+                        // MToon extension may have wrong alphaMode; use our detected/fixed value
+                        switch materialAlphaMode {
+                        case "mask":
+                            mtoonUniforms.alphaMode = 1
+                            mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
+                        case "blend":
+                            mtoonUniforms.alphaMode = 2
+                        default:
+                            mtoonUniforms.alphaMode = 0
+                        }
                     } else {
                         // NO MToon extension - use default PBR values
                         // Apply SELECTIVE alpha mode override for face/body materials AFTER MToon init

@@ -246,6 +246,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.setBuffer(planeColliders, offset: 0, index: 7)
         }
 
+        // Bind directions for stiffness spring force (return-to-bind-pose)
+        if let bindDirections = buffers.bindDirections {
+            computeEncoder.setBuffer(bindDirections, offset: 0, index: 11)
+        }
+
         // First update kinematic root bones with animated positions
         // Note: Kinematic kernel uses buffer indices 8-10 to avoid conflicts with colliders (5-7)
         if !rootBoneIndices.isEmpty,
@@ -424,35 +429,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     continue
                 }
 
-                // Look ahead to next joint in chain to get direction
-                if let nextJoint = spring.joints[safe: jointIndexInChain + 1],
-                   let nextNode = model.nodes[safe: nextJoint.node] {
-                    // Direction from current bone to next bone in world space
-                    let bindDirWorld = simd_normalize(nextNode.worldPosition - currentNode.worldPosition)
-
-                    // Transform to THIS bone's local space (will be rotation-invariant)
-                    let currentRotInv = simd_conjugate(extractRotation(from: currentNode.worldMatrix))
-                    let bindDirLocal = simd_act(currentRotInv, bindDirWorld)
-                    boneBindDirections.append(bindDirLocal)
+                // Store direction from PARENT to THIS bone (what shader needs for stiffness)
+                // Using world space for simplicity - works correctly when head is static
+                if jointIndexInChain > 0,
+                   let prevJoint = spring.joints[safe: jointIndexInChain - 1],
+                   let prevNode = model.nodes[safe: prevJoint.node] {
+                    // Direction from parent to current bone in world space
+                    let bindDirWorld = simd_normalize(currentNode.worldPosition - prevNode.worldPosition)
+                    boneBindDirections.append(bindDirWorld)
 
                     if boneIndex < 3 {
-                        vrmLog("[SpringBone] Bone \(boneIndex): bindDirWorld=\(bindDirWorld), bindDirLocal (bone space)=\(bindDirLocal)")
+                        vrmLog("[SpringBone] Bone \(boneIndex): bindDir (parent→current, world)=\(bindDirWorld)")
                     }
                 } else {
-                    // Last bone in chain has no child - use direction from parent to this bone
-                    // This provides a more accurate bind direction than a fixed default
-                    if jointIndexInChain > 0,
-                       let prevJoint = spring.joints[safe: jointIndexInChain - 1],
-                       let prevNode = model.nodes[safe: prevJoint.node] {
-                        // Use parent-to-current direction
-                        let bindDirWorld = simd_normalize(currentNode.worldPosition - prevNode.worldPosition)
-                        let currentRotInv = simd_conjugate(extractRotation(from: currentNode.worldMatrix))
-                        let bindDirLocal = simd_act(currentRotInv, bindDirWorld)
-                        boneBindDirections.append(bindDirLocal)
-                    } else {
-                        // Ultimate fallback for single-bone chains
-                        boneBindDirections.append(SIMD3<Float>(0, 1, 0))
-                    }
+                    // Root bone - use default downward direction (hair typically hangs down)
+                    boneBindDirections.append(SIMD3<Float>(0, -1, 0))
                 }
 
                 boneIndex += 1
@@ -491,6 +482,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Update buffers
         buffers.updateBoneParameters(boneParams)
         buffers.updateRestLengths(restLengths)
+        buffers.updateBindDirections(boneBindDirections)
 
         // Store CPU-side copies for physics reset
         cpuRestLengths = restLengths

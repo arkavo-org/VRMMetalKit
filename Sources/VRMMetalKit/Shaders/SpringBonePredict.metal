@@ -47,6 +47,8 @@ kernel void springBonePredict(
     device float3* bonePosCurr [[buffer(1)]],
     constant BoneParams* boneParams [[buffer(2)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
+    constant float* restLengths [[buffer(4)]],
+    constant float3* bindDirections [[buffer(11)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones) return;
@@ -108,20 +110,51 @@ kernel void springBonePredict(
     float3 effectiveGravity = boneParams[id].gravityDir * gravityMagnitude * boneParams[id].gravityPower;
 
     // Verlet integration: position += velocity * drag + acceleration * dt²
-    // NOTE: Stiffness is NOT applied here - it controls the distance constraint only.
     // Drag is the velocity damping factor (0.0 = no drag, full velocity; 1.0 = full drag, no velocity)
     float3 newPos = bonePosCurr[id] + velocity * dragFactor +
                     (effectiveGravity + windForce) *
                     globalParams.dtSub * globalParams.dtSub;
 
-    // Clamp step size to prevent explosion (not world position)
-    // This prevents physics instability regardless of character's world position
-    const float MAX_STEP = 2.0;  // Max 2 meters per substep
+    // Stiffness spring force: pulls bone toward its bind pose direction from parent
+    // This makes hair return to its styled position after being disturbed
+    float3 parentPos = bonePosCurr[parentIndex];
+    float3 bindDir = bindDirections[id];
+    float restLength = restLengths[id];
+
+    // Safety: only apply stiffness if data is valid (no NaN propagation)
+    float bindDirLen = length(bindDir);
+    bool stiffnessValid = !isnan(parentPos.x) && !isnan(parentPos.y) && !isnan(parentPos.z)
+                       && bindDirLen > 0.001 && restLength > 0.0;
+
+    if (stiffnessValid) {
+        // Normalize bindDir if needed
+        float3 safeBindDir = bindDir / bindDirLen;
+        float3 targetPos = parentPos + safeBindDir * restLength;
+
+        float stiffness = boneParams[id].stiffness;
+        float3 toTarget = targetPos - newPos;
+        float distToTarget = length(toTarget);
+
+        // Only apply stiffness when significantly displaced from target
+        if (distToTarget > 0.001 && stiffness > 0.0) {
+            float3 targetDir = toTarget / distToTarget;
+            float pullStrength = stiffness * globalParams.dtSub * 0.5;
+            newPos = newPos + targetDir * min(distToTarget, pullStrength * distToTarget);
+        }
+    }
+
+    // Clamp step size to prevent explosion
+    const float MAX_STEP = 2.0;
     float3 displacement = newPos - bonePosCurr[id];
     float stepSize = length(displacement);
     if (stepSize > MAX_STEP) {
         displacement = (displacement / stepSize) * MAX_STEP;
         newPos = bonePosCurr[id] + displacement;
+    }
+
+    // Final NaN safety check - if result is NaN, keep previous position
+    if (isnan(newPos.x) || isnan(newPos.y) || isnan(newPos.z)) {
+        newPos = bonePosCurr[id];
     }
 
     bonePosCurr[id] = newPos;

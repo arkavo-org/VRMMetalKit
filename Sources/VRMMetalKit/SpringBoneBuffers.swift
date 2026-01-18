@@ -49,6 +49,7 @@ public final class SpringBoneBuffers: @unchecked Sendable {
     var bonePosCurr: MTLBuffer?
     var boneParams: MTLBuffer?
     var restLengths: MTLBuffer?
+    var bindDirections: MTLBuffer?  // Bind pose directions for stiffness spring force
     var sphereColliders: MTLBuffer?
     var capsuleColliders: MTLBuffer?
     var planeColliders: MTLBuffer?
@@ -80,6 +81,7 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         bonePosCurr = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])
         boneParams = device.makeBuffer(length: boneParamsSize, options: [.storageModeShared])
         restLengths = device.makeBuffer(length: restLengthSize, options: [.storageModeShared])
+        bindDirections = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])  // SIMD3<Float> per bone
 
         if numSpheres > 0 {
             sphereColliders = device.makeBuffer(length: sphereColliderSize, options: [.storageModeShared])
@@ -115,6 +117,29 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         let ptr = restLengths?.contents().bindMemory(to: Float.self, capacity: numBones)
         for i in 0..<numBones {
             ptr?[i] = lengths[i]
+        }
+    }
+
+    func updateBindDirections(_ directions: [SIMD3<Float>]) {
+        guard directions.count == numBones else {
+            vrmLogPhysics("⚠️ [SpringBoneBuffers] Bind direction count mismatch: expected \(numBones), got \(directions.count)")
+            return
+        }
+
+        let ptr = bindDirections?.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+        for i in 0..<numBones {
+            var dir = directions[i]
+            // Validate: ensure no NaN and normalize if needed
+            if dir.x.isNaN || dir.y.isNaN || dir.z.isNaN {
+                dir = SIMD3<Float>(0, -1, 0) // Safe default
+            }
+            let len = simd_length(dir)
+            if len < 0.001 {
+                dir = SIMD3<Float>(0, -1, 0) // Safe default for zero-length
+            } else if abs(len - 1.0) > 0.01 {
+                dir = dir / len // Normalize
+            }
+            ptr?[i] = dir
         }
     }
 
