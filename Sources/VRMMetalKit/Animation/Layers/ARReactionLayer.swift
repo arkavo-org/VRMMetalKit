@@ -21,6 +21,10 @@ import simd
 public enum ARReaction: String, Sendable {
     /// No active reaction
     case none
+    /// Idle/standing pose
+    case idle
+    /// Walking animation
+    case walk
     /// User appeared suddenly or approached quickly
     case surprised
     /// Acknowledging user gesture
@@ -69,8 +73,14 @@ public class ARReactionLayer: AnimationLayer {
     /// Duration for jump reaction (longer to showcase physics)
     public var jumpDuration: Float = 1.2
 
+    /// Duration for walk cycle (loops continuously while held)
+    public var walkDuration: Float = 1.0
+
     /// Enable automatic reaction triggering
     public var autoTriggerEnabled = true
+
+    /// Callback when a reaction completes (not called for looping reactions like walk)
+    public var onReactionComplete: ((ARReaction) -> Void)?
 
     // MARK: - Head Position Offset
 
@@ -100,7 +110,35 @@ public class ARReactionLayer: AnimationLayer {
 
     /// Manually trigger a reaction
     public func triggerReaction(_ reaction: ARReaction) {
-        guard currentReaction == .none else { return } // Don't interrupt active reaction
+        // Allow certain transitions:
+        // - idle can always be set (stops current animation)
+        // - jump can interrupt walk
+        // - walk can only start if nothing else is playing
+        // - other reactions can't interrupt each other
+
+        if reaction == .idle || reaction == .none {
+            // Idle/none always allowed - stops current animation
+            currentReaction = reaction
+            reactionProgress = 0
+            return
+        }
+
+        if reaction == .jump && (currentReaction == .walk || currentReaction == .idle || currentReaction == .none) {
+            // Jump can interrupt walk or start from idle
+            currentReaction = reaction
+            reactionProgress = 0
+            return
+        }
+
+        if reaction == .walk && (currentReaction == .none || currentReaction == .idle) {
+            // Walk can only start from idle/none
+            currentReaction = reaction
+            reactionProgress = 0
+            return
+        }
+
+        // Other reactions: don't interrupt active reaction
+        guard currentReaction == .none || currentReaction == .idle else { return }
         currentReaction = reaction
         reactionProgress = 0
     }
@@ -135,14 +173,30 @@ public class ARReactionLayer: AnimationLayer {
 
         // Progress current reaction
         if currentReaction != .none {
-            // Use longer duration for jump to showcase physics
-            let duration = currentReaction == .jump ? jumpDuration : reactionDuration
+            // Use appropriate duration for each reaction type
+            let duration: Float
+            switch currentReaction {
+            case .jump:
+                duration = jumpDuration
+            case .walk:
+                duration = walkDuration
+            default:
+                duration = reactionDuration
+            }
+
             reactionProgress += deltaTime / duration
 
             if reactionProgress >= 1.0 {
-                // Reaction complete
-                currentReaction = .none
-                reactionProgress = 0
+                // Walk loops continuously, other reactions complete
+                if currentReaction == .walk {
+                    reactionProgress = reactionProgress.truncatingRemainder(dividingBy: 1.0)
+                } else {
+                    let completedReaction = currentReaction
+                    currentReaction = .none
+                    reactionProgress = 0
+                    // Notify completion (for physics reset, etc.)
+                    onReactionComplete?(completedReaction)
+                }
             }
         }
     }
@@ -163,6 +217,12 @@ public class ARReactionLayer: AnimationLayer {
         let intensity = t < 0.5 ? t * 2 : (1 - t) * 2
 
         switch currentReaction {
+        case .idle:
+            evaluateIdle(intensity: intensity, progress: t)
+
+        case .walk:
+            evaluateWalk(intensity: intensity, progress: t)
+
         case .surprised:
             evaluateSurprised(intensity: intensity)
 
@@ -346,6 +406,56 @@ public class ARReactionLayer: AnimationLayer {
 
         // Big happy expression during jump
         cachedOutput.morphWeights[VRMExpressionPreset.happy.rawValue] = intensity * 0.95
+    }
+
+    private func evaluateIdle(intensity: Float, progress: Float) {
+        // Subtle breathing motion - very gentle
+        let breathPhase = sin(progress * .pi * 2)
+
+        // Chest expands slightly with breath
+        var chestTransform = ProceduralBoneTransform.identity
+        chestTransform.rotation = simd_quatf(angle: 0.02 * breathPhase * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.chest] = chestTransform
+
+        // Shoulders rise slightly
+        var spineTransform = ProceduralBoneTransform.identity
+        spineTransform.rotation = simd_quatf(angle: 0.01 * breathPhase * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.spine] = spineTransform
+    }
+
+    private func evaluateWalk(intensity: Float, progress: Float) {
+        // Walking animation - continuous looping motion
+        // Use time-based cycling for continuous walk
+        let walkCycle = progress * .pi * 4  // Two full steps per animation cycle
+
+        // Hips bob up and down with each step
+        let hipBob = sin(walkCycle * 2) * 0.02 * intensity
+        var hipsTransform = ProceduralBoneTransform.identity
+        hipsTransform.translation = SIMD3<Float>(0, hipBob, 0)
+        // Hips also sway side to side
+        let hipSway = sin(walkCycle) * 0.03 * intensity
+        hipsTransform.rotation = simd_quatf(angle: hipSway, axis: SIMD3<Float>(0, 0, 1))
+        cachedOutput.bones[.hips] = hipsTransform
+
+        // Spine counter-rotates for balance
+        var spineTransform = ProceduralBoneTransform.identity
+        spineTransform.rotation = simd_quatf(angle: -hipSway * 0.5, axis: SIMD3<Float>(0, 0, 1))
+        cachedOutput.bones[.spine] = spineTransform
+
+        // Arms swing opposite to legs
+        let armSwing = sin(walkCycle) * 0.3 * intensity
+        var leftArmTransform = ProceduralBoneTransform.identity
+        leftArmTransform.rotation = simd_quatf(angle: armSwing, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.leftUpperArm] = leftArmTransform
+
+        var rightArmTransform = ProceduralBoneTransform.identity
+        rightArmTransform.rotation = simd_quatf(angle: -armSwing, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.rightUpperArm] = rightArmTransform
+
+        // Head stays relatively stable but slight bob
+        var headTransform = ProceduralBoneTransform.identity
+        headTransform.rotation = simd_quatf(angle: sin(walkCycle * 2) * 0.02 * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.head] = headTransform
     }
 
     private func easeInOut(_ t: Float) -> Float {

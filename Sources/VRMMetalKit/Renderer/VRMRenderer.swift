@@ -348,6 +348,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var temporaryWind: SIMD3<Float>?
     var forceTimer: Float = 0
 
+    /// Request physics state reset (zeros velocity, useful when returning to idle)
+    public func resetPhysics() {
+        springBoneComputeSystem?.requestPhysicsReset = true
+    }
+
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
     private static let zeroMorphWeights = [Float](repeating: 0, count: 8)
     private var hasLoggedSpringBone = false

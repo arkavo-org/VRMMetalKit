@@ -70,9 +70,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // Store bind-pose direction for each bone (in parent's local space)
     private var boneBindDirections: [SIMD3<Float>] = []
 
+    // Store rest lengths on CPU for physics reset (mirrors GPU buffer)
+    private var cpuRestLengths: [Float] = []
+
+    // Store parent indices for each bone (for kinematic position calculation)
+    private var cpuParentIndices: [Int] = []
+
     // Teleportation detection
     private var lastRootPositions: [SIMD3<Float>] = []
     private let teleportationThreshold: Float = 1.0  // 1 meter threshold
+
+    /// Flag to request physics state reset on next update (e.g., when returning to idle)
+    var requestPhysicsReset = false
 
     // Readback + synchronization (protected by snapshotLock)
     private let snapshotLock = NSLock()
@@ -312,6 +321,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         var boneParams: [BoneParams] = []
         var restLengths: [Float] = []
+        var parentIndices: [Int] = []  // CPU-side parent indices for physics reset
         var sphereColliders: [SphereCollider] = []
         var capsuleColliders: [CapsuleCollider] = []
         var planeColliders: [PlaneCollider] = []
@@ -369,12 +379,16 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     ? simd_normalize(joint.gravityDir)
                     : SIMD3<Float>(0, -1, 0) // Default downward if zero vector
 
+                // Calculate parent index (-1 for root bones)
+                let parentIdx = (isRootBone || jointIndexInChain == 0) ? -1 : (boneIndex - 1)
+                parentIndices.append(parentIdx)
+
                 let params = BoneParams(
                     stiffness: joint.stiffness,
                     drag: joint.dragForce,
                     radius: joint.hitRadius,
                     // Only set parent for non-root bones within the same chain
-                    parentIndex: (isRootBone || jointIndexInChain == 0) ? 0xFFFFFFFF : UInt32(boneIndex - 1),
+                    parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
                     gravityPower: joint.gravityPower,
                     colliderGroupMask: colliderGroupMask,
                     gravityDir: normalizedGravityDir
@@ -478,6 +492,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         buffers.updateBoneParameters(boneParams)
         buffers.updateRestLengths(restLengths)
 
+        // Store CPU-side copies for physics reset
+        cpuRestLengths = restLengths
+        cpuParentIndices = parentIndices
+
         if !sphereColliders.isEmpty {
             buffers.updateSphereColliders(sphereColliders)
         }
@@ -561,6 +579,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if shouldResetPhysics {
             resetPhysicsState(model: model, buffers: buffers, animatedPositions: animatedPositions)
             vrmLog("⚠️ [SpringBone] Teleportation detected - physics state reset")
+        }
+
+        // Manual physics reset request (e.g., when returning to idle)
+        if requestPhysicsReset {
+            resetPhysicsState(model: model, buffers: buffers, animatedPositions: animatedPositions)
+            requestPhysicsReset = false
         }
 
         // Update last root positions for next frame's teleportation check
@@ -801,34 +825,53 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
 
     /// Resets physics state after teleportation to prevent spring explosion
-    /// Sets all bone positions to their animated/rest positions
+    /// Calculates kinematic (rest) positions for all bones based on parent chain
     private func resetPhysicsState(model: VRMModel, buffers: SpringBoneBuffers, animatedPositions: [SIMD3<Float>]) {
-        guard let springBone = model.springBone,
-              let bonePosPrev = buffers.bonePosPrev,
-              let bonePosCurr = buffers.bonePosCurr else {
+        guard let bonePosPrev = buffers.bonePosPrev,
+              let bonePosCurr = buffers.bonePosCurr,
+              buffers.numBones > 0,
+              cpuParentIndices.count == buffers.numBones,
+              cpuRestLengths.count == buffers.numBones else {
             return
         }
 
-        // Collect all bone positions from current node transforms
-        var allBonePositions: [SIMD3<Float>] = []
-        for spring in springBone.springs {
-            for joint in spring.joints {
-                if let node = model.nodes[safe: joint.node] {
-                    allBonePositions.append(node.worldPosition)
-                } else {
-                    allBonePositions.append(SIMD3<Float>(0, 0, 0))
-                }
+        // Calculate kinematic positions: root bones from animation, children from parent + direction * length
+        var kinematicPositions: [SIMD3<Float>] = Array(repeating: .zero, count: buffers.numBones)
+
+        // Map root bone indices to their animated positions
+        var rootPositionMap: [Int: SIMD3<Float>] = [:]
+        for (i, rootIdx) in rootBoneIndices.enumerated() {
+            if i < animatedPositions.count {
+                rootPositionMap[Int(rootIdx)] = animatedPositions[i]
             }
         }
 
-        // Reset both previous and current positions to eliminate velocity
-        if !allBonePositions.isEmpty && allBonePositions.count == buffers.numBones {
-            let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
-            let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
-            for i in 0..<buffers.numBones {
-                prevPtr[i] = allBonePositions[i]
-                currPtr[i] = allBonePositions[i]
+        // Process bones in order (parents before children due to chain structure)
+        // Use gravity direction (downward) for child bones to make hair hang naturally
+        let gravityDir = SIMD3<Float>(0, -1, 0)
+
+        for i in 0..<buffers.numBones {
+            let parentIdx = cpuParentIndices[i]
+
+            if parentIdx < 0 {
+                // Root bone - use animated position
+                kinematicPositions[i] = rootPositionMap[i] ?? .zero
+            } else {
+                // Child bone - hang down from parent using gravity direction
+                let parentPos = kinematicPositions[parentIdx]
+                let restLength = cpuRestLengths[i]
+
+                // Use gravity direction so hair hangs down naturally
+                kinematicPositions[i] = parentPos + gravityDir * restLength
             }
+        }
+
+        // Reset both previous and current positions to kinematic (eliminates velocity)
+        let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+        let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+        for i in 0..<buffers.numBones {
+            prevPtr[i] = kinematicPositions[i]
+            currPtr[i] = kinematicPositions[i]
         }
 
         // Reset time accumulator to prevent multiple substeps after teleport

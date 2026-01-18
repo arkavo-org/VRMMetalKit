@@ -316,6 +316,76 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         XCTAssertTrue(rootMoved, "Root bone should follow animation (kinematic)")
     }
 
+    // MARK: - Inertia Tests
+
+    /// Verify that child bones trail behind when parent moves upward (like during a jump)
+    /// This tests the inertia compensation: when parent moves up, child should feel
+    /// a relative downward velocity, creating the trailing effect
+    func testChildTrailsBehindWhenParentMovesUp() throws {
+        let model = try buildVerticalChain(boneCount: 3, gravityPower: 0.0, drag: 0.1)  // Low drag to see inertia
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+
+        guard let rootNode = model.nodes.first,
+              let buffers = model.springBoneBuffers,
+              let bonePosCurr = buffers.bonePosCurr else {
+            XCTFail("Setup failed")
+            return
+        }
+
+        // Get initial child bone Y position (bone 1, relative to root)
+        let initialPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+        let initialRootY = initialPtr[0].y
+        let initialChildY = initialPtr[1].y
+        let initialRelativeY = initialChildY - initialRootY  // Should be negative (child below root)
+
+        // Simulate parent moving UP (like a jump) over several frames
+        let jumpHeight: Float = 0.5  // 50cm jump
+        let jumpFrames = 10
+
+        for frame in 1...jumpFrames {
+            // Move root upward gradually
+            let progress = Float(frame) / Float(jumpFrames)
+            let newRootY: Float = 1.0 + jumpHeight * progress
+            rootNode.translation = SIMD3<Float>(0, newRootY, 0)
+            rootNode.updateLocalMatrix()
+            rootNode.updateWorldTransform()
+
+            system.update(model: model, deltaTime: 1.0 / 60.0)
+        }
+
+        Thread.sleep(forTimeInterval: 0.1)
+        system.writeBonesToNodes(model: model)
+
+        // Check final positions
+        let finalPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+        let finalRootY = finalPtr[0].y
+        let finalChildY = finalPtr[1].y
+        let finalRelativeY = finalChildY - finalRootY
+
+        // The child should be LOWER relative to root than it started (trailing behind)
+        // If physics is correct: parent moved up, child trails behind = more negative relative Y
+        // If physics is wrong: child follows or leads = same or less negative relative Y
+        XCTAssertLessThan(
+            finalRelativeY, initialRelativeY + 0.01,  // Small tolerance
+            "Child should trail behind (lower relative to root) when parent moves up. " +
+            "Initial relative Y: \(initialRelativeY), Final relative Y: \(finalRelativeY)"
+        )
+
+        // Verify the child moved approximately the same as root (with small tolerance)
+        // The constraint pulls child along, but the relative position should decrease
+        // A small overshoot (<5%) is acceptable due to constraint correction
+        let rootDeltaY = finalRootY - initialRootY
+        let childDeltaY = finalChildY - initialChildY
+        let tolerance: Float = rootDeltaY * 0.05  // 5% tolerance
+
+        XCTAssertLessThan(
+            childDeltaY, rootDeltaY + tolerance,
+            "Child should not move significantly more than root. " +
+            "Root moved: \(rootDeltaY), Child moved: \(childDeltaY), tolerance: \(tolerance)"
+        )
+    }
+
     // MARK: - Edge Case Tests
 
     /// Spec 5.1: Teleportation should trigger reset

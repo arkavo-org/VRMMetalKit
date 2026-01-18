@@ -63,6 +63,32 @@ kernel void springBonePredict(
     // This is the core of Verlet integration - velocity is implicit in position difference
     float3 velocity = bonePosCurr[id] - bonePosPrev[id];
 
+    // INERTIA COMPENSATION: When parent moves UP, child should maintain its WORLD position
+    // momentarily due to inertia. Without compensation, constraint corrections from the
+    // previous frame become velocity this frame - when parent moves up, constraint pulls
+    // child up, and that becomes upward velocity.
+    //
+    // DIRECTION-AWARE: Only compensate for UPWARD parent movement (fighting gravity).
+    // During descent/landing, let hair float naturally - compensating downward movement
+    // would create upward force and make hair shoot up on landing.
+    //
+    // We scale the compensation based on movement magnitude:
+    // - Small movements (idle breathing/sway): minimal compensation, hair follows gently
+    // - Large movements (jumps): full compensation, hair trails behind with inertia
+    float3 parentDelta = bonePosCurr[parentIndex] - bonePosPrev[parentIndex];
+
+    // Only compensate for upward Y movement - no lateral compensation
+    // Lateral compensation can push bangs into the face during head tilts
+    float3 compensatedDelta = float3(
+        0.0,                      // No X compensation
+        max(0.0, parentDelta.y),  // Only upward movement
+        0.0                       // No Z compensation
+    );
+
+    float parentSpeed = length(compensatedDelta);
+    float compensationFactor = smoothstep(0.002, 0.02, parentSpeed);
+    velocity = velocity - compensatedDelta * compensationFactor;
+
     // Now save current position as previous for next frame
     bonePosPrev[id] = bonePosCurr[id];
 
