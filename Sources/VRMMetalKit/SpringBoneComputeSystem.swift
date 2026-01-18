@@ -478,7 +478,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             case .capsule(let offset, let radius, let tail):
                 let worldP0 = colliderNode.worldPosition + offset
-                let worldP1 = colliderNode.worldPosition + tail
+                let worldP1 = colliderNode.worldPosition + offset + tail
                 capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
 
             case .plane(let offset, let normal):
@@ -624,7 +624,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             case .capsule(let offset, let radius, let tail):
                 let worldP0 = colliderNode.worldPosition + offset
-                let worldP1 = colliderNode.worldPosition + tail
+                let worldP1 = colliderNode.worldPosition + offset + tail
                 capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
 
             case .plane(let offset, let normal):
