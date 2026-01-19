@@ -48,7 +48,9 @@ public class ARReactionLayer: AnimationLayer {
     public var isEnabled = true
 
     public var affectedBones: Set<VRMHumanoidBone> {
-        [.head, .neck, .chest, .spine, .hips, .leftUpperArm, .rightUpperArm, .leftLowerArm, .rightLowerArm]
+        [.head, .neck, .chest, .spine, .hips,
+         .leftUpperArm, .rightUpperArm, .leftLowerArm, .rightLowerArm,
+         .leftUpperLeg, .rightUpperLeg, .leftLowerLeg, .rightLowerLeg]
     }
 
     // MARK: - Proximity Thresholds (meters)
@@ -214,14 +216,20 @@ public class ARReactionLayer: AnimationLayer {
         let t = easeInOut(reactionProgress)
 
         // Bell curve for return to rest: ramps up then back down
-        let intensity = t < 0.5 ? t * 2 : (1 - t) * 2
+        // Exception: walk uses constant intensity since it loops
+        let intensity: Float
+        if currentReaction == .walk {
+            intensity = 1.0  // Constant for looping animation
+        } else {
+            intensity = t < 0.5 ? t * 2 : (1 - t) * 2
+        }
 
         switch currentReaction {
         case .idle:
             evaluateIdle(intensity: intensity, progress: t)
 
         case .walk:
-            evaluateWalk(intensity: intensity, progress: t)
+            evaluateWalk(intensity: 1.0, progress: reactionProgress)
 
         case .surprised:
             evaluateSurprised(intensity: intensity)
@@ -426,14 +434,47 @@ public class ARReactionLayer: AnimationLayer {
     private func evaluateWalk(intensity: Float, progress: Float) {
         // Walking animation - continuous looping motion
         // Use time-based cycling for continuous walk
-        let walkCycle = progress * .pi * 4  // Two full steps per animation cycle
+        let walkCycle = progress * .pi * 2  // One full gait cycle (left+right step)
 
-        // Hips bob up and down with each step
+        // Leg swing amplitude (radians) - how far legs swing forward/back
+        let legSwingAmplitude: Float = 0.4 * intensity
+
+        // Knee bend amplitude - knees bend during swing phase
+        let kneeBendAmplitude: Float = 0.5 * intensity
+
+        // Left leg swings forward when sin(walkCycle) > 0
+        let leftLegSwing = sin(walkCycle) * legSwingAmplitude
+        // Right leg is opposite phase
+        let rightLegSwing = sin(walkCycle + .pi) * legSwingAmplitude
+
+        // Upper legs (thighs) swing forward/back around X axis
+        var leftUpperLegTransform = ProceduralBoneTransform.identity
+        leftUpperLegTransform.rotation = simd_quatf(angle: -leftLegSwing, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.leftUpperLeg] = leftUpperLegTransform
+
+        var rightUpperLegTransform = ProceduralBoneTransform.identity
+        rightUpperLegTransform.rotation = simd_quatf(angle: -rightLegSwing, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.rightUpperLeg] = rightUpperLegTransform
+
+        // Lower legs (knees) bend during swing phase
+        // Knee bends most when leg is swinging forward (passing under body)
+        let leftKneeBend = max(0, sin(walkCycle + 0.5)) * kneeBendAmplitude
+        let rightKneeBend = max(0, sin(walkCycle + .pi + 0.5)) * kneeBendAmplitude
+
+        var leftLowerLegTransform = ProceduralBoneTransform.identity
+        leftLowerLegTransform.rotation = simd_quatf(angle: leftKneeBend, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.leftLowerLeg] = leftLowerLegTransform
+
+        var rightLowerLegTransform = ProceduralBoneTransform.identity
+        rightLowerLegTransform.rotation = simd_quatf(angle: rightKneeBend, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.rightLowerLeg] = rightLowerLegTransform
+
+        // Hips bob up and down with each step (twice per cycle)
         let hipBob = sin(walkCycle * 2) * 0.02 * intensity
         var hipsTransform = ProceduralBoneTransform.identity
         hipsTransform.translation = SIMD3<Float>(0, hipBob, 0)
-        // Hips also sway side to side
-        let hipSway = sin(walkCycle) * 0.03 * intensity
+        // Hips also sway side to side (weight shift)
+        let hipSway = sin(walkCycle) * 0.04 * intensity
         hipsTransform.rotation = simd_quatf(angle: hipSway, axis: SIMD3<Float>(0, 0, 1))
         cachedOutput.bones[.hips] = hipsTransform
 
@@ -442,8 +483,8 @@ public class ARReactionLayer: AnimationLayer {
         spineTransform.rotation = simd_quatf(angle: -hipSway * 0.5, axis: SIMD3<Float>(0, 0, 1))
         cachedOutput.bones[.spine] = spineTransform
 
-        // Arms swing opposite to legs
-        let armSwing = sin(walkCycle) * 0.3 * intensity
+        // Arms swing opposite to legs (natural gait)
+        let armSwing = sin(walkCycle) * 0.35 * intensity
         var leftArmTransform = ProceduralBoneTransform.identity
         leftArmTransform.rotation = simd_quatf(angle: armSwing, axis: SIMD3<Float>(1, 0, 0))
         cachedOutput.bones[.leftUpperArm] = leftArmTransform
