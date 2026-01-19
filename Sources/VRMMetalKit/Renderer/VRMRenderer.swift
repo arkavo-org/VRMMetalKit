@@ -225,16 +225,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let finalColor = color * intensity
 
         // Store directions separately - they'll be transformed by camera each frame
-        // Only store colors in uniforms directly
+        // Also update uniforms directly so values are accessible immediately
         switch index {
         case 0:
             storedLightDirections.0 = normalizedDir
+            uniforms.lightDirection = normalizedDir
             uniforms.lightColor = finalColor
         case 1:
             storedLightDirections.1 = normalizedDir
+            uniforms.light1Direction = normalizedDir
             uniforms.light1Color = finalColor
         case 2:
             storedLightDirections.2 = normalizedDir
+            uniforms.light2Direction = normalizedDir
             uniforms.light2Color = finalColor
         default:
             vrmLog("[VRMRenderer] Warning: Invalid light index \(index), must be 0-2")
@@ -540,6 +543,47 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Register custom expressions
             for (name, expression) in expressions.custom {
                 expressionController?.registerCustomExpression(expression, name: name)
+            }
+        }
+
+        // Initialize base material colors for expression-driven material color binds
+        for (materialIndex, material) in model.materials.enumerated() {
+            // Store base color factor (RGBA)
+            expressionController?.setBaseMaterialColor(
+                materialIndex: materialIndex,
+                type: .color,
+                color: material.baseColorFactor
+            )
+
+            // Store emissive factor (RGB + 1.0 alpha)
+            expressionController?.setBaseMaterialColor(
+                materialIndex: materialIndex,
+                type: .emissionColor,
+                color: SIMD4<Float>(material.emissiveFactor, 1.0)
+            )
+
+            // Store MToon-specific colors if available
+            if let mtoon = material.mtoon {
+                expressionController?.setBaseMaterialColor(
+                    materialIndex: materialIndex,
+                    type: .shadeColor,
+                    color: SIMD4<Float>(mtoon.shadeColorFactor, 1.0)
+                )
+                expressionController?.setBaseMaterialColor(
+                    materialIndex: materialIndex,
+                    type: .matcapColor,
+                    color: SIMD4<Float>(mtoon.matcapFactor, 1.0)
+                )
+                expressionController?.setBaseMaterialColor(
+                    materialIndex: materialIndex,
+                    type: .rimColor,
+                    color: SIMD4<Float>(mtoon.parametricRimColorFactor, 1.0)
+                )
+                expressionController?.setBaseMaterialColor(
+                    materialIndex: materialIndex,
+                    type: .outlineColor,
+                    color: SIMD4<Float>(mtoon.outlineColorFactor, 1.0)
+                )
             }
         }
 
@@ -2514,6 +2558,27 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLog("[VRMRenderer] Drawing mesh \(item.meshIndex): indexCount=\(primitive.indexCount), vertexCount=\(primitive.vertexCount)")
                 }
 
+                // Apply expression-driven material color overrides
+                if let materialIndex = primitive.materialIndex {
+                    if let colorOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .color) {
+                        mtoonUniforms.baseColorFactor = colorOverride
+                    }
+                    if let emissionOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .emissionColor) {
+                        mtoonUniforms.emissiveFactor = SIMD3<Float>(emissionOverride.x, emissionOverride.y, emissionOverride.z)
+                    }
+                    if let shadeOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .shadeColor) {
+                        mtoonUniforms.shadeColorFactor = SIMD3<Float>(shadeOverride.x, shadeOverride.y, shadeOverride.z)
+                    }
+                    if let matcapOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .matcapColor) {
+                        mtoonUniforms.matcapFactor = SIMD3<Float>(matcapOverride.x, matcapOverride.y, matcapOverride.z)
+                    }
+                    if let rimOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .rimColor) {
+                        mtoonUniforms.parametricRimColorFactor = SIMD3<Float>(rimOverride.x, rimOverride.y, rimOverride.z)
+                    }
+                    if let outlineOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .outlineColor) {
+                        mtoonUniforms.outlineColorFactor = SIMD3<Float>(outlineOverride.x, outlineOverride.y, outlineOverride.z)
+                    }
+                }
 
                 // Set material uniforms based on rendering mode
                 if renderingMode == .toon2D {
@@ -3247,6 +3312,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Set MToon material uniforms
             var mtoonUniforms = MToonMaterialUniforms(from: mtoon)
             mtoonUniforms.baseColorFactor = material.baseColorFactor
+
+            // Apply expression-driven material color overrides for outlines
+            if let outlineOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .outlineColor) {
+                mtoonUniforms.outlineColorFactor = SIMD3<Float>(outlineOverride.x, outlineOverride.y, outlineOverride.z)
+            }
+
             encoder.setVertexBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 2)
             encoder.setFragmentBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
 

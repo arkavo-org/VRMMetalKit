@@ -392,6 +392,10 @@ public class VRMExpressionController: @unchecked Sendable {
     // Track morph weights per mesh
     private var meshMorphWeights: [Int: [Float]] = [:]  // meshIndex -> morph weights for that mesh
 
+    // Material color override tracking for expression-driven material colors
+    private var materialColorOverrides: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
+    private var baseMaterialColors: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
+
     public init() {
         // Initialize all preset weights to 0
         for preset in VRMExpressionPreset.allCases {
@@ -411,6 +415,24 @@ public class VRMExpressionController: @unchecked Sendable {
         customExpressions[name] = expression
     }
 
+    // MARK: - Material Color Base Values
+
+    /// Sets the base material color for a material. Called during model setup.
+    /// The renderer calls this for each material's color properties so the expression
+    /// controller knows the original values to blend from.
+    public func setBaseMaterialColor(materialIndex: Int, type: VRMMaterialColorType, color: SIMD4<Float>) {
+        if baseMaterialColors[materialIndex] == nil {
+            baseMaterialColors[materialIndex] = [:]
+        }
+        baseMaterialColors[materialIndex]?[type] = color
+    }
+
+    /// Gets the material color override for rendering, if any expression is active that affects it.
+    /// Returns nil if no override is active, meaning the renderer should use the original material color.
+    public func getMaterialColorOverride(materialIndex: Int, type: VRMMaterialColorType) -> SIMD4<Float>? {
+        return materialColorOverrides[materialIndex]?[type]
+    }
+
     // MARK: - Expression Weight Control
 
     public func setExpressionWeight(_ preset: VRMExpressionPreset, weight: Float) {
@@ -424,6 +446,21 @@ public class VRMExpressionController: @unchecked Sendable {
         // Handle custom expressions
         if let expression = customExpressions[name] {
             applyExpression(expression, weight: clamp(weight, min: 0, max: 1))
+        }
+    }
+
+    /// Set multiple custom expression weights at once (more efficient for Perfect Sync).
+    ///
+    /// This method is optimized for setting many custom expression weights in a single call,
+    /// which is common with Perfect Sync where 52 ARKit blend shapes map directly to
+    /// custom expressions.
+    ///
+    /// - Parameter weights: Dictionary mapping custom expression names to weights [0-1]
+    public func setCustomExpressionWeights(_ weights: [String: Float]) {
+        for (name, weight) in weights {
+            if let expression = customExpressions[name] {
+                applyExpressionToMeshWeights(expression, weight: clamp(weight, min: 0, max: 1))
+            }
         }
     }
 
@@ -489,10 +526,14 @@ public class VRMExpressionController: @unchecked Sendable {
         // Rebuild per-mesh weights dynamically from active expressions
         meshMorphWeights.removeAll()
 
+        // Clear material color overrides for fresh blending
+        materialColorOverrides.removeAll()
+
         var activeCount = 0
         for (preset, weight) in currentWeights where weight > 0 {
             if let expression = expressions[preset] {
                 applyExpressionToMeshWeights(expression, weight: weight)
+                applyExpressionToMaterialColors(expression, weight: weight)
                 activeCount += 1
             }
         }
@@ -501,6 +542,34 @@ public class VRMExpressionController: @unchecked Sendable {
             vrmLog("[VRMExpressionController] Updated morph weights for \(activeCount) active expressions across \(meshMorphWeights.keys.count) meshes")
         }
         // Note: Renderer will push per-primitive weights; no global push here
+    }
+
+    /// Applies material color binds from an expression, blending with base colors.
+    private func applyExpressionToMaterialColors(_ expression: VRMExpression, weight: Float) {
+        for bind in expression.materialColorBinds {
+            let materialIndex = bind.material
+            let colorType = bind.type
+
+            // Get the base color for this material/type (default to opaque white if not set)
+            let baseColor = baseMaterialColors[materialIndex]?[colorType] ?? SIMD4<Float>(1, 1, 1, 1)
+
+            // Get current override (may have been set by earlier expression in this update)
+            let currentColor = materialColorOverrides[materialIndex]?[colorType] ?? baseColor
+
+            // Blend: lerp from current toward target by weight
+            let blendedColor = mix(currentColor, bind.targetValue, t: weight)
+
+            // Store the override
+            if materialColorOverrides[materialIndex] == nil {
+                materialColorOverrides[materialIndex] = [:]
+            }
+            materialColorOverrides[materialIndex]?[colorType] = blendedColor
+        }
+    }
+
+    /// Linear interpolation between two SIMD4 colors
+    private func mix(_ a: SIMD4<Float>, _ b: SIMD4<Float>, t: Float) -> SIMD4<Float> {
+        return a + (b - a) * t
     }
 
     private func applyExpressionToMeshWeights(_ expression: VRMExpression, weight: Float) {

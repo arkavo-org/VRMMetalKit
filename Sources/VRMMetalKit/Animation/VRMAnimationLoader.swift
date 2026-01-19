@@ -118,6 +118,42 @@ public enum VRMAnimationLoader {
             return map
         }()
 
+        // Map expression names to their node indices from VRMC_vrm_animation extension
+        let animationExpressionNodes: [String: Int] = {
+            guard
+                let extensionDict = document.extensions?["VRMC_vrm_animation"] as? [String: Any],
+                let expressions = extensionDict["expressions"] as? [String: Any]
+            else {
+                return [:]
+            }
+
+            var map: [String: Int] = [:]
+
+            // Parse preset expressions
+            if let preset = expressions["preset"] as? [String: Any] {
+                for (expressionName, value) in preset {
+                    if let expressionDict = value as? [String: Any],
+                       let nodeAny = expressionDict["node"],
+                       let nodeIndex = intValue(from: nodeAny) {
+                        map[expressionName] = nodeIndex
+                    }
+                }
+            }
+
+            // Parse custom expressions
+            if let custom = expressions["custom"] as? [String: Any] {
+                for (expressionName, value) in custom {
+                    if let expressionDict = value as? [String: Any],
+                       let nodeAny = expressionDict["node"],
+                       let nodeIndex = intValue(from: nodeAny) {
+                        map[expressionName] = nodeIndex
+                    }
+                }
+            }
+
+            return map
+        }()
+
         // Map VRMA node names to bones using the target model's humanoid mapping when extension data isn't available.
         let modelNameToBone: [String: VRMHumanoidBone] = {
             guard let model, let humanoid = model.humanoid else { return [:] }
@@ -200,6 +236,21 @@ public enum VRMAnimationLoader {
                                        animationRestTransforms: animationRestTransforms,
                                        nodeIndex: nodeIndex, clip: &clip)
             }
+        }
+
+        // Process expression tracks from VRMC_vrm_animation extension
+        for (expressionName, nodeIndex) in animationExpressionNodes {
+            guard let tracks = nodeTracks[nodeIndex],
+                  let translationTrack = tracks["translation"] else {
+                continue
+            }
+
+            let sampler = makeExpressionWeightSampler(track: translationTrack)
+            clip.addMorphTrack(key: expressionName, sample: sampler)
+
+            #if DEBUG
+            vrmLogLoader("[VRMAnimationLoader] Added expression track '\(expressionName)' from node \(nodeIndex)")
+            #endif
         }
 
         return clip
@@ -504,6 +555,16 @@ private func makeScaleSampler(track: KeyTrack,
         let animScale = sampleVector3(track, at: t)
         let ratio = safeDivide(animScale, by: animationRestScale)
         return modelRest * ratio
+    }
+}
+
+// Expression Weight Sampler
+// Extracts the X component of a translation track as the expression weight.
+// VRMA expression tracks encode weight as translation.x (0.0 to 1.0).
+private func makeExpressionWeightSampler(track: KeyTrack) -> (Float) -> Float {
+    return { t in
+        let translation = sampleVector3(track, at: t)
+        return translation.x
     }
 }
 
