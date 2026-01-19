@@ -216,14 +216,20 @@ public class ARReactionLayer: AnimationLayer {
         let t = easeInOut(reactionProgress)
 
         // Bell curve for return to rest: ramps up then back down
-        let intensity = t < 0.5 ? t * 2 : (1 - t) * 2
+        // Exception: walk uses constant intensity since it loops
+        let intensity: Float
+        if currentReaction == .walk {
+            intensity = 1.0  // Constant for looping animation
+        } else {
+            intensity = t < 0.5 ? t * 2 : (1 - t) * 2
+        }
 
         switch currentReaction {
         case .idle:
             evaluateIdle(intensity: intensity, progress: t)
 
         case .walk:
-            evaluateWalk(intensity: intensity, progress: t)
+            evaluateWalk(intensity: 1.0, progress: reactionProgress)
 
         case .surprised:
             evaluateSurprised(intensity: intensity)
