@@ -344,8 +344,8 @@ final class PerfectSyncTests: XCTestCase {
         // This test gracefully skips if the model is not present (e.g., in CI)
         var resourcePath: URL?
 
-        // Try /tmp first (local development)
-        let tmpPath = URL(fileURLWithPath: "/tmp/VRoid_PerfectSync_Female.vrm")
+        // Try system temp directory first (local development)
+        let tmpPath = FileManager.default.temporaryDirectory.appendingPathComponent("VRoid_PerfectSync_Female.vrm")
         if FileManager.default.fileExists(atPath: tmpPath.path) {
             resourcePath = tmpPath
         }
@@ -359,7 +359,8 @@ final class PerfectSyncTests: XCTestCase {
         }
 
         guard let vrmURL = resourcePath else {
-            throw XCTSkip("Perfect Sync VRM model not found. For local testing, download to /tmp: curl -L -o /tmp/VRoid_PerfectSync_Female.vrm 'https://github.com/hinzka/52blendshapes-for-VRoid-face/raw/main/VRoid_V110_Female_v1.1.3.vrm'")
+            let tempDir = FileManager.default.temporaryDirectory.path
+            throw XCTSkip("Perfect Sync VRM model not found. For local testing: curl -L -o '\(tempDir)/VRoid_PerfectSync_Female.vrm' 'https://github.com/hinzka/52blendshapes-for-VRoid-face/raw/main/VRoid_V110_Female_v1.1.3.vrm'")
         }
 
         // Load the model
