@@ -45,9 +45,55 @@ public struct ARKitFaceBlendShapes: Sendable, Codable {
     /// Dictionary of blend shape names to weights (0-1)
     public let shapes: [String: Float]
 
-    public init(timestamp: TimeInterval, shapes: [String: Float]) {
+    /// Head transform matrix (4x4, column-major) representing head position and rotation
+    public let headTransform: simd_float4x4?
+
+    public init(timestamp: TimeInterval, shapes: [String: Float], headTransform: simd_float4x4? = nil) {
         self.timestamp = timestamp
         self.shapes = shapes
+        self.headTransform = headTransform
+    }
+
+    // MARK: - Codable
+
+    enum CodingKeys: String, CodingKey {
+        case timestamp
+        case shapes
+        case headTransform
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        timestamp = try container.decode(TimeInterval.self, forKey: .timestamp)
+        shapes = try container.decode([String: Float].self, forKey: .shapes)
+
+        if let transformValues = try container.decodeIfPresent([Float].self, forKey: .headTransform),
+           transformValues.count == 16 {
+            headTransform = simd_float4x4(
+                simd_float4(transformValues[0], transformValues[1], transformValues[2], transformValues[3]),
+                simd_float4(transformValues[4], transformValues[5], transformValues[6], transformValues[7]),
+                simd_float4(transformValues[8], transformValues[9], transformValues[10], transformValues[11]),
+                simd_float4(transformValues[12], transformValues[13], transformValues[14], transformValues[15])
+            )
+        } else {
+            headTransform = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(shapes, forKey: .shapes)
+
+        if let matrix = headTransform {
+            let values: [Float] = [
+                matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z, matrix.columns.0.w,
+                matrix.columns.1.x, matrix.columns.1.y, matrix.columns.1.z, matrix.columns.1.w,
+                matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z, matrix.columns.2.w,
+                matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z, matrix.columns.3.w
+            ]
+            try container.encode(values, forKey: .headTransform)
+        }
     }
 
     /// Get weight for a specific blend shape (returns 0 if not present)
