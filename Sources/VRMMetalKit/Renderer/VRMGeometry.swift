@@ -801,12 +801,13 @@ public class VRMNode {
 
         // Parse transform
         if let matrix = gltfNode.matrix, matrix.count == 16 {
-            // GLTF matrices are stored in column-major order
+            // GLTF matrices are stored in column-major order: indices 0-3 = column 0, 4-7 = column 1, etc.
+            // float4x4 initializer takes columns, so we pass each column directly
             let m = float4x4(
-                SIMD4<Float>(matrix[0], matrix[4], matrix[8], matrix[12]),   // row 0
-                SIMD4<Float>(matrix[1], matrix[5], matrix[9], matrix[13]),   // row 1
-                SIMD4<Float>(matrix[2], matrix[6], matrix[10], matrix[14]),  // row 2
-                SIMD4<Float>(matrix[3], matrix[7], matrix[11], matrix[15])   // row 3 (translation)
+                SIMD4<Float>(matrix[0], matrix[1], matrix[2], matrix[3]),     // column 0
+                SIMD4<Float>(matrix[4], matrix[5], matrix[6], matrix[7]),     // column 1
+                SIMD4<Float>(matrix[8], matrix[9], matrix[10], matrix[11]),   // column 2
+                SIMD4<Float>(matrix[12], matrix[13], matrix[14], matrix[15])  // column 3 (translation)
             )
 
             // Decompose matrix to get T/R/S
