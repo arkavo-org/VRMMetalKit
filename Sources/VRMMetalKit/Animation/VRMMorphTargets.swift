@@ -449,6 +449,21 @@ public class VRMExpressionController: @unchecked Sendable {
         }
     }
 
+    /// Set multiple custom expression weights at once (more efficient for Perfect Sync).
+    ///
+    /// This method is optimized for setting many custom expression weights in a single call,
+    /// which is common with Perfect Sync where 52 ARKit blend shapes map directly to
+    /// custom expressions.
+    ///
+    /// - Parameter weights: Dictionary mapping custom expression names to weights [0-1]
+    public func setCustomExpressionWeights(_ weights: [String: Float]) {
+        for (name, weight) in weights {
+            if let expression = customExpressions[name] {
+                applyExpressionToMeshWeights(expression, weight: clamp(weight, min: 0, max: 1))
+            }
+        }
+    }
+
     // MARK: - Preset Animations
 
     public func blink(duration: Float = 0.15, completion: (@Sendable () -> Void)? = nil) {

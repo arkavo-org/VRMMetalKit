@@ -93,6 +93,10 @@ public final class ARKitFaceDriver: @unchecked Sendable {
     public let mapper: ARKitToVRMMapper
     public var smoothingConfig: SmoothingConfig
 
+    // Perfect Sync support
+    public private(set) var perfectSyncCapability: PerfectSyncCapability = .none
+    private var perfectSyncMapper: PerfectSyncMapper?
+
     // Smoothing state
     private var filterManager: FilterManager
 
@@ -113,9 +117,64 @@ public final class ARKitFaceDriver: @unchecked Sendable {
         self.filterManager = FilterManager(config: smoothing)
     }
 
+    // MARK: - Perfect Sync Initialization
+
+    /// Initialize Perfect Sync from VRM model (call after model load).
+    ///
+    /// Detects whether the VRM model has Perfect Sync custom expressions
+    /// (ARKit blend shape names) and configures the driver accordingly.
+    /// Supports different naming conventions (camelCase, PascalCase, snake_case).
+    ///
+    /// - Parameter model: The loaded VRM model
+    public func initializeForModel(_ model: VRMModel) {
+        let result = PerfectSyncCapability.detect(from: model)
+        self.perfectSyncCapability = result.capability
+
+        switch result.capability {
+        case .none:
+            perfectSyncMapper = nil
+        case .partial, .full:
+            perfectSyncMapper = PerfectSyncMapper(
+                capability: result.capability,
+                nameMapping: result.nameMapping,
+                fallbackMapper: mapper
+            )
+        }
+
+        #if VRM_METALKIT_ENABLE_LOGS
+        vrmLog("[ARKitFaceDriver] Perfect Sync: \(result.capability.description)")
+        #else
+        print("🎭 [ARKitFaceDriver] Perfect Sync: \(result.capability.description)")
+        #endif
+    }
+
+    /// Create a driver configured for the given VRM model with auto-detected Perfect Sync.
+    ///
+    /// This is a convenience factory method that creates a driver and initializes
+    /// Perfect Sync detection in one step.
+    ///
+    /// - Parameters:
+    ///   - model: The VRM model to configure for
+    ///   - mapper: ARKit to VRM expression mapper (default: `.default`)
+    ///   - smoothing: Smoothing configuration (default: `.default`)
+    /// - Returns: A configured ARKitFaceDriver instance
+    public static func configured(
+        for model: VRMModel,
+        mapper: ARKitToVRMMapper = .default,
+        smoothing: SmoothingConfig = .default
+    ) -> ARKitFaceDriver {
+        let driver = ARKitFaceDriver(mapper: mapper, smoothing: smoothing)
+        driver.initializeForModel(model)
+        return driver
+    }
+
     // MARK: - Single Source Updates
 
     /// Update VRM expressions from ARKit blend shapes (single source)
+    ///
+    /// If Perfect Sync was initialized via `initializeForModel(_:)`, this method
+    /// uses direct 1:1 mapping for matched ARKit blend shapes, providing higher
+    /// fidelity facial animation.
     ///
     /// - Parameters:
     ///   - blendShapes: ARKit face blend shape data
@@ -137,20 +196,64 @@ public final class ARKitFaceDriver: @unchecked Sendable {
             return
         }
 
-        // Map ARKit → VRM expressions
-        let rawWeights = mapper.evaluate(blendShapes)
+        // Use Perfect Sync path if available
+        if let psMapper = perfectSyncMapper {
+            let (customWeights, presetWeights) = psMapper.evaluate(blendShapes)
 
-        // Apply smoothing
-        var smoothedWeights: [String: Float] = [:]
-        for (expression, weight) in rawWeights {
-            let smoothed = filterManager.update(key: expression, value: weight)
-            smoothedWeights[expression] = smoothed
+            // Apply smoothing to custom weights
+            var smoothedCustom: [String: Float] = [:]
+            for (key, weight) in customWeights {
+                smoothedCustom[key] = filterManager.update(key: key, value: weight)
+            }
+
+            // Apply smoothing to preset weights
+            var smoothedPreset: [String: Float] = [:]
+            for (key, weight) in presetWeights {
+                smoothedPreset[key] = filterManager.update(key: key, value: weight)
+            }
+
+            // Apply weights to controller
+            applyPerfectSyncWeights(custom: smoothedCustom, preset: smoothedPreset, to: controller)
+        } else {
+            // Standard path: Map ARKit → VRM expressions
+            let rawWeights = mapper.evaluate(blendShapes)
+
+            // Apply smoothing
+            var smoothedWeights: [String: Float] = [:]
+            for (expression, weight) in rawWeights {
+                let smoothed = filterManager.update(key: expression, value: weight)
+                smoothedWeights[expression] = smoothed
+            }
+
+            // Update controller
+            applyWeights(smoothedWeights, to: controller)
         }
 
-        // Update controller
-        applyWeights(smoothedWeights, to: controller)
-
         lastUpdateTime = now
+    }
+
+    // MARK: - Perfect Sync Weight Application
+
+    /// Apply Perfect Sync weights to controller.
+    ///
+    /// Uses batch method for custom expressions (more efficient for 52 weights)
+    /// and individual calls for preset weights.
+    private func applyPerfectSyncWeights(
+        custom: [String: Float],
+        preset: [String: Float],
+        to controller: VRMExpressionController
+    ) {
+        // Apply custom expression weights in batch for efficiency
+        if !custom.isEmpty {
+            controller.setCustomExpressionWeights(custom)
+        }
+
+        // Apply preset weights individually (usually fewer in partial mode)
+        for (key, weight) in preset {
+            if let presetEnum = VRMExpressionPreset(rawValue: key) {
+                controller.setExpressionWeight(presetEnum, weight: weight)
+            }
+        }
     }
 
     // MARK: - Multi-Source Updates
