@@ -11,7 +11,9 @@ import simd
 final class VRMRealModelPhysicsTest: XCTestCase {
 
     var device: MTLDevice!
-    let modelPath = "/Users/arkavo/Projects/Muse/Resources/VRM/AvatarSample_A.vrm.glb"
+    var modelPath: String {
+        ProcessInfo.processInfo.environment["VRM_TEST_MODEL_PATH"] ?? ""
+    }
 
     override func setUp() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {

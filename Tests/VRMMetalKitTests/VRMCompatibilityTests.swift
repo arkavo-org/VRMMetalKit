@@ -21,9 +21,12 @@ final class VRMCompatibilityTests: XCTestCase {
 
     var device: MTLDevice!
 
-    // Test assets - adjust paths as needed
-    let vrm0_0_path = "/Users/arkavo/Projects/Muse/Resources/VRM/AliciaSolid.vrm"
-    let vrm1_0_path = "/Users/arkavo/Projects/Muse/Resources/VRM/AvatarSample_A.vrm.glb"
+    var vrm0_0_path: String {
+        ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"] ?? ""
+    }
+    var vrm1_0_path: String {
+        ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"] ?? ""
+    }
 
     override func setUp() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
