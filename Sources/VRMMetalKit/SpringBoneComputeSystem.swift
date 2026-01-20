@@ -68,6 +68,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var lastUpdateTime: TimeInterval = 0
 
     // Store bind-pose direction for each bone (in parent's local space)
+    // Direction from current node to child node (current→child)
+    // - Used for ROTATION calculation in Swift
+    // - Used for GPU STIFFNESS via bindDirections[parentIndex] (see shader)
     private var boneBindDirections: [SIMD3<Float>] = []
 
     // Store rest lengths on CPU for physics reset (mirrors GPU buffer)
@@ -244,21 +247,43 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Debug: Log bone positions occasionally
             updateCounter += 1
 
-            // EARLY FRAME DEBUG: Log detailed physics for skirt bone in first 10 frames
-            if updateCounter <= 10, let bonePosCurr = buffers.bonePosCurr, let bonePosPrev = buffers.bonePosPrev {
-                // Log skirt bone (index 23 = chain 5 joint 1, first non-root skirt bone)
-                let skirtBoneIndex = 23
-                if skirtBoneIndex < buffers.numBones {
-                    let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
-                    let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
-                    let curr = currPtr[skirtBoneIndex]
-                    let prev = prevPtr[skirtBoneIndex]
+            // DIAGNOSTIC DEBUG: Check for explosion/growing issues
+            if updateCounter <= 10 || updateCounter % 60 == 0,
+               let bonePosCurr = buffers.bonePosCurr,
+               let bonePosPrev = buffers.bonePosPrev,
+               let restLengthsBuffer = buffers.restLengths,
+               let boneParamsBuffer = buffers.boneParams {
+                let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+                let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+                let restPtr = restLengthsBuffer.contents().bindMemory(to: Float.self, capacity: buffers.numBones)
+                let paramsPtr = boneParamsBuffer.contents().bindMemory(to: BoneParams.self, capacity: buffers.numBones)
+
+                // Check a non-root bone (index 1)
+                let boneIndex = 1
+                if boneIndex < buffers.numBones {
+                    let curr = currPtr[boneIndex]
+                    let prev = prevPtr[boneIndex]
+                    let restLen = restPtr[boneIndex]
+                    let boneParams = paramsPtr[boneIndex]
+                    let parentIdx = Int(boneParams.parentIndex)
+
                     let velocity = curr - prev
-                    print("[PHYS frame=\(updateCounter)] skirt bone=\(skirtBoneIndex)")
-                    print("  prevPos=(\(String(format: "%.4f", prev.x)), \(String(format: "%.4f", prev.y)), \(String(format: "%.4f", prev.z)))")
-                    print("  currPos=(\(String(format: "%.4f", curr.x)), \(String(format: "%.4f", curr.y)), \(String(format: "%.4f", curr.z)))")
-                    print("  velocity=(\(String(format: "%.4f", velocity.x)), \(String(format: "%.4f", velocity.y)), \(String(format: "%.4f", velocity.z))) mag=\(String(format: "%.4f", simd_length(velocity)))")
-                    print("  settlingFrames=\(params.settlingFrames)")
+                    var actualDist: Float = 0
+                    if parentIdx < buffers.numBones && parentIdx != 0xFFFFFFFF {
+                        let parentPos = currPtr[parentIdx]
+                        actualDist = simd_length(curr - parentPos)
+                    }
+
+                    print("[PHYSICS \(updateCounter)] bone=\(boneIndex) parent=\(parentIdx)")
+                    print("  pos=(\(String(format: "%.3f", curr.x)), \(String(format: "%.3f", curr.y)), \(String(format: "%.3f", curr.z)))")
+                    print("  velocity=\(String(format: "%.4f", simd_length(velocity))) restLen=\(String(format: "%.4f", restLen)) actualDist=\(String(format: "%.4f", actualDist))")
+                    print("  stiffness=\(String(format: "%.2f", boneParams.stiffness)) drag=\(String(format: "%.2f", boneParams.drag))")
+                    print("  dtSub=\(String(format: "%.6f", params.dtSub)) settling=\(params.settlingFrames)")
+
+                    // ALERT if exploding
+                    if simd_length(velocity) > 0.5 || actualDist > restLen * 2 || curr.y.isNaN {
+                        print("  ⚠️ EXPLOSION DETECTED! velocity=\(simd_length(velocity)) stretch=\(actualDist/restLen)")
+                    }
                 }
             }
 
@@ -410,7 +435,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var sphereColliders: [SphereCollider] = []
         var capsuleColliders: [CapsuleCollider] = []
         var planeColliders: [PlaneCollider] = []
-        boneBindDirections = [] // Reset bind directions
+        boneBindDirections = [] // Reset bind directions (current→child)
 
         // Build collider-to-group index mapping
         // Each collider can belong to multiple groups, but we assign the first group index for GPU filtering
@@ -509,20 +534,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     continue
                 }
 
-                // Store direction from PARENT to THIS bone (what shader needs for stiffness)
-                // Using world space for simplicity - works correctly when head is static
-                if jointIndexInChain > 0,
-                   let prevJoint = spring.joints[safe: jointIndexInChain - 1],
-                   let prevNode = model.nodes[safe: prevJoint.node] {
-                    // Direction from parent to current bone in world space
-                    let bindDirWorld = simd_normalize(currentNode.worldPosition - prevNode.worldPosition)
-                    boneBindDirections.append(bindDirWorld)
-
-                    if boneIndex < 3 {
-                        vrmLog("[SpringBone] Bone \(boneIndex): bindDir (parent→current, world)=\(bindDirWorld)")
+                // BIND DIRECTION: current → child
+                // - Used for ROTATION calculation in Swift
+                // - Used for GPU STIFFNESS via bindDirections[parentIndex] in shader
+                if let nextJoint = spring.joints[safe: jointIndexInChain + 1],
+                   let nextNode = model.nodes[safe: nextJoint.node] {
+                    let bindDirWorld = simd_normalize(nextNode.worldPosition - currentNode.worldPosition)
+                    if let parentNode = currentNode.parent {
+                        let parentRot = extractRotation(from: parentNode.worldMatrix)
+                        let parentRotInv = simd_conjugate(parentRot)
+                        boneBindDirections.append(simd_act(parentRotInv, bindDirWorld))
+                    } else {
+                        boneBindDirections.append(bindDirWorld)
                     }
                 } else {
-                    // Root bone - use default downward direction (hair typically hangs down)
+                    // Last bone - no child, use downward
                     boneBindDirections.append(SIMD3<Float>(0, -1, 0))
                 }
 
@@ -575,7 +601,37 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Update buffers
         buffers.updateBoneParameters(boneParams)
         buffers.updateRestLengths(restLengths)
-        buffers.updateBindDirections(boneBindDirections)
+
+        // GPU needs WORLD directions for stiffness calculation
+        // boneBindDirections stores current→child in parent's LOCAL space
+        // Transform to world by applying the node's ACTUAL parent's rotation (not prev joint)
+        var initialWorldBindDirections: [SIMD3<Float>] = []
+        var boneIdx = 0
+        for spring in springBone.springs {
+            for joint in spring.joints {
+                guard boneIdx < boneBindDirections.count,
+                      let jointNode = model.nodes[safe: joint.node] else {
+                    boneIdx += 1
+                    continue
+                }
+                let localDir = boneBindDirections[boneIdx]
+                // Transform by the node's actual parent (matches how we stored it)
+                if let nodeParent = jointNode.parent {
+                    let parentRot = extractRotation(from: nodeParent.worldMatrix)
+                    let worldDir = simd_act(parentRot, localDir)
+                    initialWorldBindDirections.append(simd_normalize(worldDir))
+                } else {
+                    // Root bone - local is world
+                    initialWorldBindDirections.append(localDir)
+                }
+                boneIdx += 1
+            }
+        }
+        buffers.updateBindDirections(initialWorldBindDirections)
+
+        // Also initialize the interpolation targets with the same world directions
+        targetWorldBindDirections = initialWorldBindDirections
+        previousWorldBindDirections = initialWorldBindDirections
 
         // Store CPU-side copies for physics reset
         cpuRestLengths = restLengths
@@ -929,7 +985,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
     }
 
+    private var rotationDiagCounter = 0
+
     private func updateNodeTransformsForChain(nodePositions: [(VRMNode, SIMD3<Float>, Int)]) {
+        rotationDiagCounter += 1
+        let shouldLog = rotationDiagCounter <= 5 || rotationDiagCounter % 60 == 0
+
         // Update bone rotations to point toward physics-simulated positions
         for i in 0..<nodePositions.count - 1 {
             let (currentNode, currentPos, globalIndex) = nodePositions[i]
@@ -949,72 +1010,102 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             let targetDir = toNext / distance
 
-            // Get the bone's bind-pose direction using GLOBAL bone index
+            // VRM SpringBone Rotation Update (per three-vrm spec):
+            // Use setFromUnitVectors(initialAxis, newLocalDirection) where BOTH are in bone's local space.
+            // This computes ABSOLUTE rotation, not accumulated delta.
+
+            // Get bind direction stored in PARENT's local space (at bind time)
             guard globalIndex < boneBindDirections.count else { continue }
-            let bindDirLocal = boneBindDirections[globalIndex]
+            let bindDirInParentSpace = boneBindDirections[globalIndex]
 
             // NaN guard: skip if bind direction is invalid
-            if bindDirLocal.x.isNaN || bindDirLocal.y.isNaN || bindDirLocal.z.isNaN ||
-               simd_length(bindDirLocal) < 0.001 {
+            if bindDirInParentSpace.x.isNaN || bindDirInParentSpace.y.isNaN || bindDirInParentSpace.z.isNaN ||
+               simd_length(bindDirInParentSpace) < 0.001 {
                 continue
             }
 
-            // Transform bind direction from bone's local space to world space
-            let currentRot = extractRotation(from: currentNode.worldMatrix)
+            // Get parent's world rotation (CURRENT, after earlier bones in chain were updated)
+            guard let parent = currentNode.parent else { continue }
+            let parentRot = extractRotation(from: parent.worldMatrix)
 
-            // NaN guard: skip if extracted rotation is invalid
-            if currentRot.real.isNaN || currentRot.imag.x.isNaN ||
-               currentRot.imag.y.isNaN || currentRot.imag.z.isNaN {
-                continue
-            }
-
-            let bindDirWorld = simd_act(currentRot, bindDirLocal)
-
-            // NaN guard: skip if transformed direction is invalid
-            if bindDirWorld.x.isNaN || bindDirWorld.y.isNaN || bindDirWorld.z.isNaN ||
-               simd_length(bindDirWorld) < 0.001 {
-                continue
-            }
-
-            // Calculate rotation DELTA needed to align bind direction with physics direction
-            let rotationDelta = quaternionFromTo(from: bindDirWorld, to: targetDir)
-
-            // NaN guard: skip if rotation delta is invalid
-            if rotationDelta.real.isNaN || rotationDelta.imag.x.isNaN ||
-               rotationDelta.imag.y.isNaN || rotationDelta.imag.z.isNaN {
-                continue
-            }
-
-            // NaN guard: check if current node's localRotation is already corrupted
-            // If so, reset to initial rotation to recover from bad state
-            if currentNode.localRotation.real.isNaN || currentNode.localRotation.imag.x.isNaN ||
-               currentNode.localRotation.imag.y.isNaN || currentNode.localRotation.imag.z.isNaN {
-                vrmLogPhysics("[SpringBone] ⚠️ Resetting NaN rotation for node \(currentNode.name ?? "unnamed")")
+            // NaN guard for parent rotation
+            if parentRot.real.isNaN || parentRot.imag.x.isNaN ||
+               parentRot.imag.y.isNaN || parentRot.imag.z.isNaN {
+                vrmLogPhysics("[SpringBone] ⚠️ Parent rotation NaN, resetting node \(currentNode.name ?? "unnamed")")
                 currentNode.localRotation = currentNode.initialRotation
                 currentNode.updateLocalMatrix()
                 currentNode.updateWorldTransform()
                 continue
             }
 
-            // Apply rotation delta ON TOP OF current rotation
-            // Convert world-space delta to local space
+            // Per three-vrm spec: compute swing rotation and apply ON TOP of initial rotation.
+            // This preserves the bone's original twist/roll from bind pose.
+            //
+            // Step 1: Transform target direction to parent's local space
+            let parentRotInv = simd_conjugate(parentRot)
+            let targetDirParent = simd_act(parentRotInv, targetDir)
+
+            // Step 2: Transform target direction to bone's REST frame (bind pose local space)
+            // This tells us "where is the target relative to the bone's original orientation"
+            let initialRotInv = simd_conjugate(currentNode.initialRotation)
+            let targetDirRest = simd_act(initialRotInv, targetDirParent)
+
+            // Step 3: Get bone's initial forward axis in its local space
+            let initialAxis = simd_act(initialRotInv, bindDirInParentSpace)
+
+            // Step 4: Calculate "swing" rotation needed to align initial axis with target
+            //
+            // SOFT DEADZONE: Instead of hard cutoff, smoothly blend physics influence.
+            // - Deadzone: 0.001 (1mm) - below this, use initial rotation (sleep)
+            // - Fade range: 0.005 (5mm) - smooth transition to full physics
+            // This prevents both flutter (at rest) and popping (during transition)
+            //
+            // For unit vectors: distance ≈ 2*sin(θ/2) ≈ θ for small angles
+            let initialAxisNorm = simd_normalize(initialAxis)
+            let targetDirNorm = simd_normalize(targetDirRest)
+            let displacement = simd_length(targetDirNorm - initialAxisNorm)
+
+            let deadzone: Float = 0.001      // 1mm - sleep threshold
+            let fadeRange: Float = 0.005     // 5mm - smooth transition range
+
+            // Calculate blend weight: 0 at deadzone, 1 at deadzone+fadeRange
+            let physicsWeight = min(max((displacement - deadzone) / fadeRange, 0.0), 1.0)
+
             var newRotation: simd_quatf
-            if let parent = currentNode.parent {
-                let parentRot = extractRotation(from: parent.worldMatrix)
-                // NaN guard for parent rotation - reset to bind pose if bad
-                if parentRot.real.isNaN || parentRot.imag.x.isNaN ||
-                   parentRot.imag.y.isNaN || parentRot.imag.z.isNaN {
-                    vrmLogPhysics("[SpringBone] ⚠️ Parent rotation NaN, resetting node \(currentNode.name ?? "unnamed")")
-                    currentNode.localRotation = currentNode.initialRotation
-                    currentNode.updateLocalMatrix()
-                    currentNode.updateWorldTransform()
-                    continue
-                }
-                let parentRotInv = simd_conjugate(parentRot)
-                let localDelta = parentRotInv * rotationDelta * parentRot
-                newRotation = localDelta * currentNode.localRotation
+            let dotProduct = simd_dot(initialAxisNorm, targetDirNorm)
+
+            if dotProduct > 0.9998 {  // ~1.15 degrees - numerical stability zone
+                // Nearly parallel - use initial rotation to prevent swirl
+                newRotation = currentNode.initialRotation
             } else {
-                newRotation = rotationDelta * currentNode.localRotation
+                // Compute swing rotation and apply ON TOP of initial rotation
+                let swingRotation = quaternionFromTo(from: initialAxis, to: targetDirRest)
+                let physicsRotation = currentNode.initialRotation * swingRotation
+
+                // Soft blend: slerp between initial (rest) and physics rotation
+                if physicsWeight < 0.001 {
+                    // In deadzone - sleep
+                    newRotation = currentNode.initialRotation
+                } else if physicsWeight > 0.999 {
+                    // Full physics
+                    newRotation = physicsRotation
+                } else {
+                    // Blend zone - smooth transition
+                    newRotation = simd_slerp(currentNode.initialRotation, physicsRotation, physicsWeight)
+                }
+            }
+
+            // NaN guard: skip if rotation is invalid
+            if newRotation.real.isNaN || newRotation.imag.x.isNaN ||
+               newRotation.imag.y.isNaN || newRotation.imag.z.isNaN {
+                continue
+            }
+
+            // DIAGNOSTIC: Log rotation values
+            if shouldLog && i == 0 {
+                let newAngle = 2.0 * acos(min(abs(newRotation.real), 1.0)) * 180.0 / Float.pi
+                print("[ROTATION \(rotationDiagCounter)] bone=\(globalIndex) dot=\(String(format: "%.4f", dotProduct)) disp=\(String(format: "%.4f", displacement)) weight=\(String(format: "%.2f", physicsWeight))")
+                print("  newRotAngle=\(String(format: "%.2f", newAngle))° atRest=\(dotProduct > 0.9998) sleeping=\(physicsWeight < 0.001)")
             }
 
             // Final NaN/Inf guard before applying - reset to bind pose if calculation produced bad values
@@ -1037,58 +1128,60 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
 
     private func quaternionFromTo(from: SIMD3<Float>, to: SIMD3<Float>) -> simd_quatf {
-        // Input validation - check for zero-length, NaN, or Inf vectors
+        // THREE.JS HALF-ANGLE FORMULATION (numerically stable)
+        // Based on three.js Quaternion.setFromUnitVectors
+        //
+        // Why this is better than angle-axis:
+        // 1. No acos() call - acos loses precision near 1.0, causing noise for small angles
+        // 2. For small angles, w ≈ 2 and xyz ≈ 0, giving clean near-identity quaternions
+        // 3. Cross product magnitude naturally scales with sin(θ), no separate axis normalization
+        //
+        // Formula: q = (cross(a,b), 1 + dot(a,b)).normalize()
+        // This exploits the half-angle identity: q = (sin(θ/2)*axis, cos(θ/2))
+        // where 1 + dot(a,b) = 1 + cos(θ) = 2*cos²(θ/2) ∝ cos(θ/2) after normalization
+
+        // Input validation
         let fromLen = simd_length(from)
         let toLen = simd_length(to)
         if fromLen < 0.0001 || toLen < 0.0001 ||
            fromLen.isNaN || fromLen.isInfinite ||
            toLen.isNaN || toLen.isInfinite {
-            return simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+            return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         }
 
         // Normalize inputs
-        let fromNorm = from / fromLen
-        let toNorm = to / toLen
+        let vFrom = from / fromLen
+        let vTo = to / toLen
 
-        let axis = cross(fromNorm, toNorm)
-        let dotProduct = clamp(dot(fromNorm, toNorm), -1, 1)
-        let axisLen = length(axis)
+        // r = 1 + dot(vFrom, vTo)
+        var r = simd_dot(vFrom, vTo) + 1.0
 
-        if axisLen < 0.0001 {
-            // Vectors are parallel or anti-parallel
-            if dotProduct > 0 {
-                // Same direction - no rotation needed
-                return simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+        if r < 0.000001 {
+            // Nearly anti-parallel (180° rotation)
+            // Find perpendicular axis
+            r = 0
+            var qx: Float, qy: Float, qz: Float
+
+            if abs(vFrom.x) > abs(vFrom.z) {
+                // Perpendicular in XY plane
+                qx = -vFrom.y
+                qy = vFrom.x
+                qz = 0
             } else {
-                // ANTI-PARALLEL (180° rotation needed)
-                // Find a robust perpendicular axis using the component with smallest magnitude
-                // This ensures we always get a valid perpendicular, never return identity!
-                var perpAxis: SIMD3<Float>
-                let absFrom = abs(fromNorm)
-
-                if absFrom.x <= absFrom.y && absFrom.x <= absFrom.z {
-                    // X is smallest - use X axis to find perpendicular
-                    perpAxis = cross(fromNorm, SIMD3<Float>(1, 0, 0))
-                } else if absFrom.y <= absFrom.z {
-                    // Y is smallest - use Y axis to find perpendicular
-                    perpAxis = cross(fromNorm, SIMD3<Float>(0, 1, 0))
-                } else {
-                    // Z is smallest - use Z axis to find perpendicular
-                    perpAxis = cross(fromNorm, SIMD3<Float>(0, 0, 1))
-                }
-
-                let perpAxisLen = length(perpAxis)
-                // This should never be zero with the above logic, but guard anyway
-                if perpAxisLen < 0.0001 {
-                    // Last resort: use arbitrary axis for 180° rotation
-                    return simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0))
-                }
-                return simd_quatf(angle: .pi, axis: perpAxis / perpAxisLen)
+                // Perpendicular in YZ plane
+                qx = 0
+                qy = -vFrom.z
+                qz = vFrom.y
             }
+
+            let q = simd_quatf(ix: qx, iy: qy, iz: qz, r: r)
+            return simd_normalize(q)
         }
 
-        let angle = acos(dotProduct)
-        return simd_quatf(angle: angle, axis: axis / axisLen)
+        // Cross product gives axis * sin(θ), r gives 1 + cos(θ)
+        let crossVec = simd_cross(vFrom, vTo)
+        let q = simd_quatf(ix: crossVec.x, iy: crossVec.y, iz: crossVec.z, r: r)
+        return simd_normalize(q)
     }
 
     private func extractRotation(from matrix: float4x4) -> simd_quatf {
@@ -1142,23 +1235,22 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         var boneIndex = 0
         for spring in springBone.springs {
-            for (jointIndex, _) in spring.joints.enumerated() {
-                guard boneIndex < boneBindDirections.count else {
+            for joint in spring.joints {
+                guard boneIndex < boneBindDirections.count,
+                      let jointNode = model.nodes[safe: joint.node] else {
                     boneIndex += 1
                     continue
                 }
 
                 let localBindDir = boneBindDirections[boneIndex]
 
-                // Transform bind direction by parent's current world rotation
-                if jointIndex > 0,
-                   let prevJoint = spring.joints[safe: jointIndex - 1],
-                   let parentNode = model.nodes[safe: prevJoint.node] {
-                    let parentRot = extractRotation(from: parentNode.worldMatrix)
+                // Transform by the node's ACTUAL parent (matches how we stored it)
+                if let nodeParent = jointNode.parent {
+                    let parentRot = extractRotation(from: nodeParent.worldMatrix)
                     let worldBindDir = simd_act(parentRot, localBindDir)
                     targetWorldBindDirections.append(simd_normalize(worldBindDir))
                 } else {
-                    // Root bone - use local direction as-is (typically downward)
+                    // Root bone - local is world
                     targetWorldBindDirections.append(localBindDir)
                 }
 

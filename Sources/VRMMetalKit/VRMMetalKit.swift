@@ -26,7 +26,7 @@ import Metal
 public struct VRMMetalKit {
     public static let version = "1.0.1"
     public static let buildDate = "2026-01-18"
-    public static let shaderVersion = "v10-collider-world-rotation"
+    public static let shaderVersion = "v21-fix-stiffness-index"
 
     /// Initialize VRMMetalKit with a Metal device
     public static func initialize(device: MTLDevice) {

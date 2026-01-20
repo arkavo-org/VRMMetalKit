@@ -56,6 +56,70 @@ final class SpringBoneSettlingFailureTests: XCTestCase {
 
     // MARK: - Jump and Land Scenario
 
+    /// **DIAGNOSTIC**: Test physics with displaced (stretched) initial state
+    func testPhysicsActuallyModifiesPositions() throws {
+        let model = try buildHairChain(
+            boneCount: 3,
+            stiffness: 0.1,   // Same as jump test
+            drag: 0.4,        // Same as jump test
+            gravityPower: 1.0,
+            settlingFrames: 0
+        )
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+
+        // MANUALLY DISPLACE the chain to simulate post-landing state
+        // Move bones ABOVE their rest positions (like in jump test after landing)
+        guard let buffers = model.springBoneBuffers,
+              let bonePosCurr = buffers.bonePosCurr,
+              let bonePosPrev = buffers.bonePosPrev else {
+            XCTFail("No buffers")
+            return
+        }
+
+        let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+        let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+
+        // Set all bones to be 0.2m ABOVE root (similar to jump test frozen state)
+        // Root stays at (0, 1, 0)
+        // Non-root bones go to (0, 1.05, 0), (0, 1.1, 0) - stretched chain above root
+        currPtr[0] = SIMD3<Float>(0, 1.0, 0)   // Root
+        currPtr[1] = SIMD3<Float>(0, 1.05, 0)  // 0.05 ABOVE root (should be 0.1 below)
+        currPtr[2] = SIMD3<Float>(0, 1.10, 0)  // 0.1 ABOVE root (should be 0.2 below)
+
+        // Set prev = curr (zero velocity)
+        prevPtr[0] = currPtr[0]
+        prevPtr[1] = currPtr[1]
+        prevPtr[2] = currPtr[2]
+
+        print("=== Displaced Initial State ===")
+        let initial = readBonePositions(model: model)
+        print("Initial (displaced): \(initial)")
+        print("Expected rest: [Y=1.0, Y=0.9, Y=0.8]")
+
+        // Run physics updates
+        for i in 0..<20 {
+            system.update(model: model, deltaTime: 1.0 / 60.0)
+            if i == 0 || i == 9 || i == 19 {
+                Thread.sleep(forTimeInterval: 0.1)
+                let pos = readBonePositions(model: model)
+                print("After \(i+1) updates: bone1 Y=\(String(format: "%.4f", pos[1].y)), bone2 Y=\(String(format: "%.4f", pos[2].y))")
+            }
+        }
+
+        Thread.sleep(forTimeInterval: 0.5)
+        let final = readBonePositions(model: model)
+
+        print("\n=== Final State ===")
+        print("Final: bone1 Y=\(String(format: "%.4f", final[1].y)), bone2 Y=\(String(format: "%.4f", final[2].y))")
+
+        // Check that bone 1 moved DOWN toward rest (Y=0.9)
+        let bone1Moved = initial[1].y - final[1].y  // Positive if moved down
+        print("Bone 1 moved down: \(String(format: "%.4f", bone1Moved))m")
+
+        XCTAssertGreaterThan(bone1Moved, 0.01, "Bone 1 should have moved DOWN toward rest position, but moved \(bone1Moved)m")
+    }
+
     /// **FAILURE CASE**: Hair freezes after jump disturbance
     ///
     /// This test simulates a character jumping and landing:
