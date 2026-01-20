@@ -62,39 +62,86 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - Properties
 
+    /// The VRM specification version of this model (0.0 or 1.0).
     public let specVersion: VRMSpecVersion
+
+    /// Model metadata including title, author, license, and usage permissions.
     public let meta: VRMMeta
 
-    /// True if this model uses VRM 0.0 format (requires coordinate conversion for VRMA)
-    /// VRM 0.0 uses Unity's left-handed coordinate system while VRM 1.0/VRMA uses glTF's right-handed system
+    /// Returns `true` if this model uses VRM 0.0 format.
+    ///
+    /// VRM 0.0 uses Unity's left-handed coordinate system while VRM 1.0 uses glTF's right-handed system.
+    /// This affects coordinate conversion when playing VRMA animations.
     public var isVRM0: Bool {
         return specVersion == .v0_0
     }
+
+    /// Humanoid bone mapping for this avatar.
+    ///
+    /// Maps standard VRM bones (hips, spine, head, arms, legs, etc.) to node indices.
+    /// Use `humanoid?.getBoneNode(.hips)` to get a specific bone's node index.
     public var humanoid: VRMHumanoid?
+
+    /// First-person rendering configuration.
+    ///
+    /// Defines which meshes should be visible in first-person vs third-person cameras.
     public var firstPerson: VRMFirstPerson?
+
+    /// Eye gaze (look-at) configuration.
+    ///
+    /// Defines how the avatar's eyes track a target point, including range limits.
     public var lookAt: VRMLookAt?
+
+    /// Facial expressions (blend shapes) for this avatar.
+    ///
+    /// Contains both preset expressions (happy, angry, blink, etc.) and custom expressions.
+    /// Use `VRMExpressionController` to animate expressions at runtime.
     public var expressions: VRMExpressions?
+
+    /// Spring bone physics configuration for hair, clothing, and accessories.
+    ///
+    /// Defines physics chains, stiffness, gravity, and colliders. Physics simulation
+    /// is performed on the GPU via `SpringBoneComputeSystem`.
     public var springBone: VRMSpringBone?
 
-    // VRM 0.x material properties (MToon data stored at document level)
+    /// VRM 0.x MToon material properties stored at document level.
     public var vrm0MaterialProperties: [VRM0MaterialProperty] = []
 
-    // glTF Data
+    // MARK: - glTF Data
+
+    /// The underlying glTF document structure.
     public var gltf: GLTFDocument
+
+    /// All meshes in the model, each containing one or more primitives.
     public var meshes: [VRMMesh] = []
+
+    /// All materials used by this model (MToon, PBR, or unlit).
     public var materials: [VRMMaterial] = []
+
+    /// All textures loaded for this model.
     public var textures: [VRMTexture] = []
+
+    /// All nodes in the scene graph hierarchy.
+    ///
+    /// Nodes form a tree structure via `parent` and `children` properties.
+    /// Each node has local and world transforms that can be animated.
     public var nodes: [VRMNode] = []
+
+    /// Skin data for skeletal animation (joint matrices, inverse bind matrices).
     public var skins: [VRMSkin] = []
 
-    // File loading context
+    // MARK: - Runtime State
+
+    /// Base URL for resolving relative resource paths (set during loading).
     public var baseURL: URL?
 
-    // Render resources
+    /// Metal device used for GPU resources. Required for rendering and physics.
     public var device: MTLDevice?
 
-    // GPU SpringBone system
+    /// GPU buffers for spring bone physics simulation.
     public var springBoneBuffers: SpringBoneBuffers?
+
+    /// Global parameters for spring bone physics (gravity, wind, substeps).
     public var springBoneGlobalParams: SpringBoneGlobalParams?
 
     // PERFORMANCE: Pre-computed node lookup table (normalized names)
@@ -254,6 +301,28 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - Loading
 
+    /// Loads a VRM model from a file URL.
+    ///
+    /// This is the primary entry point for loading VRM avatars. The method parses the VRM/GLB file,
+    /// loads all resources (meshes, textures, materials), and initializes physics if a Metal device is provided.
+    ///
+    /// - Parameters:
+    ///   - url: File URL to a `.vrm` or `.glb` file.
+    ///   - device: Optional Metal device for GPU resources. If provided, textures and physics buffers are created.
+    ///
+    /// - Returns: A fully loaded `VRMModel` ready for rendering.
+    ///
+    /// - Throws: `VRMError` if the file is invalid or missing required data.
+    ///
+    /// ## Example
+    /// ```swift
+    /// let device = MTLCreateSystemDefaultDevice()!
+    /// let model = try await VRMModel.load(from: modelURL, device: device)
+    /// ```
+    ///
+    /// ## Performance
+    /// Loading is asynchronous and may take 100-500ms depending on model complexity.
+    /// Textures are loaded in parallel for better performance.
     public static func load(from url: URL, device: MTLDevice? = nil) async throws -> VRMModel {
         let data = try Data(contentsOf: url)
         let model = try await load(from: data, filePath: url.path, device: device)
@@ -262,6 +331,18 @@ public class VRMModel: @unchecked Sendable {
         return model
     }
 
+    /// Loads a VRM model from raw data.
+    ///
+    /// Use this method when loading from network responses or in-memory data.
+    ///
+    /// - Parameters:
+    ///   - data: Raw VRM/GLB file data.
+    ///   - filePath: Optional path for error messages.
+    ///   - device: Optional Metal device for GPU resources.
+    ///
+    /// - Returns: A fully loaded `VRMModel` ready for rendering.
+    ///
+    /// - Throws: `VRMError` if the data is invalid.
     public static func load(from data: Data, filePath: String? = nil, device: MTLDevice? = nil) async throws -> VRMModel {
         vrmLog("[VRMModel] Starting load from data")
         let parser = GLTFParser()
@@ -444,9 +525,22 @@ public class VRMModel: @unchecked Sendable {
         vrmLog("[VRMModel] Built node lookup table with \(nodeLookupTable.count) entries")
     }
 
-    /// Fast O(1) node lookup by normalized name (for animation system)
+    /// Finds a node by its normalized name using O(1) hash table lookup.
+    ///
+    /// This method is optimized for the animation system which needs fast bone lookups.
+    /// Names are normalized by lowercasing and removing underscores/periods.
+    ///
+    /// - Parameter normalizedName: The normalized node name (lowercase, no underscores or periods).
+    /// - Returns: The matching node, or `nil` if not found.
+    ///
+    /// ## Example
+    /// ```swift
+    /// // "LeftUpperArm" -> "leftupperarm"
+    /// if let node = model.findNodeByNormalizedName("leftupperarm") {
+    ///     node.rotation = newRotation
+    /// }
+    /// ```
     public func findNodeByNormalizedName(_ normalizedName: String) -> VRMNode? {
-        // O(1) hash table lookup - NO string operations!
         return nodeLookupTable[normalizedName]
     }
 
@@ -570,31 +664,51 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - Floor Plane Colliders
 
-    /// Set floor plane collider at specified Y position
-    /// - Parameter floorY: The Y position of the floor plane in world space
+    /// Adds a horizontal floor plane collider at the specified Y position.
+    ///
+    /// Floor planes prevent spring bone chains (hair, clothing) from passing through the ground.
+    /// The plane extends infinitely in the X and Z directions.
+    ///
+    /// - Parameter floorY: The Y position of the floor in world space (typically 0).
+    ///
+    /// ## Example
+    /// ```swift
+    /// model.setFloorPlane(at: 0.0)  // Ground level
+    /// ```
     public func setFloorPlane(at floorY: Float) {
         let floor = PlaneCollider(floorY: floorY)
         springBoneBuffers?.setPlaneColliders([floor])
         springBoneGlobalParams?.numPlanes = 1
     }
 
-    /// Set floor plane collider from an ARKit plane anchor transform
-    /// - Parameter transform: The ARPlaneAnchor's transform (simd_float4x4)
+    /// Adds a floor plane collider from an ARKit plane anchor transform.
+    ///
+    /// Use this method when integrating with ARKit plane detection to create
+    /// physics-accurate floor collision from detected surfaces.
+    ///
+    /// - Parameter transform: The `ARPlaneAnchor.transform` matrix.
     public func setFloorPlane(arkitTransform transform: simd_float4x4) {
         let floor = PlaneCollider(arkitTransform: transform)
         springBoneBuffers?.setPlaneColliders([floor])
         springBoneGlobalParams?.numPlanes = 1
     }
 
-    /// Remove floor plane collider
+    /// Removes the floor plane collider.
+    ///
+    /// Call this when the avatar is no longer grounded (e.g., jumping, flying).
     public func removeFloorPlane() {
         springBoneBuffers?.setPlaneColliders([])
         springBoneGlobalParams?.numPlanes = 0
     }
 
-    /// Update all node world transforms based on their local transforms
+    /// Recalculates world transforms for all nodes based on their local transforms.
+    ///
+    /// Call this after modifying node local transforms (translation, rotation, scale)
+    /// to propagate changes through the hierarchy. This is automatically called
+    /// during animation updates.
+    ///
+    /// - Complexity: O(n) where n is the number of nodes.
     public func updateNodeTransforms() {
-        // Update root nodes first, then children recursively
         for node in nodes where node.parent == nil {
             node.updateWorldTransform()
         }
@@ -653,10 +767,22 @@ public class VRMModel: @unchecked Sendable {
 
 // MARK: - Supporting Classes
 
+/// Humanoid bone configuration for a VRM avatar.
+///
+/// Maps standard humanoid bones (hips, spine, arms, legs, etc.) to node indices
+/// in the model's scene graph. This enables animations to target bones by semantic
+/// name rather than model-specific node names.
+///
+/// ## Required Bones
+/// VRM requires these bones: hips, spine, head, and all arm/leg bones.
+/// Use `validate()` to check if all required bones are present.
 public class VRMHumanoid {
+    /// Maps humanoid bone types to their node references.
     public var humanBones: [VRMHumanoidBone: VRMHumanBone] = [:]
 
+    /// A reference to a humanoid bone's node.
     public struct VRMHumanBone {
+        /// The index into `VRMModel.nodes` for this bone.
         public let node: Int
 
         public init(node: Int) {
@@ -666,10 +792,18 @@ public class VRMHumanoid {
 
     public init() {}
 
+    /// Returns the node index for a humanoid bone.
+    ///
+    /// - Parameter bone: The bone type to look up (e.g., `.hips`, `.leftHand`).
+    /// - Returns: The node index, or `nil` if the bone isn't mapped.
     public func getBoneNode(_ bone: VRMHumanoidBone) -> Int? {
         return humanBones[bone]?.node
     }
 
+    /// Validates that all required humanoid bones are present.
+    ///
+    /// - Parameter filePath: Optional file path for error messages.
+    /// - Throws: `VRMError.missingRequiredBone` if a required bone is missing.
     public func validate(filePath: String? = nil) throws {
         // Check all required bones are present
         for bone in VRMHumanoidBone.allCases where bone.isRequired {
@@ -685,11 +819,19 @@ public class VRMHumanoid {
     }
 }
 
+/// First-person camera configuration for VRM avatars.
+///
+/// Defines which meshes should be visible or hidden when rendering from the avatar's
+/// perspective. This prevents the avatar's head from blocking the camera view.
 public class VRMFirstPerson {
+    /// Mesh visibility annotations for first-person rendering.
     public var meshAnnotations: [VRMMeshAnnotation] = []
 
+    /// Annotation specifying how a mesh should be rendered in first-person view.
     public struct VRMMeshAnnotation {
+        /// The node index of the annotated mesh.
         public let node: Int
+        /// The visibility flag for this mesh.
         public let type: VRMFirstPersonFlag
 
         public init(node: Int, type: VRMFirstPersonFlag) {
@@ -701,19 +843,54 @@ public class VRMFirstPerson {
     public init() {}
 }
 
+/// Eye gaze (look-at) configuration for VRM avatars.
+///
+/// Defines how the avatar's eyes track a target point, including the offset from the
+/// head bone and range limits for horizontal and vertical eye movement.
 public class VRMLookAt {
+    /// The method used to control gaze (bone rotation or blend shapes).
     public var type: VRMLookAtType = .bone
+
+    /// Offset from the head bone to the eye position in local space.
     public var offsetFromHeadBone: SIMD3<Float> = [0, 0, 0]
+
+    /// Range map for inward horizontal eye movement.
     public var rangeMapHorizontalInner: VRMLookAtRangeMap = VRMLookAtRangeMap()
+
+    /// Range map for outward horizontal eye movement.
     public var rangeMapHorizontalOuter: VRMLookAtRangeMap = VRMLookAtRangeMap()
+
+    /// Range map for downward vertical eye movement.
     public var rangeMapVerticalDown: VRMLookAtRangeMap = VRMLookAtRangeMap()
+
+    /// Range map for upward vertical eye movement.
     public var rangeMapVerticalUp: VRMLookAtRangeMap = VRMLookAtRangeMap()
 
     public init() {}
 }
 
+/// Facial expression configuration for VRM avatars.
+///
+/// Contains both preset expressions (happy, angry, sad, etc.) defined by the VRM spec
+/// and custom expressions defined by the model creator.
+///
+/// ## Usage
+/// ```swift
+/// // Get a preset expression
+/// if let happy = model.expressions?.preset[.happy] {
+///     // Apply with VRMExpressionController
+/// }
+///
+/// // Get a custom expression
+/// if let wink = model.expressions?.custom["wink"] {
+///     // Apply custom expression
+/// }
+/// ```
 public class VRMExpressions {
+    /// Standard VRM expressions (happy, angry, sad, surprised, blink, etc.).
     public var preset: [VRMExpressionPreset: VRMExpression] = [:]
+
+    /// Model-specific custom expressions keyed by name.
     public var custom: [String: VRMExpression] = [:]
 
     public init() {}

@@ -68,17 +68,28 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var skinnedOpaquePipelineState: MTLRenderPipelineState?  // OPAQUE/MASK (no blending)
     var skinnedBlendPipelineState: MTLRenderPipelineState?   // BLEND (blending enabled)
 
-    // Strict Mode
+    // MARK: - Configuration
+
+    /// Renderer configuration including strict mode validation level.
+    ///
+    /// Use `.warn` during development to catch issues, `.off` in production for performance.
     public var config = RendererConfig(strict: .off)
     var strictValidator: StrictValidator?
 
-    // VRM Model
+    /// The VRM model to render. Set via `loadModel(_:)`.
     public var model: VRMModel?
 
-    // Debug modes
-    // 0=off, 1=UV gradient, 2=hasBaseColorTexture flag (red=no, green=yes), 3=baseColorFactor
+    // MARK: - Debug Options
+
+    /// Debug UV visualization mode.
+    /// - 0: Off (normal rendering)
+    /// - 1: UV gradient visualization
+    /// - 2: Base color texture presence (red=missing, green=present)
+    /// - 3: Base color factor only
     public var debugUVs: Int32 = 0
-    public var debugWireframe: Bool = false  // Enable wireframe rendering mode
+
+    /// Enable wireframe rendering mode for debugging geometry.
+    public var debugWireframe: Bool = false
 
     // MARK: - 2.5D Rendering Mode
 
@@ -343,16 +354,38 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // LookAt
     public var lookAtController: VRMLookAtController?
 
-    // SpringBone Physics (GPU Compute)
+    // MARK: - Spring Bone Physics
+
     private var springBoneComputeSystem: SpringBoneComputeSystem?
+
+    /// Enables GPU-accelerated spring bone physics simulation.
+    ///
+    /// When enabled, hair, clothing, and accessories with spring bone configurations
+    /// will simulate physics each frame. Physics runs on the GPU at 120Hz fixed timestep.
+    ///
+    /// - Note: The model must have spring bone data for this to have any effect.
     public var enableSpringBone: Bool = false
+
+    /// Quality preset for spring bone physics simulation.
+    ///
+    /// Higher quality uses more substeps and constraint iterations for more stable physics,
+    /// at the cost of GPU performance.
+    ///
+    /// - `.ultra`: 120Hz substeps, 3 constraint iterations (highest quality)
+    /// - `.high`: 90Hz substeps, 2 constraint iterations
+    /// - `.medium`: 60Hz substeps, 2 constraint iterations
+    /// - `.low`: 30Hz substeps, 1 constraint iteration (fastest)
     public var springBoneQuality: VRMConstants.SpringBoneQuality = .ultra
+
     private var lastUpdateTime: CFTimeInterval = 0
     var temporaryGravity: SIMD3<Float>?
     var temporaryWind: SIMD3<Float>?
     var forceTimer: Float = 0
 
-    /// Request physics state reset (zeros velocity, useful when returning to idle)
+    /// Resets spring bone physics state (zeros velocities).
+    ///
+    /// Call this when teleporting the character or resetting to idle pose to prevent
+    /// physics artifacts from large position changes.
     public func resetPhysics() {
         springBoneComputeSystem?.requestPhysicsReset = true
     }
@@ -371,15 +404,35 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var uniforms = Uniforms()
     let inflightSemaphore: DispatchSemaphore
 
-    // Camera
+    // MARK: - Camera
+
+    /// View matrix (camera transform). Set this each frame before calling `draw()`.
+    ///
+    /// The view matrix transforms world coordinates to camera/eye space.
+    /// Use `simd_inverse(cameraWorldMatrix)` or a look-at function to compute this.
     public var viewMatrix = matrix_identity_float4x4
+
+    /// Projection matrix (perspective or orthographic). Set this each frame or when viewport changes.
+    ///
+    /// Use `makeProjectionMatrix(aspectRatio:)` for convenience, or compute manually
+    /// for custom projection parameters.
     public var projectionMatrix = matrix_identity_float4x4
 
-    // Debug flags
+    // MARK: - Debug Flags
+
+    /// Disables back-face culling (shows both sides of all triangles).
     public var disableCulling = false
+
+    /// Renders all materials as solid white color for debugging.
     public var solidColorMode = false
+
+    /// Disables skeletal skinning (shows bind pose).
     public var disableSkinning = false
+
+    /// Disables morph target/blend shape deformation.
     public var disableMorphs = false
+
+    /// Renders only the first mesh for debugging.
     public var debugSingleMesh = false
 
     // Debug renderer for systematic testing
@@ -517,6 +570,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         setupTripleBuffering()
     }
 
+    /// Loads a VRM model into the renderer and initializes all subsystems.
+    ///
+    /// This method sets up skinning, expressions, spring bone physics, and look-at controllers.
+    /// Call this after creating the renderer and before the first draw call.
+    ///
+    /// - Parameter model: The VRM model to render (loaded via `VRMModel.load(from:)`).
+    ///
+    /// ## Example
+    /// ```swift
+    /// let renderer = VRMRenderer(device: device)
+    /// let model = try await VRMModel.load(from: modelURL, device: device)
+    /// renderer.loadModel(model)
+    /// renderer.enableSpringBone = true  // Enable physics after loading
+    /// ```
+    ///
+    /// - Note: Loading a new model invalidates cached render data and reinitializes all subsystems.
     public func loadModel(_ model: VRMModel) {
         self.model = model
 
@@ -863,14 +932,45 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return morphedBuffers
     }
 
+    /// Renders the model to an offscreen texture (headless rendering).
+    ///
+    /// Use this for thumbnail generation, sprite caching, or server-side rendering
+    /// without an `MTKView`.
+    ///
+    /// - Parameters:
+    ///   - colorTexture: Target color texture to render into.
+    ///   - depth: Depth texture for z-buffering.
+    ///   - commandBuffer: Command buffer for encoding render commands.
+    ///   - renderPassDescriptor: Render pass configuration with attachments.
     @MainActor
     public func drawOffscreenHeadless(to colorTexture: MTLTexture, depth: MTLTexture, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
-        // Use the main draw method but provide our own texture dimensions
         let dummyView = DummyView(size: CGSize(width: colorTexture.width, height: colorTexture.height))
         vrmLog("[VRMRenderer] drawOffscreenHeadless called - size: \(colorTexture.width)x\(colorTexture.height)")
         drawCore(in: dummyView, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
     }
 
+    /// Renders the VRM model to the view.
+    ///
+    /// Call this method once per frame from your `MTKViewDelegate.draw(in:)` implementation.
+    /// The renderer handles skinning, morphs, physics, and all material types automatically.
+    ///
+    /// - Parameters:
+    ///   - view: The MetalKit view to render into.
+    ///   - commandBuffer: Command buffer for encoding render commands.
+    ///   - renderPassDescriptor: Render pass configuration (typically from `view.currentRenderPassDescriptor`).
+    ///
+    /// ## Example
+    /// ```swift
+    /// func draw(in view: MTKView) {
+    ///     guard let commandBuffer = commandQueue.makeCommandBuffer(),
+    ///           let descriptor = view.currentRenderPassDescriptor else { return }
+    ///     renderer.draw(in: view, commandBuffer: commandBuffer, renderPassDescriptor: descriptor)
+    ///     commandBuffer.present(view.currentDrawable!)
+    ///     commandBuffer.commit()
+    /// }
+    /// ```
+    ///
+    /// - Important: Ensure `viewMatrix` and `projectionMatrix` are set before calling.
     @MainActor public func draw(in view: MTKView, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
         drawCore(in: view, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
     }
