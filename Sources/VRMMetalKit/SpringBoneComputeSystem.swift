@@ -856,6 +856,23 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             guard let dst = destination.baseAddress else { return }
             dst.update(from: sourcePointer, count: buffers.numBones)
         }
+
+        // NaN safety: filter out corrupted positions and replace with safe fallback
+        // This prevents NaN from propagating to writeBonesToNodes
+        var nanCount = 0
+        for i in 0..<buffers.numBones {
+            let pos = latestPositionsSnapshot[i]
+            if pos.x.isNaN || pos.y.isNaN || pos.z.isNaN ||
+               pos.x.isInfinite || pos.y.isInfinite || pos.z.isInfinite {
+                // Replace with zero - writeBonesToNodes will skip this bone
+                latestPositionsSnapshot[i] = SIMD3<Float>(repeating: Float.nan)
+                nanCount += 1
+            }
+        }
+        if nanCount > 0 {
+            vrmLogPhysics("[SpringBone] ⚠️ Frame \(frameID): \(nanCount) bones had NaN/Inf positions")
+        }
+
         latestCompletedFrame = frameID
         snapshotLock.unlock()
     }
@@ -968,14 +985,29 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 continue
             }
 
+            // NaN guard: check if current node's localRotation is already corrupted
+            // If so, reset to initial rotation to recover from bad state
+            if currentNode.localRotation.real.isNaN || currentNode.localRotation.imag.x.isNaN ||
+               currentNode.localRotation.imag.y.isNaN || currentNode.localRotation.imag.z.isNaN {
+                vrmLogPhysics("[SpringBone] ⚠️ Resetting NaN rotation for node \(currentNode.name ?? "unnamed")")
+                currentNode.localRotation = currentNode.initialRotation
+                currentNode.updateLocalMatrix()
+                currentNode.updateWorldTransform()
+                continue
+            }
+
             // Apply rotation delta ON TOP OF current rotation
             // Convert world-space delta to local space
             var newRotation: simd_quatf
             if let parent = currentNode.parent {
                 let parentRot = extractRotation(from: parent.worldMatrix)
-                // NaN guard for parent rotation
+                // NaN guard for parent rotation - reset to bind pose if bad
                 if parentRot.real.isNaN || parentRot.imag.x.isNaN ||
                    parentRot.imag.y.isNaN || parentRot.imag.z.isNaN {
+                    vrmLogPhysics("[SpringBone] ⚠️ Parent rotation NaN, resetting node \(currentNode.name ?? "unnamed")")
+                    currentNode.localRotation = currentNode.initialRotation
+                    currentNode.updateLocalMatrix()
+                    currentNode.updateWorldTransform()
                     continue
                 }
                 let parentRotInv = simd_conjugate(parentRot)
@@ -985,9 +1017,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 newRotation = rotationDelta * currentNode.localRotation
             }
 
-            // Final NaN guard before applying
+            // Final NaN guard before applying - reset to bind pose if calculation produced NaN
             if newRotation.real.isNaN || newRotation.imag.x.isNaN ||
                newRotation.imag.y.isNaN || newRotation.imag.z.isNaN {
+                vrmLogPhysics("[SpringBone] ⚠️ Calculated rotation NaN, resetting node \(currentNode.name ?? "unnamed")")
+                currentNode.localRotation = currentNode.initialRotation
+                currentNode.updateLocalMatrix()
+                currentNode.updateWorldTransform()
                 continue
             }
 

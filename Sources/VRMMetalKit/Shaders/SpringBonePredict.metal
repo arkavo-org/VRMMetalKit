@@ -197,10 +197,16 @@ kernel void springBonePredict(
 
         // Only apply stiffness when significantly displaced from target
         if (stiffness > 0.001) {
+            // VRM stiffness values (0.1-0.2) were tuned for spring-force model.
+            // For PBD direct position correction, we need to scale them up aggressively.
+            // Use pow(0.25) scaling: 0.1 -> 0.562, 0.2 -> 0.669, 0.5 -> 0.841, 1.0 -> 1.0
+            // This provides strong return-to-rest force while preserving 1.0 = snap
+            float effectiveStiffness = pow(stiffness, 0.25);
+
             // PBD formulation: lerp toward target position
-            // stiffness is now directly the interpolation factor [0, 1]
+            // effectiveStiffness is the interpolation factor [0, 1]
             // where 0 = no correction, 1 = snap to target
-            newPos = mix(newPos, targetPos, stiffness);
+            newPos = mix(newPos, targetPos, effectiveStiffness);
         }
     }
 
