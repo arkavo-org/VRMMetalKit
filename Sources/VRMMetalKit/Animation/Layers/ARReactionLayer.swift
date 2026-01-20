@@ -385,16 +385,15 @@ public class ARReactionLayer: AnimationLayer {
         headTransform.rotation = simd_quatf(angle: -0.2 * jumpPhase * intensity, axis: SIMD3<Float>(1, 0, 0))
         cachedOutput.bones[.head] = headTransform
 
-        // Arms raise up and out gleefully (rotate around Z to raise, X to spread)
+        // Arms raise up and out gleefully (rotate around Z to raise)
+        // VRM 0.0: negative Z rotation raises left arm, positive Z raises right arm
         let armRaise = jumpPhase * 1.2 * intensity  // Increased arm raise
         var leftArmTransform = ProceduralBoneTransform.identity
-        // Rotate around Z (roll) to raise arm up, positive for left arm
-        leftArmTransform.rotation = simd_quatf(angle: armRaise, axis: SIMD3<Float>(0, 0, 1))
+        leftArmTransform.rotation = simd_quatf(angle: -armRaise, axis: SIMD3<Float>(0, 0, 1))
         cachedOutput.bones[.leftUpperArm] = leftArmTransform
 
         var rightArmTransform = ProceduralBoneTransform.identity
-        // Rotate around Z (roll) to raise arm up, negative for right arm
-        rightArmTransform.rotation = simd_quatf(angle: -armRaise, axis: SIMD3<Float>(0, 0, 1))
+        rightArmTransform.rotation = simd_quatf(angle: armRaise, axis: SIMD3<Float>(0, 0, 1))
         cachedOutput.bones[.rightUpperArm] = rightArmTransform
 
         // Forearms bend for excited gesture
@@ -443,6 +442,7 @@ public class ARReactionLayer: AnimationLayer {
         let rightLegSwing = sin(walkCycle + .pi) * legSwingAmplitude
 
         // Upper legs (thighs) swing forward/back around X axis
+        // Negative X rotation = leg swings forward in VRM 0.0 coordinate system
         var leftUpperLegTransform = ProceduralBoneTransform.identity
         leftUpperLegTransform.rotation = simd_quatf(angle: -leftLegSwing, axis: SIMD3<Float>(1, 0, 0))
         cachedOutput.bones[.leftUpperLeg] = leftUpperLegTransform
@@ -453,15 +453,16 @@ public class ARReactionLayer: AnimationLayer {
 
         // Lower legs (knees) bend during swing phase
         // Knee bends most when leg is swinging forward (passing under body)
+        // Negative X rotation bends knee so calf goes backward
         let leftKneeBend = max(0, sin(walkCycle + 0.5)) * kneeBendAmplitude
         let rightKneeBend = max(0, sin(walkCycle + .pi + 0.5)) * kneeBendAmplitude
 
         var leftLowerLegTransform = ProceduralBoneTransform.identity
-        leftLowerLegTransform.rotation = simd_quatf(angle: leftKneeBend, axis: SIMD3<Float>(1, 0, 0))
+        leftLowerLegTransform.rotation = simd_quatf(angle: -leftKneeBend, axis: SIMD3<Float>(1, 0, 0))
         cachedOutput.bones[.leftLowerLeg] = leftLowerLegTransform
 
         var rightLowerLegTransform = ProceduralBoneTransform.identity
-        rightLowerLegTransform.rotation = simd_quatf(angle: rightKneeBend, axis: SIMD3<Float>(1, 0, 0))
+        rightLowerLegTransform.rotation = simd_quatf(angle: -rightKneeBend, axis: SIMD3<Float>(1, 0, 0))
         cachedOutput.bones[.rightLowerLeg] = rightLowerLegTransform
 
         // Hips bob up and down with each step (twice per cycle)
@@ -479,6 +480,8 @@ public class ARReactionLayer: AnimationLayer {
         cachedOutput.bones[.spine] = spineTransform
 
         // Arms swing opposite to legs (natural gait)
+        // Left arm swings forward when right leg swings forward (opposite phase)
+        // Positive X rotation swings arm forward in VRM 0.0
         let armSwing = sin(walkCycle) * 0.35 * intensity
         var leftArmTransform = ProceduralBoneTransform.identity
         leftArmTransform.rotation = simd_quatf(angle: armSwing, axis: SIMD3<Float>(1, 0, 0))
