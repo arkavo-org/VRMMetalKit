@@ -182,8 +182,9 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
 
     /// Spec 3.2: Gravity should be applied in gravityDir direction
     /// Verify bones fall DOWN (negative Y), not UP
+    /// Note: Uses HORIZONTAL chain - vertical chains are already at equilibrium under gravity
     func testGravityPullsDownward() throws {
-        let model = try buildVerticalChain(boneCount: 3, gravityPower: 1.0)
+        let model = try buildHorizontalChain(boneCount: 3, gravityPower: 1.0)
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
@@ -201,14 +202,15 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         let finalY = readBonePositionY(model: model, boneIndex: 2)
 
         // CRITICAL: Bones should fall DOWN (Y decreases)
-        // If Y increases, gravity direction is inverted (the bug we fixed)
+        // Horizontal chain starts at Y=1.0 and swings down under gravity
         XCTAssertLessThan(finalY, initialY, "Gravity should pull bones DOWNWARD (Y should decrease)")
     }
 
     /// Spec 3.2: gravityPower scales gravity magnitude
+    /// Note: Uses HORIZONTAL chain - vertical chains are already at equilibrium under gravity
     func testGravityPowerScalesEffect() throws {
-        let modelNoGravity = try buildVerticalChain(boneCount: 3, gravityPower: 0.0)
-        let modelFullGravity = try buildVerticalChain(boneCount: 3, gravityPower: 1.0)
+        let modelNoGravity = try buildHorizontalChain(boneCount: 3, gravityPower: 0.0)
+        let modelFullGravity = try buildHorizontalChain(boneCount: 3, gravityPower: 1.0)
 
         let systemNo = try SpringBoneComputeSystem(device: device)
         let systemFull = try SpringBoneComputeSystem(device: device)
