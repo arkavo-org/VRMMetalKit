@@ -6,20 +6,16 @@ import Metal
 import simd
 @testable import VRMMetalKit
 
-/// Tests VRM 0.0 vs VRM 1.0 compatibility, focusing on:
+/// Tests VRM compatibility across different models, focusing on:
 /// 1. Coordinate system handedness
 /// 2. Humanoid bone orientations
 /// 3. Spring bone bind directions
 /// 4. Animation direction consistency
 ///
-/// ## Known Issues
+/// ## Test Models
 ///
-/// VRM 0.0 uses a different coordinate convention than VRM 1.0:
-/// - VRM 0.0: May need X/Z mirroring for humanoid bones
-/// - VRM 1.0: Aligns with glTF standard (right-handed, Y-up, -Z forward)
-///
-/// If AliciaSolid (VRM 0.0) walks backwards while AvatarSample (VRM 1.0) walks
-/// forwards with the same animation, the loader is missing VRM 0.0 mirroring logic.
+/// Both test models (AliciaSolid and AvatarSample_A) use VRM 0.0 format.
+/// Note: AvatarSample_A.vrm.glb uses VRM 0.0 despite the filename suggesting otherwise.
 ///
 final class VRMCompatibilityTests: XCTestCase {
 
@@ -82,8 +78,9 @@ final class VRMCompatibilityTests: XCTestCase {
         }
     }
 
-    /// Test that VRM 1.0 models are correctly identified
-    func testVRM1_0VersionDetection() async throws {
+    /// Test VRM version detection for AvatarSample_A
+    /// Note: Despite the filename, AvatarSample_A.vrm.glb uses VRM 0.0 format
+    func testAvatarSampleVersionDetection() async throws {
         let url = URL(fileURLWithPath: vrm1_0_path)
         guard FileManager.default.fileExists(atPath: vrm1_0_path) else {
             throw XCTSkip("AvatarSample_A.vrm.glb not found at \(vrm1_0_path)")
@@ -91,15 +88,15 @@ final class VRMCompatibilityTests: XCTestCase {
 
         let model = try await VRMModel.load(from: url, device: device)
 
-        print("=== VRM 1.0 Model Analysis (AvatarSample_A) ===")
+        print("=== VRM Model Analysis (AvatarSample_A) ===")
 
-        // Check spring bone spec version (VRM 1.0 format)
+        // Check spring bone spec version
         let springBoneVersion = model.springBone?.specVersion ?? "unknown"
         print("SpringBone Spec Version: \(springBoneVersion)")
 
-        // VRM 1.0 should have springBone.specVersion = "1.0"
-        XCTAssertEqual(springBoneVersion, "1.0",
-                       "AvatarSample_A should have spring bone specVersion 1.0")
+        // AvatarSample_A uses VRM 0.0 format (despite the name suggesting otherwise)
+        XCTAssertEqual(springBoneVersion, "0.0",
+                       "AvatarSample_A uses VRM 0.0 format with secondaryAnimation")
 
         // Print humanoid bone info for coordinate analysis
         if let humanoid = model.humanoid {
