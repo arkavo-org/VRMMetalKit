@@ -1531,8 +1531,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Reset time accumulator to prevent multiple substeps after teleport
         timeAccumulator = 0
 
-        // Reset settling period to allow bones to settle after teleport/reset
-        model.springBoneGlobalParams?.settlingFrames = 120
+        // NOTE: Do NOT reset settlingFrames here - that's only for initial load
+        // The reset already kills velocity by setting prev=curr, which is sufficient
+        // Re-triggering settling would reduce stiffness/drag and cause extended jiggle
 
         // Reset readback state
         snapshotLock.lock()
