@@ -346,6 +346,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // SpringBone Physics (GPU Compute)
     private var springBoneComputeSystem: SpringBoneComputeSystem?
     public var enableSpringBone: Bool = false
+    public var springBoneQuality: VRMConstants.SpringBoneQuality = .ultra
     private var lastUpdateTime: CFTimeInterval = 0
     var temporaryGravity: SIMD3<Float>?
     var temporaryWind: SIMD3<Float>?
@@ -1128,24 +1129,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Update uniforms with camera matrices
         uniforms.viewMatrix = viewMatrix
         uniforms.projectionMatrix = projectionMatrix
-
-        // DEBUG: Print camera position calculation verification (once per session)
-        if frameCounter == 0 {
-            VRMMetalKit.logVersion()
-            // Extract rotation matrix from view matrix (columns 0-2, rows 0-2)
-            let r0 = SIMD3<Float>(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0])
-            let r1 = SIMD3<Float>(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1])
-            let r2 = SIMD3<Float>(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2])
-            let t = SIMD3<Float>(viewMatrix[3][0], viewMatrix[3][1], viewMatrix[3][2])
-            // Camera position = -transpose(R) * t = -(R^T * t)
-            let cameraPos = SIMD3<Float>(
-                -(r0.x * t.x + r0.y * t.y + r0.z * t.z),
-                -(r1.x * t.x + r1.y * t.y + r1.z * t.z),
-                -(r2.x * t.x + r2.y * t.y + r2.z * t.z)
-            )
-            print("[CAMERA DEBUG] View matrix translation: \(t)")
-            print("[CAMERA DEBUG] Calculated camera position: \(cameraPos)")
-        }
 
         // Use stored light directions directly (world-space lighting)
         // Camera-following lights caused washout - reverting to fixed world-space
@@ -2140,11 +2123,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                    materialIndex < model.materials.count {
                     let material = model.materials[materialIndex]
 
-                    // UNIVERSAL MATERIAL LOG: Print ALL materials on frame 0
-                    if frameCounter == 0 {
-                        print("[ALL MATERIALS] \(item.materialName) | alpha=\(materialAlphaMode) | doubleSided=\(isDoubleSided) | baseColorFactor=\(material.baseColorFactor)")
-                    }
-
                     // Set base PBR properties
                     mtoonUniforms.baseColorFactor = material.baseColorFactor
                     mtoonUniforms.metallicFactor = material.metallicFactor
@@ -2475,18 +2453,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
-                    if frameCounter == 0 {
-                        print("[MATERIAL DEBUG] \(item.materialName) | alpha=opaque | doubleSided=\(isDoubleSided) | shadeColor=\(mtoonUniforms.shadeColorFactor)")
-                    }
 
                 case "mask":
                     encoder.setDepthStencilState(depthStencilStates["mask"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
-                    if frameCounter == 0 {
-                        print("[MATERIAL DEBUG] \(item.materialName) | alpha=MASK | doubleSided=\(isDoubleSided) | shadeColor=\(mtoonUniforms.shadeColorFactor)")
-                    }
 
                 case "blend":
                     if let blendDepthState = depthStencilStates["blend"] {
@@ -2495,17 +2467,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         encoder.setDepthStencilState(depthStencilStates["opaque"])
                     }
                     encoder.setCullMode(.none)
-                    if frameCounter == 0 {
-                        print("[MATERIAL DEBUG] \(item.materialName) | alpha=BLEND | doubleSided=true(forced) | shadeColor=\(mtoonUniforms.shadeColorFactor)")
-                    }
 
                 default:
                     encoder.setDepthStencilState(depthStencilStates["opaque"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
-                    if frameCounter == 0 {
-                        print("[MATERIAL DEBUG] \(item.materialName) | alpha=default | doubleSided=\(isDoubleSided) | shadeColor=\(mtoonUniforms.shadeColorFactor)")
-                    }
                 }
             }
 

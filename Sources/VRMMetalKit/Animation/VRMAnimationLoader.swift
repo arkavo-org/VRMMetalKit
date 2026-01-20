@@ -95,6 +95,17 @@ public enum VRMAnimationLoader {
         let animationRestTransforms = buildAnimationRestTransforms(document: document)
         let modelRestTransforms = buildModelRestTransforms(model: model)
 
+        // Determine if coordinate conversion is needed for VRM 0.0 models
+        // VRMA animations use VRM 1.0 (glTF right-handed) coordinates
+        // VRM 0.0 models use Unity (left-handed) coordinates
+        let convertForVRM0 = model?.isVRM0 ?? false
+
+        #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
+        if convertForVRM0 {
+            vrmLogAnimation("[VRMAnimationLoader] VRM 0.0 model detected - applying coordinate conversion for VRMA")
+        }
+        #endif
+
         // Map animation node indices to humanoid bones using the VRMA extension data first.
         let animationNodeToBone: [Int: VRMHumanoidBone] = {
             guard
@@ -229,12 +240,16 @@ public enum VRMAnimationLoader {
                 processHumanoidTrack(bone: boneUnwrapped, nodeName: nodeName, tracks: tracks,
                                     animationRestTransforms: animationRestTransforms,
                                     modelRestTransforms: modelRestTransforms,
-                                    nodeIndex: nodeIndex, clip: &clip)
+                                    nodeIndex: nodeIndex,
+                                    convertForVRM0: convertForVRM0,
+                                    clip: &clip)
             } else {
                 // NON-HUMANOID NODE TRACK (hair, bust, accessories)
                 processNonHumanoidTrack(nodeName: nodeName, tracks: tracks,
                                        animationRestTransforms: animationRestTransforms,
-                                       nodeIndex: nodeIndex, clip: &clip)
+                                       nodeIndex: nodeIndex,
+                                       convertForVRM0: convertForVRM0,
+                                       clip: &clip)
             }
         }
 
@@ -265,6 +280,7 @@ public enum VRMAnimationLoader {
         animationRestTransforms: [Int: RestTransform],
         modelRestTransforms: [VRMHumanoidBone: RestTransform],
         nodeIndex: Int,
+        convertForVRM0: Bool,
         clip: inout AnimationClip
     ) {
         // Prepare samplers
@@ -305,21 +321,23 @@ public enum VRMAnimationLoader {
         if let rot = tracks["rotation"] {
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: modelRest?.rotation)  // Enable retargeting
+                                                  modelRestRotation: modelRest?.rotation,
+                                                  convertForVRM0: convertForVRM0)
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
         if let trans = tracks["translation"] {
             translationSampler = makeTranslationSampler(track: trans,
                                                         animationRestTranslation: translationRest,
-                                                        modelRestTranslation: modelRest?.translation)  // Enable retargeting
+                                                        modelRestTranslation: modelRest?.translation,
+                                                        convertForVRM0: convertForVRM0)
         }
 
         var scaleSampler: ((Float) -> simd_float3)? = nil
         if let scl = tracks["scale"] {
             scaleSampler = makeScaleSampler(track: scl,
                                             animationRestScale: scaleRest,
-                                            modelRestScale: modelRest?.scale)  // Enable retargeting
+                                            modelRestScale: modelRest?.scale)
         }
 
         #if DEBUG
@@ -350,10 +368,11 @@ public enum VRMAnimationLoader {
         tracks: [String: KeyTrack],
         animationRestTransforms: [Int: RestTransform],
         nodeIndex: Int,
+        convertForVRM0: Bool,
         clip: inout AnimationClip
     ) {
         // For non-humanoid nodes, we don't do rest-pose retargeting
-        // We just pass through the animation data as-is
+        // We just pass through the animation data as-is (with coordinate conversion if needed)
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
 
         let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
@@ -365,14 +384,16 @@ public enum VRMAnimationLoader {
             // No model rest for non-humanoid - use animation data directly
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: nil)
+                                                  modelRestRotation: nil,
+                                                  convertForVRM0: convertForVRM0)
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
         if let trans = tracks["translation"] {
             translationSampler = makeTranslationSampler(track: trans,
                                                         animationRestTranslation: translationRest,
-                                                        modelRestTranslation: nil)
+                                                        modelRestTranslation: nil,
+                                                        convertForVRM0: convertForVRM0)
         }
 
         var scaleSampler: ((Float) -> simd_float3)? = nil
@@ -458,20 +479,39 @@ private func componentCount(for path: String) -> Int? {
 // This transforms the animation rotation from the animation's rest pose space
 // to the target VRM model's rest pose space, preserving the animation's intent
 // while adapting to different skeleton proportions.
+//
+// VRM 0.0 Coordinate Conversion:
+// When applying VRMA (VRM 1.0 format) animations to VRM 0.0 models, coordinate
+// conversion is needed because VRM 0.0 uses Unity's left-handed system while
+// VRM 1.0/VRMA uses glTF's right-handed system. The conversion negates X and Z
+// components per three-vrm createVRMAnimationClip.ts.
 private func makeRotationSampler(track: KeyTrack,
                                  animationRestRotation: simd_quatf,
-                                 modelRestRotation: simd_quatf?) -> ((Float) -> simd_quatf)? {
+                                 modelRestRotation: simd_quatf?,
+                                 convertForVRM0: Bool = false) -> ((Float) -> simd_quatf)? {
     let modelRest = modelRestRotation
     let rotationRest = simd_normalize(animationRestRotation)
 
     if modelRest == nil {
-        return { t in sampleQuaternion(track, at: t) }
+        return { t in
+            var result = sampleQuaternion(track, at: t)
+            if convertForVRM0 {
+                result = convertRotationForVRM0(result)
+            }
+            return result
+        }
     }
 
     let modelRestNormalized = simd_normalize(modelRest!)
 
     return { t in
-        let animRotation = sampleQuaternion(track, at: t)
+        var animRotation = sampleQuaternion(track, at: t)
+
+        // Apply VRM 0.0 coordinate conversion before retargeting
+        if convertForVRM0 {
+            animRotation = convertRotationForVRM0(animRotation)
+        }
+
         let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
         let result = simd_normalize(modelRestNormalized * delta)
 
@@ -479,7 +519,7 @@ private func makeRotationSampler(track: KeyTrack,
         // Log retargeting math for debugging
         if t < 0.1 {  // Only log first frame
             vrmLogAnimation("""
-                [RETARGET] t=\(String(format: "%.3f", t))
+                [RETARGET] t=\(String(format: "%.3f", t)) convertForVRM0=\(convertForVRM0)
                   rotationRest:  quat(\(String(format: "% .6f", rotationRest.imag.x)), \
                 \(String(format: "% .6f", rotationRest.imag.y)), \
                 \(String(format: "% .6f", rotationRest.imag.z)), \
@@ -530,15 +570,32 @@ private func makeRotationSampler(track: KeyTrack,
 //
 // See also: AnimationPlayer.update() for frame-by-frame sampling
 //
+// VRM 0.0 Coordinate Conversion:
+// When applying VRMA (VRM 1.0 format) animations to VRM 0.0 models, coordinate
+// conversion is needed. The conversion negates X and Z components.
+//
 private func makeTranslationSampler(track: KeyTrack,
                                     animationRestTranslation: SIMD3<Float>,
-                                    modelRestTranslation: SIMD3<Float>?) -> ((Float) -> SIMD3<Float>)? {
+                                    modelRestTranslation: SIMD3<Float>?,
+                                    convertForVRM0: Bool = false) -> ((Float) -> SIMD3<Float>)? {
     guard let modelRest = modelRestTranslation else {
-        return { t in sampleVector3(track, at: t) }
+        return { t in
+            var result = sampleVector3(track, at: t)
+            if convertForVRM0 {
+                result = convertTranslationForVRM0(result)
+            }
+            return result
+        }
     }
 
     return { t in
-        let animTranslation = sampleVector3(track, at: t)
+        var animTranslation = sampleVector3(track, at: t)
+
+        // Apply VRM 0.0 coordinate conversion before retargeting
+        if convertForVRM0 {
+            animTranslation = convertTranslationForVRM0(animTranslation)
+        }
+
         let delta = animTranslation - animationRestTranslation
         return modelRest + delta
     }
@@ -880,6 +937,21 @@ private func safeDivide(_ numerator: SIMD3<Float>, by denominator: SIMD3<Float>)
         numerator.y / (abs(denominator.y) > epsilon ? denominator.y : 1),
         numerator.z / (abs(denominator.z) > epsilon ? denominator.z : 1)
     )
+}
+
+// MARK: - VRM 0.0 Coordinate Conversion
+
+/// Convert VRM 1.0 (VRMA) rotation to VRM 0.0 coordinate space
+/// Negates X and Z components per three-vrm createVRMAnimationClip.ts
+/// VRM 0.0 uses Unity's left-handed system; VRM 1.0/VRMA uses glTF's right-handed system
+private func convertRotationForVRM0(_ q: simd_quatf) -> simd_quatf {
+    return simd_quatf(ix: -q.imag.x, iy: q.imag.y, iz: -q.imag.z, r: q.real)
+}
+
+/// Convert VRM 1.0 (VRMA) translation to VRM 0.0 coordinate space
+/// Negates X and Z components per three-vrm createVRMAnimationClip.ts
+private func convertTranslationForVRM0(_ v: SIMD3<Float>) -> SIMD3<Float> {
+    return SIMD3<Float>(-v.x, v.y, -v.z)
 }
 
 private func matrixFromGLTF(_ values: [Float]) -> float4x4 {

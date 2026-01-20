@@ -143,8 +143,6 @@ public final class ARKitFaceDriver: @unchecked Sendable {
 
         #if VRM_METALKIT_ENABLE_LOGS
         vrmLog("[ARKitFaceDriver] Perfect Sync: \(result.capability.description)")
-        #else
-        print("🎭 [ARKitFaceDriver] Perfect Sync: \(result.capability.description)")
         #endif
     }
 

@@ -115,8 +115,11 @@ kernel void springBonePredict(
     // would create upward force and make hair shoot up on landing.
     //
     // We scale the compensation based on movement magnitude:
+    // INERTIA COMPENSATION DISABLED FOR DEBUGGING
+    // If flutter stops with this disabled, the compensation logic is the culprit.
     // - Small movements (idle breathing/sway): minimal compensation, hair follows gently
     // - Large movements (jumps): full compensation, hair trails behind with inertia
+    /*
     if (globalParams.settlingFrames == 0) {
         float3 parentDelta = bonePosCurr[parentIndex] - bonePosPrev[parentIndex];
 
@@ -132,6 +135,7 @@ kernel void springBonePredict(
         float compensationFactor = smoothstep(0.002, 0.02, parentSpeed);
         velocity = velocity - compensatedDelta * compensationFactor;
     }
+    */
 
     // Now save current position as previous for next frame
     bonePosPrev[id] = bonePosCurr[id];
@@ -142,63 +146,79 @@ kernel void springBonePredict(
                       globalParams.windDirection *
                       sin(globalParams.windFrequency * time);
 
-    // Verlet integration with drag and external forces
-    float baseDrag = boneParams[id].drag;
-
-    // SETTLING BOOST: During settling period, reduce drag and boost gravity
-    // This allows bones to quickly fall to their natural hanging position
-    // Use smoothstep to gradually phase out the boost over last 30 frames (avoid abrupt "bounce")
-    float settlingFrames = float(globalParams.settlingFrames);
-    float settlingFactor = smoothstep(0.0, 30.0, settlingFrames);  // Gradual transition
-    float dragFactor = 1.0 - baseDrag * (1.0 - settlingFactor * 0.8);  // 80% less drag during settling
-    float gravityBoost = 1.0 + settlingFactor * 4.0;  // 5x gravity during settling
-
-    // Apply per-joint gravity: use gravityDir as direction, gravityPower as magnitude
-    // gravityDir is the direction gravity pulls (typically [0, -1, 0] for downward)
-    // gravityPower scales the effect (0.0 = no gravity, 1.0 = full gravity)
-    float gravityMagnitude = length(globalParams.gravity) * gravityBoost;
-    float3 effectiveGravity = boneParams[id].gravityDir * gravityMagnitude * boneParams[id].gravityPower;
-
-    // Verlet integration: position += velocity * drag + acceleration * dt²
-    // Drag is the velocity damping factor (0.0 = no drag, full velocity; 1.0 = full drag, no velocity)
-    float3 newPos = bonePosCurr[id] + velocity * dragFactor +
-                    (effectiveGravity + windForce) *
-                    globalParams.dtSub * globalParams.dtSub;
-
-    // Stiffness spring force: pulls bone toward its bind pose direction from parent
-    // This makes hair return to its styled position after being disturbed
+    // PBD STIFFNESS MODEL: Direct position mixing toward bind pose
+    //
+    // Why PBD position mixing instead of force-based springs:
+    // 1. Force-based springs fight dt² scaling (0.00007 at 120Hz makes forces negligible)
+    // 2. Distance constraint solver creates "synthetic velocity" that opposes weak forces
+    // 3. Position mixing guarantees consistent % correction per substep regardless of dt
+    //
+    // Formula: newPos = mix(currentPos, targetPos, stiffness * K)
+    // - K is tuned so stiffness=1.0 gives strong snap, stiffness=0.1 gives gentle return
+    // - Applied AFTER Verlet integration but BEFORE distance constraint
+    //
     float3 parentPos = bonePosCurr[parentIndex];
-    float3 bindDir = bindDirections[id];
-    // restLength already declared at top of function
-
-    // Safety: only apply stiffness if data is valid (no NaN propagation)
+    // FIX: Use bindDirections[parentIndex], not bindDirections[id]
+    // bindDirections[N] = direction from Node N to Node N+1 (current→child)
+    // When simulating Node id, we need direction from parent (id-1) toward us
+    // That's bindDirections[parentIndex] = direction from parent's node to parent's child (us)
+    float3 bindDir = bindDirections[parentIndex];
     float bindDirLen = length(bindDir);
+
+    // Calculate target position for stiffness blend (applied later after Verlet)
+    float3 stiffnessTargetPos = bonePosCurr[id]; // Default: no change
+    float stiffnessBlendFactor = 0.0;
+
     bool stiffnessValid = !isnan(parentPos.x) && !isnan(parentPos.y) && !isnan(parentPos.z)
                        && bindDirLen > 0.001 && restLength > 0.0;
 
     if (stiffnessValid) {
-        // Normalize bindDir if needed
         float3 safeBindDir = bindDir / bindDirLen;
-        float3 targetPos = parentPos + safeBindDir * restLength;
+        stiffnessTargetPos = parentPos + safeBindDir * restLength;
 
         float stiffness = boneParams[id].stiffness;
 
-        // SETTLING: Completely disable stiffness during settling period
-        // Even 5% stiffness accumulates over time and prevents natural hanging
-        // Only enable stiffness AFTER settling is complete (settlingFrames == 0)
-        if (globalParams.settlingFrames > 0) {
-            stiffness = 0.0;
-        }
+        // SETTLING: Gradually enable stiffness over the settling period
+        float settlingFrames = float(globalParams.settlingFrames);
+        float settlingStiffnessScale = 1.0 - smoothstep(0.0, 60.0, settlingFrames);
+        stiffness *= settlingStiffnessScale;
 
-        float3 toTarget = targetPos - newPos;
-        float distToTarget = length(toTarget);
-
-        // Only apply stiffness when significantly displaced from target
-        if (distToTarget > 0.001 && stiffness > 0.0) {
-            float3 targetDir = toTarget / distToTarget;
-            float pullStrength = stiffness * globalParams.dtSub * 0.5;
-            newPos = newPos + targetDir * min(distToTarget, pullStrength * distToTarget);
+        if (stiffness > 0.001) {
+            // PBD stiffness: blend factor determines % of error corrected per substep
+            // K=0.15 tuned so: stiffness=1.0 → 15% correction, stiffness=0.1 → 1.5% correction
+            // This is dt-independent and consistent across frame rates
+            stiffnessBlendFactor = stiffness * 0.15;
         }
+    }
+
+    // Verlet integration with drag and external forces
+    float baseDrag = boneParams[id].drag;
+
+    // SETTLING BOOST: During settling period, reduce drag and boost gravity
+    float settlingFrames = float(globalParams.settlingFrames);
+    float settlingFactor = smoothstep(0.0, 30.0, settlingFrames);
+
+    // DT-SCALED DRAG: velocity *= (1 - drag * dt * scale)
+    // This makes drag frame-rate independent and properly normalized
+    // Scale factor of 60 means drag=1.0 gives ~50% velocity loss per 1/60s frame
+    float effectiveDrag = baseDrag * (1.0 - settlingFactor * 0.7);
+    effectiveDrag = clamp(effectiveDrag, 0.0, 0.99);
+    float dragFactor = 1.0 - effectiveDrag * globalParams.dtSub * 60.0;
+    dragFactor = clamp(dragFactor, 0.01, 1.0); // Ensure positive, non-zero
+    float gravityBoost = 1.0 + settlingFactor * 4.0;
+
+    // Per-joint gravity
+    float gravityMagnitude = length(globalParams.gravity) * gravityBoost;
+    float3 effectiveGravity = boneParams[id].gravityDir * gravityMagnitude * boneParams[id].gravityPower;
+
+    // Verlet integration: position += velocity * drag + acceleration * dt²
+    float3 newPos = bonePosCurr[id] + velocity * dragFactor +
+                    (effectiveGravity + windForce) * globalParams.dtSub * globalParams.dtSub;
+
+    // PBD STIFFNESS: Apply position blend toward bind pose AFTER Verlet, BEFORE constraints
+    // This is dt-independent and guarantees consistent % correction per substep
+    if (stiffnessBlendFactor > 0.001) {
+        newPos = mix(newPos, stiffnessTargetPos, stiffnessBlendFactor);
     }
 
     // Clamp step size to prevent explosion

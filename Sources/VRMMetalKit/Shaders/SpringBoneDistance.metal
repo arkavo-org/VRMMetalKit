@@ -48,6 +48,7 @@ kernel void springBoneDistance(
     constant BoneParams* boneParams [[buffer(2)]],
     constant float* restLengths [[buffer(4)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
+    constant float3* bindDirections [[buffer(11)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones) return;
@@ -61,29 +62,16 @@ kernel void springBoneDistance(
 
     const float epsilon = 1e-6;
     if (currentLength > epsilon && restLength > epsilon) {
-        float error = currentLength - restLength;
+        // HARD DISTANCE CONSTRAINT: Always project to exact rest length
+        // Matches three-vrm behavior - no tolerance band that allows compression/stretch
+        // This prevents the "tightening" issue where clothes compress to 95% and stick
         float3 direction = delta / currentLength;
-
-        // DISTANCE CONSTRAINT: Prevent excessive stretching
-        // This is independent of stiffness (stiffness is for bind pose return)
-        //
-        // Only correct STRETCH (error > 0), not compression.
-        // This allows gravity to pull bones down naturally while preventing
-        // the chain from stretching infinitely (which happens when stiffness=0).
-        //
-        // Allow small amount of stretch (5% tolerance) for natural physics,
-        // then apply full correction for anything beyond.
-        float stretchTolerance = restLength * 0.05;
-
-        if (error > stretchTolerance) {
-            // Correct stretch beyond tolerance - move bone back toward parent
-            float correctionAmount = error - stretchTolerance;
-            float3 correction = direction * correctionAmount;
-            bonePosCurr[id] = bonePosCurr[id] - correction;
-        }
-        // Compression (error < 0) is allowed - this is how gravity pulls bones down
+        bonePosCurr[id] = bonePosCurr[parentIndex] + direction * restLength;
     } else if (restLength > epsilon && currentLength < epsilon) {
-        // If bone collapsed to parent position, push it out by rest length
-        bonePosCurr[id] = bonePosCurr[parentIndex] + float3(0, -restLength, 0);
+        // If bone fully collapsed to parent position, use bind direction to push out
+        float3 bindDir = bindDirections[id];
+        float bindLen = length(bindDir);
+        float3 pushDir = (bindLen > 0.001) ? (bindDir / bindLen) : float3(0, -1, 0);
+        bonePosCurr[id] = bonePosCurr[parentIndex] + pushDir * restLength;
     }
 }

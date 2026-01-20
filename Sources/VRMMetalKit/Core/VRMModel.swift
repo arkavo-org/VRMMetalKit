@@ -64,6 +64,12 @@ public class VRMModel: @unchecked Sendable {
 
     public let specVersion: VRMSpecVersion
     public let meta: VRMMeta
+
+    /// True if this model uses VRM 0.0 format (requires coordinate conversion for VRMA)
+    /// VRM 0.0 uses Unity's left-handed coordinate system while VRM 1.0/VRMA uses glTF's right-handed system
+    public var isVRM0: Bool {
+        return specVersion == .v0_0
+    }
     public var humanoid: VRMHumanoid?
     public var firstPerson: VRMFirstPerson?
     public var lookAt: VRMLookAt?

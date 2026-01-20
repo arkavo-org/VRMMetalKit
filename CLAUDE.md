@@ -22,11 +22,11 @@
 # Build
 swift build
 
-# Test (All)
-swift test
+# Test (All) - Optimal parallel settings (~5x faster)
+swift test --parallel --num-workers 14 -j 16 --disable-sandbox
 
 # Test (Specific)
-swift test --filter VRMCreatorSimpleTests
+swift test --filter VRMCreatorSimpleTests --disable-sandbox
 
 # Release Build
 swift build --configuration release
