@@ -64,24 +64,26 @@ kernel void springBoneDistance(
         float error = currentLength - restLength;
         float3 direction = delta / currentLength;
 
-        // DISTANCE CONSTRAINT: Prevent excessive stretching
+        // DISTANCE CONSTRAINT: Maintain bone length within tolerance
         // This is independent of stiffness (stiffness is for bind pose return)
         //
-        // Only correct STRETCH (error > 0), not compression.
-        // This allows gravity to pull bones down naturally while preventing
-        // the chain from stretching infinitely (which happens when stiffness=0).
-        //
-        // Allow small amount of stretch (5% tolerance) for natural physics,
-        // then apply full correction for anything beyond.
-        float stretchTolerance = restLength * 0.05;
+        // Allow small amount of flex (5% tolerance) for natural physics,
+        // then apply correction for anything beyond.
+        float tolerance = restLength * 0.05;
 
-        if (error > stretchTolerance) {
-            // Correct stretch beyond tolerance - move bone back toward parent
-            float correctionAmount = error - stretchTolerance;
+        if (error > tolerance) {
+            // STRETCH correction: bone is too far from parent, pull it back
+            float correctionAmount = error - tolerance;
             float3 correction = direction * correctionAmount;
             bonePosCurr[id] = bonePosCurr[id] - correction;
+        } else if (error < -tolerance) {
+            // COMPRESSION correction: bone is too close to parent, push it out
+            // Use softer correction (50% strength) to allow some natural compression
+            // while preventing bones from crumpling/collapsing together
+            float correctionAmount = (-error - tolerance) * 0.5;
+            float3 correction = direction * correctionAmount;
+            bonePosCurr[id] = bonePosCurr[id] + correction;
         }
-        // Compression (error < 0) is allowed - this is how gravity pulls bones down
     } else if (restLength > epsilon && currentLength < epsilon) {
         // If bone collapsed to parent position, push it out by rest length
         bonePosCurr[id] = bonePosCurr[parentIndex] + float3(0, -restLength, 0);

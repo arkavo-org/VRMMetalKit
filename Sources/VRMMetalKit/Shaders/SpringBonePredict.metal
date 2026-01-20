@@ -149,8 +149,13 @@ kernel void springBonePredict(
     // This allows bones to quickly fall to their natural hanging position
     // Use smoothstep to gradually phase out the boost over last 30 frames (avoid abrupt "bounce")
     float settlingFrames = float(globalParams.settlingFrames);
-    float settlingFactor = smoothstep(0.0, 30.0, settlingFrames);  // Gradual transition
-    float dragFactor = 1.0 - baseDrag * (1.0 - settlingFactor * 0.8);  // 80% less drag during settling
+    float settlingFactor = smoothstep(0.0, 30.0, settlingFrames);  // 1.0 during settling, 0.0 after
+
+    // Drag formula: velocity *= (1 - drag * dt)
+    // During settling, reduce effective drag to let hair fall faster
+    // Clamp effective drag to reasonable range [0, 0.99] to prevent division issues
+    float effectiveDrag = baseDrag * (1.0 - settlingFactor * 0.7);  // 70% less drag during settling
+    float dragFactor = 1.0 - clamp(effectiveDrag, 0.0, 0.99);
     float gravityBoost = 1.0 + settlingFactor * 4.0;  // 5x gravity during settling
 
     // Apply per-joint gravity: use gravityDir as direction, gravityPower as magnitude
@@ -167,6 +172,7 @@ kernel void springBonePredict(
 
     // Stiffness spring force: pulls bone toward its bind pose direction from parent
     // This makes hair return to its styled position after being disturbed
+    // Using proper PBD formulation: correction = (target - current) * stiffness
     float3 parentPos = bonePosCurr[parentIndex];
     float3 bindDir = bindDirections[id];
     // restLength already declared at top of function
@@ -183,21 +189,18 @@ kernel void springBonePredict(
 
         float stiffness = boneParams[id].stiffness;
 
-        // SETTLING: Completely disable stiffness during settling period
-        // Even 5% stiffness accumulates over time and prevents natural hanging
-        // Only enable stiffness AFTER settling is complete (settlingFrames == 0)
-        if (globalParams.settlingFrames > 0) {
-            stiffness = 0.0;
-        }
-
-        float3 toTarget = targetPos - newPos;
-        float distToTarget = length(toTarget);
+        // SETTLING: Gradually enable stiffness over the settling period
+        // Use smooth ramp-in during last 60 frames to avoid abrupt "snap" to pose
+        float settlingFrames = float(globalParams.settlingFrames);
+        float settlingStiffnessScale = 1.0 - smoothstep(0.0, 60.0, settlingFrames);
+        stiffness *= settlingStiffnessScale;
 
         // Only apply stiffness when significantly displaced from target
-        if (distToTarget > 0.001 && stiffness > 0.0) {
-            float3 targetDir = toTarget / distToTarget;
-            float pullStrength = stiffness * globalParams.dtSub * 0.5;
-            newPos = newPos + targetDir * min(distToTarget, pullStrength * distToTarget);
+        if (stiffness > 0.001) {
+            // PBD formulation: lerp toward target position
+            // stiffness is now directly the interpolation factor [0, 1]
+            // where 0 = no correction, 1 = snap to target
+            newPos = mix(newPos, targetPos, stiffness);
         }
     }
 
