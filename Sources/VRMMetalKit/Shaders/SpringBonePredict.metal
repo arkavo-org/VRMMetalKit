@@ -203,15 +203,20 @@ kernel void springBonePredict(
 
         // Only apply stiffness when significantly displaced from target
         if (stiffness > 0.001) {
-            // VRM stiffness values (0.1-0.2) were tuned for spring-force model.
-            // For PBD direct position correction, we need to scale them up aggressively.
-            // Use pow(0.25) scaling: 0.1 -> 0.562, 0.2 -> 0.669, 0.5 -> 0.841, 1.0 -> 1.0
-            // This provides strong return-to-rest force while preserving 1.0 = snap
-            float effectiveStiffness = pow(stiffness, 0.25);
+            // TIME-SCALED STIFFNESS: Like drag, stiffness must be proportional to timestep
+            // to behave consistently across frame rates and prevent oscillation/flutter.
+            //
+            // At high frame rates (120Hz), applying large stiffness every substep causes
+            // snap-to-pose oscillation. Instead, apply small corrections that accumulate.
+            //
+            // Formula: effectiveStiffness = stiffness * dt * referenceRate
+            // Normalized to 60Hz, so stiffness values work as expected.
+            // Cap at 0.5 to prevent overshoot (never correct more than half the error per substep)
+            float referenceRate = 60.0;
+            float effectiveStiffness = stiffness * globalParams.dtSub * referenceRate;
+            effectiveStiffness = min(effectiveStiffness, 0.5);
 
             // PBD formulation: lerp toward target position
-            // effectiveStiffness is the interpolation factor [0, 1]
-            // where 0 = no correction, 1 = snap to target
             newPos = mix(newPos, targetPos, effectiveStiffness);
         }
     }
