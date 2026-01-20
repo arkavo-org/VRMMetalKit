@@ -366,11 +366,6 @@ public class ARReactionLayer: AnimationLayer {
         // Hips translate up for the jump - large value for visible jump
         let jumpHeight: Float = 0.25 * intensity  // 25cm jump height
 
-        // Debug: Log jump parameters
-        if jumpPhase > 0.1 {
-            print("🦘 Jump: progress=\(progress), intensity=\(intensity), jumpPhase=\(jumpPhase), height=\(jumpHeight * jumpPhase)m")
-        }
-
         var hipsTransform = ProceduralBoneTransform.identity
         hipsTransform.translation = SIMD3<Float>(0, jumpHeight * jumpPhase, 0)
         cachedOutput.bones[.hips] = hipsTransform

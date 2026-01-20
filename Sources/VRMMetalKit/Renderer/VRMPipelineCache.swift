@@ -81,11 +81,9 @@ public final class VRMPipelineCache: @unchecked Sendable {
 
             do {
                 let library = try device.makeLibrary(URL: url)
-                print("[VRMPipelineCache] ✅ Loaded from VRMMetalKitShaders.metallib at: \(url.path)")
                 libraries[key] = library
                 return library
             } catch {
-                print("[VRMPipelineCache] ❌ Failed to load metallib: \(error)")
                 throw PipelineCacheError.shaderLibraryLoadFailed(error)
             }
         }

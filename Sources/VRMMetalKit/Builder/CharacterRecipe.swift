@@ -105,7 +105,9 @@ public struct CharacterRecipe: Codable {
                 }
             default:
                 // Unknown morph - warn but allow
-                print("⚠️ Unknown morph target: \(name)")
+                #if VRM_METALKIT_ENABLE_LOGS
+                vrmLog("Unknown morph target: \(name)")
+                #endif
             }
         }
 

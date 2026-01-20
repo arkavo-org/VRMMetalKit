@@ -35,7 +35,9 @@ public struct VRMMetalKit {
 
     /// Log version information to console
     public static func logVersion() {
-        print("[VRMMetalKit] Version: \(version) (\(buildDate)) Shader: \(shaderVersion)")
+        #if VRM_METALKIT_ENABLE_LOGS
+        vrmLog("Version: \(version) (\(buildDate)) Shader: \(shaderVersion)")
+        #endif
     }
 
     /// Load a VRM model from a file URL

@@ -247,7 +247,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Debug: Log bone positions occasionally
             updateCounter += 1
 
-            // DIAGNOSTIC DEBUG: Check for explosion/growing issues
+            #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
             if updateCounter <= 10 || updateCounter % 60 == 0,
                let bonePosCurr = buffers.bonePosCurr,
                let bonePosPrev = buffers.bonePosPrev,
@@ -258,7 +258,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let restPtr = restLengthsBuffer.contents().bindMemory(to: Float.self, capacity: buffers.numBones)
                 let paramsPtr = boneParamsBuffer.contents().bindMemory(to: BoneParams.self, capacity: buffers.numBones)
 
-                // Check a non-root bone (index 1)
                 let boneIndex = 1
                 if boneIndex < buffers.numBones {
                     let curr = currPtr[boneIndex]
@@ -280,12 +279,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     print("  stiffness=\(String(format: "%.2f", boneParams.stiffness)) drag=\(String(format: "%.2f", boneParams.drag))")
                     print("  dtSub=\(String(format: "%.6f", params.dtSub)) settling=\(params.settlingFrames)")
 
-                    // ALERT if exploding
                     if simd_length(velocity) > 0.5 || actualDist > restLen * 2 || curr.y.isNaN {
                         print("  ⚠️ EXPLOSION DETECTED! velocity=\(simd_length(velocity)) stretch=\(actualDist/restLen)")
                     }
                 }
             }
+            #endif
 
             if updateCounter % VRMConstants.Performance.statusLogInterval == 0, let bonePosCurr = buffers.bonePosCurr {
                 let ptr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: 3)
@@ -676,12 +675,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // DEBUG: Log spring bone setup details
+        #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
         print("[SpringBone DEBUG] === Spring Bone Setup ===")
         var debugBoneIndex = 0
         for (springIndex, spring) in springBone.springs.enumerated() {
             let springName = spring.name ?? ""
-            // Recalculate mask for debug output
             var debugMask: UInt32 = 0
             if spring.colliderGroups.isEmpty {
                 debugMask = 0xFFFFFFFF
@@ -708,7 +706,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
         print("[SpringBone DEBUG] Total bones: \(initialPositions.count), settling frames: \(model.springBoneGlobalParams?.settlingFrames ?? 0)")
 
-        // DEBUG: Log collider setup
         print("[SpringBone DEBUG] === Colliders ===")
         print("[SpringBone DEBUG] Spheres: \(sphereColliders.count)")
         for (i, sphere) in sphereColliders.enumerated() {
@@ -719,6 +716,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             print("  Capsule \(i): p0=(\(String(format: "%.3f", capsule.p0.x)), \(String(format: "%.3f", capsule.p0.y)), \(String(format: "%.3f", capsule.p0.z))) p1=(\(String(format: "%.3f", capsule.p1.x)), \(String(format: "%.3f", capsule.p1.y)), \(String(format: "%.3f", capsule.p1.z))) radius=\(String(format: "%.3f", capsule.radius)) group=\(capsule.groupIndex)")
         }
         print("[SpringBone DEBUG] Planes: \(planeColliders.count)")
+        #endif
 
         // Initialize buffers for root bone kinematic updates
         let numRootBones = rootBoneIndices.count
@@ -811,18 +809,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
             )
 
-            // Debug: Log transformation details for first few frames
+            #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
             if updateCounter < 5 {
                 print("[Collider \(colliderIndex)] node=\(collider.node) '\(colliderNode.name ?? "")' nodePos=(\(String(format: "%.3f", colliderNode.worldPosition.x)), \(String(format: "%.3f", colliderNode.worldPosition.y)), \(String(format: "%.3f", colliderNode.worldPosition.z)))")
             }
+            #endif
 
             switch collider.shape {
             case .sphere(let offset, let radius):
                 let worldOffset = worldRotation * offset
                 let worldCenter = colliderNode.worldPosition + worldOffset
+                #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
                 if updateCounter < 5 {
                     print("  localOffset=(\(String(format: "%.3f", offset.x)), \(String(format: "%.3f", offset.y)), \(String(format: "%.3f", offset.z))) -> worldOffset=(\(String(format: "%.3f", worldOffset.x)), \(String(format: "%.3f", worldOffset.y)), \(String(format: "%.3f", worldOffset.z))) -> center=(\(String(format: "%.3f", worldCenter.x)), \(String(format: "%.3f", worldCenter.y)), \(String(format: "%.3f", worldCenter.z)))")
                 }
+                #endif
                 sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
 
             case .capsule(let offset, let radius, let tail):
@@ -841,13 +842,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Debug: Log animated collider positions occasionally
+        #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
         if updateCounter % 600 == 1 && !sphereColliders.isEmpty {
             print("[SpringBone DEBUG] === Animated Collider Positions (frame \(updateCounter)) ===")
             for (i, sphere) in sphereColliders.enumerated() {
                 print("  Sphere \(i): center=(\(String(format: "%.3f", sphere.center.x)), \(String(format: "%.3f", sphere.center.y)), \(String(format: "%.3f", sphere.center.z))) group=\(sphere.groupIndex)")
             }
         }
+        #endif
 
         // Update collider buffers with animated positions
         if !sphereColliders.isEmpty {
@@ -985,11 +987,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
     }
 
+    #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
     private var rotationDiagCounter = 0
+    #endif
 
     private func updateNodeTransformsForChain(nodePositions: [(VRMNode, SIMD3<Float>, Int)]) {
+        #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
         rotationDiagCounter += 1
         let shouldLog = rotationDiagCounter <= 5 || rotationDiagCounter % 60 == 0
+        #endif
 
         // Update bone rotations to point toward physics-simulated positions
         for i in 0..<nodePositions.count - 1 {
@@ -1101,12 +1107,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 continue
             }
 
-            // DIAGNOSTIC: Log rotation values
+            #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
             if shouldLog && i == 0 {
                 let newAngle = 2.0 * acos(min(abs(newRotation.real), 1.0)) * 180.0 / Float.pi
                 print("[ROTATION \(rotationDiagCounter)] bone=\(globalIndex) dot=\(String(format: "%.4f", dotProduct)) disp=\(String(format: "%.4f", displacement)) weight=\(String(format: "%.2f", physicsWeight))")
                 print("  newRotAngle=\(String(format: "%.2f", newAngle))° atRest=\(dotProduct > 0.9998) sleeping=\(physicsWeight < 0.001)")
             }
+            #endif
 
             // Final NaN/Inf guard before applying - reset to bind pose if calculation produced bad values
             // IMPORTANT: Check both isNaN AND isInfinite - Inf quaternions produce NaN matrices

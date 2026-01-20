@@ -51,28 +51,14 @@ extension VRMModel {
     ///
     /// - Returns: GLB-formatted Data
     public func serialize() throws -> Data {
-        print("[VRMModel] Serializing VRM to Data")
-
         // Build the complete glTF/VRM JSON
         let vrmJSON = try buildVRMJSON()
-        print("[VRMModel] Built VRM JSON with \(vrmJSON.keys.count) root keys")
 
         // Get binary buffer data from glTF document
         let binaryData = gltf.binaryBufferData ?? Data()
-        print("[VRMModel] Binary buffer data: \(binaryData.count) bytes")
-
-        if binaryData.isEmpty {
-            print("[VRMModel] ⚠️ WARNING: Binary buffer data is empty!")
-        }
 
         // Create GLB file with JSON + binary data
         let glbData = try createGLB(json: vrmJSON, binaryData: binaryData)
-
-        print("[VRMModel] VRM data created: \(glbData.count) bytes (\(binaryData.count) bytes binary data)")
-
-        if glbData.isEmpty {
-            print("[VRMModel] ❌ ERROR: GLB data is empty!")
-        }
 
         return glbData
     }
