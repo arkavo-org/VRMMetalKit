@@ -62,46 +62,11 @@ kernel void springBoneDistance(
 
     const float epsilon = 1e-6;
     if (currentLength > epsilon && restLength > epsilon) {
-        float error = currentLength - restLength;
-
-        // DISTANCE CONSTRAINT: Maintain bone length within tolerance
-        // This is independent of stiffness (stiffness is for bind pose return)
-        //
-        // Allow small amount of flex (5% tolerance) for natural physics,
-        // then apply correction for anything beyond.
-        float tolerance = restLength * 0.05;
-
-        if (error > tolerance) {
-            // STRETCH correction: bone is too far from parent, pull it back
-            // Use current direction (reliable when stretched)
-            float3 direction = delta / currentLength;
-            float correctionAmount = error - tolerance;
-            float3 correction = direction * correctionAmount;
-            bonePosCurr[id] = bonePosCurr[id] - correction;
-        } else if (error < -tolerance) {
-            // COMPRESSION correction: bone is too close to parent, push it out
-            //
-            // CRITICAL FIX: When chain is collapsed (currentLength < 50% of restLength),
-            // the delta direction becomes unreliable (may point wrong way).
-            // Use bind direction as push direction instead.
-            //
-            // This ensures hair extends in the correct direction even when collapsed.
-            float3 direction;
-            if (currentLength < restLength * 0.5) {
-                // Chain is severely collapsed - use bind direction
-                float3 bindDir = bindDirections[id];
-                float bindLen = length(bindDir);
-                direction = (bindLen > 0.001) ? (bindDir / bindLen) : float3(0, -1, 0);
-            } else {
-                // Normal compression - use current direction
-                direction = delta / currentLength;
-            }
-
-            // Full strength correction for compression (was 50%, too weak)
-            float correctionAmount = -error - tolerance;
-            float3 correction = direction * correctionAmount;
-            bonePosCurr[id] = bonePosCurr[id] + correction;
-        }
+        // HARD DISTANCE CONSTRAINT: Always project to exact rest length
+        // Matches three-vrm behavior - no tolerance band that allows compression/stretch
+        // This prevents the "tightening" issue where clothes compress to 95% and stick
+        float3 direction = delta / currentLength;
+        bonePosCurr[id] = bonePosCurr[parentIndex] + direction * restLength;
     } else if (restLength > epsilon && currentLength < epsilon) {
         // If bone fully collapsed to parent position, use bind direction to push out
         float3 bindDir = bindDirections[id];
