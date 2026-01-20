@@ -151,11 +151,17 @@ kernel void springBonePredict(
     float settlingFrames = float(globalParams.settlingFrames);
     float settlingFactor = smoothstep(0.0, 30.0, settlingFrames);  // 1.0 during settling, 0.0 after
 
-    // Drag formula: velocity *= (1 - drag * dt)
-    // During settling, reduce effective drag to let hair fall faster
-    // Clamp effective drag to reasonable range [0, 0.99] to prevent division issues
-    float effectiveDrag = baseDrag * (1.0 - settlingFactor * 0.7);  // 70% less drag during settling
-    float dragFactor = 1.0 - clamp(effectiveDrag, 0.0, 0.99);
+    // TIME-SCALED DRAG: drag must be proportional to timestep to behave consistently
+    // across different frame rates. Formula: velocity *= pow(1 - drag, dt * referenceRate)
+    // We normalize to 60Hz so drag values work as expected at typical frame rates.
+    // During settling, reduce effective drag to let hair fall faster (70% reduction)
+    float effectiveDrag = baseDrag * (1.0 - settlingFactor * 0.7);
+    // Clamp to [0, 0.99] to prevent numerical issues
+    effectiveDrag = clamp(effectiveDrag, 0.0, 0.99);
+    // Time-scaled: at 60Hz reference (dtSub ~= 0.0167), drag=0.4 gives dragFactor ~= 0.6
+    // At 120Hz (dtSub ~= 0.0083), same drag gives dragFactor ~= 0.77 per substep
+    float referenceRate = 60.0;
+    float dragFactor = pow(1.0 - effectiveDrag, globalParams.dtSub * referenceRate);
     float gravityBoost = 1.0 + settlingFactor * 4.0;  // 5x gravity during settling
 
     // Apply per-joint gravity: use gravityDir as direction, gravityPower as magnitude

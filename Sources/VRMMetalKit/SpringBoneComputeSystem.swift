@@ -1017,10 +1017,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 newRotation = rotationDelta * currentNode.localRotation
             }
 
-            // Final NaN guard before applying - reset to bind pose if calculation produced NaN
-            if newRotation.real.isNaN || newRotation.imag.x.isNaN ||
-               newRotation.imag.y.isNaN || newRotation.imag.z.isNaN {
-                vrmLogPhysics("[SpringBone] ⚠️ Calculated rotation NaN, resetting node \(currentNode.name ?? "unnamed")")
+            // Final NaN/Inf guard before applying - reset to bind pose if calculation produced bad values
+            // IMPORTANT: Check both isNaN AND isInfinite - Inf quaternions produce NaN matrices
+            if newRotation.real.isNaN || newRotation.real.isInfinite ||
+               newRotation.imag.x.isNaN || newRotation.imag.x.isInfinite ||
+               newRotation.imag.y.isNaN || newRotation.imag.y.isInfinite ||
+               newRotation.imag.z.isNaN || newRotation.imag.z.isInfinite {
+                vrmLogPhysics("[SpringBone] ⚠️ Calculated rotation NaN/Inf, resetting node \(currentNode.name ?? "unnamed")")
                 currentNode.localRotation = currentNode.initialRotation
                 currentNode.updateLocalMatrix()
                 currentNode.updateWorldTransform()
@@ -1034,10 +1037,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
 
     private func quaternionFromTo(from: SIMD3<Float>, to: SIMD3<Float>) -> simd_quatf {
-        // Input validation
+        // Input validation - check for zero-length, NaN, or Inf vectors
         let fromLen = simd_length(from)
         let toLen = simd_length(to)
-        if fromLen < 0.0001 || toLen < 0.0001 {
+        if fromLen < 0.0001 || toLen < 0.0001 ||
+           fromLen.isNaN || fromLen.isInfinite ||
+           toLen.isNaN || toLen.isInfinite {
             return simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
         }
 
@@ -1050,16 +1055,33 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let axisLen = length(axis)
 
         if axisLen < 0.0001 {
-            // Vectors are parallel
+            // Vectors are parallel or anti-parallel
             if dotProduct > 0 {
+                // Same direction - no rotation needed
                 return simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
             } else {
-                // Find perpendicular axis for 180° rotation
-                let perpendicular = abs(fromNorm.x) < 0.9 ? SIMD3<Float>(1, 0, 0) : SIMD3<Float>(0, 1, 0)
-                let perpAxis = cross(fromNorm, perpendicular)
+                // ANTI-PARALLEL (180° rotation needed)
+                // Find a robust perpendicular axis using the component with smallest magnitude
+                // This ensures we always get a valid perpendicular, never return identity!
+                var perpAxis: SIMD3<Float>
+                let absFrom = abs(fromNorm)
+
+                if absFrom.x <= absFrom.y && absFrom.x <= absFrom.z {
+                    // X is smallest - use X axis to find perpendicular
+                    perpAxis = cross(fromNorm, SIMD3<Float>(1, 0, 0))
+                } else if absFrom.y <= absFrom.z {
+                    // Y is smallest - use Y axis to find perpendicular
+                    perpAxis = cross(fromNorm, SIMD3<Float>(0, 1, 0))
+                } else {
+                    // Z is smallest - use Z axis to find perpendicular
+                    perpAxis = cross(fromNorm, SIMD3<Float>(0, 0, 1))
+                }
+
                 let perpAxisLen = length(perpAxis)
+                // This should never be zero with the above logic, but guard anyway
                 if perpAxisLen < 0.0001 {
-                    return simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+                    // Last resort: use arbitrary axis for 180° rotation
+                    return simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0))
                 }
                 return simd_quatf(angle: .pi, axis: perpAxis / perpAxisLen)
             }
