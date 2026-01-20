@@ -78,7 +78,28 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     // Teleportation detection
     private var lastRootPositions: [SIMD3<Float>] = []
-    private let teleportationThreshold: Float = 1.0  // 1 meter threshold
+    private let teleportationThreshold: Float = 1.0  // 1 meter threshold (base, scaled by model size)
+
+    // Interpolation state for smooth substep updates (prevents temporal aliasing / "hair explosion")
+    private var previousRootPositions: [SIMD3<Float>] = []
+    private var targetRootPositions: [SIMD3<Float>] = []
+    private var frameSubstepCount: Int = 0
+    private var currentSubstepIndex: Int = 0
+
+    // World bind direction interpolation (prevents rotational explosions during fast turns)
+    private var previousWorldBindDirections: [SIMD3<Float>] = []
+    private var targetWorldBindDirections: [SIMD3<Float>] = []
+
+    // Collider transform interpolation (prevents collision snapping during fast rotations)
+    private var previousSphereColliders: [SphereCollider] = []
+    private var targetSphereColliders: [SphereCollider] = []
+    private var previousCapsuleColliders: [CapsuleCollider] = []
+    private var targetCapsuleColliders: [CapsuleCollider] = []
+    private var previousPlaneColliders: [PlaneCollider] = []
+    private var targetPlaneColliders: [PlaneCollider] = []
+
+    // Cached model scale for scale-aware thresholds
+    private var cachedModelScale: Float = 1.0
 
     /// Flag to request physics state reset on next update (e.g., when returning to idle)
     var requestPhysicsReset = false
@@ -169,6 +190,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         timeAccumulator += deltaTime
         let fixedDeltaTime = 1.0 / VRMConstants.Physics.substepRateHz // Fixed update at configured rate
         let maxSubsteps = VRMConstants.Physics.maxSubstepsPerFrame
+
+        // Calculate total substeps this frame BEFORE the loop (for interpolation)
+        frameSubstepCount = min(Int(timeAccumulator / fixedDeltaTime), maxSubsteps)
+        currentSubstepIndex = 0
+
+        // Capture all target transforms where animation wants to go this frame
+        // This is called ONCE per frame, not per substep
+        // Captures: root positions, world bind directions, collider transforms
+        if VRMConstants.Physics.enableRootInterpolation && frameSubstepCount > 0 {
+            captureTargetTransforms(model: model)
+
+            // Check for teleportation BEFORE entering substep loop
+            checkTeleportationAndReset(model: model, buffers: buffers)
+        }
+
         var stepsThisFrame = 0
 
         // Process fixed steps (clamped to avoid spiral-of-death)
@@ -190,8 +226,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Copy updated params to GPU
             globalParamsBuffer?.contents().copyMemory(from: &params, byteCount: MemoryLayout<SpringBoneGlobalParams>.stride)
 
-            // Update animated root positions and colliders
-            updateAnimatedPositions(model: model, buffers: buffers)
+            // Interpolate ALL transforms for this substep (smooth motion instead of teleportation)
+            // Includes: root positions, world bind directions, collider transforms
+            if VRMConstants.Physics.enableRootInterpolation && frameSubstepCount > 0 {
+                // t goes from 1/N to N/N across substeps (reaches 1.0 on last substep)
+                let t = Float(currentSubstepIndex + 1) / Float(frameSubstepCount)
+                interpolateAllTransforms(t: t, buffers: buffers)
+                currentSubstepIndex += 1
+            } else {
+                // Fallback: original behavior - update all at once
+                updateAnimatedPositions(model: model, buffers: buffers)
+            }
 
             // Execute XPBD pipeline
             executeXPBDStep(buffers: buffers, globalParams: params)
@@ -229,6 +274,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let droppedSteps = Int(timeAccumulator / fixedDeltaTime)
             timeAccumulator = min(timeAccumulator, fixedDeltaTime)
             vrmLogPhysics("⚠️ [SpringBone] Hit max substeps (\(maxSubsteps)) this frame. Dropping \(droppedSteps) pending step(s) to stay real-time.")
+        }
+
+        // Commit all target transforms as previous for next frame's interpolation
+        if VRMConstants.Physics.enableRootInterpolation && stepsThisFrame > 0 {
+            commitAllTransforms()
         }
 
         lastUpdateTime = CACurrentMediaTime()
@@ -274,6 +324,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         // Bind directions for stiffness spring force (return-to-bind-pose)
+        // Note: When interpolation is enabled, these are DYNAMICALLY updated each substep
+        // with world-space bind directions interpolated from parent bone rotations.
+        // This prevents rotational snapping during fast character turns.
         if let bindDirections = buffers.bindDirections {
             computeEncoder.setBuffer(bindDirections, offset: 0, index: 11)
         }
@@ -754,6 +807,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
     }
 
+    /// Checks for teleportation and resets physics state if needed
+    /// Called once per frame before entering substep loop
+    private func checkTeleportationAndReset(model: VRMModel, buffers: SpringBoneBuffers) {
+        // Check for teleportation using target positions
+        let shouldResetPhysics = detectTeleportation(currentPositions: targetRootPositions, buffers: buffers)
+        if shouldResetPhysics {
+            resetPhysicsState(model: model, buffers: buffers, animatedPositions: targetRootPositions)
+            // Also reset all interpolation state to prevent lerping from old positions
+            resetInterpolationState()
+            vrmLog("⚠️ [SpringBone] Teleportation detected - physics state reset")
+        }
+
+        // Manual physics reset request
+        if requestPhysicsReset {
+            resetPhysicsState(model: model, buffers: buffers, animatedPositions: targetRootPositions)
+            resetInterpolationState()
+            requestPhysicsReset = false
+        }
+
+        // Update last root positions for next frame's teleportation check
+        lastRootPositions = targetRootPositions
+    }
+
+    /// Resets all interpolation state to current target (prevents lerping from stale data after teleport)
+    private func resetInterpolationState() {
+        previousRootPositions = targetRootPositions
+        previousWorldBindDirections = targetWorldBindDirections
+        previousSphereColliders = targetSphereColliders
+        previousCapsuleColliders = targetCapsuleColliders
+        previousPlaneColliders = targetPlaneColliders
+    }
+
     private func captureCompletedPositions(from buffers: SpringBoneBuffers, frameID: UInt64) {
         guard let bonePosCurr = buffers.bonePosCurr,
               buffers.numBones > 0 else {
@@ -961,10 +1046,260 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         return Swift.max(min, Swift.min(max, value))
     }
 
+    // MARK: - Frame Interpolation State Capture
+
+    /// Captures all target transforms from animation for this frame
+    /// Called once at the start of the frame before substep loop
+    /// Captures: root positions, world bind directions, collider transforms
+    private func captureTargetTransforms(model: VRMModel) {
+        guard let springBone = model.springBone else { return }
+
+        // 1. Capture root positions
+        targetRootPositions = []
+        for spring in springBone.springs {
+            if let firstJoint = spring.joints.first,
+               let node = model.nodes[safe: firstJoint.node] {
+                targetRootPositions.append(node.worldPosition)
+            }
+        }
+
+        // First frame initialization
+        if previousRootPositions.isEmpty || previousRootPositions.count != targetRootPositions.count {
+            previousRootPositions = targetRootPositions
+        }
+
+        // 2. Capture world bind directions (transforms static bind dirs by current parent rotation)
+        captureTargetWorldBindDirections(model: model, springBone: springBone)
+
+        // 3. Capture collider transforms
+        captureTargetColliderTransforms(model: model, springBone: springBone)
+
+        // Cache model scale for scale-aware thresholds
+        cachedModelScale = calculateModelScaleFromRestLengths()
+    }
+
+    /// Captures world-space bind directions based on current animated parent orientations
+    private func captureTargetWorldBindDirections(model: VRMModel, springBone: VRMSpringBone) {
+        targetWorldBindDirections = []
+
+        var boneIndex = 0
+        for spring in springBone.springs {
+            for (jointIndex, _) in spring.joints.enumerated() {
+                guard boneIndex < boneBindDirections.count else {
+                    boneIndex += 1
+                    continue
+                }
+
+                let localBindDir = boneBindDirections[boneIndex]
+
+                // Transform bind direction by parent's current world rotation
+                if jointIndex > 0,
+                   let prevJoint = spring.joints[safe: jointIndex - 1],
+                   let parentNode = model.nodes[safe: prevJoint.node] {
+                    let parentRot = extractRotation(from: parentNode.worldMatrix)
+                    let worldBindDir = simd_act(parentRot, localBindDir)
+                    targetWorldBindDirections.append(simd_normalize(worldBindDir))
+                } else {
+                    // Root bone - use local direction as-is (typically downward)
+                    targetWorldBindDirections.append(localBindDir)
+                }
+
+                boneIndex += 1
+            }
+        }
+
+        // First frame initialization
+        if previousWorldBindDirections.isEmpty || previousWorldBindDirections.count != targetWorldBindDirections.count {
+            previousWorldBindDirections = targetWorldBindDirections
+        }
+    }
+
+    /// Captures collider transforms based on current animated node positions/orientations
+    private func captureTargetColliderTransforms(model: VRMModel, springBone: VRMSpringBone) {
+        // Build collider-to-group index mapping
+        var colliderToGroupIndex: [Int: UInt32] = [:]
+        for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+            for colliderIndex in group.colliders {
+                if colliderToGroupIndex[colliderIndex] == nil {
+                    colliderToGroupIndex[colliderIndex] = UInt32(groupIndex)
+                }
+            }
+        }
+
+        targetSphereColliders = []
+        targetCapsuleColliders = []
+        targetPlaneColliders = []
+
+        for (colliderIndex, collider) in springBone.colliders.enumerated() {
+            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+            let groupIndex = colliderToGroupIndex[colliderIndex] ?? 0
+
+            let wm = colliderNode.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
+                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
+
+            case .capsule(let offset, let radius, let tail):
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
+                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+
+            case .plane(let offset, let normal):
+                let worldOffset = worldRotation * offset
+                let worldNormal = worldRotation * normal
+                let worldPoint = colliderNode.worldPosition + worldOffset
+                let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
+                targetPlaneColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
+            }
+        }
+
+        // First frame initialization
+        if previousSphereColliders.isEmpty || previousSphereColliders.count != targetSphereColliders.count {
+            previousSphereColliders = targetSphereColliders
+        }
+        if previousCapsuleColliders.isEmpty || previousCapsuleColliders.count != targetCapsuleColliders.count {
+            previousCapsuleColliders = targetCapsuleColliders
+        }
+        if previousPlaneColliders.isEmpty || previousPlaneColliders.count != targetPlaneColliders.count {
+            previousPlaneColliders = targetPlaneColliders
+        }
+    }
+
+    /// Estimates model scale from bone rest lengths (proxy for overall model size)
+    private func calculateModelScaleFromRestLengths() -> Float {
+        // Use max non-zero rest length as a reasonable proxy for model scale
+        // Typical VRM models have rest lengths of 0.05-0.15m for hair/cloth bones
+        let nonZeroLengths = cpuRestLengths.filter { $0 > 0.001 }
+        guard !nonZeroLengths.isEmpty else {
+            return 1.0 // Default scale if no valid rest lengths
+        }
+
+        // Average rest length, normalized so that ~0.1m = 1.0 scale
+        let avgLength = nonZeroLengths.reduce(0, +) / Float(nonZeroLengths.count)
+        let normalizedScale = avgLength / 0.1  // 0.1m is typical bone length at scale 1.0
+
+        return max(normalizedScale, VRMConstants.Physics.minScaleForThreshold)
+    }
+
+    // MARK: - Substep Interpolation Methods
+
+    /// Interpolates all transforms for the current substep
+    /// - Parameter t: Interpolation factor [0, 1] where 0 = previous frame, 1 = current frame target
+    private func interpolateAllTransforms(t: Float, buffers: SpringBoneBuffers) {
+        interpolateRootPositions(t: t)
+        interpolateWorldBindDirections(t: t, buffers: buffers)
+        interpolateColliders(t: t, buffers: buffers)
+    }
+
+    /// Interpolates root positions for the current substep
+    private func interpolateRootPositions(t: Float) {
+        guard previousRootPositions.count == targetRootPositions.count,
+              let buffer = animatedRootPositionsBuffer,
+              !previousRootPositions.isEmpty else { return }
+
+        let ptr = buffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: previousRootPositions.count)
+        for i in 0..<previousRootPositions.count {
+            // Linear interpolation: prev + t * (target - prev)
+            ptr[i] = simd_mix(previousRootPositions[i], targetRootPositions[i], SIMD3<Float>(repeating: t))
+        }
+    }
+
+    /// Interpolates world bind directions using normalized linear interpolation (nlerp)
+    /// This prevents rotational snapping during fast character turns
+    private func interpolateWorldBindDirections(t: Float, buffers: SpringBoneBuffers) {
+        guard previousWorldBindDirections.count == targetWorldBindDirections.count,
+              let bindDirectionsBuffer = buffers.bindDirections,
+              !previousWorldBindDirections.isEmpty else { return }
+
+        let ptr = bindDirectionsBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: previousWorldBindDirections.count)
+        for i in 0..<previousWorldBindDirections.count {
+            // Normalized linear interpolation (nlerp) for direction vectors
+            let interpolated = simd_mix(previousWorldBindDirections[i], targetWorldBindDirections[i], SIMD3<Float>(repeating: t))
+            let len = simd_length(interpolated)
+            ptr[i] = len > 0.001 ? interpolated / len : targetWorldBindDirections[i]
+        }
+    }
+
+    /// Interpolates collider transforms for the current substep
+    /// Prevents collision geometry from snapping during fast rotations
+    private func interpolateColliders(t: Float, buffers: SpringBoneBuffers) {
+        // Interpolate sphere colliders
+        if previousSphereColliders.count == targetSphereColliders.count,
+           let sphereBuffer = buffers.sphereColliders,
+           !previousSphereColliders.isEmpty {
+            let ptr = sphereBuffer.contents().bindMemory(to: SphereCollider.self, capacity: previousSphereColliders.count)
+            for i in 0..<previousSphereColliders.count {
+                let prev = previousSphereColliders[i]
+                let target = targetSphereColliders[i]
+                ptr[i] = SphereCollider(
+                    center: simd_mix(prev.center, target.center, SIMD3<Float>(repeating: t)),
+                    radius: prev.radius + t * (target.radius - prev.radius),
+                    groupIndex: target.groupIndex
+                )
+            }
+        }
+
+        // Interpolate capsule colliders
+        if previousCapsuleColliders.count == targetCapsuleColliders.count,
+           let capsuleBuffer = buffers.capsuleColliders,
+           !previousCapsuleColliders.isEmpty {
+            let ptr = capsuleBuffer.contents().bindMemory(to: CapsuleCollider.self, capacity: previousCapsuleColliders.count)
+            for i in 0..<previousCapsuleColliders.count {
+                let prev = previousCapsuleColliders[i]
+                let target = targetCapsuleColliders[i]
+                ptr[i] = CapsuleCollider(
+                    p0: simd_mix(prev.p0, target.p0, SIMD3<Float>(repeating: t)),
+                    p1: simd_mix(prev.p1, target.p1, SIMD3<Float>(repeating: t)),
+                    radius: prev.radius + t * (target.radius - prev.radius),
+                    groupIndex: target.groupIndex
+                )
+            }
+        }
+
+        // Interpolate plane colliders
+        if previousPlaneColliders.count == targetPlaneColliders.count,
+           let planeBuffer = buffers.planeColliders,
+           !previousPlaneColliders.isEmpty {
+            let ptr = planeBuffer.contents().bindMemory(to: PlaneCollider.self, capacity: previousPlaneColliders.count)
+            for i in 0..<previousPlaneColliders.count {
+                let prev = previousPlaneColliders[i]
+                let target = targetPlaneColliders[i]
+                // nlerp for normal direction
+                let interpolatedNormal = simd_mix(prev.normal, target.normal, SIMD3<Float>(repeating: t))
+                let normalLen = simd_length(interpolatedNormal)
+                ptr[i] = PlaneCollider(
+                    point: simd_mix(prev.point, target.point, SIMD3<Float>(repeating: t)),
+                    normal: normalLen > 0.001 ? interpolatedNormal / normalLen : target.normal,
+                    groupIndex: target.groupIndex
+                )
+            }
+        }
+    }
+
+    /// Stores current target transforms as previous for next frame's interpolation
+    private func commitAllTransforms() {
+        previousRootPositions = targetRootPositions
+        previousWorldBindDirections = targetWorldBindDirections
+        previousSphereColliders = targetSphereColliders
+        previousCapsuleColliders = targetCapsuleColliders
+        previousPlaneColliders = targetPlaneColliders
+    }
+
     // MARK: - Teleportation Detection
 
     /// Detects if the model has teleported (moved more than threshold distance)
     /// This prevents physics explosion when character is repositioned instantly
+    /// Uses scale-aware threshold to handle models of different sizes
     private func detectTeleportation(currentPositions: [SIMD3<Float>], buffers: SpringBoneBuffers) -> Bool {
         // Skip detection on first frame or if no previous positions
         guard !lastRootPositions.isEmpty,
@@ -972,10 +1307,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return false
         }
 
-        // Check if any root bone moved more than the threshold
+        // Scale threshold by model size (tiny models have proportionally smaller thresholds)
+        let scaledThreshold = teleportationThreshold * max(cachedModelScale, VRMConstants.Physics.minScaleForThreshold)
+
+        // Check if any root bone moved more than the scaled threshold
         for i in 0..<currentPositions.count {
             let distance = simd_distance(currentPositions[i], lastRootPositions[i])
-            if distance > teleportationThreshold {
+            if distance > scaledThreshold {
                 return true
             }
         }

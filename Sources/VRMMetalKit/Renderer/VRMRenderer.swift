@@ -346,6 +346,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // SpringBone Physics (GPU Compute)
     private var springBoneComputeSystem: SpringBoneComputeSystem?
     public var enableSpringBone: Bool = false
+    public var springBoneQuality: VRMConstants.SpringBoneQuality = .ultra
     private var lastUpdateTime: CFTimeInterval = 0
     var temporaryGravity: SIMD3<Float>?
     var temporaryWind: SIMD3<Float>?
