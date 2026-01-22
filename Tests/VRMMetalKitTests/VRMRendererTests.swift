@@ -584,4 +584,29 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertEqual(actualSize, expectedSize,
                        "Uniforms struct size (\(actualSize)) must match MetalSizeConstants.uniformsSize (\(expectedSize))")
     }
+
+    // MARK: - Pipeline Integration Tests
+
+    /// Test that all rendering pipelines are successfully created.
+    /// This validates that shader functions exist and compile correctly.
+    func testPipelineCreation() {
+        let config = RendererConfig(strict: .fail)
+        let strictRenderer = VRMRenderer(device: device, config: config)
+
+        XCTAssertNotNil(strictRenderer.opaquePipelineState,
+                        "Opaque pipeline state should be created successfully")
+
+        XCTAssertNotNil(strictRenderer.skinnedOpaquePipelineState,
+                        "Skinned pipeline state should be created successfully. Missing 'skinned_mtoon_vertex'?")
+
+        XCTAssertNotNil(strictRenderer.blendPipelineState,
+                        "Blend pipeline state should be created")
+        XCTAssertNotNil(strictRenderer.skinnedBlendPipelineState,
+                        "Skinned blend pipeline state should be created")
+
+        if let morphSystem = strictRenderer.morphTargetSystem {
+            XCTAssertNotNil(morphSystem.morphAccumulatePipelineState,
+                            "Morph compute pipeline should be created")
+        }
+    }
 }
