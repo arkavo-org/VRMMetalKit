@@ -226,6 +226,14 @@ public class VRMPrimitive {
             primitive.indexCount = indices.count
             primitive.indexBufferOffset = 0 // Always 0 for newly created buffers
 
+            // Validate index bounds at load time to detect wedge artifact causes early
+            if !indices.isEmpty && primitive.vertexCount > 0 {
+                let maxIndex = indices.max()!
+                if maxIndex >= primitive.vertexCount {
+                    vrmLog("⚠️ [LOADER] Index out of bounds: maxIndex=\(maxIndex) >= vertexCount=\(primitive.vertexCount)")
+                }
+            }
+
             if let device = device {
                 if accessor?.componentType == 5125 { // UNSIGNED_INT
                     primitive.indexType = .uint32
