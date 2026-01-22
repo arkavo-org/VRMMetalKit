@@ -221,10 +221,25 @@ public class VRMPrimitive {
         // Load indices (remains the same, creates a new packed buffer)
         if let indicesAccessorIndex = gltfPrimitive.indices {
             let accessor = document.accessors?[safe: indicesAccessorIndex]
-            let indices = try bufferLoader.loadAccessorAsUInt32(indicesAccessorIndex)
+            var indices = try bufferLoader.loadAccessorAsUInt32(indicesAccessorIndex)
 
             primitive.indexCount = indices.count
             primitive.indexBufferOffset = 0 // Always 0 for newly created buffers
+
+            // Rebase indices to 0 if they're out of bounds (fixes wedge artifacts)
+            // This handles glTF files where indices are relative to global buffer views
+            if !indices.isEmpty && primitive.vertexCount > 0 {
+                let maxIndex = indices.max()!
+                if maxIndex >= primitive.vertexCount {
+                    let minIndex = indices.min()!
+                    // Rebase: subtract minIndex so indices start at 0
+                    indices = indices.map { $0 - minIndex }
+                    let rebasedMax = indices.max()!
+                    if rebasedMax >= primitive.vertexCount {
+                        fputs("⚠️ [VRMMetalKit] Index out of bounds after rebasing: maxIndex=\(rebasedMax) >= vertexCount=\(primitive.vertexCount)\n", stderr)
+                    }
+                }
+            }
 
             if let device = device {
                 if accessor?.componentType == 5125 { // UNSIGNED_INT

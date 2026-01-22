@@ -367,11 +367,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.setBuffer(numRootBonesBuffer, offset: 0, index: 10)
             let rootGridSize = MTLSize(width: rootBoneIndices.count, height: 1, depth: 1)
             computeEncoder.dispatchThreads(rootGridSize, threadsPerThreadgroup: threadgroupSize)
+            computeEncoder.memoryBarrier(scope: .buffers)
         }
 
         // Execute predict kernel (step 1: predict new tip position)
         computeEncoder.setComputePipelineState(predictPipeline)
         computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+        computeEncoder.memoryBarrier(scope: .buffers)
 
         // Distance constraint iterations (step 2: enforce bone length)
         // VRM spec: run distance constraint BEFORE collision, do not run it after
@@ -379,6 +381,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         for _ in 0..<iterations {
             computeEncoder.setComputePipelineState(distancePipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            computeEncoder.memoryBarrier(scope: .buffers)
         }
 
         // Collision resolution (step 3: push tips out of colliders)
@@ -387,16 +390,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if globalParams.numSpheres > 0 {
             computeEncoder.setComputePipelineState(collideSpheresPipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            computeEncoder.memoryBarrier(scope: .buffers)
         }
 
         if globalParams.numCapsules > 0 {
             computeEncoder.setComputePipelineState(collideCapsulesPipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            computeEncoder.memoryBarrier(scope: .buffers)
         }
 
         if globalParams.numPlanes > 0 {
             computeEncoder.setComputePipelineState(collidePlanesPipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            computeEncoder.memoryBarrier(scope: .buffers)
         }
 
         computeEncoder.endEncoding()

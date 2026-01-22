@@ -170,7 +170,7 @@ static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
 // Skinned vertex shader with MToon support
 vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                constant Uniforms& uniforms [[buffer(1)]],
-                               constant MToonMaterial& material [[buffer(2)]],
+                               constant MToonMaterial& material [[buffer(8)]],
                                constant float4x4* jointMatrices [[buffer(3)]],
                                device float3* morphedPositions [[buffer(20)]],
                                constant uint& hasMorphed [[buffer(22)]],
@@ -298,7 +298,7 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
 // Skinned MToon outline vertex shader (inverted hull technique)
 vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
                                               constant Uniforms& uniforms [[buffer(1)]],
-                                              constant MToonMaterial& material [[buffer(2)]],
+                                              constant MToonMaterial& material [[buffer(8)]],
                                               constant float4x4* jointMatrices [[buffer(3)]]) {
  VertexOut out;
 

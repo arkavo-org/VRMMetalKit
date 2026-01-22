@@ -162,7 +162,7 @@ public struct MToonSkinnedShader {
     // Skinned vertex shader with MToon support
     vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                           constant Uniforms& uniforms [[buffer(1)]],
-                                          constant MToonMaterial& material [[buffer(2)]],
+                                          constant MToonMaterial& material [[buffer(8)]],
                                           constant float4x4* jointMatrices [[buffer(3)]],
                                           device float3* morphedPositions [[buffer(20)]],
                                           constant uint& hasMorphed [[buffer(22)]],
