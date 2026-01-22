@@ -230,7 +230,7 @@ public class VRMPrimitive {
             if !indices.isEmpty && primitive.vertexCount > 0 {
                 let maxIndex = indices.max()!
                 if maxIndex >= primitive.vertexCount {
-                    vrmLog("⚠️ [LOADER] Index out of bounds: maxIndex=\(maxIndex) >= vertexCount=\(primitive.vertexCount)")
+                    fputs("⚠️ [VRMMetalKit] Index out of bounds: maxIndex=\(maxIndex) >= vertexCount=\(primitive.vertexCount). This will cause wedge artifacts.\n", stderr)
                 }
             }
 
