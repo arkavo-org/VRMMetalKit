@@ -41,6 +41,7 @@ struct BoneParams {
     float gravityPower;       // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
     uint colliderGroupMask;   // Bitmask of collision groups this bone collides with
     float3 gravityDir;        // Direction vector (normalized, typically [0, -1, 0])
+    float windInfluence;      // Wind influence factor (0.0 = no wind, 1.0 = full wind) - use 0 for bosom/body physics
 };
 
 kernel void springBonePredict(
@@ -140,11 +141,21 @@ kernel void springBonePredict(
     // Now save current position as previous for next frame
     bonePosPrev[id] = bonePosCurr[id];
 
-    // Calculate wind force with time-based oscillation
+    // Calculate wind force with natural gusts (always pushes in wind direction, varying intensity)
+    // Uses multiple sine waves at different frequencies for organic variation
     float time = globalParams.windPhase;
+    float gust1 = sin(globalParams.windFrequency * time);
+    float gust2 = sin(globalParams.windFrequency * time * 1.7 + 1.3);  // Different frequency, phase offset
+    float gust3 = sin(globalParams.windFrequency * time * 0.5 + 2.7);  // Slower variation
+    // Combine gusts: base 0.6 + variations, range approximately 0.3 to 1.0 (always positive)
+    float gustFactor = 0.6 + 0.25 * gust1 + 0.1 * gust2 + 0.15 * gust3;
+    gustFactor = clamp(gustFactor, 0.2, 1.2);  // Ensure reasonable range
+    // Apply per-bone wind influence (0 for bosom/body, 1 for hair/clothing)
+    float windInfluence = boneParams[id].windInfluence;
     float3 windForce = globalParams.windAmplitude *
                       globalParams.windDirection *
-                      sin(globalParams.windFrequency * time);
+                      gustFactor *
+                      windInfluence;
 
     // PBD STIFFNESS MODEL: Direct position mixing toward bind pose
     //

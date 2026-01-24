@@ -41,6 +41,7 @@ struct BoneParams {
     float gravityPower;       // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
     uint colliderGroupMask;   // Bitmask of collision groups this bone collides with
     float3 gravityDir;        // Direction vector (normalized, typically [0, -1, 0])
+    float windInfluence;      // Wind influence factor (0.0 = no wind, 1.0 = full wind)
 };
 
 // Updates root bone positions from animated transforms

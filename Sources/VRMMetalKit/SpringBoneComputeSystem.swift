@@ -504,6 +504,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 }
             }
 
+            // Determine wind influence based on spring name
+            // Disable wind for body physics (breast/bosom) - these shouldn't be affected by wind
+            let springName = spring.name?.lowercased() ?? ""
+            let isBodyPhysics = springName.contains("breast") ||
+                               springName.contains("bosom") ||
+                               springName.contains("bust") ||
+                               springName.contains("chest") ||
+                               springName.contains("mune") ||  // Japanese for breast
+                               springName.contains("oppai")    // Japanese slang
+            let windInfluence: Float = isBodyPhysics ? 0.0 : 1.0
+
             for joint in spring.joints {
                 chainGravityPower.append(joint.gravityPower)
 
@@ -531,7 +542,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
                     gravityPower: joint.gravityPower,
                     colliderGroupMask: colliderGroupMask,
-                    gravityDir: normalizedGravityDir
+                    gravityDir: normalizedGravityDir,
+                    windInfluence: windInfluence
                 )
                 boneParams.append(params)
 
