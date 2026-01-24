@@ -511,6 +511,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 // Body physics: low drag (~0.05) = doesn't catch air = ignores wind
                 // Smooth ramp: drag < 0.15 → no wind, drag > 0.35 → full wind
                 let windInfluence = min(1.0, max(0.0, (joint.dragForce - 0.15) / 0.2))
+                #if DEBUG
+                if jointIndexInChain == 0 {
+                    print("[SpringBone] \(spring.name ?? "unnamed"): dragForce=\(String(format: "%.3f", joint.dragForce)) → windInfluence=\(String(format: "%.2f", windInfluence))")
+                }
+                #endif
                 chainGravityPower.append(joint.gravityPower)
 
                 // First joint in each spring chain is a root
