@@ -39,6 +39,10 @@ public enum ARReaction: String, Sendable {
     case nod
     /// Gleeful jump (showcases physics)
     case jump
+    /// Thinking/contemplation pose (slight head tilt, subtle weight shift)
+    case thinking
+    /// Small respectful bow (gratitude)
+    case bow
 }
 
 /// AR reaction layer providing automatic proximity-based reactions
@@ -77,6 +81,12 @@ public class ARReactionLayer: AnimationLayer {
 
     /// Duration for walk cycle (loops continuously while held)
     public var walkDuration: Float = 1.0
+
+    /// Duration for thinking pose (subtle contemplative pose)
+    public var thinkingDuration: Float = 0.5
+
+    /// Duration for bow reaction (quick respectful bow)
+    public var bowDuration: Float = 0.3
 
     /// Enable automatic reaction triggering
     public var autoTriggerEnabled = true
@@ -182,6 +192,10 @@ public class ARReactionLayer: AnimationLayer {
                 duration = jumpDuration
             case .walk:
                 duration = walkDuration
+            case .thinking:
+                duration = thinkingDuration
+            case .bow:
+                duration = bowDuration
             default:
                 duration = reactionDuration
             }
@@ -251,6 +265,12 @@ public class ARReactionLayer: AnimationLayer {
 
         case .jump:
             evaluateJump(intensity: intensity, progress: t)
+
+        case .thinking:
+            evaluateThinking(intensity: intensity, progress: t)
+
+        case .bow:
+            evaluateBow(intensity: intensity, progress: t)
 
         case .none:
             break
@@ -495,6 +515,51 @@ public class ARReactionLayer: AnimationLayer {
         var headTransform = ProceduralBoneTransform.identity
         headTransform.rotation = simd_quatf(angle: sin(walkCycle * 2) * 0.02 * intensity, axis: SIMD3<Float>(1, 0, 0))
         cachedOutput.bones[.head] = headTransform
+    }
+
+    private func evaluateThinking(intensity: Float, progress: Float) {
+        // Slight head tilt to the side (contemplative)
+        var headTransform = ProceduralBoneTransform.identity
+        headTransform.rotation = simd_quatf(angle: 0.08 * intensity, axis: SIMD3<Float>(0, 0, 1))
+        cachedOutput.bones[.head] = headTransform
+
+        // Subtle weight shift - hips shift slightly
+        var hipsTransform = ProceduralBoneTransform.identity
+        hipsTransform.translation = SIMD3<Float>(0.02 * intensity, 0, 0)
+        cachedOutput.bones[.hips] = hipsTransform
+
+        // Slight spine counter-rotation for balance
+        var spineTransform = ProceduralBoneTransform.identity
+        spineTransform.rotation = simd_quatf(angle: -0.02 * intensity, axis: SIMD3<Float>(0, 0, 1))
+        cachedOutput.bones[.spine] = spineTransform
+
+        // Relaxed expression (thoughtful)
+        cachedOutput.morphWeights[VRMExpressionPreset.relaxed.rawValue] = intensity * 0.4
+    }
+
+    private func evaluateBow(intensity: Float, progress: Float) {
+        // Forward spine tilt for respectful bow
+        var spineTransform = ProceduralBoneTransform.identity
+        spineTransform.rotation = simd_quatf(angle: 0.15 * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.spine] = spineTransform
+
+        // Chest follows spine
+        var chestTransform = ProceduralBoneTransform.identity
+        chestTransform.rotation = simd_quatf(angle: 0.1 * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.chest] = chestTransform
+
+        // Head drops forward with the bow
+        var headTransform = ProceduralBoneTransform.identity
+        headTransform.rotation = simd_quatf(angle: 0.15 * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.head] = headTransform
+
+        // Neck follows the motion
+        var neckTransform = ProceduralBoneTransform.identity
+        neckTransform.rotation = simd_quatf(angle: 0.08 * intensity, axis: SIMD3<Float>(1, 0, 0))
+        cachedOutput.bones[.neck] = neckTransform
+
+        // Gentle/grateful expression
+        cachedOutput.morphWeights[VRMExpressionPreset.relaxed.rawValue] = intensity * 0.6
     }
 
     private func easeInOut(_ t: Float) -> Float {
