@@ -107,6 +107,31 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Flag to request physics state reset on next update (e.g., when returning to idle)
     var requestPhysicsReset = false
 
+    // MARK: - Runtime Collider Radius Overrides
+
+    /// Runtime overrides for sphere collider radii (index -> radius)
+    /// Used to dynamically adjust collision boundaries, e.g., to prevent hair clipping
+    private var sphereColliderRadiusOverrides: [Int: Float] = [:]
+
+    /// Sets a runtime radius override for a sphere collider
+    /// - Parameters:
+    ///   - index: The index of the sphere collider (0-based)
+    ///   - radius: The new radius value
+    func setSphereColliderRadius(index: Int, radius: Float) {
+        sphereColliderRadiusOverrides[index] = radius
+    }
+
+    /// Clears a sphere collider radius override, reverting to the original value
+    /// - Parameter index: The index of the sphere collider
+    func clearSphereColliderRadiusOverride(index: Int) {
+        sphereColliderRadiusOverrides.removeValue(forKey: index)
+    }
+
+    /// Clears all sphere collider radius overrides
+    func clearAllColliderRadiusOverrides() {
+        sphereColliderRadiusOverrides.removeAll()
+    }
+
     // Readback + synchronization (protected by snapshotLock)
     private let snapshotLock = NSLock()
     private var latestPositionsSnapshot: [SIMD3<Float>] = []
@@ -857,6 +882,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
         #endif
 
+        // Apply runtime radius overrides (e.g., for hair clipping prevention)
+        for (index, overrideRadius) in sphereColliderRadiusOverrides {
+            if index < sphereColliders.count {
+                sphereColliders[index].radius = overrideRadius
+            }
+        }
+
         // Update collider buffers with animated positions
         if !sphereColliders.isEmpty {
             buffers.updateSphereColliders(sphereColliders)
@@ -1323,6 +1355,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let worldPoint = colliderNode.worldPosition + worldOffset
                 let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
                 targetPlaneColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
+            }
+        }
+
+        // Apply runtime radius overrides (e.g., for hair clipping prevention)
+        for (index, overrideRadius) in sphereColliderRadiusOverrides {
+            if index < targetSphereColliders.count {
+                targetSphereColliders[index].radius = overrideRadius
             }
         }
 

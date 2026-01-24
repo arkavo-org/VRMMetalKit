@@ -390,6 +390,30 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         springBoneComputeSystem?.requestPhysicsReset = true
     }
 
+    /// Sets a runtime radius override for a sphere collider.
+    ///
+    /// Use this to dynamically adjust collision boundaries at runtime, for example
+    /// to prevent hair from clipping through the forehead during head tilts.
+    ///
+    /// - Parameters:
+    ///   - index: The index of the sphere collider (0-based, as defined in VRM metadata)
+    ///   - radius: The new radius value in meters
+    public func setColliderRadius(at index: Int, radius: Float) {
+        springBoneComputeSystem?.setSphereColliderRadius(index: index, radius: radius)
+    }
+
+    /// Clears a sphere collider radius override, reverting to the original VRM-defined value.
+    ///
+    /// - Parameter index: The index of the sphere collider
+    public func clearColliderRadiusOverride(at index: Int) {
+        springBoneComputeSystem?.clearSphereColliderRadiusOverride(index: index)
+    }
+
+    /// Clears all sphere collider radius overrides, reverting all to VRM-defined values.
+    public func clearAllColliderRadiusOverrides() {
+        springBoneComputeSystem?.clearAllColliderRadiusOverrides()
+    }
+
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
     private static let zeroMorphWeights = [Float](repeating: 0, count: 8)
     private var hasLoggedSpringBone = false
