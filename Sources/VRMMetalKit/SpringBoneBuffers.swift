@@ -222,12 +222,10 @@ public struct BoneParams {
     public var gravityPower: Float      // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
     public var colliderGroupMask: UInt32 // Bitmask of collision groups this bone collides with (0xFFFFFFFF = all)
     public var gravityDir: SIMD3<Float> // Direction vector (normalized, typically [0, -1, 0])
-    public var windInfluence: Float     // Wind influence factor (0.0 = no wind, 1.0 = full wind)
 
     public init(stiffness: Float, drag: Float, radius: Float, parentIndex: UInt32,
                 gravityPower: Float = 1.0, colliderGroupMask: UInt32 = 0xFFFFFFFF,
-                gravityDir: SIMD3<Float> = SIMD3<Float>(0, -1, 0),
-                windInfluence: Float = 1.0) {
+                gravityDir: SIMD3<Float> = SIMD3<Float>(0, -1, 0)) {
         self.stiffness = stiffness
         self.drag = drag
         self.radius = radius
@@ -235,7 +233,6 @@ public struct BoneParams {
         self.gravityPower = gravityPower
         self.colliderGroupMask = colliderGroupMask
         self.gravityDir = gravityDir
-        self.windInfluence = windInfluence
     }
 }
 

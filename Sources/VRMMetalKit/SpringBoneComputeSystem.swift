@@ -505,17 +505,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
 
             for joint in spring.joints {
-                // Derive wind influence from dragForce (VRM standard property)
-                // dragForce represents air resistance - physically correct for wind interaction
-                // Hair: high drag (~0.4) = catches air = responds to wind
-                // Body physics: low drag (~0.05) = doesn't catch air = ignores wind
-                // Smooth ramp: drag < 0.15 → no wind, drag > 0.35 → full wind
-                let windInfluence = min(1.0, max(0.0, (joint.dragForce - 0.15) / 0.2))
-                #if DEBUG
-                if jointIndexInChain == 0 {
-                    print("[SpringBone] \(spring.name ?? "unnamed"): dragForce=\(String(format: "%.3f", joint.dragForce)) → windInfluence=\(String(format: "%.2f", windInfluence))")
-                }
-                #endif
                 chainGravityPower.append(joint.gravityPower)
 
                 // First joint in each spring chain is a root
@@ -542,8 +531,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
                     gravityPower: joint.gravityPower,
                     colliderGroupMask: colliderGroupMask,
-                    gravityDir: normalizedGravityDir,
-                    windInfluence: windInfluence
+                    gravityDir: normalizedGravityDir
                 )
                 boneParams.append(params)
 
