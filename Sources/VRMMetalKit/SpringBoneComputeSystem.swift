@@ -504,18 +504,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 }
             }
 
-            // Determine wind influence based on spring name
-            // Disable wind for body physics (breast/bosom) - these shouldn't be affected by wind
-            let springName = spring.name?.lowercased() ?? ""
-            let isBodyPhysics = springName.contains("breast") ||
-                               springName.contains("bosom") ||
-                               springName.contains("bust") ||
-                               springName.contains("chest") ||
-                               springName.contains("mune") ||  // Japanese for breast
-                               springName.contains("oppai")    // Japanese slang
-            let windInfluence: Float = isBodyPhysics ? 0.0 : 1.0
-
             for joint in spring.joints {
+                // Derive wind influence from dragForce (VRM standard property)
+                // dragForce represents air resistance - physically correct for wind interaction
+                // Hair: high drag (~0.4) = catches air = responds to wind
+                // Body physics: low drag (~0.05) = doesn't catch air = ignores wind
+                // Smooth ramp: drag < 0.15 → no wind, drag > 0.35 → full wind
+                let windInfluence = min(1.0, max(0.0, (joint.dragForce - 0.15) / 0.2))
                 chainGravityPower.append(joint.gravityPower)
 
                 // First joint in each spring chain is a root
