@@ -75,6 +75,7 @@ public struct AnimationContext: Sendable {
     public var conversationState: ProceduralConversationState
     public var sentimentPreset: VRMExpressionPreset?
     public var sentimentIntensity: Float
+    public var isFlirty: Bool
 
     public init(
         time: Float = 0,
@@ -83,7 +84,8 @@ public struct AnimationContext: Sendable {
         avatarPosition: SIMD3<Float> = .zero,
         conversationState: ProceduralConversationState = .idle,
         sentimentPreset: VRMExpressionPreset? = nil,
-        sentimentIntensity: Float = 0
+        sentimentIntensity: Float = 0,
+        isFlirty: Bool = false
     ) {
         self.time = time
         self.deltaTime = deltaTime
@@ -92,6 +94,7 @@ public struct AnimationContext: Sendable {
         self.conversationState = conversationState
         self.sentimentPreset = sentimentPreset
         self.sentimentIntensity = sentimentIntensity
+        self.isFlirty = isFlirty
     }
 }
 

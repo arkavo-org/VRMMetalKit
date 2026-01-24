@@ -2682,9 +2682,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoder.setFragmentBytes(materialBytes, length: materialBytes.count, index: 2)
                 } else {
                     // Standard MToon material uniforms
+                    // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
                     encoder.setVertexBytes(&mtoonUniforms,
                                            length: MemoryLayout<MToonMaterialUniforms>.stride,
-                                           index: 2)
+                                           index: 8)
                     encoder.setFragmentBytes(&mtoonUniforms,
                                            length: MemoryLayout<MToonMaterialUniforms>.stride,
                                            index: 8)
@@ -3095,9 +3096,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoder.setFragmentBytes(materialBytes, length: materialBytes.count, index: 2)
                 } else {
                     // Standard MToon material uniforms
+                    // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
                     encoder.setVertexBytes(&mtoonUniforms,
                                            length: MemoryLayout<MToonMaterialUniforms>.stride,
-                                           index: 2)
+                                           index: 8)
                     encoder.setFragmentBytes(&mtoonUniforms,
                                            length: MemoryLayout<MToonMaterialUniforms>.stride,
                                            index: 8)
@@ -3384,7 +3386,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 mtoonUniforms.outlineColorFactor = SIMD3<Float>(outlineOverride.x, outlineOverride.y, outlineOverride.z)
             }
 
-            encoder.setVertexBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 2)
+            // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
+            encoder.setVertexBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
             encoder.setFragmentBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
 
             // Set joint matrices for skinned meshes
