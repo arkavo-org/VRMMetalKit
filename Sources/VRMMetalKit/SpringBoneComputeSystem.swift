@@ -107,6 +107,31 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Flag to request physics state reset on next update (e.g., when returning to idle)
     var requestPhysicsReset = false
 
+    // MARK: - Runtime Collider Radius Overrides
+
+    /// Runtime overrides for sphere collider radii (index -> radius)
+    /// Used to dynamically adjust collision boundaries, e.g., to prevent hair clipping
+    private var sphereColliderRadiusOverrides: [Int: Float] = [:]
+
+    /// Sets a runtime radius override for a sphere collider
+    /// - Parameters:
+    ///   - index: The index of the sphere collider (0-based)
+    ///   - radius: The new radius value
+    func setSphereColliderRadius(index: Int, radius: Float) {
+        sphereColliderRadiusOverrides[index] = radius
+    }
+
+    /// Clears a sphere collider radius override, reverting to the original value
+    /// - Parameter index: The index of the sphere collider
+    func clearSphereColliderRadiusOverride(index: Int) {
+        sphereColliderRadiusOverrides.removeValue(forKey: index)
+    }
+
+    /// Clears all sphere collider radius overrides
+    func clearAllColliderRadiusOverrides() {
+        sphereColliderRadiusOverrides.removeAll()
+    }
+
     // Readback + synchronization (protected by snapshotLock)
     private let snapshotLock = NSLock()
     private var latestPositionsSnapshot: [SIMD3<Float>] = []
@@ -857,6 +882,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
         #endif
 
+        // Apply runtime radius overrides (e.g., for hair clipping prevention)
+        for (index, overrideRadius) in sphereColliderRadiusOverrides {
+            if index < sphereColliders.count {
+                sphereColliders[index].radius = overrideRadius
+            }
+        }
+
         // Update collider buffers with animated positions
         if !sphereColliders.isEmpty {
             buffers.updateSphereColliders(sphereColliders)
@@ -1326,6 +1358,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
+        // Apply runtime radius overrides (e.g., for hair clipping prevention)
+        for (index, overrideRadius) in sphereColliderRadiusOverrides {
+            if index < targetSphereColliders.count {
+                targetSphereColliders[index].radius = overrideRadius
+            }
+        }
+
         // First frame initialization
         if previousSphereColliders.isEmpty || previousSphereColliders.count != targetSphereColliders.count {
             previousSphereColliders = targetSphereColliders
@@ -1547,6 +1586,92 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         latestCompletedFrame = 0
         lastAppliedFrame = 0
         snapshotLock.unlock()
+    }
+
+    // MARK: - Physics Warmup (Initial Load Stabilization)
+
+    /// Warms up the physics system to prevent initial bounce/oscillation.
+    ///
+    /// This should be called after loading the model and before the first render frame.
+    /// It forces bone positions to match the current animated pose with zero velocity,
+    /// then runs silent physics steps to let the system settle.
+    ///
+    /// - Parameters:
+    ///   - model: The VRM model to warm up
+    ///   - steps: Number of physics steps to run silently (default: 30, ~0.5s at 60fps)
+    func warmupPhysics(model: VRMModel, steps: Int = 30) {
+        guard let buffers = model.springBoneBuffers,
+              let globalParams = model.springBoneGlobalParams,
+              buffers.numBones > 0 else {
+            return
+        }
+
+        // Step 1: Capture current animated positions for root bones
+        guard let springBone = model.springBone else { return }
+
+        var animatedPositions: [SIMD3<Float>] = []
+        for spring in springBone.springs {
+            if let firstJoint = spring.joints.first,
+               let node = model.nodes[safe: firstJoint.node] {
+                animatedPositions.append(node.worldPosition)
+            }
+        }
+
+        // Step 2: Reset physics state to current animated positions (zeros velocity)
+        resetPhysicsState(model: model, buffers: buffers, animatedPositions: animatedPositions)
+
+        // Step 3: Also reset interpolation state to match
+        resetInterpolationState()
+
+        // Step 4: Run silent physics steps to let bones settle into natural hanging positions
+        // This happens BEFORE the first render, so there's no visual bounce
+        let warmupDeltaTime: TimeInterval = 1.0 / 60.0  // Simulate at 60fps
+        for _ in 0..<steps {
+            // Update animated positions (colliders, bind directions, etc.)
+            updateAnimatedPositions(model: model, buffers: buffers)
+
+            // Run one physics step
+            var params = globalParams
+            params.windPhase += Float(warmupDeltaTime)
+
+            // Copy params to GPU
+            globalParamsBuffer?.contents().copyMemory(from: &params, byteCount: MemoryLayout<SpringBoneGlobalParams>.stride)
+
+            // Execute XPBD pipeline
+            executeXPBDStep(buffers: buffers, globalParams: params)
+        }
+
+        // Wait for all GPU work to complete before proceeding
+        // This ensures warmup physics is fully computed before first render
+        if let finalCommandBuffer = commandQueue.makeCommandBuffer() {
+            finalCommandBuffer.commit()
+            finalCommandBuffer.waitUntilCompleted()
+        }
+
+        // Step 5: Final reset to zero velocity at settled positions
+        // Read back the settled positions and use them as the new "rest" state
+        if let bonePosCurr = buffers.bonePosCurr,
+           let bonePosPrev = buffers.bonePosPrev {
+            let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+            let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+
+            // Set prev = curr to eliminate any residual velocity
+            for i in 0..<buffers.numBones {
+                prevPtr[i] = currPtr[i]
+            }
+        }
+
+        // Reset time accumulator
+        timeAccumulator = 0
+
+        // Reset readback state
+        snapshotLock.lock()
+        latestPositionsSnapshot.removeAll(keepingCapacity: true)
+        latestCompletedFrame = 0
+        lastAppliedFrame = 0
+        snapshotLock.unlock()
+
+        vrmLog("[SpringBone] Physics warmup complete (\(steps) steps)")
     }
 }
 

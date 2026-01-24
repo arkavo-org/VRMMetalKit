@@ -390,6 +390,42 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         springBoneComputeSystem?.requestPhysicsReset = true
     }
 
+    /// Sets a runtime radius override for a sphere collider.
+    ///
+    /// Use this to dynamically adjust collision boundaries at runtime, for example
+    /// to prevent hair from clipping through the forehead during head tilts.
+    ///
+    /// - Parameters:
+    ///   - index: The index of the sphere collider (0-based, as defined in VRM metadata)
+    ///   - radius: The new radius value in meters
+    public func setColliderRadius(at index: Int, radius: Float) {
+        springBoneComputeSystem?.setSphereColliderRadius(index: index, radius: radius)
+    }
+
+    /// Clears a sphere collider radius override, reverting to the original VRM-defined value.
+    ///
+    /// - Parameter index: The index of the sphere collider
+    public func clearColliderRadiusOverride(at index: Int) {
+        springBoneComputeSystem?.clearSphereColliderRadiusOverride(index: index)
+    }
+
+    /// Clears all sphere collider radius overrides, reverting all to VRM-defined values.
+    public func clearAllColliderRadiusOverrides() {
+        springBoneComputeSystem?.clearAllColliderRadiusOverrides()
+    }
+
+    /// Warms up physics to prevent initial bounce/oscillation when loading a model.
+    ///
+    /// This runs silent physics steps to let spring bones settle into their natural
+    /// hanging positions before the first render frame. Call this after loading
+    /// a model if you see violent bouncing on initial display.
+    ///
+    /// - Parameter steps: Number of physics steps to run (default: 30, ~0.5s at 60fps)
+    public func warmupPhysics(steps: Int = 30) {
+        guard let model = model else { return }
+        springBoneComputeSystem?.warmupPhysics(model: model, steps: steps)
+    }
+
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
     private static let zeroMorphWeights = [Float](repeating: 0, count: 8)
     private var hasLoggedSpringBone = false
@@ -665,6 +701,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("  - Total bones: \(model.springBoneBuffers?.numBones ?? 0)")
                 vrmLog("  - Sphere colliders: \(model.springBoneBuffers?.numSpheres ?? 0)")
                 vrmLog("  - Capsule colliders: \(model.springBoneBuffers?.numCapsules ?? 0)")
+
+                // Warm up physics to prevent initial bounce/oscillation
+                // This zeros velocity and runs silent physics steps to settle bones
+                springBoneComputeSystem?.warmupPhysics(model: model, steps: 30)
             } catch {
                 vrmLog("[VRMRenderer] Failed to initialize SpringBone GPU: \(error)")
             }
