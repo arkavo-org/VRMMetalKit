@@ -511,9 +511,14 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  float3 worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
  float3 worldPos = (uniforms.modelMatrix * float4(in.position, 1.0)).xyz;
 
- // Scale outline width by distance from camera for consistent visual thickness
- float3 cameraPos = -uniforms.viewMatrix[3].xyz;
- float distanceScale = length(worldPos - cameraPos) * 0.01; // Adjust multiplier as needed
+ // Correct camera position extraction from view matrix
+ // View matrix = [R | -R*t] where R is rotation, t is camera world position
+ // So cameraPos = -transpose(R) * viewMatrix[3].xyz
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+ float distanceScale = length(worldPos - cameraPos) * 0.01;
 
  worldPos += worldNormal * outlineWidth * distanceScale;
  out.worldPosition = worldPos;

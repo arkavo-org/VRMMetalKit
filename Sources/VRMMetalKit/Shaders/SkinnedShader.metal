@@ -320,16 +320,37 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  // Get outline width from material
  float outlineWidth = material.outlineWidthFactor;
 
- // Apply outline extrusion along normal in world space
+ // Extract camera world position from view matrix: cameraPos = -R^T * translation
+ // Done once at the start for use in both outline modes and view direction
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+
+ // Apply outline extrusion along normal
  // outlineMode: 0=none, 1=worldCoordinates, 2=screenCoordinates
+ // Must match MToonShader.metal for visual consistency
  if (material.outlineMode == 1) {
-  // World coordinates: fixed width in world units
-  worldPos.xyz += worldNormal * outlineWidth;
+  // World coordinates: width scales with camera distance (matches non-skinned)
+  float distanceScale = length(worldPos.xyz - cameraWorldPos) * 0.01;
+  worldPos.xyz += worldNormal * outlineWidth * distanceScale;
  } else if (material.outlineMode == 2) {
-  // Screen coordinates: width scales with distance from camera
+  // Screen coordinates: fixed pixel width (matches non-skinned NDC approach)
   float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
-  float screenScale = clipPos.w * 0.01; // Scale factor for screen-space width
-  worldPos.xyz += worldNormal * outlineWidth * screenScale;
+  float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
+  float2 screenNormal = normalize(viewNormal.xy);
+  float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
+  float2 offsetNDC = screenNormal * outlineWidth * pixelsToNDC;
+  clipPos.xy += offsetNDC * clipPos.w;
+  out.position = clipPos;
+  out.worldPosition = worldPos.xyz;
+  out.worldNormal = worldNormal;
+  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
+  out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
+  out.texCoord = in.texCoord;
+  out.animatedTexCoord = in.texCoord;
+  out.color = in.color;
+  return out;
  }
 
  out.worldPosition = worldPos.xyz;
@@ -340,11 +361,6 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.position = uniforms.projectionMatrix * viewPosition;
 
  // Calculate view direction and view normal
- // Extract camera world position from view matrix: cameraPos = -R^T * translation
- float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
-                                   uniforms.viewMatrix[1].xyz,
-                                   uniforms.viewMatrix[2].xyz);
- float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
  out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
 
