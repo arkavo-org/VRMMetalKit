@@ -19,18 +19,21 @@
 using namespace metal;
 
 struct SpringBoneParams {
-    float3 gravity;       // offset 0
-    float dtSub;          // offset 16 (after float3 padding)
+    float3 gravity;       // offset 0, size 12, padded to 16
+    float dtSub;          // offset 16
     float windAmplitude;  // offset 20
     float windFrequency;  // offset 24
     float windPhase;      // offset 28
-    float3 windDirection; // offset 32
+    float3 windDirection; // offset 32, size 12, padded to 16
     uint substeps;        // offset 48
     uint numBones;        // offset 52
     uint numSpheres;      // offset 56
     uint numCapsules;     // offset 60
     uint numPlanes;       // offset 64
-    uint settlingFrames;  // offset 68 - frames remaining in settling period (skip inertia compensation when > 0)
+    uint settlingFrames;  // offset 68
+    float dragMultiplier; // offset 72 - global drag multiplier (1.0 = normal, >1.0 = braking)
+    uint _padding1;       // offset 76 - padding for float3 alignment
+    float3 externalVelocity; // offset 80 - character root velocity for inertia (requires 16-byte alignment)
 };
 
 struct BoneParams {
@@ -204,7 +207,8 @@ kernel void springBonePredict(
     }
 
     // Verlet integration with drag and external forces
-    float baseDrag = boneParams[id].drag;
+    // Apply global drag multiplier for interruption braking (normally 1.0)
+    float baseDrag = boneParams[id].drag * globalParams.dragMultiplier;
 
     // SETTLING BOOST: During settling period, reduce drag and boost gravity
     float settlingFrames = float(globalParams.settlingFrames);
@@ -223,9 +227,14 @@ kernel void springBonePredict(
     float gravityMagnitude = length(globalParams.gravity) * gravityBoost;
     float3 effectiveGravity = boneParams[id].gravityDir * gravityMagnitude * boneParams[id].gravityPower;
 
+    // Inertial force from character movement
+    // When character moves in a direction, hair/cloth should trail behind (opposite direction)
+    // Scale by 0.5 for natural feel - too strong makes hair whip around
+    float3 inertialForce = -globalParams.externalVelocity * 0.5;
+
     // Verlet integration: position += velocity * drag + acceleration * dt²
     float3 newPos = bonePosCurr[id] + velocity * dragFactor +
-                    (effectiveGravity + windForce) * globalParams.dtSub * globalParams.dtSub;
+                    (effectiveGravity + windForce + inertialForce) * globalParams.dtSub * globalParams.dtSub;
 
     // PBD STIFFNESS: Apply position blend toward bind pose AFTER Verlet, BEFORE constraints
     // This is dt-independent and guarantees consistent % correction per substep
