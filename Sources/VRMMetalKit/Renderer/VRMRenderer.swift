@@ -3344,6 +3344,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Restore default cull mode
         encoder.setCullMode(.back)
 
+        // Restore depth state for subsequent render passes
+        if let opaqueState = depthStencilStates["opaque"] {
+            encoder.setDepthStencilState(opaqueState)
+        }
+
         if frameCounter % 60 == 0 {
             vrmLog("[OUTLINE] Rendered outlines for \(renderItems.count) items with width \(outlineWidth)")
         }
@@ -3366,6 +3371,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Cull front faces for inverted hull technique
         encoder.setCullMode(.front)
         encoder.setFrontFacing(.counterClockwise)
+
+        // Set depth state for outlines (test depth but don't write)
+        // Prevents outlines from incorrectly writing to depth buffer
+        if let outlineDepthState = depthStencilStates["blend"] {
+            encoder.setDepthStencilState(outlineDepthState)
+        }
 
         var outlinesRendered = 0
 
@@ -3453,6 +3464,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Restore default cull mode
         encoder.setCullMode(.back)
+
+        // Restore depth state for subsequent render passes
+        if let opaqueState = depthStencilStates["opaque"] {
+            encoder.setDepthStencilState(opaqueState)
+        }
     }
 
     // MARK: - Skinning Input Validation
