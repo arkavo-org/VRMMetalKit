@@ -979,6 +979,7 @@ public class VRMMaterial {
     public var baseColorFactor: SIMD4<Float> = [1, 1, 1, 1]
     public var baseColorTexture: VRMTexture?
     public var normalTexture: VRMTexture?  // Normal map for surface detail
+    public var emissiveTexture: VRMTexture?  // Emissive (glow) texture
     public var metallicFactor: Float = 0.0
     public var roughnessFactor: Float = 1.0
     public var emissiveFactor: SIMD3<Float> = [0, 0, 0]
@@ -1033,6 +1034,12 @@ public class VRMMaterial {
         if let normalTextureInfo = gltfMaterial.normalTexture,
            normalTextureInfo.index < textures.count {
             normalTexture = textures[normalTextureInfo.index]
+        }
+
+        // Load emissive texture (for glow effects)
+        if let emissiveTextureInfo = gltfMaterial.emissiveTexture,
+           emissiveTextureInfo.index < textures.count {
+            emissiveTexture = textures[emissiveTextureInfo.index]
         }
 
         if let emissive = gltfMaterial.emissiveFactor, emissive.count == 3 {

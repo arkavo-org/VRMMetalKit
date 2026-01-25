@@ -2444,8 +2444,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // Index 4: Emissive texture
-                    // Note: Emissive texture typically comes from the base material, not MToon
-                    // Could add support for emissiveTexture if needed
+                    if let mtlTexture = material.emissiveTexture?.mtlTexture {
+                        encoder.setFragmentTexture(mtlTexture, index: 4)
+                        mtoonUniforms.hasEmissiveTexture = 1
+                        textureCount += 1
+                    }
 
                     // Index 5: Matcap texture
                     if let mtoon = material.mtoon,

@@ -432,13 +432,16 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float3 rimColor = float3(0.0);
  float3 parametricRimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
  if (any(parametricRimColorFactor > 0.0)) {
- // Use view-space normal and view direction for proper fresnel
+ // Use view-space normal and CORRECT view direction for proper fresnel
  float3 Nv = viewNormal;  // Use flipped viewNormal for back faces
- float3 Vv = normalize(-in.worldPosition); // View direction in world space
+ float3 Vv = normalize(in.viewDirection);  // Correct: use vertex shader's viewDirection
 
- float vf = 1.0 - saturate(dot(Nv, normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz)));
- float rimF = pow(vf, material.parametricRimFresnelPowerFactor);
- rimF = saturate(rimF + material.parametricRimLiftFactor);
+ // Transform view direction to view space for dot product with view-space normal
+ float3 viewDirViewSpace = normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz);
+ float NdotV = saturate(dot(Nv, viewDirViewSpace));
+ float vf = 1.0 - NdotV;
+ float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
+                  material.parametricRimFresnelPowerFactor);
 
  rimColor = parametricRimColorFactor * rimF;
 
@@ -449,14 +452,14 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
  }
 
- // Apply rim lighting mix - blend between lit and unlit rim
+ // Apply rim lighting - blend between lit and unlit rim, then ADD to final color
  if (any(rimColor > 0.0)) {
  float3 rimLit = rimColor * uniforms.lightColor.xyz;  // Lit rim
- float3 rimUnlit = rimColor;                       // Unlit rim
- rimColor = mix(rimLit, rimUnlit, material.rimLightingMixFactor);
+ float3 rimUnlit = rimColor;                          // Unlit rim
+ float3 finalRim = mix(rimLit, rimUnlit, material.rimLightingMixFactor);
 
- // Mix rim into the final color instead of additive
- litColor = mix(litColor, litColor + rimColor, material.rimLightingMixFactor);
+ // ADD rim to final color (standard MToon behavior per spec)
+ litColor += finalRim;
  }
 
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
@@ -612,10 +615,12 @@ fragment float4 mtoon_debug_rim(VertexOut in [[stage_in]],
  }
 
  float3 Nv = in.viewNormal;
- float3 Vv = normalize(-in.worldPosition);
- float vf = 1.0 - saturate(dot(Nv, normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz)));
- float rimF = pow(vf, material.parametricRimFresnelPowerFactor);
- rimF = saturate(rimF + material.parametricRimLiftFactor);
+ float3 Vv = normalize(in.viewDirection);  // Correct: use vertex shader's viewDirection
+ float3 viewDirViewSpace = normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz);
+ float NdotV = saturate(dot(Nv, viewDirViewSpace));
+ float vf = 1.0 - NdotV;
+ float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
+                  material.parametricRimFresnelPowerFactor);
  return float4(rimF, rimF, rimF, 1.0);
 }
 
