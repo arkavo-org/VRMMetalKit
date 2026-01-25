@@ -154,8 +154,9 @@ kernel void springBonePredict(
     // Wind influence based on drag (air resistance)
     // Hair: high drag (~0.4) catches wind
     // Bust: low drag (~0.05) ignores wind
+    // Gradual transition from 0.15-0.35 for smooth blending
     float drag = boneParams[id].drag;
-    float windInfluence = (drag >= 0.3) ? 1.0 : 0.0;
+    float windInfluence = smoothstep(0.15, 0.35, drag);
     float3 windForce = globalParams.windAmplitude *
                       globalParams.windDirection *
                       gustFactor *
