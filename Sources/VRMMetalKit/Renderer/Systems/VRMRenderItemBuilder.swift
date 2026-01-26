@@ -34,13 +34,15 @@ struct RenderItem {
     let isFaceMaterial: Bool
     let isEyeMaterial: Bool
     var renderOrder: Int
-    // VRM material renderQueue for secondary sorting (Unity renderQueue values)
-    // Default 2000 (geometry), transparent materials typically 3000+
+    // VRM material renderQueue for primary sorting (computed from base + offset)
+    // OPAQUE base=2000, MASK base=2450, BLEND base=3000
     let materialRenderQueue: Int
     // Whether this material should write to depth buffer (from VRM transparentWithZWrite)
     let depthWriteEnabled: Bool
     // Render queue offset for fine-grained sorting within a category
     let renderQueueOffset: Int
+    // Scene graph order for stable tie-breaking in sort
+    let primitiveIndex: Int
 }
 
 final class VRMRenderItemBuilder {
@@ -82,6 +84,7 @@ final class VRMRenderItemBuilder {
         var faceEyelineCount = 0
         var faceEyeCount = 0
         var faceHighlightCount = 0
+        var globalPrimitiveIndex = 0
 
         for (nodeIndex, node) in model.nodes.enumerated() {
             if frameCounter <= 2 {
@@ -238,20 +241,28 @@ final class VRMRenderItemBuilder {
                     renderOrder: renderOrder,
                     materialRenderQueue: materialRenderQueue,
                     depthWriteEnabled: depthWriteEnabled,
-                    renderQueueOffset: materialRenderQueueOffset
+                    renderQueueOffset: materialRenderQueueOffset,
+                    primitiveIndex: globalPrimitiveIndex
                 )
 
                 allItems.append(item)
+                globalPrimitiveIndex += 1
             }
         }
 
-        // Sort by renderOrder first, then by materialRenderQueue for items with the same renderOrder
+        // Multi-tier sorting: renderOrder (name-based) + VRM queue + stable order
+        // Note: View-Z sorting for transparencies is done at render time with view matrix
         allItems.sort { a, b in
+            // Primary: renderOrder (name-based face/body category ordering)
             if a.renderOrder != b.renderOrder {
                 return a.renderOrder < b.renderOrder
             }
-            // Secondary sort by VRM materialRenderQueue (fixes z-fighting for eyebrows/eyelashes)
-            return a.materialRenderQueue < b.materialRenderQueue
+            // Secondary: VRM render queue (author's intent for fine-grained ordering)
+            if a.materialRenderQueue != b.materialRenderQueue {
+                return a.materialRenderQueue < b.materialRenderQueue
+            }
+            // Tertiary: stable definition order for tie-breaking
+            return a.primitiveIndex < b.primitiveIndex
         }
 
         if frameCounter % 60 == 0 {

@@ -475,9 +475,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // OPTIMIZATION: Render order for single-array sorting (avoids concatenation)
         var renderOrder: Int  // 0=opaque, 1=faceSkin, 2=faceEyebrow, 3=faceEyeline, 4=mask, 5=faceEye, 6=faceHighlight, 7=blend
 
-        // VRM material renderQueue for secondary sorting (Unity renderQueue values)
-        // Default 2000 (geometry), transparent materials typically 3000+
+        // VRM material renderQueue for primary sorting (computed from base + offset)
+        // OPAQUE base=2000, MASK base=2450, BLEND base=3000
         let materialRenderQueue: Int
+
+        // Scene graph order for stable tie-breaking in sort
+        let primitiveIndex: Int
     }
 
     /// Set the debug phase for systematic testing
@@ -1319,6 +1322,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             var faceEyelineCount = 0
             var faceEyeCount = 0
             var faceHighlightCount = 0
+            var globalPrimitiveIndex = 0
 
             // Collect all primitives and categorize by alpha mode
             for (nodeIndex, node) in model.nodes.enumerated() {
@@ -1431,7 +1435,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
                     renderOrder: 0,  // Will be set based on category
-                    materialRenderQueue: materialRenderQueue
+                    materialRenderQueue: materialRenderQueue,
+                    primitiveIndex: globalPrimitiveIndex
                 )
 
                 // Enhanced face/body material detection and overrides
@@ -1567,47 +1572,38 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 // OPTIMIZATION: Add to single pre-allocated array
                 allItems.append(item)
+                globalPrimitiveIndex += 1
             }
         }
 
         vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
 
-        // OPTIMIZATION: Single sort by renderOrder (eliminates array concatenation)
-        // Order: 0=opaque, 1=faceSkin, 2=faceEyebrow, 3=faceEyeline, 4=mask, 5=faceEye, 6=faceHighlight, 7=blend
+        // Multi-tier sorting: renderOrder (name-based) + VRM queue + view-Z + stable order
         allItems.sort { a, b in
-            // Primary sort: by renderOrder
+            // 1. Primary: renderOrder (name-based face/body category ordering)
+            // Order: 0=body/opaque, 1=skin, 2=brow, 3=line, 4=mask, 5=eye, 6=highlight, 7=blend, 8=clothing
             if a.renderOrder != b.renderOrder {
                 return a.renderOrder < b.renderOrder
             }
 
-            // Secondary sort: by VRM materialRenderQueue (Unity render queue values)
-            // This fixes z-fighting for eyebrows/eyelashes which have higher renderQueue
-            // (e.g., eyebrows at 2100 render after face skin at 2000)
+            // 2. Secondary: VRM render queue (author's intent for fine-grained ordering)
+            // Within same renderOrder, respect explicit queue differences
             if a.materialRenderQueue != b.materialRenderQueue {
                 return a.materialRenderQueue < b.materialRenderQueue
             }
 
-            // Tertiary sort for BLEND items (renderOrder=7): by view-space Z
-            if a.renderOrder == 7 {
+            // 3. Tertiary: Transparent materials (queue >= 2500): back-to-front Z-sorting
+            // This threshold covers TransparentWithZWrite (2450+) and Transparent (3000+)
+            if a.materialRenderQueue >= 2500 {
                 let aWorldPos = a.node.worldMatrix.columns.3
                 let aViewZ = (viewMatrix * aWorldPos).z
                 let bWorldPos = b.node.worldMatrix.columns.3
                 let bViewZ = (viewMatrix * bWorldPos).z
-                return aViewZ < bViewZ  // Far to near
+                return aViewZ < bViewZ  // Far to near (Painter's Algorithm)
             }
 
-            // Quaternary sort within opaque face materials: use cached isEyeMaterial
-            if a.isFaceMaterial && b.isFaceMaterial {
-                if a.isEyeMaterial != b.isEyeMaterial {
-                    return !a.isEyeMaterial  // Eyes render last
-                }
-            }
-
-            // Default: by material then mesh
-            if let aMatIdx = a.primitive.materialIndex, let bMatIdx = b.primitive.materialIndex, aMatIdx != bMatIdx {
-                return aMatIdx < bMatIdx
-            }
-            return a.meshIndex < b.meshIndex
+            // 4. Quaternary: stable definition order for tie-breaking
+            return a.primitiveIndex < b.primitiveIndex
         }
 
         if blendCount > 0 && frameCounter < 10 {
@@ -2558,7 +2554,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    // Slope scale depth bias for MASK materials on curved surfaces
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=\(faceCategory)  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -2585,7 +2582,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    // Slope scale depth bias for blend materials on curved surfaces
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=highlight  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -2601,7 +2599,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)  // Often double-sided for overlays
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    // Slope scale depth bias for transparent materials on curved surfaces
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=transparentZWrite  pso=face(.lessEqual+depthWrite)  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -2620,12 +2619,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
 
                 case "mask":
                     encoder.setDepthStencilState(depthStencilStates["mask"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
+                    // Slope scale depth bias handles curved surfaces better than constant bias
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
 
                 case "blend":
                     if let blendDepthState = depthStencilStates["blend"] {
@@ -2634,11 +2636,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         encoder.setDepthStencilState(depthStencilStates["opaque"])
                     }
                     encoder.setCullMode(.none)
+                    // Slope scale depth bias handles curved surfaces better than constant bias
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
 
                 default:
                     encoder.setDepthStencilState(depthStencilStates["opaque"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
                 }
             }
 

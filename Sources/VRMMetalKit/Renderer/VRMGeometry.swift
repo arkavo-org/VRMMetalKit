@@ -1195,8 +1195,23 @@ public class VRMMaterial {
                 transparentWithZWrite = twzw
             }
             // VRM 1.0: renderQueueOffsetNumber for sorting within category
+            // Compute final renderQueue from base + offset per VRM 1.0 spec
             if let rqOffset = mtoonExt["renderQueueOffsetNumber"] as? Int {
                 renderQueueOffset = rqOffset
+
+                // VRM 1.0 base render queue values per alpha mode
+                let base: Int
+                switch alphaMode.uppercased() {
+                case "OPAQUE":
+                    base = 2000
+                case "MASK":
+                    base = 2450
+                case "BLEND":
+                    base = 3000
+                default:
+                    base = 2000
+                }
+                renderQueue = base + rqOffset
             }
         }
         // VRM 0.x: material properties from document-level VRM extension
