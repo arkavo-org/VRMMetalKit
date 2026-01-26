@@ -37,6 +37,10 @@ struct RenderItem {
     // VRM material renderQueue for secondary sorting (Unity renderQueue values)
     // Default 2000 (geometry), transparent materials typically 3000+
     let materialRenderQueue: Int
+    // Whether this material should write to depth buffer (from VRM transparentWithZWrite)
+    let depthWriteEnabled: Bool
+    // Render queue offset for fine-grained sorting within a category
+    let renderQueueOffset: Int
 }
 
 final class VRMRenderItemBuilder {
@@ -96,8 +100,13 @@ final class VRMRenderItemBuilder {
             totalMeshes += 1
 
             for primitive in mesh.primitives {
-                let alpha = primitive.materialIndex.flatMap { idx in idx < model.materials.count ? model.materials[idx].alphaMode : nil }?.lowercased() ?? "opaque"
-                let materialName = (primitive.materialIndex.flatMap { idx in idx < model.materials.count ? model.materials[idx].name : nil }) ?? "unnamed"
+                // Get material reference for property-based detection
+                let material: VRMMaterial? = primitive.materialIndex.flatMap { idx in
+                    idx < model.materials.count ? model.materials[idx] : nil
+                }
+
+                let alpha = material?.alphaMode.lowercased() ?? "opaque"
+                let materialName = material?.name ?? "unnamed"
 
                 let nodeName = node.name ?? "unnamed"
                 let meshName = mesh.name ?? "unnamed_mesh"
@@ -110,13 +119,32 @@ final class VRMRenderItemBuilder {
                 let materialIsFace = materialLower.contains("face") || materialLower.contains("eye")
 
                 if nodeIsFace || meshIsFace || materialIsFace {
-                    logFaceCandidate(nodeName: nodeName, meshName: meshName, materialName: materialName, alpha: alpha, primitive: primitive)
+                    logFaceCandidate(nodeName: nodeName, meshName: meshName, materialName: materialName, alpha: alpha, primitive: primitive, material: material)
                 }
+
+                // Property-based detection using VRM material properties
+                let isTransparentWithZWrite = material?.isTransparentWithZWrite ?? false
+                let materialRenderQueueOffset = material?.renderQueueOffset ?? 0
+                let depthWriteEnabled = material?.zWriteEnabled ?? true
 
                 var faceCategory: String?
                 var renderOrder = 0
 
-                if materialLower.contains("face_skin") || materialLower.contains("facebase") {
+                // PRIORITY 1: Property-based transparentWithZWrite detection (most reliable)
+                if isTransparentWithZWrite {
+                    faceCategory = "transparentZWrite"
+                    // TransparentZWrite: 10 + offset (renders before regular transparent at 19+)
+                    renderOrder = 10 + materialRenderQueueOffset
+                }
+                // PRIORITY 2: Name-based body material detection
+                else if materialLower.contains("body_skin") ||
+                   (materialLower.contains("body") && !materialLower.contains("face")) {
+                    faceCategory = "body"
+                    renderOrder = 0  // Render first
+                }
+                // PRIORITY 3: Name-based face material detection
+                else if materialLower.contains("face_skin") || materialLower.contains("facebase") ||
+                          (materialLower.contains("face") && materialLower.contains("skin")) {
                     faceCategory = "skin"
                     renderOrder = 1
                     faceSkinCount += 1
@@ -140,7 +168,16 @@ final class VRMRenderItemBuilder {
                     faceCategory = "eye"
                     renderOrder = 5
                     faceEyeCount += 1
-                } else {
+                }
+                // PRIORITY 4: Name-based clothing detection (fallback)
+                else if materialLower.contains("cloth") || materialLower.contains("tops") ||
+                          materialLower.contains("bottoms") || materialLower.contains("skirt") ||
+                          materialLower.contains("shorts") || materialLower.contains("pants") {
+                    faceCategory = "clothing"
+                    renderOrder = 8
+                }
+                // PRIORITY 5: Alpha mode based ordering
+                else {
                     switch alpha {
                     case "opaque":
                         renderOrder = 0
@@ -149,10 +186,11 @@ final class VRMRenderItemBuilder {
                         renderOrder = 4
                         maskCount += 1
                     case "blend":
-                        renderOrder = 7
+                        // Regular transparent: 19 + offset (renders last)
+                        renderOrder = 19 + materialRenderQueueOffset
                         blendCount += 1
                     default:
-                        renderOrder = 7
+                        renderOrder = 19 + materialRenderQueueOffset
                         blendCount += 1
                     }
                 }
@@ -198,7 +236,9 @@ final class VRMRenderItemBuilder {
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
                     renderOrder: renderOrder,
-                    materialRenderQueue: materialRenderQueue
+                    materialRenderQueue: materialRenderQueue,
+                    depthWriteEnabled: depthWriteEnabled,
+                    renderQueueOffset: materialRenderQueueOffset
                 )
 
                 allItems.append(item)
@@ -233,12 +273,21 @@ final class VRMRenderItemBuilder {
         return Result(items: allItems, totalMeshesWithNodes: totalMeshes)
     }
 
-    private func logFaceCandidate(nodeName: String, meshName: String, materialName: String, alpha: String, primitive: VRMPrimitive) {
+    private func logFaceCandidate(nodeName: String, meshName: String, materialName: String, alpha: String, primitive: VRMPrimitive, material: VRMMaterial?) {
         vrmLog("[FACE MATERIAL DEBUG] Potential face material detected:")
         vrmLog("  - Node: '\(nodeName)'")
         vrmLog("  - Mesh: '\(meshName)'")
         vrmLog("  - Material: '\(materialName)'")
         vrmLog("  - Alpha mode: \(alpha)")
         vrmLog("  - IndexCount: \(primitive.indexCount)")
+        if let mat = material {
+            vrmLog("  - VRM Properties:")
+            vrmLog("    - transparentWithZWrite: \(mat.transparentWithZWrite)")
+            vrmLog("    - zWriteEnabled: \(mat.zWriteEnabled)")
+            vrmLog("    - blendMode: \(mat.blendMode)")
+            vrmLog("    - isTransparentWithZWrite: \(mat.isTransparentWithZWrite)")
+            vrmLog("    - renderQueue: \(mat.renderQueue)")
+            vrmLog("    - renderQueueOffset: \(mat.renderQueueOffset)")
+        }
     }
 }

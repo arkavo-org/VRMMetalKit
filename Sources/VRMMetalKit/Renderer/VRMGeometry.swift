@@ -1099,6 +1099,35 @@ public class VRMMaterial {
     // Default is 2000 (geometry), transparent materials typically 3000+
     public var renderQueue: Int = 2000
 
+    // VRM transparent with depth write - transparent materials that still write to depth buffer
+    // This is critical for proper layering of face materials (eyebrows, eyelashes over skin)
+    public var transparentWithZWrite: Bool = false
+
+    // Render queue offset from VRM extension (relative to category base)
+    public var renderQueueOffset: Int = 0
+
+    // Z-write enabled (for VRM 0.x compatibility)
+    public var zWriteEnabled: Bool = true
+
+    // Blend mode from VRM 0.x (0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite)
+    public var blendMode: Int = 0
+
+    /// Computed property: Is this material transparent but should write to depth?
+    /// Used for proper layering of overlapping transparent materials (e.g., eyebrows over face skin)
+    public var isTransparentWithZWrite: Bool {
+        // Explicit flag from VRM 1.0 extension
+        if transparentWithZWrite {
+            return true
+        }
+        // VRM 0.x: BlendMode 3 is explicitly TransparentWithZWrite
+        if blendMode == 3 {
+            return true
+        }
+        // VRM 0.x: Infer from properties - transparent material with zWrite enabled
+        let isTransparent = alphaMode == "BLEND" || blendMode == 2
+        return isTransparent && zWriteEnabled
+    }
+
     public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil) {
         self.name = gltfMaterial.name
 
@@ -1160,6 +1189,15 @@ public class VRMMaterial {
         if let extensions = gltfMaterial.extensions,
            let mtoonExt = extensions["VRMC_materials_mtoon"] as? [String: Any] {
             mtoon = parseMToonExtension(mtoonExt, textures: textures)
+
+            // VRM 1.0: explicit transparentWithZWrite flag
+            if let twzw = mtoonExt["transparentWithZWrite"] as? Bool {
+                transparentWithZWrite = twzw
+            }
+            // VRM 1.0: renderQueueOffsetNumber for sorting within category
+            if let rqOffset = mtoonExt["renderQueueOffsetNumber"] as? Int {
+                renderQueueOffset = rqOffset
+            }
         }
         // VRM 0.x: material properties from document-level VRM extension
         else if let vrm0Prop = vrm0MaterialProperty {
@@ -1178,6 +1216,16 @@ public class VRMMaterial {
             // Get renderQueue from VRM 0.x material (used for sorting transparent materials)
             if let queue = vrm0Prop.renderQueue {
                 renderQueue = queue
+            }
+
+            // VRM 0.x: Read _ZWrite and _BlendMode from floatProperties
+            // _ZWrite: 1 = writes to depth, 0 = no depth write
+            if let zWrite = vrm0Prop.floatProperties["_ZWrite"] {
+                zWriteEnabled = (zWrite == 1.0)
+            }
+            // _BlendMode: 0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite
+            if let bm = vrm0Prop.floatProperties["_BlendMode"] {
+                blendMode = Int(bm)
             }
         }
     }

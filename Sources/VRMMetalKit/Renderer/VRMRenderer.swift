@@ -1398,8 +1398,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 } ?? 2000
 
                 // OPTIMIZATION: Single face/body detection pass (consolidates 3 separate checks)
+                // Include body, clothing, and transparentZWrite materials for proper categorization
                 let isFaceMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
-                                    nodeNameLower.contains("face") || nodeNameLower.contains("eye")
+                                    nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
+                                    (materialNameLower.contains("body") && !materialNameLower.contains("face")) ||
+                                    materialNameLower.contains("cloth") || materialNameLower.contains("tops") ||
+                                    materialNameLower.contains("bottoms") || materialNameLower.contains("skirt") ||
+                                    materialNameLower.contains("shorts") || materialNameLower.contains("pants") ||
+                                    materialNameLower.contains("lace") || materialNameLower.contains("collar") ||
+                                    materialNameLower.contains("ribbon") || materialNameLower.contains("frill") ||
+                                    materialNameLower.contains("ruffle")
                 let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
                 let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
                                       meshNameLower.contains("face") || meshNameLower.contains("eye")
@@ -1472,7 +1480,25 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 // OPTIMIZATION: Set renderOrder instead of appending to separate arrays
                 if item.isFaceMaterial {
                     // Classify face material by type and set category + renderOrder
-                    if item.materialNameLower.contains("skin") || (item.materialNameLower.contains("face") && !item.materialNameLower.contains("eye")) {
+                    // Body detection - must come before skin check since body materials contain "skin"
+                    if item.materialNameLower.contains("body") && !item.materialNameLower.contains("face") {
+                        item.faceCategory = "body"
+                        item.renderOrder = 0  // body renders first, pushed back by depth bias
+                        vrmLog("  → Assigned to: body queue (order=0)")
+                    } else if item.materialNameLower.contains("lace") || item.materialNameLower.contains("collar") ||
+                              item.materialNameLower.contains("ribbon") || item.materialNameLower.contains("frill") ||
+                              item.materialNameLower.contains("ruffle") {
+                        // TransparentWithZWrite - semi-transparent overlays that need depth writing
+                        item.faceCategory = "transparentZWrite"
+                        item.renderOrder = 8  // After opaque, before regular blend
+                        vrmLog("  → Assigned to: transparentZWrite queue (order=8)")
+                    } else if item.materialNameLower.contains("cloth") || item.materialNameLower.contains("tops") ||
+                              item.materialNameLower.contains("bottoms") || item.materialNameLower.contains("skirt") ||
+                              item.materialNameLower.contains("shorts") || item.materialNameLower.contains("pants") {
+                        item.faceCategory = "clothing"
+                        item.renderOrder = 8  // Same as transparentZWrite for proper layering
+                        vrmLog("  → Assigned to: clothing queue (order=8)")
+                    } else if item.materialNameLower.contains("skin") || (item.materialNameLower.contains("face") && !item.materialNameLower.contains("eye")) {
                         item.faceCategory = "skin"
                         item.renderOrder = 1  // faceSkin
                         faceSkinCount += 1
@@ -2480,29 +2506,65 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let viewZ = viewPos.z
 
                 switch faceCategory {
-                case "skin":
-                    // OPAQUE PSO, depthWrite=ON, cull=back
-                    encoder.setDepthStencilState(depthStencilStates["opaque"])
+                case "body":
+                    // Body (with lace texture) renders FIRST (order=0)
+                    // Uses lessEqual - later materials win at equal depths
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    }
                     encoder.setCullMode(.back)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(-0.0001, slopeScale: -1.0, clamp: -0.01)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=skin  pso=opaque  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=body  z=\(viewZ)  mat=\(item.materialName)")
+                    }
+
+                case "clothing":
+                    // Clothing renders AFTER body - wins at overlaps via render order
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    }
+                    encoder.setCullMode(.back)
+                    encoder.setFrontFacing(.counterClockwise)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    if frameCounter % 60 == 0 {
+                        vrmLog("[FACE] order=clothing  z=\(viewZ)  mat=\(item.materialName)")
+                    }
+
+                case "skin":
+                    // Face skin renders AFTER body - wins at neck seam via render order
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    }
+                    encoder.setCullMode(.back)
+                    encoder.setFrontFacing(.counterClockwise)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    if frameCounter % 60 == 0 {
+                        vrmLog("[FACE] order=skin  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 case "eyebrow", "eyeline":
-                    // OPAQUE PSO with alphaCutoff, depthWrite=ON, cull=none
-                    encoder.setDepthStencilState(depthStencilStates["mask"])
+                    // Face features render after skin - win via render order
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["mask"])
+                    }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(-0.0002, slopeScale: -1.0, clamp: -0.01)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=\(faceCategory)  pso=opaque  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=\(faceCategory)  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 case "eye":
-                    // OPAQUE PSO for eyes, cull none. Render after face skin.
-                    // Use lessEqual compare with depth write ON to prevent showing through head.
+                    // Eyes render after skin - win via render order
                     if let faceState = depthStencilStates["face"] {
                         encoder.setDepthStencilState(faceState)
                     } else {
@@ -2510,12 +2572,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(-0.0002, slopeScale: -1.0, clamp: -0.01)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=eye  pso=opaque  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=eye  z=\(viewZ)  mat=\(item.materialName)")
                     }
                 case "highlight":
-                    // BLEND PSO for eye highlights, depthWrite=OFF, cull=none
+                    // Eye highlights render last - win via render order
                     if let blendDepthState = depthStencilStates["blend"] {
                         encoder.setDepthStencilState(blendDepthState)
                     } else {
@@ -2523,9 +2585,25 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(-0.0003, slopeScale: -1.0, clamp: -0.01)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=highlight  pso=blend  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=highlight  z=\(viewZ)  mat=\(item.materialName)")
+                    }
+
+                case "transparentZWrite":
+                    // TransparentWithZWrite: blend with depth write ON
+                    // Uses face state (.lessEqual + depth write) to occlude what's behind
+                    // Key for lace, collar, and semi-transparent overlays
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    }
+                    encoder.setCullMode(.none)  // Often double-sided for overlays
+                    encoder.setFrontFacing(.counterClockwise)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    if frameCounter % 60 == 0 {
+                        vrmLog("[FACE] order=transparentZWrite  pso=face(.lessEqual+depthWrite)  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 default:
