@@ -611,6 +611,91 @@ public class VRMPrimitive {
         vrmLog("  - SoA positions buffer: \(morphPositionsSoA != nil) (\(totalDeltasSize) bytes)")
         vrmLog("  - SoA normals buffer: \(morphNormalsSoA != nil)")
     }
+
+    // MARK: - Iron Dome Sanitization
+
+    /// Sanitizes joint indices to prevent vertex explosions from out-of-bounds bone references.
+    ///
+    /// This is the "Iron Dome" sanitizer that catches:
+    /// - **Sentinel values**: 65535 (0xFFFF) used by some exporters to mean "no bone"
+    /// - **Out-of-bounds indices**: Joint indices >= actual bone count
+    ///
+    /// Both cases are remapped to joint 0 (root bone) with their weight zeroed out.
+    ///
+    /// - Parameter maxJointIndex: The maximum valid joint index (skin.joints.count - 1)
+    /// - Returns: Number of joints that were sanitized
+    @discardableResult
+    public func sanitizeJoints(maxJointIndex: Int) -> Int {
+        guard hasJoints, let vertexBuffer = vertexBuffer, vertexCount > 0 else {
+            return 0
+        }
+
+        let maxValid = UInt32(maxJointIndex)
+        var sanitizedCount = 0
+
+        // Get mutable access to vertex buffer
+        let vertexPointer = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+
+        for i in 0..<vertexCount {
+            var vertex = vertexPointer[i]
+            var modified = false
+
+            // Check and sanitize each joint index
+            // If index is out of bounds or sentinel (65535), remap to joint 0 and zero the weight
+            if vertex.joints.x > maxValid || vertex.joints.x == 65535 {
+                vertex.joints.x = 0
+                vertex.weights.x = 0
+                modified = true
+                sanitizedCount += 1
+            }
+            if vertex.joints.y > maxValid || vertex.joints.y == 65535 {
+                vertex.joints.y = 0
+                vertex.weights.y = 0
+                modified = true
+                sanitizedCount += 1
+            }
+            if vertex.joints.z > maxValid || vertex.joints.z == 65535 {
+                vertex.joints.z = 0
+                vertex.weights.z = 0
+                modified = true
+                sanitizedCount += 1
+            }
+            if vertex.joints.w > maxValid || vertex.joints.w == 65535 {
+                vertex.joints.w = 0
+                vertex.weights.w = 0
+                modified = true
+                sanitizedCount += 1
+            }
+
+            // Renormalize weights if any were zeroed
+            if modified {
+                let weightSum = vertex.weights.x + vertex.weights.y + vertex.weights.z + vertex.weights.w
+                if weightSum > 0.0001 {
+                    vertex.weights = vertex.weights / weightSum
+                } else {
+                    // All weights zeroed - set to 100% root bone
+                    vertex.weights = SIMD4<Float>(1, 0, 0, 0)
+                }
+                vertexPointer[i] = vertex
+            }
+        }
+
+        // Update requiredPaletteSize after sanitization
+        if sanitizedCount > 0 {
+            var newMaxJoint: UInt32 = 0
+            for i in 0..<vertexCount {
+                let joints = vertexPointer[i].joints
+                newMaxJoint = max(newMaxJoint, joints.x, joints.y, joints.z, joints.w)
+            }
+            requiredPaletteSize = Int(newMaxJoint) + 1
+
+            vrmLog("[IRON DOME] Sanitized \(sanitizedCount) out-of-bounds joint indices")
+            vrmLog("  - Max valid joint: \(maxJointIndex)")
+            vrmLog("  - New requiredPaletteSize: \(requiredPaletteSize)")
+        }
+
+        return sanitizedCount
+    }
 }
 
 // MARK: - Vertex Data

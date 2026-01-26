@@ -92,9 +92,6 @@ Errors must implement `LocalizedError`. Messages should be LLM-friendly:
 3.  **Suggestion** for fixing.
 4.  **Link** to VRM spec.
 
-### 4. 2.5D Rendering Mode
-Toggle via `renderer.renderingMode = .toon2D`. Uses `Toon2DShader` and `CharacterPrioritySystem` for sprite-like orthographic rendering with outlines.
-
 ## Licensing
 *   **Source Code:** Apache License 2.0.
 *   **Assets/Models:** VRM Platform License 1.0 (check model metadata).

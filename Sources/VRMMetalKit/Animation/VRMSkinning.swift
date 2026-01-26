@@ -123,14 +123,18 @@ public class VRMSkinningSystem {
         totalMatrixCount = currentOffset
 
         // Allocate the large buffer for all skins
-        let totalBufferSize = currentByteOffset
+        // CRITICAL: Pad to at least 256 matrices so shader clamp to 255 is always safe
+        let minMatrixCount = 256
+        let paddedMatrixCount = max(totalMatrixCount, minMatrixCount)
+        let totalBufferSize = paddedMatrixCount * matrixSize
         jointMatricesBuffer = device.makeBuffer(length: totalBufferSize, options: .storageModeShared)
-        vrmLog("[SKINNING] Allocated buffer for \(totalMatrixCount) total matrices (\(totalBufferSize) bytes)")
+        vrmLog("[SKINNING] Allocated buffer for \(totalMatrixCount) matrices (padded to \(paddedMatrixCount), \(totalBufferSize) bytes)")
 
-        // Initialize all matrices to identity to prevent garbage
+        // Initialize ALL matrices to identity to prevent garbage reads
+        // This includes padding matrices that may be accessed by clamped garbage indices
         if let buffer = jointMatricesBuffer {
-            let pointer = buffer.contents().bindMemory(to: float4x4.self, capacity: totalMatrixCount)
-            for i in 0..<totalMatrixCount {
+            let pointer = buffer.contents().bindMemory(to: float4x4.self, capacity: paddedMatrixCount)
+            for i in 0..<paddedMatrixCount {
                 pointer[i] = float4x4(1)  // Identity matrix
             }
         }

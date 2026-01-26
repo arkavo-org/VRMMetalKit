@@ -39,20 +39,6 @@ final class OutlineRenderingDepthTests: XCTestCase {
         )
     }
 
-    // MARK: - Outline Rendering Configuration Tests
-
-    /// Test that Toon2D mode can be set
-    func testToon2DModeCanBeSet() {
-        renderer.renderingMode = .toon2D
-        XCTAssertEqual(renderer.renderingMode, .toon2D, "Rendering mode should be Toon2D")
-    }
-
-    /// Test that standard mode is the default
-    func testStandardModeIsDefault() {
-        let freshRenderer = VRMRenderer(device: device)
-        XCTAssertEqual(freshRenderer.renderingMode, .standard, "Default rendering mode should be standard")
-    }
-
     // MARK: - Outline Width Configuration Tests
 
     /// Test outline width can be configured
@@ -118,16 +104,6 @@ final class OutlineRenderingDepthTests: XCTestCase {
 
         // Without a model, outline rendering should safely no-op
         // This is verified by the guard let model = model else { return } pattern
-    }
-
-    /// Test that Toon2D outlines uses correct depth state
-    /// Toon2D renderOutlines should set blend depth state before rendering
-    func testToon2DOutlinesUsesBlendDepthState() {
-        // Verify the blend state exists for Toon2D outlines
-        XCTAssertNotNil(
-            renderer.depthStencilStates["blend"],
-            "Toon2D outlines require blend depth state"
-        )
     }
 
     // MARK: - Depth State Key Consistency Tests
