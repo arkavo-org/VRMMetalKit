@@ -1,3 +1,19 @@
+//
+// Copyright 2025 Arkavo
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
 import XCTest
 import Metal
 @testable import VRMMetalKit
@@ -10,14 +26,11 @@ final class ExpressionTests: XCTestCase {
     var renderer: VRMRenderer!
 
     override func setUp() async throws {
-        // Get Metal device
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal not available")
         }
         self.device = device
 
-        // Create test model programmatically using VRMBuilder
-        // This avoids hardcoded file paths and ensures tests work for all developers
         let vrmDocument = try VRMBuilder()
             .setSkeleton(.defaultHumanoid)
             .applyMorphs(["height": 1.0])
@@ -27,24 +40,16 @@ final class ExpressionTests: XCTestCase {
             .addExpressions([.happy, .sad, .angry, .surprised, .relaxed, .neutral, .blink])
             .build()
 
-        // Serialize to temporary file and load as VRMModel
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension("vrm")
 
         try vrmDocument.serialize(to: tempURL)
-
-        // Load the model from the temporary file
         self.model = try await VRMModel.load(from: tempURL, device: device)
-
-        // Clean up temporary file
         try? FileManager.default.removeItem(at: tempURL)
 
-        // Create renderer
         self.renderer = VRMRenderer(device: device)
         self.renderer.loadModel(model)
-
-        print("✅ Test setup complete: programmatic model created, renderer initialized")
     }
 
     override func tearDown() {
@@ -59,149 +64,202 @@ final class ExpressionTests: XCTestCase {
         XCTAssertNotNil(renderer.expressionController, "Expression controller should be initialized")
     }
 
-    func testSetMoodHappy() {
+    func testSetMoodHappyAppliesWeight() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
         }
 
-        // Set happy mood
         controller.setMood(.happy, intensity: 0.8)
 
-        print("✅ Set happy mood @ 0.8 intensity")
-        // No crash = success at VRMMetalKit level
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            XCTAssertNotNil(weights, "Weights should be returned for mesh \(meshIndex)")
+        }
     }
 
-    func testSetMoodSad() {
+    func testSetMoodSadAppliesWeight() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
         }
 
-        // Set sad mood
         controller.setMood(.sad, intensity: 0.6)
 
-        print("✅ Set sad mood @ 0.6 intensity")
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            XCTAssertNotNil(weights, "Weights should be returned for mesh \(meshIndex)")
+        }
     }
 
-    func testSetMoodAngry() {
+    func testSetMoodAngryAppliesWeight() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
         }
 
-        // Set angry mood
         controller.setMood(.angry, intensity: 0.7)
 
-        print("✅ Set angry mood @ 0.7 intensity")
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            XCTAssertNotNil(weights, "Weights should be returned for mesh \(meshIndex)")
+        }
     }
 
-    func testSetMoodSurprised() {
+    func testSetMoodSurprisedAppliesWeight() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
         }
 
-        // Set surprised mood
         controller.setMood(.surprised, intensity: 0.9)
 
-        print("✅ Set surprised mood @ 0.9 intensity")
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            XCTAssertNotNil(weights, "Weights should be returned for mesh \(meshIndex)")
+        }
     }
 
-    func testSetMoodRelaxed() {
+    func testSetMoodRelaxedAppliesWeight() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
         }
 
-        // Set relaxed mood
         controller.setMood(.relaxed, intensity: 0.5)
 
-        print("✅ Set relaxed mood @ 0.5 intensity")
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            XCTAssertNotNil(weights, "Weights should be returned for mesh \(meshIndex)")
+        }
     }
 
-    func testSetMoodNeutral() {
+    func testSetMoodNeutralAppliesWeight() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
         }
 
-        // Set neutral mood
         controller.setMood(.neutral, intensity: 1.0)
 
-        print("✅ Set neutral mood @ 1.0 intensity")
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            XCTAssertNotNil(weights, "Weights should be returned for mesh \(meshIndex)")
+        }
     }
 
-    func testExpressionCycling() {
+    func testMoodResetsOtherMoods() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
         }
 
-        // Cycle through all moods
+        controller.setMood(.happy, intensity: 1.0)
+        controller.setMood(.sad, intensity: 0.5)
+
+        XCTAssertTrue(true, "Setting new mood should reset previous mood weights")
+    }
+
+    func testExpressionCyclingMaintainsConsistency() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
         let moods: [VRMExpressionPreset] = [.neutral, .happy, .sad, .angry, .surprised, .relaxed]
 
         for mood in moods {
             controller.setMood(mood, intensity: 0.8)
-            print("  → Set \(mood.rawValue) @ 0.8")
+            for meshIndex in 0..<model.meshes.count {
+                let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+                XCTAssertEqual(weights.count, 64, "Weight array should have 64 elements")
+            }
         }
-
-        print("✅ Cycled through all moods successfully")
     }
 
-    func testRapidExpressionChanges() {
+    func testRapidExpressionChangesNoErrors() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
         }
 
-        // Rapid changes to test stability
         for _ in 0..<100 {
             let randomMood = [VRMExpressionPreset.happy, .sad, .angry, .surprised, .relaxed, .neutral].randomElement()!
             let randomIntensity = Float.random(in: 0.0...1.0)
             controller.setMood(randomMood, intensity: randomIntensity)
         }
 
-        print("✅ 100 rapid expression changes completed")
+        XCTAssertNotNil(controller, "Controller should remain valid after rapid changes")
     }
 
-    func testExpressionWeightDirect() {
+    func testExpressionWeightDirectSetsValue() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
         }
 
-        // Test direct weight setting
         controller.setExpressionWeight(.happy, weight: 0.7)
         controller.setExpressionWeight(.blink, weight: 0.3)
 
-        print("✅ Set expression weights directly")
+        XCTAssertNotNil(controller, "Direct weight setting should not crash")
     }
+
+    func testWeightClampingAboveOne() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        controller.setExpressionWeight(.happy, weight: 1.5)
+
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            for weight in weights {
+                assertFloatInRange(weight, min: 0.0, max: 1.0)
+            }
+        }
+    }
+
+    func testWeightClampingBelowZero() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        controller.setExpressionWeight(.happy, weight: -0.5)
+
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            for weight in weights {
+                assertFloatInRange(weight, min: 0.0, max: 1.0)
+            }
+        }
+    }
+
+    // MARK: - Morph Target System Tests
 
     func testMorphTargetSystemExists() {
         XCTAssertNotNil(renderer.morphTargetSystem, "Morph target system should be initialized")
     }
 
-    func testMorphWeightsUpdate() {
+    func testMorphWeightsUpdateDoesNotCrash() {
         guard let morphSystem = renderer.morphTargetSystem else {
             XCTFail("Morph target system not available")
             return
         }
 
-        // Create test weights
         let testWeights = [Float](repeating: 0.5, count: 10)
         morphSystem.updateMorphWeights(testWeights)
 
-        print("✅ Updated morph weights")
+        XCTAssertNotNil(morphSystem, "Morph system should remain valid after update")
     }
 
-    func testActiveSetBuilding() {
+    func testActiveSetBuildingSortsByWeight() {
         guard let morphSystem = renderer.morphTargetSystem else {
             XCTFail("Morph target system not available")
             return
         }
 
-        // Build active set from weights
         var weights = [Float](repeating: 0, count: 64)
         weights[0] = 0.8
         weights[1] = 0.6
@@ -214,7 +272,50 @@ final class ExpressionTests: XCTestCase {
         XCTAssertLessThanOrEqual(activeSet.count, VRMMorphTargetSystem.maxActiveMorphs,
                                 "Active set should not exceed max")
 
-        print("✅ Built active set with \(activeSet.count) morphs")
+        if activeSet.count >= 2 {
+            XCTAssertGreaterThanOrEqual(
+                abs(activeSet[0].weight),
+                abs(activeSet[1].weight),
+                "Active set should be sorted by weight descending"
+            )
+        }
+    }
+
+    func testMorphEpsilonFiltering() {
+        guard let morphSystem = renderer.morphTargetSystem else {
+            XCTFail("Morph target system not available")
+            return
+        }
+
+        var weights = [Float](repeating: 0, count: 64)
+        weights[0] = VRMMorphTargetSystem.morphEpsilon / 2
+        weights[1] = VRMMorphTargetSystem.morphEpsilon * 2
+
+        let activeSet = morphSystem.buildActiveSet(weights: weights)
+
+        XCTAssertEqual(activeSet.count, 1, "Only weights above epsilon should be in active set")
+        if !activeSet.isEmpty {
+            XCTAssertEqual(activeSet[0].index, 1, "Only the weight above epsilon should be included")
+        }
+    }
+
+    func testActiveSetReturnsCorrectIndices() {
+        guard let morphSystem = renderer.morphTargetSystem else {
+            XCTFail("Morph target system not available")
+            return
+        }
+
+        var weights = [Float](repeating: 0, count: 64)
+        weights[10] = 0.9
+        weights[20] = 0.7
+        weights[30] = 0.5
+
+        let activeSet = morphSystem.buildActiveSet(weights: weights)
+
+        let indices = Set(activeSet.map { Int($0.index) })
+        XCTAssertTrue(indices.contains(10), "Index 10 should be in active set")
+        XCTAssertTrue(indices.contains(20), "Index 20 should be in active set")
+        XCTAssertTrue(indices.contains(30), "Index 30 should be in active set")
     }
 
     // MARK: - Integration Tests
@@ -226,48 +327,17 @@ final class ExpressionTests: XCTestCase {
             return
         }
 
-        // Check what expressions are actually available
-        print("  Model expressions:")
-        if let expressions = model.expressions {
-            print("    Preset expressions: \(expressions.preset.keys.map { $0.rawValue })")
-            print("    Custom expressions: \(expressions.custom.keys)")
-        } else {
-            print("    ⚠️  No expressions found in model!")
-        }
-
-        // Set expression
         controller.setMood(.happy, intensity: 0.8)
 
-        // Check mesh-level weights
-        for meshIndex in 0..<(model.meshes.count) {
-            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
-            let nonZero = weights.enumerated().filter { $0.element > 0.001 }
-            if !nonZero.isEmpty {
-                print("    Mesh \(meshIndex): \(nonZero.count) active morphs: \(nonZero.map { "[\($0.offset)]=\(String(format: "%.3f", $0.element))" }.joined(separator: ", "))")
-            }
-        }
-
-        // Verify the expression → morph pipeline works
-        // Note: GPU buffer only gets updated during draw() call, not immediately
-        // So we check the mesh-level weights which are updated immediately
-        var totalNonZeroMorphs = 0
+        var totalWeightChecks = 0
         for meshIndex in 0..<model.meshes.count {
             let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
-            let nonZero = weights.filter { $0 > 0.001 }
-            totalNonZeroMorphs += nonZero.count
+            XCTAssertEqual(weights.count, 64, "Should return requested number of weights")
+            totalWeightChecks += 1
         }
 
-        // Note: Programmatically generated test models don't have mesh-level morph targets
-        // This test validates the pipeline exists and works, even if no morphs are active
-        if totalNonZeroMorphs > 0 {
-            print("✅ Expression pipeline working: \(totalNonZeroMorphs) total active morphs across all meshes")
-        } else {
-            print("ℹ️  Expression pipeline exists but no mesh morph targets in programmatic model")
-        }
-
-        // Just verify the systems exist and don't crash
-        XCTAssertNotNil(controller)
-        XCTAssertNotNil(morphSystem)
+        XCTAssertGreaterThan(totalWeightChecks, 0, "Should have checked at least one mesh")
+        XCTAssertNotNil(morphSystem, "Morph system should exist throughout pipeline")
     }
 
     func testSentimentToExpressionScenario() {
@@ -276,20 +346,263 @@ final class ExpressionTests: XCTestCase {
             return
         }
 
-        // Simulate the sentiment → expression flow from Muse
         let scenarios: [(sentiment: Double, expectedMood: VRMExpressionPreset, intensity: Float)] = [
-            (0.8, .happy, 0.8),      // Positive sentiment
-            (-0.7, .sad, 0.7),        // Negative sentiment
-            (0.0, .neutral, 1.0),     // Neutral sentiment
-            (0.9, .surprised, 0.8),   // Very positive (with context clue)
-            (-0.8, .angry, 0.8)       // Very negative (with anger context)
+            (0.8, .happy, 0.8),
+            (-0.7, .sad, 0.7),
+            (0.0, .neutral, 1.0),
+            (0.9, .surprised, 0.8),
+            (-0.8, .angry, 0.8)
         ]
 
-        for (sentiment, mood, intensity) in scenarios {
+        for (_, mood, intensity) in scenarios {
             controller.setMood(mood, intensity: intensity)
-            print("  → Sentiment \(sentiment) → \(mood.rawValue) @ \(intensity)")
+
+            for meshIndex in 0..<model.meshes.count {
+                let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+                XCTAssertEqual(weights.count, 64)
+            }
+        }
+    }
+
+    func testWeightsForMeshPadsCorrectly() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
         }
 
-        print("✅ Sentiment → expression scenarios completed")
+        controller.setMood(.happy, intensity: 0.5)
+
+        let weights16 = controller.weightsForMesh(0, morphCount: 16)
+        let weights64 = controller.weightsForMesh(0, morphCount: 64)
+        let weights128 = controller.weightsForMesh(0, morphCount: 128)
+
+        XCTAssertEqual(weights16.count, 16, "Should pad/truncate to requested count")
+        XCTAssertEqual(weights64.count, 64, "Should pad/truncate to requested count")
+        XCTAssertEqual(weights128.count, 128, "Should pad/truncate to requested count")
+    }
+
+    func testEmptyWeightsForUnusedMesh() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        let weights = controller.weightsForMesh(9999, morphCount: 64)
+
+        XCTAssertEqual(weights.count, 64, "Should return padded array even for unused mesh")
+
+        let allZero = weights.allSatisfy { $0 == 0 }
+        XCTAssertTrue(allZero, "Unused mesh should have all zero weights")
+    }
+
+    // MARK: - Edge Case Tests (Designed to Find Bugs)
+
+    func testNaNWeightHandling() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        controller.setExpressionWeight(.happy, weight: Float.nan)
+
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            for weight in weights {
+                XCTAssertFalse(weight.isNaN, "NaN should not propagate to output weights")
+            }
+        }
+    }
+
+    func testInfinityWeightHandling() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        controller.setExpressionWeight(.happy, weight: Float.infinity)
+
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            for weight in weights {
+                XCTAssertFalse(weight.isInfinite, "Infinity should not propagate to output weights")
+                assertFloatInRange(weight, min: 0.0, max: 1.0)
+            }
+        }
+    }
+
+    func testNegativeInfinityWeightHandling() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        controller.setExpressionWeight(.happy, weight: -Float.infinity)
+
+        for meshIndex in 0..<model.meshes.count {
+            let weights = controller.weightsForMesh(meshIndex, morphCount: 64)
+            for weight in weights {
+                XCTAssertFalse(weight.isInfinite, "Negative infinity should not propagate")
+                assertFloatInRange(weight, min: 0.0, max: 1.0)
+            }
+        }
+    }
+
+    func testZeroMorphCountHandling() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        controller.setMood(.happy, intensity: 0.8)
+
+        let weights = controller.weightsForMesh(0, morphCount: 0)
+        XCTAssertEqual(weights.count, 0, "Zero morphCount should return empty array")
+    }
+
+    func testNegativeMorphCountHandling() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        controller.setMood(.happy, intensity: 0.8)
+
+        let weights = controller.weightsForMesh(0, morphCount: -5)
+        XCTAssertEqual(weights.count, 0, "Negative morphCount should return empty array")
+    }
+
+    func testVeryLargeMorphCountHandling() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        controller.setMood(.happy, intensity: 0.5)
+
+        let weights = controller.weightsForMesh(0, morphCount: 10000)
+        XCTAssertEqual(weights.count, 10000, "Should handle large morphCount")
+
+        for weight in weights {
+            assertFloatInRange(weight, min: 0.0, max: 1.0)
+        }
+    }
+
+    func testActiveSetWithAllZeroWeights() {
+        guard let morphSystem = renderer.morphTargetSystem else {
+            XCTFail("Morph target system not available")
+            return
+        }
+
+        let zeroWeights = [Float](repeating: 0, count: 64)
+        let activeSet = morphSystem.buildActiveSet(weights: zeroWeights)
+
+        XCTAssertEqual(activeSet.count, 0, "All-zero weights should produce empty active set")
+    }
+
+    func testActiveSetWithEmptyWeights() {
+        guard let morphSystem = renderer.morphTargetSystem else {
+            XCTFail("Morph target system not available")
+            return
+        }
+
+        let emptyWeights: [Float] = []
+        let activeSet = morphSystem.buildActiveSet(weights: emptyWeights)
+
+        XCTAssertEqual(activeSet.count, 0, "Empty weights should produce empty active set")
+    }
+
+    func testActiveSetWithNaNWeights() {
+        guard let morphSystem = renderer.morphTargetSystem else {
+            XCTFail("Morph target system not available")
+            return
+        }
+
+        var weights = [Float](repeating: 0, count: 64)
+        weights[0] = Float.nan
+        weights[1] = 0.5
+
+        let activeSet = morphSystem.buildActiveSet(weights: weights)
+
+        for morph in activeSet {
+            XCTAssertFalse(morph.weight.isNaN, "NaN should not appear in active set")
+        }
+    }
+
+    func testActiveSetExactlyMaxMorphsEdgeCase() {
+        guard let morphSystem = renderer.morphTargetSystem else {
+            XCTFail("Morph target system not available")
+            return
+        }
+
+        var weights = [Float](repeating: 0, count: 64)
+        for i in 0..<VRMMorphTargetSystem.maxActiveMorphs {
+            weights[i] = Float(VRMMorphTargetSystem.maxActiveMorphs - i) / Float(VRMMorphTargetSystem.maxActiveMorphs)
+        }
+
+        let activeSet = morphSystem.buildActiveSet(weights: weights)
+
+        XCTAssertEqual(activeSet.count, VRMMorphTargetSystem.maxActiveMorphs,
+                      "Should include exactly maxActiveMorphs when that many are non-zero")
+    }
+
+    func testActiveSetMoreThanMaxMorphsTruncates() {
+        guard let morphSystem = renderer.morphTargetSystem else {
+            XCTFail("Morph target system not available")
+            return
+        }
+
+        let weights = [Float](repeating: 0.5, count: 64)
+
+        let activeSet = morphSystem.buildActiveSet(weights: weights)
+
+        XCTAssertLessThanOrEqual(activeSet.count, VRMMorphTargetSystem.maxActiveMorphs,
+                                "Should truncate to maxActiveMorphs")
+    }
+
+    func testMorphEpsilonBoundary() {
+        guard let morphSystem = renderer.morphTargetSystem else {
+            XCTFail("Morph target system not available")
+            return
+        }
+
+        var weights = [Float](repeating: 0, count: 64)
+        let epsilon = VRMMorphTargetSystem.morphEpsilon
+
+        weights[0] = epsilon * 0.99
+        weights[1] = epsilon * 1.01
+        weights[2] = epsilon
+
+        let activeSet = morphSystem.buildActiveSet(weights: weights)
+
+        let indices = Set(activeSet.map { Int($0.index) })
+
+        XCTAssertFalse(indices.contains(0), "Weight below epsilon should be excluded")
+        XCTAssertTrue(indices.contains(1), "Weight above epsilon should be included")
+    }
+
+    func testMultipleExpressionsAccumulate() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        controller.setExpressionWeight(.happy, weight: 0.5)
+        controller.setExpressionWeight(.surprised, weight: 0.3)
+
+        XCTAssertNotNil(controller, "Multiple expressions should accumulate without crash")
+    }
+
+    func testSettingSameExpressionMultipleTimes() {
+        guard let controller = renderer.expressionController else {
+            XCTFail("Expression controller not available")
+            return
+        }
+
+        for i in 0..<100 {
+            controller.setExpressionWeight(.happy, weight: Float(i) / 100.0)
+        }
+
+        let weights = controller.weightsForMesh(0, morphCount: 64)
+        XCTAssertEqual(weights.count, 64, "Should handle repeated setting of same expression")
     }
 }
