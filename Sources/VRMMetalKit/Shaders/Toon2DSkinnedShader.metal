@@ -84,7 +84,7 @@ struct VertexIn {
  float3 normal [[attribute(1)]];
  float2 texCoord [[attribute(2)]];
  float4 color [[attribute(3)]];
- ushort4 joints [[attribute(4)]];
+ uint4 joints [[attribute(4)]];  // Changed to uint4 to match VRMVertex.joints (SIMD4<UInt32>)
  float4 weights [[attribute(5)]];
 };
 
@@ -168,20 +168,30 @@ vertex VertexOut skinned_toon2d_vertex(
  basePosition = in.position;
  }
 
- // Apply skeletal skinning
+ // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
+ float4 weights = in.weights;
+ float weightSum = dot(weights, float4(1.0));
+ if (weightSum > 1e-6) {
+ weights = weights / weightSum;
+ } else {
+ weights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
+ }
+
+ // Apply skeletal skinning with normalized weights
  float4x4 skinMatrix = float4x4(0.0);
 
- if (in.weights[0] > 0.0) {
- skinMatrix += jointMatrices[in.joints[0]] * in.weights[0];
+ // Use 0.001 threshold to prevent NaN propagation from out-of-bounds joint indices
+ if (weights[0] > 0.001) {
+ skinMatrix += jointMatrices[in.joints[0]] * weights[0];
  }
- if (in.weights[1] > 0.0) {
- skinMatrix += jointMatrices[in.joints[1]] * in.weights[1];
+ if (weights[1] > 0.001) {
+ skinMatrix += jointMatrices[in.joints[1]] * weights[1];
  }
- if (in.weights[2] > 0.0) {
- skinMatrix += jointMatrices[in.joints[2]] * in.weights[2];
+ if (weights[2] > 0.001) {
+ skinMatrix += jointMatrices[in.joints[2]] * weights[2];
  }
- if (in.weights[3] > 0.0) {
- skinMatrix += jointMatrices[in.joints[3]] * in.weights[3];
+ if (weights[3] > 0.001) {
+ skinMatrix += jointMatrices[in.joints[3]] * weights[3];
  }
 
  // Apply skinning to position and normal
@@ -374,20 +384,30 @@ vertex VertexOut skinned_toon2d_outline_vertex(
  basePosition = in.position;
  }
 
- // Apply skeletal skinning
+ // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
+ float4 weights = in.weights;
+ float weightSum = dot(weights, float4(1.0));
+ if (weightSum > 1e-6) {
+ weights = weights / weightSum;
+ } else {
+ weights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
+ }
+
+ // Apply skeletal skinning with normalized weights
  float4x4 skinMatrix = float4x4(0.0);
 
- if (in.weights[0] > 0.0) {
- skinMatrix += jointMatrices[in.joints[0]] * in.weights[0];
+ // Use 0.001 threshold to prevent NaN propagation from out-of-bounds joint indices
+ if (weights[0] > 0.001) {
+ skinMatrix += jointMatrices[in.joints[0]] * weights[0];
  }
- if (in.weights[1] > 0.0) {
- skinMatrix += jointMatrices[in.joints[1]] * in.weights[1];
+ if (weights[1] > 0.001) {
+ skinMatrix += jointMatrices[in.joints[1]] * weights[1];
  }
- if (in.weights[2] > 0.0) {
- skinMatrix += jointMatrices[in.joints[2]] * in.weights[2];
+ if (weights[2] > 0.001) {
+ skinMatrix += jointMatrices[in.joints[2]] * weights[2];
  }
- if (in.weights[3] > 0.0) {
- skinMatrix += jointMatrices[in.joints[3]] * in.weights[3];
+ if (weights[3] > 0.001) {
+ skinMatrix += jointMatrices[in.joints[3]] * weights[3];
  }
 
  // Apply skinning to position and normal
@@ -397,15 +417,27 @@ vertex VertexOut skinned_toon2d_outline_vertex(
  // Extrude along normal for outline
  float outlineWidth = material.outlineWidth;
 
+ // Calculate world position and camera direction for edge attenuation
+ float4 worldPosition = uniforms.modelMatrix * skinnedPosition;
+ float3 worldNormal = normalize((uniforms.normalMatrix * float4(skinnedNormal, 0.0)).xyz);
+
+ // Extract camera world position from view matrix
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+
+ // Calculate view direction
+ float3 viewDir = normalize(cameraPos - worldPosition.xyz);
+
  if (material.outlineMode == 1.0) {
  // World-space outline
  float3 extrudedPos = skinnedPosition.xyz + skinnedNormal * outlineWidth;
- float4 worldPosition = uniforms.modelMatrix * float4(extrudedPos, 1.0);
+ worldPosition = uniforms.modelMatrix * float4(extrudedPos, 1.0);
  float4 viewPosition = uniforms.viewMatrix * worldPosition;
  out.position = uniforms.projectionMatrix * viewPosition;
  } else if (material.outlineMode == 2.0) {
  // Screen-space outline
- float4 worldPosition = uniforms.modelMatrix * skinnedPosition;
  float4 viewPosition = uniforms.viewMatrix * worldPosition;
 
  // Transform normal to view space
@@ -417,7 +449,6 @@ vertex VertexOut skinned_toon2d_outline_vertex(
  out.position = uniforms.projectionMatrix * viewPosition;
  } else {
  // No outline
- float4 worldPosition = uniforms.modelMatrix * skinnedPosition;
  float4 viewPosition = uniforms.viewMatrix * worldPosition;
  out.position = uniforms.projectionMatrix * viewPosition;
  }

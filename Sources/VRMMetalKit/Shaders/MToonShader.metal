@@ -505,19 +505,20 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  outlineWidth *= widthMultiplier;
  }
 
- // Calculate final position with outline extrusion
- if (material.outlineMode == 1.0) {
- // World coordinates mode - extrude in world space
+ // Pre-calculate world normal and camera position for edge attenuation
  float3 worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
- float3 worldPos = (uniforms.modelMatrix * float4(in.position, 1.0)).xyz;
-
- // Correct camera position extraction from view matrix
- // View matrix = [R | -R*t] where R is rotation, t is camera world position
- // So cameraPos = -transpose(R) * viewMatrix[3].xyz
  float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
                                    uniforms.viewMatrix[1].xyz,
                                    uniforms.viewMatrix[2].xyz);
  float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+ float3 worldPos = (uniforms.modelMatrix * float4(in.position, 1.0)).xyz;
+
+ // Calculate view direction
+ float3 viewDir = normalize(cameraPos - worldPos);
+
+ // Calculate final position with outline extrusion
+ if (material.outlineMode == 1.0) {
+ // World coordinates mode - extrude in world space
  float distanceScale = length(worldPos - cameraPos) * 0.01;
 
  worldPos += worldNormal * outlineWidth * distanceScale;
@@ -526,11 +527,11 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  } else if (material.outlineMode == 2.0) {
  // Screen coordinates mode - extrude in screen space
- float4 worldPos = uniforms.modelMatrix * float4(in.position, 1.0);
- out.worldPosition = worldPos.xyz;
+ float4 worldPos4 = uniforms.modelMatrix * float4(in.position, 1.0);
+ out.worldPosition = worldPos4.xyz;
 
  // Transform to clip space
- float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
+ float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos4;
 
  // Calculate screen-space normal
  float3 viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
@@ -546,23 +547,19 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  } else {
  // No outline (mode 0)
- float4 worldPos = uniforms.modelMatrix * float4(in.position, 1.0);
- out.worldPosition = worldPos.xyz;
- out.position = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
+ float4 worldPos4 = uniforms.modelMatrix * float4(in.position, 1.0);
+ out.worldPosition = worldPos4.xyz;
+ out.position = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos4;
  }
 
- out.worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
+ out.worldNormal = worldNormal;
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
  out.texCoord = in.texCoord;
  out.animatedTexCoord = animateUV(in.texCoord, material);
  out.color = in.color;
 
- // Calculate view direction - extract camera world position from view matrix
- float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
-                                   uniforms.viewMatrix[1].xyz,
-                                   uniforms.viewMatrix[2].xyz);
- float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
- out.viewDirection = normalize(cameraPos - out.worldPosition);
+ // View direction already calculated above for edge attenuation
+ out.viewDirection = viewDir;
 
  return out;
 }

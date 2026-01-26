@@ -163,27 +163,34 @@ extension VRMRenderer {
             // Create vertex descriptor
             let vertexDescriptor = MTLVertexDescriptor()
 
+            // Use compiler-accurate offsets (fixes alignment padding issues)
+            let posOffset = MemoryLayout<VRMVertex>.offset(of: \.position)!
+            let normOffset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
+            let texOffset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
+            let colorOffset = MemoryLayout<VRMVertex>.offset(of: \.color)!
+            let stride = MemoryLayout<VRMVertex>.stride
+
             // Position
             vertexDescriptor.attributes[0].format = .float3
-            vertexDescriptor.attributes[0].offset = 0
+            vertexDescriptor.attributes[0].offset = posOffset
             vertexDescriptor.attributes[0].bufferIndex = 0
 
             // Normal
             vertexDescriptor.attributes[1].format = .float3
-            vertexDescriptor.attributes[1].offset = MemoryLayout<SIMD3<Float>>.size
+            vertexDescriptor.attributes[1].offset = normOffset
             vertexDescriptor.attributes[1].bufferIndex = 0
 
             // TexCoord
             vertexDescriptor.attributes[2].format = .float2
-            vertexDescriptor.attributes[2].offset = MemoryLayout<SIMD3<Float>>.size * 2
+            vertexDescriptor.attributes[2].offset = texOffset
             vertexDescriptor.attributes[2].bufferIndex = 0
 
             // Color
             vertexDescriptor.attributes[3].format = .float4
-            vertexDescriptor.attributes[3].offset = MemoryLayout<SIMD3<Float>>.size * 2 + MemoryLayout<SIMD2<Float>>.size
+            vertexDescriptor.attributes[3].offset = colorOffset
             vertexDescriptor.attributes[3].bufferIndex = 0
 
-            vertexDescriptor.layouts[0].stride = MemoryLayout<VRMVertex>.stride
+            vertexDescriptor.layouts[0].stride = stride
 
             // Create base pipeline descriptor
             let basePipelineDescriptor = MTLRenderPipelineDescriptor()
@@ -334,37 +341,51 @@ extension VRMRenderer {
             let vertexDescriptor = MTLVertexDescriptor()
 
             // 🎯 CRITICAL FIX: Use compiler-accurate offsets instead of manual calculations
+            let posOffset = MemoryLayout<VRMVertex>.offset(of: \.position)!
+            let normOffset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
+            let texOffset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
+            let colorOffset = MemoryLayout<VRMVertex>.offset(of: \.color)!
+            let jointsOffset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
+            let weightsOffset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
+            let stride = MemoryLayout<VRMVertex>.stride
+
+            // 📐 DIAGNOSTIC: Log actual offsets for debugging wedge artifact
+            vrmLog("📐 [VERTEX LAYOUT] MToon Skinned Pipeline:")
+            vrmLog("   position: \(posOffset), normal: \(normOffset), texCoord: \(texOffset)")
+            vrmLog("   color: \(colorOffset), joints: \(jointsOffset), weights: \(weightsOffset)")
+            vrmLog("   stride: \(stride)")
+
             // Position
             vertexDescriptor.attributes[0].format = .float3
-            vertexDescriptor.attributes[0].offset = MemoryLayout<VRMVertex>.offset(of: \.position)!
+            vertexDescriptor.attributes[0].offset = posOffset
             vertexDescriptor.attributes[0].bufferIndex = 0
 
             // Normal
             vertexDescriptor.attributes[1].format = .float3
-            vertexDescriptor.attributes[1].offset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
+            vertexDescriptor.attributes[1].offset = normOffset
             vertexDescriptor.attributes[1].bufferIndex = 0
 
             // TexCoord
             vertexDescriptor.attributes[2].format = .float2
-            vertexDescriptor.attributes[2].offset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
+            vertexDescriptor.attributes[2].offset = texOffset
             vertexDescriptor.attributes[2].bufferIndex = 0
 
             // Color
             vertexDescriptor.attributes[3].format = .float4
-            vertexDescriptor.attributes[3].offset = MemoryLayout<VRMVertex>.offset(of: \.color)!
+            vertexDescriptor.attributes[3].offset = colorOffset
             vertexDescriptor.attributes[3].bufferIndex = 0
 
             // Joints
-            vertexDescriptor.attributes[4].format = .ushort4
-            vertexDescriptor.attributes[4].offset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
+            vertexDescriptor.attributes[4].format = .uint4
+            vertexDescriptor.attributes[4].offset = jointsOffset
             vertexDescriptor.attributes[4].bufferIndex = 0
 
             // Weights
             vertexDescriptor.attributes[5].format = .float4
-            vertexDescriptor.attributes[5].offset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
+            vertexDescriptor.attributes[5].offset = weightsOffset
             vertexDescriptor.attributes[5].bufferIndex = 0
 
-            vertexDescriptor.layouts[0].stride = MemoryLayout<VRMVertex>.stride
+            vertexDescriptor.layouts[0].stride = stride
 
             // Create base skinned pipeline descriptor
             let basePipelineDescriptor = MTLRenderPipelineDescriptor()
@@ -508,27 +529,33 @@ extension VRMRenderer {
                 return
             }
 
-            // Create vertex descriptor (same as standard pipeline)
+            // Create vertex descriptor (use compiler-accurate offsets)
             let vertexDescriptor = MTLVertexDescriptor()
+
+            // Use compiler-accurate offsets (fixes alignment padding issues)
+            let posOffset = MemoryLayout<VRMVertex>.offset(of: \.position)!
+            let normOffset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
+            let texOffset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
+            let colorOffset = MemoryLayout<VRMVertex>.offset(of: \.color)!
 
             // Position
             vertexDescriptor.attributes[0].format = .float3
-            vertexDescriptor.attributes[0].offset = 0
+            vertexDescriptor.attributes[0].offset = posOffset
             vertexDescriptor.attributes[0].bufferIndex = 0
 
             // Normal
             vertexDescriptor.attributes[1].format = .float3
-            vertexDescriptor.attributes[1].offset = MemoryLayout<SIMD3<Float>>.size
+            vertexDescriptor.attributes[1].offset = normOffset
             vertexDescriptor.attributes[1].bufferIndex = 0
 
             // TexCoord
             vertexDescriptor.attributes[2].format = .float2
-            vertexDescriptor.attributes[2].offset = MemoryLayout<SIMD3<Float>>.size * 2
+            vertexDescriptor.attributes[2].offset = texOffset
             vertexDescriptor.attributes[2].bufferIndex = 0
 
             // Color
             vertexDescriptor.attributes[3].format = .float4
-            vertexDescriptor.attributes[3].offset = MemoryLayout<SIMD3<Float>>.size * 2 + MemoryLayout<SIMD2<Float>>.size
+            vertexDescriptor.attributes[3].offset = colorOffset
             vertexDescriptor.attributes[3].bufferIndex = 0
 
             vertexDescriptor.layouts[0].stride = MemoryLayout<VRMVertex>.stride
@@ -648,37 +675,51 @@ extension VRMRenderer {
             // Create vertex descriptor (with joints and weights)
             let vertexDescriptor = MTLVertexDescriptor()
 
+            // 📐 DIAGNOSTIC: Reuse offset calculations and log for Toon2D pipeline
+            let posOffset = MemoryLayout<VRMVertex>.offset(of: \.position)!
+            let normOffset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
+            let texOffset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
+            let colorOffset = MemoryLayout<VRMVertex>.offset(of: \.color)!
+            let jointsOffset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
+            let weightsOffset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
+            let stride = MemoryLayout<VRMVertex>.stride
+
+            vrmLog("📐 [VERTEX LAYOUT] Toon2D Skinned Pipeline:")
+            vrmLog("   position: \(posOffset), normal: \(normOffset), texCoord: \(texOffset)")
+            vrmLog("   color: \(colorOffset), joints: \(jointsOffset), weights: \(weightsOffset)")
+            vrmLog("   stride: \(stride)")
+
             // Position
             vertexDescriptor.attributes[0].format = .float3
-            vertexDescriptor.attributes[0].offset = MemoryLayout<VRMVertex>.offset(of: \.position)!
+            vertexDescriptor.attributes[0].offset = posOffset
             vertexDescriptor.attributes[0].bufferIndex = 0
 
             // Normal
             vertexDescriptor.attributes[1].format = .float3
-            vertexDescriptor.attributes[1].offset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
+            vertexDescriptor.attributes[1].offset = normOffset
             vertexDescriptor.attributes[1].bufferIndex = 0
 
             // TexCoord
             vertexDescriptor.attributes[2].format = .float2
-            vertexDescriptor.attributes[2].offset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
+            vertexDescriptor.attributes[2].offset = texOffset
             vertexDescriptor.attributes[2].bufferIndex = 0
 
             // Color
             vertexDescriptor.attributes[3].format = .float4
-            vertexDescriptor.attributes[3].offset = MemoryLayout<VRMVertex>.offset(of: \.color)!
+            vertexDescriptor.attributes[3].offset = colorOffset
             vertexDescriptor.attributes[3].bufferIndex = 0
 
             // Joints
-            vertexDescriptor.attributes[4].format = .ushort4
-            vertexDescriptor.attributes[4].offset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
+            vertexDescriptor.attributes[4].format = .uint4
+            vertexDescriptor.attributes[4].offset = jointsOffset
             vertexDescriptor.attributes[4].bufferIndex = 0
 
             // Weights
             vertexDescriptor.attributes[5].format = .float4
-            vertexDescriptor.attributes[5].offset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
+            vertexDescriptor.attributes[5].offset = weightsOffset
             vertexDescriptor.attributes[5].bufferIndex = 0
 
-            vertexDescriptor.layouts[0].stride = MemoryLayout<VRMVertex>.stride
+            vertexDescriptor.layouts[0].stride = stride
 
             // Create base pipeline descriptor for skinned main rendering
             let basePipelineDescriptor = MTLRenderPipelineDescriptor()

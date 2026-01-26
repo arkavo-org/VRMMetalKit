@@ -347,16 +347,28 @@ vertex VertexOut outline_vertex(
  // Extrude vertex along normal for outline
  float outlineWidth = material.outlineWidth;
 
+ // Calculate world position and camera direction for edge attenuation
+ float4 worldPosition = uniforms.modelMatrix * float4(in.position, 1.0);
+ float3 worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
+
+ // Extract camera world position from view matrix
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+
+ // Calculate view direction
+ float3 viewDir = normalize(cameraPos - worldPosition.xyz);
+
  // Scale by mode
  if (material.outlineMode == 1.0) {
  // World-space: constant thickness regardless of distance
  float3 extrudedPos = in.position + in.normal * outlineWidth;
- float4 worldPosition = uniforms.modelMatrix * float4(extrudedPos, 1.0);
+ worldPosition = uniforms.modelMatrix * float4(extrudedPos, 1.0);
  float4 viewPosition = uniforms.viewMatrix * worldPosition;
  out.position = uniforms.projectionMatrix * viewPosition;
  } else if (material.outlineMode == 2.0) {
  // Screen-space: thickness scales with distance
- float4 worldPosition = uniforms.modelMatrix * float4(in.position, 1.0);
  float4 viewPosition = uniforms.viewMatrix * worldPosition;
 
  // Transform normal to view space
@@ -368,7 +380,6 @@ vertex VertexOut outline_vertex(
  out.position = uniforms.projectionMatrix * viewPosition;
  } else {
  // No outline
- float4 worldPosition = uniforms.modelMatrix * float4(in.position, 1.0);
  float4 viewPosition = uniforms.viewMatrix * worldPosition;
  out.position = uniforms.projectionMatrix * viewPosition;
  }

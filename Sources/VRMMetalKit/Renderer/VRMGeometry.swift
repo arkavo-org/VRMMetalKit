@@ -159,15 +159,35 @@ public class VRMPrimitive {
         if let jointsAccessorIndex = gltfPrimitive.attributes["JOINTS_0"] {
             let joints = try bufferLoader.loadAccessorAsUInt32(jointsAccessorIndex)
             let jointCount = (joints.count / 4) * 4
+
+            // SANITIZE: Clamp sentinel values (65535, -1, etc.) to prevent vertex explosion
+            // VRM models typically have < 256 bones, so anything >= 256 is suspicious
+            let maxValidJoint: UInt32 = 255
+            var sanitizedCount = 0
+
             vertexData.joints = stride(from: 0, to: jointCount, by: 4).map { i in
-                SIMD4<UInt16>(UInt16(joints[i]), UInt16(joints[i+1]), UInt16(joints[i+2]), UInt16(joints[i+3]))
+                var j0 = joints[i]
+                var j1 = joints[i+1]
+                var j2 = joints[i+2]
+                var j3 = joints[i+3]
+
+                // Clamp out-of-bounds indices to 0 (root bone)
+                if j0 > maxValidJoint { j0 = 0; sanitizedCount += 1 }
+                if j1 > maxValidJoint { j1 = 0; sanitizedCount += 1 }
+                if j2 > maxValidJoint { j2 = 0; sanitizedCount += 1 }
+                if j3 > maxValidJoint { j3 = 0; sanitizedCount += 1 }
+
+                return SIMD4<UInt32>(j0, j1, j2, j3)
             }
 
-            // Compute required palette size from actual joint indices
-            let maxJoint = joints.max() ?? 0
+            // Compute required palette size from SANITIZED joint indices
+            let maxJoint = vertexData.joints.flatMap { [$0.x, $0.y, $0.z, $0.w] }.max() ?? 0
             primitive.requiredPaletteSize = Int(maxJoint) + 1
             primitive.hasJoints = true
 
+            if sanitizedCount > 0 {
+                vrmLog("[VRMPrimitive] ⚠️ SANITIZED \(sanitizedCount) out-of-bounds joint indices (sentinel values like 65535)")
+            }
             vrmLog("[VRMPrimitive] JOINTS_0 loaded: \(jointCount/4) vertices, maxJoint=\(maxJoint), requiredPalette=\(primitive.requiredPaletteSize)")
         }
 
@@ -601,7 +621,7 @@ struct VertexData {
     var texCoords: [SIMD2<Float>] = []
     var colors: [SIMD4<Float>] = []
     var tangents: [SIMD4<Float>] = []
-    var joints: [SIMD4<UInt16>] = []
+    var joints: [SIMD4<UInt32>] = []  // Changed to UInt32 to avoid truncation
     var weights: [SIMD4<Float>] = []
 
     func interleaved() -> [VRMVertex] {
@@ -646,7 +666,7 @@ public struct VRMVertex {
     public var normal: SIMD3<Float> = [0, 1, 0]
     public var texCoord: SIMD2<Float> = [0, 0]
     public var color: SIMD4<Float> = [1, 1, 1, 1]
-    public var joints: SIMD4<UInt16> = [0, 0, 0, 0]
+    public var joints: SIMD4<UInt32> = [0, 0, 0, 0]  // Changed to UInt32 to match shader uint4
     public var weights: SIMD4<Float> = [1, 0, 0, 0]
 }
 

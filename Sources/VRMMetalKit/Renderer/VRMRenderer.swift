@@ -2183,10 +2183,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
 
                         encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
-
-                        // Pass joint count at index 4 for bounds checking
-                        var jointCount = UInt32(skin.joints.count)
-                        encoder.setVertexBytes(&jointCount, length: MemoryLayout<UInt32>.size, index: 4)
                     }
                 } else {
                     // Skin index is out of range - this shouldn't happen
@@ -2211,11 +2207,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                            length: Self.zeroMorphWeights.count * MemoryLayout<Float>.size,
                                            index: ResourceIndices.morphWeightsBuffer)
 
-                    // Set null buffers for morph deltas (no longer needed)
-                    for i in 0..<8 {
-                        encoder.setVertexBuffer(nil, offset: 0, index: 4 + i)  // position deltas
-                        encoder.setVertexBuffer(nil, offset: 0, index: 12 + i) // normal deltas
-                    }
+                    // Morph deltas are no longer used (GPU compute path handles morphs)
+                    // Do NOT clear buffer indices here - it would overwrite jointCount (4),
+                    // morphedPositions (20), and other active bindings
                 }
 
                 // Pass vertex offset for proper morph buffer indexing
@@ -2912,7 +2906,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // Condition 2: Sample vertices to double-check
                         if let vertexBuffer = prim.vertexBuffer, prim.hasJoints {
                             let verts = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: min(10, prim.vertexCount))
-                            var sampleMaxJoint: UInt16 = 0
+                            var sampleMaxJoint: UInt32 = 0
                             let samplesToCheck = min(10, prim.vertexCount)
 
                             for i in 0..<samplesToCheck {
@@ -3264,6 +3258,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             encoder.setDepthStencilState(depthState)
         }
 
+        // Minimal depth bias for outlines - the real fix is proper vertex skinning
+        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+
         // Create Toon2D material for outlines
         var outlineMaterial = Toon2DMaterialCPU()
         outlineMaterial.outlineColorFactor = outlineColor
@@ -3347,6 +3344,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Restore default cull mode
         encoder.setCullMode(.back)
 
+        // Reset depth bias for subsequent render passes
+        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+
         // Restore depth state for subsequent render passes
         if let opaqueState = depthStencilStates["opaque"] {
             encoder.setDepthStencilState(opaqueState)
@@ -3380,6 +3380,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if let outlineDepthState = depthStencilStates["blend"] {
             encoder.setDepthStencilState(outlineDepthState)
         }
+
+        // Minimal depth bias for outlines - the real fix is proper vertex skinning
+        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
 
         var outlinesRendered = 0
 
@@ -3467,6 +3470,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Restore default cull mode
         encoder.setCullMode(.back)
+
+        // Reset depth bias for subsequent render passes
+        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
 
         // Restore depth state for subsequent render passes
         if let opaqueState = depthStencilStates["opaque"] {
