@@ -596,6 +596,7 @@ public class VRMExpressionController: @unchecked Sendable {
 
     // Expose per-mesh weights for renderer; pads/truncates to morphCount
     public func weightsForMesh(_ meshIndex: Int, morphCount: Int) -> [Float] {
+        guard morphCount > 0 else { return [] }
         let arr = meshMorphWeights[meshIndex] ?? []
         if arr.count >= morphCount { return Array(arr.prefix(morphCount)) }
         return arr + Array(repeating: 0.0, count: morphCount - arr.count)
