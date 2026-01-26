@@ -53,9 +53,25 @@ final class ZFightingFrameAnalysisTests: XCTestCase {
         renderer.loadModel(model)
     }
 
-    override func tearDown() {
-        model = nil
+    override func tearDown() async throws {
+        // Wait for GPU to complete any in-flight commands before releasing resources
+        if let commandQueue = commandQueue,
+           let buffer = commandQueue.makeCommandBuffer() {
+            buffer.commit()
+            await buffer.completed()
+        }
+
+        if let renderer = renderer,
+           let buffer = renderer.commandQueue.makeCommandBuffer() {
+            buffer.commit()
+            await buffer.completed()
+        }
+
+        // Small delay to allow Metal to finish any background cleanup
+        try await Task.sleep(nanoseconds: 10_000_000)  // 10ms
+
         renderer = nil
+        model = nil
         commandQueue = nil
         device = nil
     }
@@ -356,10 +372,11 @@ final class ZFightingFrameAnalysisTests: XCTestCase {
             "Stable pixel should not show alternating pattern")
     }
 
-    // MARK: - Camera Movement Tests
+    // MARK: - Camera Movement Analysis
 
-    func testZFightingDuringCameraMovement() {
-        // Z-fighting can change during camera movement due to depth precision changes
+    /// Analysis helper for Z-fighting risk at different camera distances
+    /// Not a test - run manually when needed for documentation
+    private func analyzeZFightingDuringCameraMovement() {
         let cameraDistances: [Float] = [1.0, 2.0, 5.0, 10.0, 20.0]
 
         print("\nZ-Fighting Risk at Different Camera Distances:")
@@ -386,8 +403,6 @@ final class ZFightingFrameAnalysisTests: XCTestCase {
 
             print(String(format: "%12.1f | %20.4f | %s", distance, precision * 1000, riskLevel))
         }
-
-        XCTAssertTrue(true, "Camera distance analysis completed")
     }
 
     // MARK: - Helper Functions
@@ -466,6 +481,7 @@ final class ZFightingFrameAnalysisTests: XCTestCase {
         // If most transitions are alternations, it's likely Z-fighting
         return Float(alternations) / Float(values.count - 2) > 0.6
     }
+
 }
 
 // MARK: - String Multiplication Helper
