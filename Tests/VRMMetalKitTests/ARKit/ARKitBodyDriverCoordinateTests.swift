@@ -442,6 +442,382 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
                       "Spine local rotation should be preserved (~0°) when parent is missing")
     }
 
+    // MARK: - Degenerate Matrix Tests (Vertex Explosion Bug)
+
+    /// Regression test: Degenerate matrix with near-zero scale produces NaN quaternion
+    ///
+    /// BUG: extractRotation() doesn't handle matrices with near-zero scale:
+    /// - If scaleX <= 0.0001, basisX is NOT normalized (keeps garbage values)
+    /// - simd_quatf(simd_float3x3) with degenerate matrix produces NaN
+    /// - NaN propagates to VRMNode.rotation, causing vertex explosion on GPU
+    ///
+    /// This test creates a degenerate matrix and verifies the driver produces
+    /// a VALID quaternion (not NaN, properly normalized).
+    func testDegenerateMatrixWithNearZeroScaleProducesValidQuaternion() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createTestHumanoidSetup()
+
+        // Create degenerate matrix with near-zero scale columns
+        // This simulates corrupted ARKit data or edge cases
+        var degenerateMatrix = simd_float4x4(1)  // Start with identity
+        // Set columns to near-zero values (below the 0.0001 threshold in extractRotation)
+        degenerateMatrix.columns.0 = SIMD4<Float>(0.00001, 0, 0, 0)
+        degenerateMatrix.columns.1 = SIMD4<Float>(0, 0.00001, 0, 0)
+        degenerateMatrix.columns.2 = SIMD4<Float>(0, 0, 0.00001, 0)
+
+        // Store initial rotation to detect if it was updated
+        let initialRotation = nodes[0].rotation
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [.hips: degenerateMatrix],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let rotation = nodes[0].rotation
+
+        // Print actual values for debugging
+        print("Initial rotation: w=\(initialRotation.real), x=\(initialRotation.imag.x), y=\(initialRotation.imag.y), z=\(initialRotation.imag.z)")
+        print("Final rotation: w=\(rotation.real), x=\(rotation.imag.x), y=\(rotation.imag.y), z=\(rotation.imag.z)")
+
+        // Verify the update actually changed the node (didn't silently skip)
+        // If it skipped, initial identity rotation would be preserved
+        let wasUpdated = rotation.real != initialRotation.real ||
+                        rotation.imag.x != initialRotation.imag.x ||
+                        rotation.imag.y != initialRotation.imag.y ||
+                        rotation.imag.z != initialRotation.imag.z
+        print("Was rotation updated: \(wasUpdated)")
+
+        // CRITICAL: Rotation must NOT be NaN
+        XCTAssertFalse(rotation.real.isNaN, "Quaternion real component should not be NaN (got \(rotation.real))")
+        XCTAssertFalse(rotation.imag.x.isNaN, "Quaternion X should not be NaN (got \(rotation.imag.x))")
+        XCTAssertFalse(rotation.imag.y.isNaN, "Quaternion Y should not be NaN (got \(rotation.imag.y))")
+        XCTAssertFalse(rotation.imag.z.isNaN, "Quaternion Z should not be NaN (got \(rotation.imag.z))")
+
+        // Quaternion should be normalized (length ≈ 1)
+        let length = sqrt(
+            rotation.real * rotation.real +
+            rotation.imag.x * rotation.imag.x +
+            rotation.imag.y * rotation.imag.y +
+            rotation.imag.z * rotation.imag.z
+        )
+        XCTAssertEqual(length, 1.0, accuracy: 0.001, "Quaternion should be normalized (got length \(length))")
+    }
+
+    /// Test: Zero matrix produces valid quaternion (not NaN/Infinity)
+    func testZeroMatrixProducesValidQuaternion() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createTestHumanoidSetup()
+
+        // Completely zero matrix (pathological case)
+        let zeroMatrix = simd_float4x4(0)
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [.hips: zeroMatrix],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let rotation = nodes[0].rotation
+
+        // Must not produce NaN or Infinity
+        XCTAssertFalse(rotation.real.isNaN, "Real should not be NaN for zero matrix")
+        XCTAssertFalse(rotation.real.isInfinite, "Real should not be Infinite")
+        XCTAssertFalse(rotation.imag.x.isNaN, "X should not be NaN")
+        XCTAssertFalse(rotation.imag.y.isNaN, "Y should not be NaN")
+        XCTAssertFalse(rotation.imag.z.isNaN, "Z should not be NaN")
+    }
+
+    /// Test: Matrix with non-orthonormal columns produces NORMALIZED quaternion
+    ///
+    /// When extractRotation normalizes columns, it should produce a proper rotation.
+    /// If normalization fails/skips, the resulting quaternion may have length != 1,
+    /// which causes scaling artifacts in GPU skinning (vertex explosion).
+    func testScaledMatrixProducesNormalizedQuaternion() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createTestHumanoidSetup()
+
+        // Create a rotation matrix with non-unit scale (scaled by 0.5)
+        // This is a valid 45° Y rotation with 0.5 scale
+        let angle = Float.pi / 4  // 45 degrees
+        let c = cos(angle) * 0.5
+        let s = sin(angle) * 0.5
+
+        var scaledMatrix = simd_float4x4(1)
+        scaledMatrix.columns.0 = SIMD4<Float>(c, 0, s, 0)   // X column (scaled)
+        scaledMatrix.columns.1 = SIMD4<Float>(0, 0.5, 0, 0) // Y column (scaled)
+        scaledMatrix.columns.2 = SIMD4<Float>(-s, 0, c, 0)  // Z column (scaled)
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [.hips: scaledMatrix],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let rotation = nodes[0].rotation
+        print("Scaled matrix result: w=\(rotation.real), x=\(rotation.imag.x), y=\(rotation.imag.y), z=\(rotation.imag.z)")
+
+        // Quaternion MUST be normalized (this is critical for GPU skinning)
+        let length = sqrt(
+            rotation.real * rotation.real +
+            rotation.imag.x * rotation.imag.x +
+            rotation.imag.y * rotation.imag.y +
+            rotation.imag.z * rotation.imag.z
+        )
+        print("Quaternion length: \(length)")
+        XCTAssertEqual(length, 1.0, accuracy: 0.001, "Quaternion MUST be normalized to prevent vertex explosion (got \(length))")
+    }
+
+    /// Test: Very small scale matrix produces normalized quaternion
+    ///
+    /// Scale values near zero but above the threshold may not be handled correctly.
+    func testVerySmallScaleMatrixProducesNormalizedQuaternion() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createTestHumanoidSetup()
+
+        // Scale just above the 0.0001 threshold - should trigger normalization
+        // but might produce very small normalized values -> degenerate quaternion
+        let smallScale: Float = 0.0002
+
+        var smallScaleMatrix = simd_float4x4(1)
+        smallScaleMatrix.columns.0 = SIMD4<Float>(smallScale, 0, 0, 0)
+        smallScaleMatrix.columns.1 = SIMD4<Float>(0, smallScale, 0, 0)
+        smallScaleMatrix.columns.2 = SIMD4<Float>(0, 0, smallScale, 0)
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [.hips: smallScaleMatrix],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let rotation = nodes[0].rotation
+        print("Small scale result: w=\(rotation.real), x=\(rotation.imag.x), y=\(rotation.imag.y), z=\(rotation.imag.z)")
+
+        // Check for NaN
+        XCTAssertFalse(rotation.real.isNaN, "Quaternion should not be NaN with small scale")
+        XCTAssertFalse(rotation.imag.x.isNaN, "X should not be NaN")
+        XCTAssertFalse(rotation.imag.y.isNaN, "Y should not be NaN")
+        XCTAssertFalse(rotation.imag.z.isNaN, "Z should not be NaN")
+
+        // Check normalized
+        let length = sqrt(
+            rotation.real * rotation.real +
+            rotation.imag.x * rotation.imag.x +
+            rotation.imag.y * rotation.imag.y +
+            rotation.imag.z * rotation.imag.z
+        )
+        print("Small scale quaternion length: \(length)")
+        XCTAssertEqual(length, 1.0, accuracy: 0.01, "Quaternion must be normalized (got \(length))")
+    }
+
+    /// Test: Matrix with mixed valid/invalid columns
+    func testPartiallyDegenerateMatrixProducesValidQuaternion() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createTestHumanoidSetup()
+
+        // Matrix with one zero column (degenerate)
+        var partialMatrix = simd_float4x4(1)
+        partialMatrix.columns.0 = SIMD4<Float>(0, 0, 0, 0)  // Zero X column
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [.hips: partialMatrix],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let rotation = nodes[0].rotation
+
+        XCTAssertFalse(rotation.real.isNaN, "Real should not be NaN for partial degenerate matrix")
+        XCTAssertFalse(rotation.imag.x.isNaN, "X should not be NaN")
+        XCTAssertFalse(rotation.imag.y.isNaN, "Y should not be NaN")
+        XCTAssertFalse(rotation.imag.z.isNaN, "Z should not be NaN")
+    }
+
+    /// Test: EMA smoothing with degenerate input doesn't produce NaN
+    ///
+    /// simd_slerp with bad quaternion inputs can produce NaN.
+    /// This tests the full pipeline with smoothing enabled.
+    func testSmoothingWithDegenerateInputProducesValidQuaternion() {
+        // Create driver WITH smoothing enabled (real production config)
+        let driver = ARKitBodyDriver(
+            mapper: .default,
+            smoothing: .default  // Uses EMA smoothing
+        )
+        let (nodes, humanoid) = createTestHumanoidSetup()
+
+        // First frame: valid rotation to initialize smoothing state
+        let validRotation = simd_quatf(angle: .pi / 4, axis: SIMD3<Float>(0, 1, 0))
+        let skeleton1 = ARKitBodySkeleton(
+            timestamp: 0.0,
+            joints: [.hips: simd_float4x4(validRotation)],
+            isTracked: true
+        )
+        driver.update(skeleton: skeleton1, nodes: nodes, humanoid: humanoid)
+
+        let rotation1 = nodes[0].rotation
+        print("After valid frame: w=\(rotation1.real), y=\(rotation1.imag.y)")
+        XCTAssertFalse(rotation1.real.isNaN, "Rotation should be valid after first frame")
+
+        // Second frame: degenerate matrix
+        var degenerateMatrix = simd_float4x4(1)
+        degenerateMatrix.columns.0 = SIMD4<Float>(0.00001, 0, 0, 0)
+        degenerateMatrix.columns.1 = SIMD4<Float>(0, 0.00001, 0, 0)
+        degenerateMatrix.columns.2 = SIMD4<Float>(0, 0, 0.00001, 0)
+
+        let skeleton2 = ARKitBodySkeleton(
+            timestamp: 1.0,
+            joints: [.hips: degenerateMatrix],
+            isTracked: true
+        )
+        driver.update(skeleton: skeleton2, nodes: nodes, humanoid: humanoid)
+
+        let rotation2 = nodes[0].rotation
+        print("After degenerate frame: w=\(rotation2.real), x=\(rotation2.imag.x), y=\(rotation2.imag.y), z=\(rotation2.imag.z)")
+
+        // Smoothing with simd_slerp might produce NaN if input is bad
+        XCTAssertFalse(rotation2.real.isNaN, "Rotation should not be NaN after smoothing degenerate input")
+        XCTAssertFalse(rotation2.imag.x.isNaN, "X should not be NaN")
+        XCTAssertFalse(rotation2.imag.y.isNaN, "Y should not be NaN")
+        XCTAssertFalse(rotation2.imag.z.isNaN, "Z should not be NaN")
+
+        // Check normalization
+        let length = simd_length(simd_float4(rotation2.imag.x, rotation2.imag.y, rotation2.imag.z, rotation2.real))
+        print("Quaternion length after smoothing: \(length)")
+        XCTAssertEqual(length, 1.0, accuracy: 0.01, "Quaternion must remain normalized after smoothing")
+    }
+
+    /// Test: Very large rotation values (potential overflow)
+    func testLargeRotationValuesProduceValidQuaternion() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createTestHumanoidSetup()
+
+        // Create matrix with very large values (potential overflow in calculations)
+        var largeMatrix = simd_float4x4(1)
+        let largeValue: Float = 1e6
+        largeMatrix.columns.0 = SIMD4<Float>(largeValue, 0, 0, 0)
+        largeMatrix.columns.1 = SIMD4<Float>(0, largeValue, 0, 0)
+        largeMatrix.columns.2 = SIMD4<Float>(0, 0, largeValue, 0)
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [.hips: largeMatrix],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let rotation = nodes[0].rotation
+        print("Large scale result: w=\(rotation.real), xyz=(\(rotation.imag.x), \(rotation.imag.y), \(rotation.imag.z))")
+
+        XCTAssertFalse(rotation.real.isNaN, "Real should not be NaN with large scale")
+        XCTAssertFalse(rotation.real.isInfinite, "Real should not be infinite")
+
+        let length = simd_length(simd_float4(rotation.imag.x, rotation.imag.y, rotation.imag.z, rotation.real))
+        XCTAssertEqual(length, 1.0, accuracy: 0.01, "Quaternion must be normalized")
+    }
+
+    // MARK: - VRMNode Matrix Conversion Tests
+
+    /// BUG TEST: Unnormalized quaternion causes scaling in rotation matrix
+    ///
+    /// The VRMNode.updateLocalMatrix() manually converts quaternion to matrix.
+    /// The formula assumes the quaternion is normalized (x²+y²+z²+w² = 1).
+    /// If the quaternion is NOT normalized, the matrix will scale/shear vertices,
+    /// causing "vertex explosion" on the GPU.
+    ///
+    /// This test verifies that after driver.update(), the resulting rotation
+    /// matrix has no scaling (diagonal elements should sum to 3 for pure rotation).
+    func testRotationMatrixHasNoScaling() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createTestHumanoidSetup()
+
+        // Apply a valid rotation
+        let rotation = simd_quatf(angle: .pi / 3, axis: SIMD3<Float>(0, 1, 0))
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [.hips: simd_float4x4(rotation)],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        // Get the local matrix from the node
+        let matrix = nodes[0].localMatrix
+
+        // For a pure rotation matrix (no scale), each column should have length 1
+        let col0Length = simd_length(SIMD3<Float>(matrix[0][0], matrix[0][1], matrix[0][2]))
+        let col1Length = simd_length(SIMD3<Float>(matrix[1][0], matrix[1][1], matrix[1][2]))
+        let col2Length = simd_length(SIMD3<Float>(matrix[2][0], matrix[2][1], matrix[2][2]))
+
+        print("Column lengths: \(col0Length), \(col1Length), \(col2Length)")
+
+        XCTAssertEqual(col0Length, 1.0, accuracy: 0.01, "Column 0 should have unit length (no scaling)")
+        XCTAssertEqual(col1Length, 1.0, accuracy: 0.01, "Column 1 should have unit length (no scaling)")
+        XCTAssertEqual(col2Length, 1.0, accuracy: 0.01, "Column 2 should have unit length (no scaling)")
+
+        // Also verify determinant is 1 (pure rotation, no reflection or scaling)
+        let det = simd_determinant(matrix)
+        print("Matrix determinant: \(det)")
+        XCTAssertEqual(det, 1.0, accuracy: 0.01, "Determinant should be 1 for pure rotation")
+    }
+
+    /// DOCUMENTATION TEST: VRMNode.updateLocalMatrix() trusts quaternion is normalized
+    ///
+    /// VRMNode does NOT normalize quaternions itself - it trusts the caller.
+    /// If an unnormalized quaternion is set directly, the rotation matrix will
+    /// have scaling artifacts, causing vertex explosion.
+    ///
+    /// The fix for this is in ARKitBodyDriver, which normalizes before applying.
+    /// This test documents the expected VRMNode behavior (not a bug in VRMNode itself).
+    func testVRMNodeTrustsNormalizedQuaternion() {
+        let (nodes, _) = createTestHumanoidSetup()
+        let node = nodes[0]
+
+        // Create an UNNORMALIZED quaternion (length = sqrt(2) ≈ 1.414)
+        let unnormalized = simd_quatf(ix: 0.0, iy: 1.0, iz: 0.0, r: 1.0)
+        let quatLength = simd_length(simd_float4(unnormalized.imag.x, unnormalized.imag.y, unnormalized.imag.z, unnormalized.real))
+        print("Unnormalized quaternion length: \(quatLength)")
+        XCTAssertNotEqual(quatLength, 1.0, accuracy: 0.1, "Quaternion should NOT be normalized for this test")
+
+        // Set the unnormalized quaternion directly on the node (bypassing driver)
+        node.rotation = unnormalized
+        node.updateLocalMatrix()
+
+        // Check matrix column lengths - they will NOT be 1.0
+        let matrix = node.localMatrix
+        let col0Length = simd_length(SIMD3<Float>(matrix[0][0], matrix[0][1], matrix[0][2]))
+        let col2Length = simd_length(SIMD3<Float>(matrix[2][0], matrix[2][1], matrix[2][2]))
+
+        print("Matrix column lengths with unnormalized quat: \(col0Length), _, \(col2Length)")
+
+        // This is EXPECTED behavior - VRMNode trusts caller to normalize
+        // Column lengths should be > 1 when quaternion length > 1
+        XCTAssertGreaterThan(col0Length, 1.0, "Unnormalized quat should cause scaling")
+        XCTAssertGreaterThan(col2Length, 1.0, "Unnormalized quat should cause scaling")
+
+        // Now verify that NORMALIZING the quaternion fixes the issue
+        let normalized = simd_normalize(unnormalized)
+        node.rotation = normalized
+        node.updateLocalMatrix()
+
+        let fixedMatrix = node.localMatrix
+        let fixedCol0Length = simd_length(SIMD3<Float>(fixedMatrix[0][0], fixedMatrix[0][1], fixedMatrix[0][2]))
+        let fixedCol2Length = simd_length(SIMD3<Float>(fixedMatrix[2][0], fixedMatrix[2][1], fixedMatrix[2][2]))
+
+        XCTAssertEqual(fixedCol0Length, 1.0, accuracy: 0.01, "Normalized quat should produce unit columns")
+        XCTAssertEqual(fixedCol2Length, 1.0, accuracy: 0.01, "Normalized quat should produce unit columns")
+    }
+
     // MARK: - Performance Tests
 
     func testDriverUpdatePerformance() {

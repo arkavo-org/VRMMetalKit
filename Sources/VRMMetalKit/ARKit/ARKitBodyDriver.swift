@@ -219,8 +219,22 @@ public final class ARKitBodyDriver: @unchecked Sendable {
                 smoothedRotation = localRotation
             }
 
+            // CRITICAL: Normalize quaternion to prevent vertex explosion
+            // VRMNode.updateLocalMatrix() converts quaternion to matrix using a formula
+            // that assumes the quaternion is normalized (x²+y²+z²+w² = 1).
+            // Unnormalized quaternions cause scaling artifacts in the rotation matrix,
+            // leading to mesh distortion ("vertex explosion") on the GPU.
+            let normalizedRotation = simd_normalize(smoothedRotation)
+
+            // Additional safety: Check for NaN (can occur with degenerate input)
+            if normalizedRotation.real.isNaN || normalizedRotation.imag.x.isNaN ||
+               normalizedRotation.imag.y.isNaN || normalizedRotation.imag.z.isNaN {
+                // Skip this joint - preserves previous valid rotation
+                continue
+            }
+
             // Apply rotation only (preserve node's rest position)
-            node.rotation = smoothedRotation
+            node.rotation = normalizedRotation
             node.updateLocalMatrix()
         }
 
