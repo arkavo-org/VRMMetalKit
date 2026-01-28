@@ -97,6 +97,31 @@ public final class ARKitBodyDriver: @unchecked Sendable {
     /// Lock for thread safety
     private let lock = NSLock()
 
+    /// Parent hierarchy for computing local rotations from world-space
+    static let arkitParentMap: [ARKitJoint: ARKitJoint] = [
+        .spine: .hips,
+        .chest: .spine,
+        .upperChest: .chest,
+        .neck: .upperChest,
+        .head: .neck,
+        .leftShoulder: .upperChest,
+        .leftUpperArm: .leftShoulder,
+        .leftLowerArm: .leftUpperArm,
+        .leftHand: .leftLowerArm,
+        .rightShoulder: .upperChest,
+        .rightUpperArm: .rightShoulder,
+        .rightLowerArm: .rightUpperArm,
+        .rightHand: .rightLowerArm,
+        .leftUpperLeg: .hips,
+        .leftLowerLeg: .leftUpperLeg,
+        .leftFoot: .leftLowerLeg,
+        .leftToes: .leftFoot,
+        .rightUpperLeg: .hips,
+        .rightLowerLeg: .rightUpperLeg,
+        .rightFoot: .rightLowerLeg,
+        .rightToes: .rightFoot,
+    ]
+
     public init(
         mapper: ARKitSkeletonMapper = .default,
         smoothing: SkeletonSmoothingConfig = .default,
@@ -176,28 +201,26 @@ public final class ARKitBodyDriver: @unchecked Sendable {
                 continue
             }
 
-            // Decompose transform matrix into TRS components
-            let (position, rotation, scale) = decomposeTransform(transform)
-
-            // Apply smoothing
-            let smoothedPosition: SIMD3<Float>
-            let smoothedRotation: simd_quatf
-
-            if let filter = filterManager {
-                let jointKey = vrmBoneName
-                smoothedPosition = filter.updatePosition(joint: jointKey, position: position)
-                smoothedRotation = filter.updateRotation(joint: jointKey, rotation: rotation)
-            } else {
-                smoothedPosition = position
-                smoothedRotation = rotation
+            // Compute local rotation with coordinate conversion
+            // Returns nil if parent transform is missing (skip to avoid incorrect pose)
+            guard let localRotation = computeLocalRotation(
+                joint: arkitJoint,
+                childTransform: transform,
+                skeleton: skeleton
+            ) else {
+                continue  // Skip joint when parent data is missing
             }
 
-            // Apply to VRM node
-            node.translation = smoothedPosition
-            node.rotation = smoothedRotation
-            node.scale = scale
+            // Apply smoothing
+            let smoothedRotation: simd_quatf
+            if let filter = filterManager {
+                smoothedRotation = filter.updateRotation(joint: vrmBoneName, rotation: localRotation)
+            } else {
+                smoothedRotation = localRotation
+            }
 
-            // Update local matrix
+            // Apply rotation only (preserve node's rest position)
+            node.rotation = smoothedRotation
             node.updateLocalMatrix()
         }
 
@@ -332,6 +355,69 @@ public final class ARKitBodyDriver: @unchecked Sendable {
         let rotation = simd_quatf(rotationMatrix)
 
         return (position, rotation, scale)
+    }
+
+    // MARK: - Coordinate System Conversion
+
+    /// Convert ARKit rotation to glTF/VRM coordinate system
+    /// Negates Z component to flip from ARKit (-Z forward) to glTF (+Z forward)
+    private func convertARKitToGLTF(_ rotation: simd_quatf) -> simd_quatf {
+        return simd_quatf(
+            ix: rotation.imag.x,
+            iy: rotation.imag.y,
+            iz: -rotation.imag.z, // Negate Z for axis flip
+            r: rotation.real
+        )
+    }
+
+    /// Compute local rotation from world-space transforms
+    ///
+    /// Returns `nil` if the joint has a parent in the hierarchy but that parent's
+    /// transform is missing from the skeleton data. This prevents incorrect poses
+    /// from using world rotation as local rotation.
+    private func computeLocalRotation(
+        joint: ARKitJoint,
+        childTransform: simd_float4x4,
+        skeleton: ARKitBodySkeleton
+    ) -> simd_quatf? {
+        let childRot = extractRotation(from: childTransform)
+
+        // Check if this joint has a parent in the hierarchy
+        guard let parentJoint = Self.arkitParentMap[joint] else {
+            // Root joint (hips) - use world rotation directly
+            return convertARKitToGLTF(childRot)
+        }
+
+        // Joint has a parent - require parent transform to compute local rotation
+        guard let parentTransform = skeleton.joints[parentJoint] else {
+            // Parent transform missing - skip this joint to avoid incorrect pose
+            return nil
+        }
+
+        // Compute local: inverse(parentWorld) * childWorld
+        let parentRot = extractRotation(from: parentTransform)
+        let localRot = simd_mul(simd_inverse(parentRot), childRot)
+        return convertARKitToGLTF(localRot)
+    }
+
+    /// Extract rotation quaternion from transform matrix (for local rotation computation)
+    private func extractRotation(from transform: simd_float4x4) -> simd_quatf {
+        var basisX = SIMD3<Float>(
+            transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
+        var basisY = SIMD3<Float>(
+            transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
+        var basisZ = SIMD3<Float>(
+            transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
+
+        let scaleX = length(basisX)
+        let scaleY = length(basisY)
+        let scaleZ = length(basisZ)
+
+        if scaleX > 0.0001 { basisX /= scaleX }
+        if scaleY > 0.0001 { basisY /= scaleY }
+        if scaleZ > 0.0001 { basisZ /= scaleZ }
+
+        return simd_quatf(simd_float3x3(basisX, basisY, basisZ))
     }
 
     // MARK: - Reset and Utilities
