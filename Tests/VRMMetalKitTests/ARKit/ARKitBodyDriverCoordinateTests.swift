@@ -31,6 +31,8 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
     // MARK: - Parent Hierarchy Validation Tests
 
     /// Test that parent hierarchy map contains all expected bone relationships
+    /// Note: ARKit body tracking doesn't provide shoulder joints, so upper arms
+    /// connect directly to upperChest instead of shoulders.
     func testParentHierarchyMapCompleteness() {
         let expectedMappings: [ARKitJoint: ARKitJoint] = [
             .spine: .hips,
@@ -39,11 +41,11 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
             .neck: .upperChest,
             .head: .neck,
             .leftShoulder: .upperChest,
-            .leftUpperArm: .leftShoulder,
+            .leftUpperArm: .upperChest,  // ARKit doesn't provide leftShoulder, connect directly to upperChest
             .leftLowerArm: .leftUpperArm,
             .leftHand: .leftLowerArm,
             .rightShoulder: .upperChest,
-            .rightUpperArm: .rightShoulder,
+            .rightUpperArm: .upperChest,  // ARKit doesn't provide rightShoulder, connect directly to upperChest
             .rightLowerArm: .rightUpperArm,
             .rightHand: .rightLowerArm,
             .leftUpperLeg: .hips,
@@ -102,8 +104,9 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
         XCTAssertEqual(nodes[0].rotation.imag.z, 0.0, accuracy: 0.001, "Z should be 0 (identity)")
     }
 
-    /// Test that Z-axis rotation has Z component negated after coordinate conversion
-    func testZAxisRotationNegatesZComponent() {
+    /// Test that Z-axis rotation preserves Z component after coordinate conversion
+    /// (Z-axis reflection: negate X and Y, keep Z unchanged)
+    func testZAxisRotationPreservesZComponent() {
         let driver = createDriver()
         let (nodes, humanoid) = createTestHumanoidSetup()
 
@@ -119,23 +122,24 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
 
         driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
 
-        // Z should be negated, X and Y unchanged
-        XCTAssertEqual(nodes[0].rotation.imag.z, -rotZ45.imag.z, accuracy: 0.001,
-                      "Z component should be negated")
-        XCTAssertEqual(nodes[0].rotation.imag.x, rotZ45.imag.x, accuracy: 0.001,
-                      "X component should be unchanged")
-        XCTAssertEqual(nodes[0].rotation.imag.y, rotZ45.imag.y, accuracy: 0.001,
-                      "Y component should be unchanged")
+        // For Z-axis reflection: X and Y are negated, Z unchanged
+        // For pure Z rotation: X≈0, Y≈0, so negation has no visible effect
+        XCTAssertEqual(nodes[0].rotation.imag.z, rotZ45.imag.z, accuracy: 0.001,
+                      "Z component should be preserved")
+        XCTAssertEqual(nodes[0].rotation.imag.x, -rotZ45.imag.x, accuracy: 0.001,
+                      "X component should be negated (but was ~0)")
+        XCTAssertEqual(nodes[0].rotation.imag.y, -rotZ45.imag.y, accuracy: 0.001,
+                      "Y component should be negated (but was ~0)")
         XCTAssertEqual(nodes[0].rotation.real, rotZ45.real, accuracy: 0.001,
                       "Real component should be unchanged")
     }
 
-    /// Test that Y-axis rotation (which has Z≈0) passes through correctly
-    func testYAxisRotationPreserved() {
+    /// Test that Y-axis rotation has Y component negated after coordinate conversion
+    func testYAxisRotationNegatesYComponent() {
         let driver = createDriver()
         let (nodes, humanoid) = createTestHumanoidSetup()
 
-        // 90° rotation around Y axis - Z component is 0, so negation has no effect
+        // 90° rotation around Y axis - Y component should be negated
         let rotY90 = simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(0, 1, 0))
         let transform = simd_float4x4(rotY90)
 
@@ -147,18 +151,18 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
 
         driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
 
-        // For pure Y rotation, Z≈0 so output ≈ input
-        XCTAssertEqual(nodes[0].rotation.imag.y, rotY90.imag.y, accuracy: 0.001,
-                      "Y component should be preserved")
+        // For Z-axis reflection: Y component is negated
+        XCTAssertEqual(nodes[0].rotation.imag.y, -rotY90.imag.y, accuracy: 0.001,
+                      "Y component should be negated")
         XCTAssertEqual(nodes[0].rotation.real, rotY90.real, accuracy: 0.001,
                       "Real component should be preserved")
-        // Z was 0, negated is still 0
+        // Z was 0, remains 0
         XCTAssertEqual(nodes[0].rotation.imag.z, 0.0, accuracy: 0.001,
                       "Z should remain near zero")
     }
 
-    /// Test that X-axis rotation has Z component negated
-    func testXAxisRotationNegatesZComponent() {
+    /// Test that X-axis rotation has X component negated after coordinate conversion
+    func testXAxisRotationNegatesXComponent() {
         let driver = createDriver()
         let (nodes, humanoid) = createTestHumanoidSetup()
 
@@ -174,15 +178,16 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
 
         driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
 
-        // X rotation quaternion has Z=0, so negation doesn't change it
-        XCTAssertEqual(nodes[0].rotation.imag.x, rotX30.imag.x, accuracy: 0.001,
-                      "X component should be preserved")
-        XCTAssertEqual(nodes[0].rotation.imag.z, -rotX30.imag.z, accuracy: 0.001,
-                      "Z component should be negated (but was ~0)")
+        // For Z-axis reflection: X component is negated
+        XCTAssertEqual(nodes[0].rotation.imag.x, -rotX30.imag.x, accuracy: 0.001,
+                      "X component should be negated")
+        // Z was ~0, remains ~0
+        XCTAssertEqual(nodes[0].rotation.imag.z, rotX30.imag.z, accuracy: 0.001,
+                      "Z component should be preserved (was ~0)")
     }
 
-    /// Test combined rotation with all axes
-    func testCombinedRotationNegatesOnlyZ() {
+    /// Test combined rotation with all axes - X and Y negated, Z preserved
+    func testCombinedRotationNegatesXYOnly() {
         let driver = createDriver()
         let (nodes, humanoid) = createTestHumanoidSetup()
 
@@ -199,9 +204,10 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
 
         driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
 
-        XCTAssertEqual(nodes[0].rotation.imag.x, 0.5, accuracy: 0.001, "X unchanged")
-        XCTAssertEqual(nodes[0].rotation.imag.y, 0.5, accuracy: 0.001, "Y unchanged")
-        XCTAssertEqual(nodes[0].rotation.imag.z, -0.5, accuracy: 0.001, "Z negated")
+        // For Z-axis reflection: X and Y negated, Z and W preserved
+        XCTAssertEqual(nodes[0].rotation.imag.x, -0.5, accuracy: 0.001, "X negated")
+        XCTAssertEqual(nodes[0].rotation.imag.y, -0.5, accuracy: 0.001, "Y negated")
+        XCTAssertEqual(nodes[0].rotation.imag.z, 0.5, accuracy: 0.001, "Z preserved")
         XCTAssertEqual(nodes[0].rotation.real, 0.5, accuracy: 0.001, "Real unchanged")
     }
 
@@ -274,7 +280,7 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
                       "Spine local rotation should be ~45° (90° world - 45° parent)")
     }
 
-    /// Test that root joint (hips) uses world rotation directly
+    /// Test that root joint (hips) uses world rotation directly with coordinate conversion
     func testRootJointUsesWorldRotation() {
         let driver = createDriver()
         let (nodes, humanoid) = createSpineHierarchySetup()
@@ -290,10 +296,10 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
 
         driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
 
-        // Hips should get world rotation directly (with Z negated, but Z≈0 for Y rotation)
+        // Hips should get world rotation with Z-axis reflection (Y negated)
         let hipsNode = nodes[0]
-        XCTAssertEqual(hipsNode.rotation.imag.y, hipsRot.imag.y, accuracy: 0.001,
-                      "Hips should use world rotation Y component")
+        XCTAssertEqual(hipsNode.rotation.imag.y, -hipsRot.imag.y, accuracy: 0.001,
+                      "Hips should use world rotation Y component (negated for Z-axis reflection)")
         XCTAssertEqual(hipsNode.rotation.real, hipsRot.real, accuracy: 0.001,
                       "Hips should use world rotation real component")
     }
@@ -816,6 +822,394 @@ final class ARKitBodyDriverCoordinateTests: XCTestCase {
 
         XCTAssertEqual(fixedCol0Length, 1.0, accuracy: 0.01, "Normalized quat should produce unit columns")
         XCTAssertEqual(fixedCol2Length, 1.0, accuracy: 0.01, "Normalized quat should produce unit columns")
+    }
+
+    // MARK: - T-Pose Tests (ARKit Landscape Mode)
+
+    /// Test that T-pose input produces symmetric leg rotations
+    /// In T-pose, both legs should have the same local rotation (both pointing down)
+    func testTPoseLegSymmetry() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createFullBodySetup()
+
+        // Simulate T-pose from ARKit (phone in landscape)
+        // In T-pose, hips and legs have similar world orientations
+        let tPoseHipsRot = simd_quatf(real: 1.0, imag: SIMD3<Float>(0, 0, 0))  // Identity
+
+        // Both legs pointing down - similar world rotation to hips
+        let leftLegRot = simd_quatf(real: 1.0, imag: SIMD3<Float>(0, 0, 0))
+        let rightLegRot = simd_quatf(real: 1.0, imag: SIMD3<Float>(0, 0, 0))
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [
+                .hips: simd_float4x4(tPoseHipsRot),
+                .leftUpperLeg: simd_float4x4(leftLegRot),
+                .rightUpperLeg: simd_float4x4(rightLegRot)
+            ],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let leftLegNode = nodes[1]   // leftUpperLeg
+        let rightLegNode = nodes[2]  // rightUpperLeg
+
+        // Both legs should have similar local rotations in T-pose
+        // Allow some tolerance for coordinate conversion
+        XCTAssertEqual(leftLegNode.rotation.real, rightLegNode.rotation.real, accuracy: 0.1,
+                      "Left and right leg w should match in T-pose")
+
+        // The X component (flexion) should have same magnitude
+        // (may differ in sign due to left/right mirroring)
+        XCTAssertEqual(abs(leftLegNode.rotation.imag.x), abs(rightLegNode.rotation.imag.x), accuracy: 0.1,
+                      "Left and right leg X magnitude should match")
+
+        print("T-Pose leg rotations:")
+        print("  Left:  w=\(leftLegNode.rotation.real), x=\(leftLegNode.rotation.imag.x), y=\(leftLegNode.rotation.imag.y), z=\(leftLegNode.rotation.imag.z)")
+        print("  Right: w=\(rightLegNode.rotation.real), x=\(rightLegNode.rotation.imag.x), y=\(rightLegNode.rotation.imag.y), z=\(rightLegNode.rotation.imag.z)")
+    }
+
+    /// Test that T-pose produces near-identity local rotations
+    /// When ARKit reports identity world rotations for parent and child,
+    /// the local rotation should be identity
+    func testTPoseIdentityInput() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createFullBodySetup()
+
+        // All joints at identity (simplest T-pose)
+        let identity = simd_float4x4(1)
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [
+                .hips: identity,
+                .leftUpperLeg: identity,
+                .rightUpperLeg: identity
+            ],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let leftLegNode = nodes[1]
+        let rightLegNode = nodes[2]
+
+        print("Identity input leg rotations:")
+        print("  Left:  w=\(leftLegNode.rotation.real), x=\(leftLegNode.rotation.imag.x), y=\(leftLegNode.rotation.imag.y), z=\(leftLegNode.rotation.imag.z)")
+        print("  Right: w=\(rightLegNode.rotation.real), x=\(rightLegNode.rotation.imag.x), y=\(rightLegNode.rotation.imag.y), z=\(rightLegNode.rotation.imag.z)")
+
+        // Local rotation should be identity when child matches parent
+        // (local = inverse(parent) * child = inverse(identity) * identity = identity)
+        XCTAssertEqual(leftLegNode.rotation.real, 1.0, accuracy: 0.01,
+                      "Left leg local rotation should be identity (w=1)")
+        XCTAssertEqual(rightLegNode.rotation.real, 1.0, accuracy: 0.01,
+                      "Right leg local rotation should be identity (w=1)")
+    }
+
+    /// Test realistic ARKit T-pose data
+    /// Based on actual logs from iPhone in landscape mode
+    func testRealisticTPoseData() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createFullBodySetup()
+
+        // Realistic T-pose values observed from ARKit (from logs)
+        // Hips near identity with slight variation
+        let hipsRot = simd_quatf(real: 0.995, imag: SIMD3<Float>(0.097, -0.001, -0.010))
+
+        // Right leg - values from actual T-pose
+        let rightLegRot = simd_quatf(real: 0.550, imag: SIMD3<Float>(0.493, 0.447, 0.504))
+
+        // Left leg - values from actual T-pose (note different pattern)
+        let leftLegRot = simd_quatf(real: 0.486, imag: SIMD3<Float>(-0.509, 0.526, -0.478))
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [
+                .hips: simd_float4x4(hipsRot),
+                .leftUpperLeg: simd_float4x4(leftLegRot),
+                .rightUpperLeg: simd_float4x4(rightLegRot)
+            ],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let hipsNode = nodes[0]
+        let leftLegNode = nodes[1]
+        let rightLegNode = nodes[2]
+
+        print("\nRealistic T-pose output:")
+        print("  Hips:  w=\(hipsNode.rotation.real), x=\(hipsNode.rotation.imag.x), y=\(hipsNode.rotation.imag.y), z=\(hipsNode.rotation.imag.z)")
+        print("  Left:  w=\(leftLegNode.rotation.real), x=\(leftLegNode.rotation.imag.x), y=\(leftLegNode.rotation.imag.y), z=\(leftLegNode.rotation.imag.z)")
+        print("  Right: w=\(rightLegNode.rotation.real), x=\(rightLegNode.rotation.imag.x), y=\(rightLegNode.rotation.imag.y), z=\(rightLegNode.rotation.imag.z)")
+
+        // In a working system, both legs should produce similar local rotations
+        // that result in legs pointing DOWN in VRM space
+
+        // For now, just document what we get - this helps us iterate
+        // TODO: Add assertions once we know the correct expected values
+    }
+
+    /// Test that leg flexion (raising leg forward) works correctly
+    func testLegFlexion() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createFullBodySetup()
+
+        // Hips at identity
+        let hipsRot = simd_quatf(real: 1.0, imag: SIMD3<Float>(0, 0, 0))
+
+        // Right leg flexed 45° forward (rotation around X axis in local space)
+        // In ARKit, this would show as a different world rotation
+        let flexAngle: Float = .pi / 4  // 45 degrees
+        let rightLegRot = simd_quatf(angle: flexAngle, axis: SIMD3<Float>(1, 0, 0))
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [
+                .hips: simd_float4x4(hipsRot),
+                .rightUpperLeg: simd_float4x4(rightLegRot)
+            ],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let rightLegNode = nodes[2]
+
+        print("\nLeg flexion test:")
+        print("  Input: 45° around X")
+        print("  Output: w=\(rightLegNode.rotation.real), x=\(rightLegNode.rotation.imag.x), y=\(rightLegNode.rotation.imag.y), z=\(rightLegNode.rotation.imag.z)")
+
+        // The output should represent a 45° rotation
+        let outputAngle = 2 * acos(min(abs(rightLegNode.rotation.real), 1.0))
+        print("  Output angle: \(outputAngle * 180 / .pi)°")
+
+        XCTAssertEqual(outputAngle, flexAngle, accuracy: 0.1,
+                      "Leg flexion angle should be preserved")
+    }
+
+    // MARK: - Arm Tests
+
+    /// Test that T-pose arms have symmetric rotations
+    func testTPoseArmSymmetry() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createFullBodyWithArmsSetup()
+
+        // T-pose: arms extended horizontally
+        // In ARKit, arms pointing out have specific world rotations
+        let identity = simd_float4x4(1)
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [
+                .hips: identity,
+                .spine: identity,
+                .chest: identity,
+                .upperChest: identity,
+                .leftShoulder: identity,
+                .rightShoulder: identity,
+                .leftUpperArm: identity,
+                .rightUpperArm: identity
+            ],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let leftArmNode = nodes[5]   // leftUpperArm
+        let rightArmNode = nodes[6]  // rightUpperArm
+
+        print("\nT-Pose arm rotations (identity input):")
+        print("  Left arm:  w=\(leftArmNode.rotation.real), x=\(leftArmNode.rotation.imag.x), y=\(leftArmNode.rotation.imag.y), z=\(leftArmNode.rotation.imag.z)")
+        print("  Right arm: w=\(rightArmNode.rotation.real), x=\(rightArmNode.rotation.imag.x), y=\(rightArmNode.rotation.imag.y), z=\(rightArmNode.rotation.imag.z)")
+
+        // Both arms should have similar local rotations
+        XCTAssertEqual(leftArmNode.rotation.real, rightArmNode.rotation.real, accuracy: 0.1,
+                      "Left and right arm w should match in T-pose")
+    }
+
+    /// Test realistic arm data from ARKit T-pose
+    func testRealisticTPoseArmData() {
+        let driver = createDriver()
+        let (nodes, humanoid) = createFullBodyWithArmsSetup()
+
+        // Simulate realistic ARKit T-pose data
+        // Hips near identity
+        let hipsRot = simd_quatf(real: 0.995, imag: SIMD3<Float>(0.097, -0.001, -0.010))
+
+        // Upper chest (parent of shoulders)
+        let upperChestRot = simd_quatf(real: 0.99, imag: SIMD3<Float>(0.1, 0, 0))
+
+        // Arms in T-pose - extended horizontally
+        // These are approximate values - real data will vary
+        let leftArmRot = simd_quatf(real: 0.7, imag: SIMD3<Float>(-0.1, 0.7, -0.1))
+        let rightArmRot = simd_quatf(real: 0.7, imag: SIMD3<Float>(0.1, 0.7, 0.1))
+
+        let skeleton = ARKitBodySkeleton(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            joints: [
+                .hips: simd_float4x4(hipsRot),
+                .spine: simd_float4x4(hipsRot),
+                .chest: simd_float4x4(hipsRot),
+                .upperChest: simd_float4x4(upperChestRot),
+                .leftShoulder: simd_float4x4(upperChestRot),
+                .rightShoulder: simd_float4x4(upperChestRot),
+                .leftUpperArm: simd_float4x4(leftArmRot),
+                .rightUpperArm: simd_float4x4(rightArmRot)
+            ],
+            isTracked: true
+        )
+
+        driver.update(skeleton: skeleton, nodes: nodes, humanoid: humanoid)
+
+        let leftArmNode = nodes[5]
+        let rightArmNode = nodes[6]
+
+        print("\nRealistic T-pose arm output:")
+        print("  Left arm:  w=\(leftArmNode.rotation.real), x=\(leftArmNode.rotation.imag.x), y=\(leftArmNode.rotation.imag.y), z=\(leftArmNode.rotation.imag.z)")
+        print("  Right arm: w=\(rightArmNode.rotation.real), x=\(rightArmNode.rotation.imag.x), y=\(rightArmNode.rotation.imag.y), z=\(rightArmNode.rotation.imag.z)")
+    }
+
+    // MARK: - Helper: Full Body Setup with Arms
+
+    /// Creates a test setup with hips, spine chain, and both arms
+    private func createFullBodyWithArmsSetup() -> ([VRMNode], VRMHumanoid) {
+        // Node indices:
+        // 0: hips, 1: spine, 2: chest, 3: upperChest
+        // 4: leftShoulder, 5: leftUpperArm
+        // 6: rightShoulder, 7: rightUpperArm
+        // 8: leftUpperLeg, 9: rightUpperLeg
+
+        let hipsGltf = GLTFNode(name: "hips", children: [1, 8, 9], matrix: nil,
+            translation: [0, 1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+        let spineGltf = GLTFNode(name: "spine", children: [2], matrix: nil,
+            translation: [0, 0.1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+        let chestGltf = GLTFNode(name: "chest", children: [3], matrix: nil,
+            translation: [0, 0.1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+        let upperChestGltf = GLTFNode(name: "upperChest", children: [4, 6], matrix: nil,
+            translation: [0, 0.1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+
+        let leftShoulderGltf = GLTFNode(name: "leftShoulder", children: [5], matrix: nil,
+            translation: [0.05, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+        let leftUpperArmGltf = GLTFNode(name: "leftUpperArm", children: nil, matrix: nil,
+            translation: [0.1, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+
+        let rightShoulderGltf = GLTFNode(name: "rightShoulder", children: [7], matrix: nil,
+            translation: [-0.05, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+        let rightUpperArmGltf = GLTFNode(name: "rightUpperArm", children: nil, matrix: nil,
+            translation: [-0.1, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+
+        let leftLegGltf = GLTFNode(name: "leftUpperLeg", children: nil, matrix: nil,
+            translation: [0.1, -0.1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+        let rightLegGltf = GLTFNode(name: "rightUpperLeg", children: nil, matrix: nil,
+            translation: [-0.1, -0.1, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1], mesh: nil, skin: nil, weights: nil)
+
+        let hipsNode = VRMNode(index: 0, gltfNode: hipsGltf)
+        let spineNode = VRMNode(index: 1, gltfNode: spineGltf)
+        let chestNode = VRMNode(index: 2, gltfNode: chestGltf)
+        let upperChestNode = VRMNode(index: 3, gltfNode: upperChestGltf)
+        let leftShoulderNode = VRMNode(index: 4, gltfNode: leftShoulderGltf)
+        let leftUpperArmNode = VRMNode(index: 5, gltfNode: leftUpperArmGltf)
+        let rightShoulderNode = VRMNode(index: 6, gltfNode: rightShoulderGltf)
+        let rightUpperArmNode = VRMNode(index: 7, gltfNode: rightUpperArmGltf)
+        let leftLegNode = VRMNode(index: 8, gltfNode: leftLegGltf)
+        let rightLegNode = VRMNode(index: 9, gltfNode: rightLegGltf)
+
+        // Set up hierarchy
+        spineNode.parent = hipsNode
+        chestNode.parent = spineNode
+        upperChestNode.parent = chestNode
+        leftShoulderNode.parent = upperChestNode
+        leftUpperArmNode.parent = leftShoulderNode
+        rightShoulderNode.parent = upperChestNode
+        rightUpperArmNode.parent = rightShoulderNode
+        leftLegNode.parent = hipsNode
+        rightLegNode.parent = hipsNode
+
+        hipsNode.children = [spineNode, leftLegNode, rightLegNode]
+        spineNode.children = [chestNode]
+        chestNode.children = [upperChestNode]
+        upperChestNode.children = [leftShoulderNode, rightShoulderNode]
+        leftShoulderNode.children = [leftUpperArmNode]
+        rightShoulderNode.children = [rightUpperArmNode]
+
+        let nodes = [hipsNode, spineNode, chestNode, upperChestNode,
+                     leftShoulderNode, leftUpperArmNode, rightShoulderNode, rightUpperArmNode,
+                     leftLegNode, rightLegNode]
+
+        let humanoid = VRMHumanoid()
+        humanoid.humanBones[.hips] = VRMHumanoid.VRMHumanBone(node: 0)
+        humanoid.humanBones[.spine] = VRMHumanoid.VRMHumanBone(node: 1)
+        humanoid.humanBones[.chest] = VRMHumanoid.VRMHumanBone(node: 2)
+        humanoid.humanBones[.upperChest] = VRMHumanoid.VRMHumanBone(node: 3)
+        humanoid.humanBones[.leftShoulder] = VRMHumanoid.VRMHumanBone(node: 4)
+        humanoid.humanBones[.leftUpperArm] = VRMHumanoid.VRMHumanBone(node: 5)
+        humanoid.humanBones[.rightShoulder] = VRMHumanoid.VRMHumanBone(node: 6)
+        humanoid.humanBones[.rightUpperArm] = VRMHumanoid.VRMHumanBone(node: 7)
+        humanoid.humanBones[.leftUpperLeg] = VRMHumanoid.VRMHumanBone(node: 8)
+        humanoid.humanBones[.rightUpperLeg] = VRMHumanoid.VRMHumanBone(node: 9)
+
+        return (nodes, humanoid)
+    }
+
+    // MARK: - Helper: Full Body Setup
+
+    /// Creates a test setup with hips and both upper legs
+    private func createFullBodySetup() -> ([VRMNode], VRMHumanoid) {
+        let hipsGltf = GLTFNode(
+            name: "hips",
+            children: [1, 2],
+            matrix: nil,
+            translation: [0, 1, 0],
+            rotation: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+            mesh: nil,
+            skin: nil,
+            weights: nil
+        )
+
+        let leftLegGltf = GLTFNode(
+            name: "leftUpperLeg",
+            children: nil,
+            matrix: nil,
+            translation: [0.1, -0.1, 0],
+            rotation: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+            mesh: nil,
+            skin: nil,
+            weights: nil
+        )
+
+        let rightLegGltf = GLTFNode(
+            name: "rightUpperLeg",
+            children: nil,
+            matrix: nil,
+            translation: [-0.1, -0.1, 0],
+            rotation: [0, 0, 0, 1],
+            scale: [1, 1, 1],
+            mesh: nil,
+            skin: nil,
+            weights: nil
+        )
+
+        let hipsNode = VRMNode(index: 0, gltfNode: hipsGltf)
+        let leftLegNode = VRMNode(index: 1, gltfNode: leftLegGltf)
+        let rightLegNode = VRMNode(index: 2, gltfNode: rightLegGltf)
+
+        // Set up parent-child relationships
+        leftLegNode.parent = hipsNode
+        rightLegNode.parent = hipsNode
+        hipsNode.children = [leftLegNode, rightLegNode]
+
+        let nodes = [hipsNode, leftLegNode, rightLegNode]
+
+        let humanoid = VRMHumanoid()
+        humanoid.humanBones[.hips] = VRMHumanoid.VRMHumanBone(node: 0)
+        humanoid.humanBones[.leftUpperLeg] = VRMHumanoid.VRMHumanBone(node: 1)
+        humanoid.humanBones[.rightUpperLeg] = VRMHumanoid.VRMHumanBone(node: 2)
+
+        return (nodes, humanoid)
     }
 
     // MARK: - Performance Tests

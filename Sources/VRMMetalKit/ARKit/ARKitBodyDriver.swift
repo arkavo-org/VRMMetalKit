@@ -105,11 +105,11 @@ public final class ARKitBodyDriver: @unchecked Sendable {
         .neck: .upperChest,
         .head: .neck,
         .leftShoulder: .upperChest,
-        .leftUpperArm: .leftShoulder,
+        .leftUpperArm: .upperChest,  // ARKit doesn't provide leftShoulder, connect directly to upperChest
         .leftLowerArm: .leftUpperArm,
         .leftHand: .leftLowerArm,
         .rightShoulder: .upperChest,
-        .rightUpperArm: .rightShoulder,
+        .rightUpperArm: .upperChest,  // ARKit doesn't provide rightShoulder, connect directly to upperChest
         .rightLowerArm: .rightUpperArm,
         .rightHand: .rightLowerArm,
         .leftUpperLeg: .hips,
@@ -188,6 +188,14 @@ public final class ARKitBodyDriver: @unchecked Sendable {
         }
         let humanoidNodes = cachedHumanoidNodes ?? [:]
 
+        // Log skeleton contents periodically
+        #if DEBUG
+        if updateCount % 60 == 0 {
+            let joints = skeleton.joints.keys.map { $0.rawValue }.sorted()
+            print("[BodyDriver] Skeleton has \(joints.count) joints: \(joints.joined(separator: ", "))")
+        }
+        #endif
+
         // Retarget each ARKit joint to VRM bone
         for (arkitJoint, transform) in skeleton.joints {
             // Get VRM bone name from mapper
@@ -201,6 +209,17 @@ public final class ARKitBodyDriver: @unchecked Sendable {
                 continue
             }
 
+            // Debug: Log joint rotations (every 30 frames)
+            #if DEBUG
+            if updateCount % 30 == 0 {
+                let logJoints: Set<ARKitJoint> = [.hips, .leftUpperLeg, .rightUpperLeg, .leftUpperArm, .rightUpperArm]
+                if logJoints.contains(arkitJoint) {
+                    let inputRot = extractRotation(from: transform)
+                    print("[BodyDriver] \(arkitJoint) INPUT: w=\(String(format: "%.3f", inputRot.real)), x=\(String(format: "%.3f", inputRot.imag.x)), y=\(String(format: "%.3f", inputRot.imag.y)), z=\(String(format: "%.3f", inputRot.imag.z))")
+                }
+            }
+            #endif
+
             // Compute local rotation with coordinate conversion
             // Returns nil if parent transform is missing (skip to avoid incorrect pose)
             guard let localRotation = computeLocalRotation(
@@ -208,8 +227,28 @@ public final class ARKitBodyDriver: @unchecked Sendable {
                 childTransform: transform,
                 skeleton: skeleton
             ) else {
+                #if DEBUG
+                if updateCount % 30 == 0 {
+                    let logJoints: Set<ARKitJoint> = [.leftUpperArm, .rightUpperArm, .leftShoulder, .rightShoulder]
+                    if logJoints.contains(arkitJoint) {
+                        if let parentJoint = Self.arkitParentMap[arkitJoint] {
+                            print("[BodyDriver] \(arkitJoint) SKIPPED - missing parent: \(parentJoint)")
+                        }
+                    }
+                }
+                #endif
                 continue  // Skip joint when parent data is missing
             }
+
+            // Debug: Log joint output rotations (every 30 frames)
+            #if DEBUG
+            if updateCount % 30 == 0 {
+                let logJoints: Set<ARKitJoint> = [.hips, .leftUpperLeg, .rightUpperLeg, .leftUpperArm, .rightUpperArm]
+                if logJoints.contains(arkitJoint) {
+                    print("[BodyDriver] \(arkitJoint) OUTPUT: w=\(String(format: "%.3f", localRotation.real)), x=\(String(format: "%.3f", localRotation.imag.x)), y=\(String(format: "%.3f", localRotation.imag.y)), z=\(String(format: "%.3f", localRotation.imag.z))")
+                }
+            }
+            #endif
 
             // Apply smoothing
             let smoothedRotation: simd_quatf
@@ -373,16 +412,48 @@ public final class ARKitBodyDriver: @unchecked Sendable {
 
     // MARK: - Coordinate System Conversion
 
-    /// Convert ARKit rotation to glTF/VRM coordinate system
-    /// Negates Z component to flip from ARKit (-Z forward) to glTF (+Z forward)
-    private func convertARKitToGLTF(_ rotation: simd_quatf) -> simd_quatf {
-        return simd_quatf(
-            ix: rotation.imag.x,
-            iy: rotation.imag.y,
-            iz: -rotation.imag.z, // Negate Z for axis flip
-            r: rotation.real
-        )
+    /// Correction quaternion: -90° X then -90° Y rotation
+    /// This corrects for the coordinate system difference between ARKit body tracking
+    /// and glTF/VRM.
+    ///
+    /// Diagnostic results:
+    /// - -90° X alone: avatar upright but head facing right, legs wrong
+    /// - Need additional -90° Y to fix facing direction
+    ///
+    /// Only applied to the ROOT joint (hips) - child joints use local rotations.
+    private static let rootRotationCorrection: simd_quatf = {
+        let rotX = simd_quatf(angle: -.pi / 2, axis: SIMD3<Float>(1, 0, 0))  // -90° around X
+        let rotY = simd_quatf(angle: -.pi / 2, axis: SIMD3<Float>(0, 1, 0))  // -90° around Y
+        return simd_mul(rotY, rotX)  // Apply X first, then Y
+    }()
+
+    /// Convert root (hips) rotation from ARKit to glTF/VRM coordinate system
+    private func convertRootRotationToGLTF(_ rotation: simd_quatf) -> simd_quatf {
+        return simd_mul(Self.rootRotationCorrection, rotation)
     }
+
+    /// Convert local rotation for child joints
+    /// Direct mapping for right side, negate X for left side to fix flexion direction
+    private func convertLocalRotationToGLTF(_ rotation: simd_quatf, joint: ARKitJoint) -> simd_quatf {
+        // Normalize to positive w (short path) for consistent representation
+        var q = rotation
+        if q.real < 0 {
+            q = simd_quatf(real: -q.real, imag: -q.imag)
+        }
+
+        // Left-side joints: negate X and Z to mirror to match right-side pattern
+        // ARKit reports mirrored values for left vs right (x and z have opposite signs)
+        if Self.leftSideJoints.contains(joint) {
+            return simd_quatf(real: q.real, imag: SIMD3<Float>(-q.imag.x, q.imag.y, -q.imag.z))
+        }
+        return q
+    }
+
+    /// Left-side joints that need Z negation
+    private static let leftSideJoints: Set<ARKitJoint> = [
+        .leftShoulder, .leftUpperArm, .leftLowerArm, .leftHand,
+        .leftUpperLeg, .leftLowerLeg, .leftFoot, .leftToes
+    ]
 
     /// Compute local rotation from world-space transforms
     ///
@@ -398,8 +469,8 @@ public final class ARKitBodyDriver: @unchecked Sendable {
 
         // Check if this joint has a parent in the hierarchy
         guard let parentJoint = Self.arkitParentMap[joint] else {
-            // Root joint (hips) - use world rotation directly
-            return convertARKitToGLTF(childRot)
+            // Root joint (hips) - apply world coordinate correction
+            return convertRootRotationToGLTF(childRot)
         }
 
         // Joint has a parent - require parent transform to compute local rotation
@@ -411,7 +482,8 @@ public final class ARKitBodyDriver: @unchecked Sendable {
         // Compute local: inverse(parentWorld) * childWorld
         let parentRot = extractRotation(from: parentTransform)
         let localRot = simd_mul(simd_inverse(parentRot), childRot)
-        return convertARKitToGLTF(localRot)
+        // Apply any joint-specific corrections (e.g., left-side mirroring)
+        return convertLocalRotationToGLTF(localRot, joint: joint)
     }
 
     /// Extract rotation quaternion from transform matrix (for local rotation computation)
