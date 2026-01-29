@@ -309,7 +309,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 14) {
  // Debug mode 14: Output shadowStep as grayscale for sunburn diagnosis
  float3 normal = normalize(in.worldNormal);
- float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
+ // Half-Lambert to match main lighting
+ float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
+ float NdotL = rawNdotL * 0.5 + 0.5;
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
@@ -332,7 +334,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // WHITE = fully lit (baseColor), BLACK = fully shadow (shadeColor)
  // This is identical to mode 14 but named for clarity in sunburn diagnosis
  float3 normal = normalize(in.worldNormal);
- float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
+ // Half-Lambert to match main lighting
+ float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
+ float NdotL = rawNdotL * 0.5 + 0.5;
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
@@ -452,7 +456,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  if (intensity0 > 0.0) {
  // Light direction convention: negate because uniforms stores direction FROM light,
  // but NdotL calculation needs direction TO light
- float NdotL = dot(normal, -uniforms.lightDirection.xyz);
+ // Half-Lambert: remap from [-1,1] to [0,1] for softer anime-style shadows
+ float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
+ float NdotL = rawNdotL * 0.5 + 0.5;
  float shadowStep;
  if (material.vrmVersion == 0) {
      // VRM 0.0: Original smoothstep formula (params were designed for this)
@@ -470,7 +476,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  float3 lit1 = float3(0.0);
  if (intensity1 > 0.0) {
- float NdotL1 = dot(normal, -uniforms.light1Direction.xyz);
+ // Half-Lambert for fill light
+ float rawNdotL1 = dot(normal, -uniforms.light1Direction.xyz);
+ float NdotL1 = rawNdotL1 * 0.5 + 0.5;
  float shadowStep1;
  if (material.vrmVersion == 0) {
      shadowStep1 = smoothstep(shadingShift - toony * 0.5,
@@ -486,7 +494,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  float3 lit2 = float3(0.0);
  if (intensity2 > 0.0) {
- float NdotL2 = dot(normal, -uniforms.light2Direction.xyz);
+ // Half-Lambert for rim light
+ float rawNdotL2 = dot(normal, -uniforms.light2Direction.xyz);
+ float NdotL2 = rawNdotL2 * 0.5 + 0.5;
  float shadowStep2;
  if (material.vrmVersion == 0) {
      shadowStep2 = smoothstep(shadingShift - toony * 0.5,
