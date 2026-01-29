@@ -97,30 +97,7 @@ public final class ARKitBodyDriver: @unchecked Sendable {
     /// Lock for thread safety
     private let lock = NSLock()
 
-    /// Parent hierarchy for computing local rotations from world-space
-    static let arkitParentMap: [ARKitJoint: ARKitJoint] = [
-        .spine: .hips,
-        .chest: .spine,
-        .upperChest: .chest,
-        .neck: .upperChest,
-        .head: .neck,
-        .leftShoulder: .upperChest,
-        .leftUpperArm: .upperChest,  // ARKit doesn't provide leftShoulder, connect directly to upperChest
-        .leftLowerArm: .leftUpperArm,
-        .leftHand: .leftLowerArm,
-        .rightShoulder: .upperChest,
-        .rightUpperArm: .upperChest,  // ARKit doesn't provide rightShoulder, connect directly to upperChest
-        .rightLowerArm: .rightUpperArm,
-        .rightHand: .rightLowerArm,
-        .leftUpperLeg: .hips,
-        .leftLowerLeg: .leftUpperLeg,
-        .leftFoot: .leftLowerLeg,
-        .leftToes: .leftFoot,
-        .rightUpperLeg: .hips,
-        .rightLowerLeg: .rightUpperLeg,
-        .rightFoot: .rightLowerLeg,
-        .rightToes: .rightFoot,
-    ]
+    // Parent hierarchy is now in ARKitCoordinateConverter (consolidated)
 
     public init(
         mapper: ARKitSkeletonMapper = .default,
@@ -231,7 +208,7 @@ public final class ARKitBodyDriver: @unchecked Sendable {
                 if updateCount % 30 == 0 {
                     let logJoints: Set<ARKitJoint> = [.leftUpperArm, .rightUpperArm, .leftShoulder, .rightShoulder]
                     if logJoints.contains(arkitJoint) {
-                        if let parentJoint = Self.arkitParentMap[arkitJoint] {
+                        if let parentJoint = ARKitCoordinateConverter.arkitParentMap[arkitJoint] {
                             print("[BodyDriver] \(arkitJoint) SKIPPED - missing parent: \(parentJoint)")
                         }
                     }
@@ -410,100 +387,32 @@ public final class ARKitBodyDriver: @unchecked Sendable {
         return (position, rotation, scale)
     }
 
-    // MARK: - Coordinate System Conversion
+    // MARK: - Coordinate System Conversion (Consolidated)
 
-    /// Correction quaternion: -90° X then -90° Y rotation
-    /// This corrects for the coordinate system difference between ARKit body tracking
-    /// and glTF/VRM.
+    /// Compute local rotation from world-space transforms using shared converter
     ///
-    /// Diagnostic results:
-    /// - -90° X alone: avatar upright but head facing right, legs wrong
-    /// - Need additional -90° Y to fix facing direction
-    ///
-    /// Only applied to the ROOT joint (hips) - child joints use local rotations.
-    private static let rootRotationCorrection: simd_quatf = {
-        let rotX = simd_quatf(angle: -.pi / 2, axis: SIMD3<Float>(1, 0, 0))  // -90° around X
-        let rotY = simd_quatf(angle: -.pi / 2, axis: SIMD3<Float>(0, 1, 0))  // -90° around Y
-        return simd_mul(rotY, rotX)  // Apply X first, then Y
-    }()
-
-    /// Convert root (hips) rotation from ARKit to glTF/VRM coordinate system
-    private func convertRootRotationToGLTF(_ rotation: simd_quatf) -> simd_quatf {
-        return simd_mul(Self.rootRotationCorrection, rotation)
-    }
-
-    /// Convert local rotation for child joints
-    /// Direct mapping for right side, negate X for left side to fix flexion direction
-    private func convertLocalRotationToGLTF(_ rotation: simd_quatf, joint: ARKitJoint) -> simd_quatf {
-        // Normalize to positive w (short path) for consistent representation
-        var q = rotation
-        if q.real < 0 {
-            q = simd_quatf(real: -q.real, imag: -q.imag)
-        }
-
-        // Left-side joints: negate X and Z to mirror to match right-side pattern
-        // ARKit reports mirrored values for left vs right (x and z have opposite signs)
-        if Self.leftSideJoints.contains(joint) {
-            return simd_quatf(real: q.real, imag: SIMD3<Float>(-q.imag.x, q.imag.y, -q.imag.z))
-        }
-        return q
-    }
-
-    /// Left-side joints that need Z negation
-    private static let leftSideJoints: Set<ARKitJoint> = [
-        .leftShoulder, .leftUpperArm, .leftLowerArm, .leftHand,
-        .leftUpperLeg, .leftLowerLeg, .leftFoot, .leftToes
-    ]
-
-    /// Compute local rotation from world-space transforms
+    /// Uses ARKitCoordinateConverter for consistent conversion between live preview
+    /// and recording. Includes rest pose calibration to fix collapsed shoulders,
+    /// scissor legs, and other visual artifacts.
     ///
     /// Returns `nil` if the joint has a parent in the hierarchy but that parent's
-    /// transform is missing from the skeleton data. This prevents incorrect poses
-    /// from using world rotation as local rotation.
+    /// transform is missing from the skeleton data.
     private func computeLocalRotation(
         joint: ARKitJoint,
         childTransform: simd_float4x4,
         skeleton: ARKitBodySkeleton
     ) -> simd_quatf? {
-        let childRot = extractRotation(from: childTransform)
-
-        // Check if this joint has a parent in the hierarchy
-        guard let parentJoint = Self.arkitParentMap[joint] else {
-            // Root joint (hips) - apply world coordinate correction
-            return convertRootRotationToGLTF(childRot)
-        }
-
-        // Joint has a parent - require parent transform to compute local rotation
-        guard let parentTransform = skeleton.joints[parentJoint] else {
-            // Parent transform missing - skip this joint to avoid incorrect pose
-            return nil
-        }
-
-        // Compute local: inverse(parentWorld) * childWorld
-        let parentRot = extractRotation(from: parentTransform)
-        let localRot = simd_mul(simd_inverse(parentRot), childRot)
-        // Apply any joint-specific corrections (e.g., left-side mirroring)
-        return convertLocalRotationToGLTF(localRot, joint: joint)
+        // Use shared converter with rest pose calibration
+        return ARKitCoordinateConverter.computeVRMRotation(
+            joint: joint,
+            childTransform: childTransform,
+            skeleton: skeleton
+        )
     }
 
-    /// Extract rotation quaternion from transform matrix (for local rotation computation)
+    /// Extract rotation quaternion from transform matrix (for debug logging)
     private func extractRotation(from transform: simd_float4x4) -> simd_quatf {
-        var basisX = SIMD3<Float>(
-            transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
-        var basisY = SIMD3<Float>(
-            transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
-        var basisZ = SIMD3<Float>(
-            transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
-
-        let scaleX = length(basisX)
-        let scaleY = length(basisY)
-        let scaleZ = length(basisZ)
-
-        if scaleX > 0.0001 { basisX /= scaleX }
-        if scaleY > 0.0001 { basisY /= scaleY }
-        if scaleZ > 0.0001 { basisZ /= scaleZ }
-
-        return simd_quatf(simd_float3x3(basisX, basisY, basisZ))
+        return ARKitCoordinateConverter.extractRotation(from: transform)
     }
 
     // MARK: - Reset and Utilities
