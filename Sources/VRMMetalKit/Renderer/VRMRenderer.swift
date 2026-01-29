@@ -265,21 +265,25 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         fillIntensity: Float = 0.5,
         rimIntensity: Float = 0.3
     ) {
-        // Key light: front-right-top (main light, warm tone for natural skin)
+        // VRM models face +Z. Light direction points FROM light TO scene.
+        // Shader negates direction: NdotL = dot(normal, -lightDir)
+        // So lightDir with negative Z = light from front
+
+        // Key light: front-right-slightly-above (anime-style soft lighting)
         setLight(0,
-                 direction: SIMD3<Float>(0.4, 0.8, -0.4),
-                 color: SIMD3<Float>(1.0, 0.93, 0.85),
+                 direction: SIMD3<Float>(0.3, -0.2, -0.9),
+                 color: SIMD3<Float>(1.0, 0.98, 0.95),
                  intensity: keyIntensity)
 
         // Fill light: front-left at eye level (softer, slightly cool)
         setLight(1,
-                 direction: SIMD3<Float>(-0.5, 0.0, -0.5),
-                 color: SIMD3<Float>(0.8, 0.85, 0.9),
+                 direction: SIMD3<Float>(-0.4, -0.1, -0.9),
+                 color: SIMD3<Float>(0.85, 0.88, 0.95),
                  intensity: fillIntensity)
 
-        // Rim/back light: behind and above (edge highlight, cool accent)
+        // Rim/back light: behind and above (edge highlight)
         setLight(2,
-                 direction: SIMD3<Float>(0.0, 0.3, 1.0),
+                 direction: SIMD3<Float>(0.0, -0.5, 0.85),
                  color: SIMD3<Float>(0.9, 0.95, 1.0),
                  intensity: rimIntensity)
     }

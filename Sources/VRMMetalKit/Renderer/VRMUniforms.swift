@@ -25,8 +25,9 @@ struct Uniforms {
     var normalMatrix = matrix_identity_float4x4                   // 64 bytes, offset 192
 
     // Light 0 (key light) - Front-facing for anime-style lighting
-    // Direction points FROM light TO scene: (0.2, 0.3, 1.0) = slightly right, slightly above, mostly front
-    var lightDirection_packed = SIMD4<Float>(0.2, 0.3, 1.0, 0.0) // 16 bytes, offset 256 (xyz = direction)
+    // VRM models face +Z (toward camera). Light FROM camera means direction pointing INTO scene (-Z)
+    // (0.2, -0.3, -0.9) = slightly right, slightly above, mostly from front
+    var lightDirection_packed = SIMD4<Float>(0.2, -0.3, -0.9, 0.0) // 16 bytes, offset 256 (xyz = direction)
     var lightColor_packed = SIMD4<Float>(1.0, 1.0, 1.0, 1.732)    // 16 bytes, offset 272 (xyz = color, w = intensity)
     var ambientColor_packed = SIMD4<Float>(0.05, 0.05, 0.05, 0.0)   // 16 bytes, offset 288 (SIMD3 + padding)
 
