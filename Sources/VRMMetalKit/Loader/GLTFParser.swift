@@ -248,7 +248,17 @@ public struct GLTFMaterial: Codable {
         alphaMode = try container.decodeIfPresent(String.self, forKey: .alphaMode)
         alphaCutoff = try container.decodeIfPresent(Float.self, forKey: .alphaCutoff)
         doubleSided = try container.decodeIfPresent(Bool.self, forKey: .doubleSided)
-        extensions = nil // Handle extensions separately if needed
+        // Decode extensions as [String: Any] using AnyCodable wrapper
+        // This enables VRM 1.0 per-material VRMC_materials_mtoon extension parsing
+        if container.contains(.extensions) {
+            if let extWrapper = try? container.decode([String: AnyCodable].self, forKey: .extensions) {
+                extensions = extWrapper.mapValues { $0.value }
+            } else {
+                extensions = nil
+            }
+        } else {
+            extensions = nil
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
