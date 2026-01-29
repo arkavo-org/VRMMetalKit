@@ -59,7 +59,7 @@ public struct MToonMaterialUniforms {
     public var rimColorR: Float = 0.0
     public var rimColorG: Float = 0.0
     public var rimColorB: Float = 0.0
-    public var parametricRimFresnelPowerFactor: Float = 1.0
+    public var parametricRimFresnelPowerFactor: Float = 5.0  // Higher = narrower rim edge
 
     // Block 6: 16 bytes - Rim lighting part 2
     public var parametricRimLiftFactor: Float = 0.0

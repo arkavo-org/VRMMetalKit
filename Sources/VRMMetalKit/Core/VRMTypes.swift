@@ -437,7 +437,7 @@ public struct VRMMToonMaterial {
     public var matcapFactor: SIMD3<Float> = [1.0, 1.0, 1.0]  // White default for texture multiplication
     public var matcapTexture: Int?
     public var parametricRimColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]  // Rim should start disabled
-    public var parametricRimFresnelPowerFactor: Float = 1.0
+    public var parametricRimFresnelPowerFactor: Float = 5.0  // Higher = narrower rim edge
     public var parametricRimLiftFactor: Float = 0.0
     public var rimMultiplyTexture: Int?
     public var rimLightingMixFactor: Float = 0.0
