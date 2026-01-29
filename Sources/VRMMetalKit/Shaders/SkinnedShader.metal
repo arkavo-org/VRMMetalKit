@@ -117,6 +117,12 @@ struct MToonMaterial {
  int hasEmissiveTexture;                    // 4 bytes
  uint32_t alphaMode;                        // 4 bytes
  float alphaCutoff;                         // 4 bytes
+
+ // Block 12: 16 bytes - Version flag and padding
+ uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
+ float _padding3;                           // 4 bytes
+ float _padding4;                           // 4 bytes
+ float _padding5;                           // 4 bytes
 };
 
 struct VertexIn {

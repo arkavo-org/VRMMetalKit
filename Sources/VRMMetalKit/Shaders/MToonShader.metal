@@ -117,6 +117,12 @@ struct MToonMaterial {
  int hasEmissiveTexture;                    // 4 bytes
  uint32_t alphaMode;                        // 4 bytes (0: OPAQUE, 1: MASK, 2: BLEND)
  float alphaCutoff;                         // 4 bytes
+
+ // Block 12: 16 bytes - Version flag and padding
+ uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
+ float _padding3;                           // 4 bytes
+ float _padding4;                           // 4 bytes
+ float _padding5;                           // 4 bytes
 };
 
 struct VertexIn {
@@ -168,6 +174,17 @@ static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
 float2 calculateMatCapUV(float3 viewNormal) {
  // Convert view normal to UV coordinates for MatCap sampling
  return viewNormal.xy * 0.5 + 0.5;
+}
+
+// VRM 1.0 MToon spec uses linearstep for toon shading
+// Creates sharp anime-style shadow boundaries (not smooth gradients)
+static inline float linearstep(float a, float b, float t) {
+ float range = b - a;
+ // Guard against division by zero when toony=1.0 (range becomes 0)
+ if (range <= 0.0001) {
+     return t >= b ? 1.0 : 0.0;
+ }
+ return saturate((t - a) / range);
 }
 
 // Vertex shader with optional morphed positions buffer
@@ -375,13 +392,23 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float intensity2 = uniforms.light2Color.w;
  float totalIntensity = max(intensity0 + intensity1 + intensity2, MIN_TOTAL_INTENSITY);
 
- // Calculate weighted light contributions
+ // Calculate weighted light contributions with version-aware shading formula
+ // VRM 0.0: smoothstep formula (converted params were designed for this)
+ // VRM 1.0: linearstep formula for sharp cel-shading per spec
  float3 lit0 = float3(0.0);
  if (intensity0 > 0.0) {
  float NdotL = dot(normal, uniforms.lightDirection.xyz);
- float shadowStep = smoothstep(shadingShift - toony * 0.5,
-                          shadingShift + toony * 0.5,
-                          NdotL);
+ float shadowStep;
+ if (material.vrmVersion == 0) {
+     // VRM 0.0: Original smoothstep formula (params were designed for this)
+     shadowStep = smoothstep(shadingShift - toony * 0.5,
+                            shadingShift + toony * 0.5,
+                            NdotL);
+ } else {
+     // VRM 1.0: Spec-compliant linearstep formula for sharp cel-shading
+     float shading = NdotL + shadingShift;
+     shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading);
+ }
  float weight = intensity0 / totalIntensity;
  lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor.xyz * weight;
  }
@@ -389,9 +416,15 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float3 lit1 = float3(0.0);
  if (intensity1 > 0.0) {
  float NdotL1 = dot(normal, uniforms.light1Direction.xyz);
- float shadowStep1 = smoothstep(shadingShift - toony * 0.5,
-                          shadingShift + toony * 0.5,
-                          NdotL1);
+ float shadowStep1;
+ if (material.vrmVersion == 0) {
+     shadowStep1 = smoothstep(shadingShift - toony * 0.5,
+                             shadingShift + toony * 0.5,
+                             NdotL1);
+ } else {
+     float shading1 = NdotL1 + shadingShift;
+     shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
+ }
  float weight1 = intensity1 / totalIntensity;
  lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color.xyz * weight1;
  }
@@ -399,9 +432,15 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float3 lit2 = float3(0.0);
  if (intensity2 > 0.0) {
  float NdotL2 = dot(normal, uniforms.light2Direction.xyz);
- float shadowStep2 = smoothstep(shadingShift - toony * 0.5,
-                          shadingShift + toony * 0.5,
-                          NdotL2);
+ float shadowStep2;
+ if (material.vrmVersion == 0) {
+     shadowStep2 = smoothstep(shadingShift - toony * 0.5,
+                             shadingShift + toony * 0.5,
+                             NdotL2);
+ } else {
+     float shading2 = NdotL2 + shadingShift;
+     shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
+ }
  float weight2 = intensity2 / totalIntensity;
  lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
  }

@@ -1095,6 +1095,10 @@ public class VRMMaterial {
     // MToon properties
     public var mtoon: VRMMToonMaterial?
 
+    // VRM spec version for version-aware shader behavior
+    // VRM 0.0 uses smoothstep shading, VRM 1.0 uses linearstep
+    public var vrmVersion: VRMSpecVersion = .v1_0
+
     // Render queue for sorting (VRM 0.x: Unity render queue values, higher = render later)
     // Default is 2000 (geometry), transparent materials typically 3000+
     public var renderQueue: Int = 2000
@@ -1128,8 +1132,9 @@ public class VRMMaterial {
         return isTransparent && zWriteEnabled
     }
 
-    public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil) {
+    public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil, vrmVersion: VRMSpecVersion = .v1_0) {
         self.name = gltfMaterial.name
+        self.vrmVersion = vrmVersion
 
         if let pbr = gltfMaterial.pbrMetallicRoughness {
             if let baseColor = pbr.baseColorFactor, baseColor.count == 4 {

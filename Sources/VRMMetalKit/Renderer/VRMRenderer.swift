@@ -2246,6 +2246,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                    materialIndex < model.materials.count {
                     let material = model.materials[materialIndex]
 
+                    // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
+                    mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
+
                     // Set base PBR properties
                     mtoonUniforms.baseColorFactor = material.baseColorFactor
                     mtoonUniforms.metallicFactor = material.metallicFactor
@@ -2320,6 +2323,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtoon = material.mtoon {
                         mtoonUniforms = MToonMaterialUniforms(from: mtoon)
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
+                        // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
+                        mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
                         // LIGHTING FIX: Zero emissive AFTER MToon init to prevent washout
                         mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
@@ -3285,6 +3290,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Set MToon material uniforms
             var mtoonUniforms = MToonMaterialUniforms(from: mtoon)
             mtoonUniforms.baseColorFactor = material.baseColorFactor
+            // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
+            mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
             // Apply expression-driven material color overrides for outlines
             if let outlineOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .outlineColor) {

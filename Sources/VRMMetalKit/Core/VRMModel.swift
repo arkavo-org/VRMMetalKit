@@ -438,8 +438,9 @@ public class VRMModel: @unchecked Sendable {
         for materialIndex in 0..<(gltf.materials?.count ?? 0) {
             if let gltfMaterial = gltf.materials?[safe: materialIndex] {
                 // Pass VRM 0.x material property if available (MToon data at document level)
+                // Also pass VRM spec version for version-aware shading in shader
                 let vrm0Prop = materialIndex < vrm0MaterialProperties.count ? vrm0MaterialProperties[materialIndex] : nil
-                let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop)
+                let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop, vrmVersion: specVersion)
                 materials.append(material)
             }
         }
