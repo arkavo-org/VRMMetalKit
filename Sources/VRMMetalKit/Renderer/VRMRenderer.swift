@@ -79,6 +79,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// The VRM model to render. Set via `loadModel(_:)`.
     public var model: VRMModel?
 
+    /// Model rotation correction for VRM coordinate system differences.
+    /// VRM 1.0 (glTF) models face +Z; VRM 0.0 (Unity) models face -Z.
+    /// Apply 180° Y rotation to VRM 1.0 models so they face the camera at -Z.
+    private var vrmVersionRotation: matrix_float4x4 {
+        guard let model = model else { return matrix_identity_float4x4 }
+        if model.isVRM0 {
+            return matrix_identity_float4x4
+        } else {
+            // VRM 1.0 faces +Z, rotate 180° around Y to face -Z (towards camera)
+            return matrix_float4x4(simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0)))
+        }
+    }
+
     // MARK: - Debug Options
 
     /// Debug UV visualization mode.
@@ -2019,19 +2032,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
 
             // Update model matrix for this node
-            // For skinned meshes, modelMatrix should be identity because transforms are in the skinning data
-            // For non-skinned meshes, use the node's world transform
+            // Apply VRM version rotation: VRM 1.0 models face +Z, need 180° Y rotation to face camera at -Z
+            // For skinned meshes, use vrmVersionRotation (transforms are in skinning data)
+            // For non-skinned meshes, multiply vrmVersionRotation with node's world transform
+            let vrmRotation = vrmVersionRotation
             if isSkinned {
-                uniforms.modelMatrix = matrix_identity_float4x4
-                uniforms.normalMatrix = matrix_identity_float4x4 // Should be identity as well
+                uniforms.modelMatrix = vrmRotation
+                uniforms.normalMatrix = vrmRotation // Rotation-only matrix works for normals
                 if frameCounter % 60 == 0 {
-                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=true, using IDENTITY matrix")
+                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=true, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation applied")
                 }
             } else {
-                uniforms.modelMatrix = item.node.worldMatrix
-                uniforms.normalMatrix = item.node.worldMatrix.inverse.transpose
+                uniforms.modelMatrix = simd_mul(vrmRotation, item.node.worldMatrix)
+                uniforms.normalMatrix = uniforms.modelMatrix.inverse.transpose
                 if frameCounter % 60 == 0 {
-                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=false, using WORLD matrix")
+                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=false, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation * WORLD matrix")
                 }
             }
             uniformsBuffer.contents().copyMemory(from: &uniforms, byteCount: MemoryLayout<Uniforms>.size)
