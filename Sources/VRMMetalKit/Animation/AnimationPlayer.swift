@@ -196,8 +196,13 @@ public final class AnimationPlayer: @unchecked Sendable {
     }
 
     public var progress: Float {
-        guard let clip = playerLock.withLock({ clip }) else { return 0 }
-        return playerLock.withLock { currentTime } / clip.duration
+        guard let clip = playerLock.withLock({ clip }), clip.duration > 0 else { return 0 }
+        let time = playerLock.withLock { currentTime }
+        if isLooping {
+            return fmodf(time, clip.duration) / clip.duration
+        } else {
+            return min(time / clip.duration, 1.0)
+        }
     }
 
     public var isFinished: Bool {
