@@ -280,7 +280,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 7) {
  // Show NdotL (diffuse lighting term)
  float3 normal = normalize(in.worldNormal);
- float NdotL = dot(normal, uniforms.lightDirection.xyz);
+ float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
  // Map from [-1,1] to [0,1] for visualization
  float mapped = NdotL * 0.5 + 0.5;
  return float4(mapped, mapped, mapped, 1.0);
@@ -306,6 +306,59 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 13) {
  // Show vertex color only
  return float4(in.color.rgb, 1.0);
+ } else if (uniforms.debugUVs == 14) {
+ // Debug mode 14: Output shadowStep as grayscale for sunburn diagnosis
+ float3 normal = normalize(in.worldNormal);
+ float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
+ float shadingShift = material.shadingShiftFactor;
+ float toony = material.shadingToonyFactor;
+ float shading = NdotL + shadingShift;
+ float shadowStep;
+ if (material.vrmVersion == 0) {
+     shadowStep = smoothstep(shadingShift - toony * 0.5,
+                            shadingShift + toony * 0.5, NdotL);
+ } else {
+     // VRM 1.0: linearstep formula
+     float range = (1.0 - toony) * 2.0;
+     if (range <= 0.0001) {
+         shadowStep = shading >= (1.0 - toony) ? 1.0 : 0.0;
+     } else {
+         shadowStep = saturate((shading - (-1.0 + toony)) / range);
+     }
+ }
+ return float4(shadowStep, shadowStep, shadowStep, 1.0);
+ } else if (uniforms.debugUVs == 15) {
+ // Debug mode 15: Visualize lightingFactor (the lit/shadow interpolation)
+ // WHITE = fully lit (baseColor), BLACK = fully shadow (shadeColor)
+ // This is identical to mode 14 but named for clarity in sunburn diagnosis
+ float3 normal = normalize(in.worldNormal);
+ float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
+ float shadingShift = material.shadingShiftFactor;
+ float toony = material.shadingToonyFactor;
+ float shading = NdotL + shadingShift;
+ float lightingFactor;
+ if (material.vrmVersion == 0) {
+     // VRM 0.0: smoothstep formula
+     lightingFactor = smoothstep(shadingShift - toony * 0.5,
+                                 shadingShift + toony * 0.5, NdotL);
+ } else {
+     // VRM 1.0: linearstep formula per spec
+     float lower = -1.0 + toony;
+     float upper = 1.0 - toony;
+     lightingFactor = saturate((shading - lower) / (upper - lower));
+ }
+ return float4(lightingFactor, lightingFactor, lightingFactor, 1.0);
+ } else if (uniforms.debugUVs == 16) {
+ // Debug mode 16: Show raw NdotL as color
+ // GREEN = positive NdotL (lit), RED = negative NdotL (shadow)
+ // Intensity shows magnitude
+ float3 normal = normalize(in.worldNormal);
+ float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
+ if (NdotL >= 0.0) {
+     return float4(0.0, NdotL, 0.0, 1.0);  // Green = positive (correct for front-lit)
+ } else {
+     return float4(-NdotL, 0.0, 0.0, 1.0); // Red = negative (WRONG for front-lit)
+ }
  }
 
  // Choose UV coordinates (animated or static)
@@ -397,7 +450,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // VRM 1.0: linearstep formula for sharp cel-shading per spec
  float3 lit0 = float3(0.0);
  if (intensity0 > 0.0) {
- float NdotL = dot(normal, uniforms.lightDirection.xyz);
+ // Light direction convention: negate because uniforms stores direction FROM light,
+ // but NdotL calculation needs direction TO light
+ float NdotL = dot(normal, -uniforms.lightDirection.xyz);
  float shadowStep;
  if (material.vrmVersion == 0) {
      // VRM 0.0: Original smoothstep formula (params were designed for this)
@@ -415,7 +470,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  float3 lit1 = float3(0.0);
  if (intensity1 > 0.0) {
- float NdotL1 = dot(normal, uniforms.light1Direction.xyz);
+ float NdotL1 = dot(normal, -uniforms.light1Direction.xyz);
  float shadowStep1;
  if (material.vrmVersion == 0) {
      shadowStep1 = smoothstep(shadingShift - toony * 0.5,
@@ -431,7 +486,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  float3 lit2 = float3(0.0);
  if (intensity2 > 0.0) {
- float NdotL2 = dot(normal, uniforms.light2Direction.xyz);
+ float NdotL2 = dot(normal, -uniforms.light2Direction.xyz);
  float shadowStep2;
  if (material.vrmVersion == 0) {
      shadowStep2 = smoothstep(shadingShift - toony * 0.5,
@@ -623,7 +678,7 @@ fragment float4 mtoon_debug_nl(VertexOut in [[stage_in]],
                         constant MToonMaterial& material [[buffer(8)]],
                         constant Uniforms& uniforms [[buffer(1)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, uniforms.lightDirection.xyz));
+ float nl = saturate(dot(normal, -uniforms.lightDirection.xyz));  // Negate for correct convention
  return float4(nl, nl, nl, 1.0);
 }
 
@@ -633,7 +688,7 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
                           texture2d<float> shadingShiftTexture [[texture(2)]],
                           sampler textureSampler [[sampler(0)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, uniforms.lightDirection.xyz));
+ float nl = saturate(dot(normal, -uniforms.lightDirection.xyz));  // Negate for correct convention
 
  float shadingShift = material.shadingShiftFactor;
  if (material.hasShadingShiftTexture > 0) {
