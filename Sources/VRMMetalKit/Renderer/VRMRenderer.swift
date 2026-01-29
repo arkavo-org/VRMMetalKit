@@ -116,11 +116,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Current light normalization mode
     public var lightNormalizationMode: LightNormalizationMode = .automatic
 
-    /// Stored light directions (view-relative, transformed each frame by camera)
+    /// Stored light directions (world-space, shader negates for NdotL calculation)
+    /// VRM models face -Z after rotation. For front lighting, use positive Z direction.
     private var storedLightDirections: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) = (
-        SIMD3<Float>(0, 1, 0),  // Key light default
-        SIMD3<Float>(0, 1, 0),  // Fill light default
-        SIMD3<Float>(0, 1, 0)   // Rim light default
+        SIMD3<Float>(0.2, 0.3, 0.9),   // Key light: front with slight right/above
+        SIMD3<Float>(-0.3, 0.1, 0.9),  // Fill light: front-left
+        SIMD3<Float>(0.0, -0.5, -0.85) // Rim light: from behind/above
     )
 
     /// Orthographic camera height in world units
