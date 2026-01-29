@@ -42,8 +42,6 @@ let package = Package(
                 "Shaders/DebugShaders.metal",
                 "Shaders/MToonShader.metal",
                 "Shaders/SkinnedShader.metal",
-                "Shaders/Toon2DShader.metal",
-                "Shaders/Toon2DSkinnedShader.metal",
                 "Shaders/SpriteShader.metal"
             ],
             resources: [

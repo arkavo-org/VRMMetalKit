@@ -432,13 +432,16 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float3 rimColor = float3(0.0);
  float3 parametricRimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
  if (any(parametricRimColorFactor > 0.0)) {
- // Use view-space normal and view direction for proper fresnel
+ // Use view-space normal and CORRECT view direction for proper fresnel
  float3 Nv = viewNormal;  // Use flipped viewNormal for back faces
- float3 Vv = normalize(-in.worldPosition); // View direction in world space
+ float3 Vv = normalize(in.viewDirection);  // Correct: use vertex shader's viewDirection
 
- float vf = 1.0 - saturate(dot(Nv, normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz)));
- float rimF = pow(vf, material.parametricRimFresnelPowerFactor);
- rimF = saturate(rimF + material.parametricRimLiftFactor);
+ // Transform view direction to view space for dot product with view-space normal
+ float3 viewDirViewSpace = normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz);
+ float NdotV = saturate(dot(Nv, viewDirViewSpace));
+ float vf = 1.0 - NdotV;
+ float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
+                  material.parametricRimFresnelPowerFactor);
 
  rimColor = parametricRimColorFactor * rimF;
 
@@ -449,14 +452,14 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
  }
 
- // Apply rim lighting mix - blend between lit and unlit rim
+ // Apply rim lighting - blend between lit and unlit rim, then ADD to final color
  if (any(rimColor > 0.0)) {
  float3 rimLit = rimColor * uniforms.lightColor.xyz;  // Lit rim
- float3 rimUnlit = rimColor;                       // Unlit rim
- rimColor = mix(rimLit, rimUnlit, material.rimLightingMixFactor);
+ float3 rimUnlit = rimColor;                          // Unlit rim
+ float3 finalRim = mix(rimLit, rimUnlit, material.rimLightingMixFactor);
 
- // Mix rim into the final color instead of additive
- litColor = mix(litColor, litColor + rimColor, material.rimLightingMixFactor);
+ // ADD rim to final color (standard MToon behavior per spec)
+ litColor += finalRim;
  }
 
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
@@ -502,15 +505,21 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  outlineWidth *= widthMultiplier;
  }
 
+ // Pre-calculate world normal and camera position for edge attenuation
+ float3 worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+ float3 worldPos = (uniforms.modelMatrix * float4(in.position, 1.0)).xyz;
+
+ // Calculate view direction
+ float3 viewDir = normalize(cameraPos - worldPos);
+
  // Calculate final position with outline extrusion
  if (material.outlineMode == 1.0) {
  // World coordinates mode - extrude in world space
- float3 worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
- float3 worldPos = (uniforms.modelMatrix * float4(in.position, 1.0)).xyz;
-
- // Scale outline width by distance from camera for consistent visual thickness
- float3 cameraPos = -uniforms.viewMatrix[3].xyz;
- float distanceScale = length(worldPos - cameraPos) * 0.01; // Adjust multiplier as needed
+ float distanceScale = length(worldPos - cameraPos) * 0.01;
 
  worldPos += worldNormal * outlineWidth * distanceScale;
  out.worldPosition = worldPos;
@@ -518,11 +527,11 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  } else if (material.outlineMode == 2.0) {
  // Screen coordinates mode - extrude in screen space
- float4 worldPos = uniforms.modelMatrix * float4(in.position, 1.0);
- out.worldPosition = worldPos.xyz;
+ float4 worldPos4 = uniforms.modelMatrix * float4(in.position, 1.0);
+ out.worldPosition = worldPos4.xyz;
 
  // Transform to clip space
- float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
+ float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos4;
 
  // Calculate screen-space normal
  float3 viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
@@ -538,23 +547,19 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  } else {
  // No outline (mode 0)
- float4 worldPos = uniforms.modelMatrix * float4(in.position, 1.0);
- out.worldPosition = worldPos.xyz;
- out.position = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
+ float4 worldPos4 = uniforms.modelMatrix * float4(in.position, 1.0);
+ out.worldPosition = worldPos4.xyz;
+ out.position = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos4;
  }
 
- out.worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
+ out.worldNormal = worldNormal;
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
  out.texCoord = in.texCoord;
  out.animatedTexCoord = animateUV(in.texCoord, material);
  out.color = in.color;
 
- // Calculate view direction - extract camera world position from view matrix
- float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
-                                   uniforms.viewMatrix[1].xyz,
-                                   uniforms.viewMatrix[2].xyz);
- float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
- out.viewDirection = normalize(cameraPos - out.worldPosition);
+ // View direction already calculated above for edge attenuation
+ out.viewDirection = viewDir;
 
  return out;
 }
@@ -612,10 +617,12 @@ fragment float4 mtoon_debug_rim(VertexOut in [[stage_in]],
  }
 
  float3 Nv = in.viewNormal;
- float3 Vv = normalize(-in.worldPosition);
- float vf = 1.0 - saturate(dot(Nv, normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz)));
- float rimF = pow(vf, material.parametricRimFresnelPowerFactor);
- rimF = saturate(rimF + material.parametricRimLiftFactor);
+ float3 Vv = normalize(in.viewDirection);  // Correct: use vertex shader's viewDirection
+ float3 viewDirViewSpace = normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz);
+ float NdotV = saturate(dot(Nv, viewDirViewSpace));
+ float vf = 1.0 - NdotV;
+ float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
+                  material.parametricRimFresnelPowerFactor);
  return float4(rimF, rimF, rimF, 1.0);
 }
 

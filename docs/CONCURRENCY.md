@@ -87,7 +87,7 @@ renderQueue.async {
 ```swift
 // WRONG: Renderer state modified from multiple threads
 DispatchQueue.global().async {
-    renderer.renderingMode = .toon2D  // Data race!
+    renderer.outlineWidth = 2.0  // Data race!
 }
 
 DispatchQueue.main.async {

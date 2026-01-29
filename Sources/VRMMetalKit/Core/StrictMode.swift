@@ -209,17 +209,18 @@ public struct ResourceIndices {
     // Vertex shader buffer indices
     public static let vertexBuffer = 0
     public static let uniformsBuffer = 1
-    public static let skinDataBuffer = 2      // Joint indices/weights
-    public static let jointMatricesBuffer = 3
+    public static let skinDataBuffer = 2      // Joint indices/weights (legacy, unused)
     public static let morphWeightsBuffer = 4
     public static let morphPositionDeltas = 5...12  // 8 slots
-    public static let morphNormalDeltas = 13...20   // 8 slots
+    public static let morphNormalDeltas = 13...19   // 7 slots (avoid collision with morphedPositions)
     // Runtime morphed positions from compute pass
     public static let morphedPositionsBuffer = 20
     // Per-draw vertex offset (uint32)
     public static let vertexOffsetBuffer = 21
     // Flag: 1 if morphedPositions is valid, 0 otherwise (uint32)
     public static let hasMorphedPositionsFlag = 22
+    // Joint matrices - moved to high index to avoid argument table collision
+    public static let jointMatricesBuffer = 25
 
     // Fragment shader buffer indices
     public static let materialUniforms = 0

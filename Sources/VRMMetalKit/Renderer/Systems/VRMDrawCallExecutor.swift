@@ -17,13 +17,6 @@
 import Foundation
 import Metal
 
-struct ToonSettings {
-    let renderingMode: VRMRenderer.RenderingMode
-    let toonBands: Int
-    let outlineWidth: Float
-    let outlineColor: SIMD3<Float>
-}
-
 final class VRMDrawCallExecutor {
     func logDrawIntro(item: RenderItem, drawIndex: Int, frameCounter: Int, index: Int, model: VRMModel) {
         let meshName = item.mesh.name ?? "unnamed"

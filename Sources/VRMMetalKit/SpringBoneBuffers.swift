@@ -329,23 +329,27 @@ public struct PlaneCollider {
 }
 
 public struct SpringBoneGlobalParams {
-    public var gravity: SIMD3<Float>
-    public var dtSub: Float
-    public var windAmplitude: Float
-    public var windFrequency: Float
-    public var windPhase: Float
-    public var windDirection: SIMD3<Float>
-    public var substeps: UInt32
-    public var numBones: UInt32
-    public var numSpheres: UInt32
-    public var numCapsules: UInt32
-    public var numPlanes: UInt32
-    public var settlingFrames: UInt32  // Frames remaining in settling period (skip inertia compensation when > 0)
+    public var gravity: SIMD3<Float>      // offset 0, aligned to 16 bytes
+    public var dtSub: Float               // offset 16
+    public var windAmplitude: Float       // offset 20
+    public var windFrequency: Float       // offset 24
+    public var windPhase: Float           // offset 28
+    public var windDirection: SIMD3<Float>// offset 32, aligned to 16 bytes
+    public var substeps: UInt32           // offset 48
+    public var numBones: UInt32           // offset 52
+    public var numSpheres: UInt32         // offset 56
+    public var numCapsules: UInt32        // offset 60
+    public var numPlanes: UInt32          // offset 64
+    public var settlingFrames: UInt32     // offset 68 - Frames remaining in settling period
+    public var dragMultiplier: Float      // offset 72 - Global drag multiplier (1.0 = normal, >1.0 = braking)
+    private var _padding1: UInt32 = 0     // offset 76 - padding for float3 alignment
+    public var externalVelocity: SIMD3<Float>  // offset 80 - Character root velocity for inertia
 
     public init(gravity: SIMD3<Float>, dtSub: Float, windAmplitude: Float, windFrequency: Float,
          windPhase: Float, windDirection: SIMD3<Float>, substeps: UInt32,
          numBones: UInt32, numSpheres: UInt32, numCapsules: UInt32, numPlanes: UInt32 = 0,
-         settlingFrames: UInt32 = 0) {
+         settlingFrames: UInt32 = 0, externalVelocity: SIMD3<Float> = .zero,
+         dragMultiplier: Float = 1.0) {
         self.gravity = gravity
         self.dtSub = dtSub
         self.windAmplitude = windAmplitude
@@ -358,5 +362,7 @@ public struct SpringBoneGlobalParams {
         self.numCapsules = numCapsules
         self.numPlanes = numPlanes
         self.settlingFrames = settlingFrames
+        self.dragMultiplier = dragMultiplier
+        self.externalVelocity = externalVelocity
     }
 }

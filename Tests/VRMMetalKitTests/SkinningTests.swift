@@ -77,6 +77,26 @@ final class SkinningTests: XCTestCase {
         return fileManager.currentDirectoryPath
     }
 
+    /// Find Muse project resources directory (use MUSE_RESOURCES_PATH env var)
+    private var museResourcesPath: String? {
+        let fileManager = FileManager.default
+
+        // Check environment variable first
+        if let envPath = ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"] {
+            if fileManager.fileExists(atPath: "\(envPath)/AvatarSample_A.vrm.glb") {
+                return envPath
+            }
+        }
+
+        // Try relative to project root
+        let relativePath = "\(projectRoot)/../Muse/Resources/VRM"
+        if fileManager.fileExists(atPath: "\(relativePath)/AvatarSample_A.vrm.glb") {
+            return relativePath
+        }
+
+        return nil
+    }
+
     // MARK: - Helper Methods
 
     /// Load test VRM model
@@ -97,7 +117,7 @@ final class SkinningTests: XCTestCase {
     /// Apply skinning to a vertex (CPU simulation of GPU shader)
     private func skinVertex(
         position: SIMD3<Float>,
-        joints: SIMD4<UInt16>,
+        joints: SIMD4<UInt32>,
         weights: SIMD4<Float>,
         skinMatrices: [float4x4]
     ) -> SIMD3<Float> {
@@ -377,7 +397,7 @@ final class SkinningTests: XCTestCase {
 
         // Test skinning a vertex at origin with single joint influence
         let testPosition = SIMD3<Float>(0, 1, 0)  // 1 unit up
-        let testJoints = SIMD4<UInt16>(0, 0, 0, 0)  // All weight on joint 0
+        let testJoints = SIMD4<UInt32>(0, 0, 0, 0)  // All weight on joint 0
         let testWeights = SIMD4<Float>(1, 0, 0, 0)
 
         let skinnedPosition = skinVertex(
@@ -431,7 +451,7 @@ final class SkinningTests: XCTestCase {
         // Test 100% joint 0
         let pos0 = skinVertex(
             position: testPosition,
-            joints: SIMD4<UInt16>(0, 1, 0, 0),
+            joints: SIMD4<UInt32>(0, 1, 0, 0),
             weights: SIMD4<Float>(1, 0, 0, 0),
             skinMatrices: skinMatrices
         )
@@ -439,7 +459,7 @@ final class SkinningTests: XCTestCase {
         // Test 100% joint 1
         let pos1 = skinVertex(
             position: testPosition,
-            joints: SIMD4<UInt16>(0, 1, 0, 0),
+            joints: SIMD4<UInt32>(0, 1, 0, 0),
             weights: SIMD4<Float>(0, 1, 0, 0),
             skinMatrices: skinMatrices
         )
@@ -447,7 +467,7 @@ final class SkinningTests: XCTestCase {
         // Test 50/50 blend
         let posBlend = skinVertex(
             position: testPosition,
-            joints: SIMD4<UInt16>(0, 1, 0, 0),
+            joints: SIMD4<UInt32>(0, 1, 0, 0),
             weights: SIMD4<Float>(0.5, 0.5, 0, 0),
             skinMatrices: skinMatrices
         )
@@ -620,5 +640,563 @@ final class SkinningTests: XCTestCase {
 
         print("\n=== Animated Pose Validation ===")
         print("Max skin matrix translation: \(maxTranslation)")
+    }
+
+    // MARK: - Phase 5: Vertex Layout Consistency Tests
+
+    /// Test 5.1: VRMVertex memory layout offsets are consistent
+    func testVRMVertexLayoutOffsets() {
+        // Get actual offsets from MemoryLayout
+        let posOffset = MemoryLayout<VRMVertex>.offset(of: \.position)!
+        let normOffset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
+        let texOffset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
+        let colorOffset = MemoryLayout<VRMVertex>.offset(of: \.color)!
+        let jointsOffset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
+        let weightsOffset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
+        let stride = MemoryLayout<VRMVertex>.stride
+        let size = MemoryLayout<VRMVertex>.size
+
+        print("\n=== VRMVertex Memory Layout ===")
+        print("position:  offset \(posOffset), size \(MemoryLayout<SIMD3<Float>>.size)")
+        print("normal:    offset \(normOffset), size \(MemoryLayout<SIMD3<Float>>.size)")
+        print("texCoord:  offset \(texOffset), size \(MemoryLayout<SIMD2<Float>>.size)")
+        print("color:     offset \(colorOffset), size \(MemoryLayout<SIMD4<Float>>.size)")
+        print("joints:    offset \(jointsOffset), size \(MemoryLayout<SIMD4<UInt32>>.size)")
+        print("weights:   offset \(weightsOffset), size \(MemoryLayout<SIMD4<Float>>.size)")
+        print("stride:    \(stride)")
+        print("size:      \(size)")
+
+        // Verify offsets are in ascending order
+        XCTAssertLessThan(posOffset, normOffset, "position should come before normal")
+        XCTAssertLessThan(normOffset, texOffset, "normal should come before texCoord")
+        XCTAssertLessThan(texOffset, colorOffset, "texCoord should come before color")
+        XCTAssertLessThan(colorOffset, jointsOffset, "color should come before joints")
+        XCTAssertLessThan(jointsOffset, weightsOffset, "joints should come before weights")
+
+        // Verify stride is large enough to contain all data
+        let lastFieldEnd = weightsOffset + MemoryLayout<SIMD4<Float>>.size
+        XCTAssertGreaterThanOrEqual(stride, lastFieldEnd,
+            "stride (\(stride)) must be >= end of last field (\(lastFieldEnd))")
+
+        // Verify joints field has proper alignment for ushort4
+        XCTAssertEqual(jointsOffset % MemoryLayout<UInt16>.alignment, 0,
+            "joints offset should be aligned to UInt16 alignment")
+
+        // Verify weights field has proper alignment for float4
+        XCTAssertEqual(weightsOffset % MemoryLayout<Float>.alignment, 0,
+            "weights offset should be aligned to Float alignment")
+
+        // CRITICAL: Verify manual calculations match actual offsets
+        // This catches bugs where MemoryLayout<SIMD3<Float>>.size (16) differs from
+        // the actual struct layout due to alignment padding
+        let manualColorOffset = MemoryLayout<SIMD3<Float>>.size * 2 + MemoryLayout<SIMD2<Float>>.size
+        if manualColorOffset != colorOffset {
+            print("⚠️ ALIGNMENT BUG DETECTED:")
+            print("  Manual color offset calculation: \(manualColorOffset)")
+            print("  Actual VRMVertex.color offset: \(colorOffset)")
+            print("  Difference: \(colorOffset - manualColorOffset) bytes of alignment padding")
+        }
+        // This test documents the known alignment behavior - use MemoryLayout.offset, not manual calculations!
+        XCTAssertEqual(colorOffset, 48, "color offset should be 48 (not 40 from manual calc due to alignment)")
+        XCTAssertEqual(jointsOffset, 64, "joints offset should be 64")
+        XCTAssertEqual(weightsOffset, 80, "weights offset should be 80")
+        XCTAssertEqual(stride, 96, "stride should be 96")
+    }
+
+    /// Test 5.2: Verify joint indices are within valid range for all vertices
+    func testAllJointIndicesWithinValidRange() async throws {
+        let model = try await loadTestModel()
+
+        for (meshIndex, mesh) in model.meshes.enumerated() {
+            for (primIndex, primitive) in mesh.primitives.enumerated() {
+                guard primitive.hasJoints,
+                      let vertexBuffer = primitive.vertexBuffer else {
+                    continue
+                }
+
+                let vertexStride = MemoryLayout<VRMVertex>.stride
+                let vertexCount = vertexBuffer.length / vertexStride
+                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+
+                // Find the max joint index referenced
+                var maxJointIndex: UInt32 = 0
+                var problematicVertices: [(Int, SIMD4<UInt32>)] = []
+
+                for i in 0..<vertexCount {
+                    let joints = vertices[i].joints
+                    let weights = vertices[i].weights
+
+                    // Track max joint index (only for non-zero weights)
+                    if weights.x > 0 { maxJointIndex = max(maxJointIndex, joints.x) }
+                    if weights.y > 0 { maxJointIndex = max(maxJointIndex, joints.y) }
+                    if weights.z > 0 { maxJointIndex = max(maxJointIndex, joints.z) }
+                    if weights.w > 0 { maxJointIndex = max(maxJointIndex, joints.w) }
+
+                    // Check for potentially problematic values (joint 0 with other zeros often indicates issues)
+                    let weightSum = weights.x + weights.y + weights.z + weights.w
+                    if weightSum < 0.001 {
+                        if problematicVertices.count < 5 {
+                            problematicVertices.append((i, joints))
+                        }
+                    }
+                }
+
+                print("\n=== Mesh \(meshIndex) Primitive \(primIndex) ===")
+                print("Vertices: \(vertexCount)")
+                print("Max joint index: \(maxJointIndex)")
+                print("Required palette size: \(primitive.requiredPaletteSize)")
+
+                if !problematicVertices.isEmpty {
+                    print("⚠️ Found \(problematicVertices.count)+ vertices with near-zero weight sums:")
+                    for (idx, joints) in problematicVertices.prefix(3) {
+                        print("  Vertex \(idx): joints=[\(joints.x), \(joints.y), \(joints.z), \(joints.w)]")
+                    }
+                }
+
+                // Joint indices should be within required palette size
+                XCTAssertLessThan(Int(maxJointIndex), primitive.requiredPaletteSize,
+                    "Max joint index (\(maxJointIndex)) should be < requiredPaletteSize (\(primitive.requiredPaletteSize))")
+            }
+        }
+    }
+
+    /// Test 5.3: Verify weight sums are approximately 1.0 for all vertices
+    func testWeightSumsApproximatelyOne() async throws {
+        let model = try await loadTestModel()
+
+        var totalVertices = 0
+        var badWeightVertices = 0
+        var zeroWeightVertices = 0
+
+        for mesh in model.meshes {
+            for primitive in mesh.primitives {
+                guard primitive.hasWeights,
+                      let vertexBuffer = primitive.vertexBuffer else {
+                    continue
+                }
+
+                let vertexStride = MemoryLayout<VRMVertex>.stride
+                let vertexCount = vertexBuffer.length / vertexStride
+                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+
+                for i in 0..<vertexCount {
+                    let weights = vertices[i].weights
+                    let sum = weights.x + weights.y + weights.z + weights.w
+                    totalVertices += 1
+
+                    if sum < 0.001 {
+                        zeroWeightVertices += 1
+                    } else if abs(sum - 1.0) > 0.05 {
+                        badWeightVertices += 1
+                    }
+                }
+            }
+        }
+
+        print("\n=== Weight Sum Analysis ===")
+        print("Total vertices with weights: \(totalVertices)")
+        print("Vertices with near-zero weights: \(zeroWeightVertices)")
+        print("Vertices with sum != 1.0 (>5% deviation): \(badWeightVertices)")
+
+        // Some files may have weights that don't sum to 1.0 (shader normalizes)
+        // But we should flag if too many have issues
+        let problemRatio = Float(zeroWeightVertices + badWeightVertices) / Float(max(totalVertices, 1))
+        print("Problem ratio: \(String(format: "%.2f", problemRatio * 100))%")
+
+        // Warn if more than 1% of vertices have weight issues
+        if problemRatio > 0.01 {
+            print("⚠️ More than 1% of vertices have weight sum issues")
+        }
+
+        // Fail if any vertices have zero weights (indicates data loading issue)
+        XCTAssertEqual(zeroWeightVertices, 0,
+            "Found \(zeroWeightVertices) vertices with zero weight sums - possible data loading issue")
+    }
+
+    // MARK: - Phase 6: AvatarSample_A Specific Tests (Cardigan Button Issue)
+
+    /// Load AvatarSample_A model for testing the cardigan button wedge artifact
+    private func loadAvatarSampleA() async throws -> VRMModel {
+        guard let resourcesPath = museResourcesPath else {
+            throw XCTSkip("Muse resources not found")
+        }
+        let modelPath = "\(resourcesPath)/AvatarSample_A.vrm.glb"
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
+                      "AvatarSample_A.vrm.glb not found at \(modelPath)")
+
+        let modelURL = URL(fileURLWithPath: modelPath)
+        return try await VRMModel.load(from: modelURL, device: device)
+    }
+
+    /// Test 6.1: Analyze AvatarSample_A vertex data for anomalies
+    func testAvatarSampleA_VertexDataAnalysis() async throws {
+        let model = try await loadAvatarSampleA()
+
+        print("\n=== AvatarSample_A Analysis ===")
+        print("Meshes: \(model.meshes.count)")
+        print("Skins: \(model.skins.count)")
+
+        var totalVertices = 0
+        var clothingMeshInfo: [(meshIndex: Int, primIndex: Int, name: String?, vertexCount: Int)] = []
+
+        for (meshIndex, mesh) in model.meshes.enumerated() {
+            for (primIndex, primitive) in mesh.primitives.enumerated() {
+                guard let vertexBuffer = primitive.vertexBuffer else { continue }
+
+                let vertexStride = MemoryLayout<VRMVertex>.stride
+                let vertexCount = vertexBuffer.length / vertexStride
+                totalVertices += vertexCount
+
+                // Look for clothing-related meshes (cardigan, shirt, etc.)
+                let meshName = mesh.name?.lowercased() ?? ""
+                if meshName.contains("cloth") || meshName.contains("cardigan") ||
+                   meshName.contains("shirt") || meshName.contains("body") ||
+                   meshName.contains("outfit") || meshName.contains("top") {
+                    clothingMeshInfo.append((meshIndex, primIndex, mesh.name, vertexCount))
+                }
+
+                print("Mesh \(meshIndex) '\(mesh.name ?? "unnamed")' prim \(primIndex): \(vertexCount) vertices, hasJoints=\(primitive.hasJoints)")
+            }
+        }
+
+        print("\nTotal vertices: \(totalVertices)")
+        print("Potential clothing meshes: \(clothingMeshInfo.count)")
+        for info in clothingMeshInfo {
+            print("  - Mesh \(info.meshIndex) '\(info.name ?? "unnamed")': \(info.vertexCount) vertices")
+        }
+
+        XCTAssertGreaterThan(totalVertices, 0, "Model should have vertices")
+    }
+
+    /// Test 6.2: Check AvatarSample_A for vertices with problematic skinning data
+    func testAvatarSampleA_SkinningDataIntegrity() async throws {
+        let model = try await loadAvatarSampleA()
+
+        var issuesFound: [(mesh: Int, prim: Int, vertex: Int, issue: String)] = []
+
+        for (meshIndex, mesh) in model.meshes.enumerated() {
+            for (primIndex, primitive) in mesh.primitives.enumerated() {
+                guard primitive.hasJoints,
+                      let vertexBuffer = primitive.vertexBuffer else { continue }
+
+                let vertexStride = MemoryLayout<VRMVertex>.stride
+                let vertexCount = vertexBuffer.length / vertexStride
+                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+
+                for i in 0..<vertexCount {
+                    let v = vertices[i]
+                    let joints = v.joints
+                    let weights = v.weights
+                    let weightSum = weights.x + weights.y + weights.z + weights.w
+
+                    // Check for zero/near-zero weight sum
+                    if weightSum < 0.001 {
+                        if issuesFound.count < 20 {
+                            issuesFound.append((meshIndex, primIndex, i, "zero weight sum"))
+                        }
+                    }
+
+                    // Check for weight sum significantly different from 1.0
+                    if abs(weightSum - 1.0) > 0.1 && weightSum > 0.001 {
+                        if issuesFound.count < 20 {
+                            issuesFound.append((meshIndex, primIndex, i, "weight sum = \(weightSum)"))
+                        }
+                    }
+
+                    // Check for joint index 0 with full weight (potential fallback indicator)
+                    if joints.x == 0 && joints.y == 0 && joints.z == 0 && joints.w == 0 && weights.x > 0.99 {
+                        if issuesFound.count < 20 {
+                            issuesFound.append((meshIndex, primIndex, i, "all joints=0 with full weight on joint 0"))
+                        }
+                    }
+
+                    // Check for out-of-bounds joint indices
+                    let maxJoint = max(joints.x, joints.y, joints.z, joints.w)
+                    if Int(maxJoint) >= primitive.requiredPaletteSize && primitive.requiredPaletteSize > 0 {
+                        if issuesFound.count < 20 {
+                            issuesFound.append((meshIndex, primIndex, i, "joint \(maxJoint) >= palette \(primitive.requiredPaletteSize)"))
+                        }
+                    }
+                }
+            }
+        }
+
+        print("\n=== AvatarSample_A Skinning Data Integrity ===")
+        if issuesFound.isEmpty {
+            print("✅ No skinning data issues found")
+        } else {
+            print("⚠️ Found \(issuesFound.count) potential issues:")
+            for issue in issuesFound.prefix(10) {
+                print("  Mesh \(issue.mesh) prim \(issue.prim) vertex \(issue.vertex): \(issue.issue)")
+            }
+        }
+
+        // The test passes but reports issues for investigation
+        // We don't fail because some files may have quirks that the shader handles
+    }
+
+    /// Test 6.3: Identify vertices that might cause the wedge artifact
+    func testAvatarSampleA_WedgeArtifactDetection() async throws {
+        let model = try await loadAvatarSampleA()
+
+        // Update world transforms
+        for node in model.nodes where node.parent == nil {
+            node.updateWorldTransform()
+        }
+
+        guard model.skins.count > 0 else {
+            throw XCTSkip("Model has no skins")
+        }
+
+        let skin = model.skins[0]
+
+        // Compute skin matrices in bind pose
+        var skinMatrices: [float4x4] = []
+        for (idx, joint) in skin.joints.enumerated() {
+            let skinMatrix = computeSkinMatrix(
+                worldMatrix: joint.worldMatrix,
+                inverseBindMatrix: skin.inverseBindMatrices[idx]
+            )
+            skinMatrices.append(skinMatrix)
+        }
+
+        var suspiciousVertices: [(mesh: Int, prim: Int, vertex: Int, displacement: Float, details: String)] = []
+
+        for (meshIndex, mesh) in model.meshes.enumerated() {
+            for (primIndex, primitive) in mesh.primitives.enumerated() {
+                guard primitive.hasJoints,
+                      let vertexBuffer = primitive.vertexBuffer else { continue }
+
+                let vertexStride = MemoryLayout<VRMVertex>.stride
+                let vertexCount = vertexBuffer.length / vertexStride
+                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+
+                for i in 0..<vertexCount {
+                    let v = vertices[i]
+
+                    // Simulate CPU skinning
+                    let skinnedPos = skinVertex(
+                        position: v.position,
+                        joints: v.joints,
+                        weights: v.weights,
+                        skinMatrices: skinMatrices
+                    )
+
+                    // Check displacement from original position
+                    let displacement = simd_length(skinnedPos - v.position)
+
+                    // Flag vertices that move significantly in bind pose (> 0.1 units)
+                    // In proper bind pose, vertices should barely move
+                    if displacement > 0.1 {
+                        let details = "pos=\(v.position), skinned=\(skinnedPos), joints=[\(v.joints.x),\(v.joints.y),\(v.joints.z),\(v.joints.w)], weights=[\(v.weights.x),\(v.weights.y),\(v.weights.z),\(v.weights.w)]"
+                        suspiciousVertices.append((meshIndex, primIndex, i, displacement, details))
+                    }
+                }
+            }
+        }
+
+        // Sort by displacement (largest first)
+        suspiciousVertices.sort { $0.displacement > $1.displacement }
+
+        print("\n=== AvatarSample_A Wedge Artifact Detection ===")
+        print("Total suspicious vertices (displacement > 0.1): \(suspiciousVertices.count)")
+
+        if !suspiciousVertices.isEmpty {
+            print("\nTop 10 most displaced vertices:")
+            for v in suspiciousVertices.prefix(10) {
+                print("  Mesh \(v.mesh) prim \(v.prim) vertex \(v.vertex): displacement=\(String(format: "%.4f", v.displacement))")
+                print("    \(v.details)")
+            }
+
+            // Check if the most displaced vertex has suspicious joint data
+            let worst = suspiciousVertices[0]
+            print("\n⚠️ Most displaced vertex details:")
+            print("  Displacement: \(worst.displacement) units")
+            print("  This could be the source of the wedge artifact!")
+        } else {
+            print("✅ No vertices with significant bind pose displacement")
+        }
+
+        // We expect some displacement in bind pose, but not extreme values
+        let maxDisplacement = suspiciousVertices.first?.displacement ?? 0
+        XCTAssertLessThan(maxDisplacement, 1.0,
+            "Found vertex with extreme displacement (\(maxDisplacement)) - likely skinning bug")
+    }
+
+    /// Test 6.4: Verify AvatarSample_A with extreme joint rotations doesn't explode vertices
+    func testAvatarSampleA_ExtremePoseStability() async throws {
+        let model = try await loadAvatarSampleA()
+
+        // Update initial world transforms
+        for node in model.nodes where node.parent == nil {
+            node.updateWorldTransform()
+        }
+
+        guard model.skins.count > 0 else {
+            throw XCTSkip("Model has no skins")
+        }
+
+        let skin = model.skins[0]
+
+        // Apply extreme rotations to various bones to stress test skinning
+        let extremeAngle: Float = .pi / 2  // 90 degrees
+
+        // Find and rotate some key bones
+        let bonesToRotate: [VRMHumanoidBone] = [.spine, .chest, .upperChest, .leftUpperArm, .rightUpperArm]
+        for bone in bonesToRotate {
+            if let nodeIndex = model.humanoid?.getBoneNode(bone), nodeIndex < model.nodes.count {
+                let node = model.nodes[nodeIndex]
+                // Apply rotation around local Y axis
+                node.rotation = makeQuaternion(angle: extremeAngle, axis: SIMD3<Float>(0, 1, 0))
+                node.updateLocalMatrix()
+            }
+        }
+
+        // Update all world transforms after rotation
+        for node in model.nodes where node.parent == nil {
+            node.updateWorldTransform()
+        }
+
+        // Compute skin matrices with extreme pose
+        var skinMatrices: [float4x4] = []
+        for (idx, joint) in skin.joints.enumerated() {
+            let skinMatrix = computeSkinMatrix(
+                worldMatrix: joint.worldMatrix,
+                inverseBindMatrix: skin.inverseBindMatrices[idx]
+            )
+            skinMatrices.append(skinMatrix)
+        }
+
+        // Check for any skin matrices with extreme values
+        var extremeMatrices: [(index: Int, translation: Float)] = []
+        for (idx, matrix) in skinMatrices.enumerated() {
+            let translation = extractTranslation(matrix)
+            let magnitude = simd_length(translation)
+
+            // Flag matrices with very large translations (> 5 units is suspicious)
+            if magnitude > 5.0 {
+                extremeMatrices.append((idx, magnitude))
+            }
+
+            // Check for NaN/Inf
+            XCTAssertTrue(matrixIsValid(matrix),
+                "Skin matrix \(idx) has NaN/Inf values after extreme rotation")
+        }
+
+        print("\n=== AvatarSample_A Extreme Pose Test ===")
+        print("Applied 90° rotations to spine, chest, arms")
+
+        if extremeMatrices.isEmpty {
+            print("✅ All skin matrix translations within reasonable bounds")
+        } else {
+            print("⚠️ Found \(extremeMatrices.count) matrices with large translations:")
+            for m in extremeMatrices.prefix(5) {
+                if let joint = skin.joints[safe: m.index] {
+                    print("  Joint \(m.index) '\(joint.name ?? "unnamed")': translation = \(m.translation)")
+                }
+            }
+        }
+
+        // Test CPU skinning on a sample of vertices
+        var maxDisplacement: Float = 0
+        var worstVertex: (mesh: Int, vertex: Int, displacement: Float)?
+
+        for (meshIndex, mesh) in model.meshes.enumerated() {
+            for primitive in mesh.primitives {
+                guard primitive.hasJoints,
+                      let vertexBuffer = primitive.vertexBuffer else { continue }
+
+                let vertexStride = MemoryLayout<VRMVertex>.stride
+                let vertexCount = vertexBuffer.length / vertexStride
+                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+
+                // Sample every 100th vertex for performance
+                for i in stride(from: 0, to: vertexCount, by: 100) {
+                    let v = vertices[i]
+                    let skinnedPos = skinVertex(
+                        position: v.position,
+                        joints: v.joints,
+                        weights: v.weights,
+                        skinMatrices: skinMatrices
+                    )
+
+                    let displacement = simd_length(skinnedPos - v.position)
+                    if displacement > maxDisplacement {
+                        maxDisplacement = displacement
+                        worstVertex = (meshIndex, i, displacement)
+                    }
+
+                    // Fail if any vertex moves more than 10 units (extreme explosion)
+                    XCTAssertLessThan(displacement, 10.0,
+                        "Vertex \(i) in mesh \(meshIndex) has extreme displacement (\(displacement)) under extreme pose")
+                }
+            }
+        }
+
+        print("Max vertex displacement under extreme pose: \(String(format: "%.4f", maxDisplacement))")
+        if let worst = worstVertex {
+            print("Worst vertex: mesh \(worst.mesh) vertex \(worst.vertex)")
+        }
+    }
+
+    /// Test 5.4: Vertex buffer contents can be correctly read using VRMVertex layout
+    func testVertexBufferReadability() async throws {
+        let model = try await loadTestModel()
+
+        for (meshIndex, mesh) in model.meshes.enumerated() {
+            for (primIndex, primitive) in mesh.primitives.enumerated() {
+                guard let vertexBuffer = primitive.vertexBuffer else {
+                    continue
+                }
+
+                let vertexStride = MemoryLayout<VRMVertex>.stride
+                let vertexCount = vertexBuffer.length / vertexStride
+
+                guard vertexCount > 0 else { continue }
+
+                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+
+                // Sample a few vertices and verify data is sensible
+                var minPos = SIMD3<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
+                var maxPos = SIMD3<Float>(-Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)
+                var hasNaN = false
+                var hasInf = false
+
+                for i in 0..<min(100, vertexCount) {
+                    let v = vertices[i]
+
+                    // Check for NaN/Inf in position
+                    if v.position.x.isNaN || v.position.y.isNaN || v.position.z.isNaN {
+                        hasNaN = true
+                    }
+                    if v.position.x.isInfinite || v.position.y.isInfinite || v.position.z.isInfinite {
+                        hasInf = true
+                    }
+
+                    minPos = simd_min(minPos, v.position)
+                    maxPos = simd_max(maxPos, v.position)
+
+                    // Verify normal is unit-ish (allowing some tolerance)
+                    let normalLength = simd_length(v.normal)
+                    if !normalLength.isNaN && normalLength > 0.1 {
+                        XCTAssertLessThan(abs(normalLength - 1.0), 0.2,
+                            "Mesh \(meshIndex) prim \(primIndex) vertex \(i) has abnormal normal length: \(normalLength)")
+                    }
+
+                    // Verify UV coordinates are in reasonable range
+                    if primitive.hasTexCoords {
+                        // UVs typically in [0,1] but can extend beyond for tiling
+                        XCTAssertFalse(v.texCoord.x.isNaN || v.texCoord.y.isNaN,
+                            "Mesh \(meshIndex) prim \(primIndex) vertex \(i) has NaN UV")
+                    }
+                }
+
+                XCTAssertFalse(hasNaN, "Mesh \(meshIndex) prim \(primIndex) has NaN positions")
+                XCTAssertFalse(hasInf, "Mesh \(meshIndex) prim \(primIndex) has Infinite positions")
+
+                let size = maxPos - minPos
+                print("Mesh \(meshIndex) prim \(primIndex): \(vertexCount) vertices, size=\(size)")
+            }
+        }
     }
 }

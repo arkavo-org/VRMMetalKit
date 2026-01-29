@@ -97,6 +97,8 @@ public final class ARKitBodyDriver: @unchecked Sendable {
     /// Lock for thread safety
     private let lock = NSLock()
 
+    // Parent hierarchy is now in ARKitCoordinateConverter (consolidated)
+
     public init(
         mapper: ARKitSkeletonMapper = .default,
         smoothing: SkeletonSmoothingConfig = .default,
@@ -163,6 +165,14 @@ public final class ARKitBodyDriver: @unchecked Sendable {
         }
         let humanoidNodes = cachedHumanoidNodes ?? [:]
 
+        // Log skeleton contents periodically
+        #if DEBUG
+        if updateCount % 60 == 0 {
+            let joints = skeleton.joints.keys.map { $0.rawValue }.sorted()
+            print("[BodyDriver] Skeleton has \(joints.count) joints: \(joints.joined(separator: ", "))")
+        }
+        #endif
+
         // Retarget each ARKit joint to VRM bone
         for (arkitJoint, transform) in skeleton.joints {
             // Get VRM bone name from mapper
@@ -176,28 +186,71 @@ public final class ARKitBodyDriver: @unchecked Sendable {
                 continue
             }
 
-            // Decompose transform matrix into TRS components
-            let (position, rotation, scale) = decomposeTransform(transform)
+            // Debug: Log joint rotations (every 30 frames)
+            #if DEBUG
+            if updateCount % 30 == 0 {
+                let logJoints: Set<ARKitJoint> = [.hips, .leftUpperLeg, .rightUpperLeg, .leftUpperArm, .rightUpperArm]
+                if logJoints.contains(arkitJoint) {
+                    let inputRot = extractRotation(from: transform)
+                    print("[BodyDriver] \(arkitJoint) INPUT: w=\(String(format: "%.3f", inputRot.real)), x=\(String(format: "%.3f", inputRot.imag.x)), y=\(String(format: "%.3f", inputRot.imag.y)), z=\(String(format: "%.3f", inputRot.imag.z))")
+                }
+            }
+            #endif
 
-            // Apply smoothing
-            let smoothedPosition: SIMD3<Float>
-            let smoothedRotation: simd_quatf
-
-            if let filter = filterManager {
-                let jointKey = vrmBoneName
-                smoothedPosition = filter.updatePosition(joint: jointKey, position: position)
-                smoothedRotation = filter.updateRotation(joint: jointKey, rotation: rotation)
-            } else {
-                smoothedPosition = position
-                smoothedRotation = rotation
+            // Compute local rotation with coordinate conversion
+            // Returns nil if parent transform is missing (skip to avoid incorrect pose)
+            guard let localRotation = computeLocalRotation(
+                joint: arkitJoint,
+                childTransform: transform,
+                skeleton: skeleton
+            ) else {
+                #if DEBUG
+                if updateCount % 30 == 0 {
+                    let logJoints: Set<ARKitJoint> = [.leftUpperArm, .rightUpperArm, .leftShoulder, .rightShoulder]
+                    if logJoints.contains(arkitJoint) {
+                        if let parentJoint = ARKitCoordinateConverter.arkitParentMap[arkitJoint] {
+                            print("[BodyDriver] \(arkitJoint) SKIPPED - missing parent: \(parentJoint)")
+                        }
+                    }
+                }
+                #endif
+                continue  // Skip joint when parent data is missing
             }
 
-            // Apply to VRM node
-            node.translation = smoothedPosition
-            node.rotation = smoothedRotation
-            node.scale = scale
+            // Debug: Log joint output rotations (every 30 frames)
+            #if DEBUG
+            if updateCount % 30 == 0 {
+                let logJoints: Set<ARKitJoint> = [.hips, .leftUpperLeg, .rightUpperLeg, .leftUpperArm, .rightUpperArm]
+                if logJoints.contains(arkitJoint) {
+                    print("[BodyDriver] \(arkitJoint) OUTPUT: w=\(String(format: "%.3f", localRotation.real)), x=\(String(format: "%.3f", localRotation.imag.x)), y=\(String(format: "%.3f", localRotation.imag.y)), z=\(String(format: "%.3f", localRotation.imag.z))")
+                }
+            }
+            #endif
 
-            // Update local matrix
+            // Apply smoothing
+            let smoothedRotation: simd_quatf
+            if let filter = filterManager {
+                smoothedRotation = filter.updateRotation(joint: vrmBoneName, rotation: localRotation)
+            } else {
+                smoothedRotation = localRotation
+            }
+
+            // CRITICAL: Normalize quaternion to prevent vertex explosion
+            // VRMNode.updateLocalMatrix() converts quaternion to matrix using a formula
+            // that assumes the quaternion is normalized (x²+y²+z²+w² = 1).
+            // Unnormalized quaternions cause scaling artifacts in the rotation matrix,
+            // leading to mesh distortion ("vertex explosion") on the GPU.
+            let normalizedRotation = simd_normalize(smoothedRotation)
+
+            // Additional safety: Check for NaN (can occur with degenerate input)
+            if normalizedRotation.real.isNaN || normalizedRotation.imag.x.isNaN ||
+               normalizedRotation.imag.y.isNaN || normalizedRotation.imag.z.isNaN {
+                // Skip this joint - preserves previous valid rotation
+                continue
+            }
+
+            // Apply rotation only (preserve node's rest position)
+            node.rotation = normalizedRotation
             node.updateLocalMatrix()
         }
 
@@ -332,6 +385,34 @@ public final class ARKitBodyDriver: @unchecked Sendable {
         let rotation = simd_quatf(rotationMatrix)
 
         return (position, rotation, scale)
+    }
+
+    // MARK: - Coordinate System Conversion (Consolidated)
+
+    /// Compute local rotation from world-space transforms using shared converter
+    ///
+    /// Uses ARKitCoordinateConverter for consistent conversion between live preview
+    /// and recording. Includes rest pose calibration to fix collapsed shoulders,
+    /// scissor legs, and other visual artifacts.
+    ///
+    /// Returns `nil` if the joint has a parent in the hierarchy but that parent's
+    /// transform is missing from the skeleton data.
+    private func computeLocalRotation(
+        joint: ARKitJoint,
+        childTransform: simd_float4x4,
+        skeleton: ARKitBodySkeleton
+    ) -> simd_quatf? {
+        // Use shared converter with rest pose calibration
+        return ARKitCoordinateConverter.computeVRMRotation(
+            joint: joint,
+            childTransform: childTransform,
+            skeleton: skeleton
+        )
+    }
+
+    /// Extract rotation quaternion from transform matrix (for debug logging)
+    private func extractRotation(from transform: simd_float4x4) -> simd_quatf {
+        return ARKitCoordinateConverter.extractRotation(from: transform)
     }
 
     // MARK: - Reset and Utilities
