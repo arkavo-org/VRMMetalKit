@@ -360,26 +360,24 @@ final class MToonShaderGPUTests: XCTestCase {
     // MARK: - Helper Functions
 
     private func findShaderSourcePath() -> String? {
-        // Try multiple locations
-        let candidates = [
-            // From test file location
-            URL(fileURLWithPath: #file)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("Sources/VRMMetalKit/Shaders/MToonShader.metal")
-                .path,
-            // Absolute path
-            "/Users/arkavo/Projects/VRMMetalKit/Sources/VRMMetalKit/Shaders/MToonShader.metal",
-            // Environment variable
-            ProcessInfo.processInfo.environment["VRM_SHADER_PATH"] ?? ""
-        ]
-
-        for path in candidates {
-            if FileManager.default.fileExists(atPath: path) {
-                return path
-            }
+        // Try environment variable first
+        if let envPath = ProcessInfo.processInfo.environment["VRM_SHADER_PATH"],
+           FileManager.default.fileExists(atPath: envPath) {
+            return envPath
         }
+
+        // From test file location (relative path resolution)
+        let relativePath = URL(fileURLWithPath: #file)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/VRMMetalKit/Shaders/MToonShader.metal")
+            .path
+
+        if FileManager.default.fileExists(atPath: relativePath) {
+            return relativePath
+        }
+
         return nil
     }
 

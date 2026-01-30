@@ -385,7 +385,9 @@ final class VRMALoaderEdgeCaseTests: XCTestCase {
 
     /// Test loading non-existent file throws appropriate error
     func testLoadNonExistentFile() {
-        let fakeURL = URL(fileURLWithPath: "/nonexistent/file.vrma")
+        let fakeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nonexistent-\(UUID().uuidString)")
+            .appendingPathExtension("vrma")
 
         XCTAssertThrowsError(try VRMAnimationLoader.loadVRMA(from: fakeURL, model: model)) { error in
             // Should throw file not found error

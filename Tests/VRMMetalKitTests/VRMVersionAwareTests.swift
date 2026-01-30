@@ -1,6 +1,17 @@
 //
-// VRMVersionAwareTests.swift
-// Tests for version-aware VRM shader behavior
+// Copyright 2025 Arkavo
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 //
 
 import XCTest
@@ -19,9 +30,9 @@ final class VRMVersionAwareTests: XCTestCase {
     // MARK: - VRM 0.0 Tests
 
     func testVRM0ModelVersionDetection() async throws {
-        // Try environment variable first, then fallback to known path
-        let vrm0Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"]
-            ?? "/Users/arkavo/Documents/VRMModels/AvatarSample_A.vrm.glb"
+        guard let vrm0Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"] else {
+            throw XCTSkip("VRM_TEST_VRM0_PATH environment variable not set")
+        }
 
         let url = URL(fileURLWithPath: vrm0Path)
         guard FileManager.default.fileExists(atPath: vrm0Path) else {
@@ -41,8 +52,9 @@ final class VRMVersionAwareTests: XCTestCase {
     }
 
     func testVRM0MaterialVersionPropagation() async throws {
-        let vrm0Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"]
-            ?? "/Users/arkavo/Documents/VRMModels/AvatarSample_A.vrm.glb"
+        guard let vrm0Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"] else {
+            throw XCTSkip("VRM_TEST_VRM0_PATH environment variable not set")
+        }
 
         let url = URL(fileURLWithPath: vrm0Path)
         guard FileManager.default.fileExists(atPath: vrm0Path) else {
@@ -64,8 +76,9 @@ final class VRMVersionAwareTests: XCTestCase {
     }
 
     func testVRM0MToonUniformsVersion() async throws {
-        let vrm0Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"]
-            ?? "/Users/arkavo/Documents/VRMModels/AvatarSample_A.vrm.glb"
+        guard let vrm0Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"] else {
+            throw XCTSkip("VRM_TEST_VRM0_PATH environment variable not set")
+        }
 
         let url = URL(fileURLWithPath: vrm0Path)
         guard FileManager.default.fileExists(atPath: vrm0Path) else {
@@ -89,8 +102,9 @@ final class VRMVersionAwareTests: XCTestCase {
     // MARK: - VRM 1.0 Tests
 
     func testVRM1ModelVersionDetection() async throws {
-        let vrm1Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"]
-            ?? "/Users/arkavo/Documents/VRMModels/Seed-san.vrm"
+        guard let vrm1Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"] else {
+            throw XCTSkip("VRM_TEST_VRM1_PATH environment variable not set")
+        }
 
         let url = URL(fileURLWithPath: vrm1Path)
         guard FileManager.default.fileExists(atPath: vrm1Path) else {
@@ -110,8 +124,9 @@ final class VRMVersionAwareTests: XCTestCase {
     }
 
     func testVRM1MaterialVersionPropagation() async throws {
-        let vrm1Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"]
-            ?? "/Users/arkavo/Documents/VRMModels/Seed-san.vrm"
+        guard let vrm1Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"] else {
+            throw XCTSkip("VRM_TEST_VRM1_PATH environment variable not set")
+        }
 
         let url = URL(fileURLWithPath: vrm1Path)
         guard FileManager.default.fileExists(atPath: vrm1Path) else {
@@ -133,8 +148,9 @@ final class VRMVersionAwareTests: XCTestCase {
     }
 
     func testVRM1MToonUniformsVersion() async throws {
-        let vrm1Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"]
-            ?? "/Users/arkavo/Documents/VRMModels/Seed-san.vrm"
+        guard let vrm1Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"] else {
+            throw XCTSkip("VRM_TEST_VRM1_PATH environment variable not set")
+        }
 
         let url = URL(fileURLWithPath: vrm1Path)
         guard FileManager.default.fileExists(atPath: vrm1Path) else {
@@ -158,10 +174,12 @@ final class VRMVersionAwareTests: XCTestCase {
     // MARK: - Comparison Test
 
     func testVersionDifferentiationBetweenModels() async throws {
-        let vrm0Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"]
-            ?? "/Users/arkavo/Documents/VRMModels/AvatarSample_A.vrm.glb"
-        let vrm1Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"]
-            ?? "/Users/arkavo/Documents/VRMModels/Seed-san.vrm"
+        guard let vrm0Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"] else {
+            throw XCTSkip("VRM_TEST_VRM0_PATH environment variable not set")
+        }
+        guard let vrm1Path = ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"] else {
+            throw XCTSkip("VRM_TEST_VRM1_PATH environment variable not set")
+        }
 
         guard FileManager.default.fileExists(atPath: vrm0Path) else {
             throw XCTSkip("VRM 0.0 test model not found")
