@@ -46,6 +46,31 @@ make shaders      # Compiles to Resources/VRMMetalKitShaders.metallib
 make clean        # Cleans temp files
 ```
 
+### Z-Fighting Tests
+GPU-based tests that detect Z-fighting (rendering artifacts where coplanar surfaces flicker).
+
+```bash
+# Regression tests - FAIL if Z-fighting exceeds thresholds
+# Run after renderer changes to ensure bugs don't regress
+swift test --filter ZFightingRegressionTests --disable-sandbox
+
+# Bug finder - detailed analysis with flicker heatmaps
+# Use to investigate new Z-fighting issues
+swift test --filter ZFightingBugFinderTests --disable-sandbox
+
+# Full GPU test suite - includes positive tests proving detection works
+swift test --filter ZFightingGPUTests --disable-sandbox
+```
+
+**Current Known Issues (thresholds in `ZFightingRegressionTests.swift`):**
+- Face regions: 5%+ flicker (threshold: 2%)
+- Collar/Neck: 9%+ flicker (threshold: 3%)
+- Hip/Skirt: 9%+ flicker (threshold: 2%)
+
+**Requirements:**
+- Metal device (tests skip on CI without GPU)
+- `AvatarSample_A.vrm.glb` in `../Muse/Resources/VRM/` or set `MUSE_RESOURCES_PATH` env var
+
 ## Architecture & Design Patterns
 
 ### Core Systems
@@ -91,9 +116,6 @@ Errors must implement `LocalizedError`. Messages should be LLM-friendly:
 2.  **Where** (file/index).
 3.  **Suggestion** for fixing.
 4.  **Link** to VRM spec.
-
-### 4. 2.5D Rendering Mode
-Toggle via `renderer.renderingMode = .toon2D`. Uses `Toon2DShader` and `CharacterPrioritySystem` for sprite-like orthographic rendering with outlines.
 
 ## Licensing
 *   **Source Code:** Apache License 2.0.

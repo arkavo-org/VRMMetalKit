@@ -443,7 +443,7 @@ Task.detached {
 ```swift
 // ❌ UNSAFE: Don't access from multiple threads
 DispatchQueue.global().async {
-    renderer.renderingMode = .toon2D  // Data race!
+    renderer.outlineWidth = 2.0  // Data race!
 }
 ```
 

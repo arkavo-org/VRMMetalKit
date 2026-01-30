@@ -117,6 +117,12 @@ struct MToonMaterial {
  int hasEmissiveTexture;                    // 4 bytes
  uint32_t alphaMode;                        // 4 bytes (0: OPAQUE, 1: MASK, 2: BLEND)
  float alphaCutoff;                         // 4 bytes
+
+ // Block 12: 16 bytes - Version flag and padding
+ uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
+ float _padding3;                           // 4 bytes
+ float _padding4;                           // 4 bytes
+ float _padding5;                           // 4 bytes
 };
 
 struct VertexIn {
@@ -168,6 +174,17 @@ static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
 float2 calculateMatCapUV(float3 viewNormal) {
  // Convert view normal to UV coordinates for MatCap sampling
  return viewNormal.xy * 0.5 + 0.5;
+}
+
+// VRM 1.0 MToon spec uses linearstep for toon shading
+// Creates sharp anime-style shadow boundaries (not smooth gradients)
+static inline float linearstep(float a, float b, float t) {
+ float range = b - a;
+ // Guard against division by zero when toony=1.0 (range becomes 0)
+ if (range <= 0.0001) {
+     return t >= b ? 1.0 : 0.0;
+ }
+ return saturate((t - a) / range);
 }
 
 // Vertex shader with optional morphed positions buffer
@@ -263,7 +280,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 7) {
  // Show NdotL (diffuse lighting term)
  float3 normal = normalize(in.worldNormal);
- float NdotL = dot(normal, uniforms.lightDirection.xyz);
+ float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
  // Map from [-1,1] to [0,1] for visualization
  float mapped = NdotL * 0.5 + 0.5;
  return float4(mapped, mapped, mapped, 1.0);
@@ -289,6 +306,63 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 13) {
  // Show vertex color only
  return float4(in.color.rgb, 1.0);
+ } else if (uniforms.debugUVs == 14) {
+ // Debug mode 14: Output shadowStep as grayscale for sunburn diagnosis
+ float3 normal = normalize(in.worldNormal);
+ // Half-Lambert to match main lighting
+ float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
+ float NdotL = rawNdotL * 0.5 + 0.5;
+ float shadingShift = material.shadingShiftFactor;
+ float toony = material.shadingToonyFactor;
+ float shading = NdotL + shadingShift;
+ float shadowStep;
+ if (material.vrmVersion == 0) {
+     shadowStep = smoothstep(shadingShift - toony * 0.5,
+                            shadingShift + toony * 0.5, NdotL);
+ } else {
+     // VRM 1.0: linearstep formula
+     float range = (1.0 - toony) * 2.0;
+     if (range <= 0.0001) {
+         shadowStep = shading >= (1.0 - toony) ? 1.0 : 0.0;
+     } else {
+         shadowStep = saturate((shading - (-1.0 + toony)) / range);
+     }
+ }
+ return float4(shadowStep, shadowStep, shadowStep, 1.0);
+ } else if (uniforms.debugUVs == 15) {
+ // Debug mode 15: Visualize lightingFactor (the lit/shadow interpolation)
+ // WHITE = fully lit (baseColor), BLACK = fully shadow (shadeColor)
+ // This is identical to mode 14 but named for clarity in sunburn diagnosis
+ float3 normal = normalize(in.worldNormal);
+ // Half-Lambert to match main lighting
+ float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
+ float NdotL = rawNdotL * 0.5 + 0.5;
+ float shadingShift = material.shadingShiftFactor;
+ float toony = material.shadingToonyFactor;
+ float shading = NdotL + shadingShift;
+ float lightingFactor;
+ if (material.vrmVersion == 0) {
+     // VRM 0.0: smoothstep formula
+     lightingFactor = smoothstep(shadingShift - toony * 0.5,
+                                 shadingShift + toony * 0.5, NdotL);
+ } else {
+     // VRM 1.0: linearstep formula per spec
+     float lower = -1.0 + toony;
+     float upper = 1.0 - toony;
+     lightingFactor = saturate((shading - lower) / (upper - lower));
+ }
+ return float4(lightingFactor, lightingFactor, lightingFactor, 1.0);
+ } else if (uniforms.debugUVs == 16) {
+ // Debug mode 16: Show raw NdotL as color
+ // GREEN = positive NdotL (lit), RED = negative NdotL (shadow)
+ // Intensity shows magnitude
+ float3 normal = normalize(in.worldNormal);
+ float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
+ if (NdotL >= 0.0) {
+     return float4(0.0, NdotL, 0.0, 1.0);  // Green = positive (correct for front-lit)
+ } else {
+     return float4(-NdotL, 0.0, 0.0, 1.0); // Red = negative (WRONG for front-lit)
+ }
  }
 
  // Choose UV coordinates (animated or static)
@@ -375,33 +449,63 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float intensity2 = uniforms.light2Color.w;
  float totalIntensity = max(intensity0 + intensity1 + intensity2, MIN_TOTAL_INTENSITY);
 
- // Calculate weighted light contributions
+ // Calculate weighted light contributions with version-aware shading formula
+ // VRM 0.0: smoothstep formula (converted params were designed for this)
+ // VRM 1.0: linearstep formula for sharp cel-shading per spec
  float3 lit0 = float3(0.0);
  if (intensity0 > 0.0) {
- float NdotL = dot(normal, uniforms.lightDirection.xyz);
- float shadowStep = smoothstep(shadingShift - toony * 0.5,
-                          shadingShift + toony * 0.5,
-                          NdotL);
+ // Light direction convention: negate because uniforms stores direction FROM light,
+ // but NdotL calculation needs direction TO light
+ // Half-Lambert: remap from [-1,1] to [0,1] for softer anime-style shadows
+ float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
+ float NdotL = rawNdotL * 0.5 + 0.5;
+ float shadowStep;
+ if (material.vrmVersion == 0) {
+     // VRM 0.0: Original smoothstep formula (params were designed for this)
+     shadowStep = smoothstep(shadingShift - toony * 0.5,
+                            shadingShift + toony * 0.5,
+                            NdotL);
+ } else {
+     // VRM 1.0: Spec-compliant linearstep formula for sharp cel-shading
+     float shading = NdotL + shadingShift;
+     shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading);
+ }
  float weight = intensity0 / totalIntensity;
  lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor.xyz * weight;
  }
 
  float3 lit1 = float3(0.0);
  if (intensity1 > 0.0) {
- float NdotL1 = dot(normal, uniforms.light1Direction.xyz);
- float shadowStep1 = smoothstep(shadingShift - toony * 0.5,
-                          shadingShift + toony * 0.5,
-                          NdotL1);
+ // Half-Lambert for fill light
+ float rawNdotL1 = dot(normal, -uniforms.light1Direction.xyz);
+ float NdotL1 = rawNdotL1 * 0.5 + 0.5;
+ float shadowStep1;
+ if (material.vrmVersion == 0) {
+     shadowStep1 = smoothstep(shadingShift - toony * 0.5,
+                             shadingShift + toony * 0.5,
+                             NdotL1);
+ } else {
+     float shading1 = NdotL1 + shadingShift;
+     shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
+ }
  float weight1 = intensity1 / totalIntensity;
  lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color.xyz * weight1;
  }
 
  float3 lit2 = float3(0.0);
  if (intensity2 > 0.0) {
- float NdotL2 = dot(normal, uniforms.light2Direction.xyz);
- float shadowStep2 = smoothstep(shadingShift - toony * 0.5,
-                          shadingShift + toony * 0.5,
-                          NdotL2);
+ // Half-Lambert for rim light
+ float rawNdotL2 = dot(normal, -uniforms.light2Direction.xyz);
+ float NdotL2 = rawNdotL2 * 0.5 + 0.5;
+ float shadowStep2;
+ if (material.vrmVersion == 0) {
+     shadowStep2 = smoothstep(shadingShift - toony * 0.5,
+                             shadingShift + toony * 0.5,
+                             NdotL2);
+ } else {
+     float shading2 = NdotL2 + shadingShift;
+     shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
+ }
  float weight2 = intensity2 / totalIntensity;
  lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
  }
@@ -432,13 +536,16 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float3 rimColor = float3(0.0);
  float3 parametricRimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
  if (any(parametricRimColorFactor > 0.0)) {
- // Use view-space normal and view direction for proper fresnel
+ // Use view-space normal and CORRECT view direction for proper fresnel
  float3 Nv = viewNormal;  // Use flipped viewNormal for back faces
- float3 Vv = normalize(-in.worldPosition); // View direction in world space
+ float3 Vv = normalize(in.viewDirection);  // Correct: use vertex shader's viewDirection
 
- float vf = 1.0 - saturate(dot(Nv, normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz)));
- float rimF = pow(vf, material.parametricRimFresnelPowerFactor);
- rimF = saturate(rimF + material.parametricRimLiftFactor);
+ // Transform view direction to view space for dot product with view-space normal
+ float3 viewDirViewSpace = normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz);
+ float NdotV = saturate(dot(Nv, viewDirViewSpace));
+ float vf = 1.0 - NdotV;
+ float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
+                  material.parametricRimFresnelPowerFactor);
 
  rimColor = parametricRimColorFactor * rimF;
 
@@ -449,14 +556,14 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
  }
 
- // Apply rim lighting mix - blend between lit and unlit rim
+ // Apply rim lighting - blend between lit and unlit rim, then ADD to final color
  if (any(rimColor > 0.0)) {
  float3 rimLit = rimColor * uniforms.lightColor.xyz;  // Lit rim
- float3 rimUnlit = rimColor;                       // Unlit rim
- rimColor = mix(rimLit, rimUnlit, material.rimLightingMixFactor);
+ float3 rimUnlit = rimColor;                          // Unlit rim
+ float3 finalRim = mix(rimLit, rimUnlit, material.rimLightingMixFactor);
 
- // Mix rim into the final color instead of additive
- litColor = mix(litColor, litColor + rimColor, material.rimLightingMixFactor);
+ // ADD rim to final color (standard MToon behavior per spec)
+ litColor += finalRim;
  }
 
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
@@ -502,15 +609,21 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  outlineWidth *= widthMultiplier;
  }
 
+ // Pre-calculate world normal and camera position for edge attenuation
+ float3 worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+ float3 worldPos = (uniforms.modelMatrix * float4(in.position, 1.0)).xyz;
+
+ // Calculate view direction
+ float3 viewDir = normalize(cameraPos - worldPos);
+
  // Calculate final position with outline extrusion
  if (material.outlineMode == 1.0) {
  // World coordinates mode - extrude in world space
- float3 worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
- float3 worldPos = (uniforms.modelMatrix * float4(in.position, 1.0)).xyz;
-
- // Scale outline width by distance from camera for consistent visual thickness
- float3 cameraPos = -uniforms.viewMatrix[3].xyz;
- float distanceScale = length(worldPos - cameraPos) * 0.01; // Adjust multiplier as needed
+ float distanceScale = length(worldPos - cameraPos) * 0.01;
 
  worldPos += worldNormal * outlineWidth * distanceScale;
  out.worldPosition = worldPos;
@@ -518,11 +631,11 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  } else if (material.outlineMode == 2.0) {
  // Screen coordinates mode - extrude in screen space
- float4 worldPos = uniforms.modelMatrix * float4(in.position, 1.0);
- out.worldPosition = worldPos.xyz;
+ float4 worldPos4 = uniforms.modelMatrix * float4(in.position, 1.0);
+ out.worldPosition = worldPos4.xyz;
 
  // Transform to clip space
- float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
+ float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos4;
 
  // Calculate screen-space normal
  float3 viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
@@ -538,23 +651,19 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  } else {
  // No outline (mode 0)
- float4 worldPos = uniforms.modelMatrix * float4(in.position, 1.0);
- out.worldPosition = worldPos.xyz;
- out.position = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
+ float4 worldPos4 = uniforms.modelMatrix * float4(in.position, 1.0);
+ out.worldPosition = worldPos4.xyz;
+ out.position = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos4;
  }
 
- out.worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
+ out.worldNormal = worldNormal;
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
  out.texCoord = in.texCoord;
  out.animatedTexCoord = animateUV(in.texCoord, material);
  out.color = in.color;
 
- // Calculate view direction - extract camera world position from view matrix
- float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
-                                   uniforms.viewMatrix[1].xyz,
-                                   uniforms.viewMatrix[2].xyz);
- float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
- out.viewDirection = normalize(cameraPos - out.worldPosition);
+ // View direction already calculated above for edge attenuation
+ out.viewDirection = viewDir;
 
  return out;
 }
@@ -579,7 +688,7 @@ fragment float4 mtoon_debug_nl(VertexOut in [[stage_in]],
                         constant MToonMaterial& material [[buffer(8)]],
                         constant Uniforms& uniforms [[buffer(1)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, uniforms.lightDirection.xyz));
+ float nl = saturate(dot(normal, -uniforms.lightDirection.xyz));  // Negate for correct convention
  return float4(nl, nl, nl, 1.0);
 }
 
@@ -589,7 +698,7 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
                           texture2d<float> shadingShiftTexture [[texture(2)]],
                           sampler textureSampler [[sampler(0)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, uniforms.lightDirection.xyz));
+ float nl = saturate(dot(normal, -uniforms.lightDirection.xyz));  // Negate for correct convention
 
  float shadingShift = material.shadingShiftFactor;
  if (material.hasShadingShiftTexture > 0) {
@@ -612,10 +721,12 @@ fragment float4 mtoon_debug_rim(VertexOut in [[stage_in]],
  }
 
  float3 Nv = in.viewNormal;
- float3 Vv = normalize(-in.worldPosition);
- float vf = 1.0 - saturate(dot(Nv, normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz)));
- float rimF = pow(vf, material.parametricRimFresnelPowerFactor);
- rimF = saturate(rimF + material.parametricRimLiftFactor);
+ float3 Vv = normalize(in.viewDirection);  // Correct: use vertex shader's viewDirection
+ float3 viewDirViewSpace = normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz);
+ float NdotV = saturate(dot(Nv, viewDirViewSpace));
+ float vf = 1.0 - NdotV;
+ float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
+                  material.parametricRimFresnelPowerFactor);
  return float4(rimF, rimF, rimF, 1.0);
 }
 

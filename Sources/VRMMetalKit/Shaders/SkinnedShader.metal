@@ -117,6 +117,12 @@ struct MToonMaterial {
  int hasEmissiveTexture;                    // 4 bytes
  uint32_t alphaMode;                        // 4 bytes
  float alphaCutoff;                         // 4 bytes
+
+ // Block 12: 16 bytes - Version flag and padding
+ uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
+ float _padding3;                           // 4 bytes
+ float _padding4;                           // 4 bytes
+ float _padding5;                           // 4 bytes
 };
 
 struct VertexIn {
@@ -124,7 +130,7 @@ struct VertexIn {
  float3 normal [[attribute(1)]];
  float2 texCoord [[attribute(2)]];
  float4 color [[attribute(3)]];
- ushort4 joints [[attribute(4)]];
+ uint4 joints [[attribute(4)]];  // Changed to uint4 to match VRMVertex.joints (SIMD4<UInt32>)
  float4 weights [[attribute(5)]];
 };
 
@@ -171,7 +177,7 @@ static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
 vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                constant Uniforms& uniforms [[buffer(1)]],
                                constant MToonMaterial& material [[buffer(8)]],
-                               constant float4x4* jointMatrices [[buffer(3)]],
+                               constant float4x4* jointMatrices [[buffer(25)]],
                                device float3* morphedPositions [[buffer(20)]],
                                constant uint& hasMorphed [[buffer(22)]],
                                uint vertexID [[vertex_id]]) {
@@ -187,26 +193,62 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  basePosition = in.position;
  }
 
- // Apply skeletal skinning
- float4x4 skinMatrix = float4x4(0.0);
+ // Store RAW weights for threshold check (before normalization)
+ // This prevents accessing garbage joint indices that have zero/tiny weights
+ float4 rawWeights = in.weights;
 
- // Accumulate weighted joint transforms
- if (in.weights[0] > 0.0) {
- skinMatrix += jointMatrices[in.joints[0]] * in.weights[0];
+ // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
+ float4 weights = rawWeights;
+ float weightSum = dot(weights, float4(1.0));
+ if (weightSum > 1e-6) {
+ weights = weights / weightSum;
+ } else {
+ weights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
  }
- if (in.weights[1] > 0.0) {
- skinMatrix += jointMatrices[in.joints[1]] * in.weights[1];
+
+ // Apply skeletal skinning with normalized weights
+ // CRITICAL: Use RAW weights for threshold check to avoid accessing garbage joint indices
+ float4x4 skinMatrix = float4x4(0.0);
+ float threshold = 0.001;
+
+ // Safe buffer limit: clamp to 255 to prevent reading garbage memory
+ // This allows valid indices (0-90+) while blocking garbage indices (65535, etc.)
+ uint maxJoint = 255;
+ uint4 safeJoints = min(in.joints, uint4(maxJoint));
+
+ if (rawWeights[0] > threshold) {
+ skinMatrix += jointMatrices[safeJoints[0]] * weights[0];
  }
- if (in.weights[2] > 0.0) {
- skinMatrix += jointMatrices[in.joints[2]] * in.weights[2];
+ if (rawWeights[1] > threshold) {
+ skinMatrix += jointMatrices[safeJoints[1]] * weights[1];
  }
- if (in.weights[3] > 0.0) {
- skinMatrix += jointMatrices[in.joints[3]] * in.weights[3];
+ if (rawWeights[2] > threshold) {
+ skinMatrix += jointMatrices[safeJoints[2]] * weights[2];
+ }
+ if (rawWeights[3] > threshold) {
+ skinMatrix += jointMatrices[safeJoints[3]] * weights[3];
+ }
+
+ // Fallback: if skinMatrix is zero (no weights passed threshold), use first joint
+ if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
+ skinMatrix = jointMatrices[safeJoints[0]];
  }
 
  // Apply skinning to position and normal (using morphed base position if available)
  float4 skinnedPosition = skinMatrix * float4(basePosition, 1.0);
- float3 skinnedNormal = normalize((skinMatrix * float4(in.normal, 0.0)).xyz);
+ float3 skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
+
+ // SANITY CHECK: Detect NaN/Inf or extreme skinned positions and fall back to original
+ // This catches cases where joint indices point to garbage memory or matrix is corrupted
+ bool posHasNaN = any(isnan(skinnedPosition.xyz)) || any(isinf(skinnedPosition.xyz));
+ bool posHasExtreme = length(skinnedPosition.xyz) > 50.0;  // Reasonable limit for humanoid (within 50 units of origin)
+ bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
+ if (posHasNaN || posHasExtreme || normalHasNaN) {
+ // Fall back to original position (no skinning)
+ skinnedPosition = float4(basePosition, 1.0);
+ skinnedNormal = in.normal;
+ }
+ skinnedNormal = normalize(skinnedNormal);
 
  // Transform to world space
  float4 worldPos = uniforms.modelMatrix * skinnedPosition;
@@ -241,30 +283,61 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
 // Simplified skinned vertex shader for debugging
 vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
                          constant Uniforms& uniforms [[buffer(1)]],
-                         constant float4x4* jointMatrices [[buffer(3)]],
+                         constant float4x4* jointMatrices [[buffer(25)]],
                          uint vertexID [[vertex_id]]) {
  VertexOut out;
 
- // Apply skeletal skinning
- float4x4 skinMatrix = float4x4(0.0);
+ // Store RAW weights for threshold check
+ float4 rawWeights = in.weights;
 
- // Accumulate weighted joint transforms
- if (in.weights[0] > 0.0) {
- skinMatrix += jointMatrices[in.joints[0]] * in.weights[0];
+ // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
+ float4 weights = rawWeights;
+ float weightSum = dot(weights, float4(1.0));
+ if (weightSum > 1e-6) {
+ weights = weights / weightSum;
+ } else {
+ weights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
  }
- if (in.weights[1] > 0.0) {
- skinMatrix += jointMatrices[in.joints[1]] * in.weights[1];
+
+ // Apply skeletal skinning - use RAW weights for threshold check
+ float4x4 skinMatrix = float4x4(0.0);
+ float threshold = 0.001;
+
+ // Safe buffer limit: clamp to 255 to prevent reading garbage memory
+ uint maxJoint = 255;
+ uint4 safeJoints = min(in.joints, uint4(maxJoint));
+
+ if (rawWeights[0] > threshold) {
+ skinMatrix += jointMatrices[safeJoints[0]] * weights[0];
  }
- if (in.weights[2] > 0.0) {
- skinMatrix += jointMatrices[in.joints[2]] * in.weights[2];
+ if (rawWeights[1] > threshold) {
+ skinMatrix += jointMatrices[safeJoints[1]] * weights[1];
  }
- if (in.weights[3] > 0.0) {
- skinMatrix += jointMatrices[in.joints[3]] * in.weights[3];
+ if (rawWeights[2] > threshold) {
+ skinMatrix += jointMatrices[safeJoints[2]] * weights[2];
+ }
+ if (rawWeights[3] > threshold) {
+ skinMatrix += jointMatrices[safeJoints[3]] * weights[3];
+ }
+
+ // Fallback: if skinMatrix is zero, use first joint
+ if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
+ skinMatrix = jointMatrices[safeJoints[0]];
  }
 
  // Apply skinning to position and normal
  float4 skinnedPosition = skinMatrix * float4(in.position, 1.0);
- float3 skinnedNormal = normalize((skinMatrix * float4(in.normal, 0.0)).xyz);
+ float3 skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
+
+ // SANITY CHECK: Detect NaN/Inf or extreme skinned positions and fall back to original
+ bool posHasNaN = any(isnan(skinnedPosition.xyz)) || any(isinf(skinnedPosition.xyz));
+ bool posHasExtreme = length(skinnedPosition.xyz) > 50.0;
+ bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
+ if (posHasNaN || posHasExtreme || normalHasNaN) {
+ skinnedPosition = float4(in.position, 1.0);
+ skinnedNormal = in.normal;
+ }
+ skinnedNormal = normalize(skinnedNormal);
 
  // Transform to world space
  float4 worldPos = uniforms.modelMatrix * skinnedPosition;
@@ -299,19 +372,52 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
 vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
                                               constant Uniforms& uniforms [[buffer(1)]],
                                               constant MToonMaterial& material [[buffer(8)]],
-                                              constant float4x4* jointMatrices [[buffer(3)]]) {
+                                              constant float4x4* jointMatrices [[buffer(25)]]) {
  VertexOut out;
 
- // Apply skeletal skinning
+ // Store RAW weights for threshold check
+ float4 rawWeights = in.weights;
+
+ // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
+ float4 weights = rawWeights;
+ float weightSum = dot(weights, float4(1.0));
+ if (weightSum > 1e-6) {
+ weights = weights / weightSum;
+ } else {
+ weights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
+ }
+
+ // Apply skeletal skinning - use RAW weights for threshold check
  float4x4 skinMatrix = float4x4(0.0);
- if (in.weights[0] > 0.0) skinMatrix += jointMatrices[in.joints[0]] * in.weights[0];
- if (in.weights[1] > 0.0) skinMatrix += jointMatrices[in.joints[1]] * in.weights[1];
- if (in.weights[2] > 0.0) skinMatrix += jointMatrices[in.joints[2]] * in.weights[2];
- if (in.weights[3] > 0.0) skinMatrix += jointMatrices[in.joints[3]] * in.weights[3];
+ float threshold = 0.001;
+
+ // Safe buffer limit: clamp to 255 to prevent reading garbage memory
+ uint maxJoint = 255;
+ uint4 safeJoints = min(in.joints, uint4(maxJoint));
+
+ if (rawWeights[0] > threshold) skinMatrix += jointMatrices[safeJoints[0]] * weights[0];
+ if (rawWeights[1] > threshold) skinMatrix += jointMatrices[safeJoints[1]] * weights[1];
+ if (rawWeights[2] > threshold) skinMatrix += jointMatrices[safeJoints[2]] * weights[2];
+ if (rawWeights[3] > threshold) skinMatrix += jointMatrices[safeJoints[3]] * weights[3];
+
+ // Fallback: if skinMatrix is zero, use first joint
+ if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
+ skinMatrix = jointMatrices[safeJoints[0]];
+ }
 
  // Apply skinning to position and normal
  float4 skinnedPosition = skinMatrix * float4(in.position, 1.0);
- float3 skinnedNormal = normalize((skinMatrix * float4(in.normal, 0.0)).xyz);
+ float3 skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
+
+ // SANITY CHECK: Detect NaN/Inf or extreme skinned positions and fall back to original
+ bool posHasNaN = any(isnan(skinnedPosition.xyz)) || any(isinf(skinnedPosition.xyz));
+ bool posHasExtreme = length(skinnedPosition.xyz) > 50.0;
+ bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
+ if (posHasNaN || posHasExtreme || normalHasNaN) {
+ skinnedPosition = float4(in.position, 1.0);
+ skinnedNormal = in.normal;
+ }
+ skinnedNormal = normalize(skinnedNormal);
 
  // Transform to world space
  float4 worldPos = uniforms.modelMatrix * skinnedPosition;
@@ -320,16 +426,40 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  // Get outline width from material
  float outlineWidth = material.outlineWidthFactor;
 
- // Apply outline extrusion along normal in world space
+ // Extract camera world position from view matrix: cameraPos = -R^T * translation
+ // Done once at the start for use in both outline modes and view direction
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+
+ // Calculate view direction
+ float3 viewDir = normalize(cameraWorldPos - worldPos.xyz);
+
+ // Apply outline extrusion along normal
  // outlineMode: 0=none, 1=worldCoordinates, 2=screenCoordinates
+ // Must match MToonShader.metal for visual consistency
  if (material.outlineMode == 1) {
-  // World coordinates: fixed width in world units
-  worldPos.xyz += worldNormal * outlineWidth;
+  // World coordinates: width scales with camera distance (matches non-skinned)
+  float distanceScale = length(worldPos.xyz - cameraWorldPos) * 0.01;
+  worldPos.xyz += worldNormal * outlineWidth * distanceScale;
  } else if (material.outlineMode == 2) {
-  // Screen coordinates: width scales with distance from camera
+  // Screen coordinates: fixed pixel width (matches non-skinned NDC approach)
   float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
-  float screenScale = clipPos.w * 0.01; // Scale factor for screen-space width
-  worldPos.xyz += worldNormal * outlineWidth * screenScale;
+  float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
+  float2 screenNormal = normalize(viewNormal.xy);
+  float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
+  float2 offsetNDC = screenNormal * outlineWidth * pixelsToNDC;
+  clipPos.xy += offsetNDC * clipPos.w;
+  out.position = clipPos;
+  out.worldPosition = worldPos.xyz;
+  out.worldNormal = worldNormal;
+  out.viewDirection = viewDir;
+  out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
+  out.texCoord = in.texCoord;
+  out.animatedTexCoord = in.texCoord;
+  out.color = in.color;
+  return out;
  }
 
  out.worldPosition = worldPos.xyz;
@@ -340,11 +470,6 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.position = uniforms.projectionMatrix * viewPosition;
 
  // Calculate view direction and view normal
- // Extract camera world position from view matrix: cameraPos = -R^T * translation
- float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
-                                   uniforms.viewMatrix[1].xyz,
-                                   uniforms.viewMatrix[2].xyz);
- float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
  out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
 

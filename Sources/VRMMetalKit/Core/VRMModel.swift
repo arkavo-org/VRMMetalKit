@@ -438,8 +438,9 @@ public class VRMModel: @unchecked Sendable {
         for materialIndex in 0..<(gltf.materials?.count ?? 0) {
             if let gltfMaterial = gltf.materials?[safe: materialIndex] {
                 // Pass VRM 0.x material property if available (MToon data at document level)
+                // Also pass VRM spec version for version-aware shading in shader
                 let vrm0Prop = materialIndex < vrm0MaterialProperties.count ? vrm0MaterialProperties[materialIndex] : nil
-                let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop)
+                let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop, vrmVersion: specVersion)
                 materials.append(material)
             }
         }
@@ -462,6 +463,50 @@ public class VRMModel: @unchecked Sendable {
                 let skin = try VRMSkin(from: gltfSkin, nodes: nodes, document: gltf, bufferLoader: bufferLoader)
                 skins.append(skin)
             }
+        }
+
+        // IRON DOME: Sanitize joint indices now that we know actual bone counts
+        sanitizeAllMeshJoints()
+    }
+
+    /// "Iron Dome" joint sanitization - ensures all mesh joint indices are within valid bounds.
+    ///
+    /// This is called after skins are loaded, when we know the actual bone count for each skin.
+    /// It iterates through all node->mesh->skin associations and sanitizes any out-of-bounds
+    /// joint indices, preventing vertex explosions from sentinel values (65535) or
+    /// indices that exceed the skeleton size.
+    private func sanitizeAllMeshJoints() {
+        guard !skins.isEmpty else { return }
+
+        var totalSanitized = 0
+
+        // Iterate through nodes that have both mesh and skin
+        for node in nodes {
+            guard let meshIndex = node.mesh,
+                  meshIndex < meshes.count,
+                  let skinIndex = node.skin,
+                  skinIndex < skins.count else {
+                continue
+            }
+
+            let mesh = meshes[meshIndex]
+            let skin = skins[skinIndex]
+            let maxJointIndex = skin.joints.count - 1
+
+            guard maxJointIndex >= 0 else { continue }
+
+            // Sanitize each primitive in the mesh
+            for (primIndex, primitive) in mesh.primitives.enumerated() {
+                let sanitized = primitive.sanitizeJoints(maxJointIndex: maxJointIndex)
+                if sanitized > 0 {
+                    vrmLog("[IRON DOME] Mesh '\(mesh.name ?? "unnamed")' prim \(primIndex): sanitized \(sanitized) joints (max valid: \(maxJointIndex))")
+                    totalSanitized += sanitized
+                }
+            }
+        }
+
+        if totalSanitized > 0 {
+            vrmLog("[IRON DOME] ✅ Total sanitized joint indices: \(totalSanitized)")
         }
     }
 

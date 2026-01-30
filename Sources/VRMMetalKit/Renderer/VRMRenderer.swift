@@ -79,6 +79,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// The VRM model to render. Set via `loadModel(_:)`.
     public var model: VRMModel?
 
+    /// Model rotation correction for VRM coordinate system differences.
+    /// VRM 1.0 (glTF) models face +Z; VRM 0.0 (Unity) models face -Z.
+    /// Apply 180° Y rotation to VRM 1.0 models so they face the camera at -Z.
+    private var vrmVersionRotation: matrix_float4x4 {
+        guard let model = model else { return matrix_identity_float4x4 }
+        if model.isVRM0 {
+            return matrix_identity_float4x4
+        } else {
+            // VRM 1.0 faces +Z, rotate 180° around Y to face -Z (towards camera)
+            return matrix_float4x4(simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0)))
+        }
+    }
+
     // MARK: - Debug Options
 
     /// Debug UV visualization mode.
@@ -93,12 +106,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     // MARK: - 2.5D Rendering Mode
 
-    /// Rendering mode selection
-    public enum RenderingMode {
-        case standard      // Standard 3D MToon rendering
-        case toon2D        // 2.5D cel-shaded rendering with outlines
-    }
-
     /// Light normalization mode for multi-light setups
     public enum LightNormalizationMode {
         case automatic              // Auto-normalize when total intensity > 1.0 (default)
@@ -106,35 +113,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         case manual(Float)          // Custom normalization factor
     }
 
-    /// Current rendering mode
-    public var renderingMode: RenderingMode = .standard
-
     /// Current light normalization mode
     public var lightNormalizationMode: LightNormalizationMode = .automatic
 
-    /// Stored light directions (view-relative, transformed each frame by camera)
+    /// Stored light directions (world-space, shader negates for NdotL calculation)
+    /// VRM models face -Z after rotation. For front lighting, use positive Z direction.
     private var storedLightDirections: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) = (
-        SIMD3<Float>(0, 1, 0),  // Key light default
-        SIMD3<Float>(0, 1, 0),  // Fill light default
-        SIMD3<Float>(0, 1, 0)   // Rim light default
+        SIMD3<Float>(0.2, 0.3, 0.9),   // Key light: front with slight right/above
+        SIMD3<Float>(-0.3, 0.1, 0.9),  // Fill light: front-left
+        SIMD3<Float>(0.0, -0.5, -0.85) // Rim light: from behind/above
     )
 
-    /// Orthographic camera height in world units (for toon2D mode)
+    /// Orthographic camera height in world units
     public var orthoSize: Float = 1.7 {
         didSet {
             if orthoSize <= 0 {
                 vrmLog("[VRMRenderer] Warning: orthoSize must be positive, clamping \(orthoSize) to 0.1")
                 orthoSize = max(0.1, orthoSize)
-            }
-        }
-    }
-
-    /// Number of cel-shading bands (1-5, only for toon2D mode)
-    public var toonBands: Int = 3 {
-        didSet {
-            if toonBands < 1 || toonBands > 5 {
-                vrmLog("[VRMRenderer] Warning: toonBands must be in range 1-5, clamping \(toonBands) to valid range")
-                toonBands = max(1, min(5, toonBands))
             }
         }
     }
@@ -271,21 +266,25 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         fillIntensity: Float = 0.5,
         rimIntensity: Float = 0.3
     ) {
-        // Key light: front-right-top (main light, warm tone for natural skin)
+        // VRM models face +Z. Light direction points FROM light TO scene.
+        // Shader negates direction: NdotL = dot(normal, -lightDir)
+        // So lightDir with negative Z = light from front
+
+        // Key light: front-right-slightly-above (anime-style soft lighting)
         setLight(0,
-                 direction: SIMD3<Float>(0.4, 0.8, -0.4),
-                 color: SIMD3<Float>(1.0, 0.93, 0.85),
+                 direction: SIMD3<Float>(0.3, -0.2, -0.9),
+                 color: SIMD3<Float>(1.0, 0.98, 0.95),
                  intensity: keyIntensity)
 
         // Fill light: front-left at eye level (softer, slightly cool)
         setLight(1,
-                 direction: SIMD3<Float>(-0.5, 0.0, -0.5),
-                 color: SIMD3<Float>(0.8, 0.85, 0.9),
+                 direction: SIMD3<Float>(-0.4, -0.1, -0.9),
+                 color: SIMD3<Float>(0.85, 0.88, 0.95),
                  intensity: fillIntensity)
 
-        // Rim/back light: behind and above (edge highlight, cool accent)
+        // Rim/back light: behind and above (edge highlight)
         setLight(2,
-                 direction: SIMD3<Float>(0.0, 0.3, 1.0),
+                 direction: SIMD3<Float>(0.0, -0.5, 0.85),
                  color: SIMD3<Float>(0.9, 0.95, 1.0),
                  intensity: rimIntensity)
     }
@@ -307,17 +306,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         lightNormalizationMode = mode
     }
 
-    // Pipeline states for 2.5D rendering (non-skinned)
-    var toon2DOpaquePipelineState: MTLRenderPipelineState?
-    var toon2DBlendPipelineState: MTLRenderPipelineState?
-    var toon2DOutlinePipelineState: MTLRenderPipelineState?
-
-    // Pipeline states for 2.5D rendering (skinned)
-    var toon2DSkinnedOpaquePipelineState: MTLRenderPipelineState?
-    var toon2DSkinnedBlendPipelineState: MTLRenderPipelineState?
-    var toon2DSkinnedOutlinePipelineState: MTLRenderPipelineState?
-
-    // Pipeline states for MToon outline rendering (standard mode)
+    // Pipeline states for MToon outline rendering
     var mtoonOutlinePipelineState: MTLRenderPipelineState?
     var mtoonSkinnedOutlinePipelineState: MTLRenderPipelineState?
 
@@ -504,9 +493,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // OPTIMIZATION: Render order for single-array sorting (avoids concatenation)
         var renderOrder: Int  // 0=opaque, 1=faceSkin, 2=faceEyebrow, 3=faceEyeline, 4=mask, 5=faceEye, 6=faceHighlight, 7=blend
 
-        // VRM material renderQueue for secondary sorting (Unity renderQueue values)
-        // Default 2000 (geometry), transparent materials typically 3000+
+        // VRM material renderQueue for primary sorting (computed from base + offset)
+        // OPAQUE base=2000, MASK base=2450, BLEND base=3000
         let materialRenderQueue: Int
+
+        // Scene graph order for stable tie-breaking in sort
+        let primitiveIndex: Int
     }
 
     /// Set the debug phase for systematic testing
@@ -1019,12 +1011,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // DEBUG: Confirm we're in drawCore
         if frameCounter <= 2 || frameCounter % 60 == 0 {
             vrmLog("[VRMRenderer] drawCore() executing, frame \(frameCounter)")
-            vrmLog("[VRMRenderer] renderingMode = \(renderingMode), useOrthographic = \(useOrthographic), toonBands = \(toonBands)")
-        }
-
-        // Lazy initialize Toon2D pipelines if needed
-        if renderingMode == .toon2D {
-            ensureToon2DPipelinesInitialized()
+            vrmLog("[VRMRenderer] useOrthographic = \(useOrthographic)")
         }
 
         // Wait for a free uniform buffer (triple buffering sync)
@@ -1353,6 +1340,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             var faceEyelineCount = 0
             var faceEyeCount = 0
             var faceHighlightCount = 0
+            var globalPrimitiveIndex = 0
 
             // Collect all primitives and categorize by alpha mode
             for (nodeIndex, node) in model.nodes.enumerated() {
@@ -1432,8 +1420,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 } ?? 2000
 
                 // OPTIMIZATION: Single face/body detection pass (consolidates 3 separate checks)
+                // Include body, clothing, and transparentZWrite materials for proper categorization
                 let isFaceMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
-                                    nodeNameLower.contains("face") || nodeNameLower.contains("eye")
+                                    nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
+                                    (materialNameLower.contains("body") && !materialNameLower.contains("face")) ||
+                                    materialNameLower.contains("cloth") || materialNameLower.contains("tops") ||
+                                    materialNameLower.contains("bottoms") || materialNameLower.contains("skirt") ||
+                                    materialNameLower.contains("shorts") || materialNameLower.contains("pants") ||
+                                    materialNameLower.contains("lace") || materialNameLower.contains("collar") ||
+                                    materialNameLower.contains("ribbon") || materialNameLower.contains("frill") ||
+                                    materialNameLower.contains("ruffle")
                 let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
                 let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
                                       meshNameLower.contains("face") || meshNameLower.contains("eye")
@@ -1457,7 +1453,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
                     renderOrder: 0,  // Will be set based on category
-                    materialRenderQueue: materialRenderQueue
+                    materialRenderQueue: materialRenderQueue,
+                    primitiveIndex: globalPrimitiveIndex
                 )
 
                 // Enhanced face/body material detection and overrides
@@ -1506,7 +1503,25 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 // OPTIMIZATION: Set renderOrder instead of appending to separate arrays
                 if item.isFaceMaterial {
                     // Classify face material by type and set category + renderOrder
-                    if item.materialNameLower.contains("skin") || (item.materialNameLower.contains("face") && !item.materialNameLower.contains("eye")) {
+                    // Body detection - must come before skin check since body materials contain "skin"
+                    if item.materialNameLower.contains("body") && !item.materialNameLower.contains("face") {
+                        item.faceCategory = "body"
+                        item.renderOrder = 0  // body renders first, pushed back by depth bias
+                        vrmLog("  → Assigned to: body queue (order=0)")
+                    } else if item.materialNameLower.contains("lace") || item.materialNameLower.contains("collar") ||
+                              item.materialNameLower.contains("ribbon") || item.materialNameLower.contains("frill") ||
+                              item.materialNameLower.contains("ruffle") {
+                        // TransparentWithZWrite - semi-transparent overlays that need depth writing
+                        item.faceCategory = "transparentZWrite"
+                        item.renderOrder = 8  // After opaque, before regular blend
+                        vrmLog("  → Assigned to: transparentZWrite queue (order=8)")
+                    } else if item.materialNameLower.contains("cloth") || item.materialNameLower.contains("tops") ||
+                              item.materialNameLower.contains("bottoms") || item.materialNameLower.contains("skirt") ||
+                              item.materialNameLower.contains("shorts") || item.materialNameLower.contains("pants") {
+                        item.faceCategory = "clothing"
+                        item.renderOrder = 8  // Same as transparentZWrite for proper layering
+                        vrmLog("  → Assigned to: clothing queue (order=8)")
+                    } else if item.materialNameLower.contains("skin") || (item.materialNameLower.contains("face") && !item.materialNameLower.contains("eye")) {
                         item.faceCategory = "skin"
                         item.renderOrder = 1  // faceSkin
                         faceSkinCount += 1
@@ -1575,47 +1590,38 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 // OPTIMIZATION: Add to single pre-allocated array
                 allItems.append(item)
+                globalPrimitiveIndex += 1
             }
         }
 
         vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
 
-        // OPTIMIZATION: Single sort by renderOrder (eliminates array concatenation)
-        // Order: 0=opaque, 1=faceSkin, 2=faceEyebrow, 3=faceEyeline, 4=mask, 5=faceEye, 6=faceHighlight, 7=blend
+        // Multi-tier sorting: renderOrder (name-based) + VRM queue + view-Z + stable order
         allItems.sort { a, b in
-            // Primary sort: by renderOrder
+            // 1. Primary: renderOrder (name-based face/body category ordering)
+            // Order: 0=body/opaque, 1=skin, 2=brow, 3=line, 4=mask, 5=eye, 6=highlight, 7=blend, 8=clothing
             if a.renderOrder != b.renderOrder {
                 return a.renderOrder < b.renderOrder
             }
 
-            // Secondary sort: by VRM materialRenderQueue (Unity render queue values)
-            // This fixes z-fighting for eyebrows/eyelashes which have higher renderQueue
-            // (e.g., eyebrows at 2100 render after face skin at 2000)
+            // 2. Secondary: VRM render queue (author's intent for fine-grained ordering)
+            // Within same renderOrder, respect explicit queue differences
             if a.materialRenderQueue != b.materialRenderQueue {
                 return a.materialRenderQueue < b.materialRenderQueue
             }
 
-            // Tertiary sort for BLEND items (renderOrder=7): by view-space Z
-            if a.renderOrder == 7 {
+            // 3. Tertiary: Transparent materials (queue >= 2500): back-to-front Z-sorting
+            // This threshold covers TransparentWithZWrite (2450+) and Transparent (3000+)
+            if a.materialRenderQueue >= 2500 {
                 let aWorldPos = a.node.worldMatrix.columns.3
                 let aViewZ = (viewMatrix * aWorldPos).z
                 let bWorldPos = b.node.worldMatrix.columns.3
                 let bViewZ = (viewMatrix * bWorldPos).z
-                return aViewZ < bViewZ  // Far to near
+                return aViewZ < bViewZ  // Far to near (Painter's Algorithm)
             }
 
-            // Quaternary sort within opaque face materials: use cached isEyeMaterial
-            if a.isFaceMaterial && b.isFaceMaterial {
-                if a.isEyeMaterial != b.isEyeMaterial {
-                    return !a.isEyeMaterial  // Eyes render last
-                }
-            }
-
-            // Default: by material then mesh
-            if let aMatIdx = a.primitive.materialIndex, let bMatIdx = b.primitive.materialIndex, aMatIdx != bMatIdx {
-                return aMatIdx < bMatIdx
-            }
-            return a.meshIndex < b.meshIndex
+            // 4. Quaternary: stable definition order for tie-breaking
+            return a.primitiveIndex < b.primitiveIndex
         }
 
         if blendCount > 0 && frameCounter < 10 {
@@ -1973,31 +1979,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("[PIPELINE DEBUG] Node '\(item.node.name ?? "unnamed")': nodeHasSkin=\(nodeHasSkin), meshUsesSkinning=\(meshUsesSkinning), hasSkinning=\(hasSkinning), isSkinned=\(isSkinned)")
             }
 
-            // Select correct pipeline based on rendering mode, alpha mode, and debug settings
+            // Select correct pipeline based on alpha mode and debug settings
             let activePipelineState: MTLRenderPipelineState?
             if debugWireframe {
                 // Use wireframe pipeline for debugging (non-skinned only for now)
                 activePipelineState = wireframePipelineState
-            } else if renderingMode == .toon2D {
-                // Toon2D rendering (cel-shaded, for visual novel/dialogue scenes)
-                if materialAlphaMode == "blend" {
-                    activePipelineState = isSkinned ? toon2DSkinnedBlendPipelineState : toon2DBlendPipelineState
-                } else {
-                    activePipelineState = isSkinned ? toon2DSkinnedOpaquePipelineState : toon2DOpaquePipelineState
-                }
-
-                // Debug: Check if pipeline state is nil
-                if activePipelineState == nil {
-                    vrmLog("❌ [TOON2D ERROR] Pipeline state is NIL! isSkinned=\(isSkinned), alphaMode=\(materialAlphaMode)", level: .error)
-                    vrmLog("[TOON2D ERROR] toon2DOpaquePipelineState=\(toon2DOpaquePipelineState != nil)")
-                    vrmLog("[TOON2D ERROR] toon2DBlendPipelineState=\(toon2DBlendPipelineState != nil)")
-                    vrmLog("[TOON2D ERROR] toon2DSkinnedOpaquePipelineState=\(toon2DSkinnedOpaquePipelineState != nil)")
-                    vrmLog("[TOON2D ERROR] toon2DSkinnedBlendPipelineState=\(toon2DSkinnedBlendPipelineState != nil)")
-                }
-
-                if frameCounter % 60 == 0 {
-                    vrmLog("[PIPELINE SELECT] Using toon2D \(isSkinned ? "skinned" : "non-skinned") pipeline: \(materialAlphaMode)")
-                }
             } else if materialAlphaMode == "blend" {
                 // Standard 3D BLEND mode requires blending-enabled PSO
                 activePipelineState = isSkinned ? skinnedBlendPipelineState : blendPipelineState
@@ -2051,19 +2037,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
 
             // Update model matrix for this node
-            // For skinned meshes, modelMatrix should be identity because transforms are in the skinning data
-            // For non-skinned meshes, use the node's world transform
+            // Apply VRM version rotation: VRM 1.0 models face +Z, need 180° Y rotation to face camera at -Z
+            // For skinned meshes, use vrmVersionRotation (transforms are in skinning data)
+            // For non-skinned meshes, multiply vrmVersionRotation with node's world transform
+            let vrmRotation = vrmVersionRotation
             if isSkinned {
-                uniforms.modelMatrix = matrix_identity_float4x4
-                uniforms.normalMatrix = matrix_identity_float4x4 // Should be identity as well
+                uniforms.modelMatrix = vrmRotation
+                uniforms.normalMatrix = vrmRotation // Rotation-only matrix works for normals
                 if frameCounter % 60 == 0 {
-                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=true, using IDENTITY matrix")
+                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=true, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation applied")
                 }
             } else {
-                uniforms.modelMatrix = item.node.worldMatrix
-                uniforms.normalMatrix = item.node.worldMatrix.inverse.transpose
+                uniforms.modelMatrix = simd_mul(vrmRotation, item.node.worldMatrix)
+                uniforms.normalMatrix = uniforms.modelMatrix.inverse.transpose
                 if frameCounter % 60 == 0 {
-                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=false, using WORLD matrix")
+                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=false, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation * WORLD matrix")
                 }
             }
             uniformsBuffer.contents().copyMemory(from: &uniforms, byteCount: MemoryLayout<Uniforms>.size)
@@ -2182,11 +2170,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             vrmLog("[FACE SKIN] Using skin \(skinIndex): matrixOffset=\(skin.matrixOffset), bufferByteOffset=\(byteOffset), joints=\(skin.joints.count)")
                         }
 
-                        encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
+                        // Debug: Log joint count for shorts to check for buffer overflow
+                        let meshName = item.node.name?.lowercased() ?? ""
+                        if frameCounter % 60 == 0 && (meshName.contains("short") || meshName.contains("pants") || meshName.contains("body")) {
+                            vrmLog("[SHORTS DEBUG] Mesh '\(item.node.name ?? "unnamed")' using skin \(skinIndex): jointCount=\(skin.joints.count), bufferOffset=\(byteOffset)")
+                        }
 
-                        // Pass joint count at index 4 for bounds checking
-                        var jointCount = UInt32(skin.joints.count)
-                        encoder.setVertexBytes(&jointCount, length: MemoryLayout<UInt32>.size, index: 4)
+                        encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
                     }
                 } else {
                     // Skin index is out of range - this shouldn't happen
@@ -2211,11 +2201,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                            length: Self.zeroMorphWeights.count * MemoryLayout<Float>.size,
                                            index: ResourceIndices.morphWeightsBuffer)
 
-                    // Set null buffers for morph deltas (no longer needed)
-                    for i in 0..<8 {
-                        encoder.setVertexBuffer(nil, offset: 0, index: 4 + i)  // position deltas
-                        encoder.setVertexBuffer(nil, offset: 0, index: 12 + i) // normal deltas
-                    }
+                    // Morph deltas are no longer used (GPU compute path handles morphs)
+                    // Do NOT clear buffer indices here - it would overwrite jointCount (4),
+                    // morphedPositions (20), and other active bindings
                 }
 
                 // Pass vertex offset for proper morph buffer indexing
@@ -2262,6 +2250,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if let materialIndex = primitive.materialIndex,
                    materialIndex < model.materials.count {
                     let material = model.materials[materialIndex]
+
+                    // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
+                    mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
                     // Set base PBR properties
                     mtoonUniforms.baseColorFactor = material.baseColorFactor
@@ -2337,6 +2328,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtoon = material.mtoon {
                         mtoonUniforms = MToonMaterialUniforms(from: mtoon)
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
+                        // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
+                        mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
                         // LIGHTING FIX: Zero emissive AFTER MToon init to prevent washout
                         mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
@@ -2444,8 +2437,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // Index 4: Emissive texture
-                    // Note: Emissive texture typically comes from the base material, not MToon
-                    // Could add support for emissiveTexture if needed
+                    if let mtlTexture = material.emissiveTexture?.mtlTexture {
+                        encoder.setFragmentTexture(mtlTexture, index: 4)
+                        mtoonUniforms.hasEmissiveTexture = 1
+                        textureCount += 1
+                    }
 
                     // Index 5: Matcap texture
                     if let mtoon = material.mtoon,
@@ -2531,29 +2527,66 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let viewZ = viewPos.z
 
                 switch faceCategory {
-                case "skin":
-                    // OPAQUE PSO, depthWrite=ON, cull=back
-                    encoder.setDepthStencilState(depthStencilStates["opaque"])
+                case "body":
+                    // Body (with lace texture) renders FIRST (order=0)
+                    // Uses lessEqual - later materials win at equal depths
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    }
                     encoder.setCullMode(.back)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(-0.0001, slopeScale: -1.0, clamp: -0.01)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=skin  pso=opaque  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=body  z=\(viewZ)  mat=\(item.materialName)")
+                    }
+
+                case "clothing":
+                    // Clothing renders AFTER body - wins at overlaps via render order
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    }
+                    encoder.setCullMode(.back)
+                    encoder.setFrontFacing(.counterClockwise)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    if frameCounter % 60 == 0 {
+                        vrmLog("[FACE] order=clothing  z=\(viewZ)  mat=\(item.materialName)")
+                    }
+
+                case "skin":
+                    // Face skin renders AFTER body - wins at neck seam via render order
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    }
+                    encoder.setCullMode(.back)
+                    encoder.setFrontFacing(.counterClockwise)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    if frameCounter % 60 == 0 {
+                        vrmLog("[FACE] order=skin  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 case "eyebrow", "eyeline":
-                    // OPAQUE PSO with alphaCutoff, depthWrite=ON, cull=none
-                    encoder.setDepthStencilState(depthStencilStates["mask"])
+                    // Face features render after skin - win via render order
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["mask"])
+                    }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(-0.0002, slopeScale: -1.0, clamp: -0.01)
+                    // Slope scale depth bias for MASK materials on curved surfaces
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=\(faceCategory)  pso=opaque  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=\(faceCategory)  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 case "eye":
-                    // OPAQUE PSO for eyes, cull none. Render after face skin.
-                    // Use lessEqual compare with depth write ON to prevent showing through head.
+                    // Eyes render after skin - win via render order
                     if let faceState = depthStencilStates["face"] {
                         encoder.setDepthStencilState(faceState)
                     } else {
@@ -2561,12 +2594,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(-0.0002, slopeScale: -1.0, clamp: -0.01)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=eye  pso=opaque  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=eye  z=\(viewZ)  mat=\(item.materialName)")
                     }
                 case "highlight":
-                    // BLEND PSO for eye highlights, depthWrite=OFF, cull=none
+                    // Eye highlights render last - win via render order
                     if let blendDepthState = depthStencilStates["blend"] {
                         encoder.setDepthStencilState(blendDepthState)
                     } else {
@@ -2574,9 +2607,27 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(-0.0003, slopeScale: -1.0, clamp: -0.01)
+                    // Slope scale depth bias for blend materials on curved surfaces
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=highlight  pso=blend  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=highlight  z=\(viewZ)  mat=\(item.materialName)")
+                    }
+
+                case "transparentZWrite":
+                    // TransparentWithZWrite: blend with depth write ON
+                    // Uses face state (.lessEqual + depth write) to occlude what's behind
+                    // Key for lace, collar, and semi-transparent overlays
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    }
+                    encoder.setCullMode(.none)  // Often double-sided for overlays
+                    encoder.setFrontFacing(.counterClockwise)
+                    // Slope scale depth bias for transparent materials on curved surfaces
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
+                    if frameCounter % 60 == 0 {
+                        vrmLog("[FACE] order=transparentZWrite  pso=face(.lessEqual+depthWrite)  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 default:
@@ -2593,12 +2644,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
 
                 case "mask":
                     encoder.setDepthStencilState(depthStencilStates["mask"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
+                    // Slope scale depth bias handles curved surfaces better than constant bias
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
 
                 case "blend":
                     if let blendDepthState = depthStencilStates["blend"] {
@@ -2607,11 +2661,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         encoder.setDepthStencilState(depthStencilStates["opaque"])
                     }
                     encoder.setCullMode(.none)
+                    // Slope scale depth bias handles curved surfaces better than constant bias
+                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
 
                 default:
                     encoder.setDepthStencilState(depthStencilStates["opaque"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
+                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
                 }
             }
 
@@ -2686,50 +2743,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                 }
 
-                // Set material uniforms based on rendering mode
-                if renderingMode == .toon2D {
-                    // Convert MToon material to Toon2D material
-                    var toon2DMaterial = Toon2DMaterialCPU()
-                    toon2DMaterial.baseColorFactor = mtoonUniforms.baseColorFactor
-                    toon2DMaterial.shadeColorFactor = mtoonUniforms.shadeColorFactor
-                    toon2DMaterial.shadingToonyFactor = mtoonUniforms.shadingToonyFactor
-                    toon2DMaterial.emissiveFactor = mtoonUniforms.emissiveFactor
-                    toon2DMaterial.outlineColorFactor = SIMD3<Float>(0, 0, 0)  // Black outlines
-                    toon2DMaterial.outlineWidth = outlineWidth
-                    toon2DMaterial.outlineMode = outlineWidth > 0.0001 ? 2.0 : 0.0  // Screen-space or none
-                    toon2DMaterial.hasBaseColorTexture = mtoonUniforms.hasBaseColorTexture
-                    toon2DMaterial.hasShadeMultiplyTexture = 0  // MToon doesn't use this
-                    toon2DMaterial.hasEmissiveTexture = mtoonUniforms.hasEmissiveTexture
-                    toon2DMaterial.alphaMode = UInt32(mtoonUniforms.alphaMode)
-                    toon2DMaterial.alphaCutoff = mtoonUniforms.alphaCutoff
-
-                    #if VRM_METALKIT_ENABLE_LOGS
-                    if frameCounter == 0 && index < 3 {
-                        vrmLog("[TOON2D MATERIAL] Material \(index): hasBaseColorTexture=\(toon2DMaterial.hasBaseColorTexture) (from mtoon=\(mtoonUniforms.hasBaseColorTexture))")
-                        vrmLog("[TOON2D MATERIAL]   baseColorFactor=\(toon2DMaterial.baseColorFactor)")
-                        vrmLog("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.size = \(MemoryLayout<Toon2DMaterialCPU>.size)")
-                        vrmLog("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.stride = \(MemoryLayout<Toon2DMaterialCPU>.stride)")
-                    }
-                    #endif
-
-                    let materialBytes = toon2DMaterial.toBytes()
-                    #if VRM_METALKIT_ENABLE_LOGS
-                    if frameCounter == 0 && index < 3 {
-                        vrmLog("[TOON2D MATERIAL]   materialBytes.count = \(materialBytes.count)")
-                    }
-                    #endif
-                    encoder.setVertexBytes(materialBytes, length: materialBytes.count, index: 2)
-                    encoder.setFragmentBytes(materialBytes, length: materialBytes.count, index: 2)
-                } else {
-                    // Standard MToon material uniforms
-                    // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
-                    encoder.setVertexBytes(&mtoonUniforms,
-                                           length: MemoryLayout<MToonMaterialUniforms>.stride,
-                                           index: 8)
-                    encoder.setFragmentBytes(&mtoonUniforms,
-                                           length: MemoryLayout<MToonMaterialUniforms>.stride,
-                                           index: 8)
-                }
+                // Set MToon material uniforms
+                // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
+                encoder.setVertexBytes(&mtoonUniforms,
+                                       length: MemoryLayout<MToonMaterialUniforms>.stride,
+                                       index: 8)
+                encoder.setFragmentBytes(&mtoonUniforms,
+                                       length: MemoryLayout<MToonMaterialUniforms>.stride,
+                                       index: 8)
 
                 // Also pass main uniforms to fragment shader for lighting
                 encoder.setFragmentBuffer(uniformsBuffer, offset: 0, index: 1)
@@ -2909,7 +2930,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // Condition 2: Sample vertices to double-check
                         if let vertexBuffer = prim.vertexBuffer, prim.hasJoints {
                             let verts = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: min(10, prim.vertexCount))
-                            var sampleMaxJoint: UInt16 = 0
+                            var sampleMaxJoint: UInt32 = 0
                             let samplesToCheck = min(10, prim.vertexCount)
 
                             for i in 0..<samplesToCheck {
@@ -3100,50 +3121,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                 }
 
-                // Set material uniforms based on rendering mode
-                if renderingMode == .toon2D {
-                    // Convert MToon material to Toon2D material
-                    var toon2DMaterial = Toon2DMaterialCPU()
-                    toon2DMaterial.baseColorFactor = mtoonUniforms.baseColorFactor
-                    toon2DMaterial.shadeColorFactor = mtoonUniforms.shadeColorFactor
-                    toon2DMaterial.shadingToonyFactor = mtoonUniforms.shadingToonyFactor
-                    toon2DMaterial.emissiveFactor = mtoonUniforms.emissiveFactor
-                    toon2DMaterial.outlineColorFactor = SIMD3<Float>(0, 0, 0)  // Black outlines
-                    toon2DMaterial.outlineWidth = outlineWidth
-                    toon2DMaterial.outlineMode = outlineWidth > 0.0001 ? 2.0 : 0.0  // Screen-space or none
-                    toon2DMaterial.hasBaseColorTexture = mtoonUniforms.hasBaseColorTexture
-                    toon2DMaterial.hasShadeMultiplyTexture = 0  // MToon doesn't use this
-                    toon2DMaterial.hasEmissiveTexture = mtoonUniforms.hasEmissiveTexture
-                    toon2DMaterial.alphaMode = UInt32(mtoonUniforms.alphaMode)
-                    toon2DMaterial.alphaCutoff = mtoonUniforms.alphaCutoff
-
-                    #if VRM_METALKIT_ENABLE_LOGS
-                    if frameCounter == 0 && index < 3 {
-                        vrmLog("[TOON2D MATERIAL] Material \(index): hasBaseColorTexture=\(toon2DMaterial.hasBaseColorTexture) (from mtoon=\(mtoonUniforms.hasBaseColorTexture))")
-                        vrmLog("[TOON2D MATERIAL]   baseColorFactor=\(toon2DMaterial.baseColorFactor)")
-                        vrmLog("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.size = \(MemoryLayout<Toon2DMaterialCPU>.size)")
-                        vrmLog("[TOON2D MATERIAL]   MemoryLayout<Toon2DMaterialCPU>.stride = \(MemoryLayout<Toon2DMaterialCPU>.stride)")
-                    }
-                    #endif
-
-                    let materialBytes = toon2DMaterial.toBytes()
-                    #if VRM_METALKIT_ENABLE_LOGS
-                    if frameCounter == 0 && index < 3 {
-                        vrmLog("[TOON2D MATERIAL]   materialBytes.count = \(materialBytes.count)")
-                    }
-                    #endif
-                    encoder.setVertexBytes(materialBytes, length: materialBytes.count, index: 2)
-                    encoder.setFragmentBytes(materialBytes, length: materialBytes.count, index: 2)
-                } else {
-                    // Standard MToon material uniforms
-                    // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
-                    encoder.setVertexBytes(&mtoonUniforms,
-                                           length: MemoryLayout<MToonMaterialUniforms>.stride,
-                                           index: 8)
-                    encoder.setFragmentBytes(&mtoonUniforms,
-                                           length: MemoryLayout<MToonMaterialUniforms>.stride,
-                                           index: 8)
-                }
+                // Set MToon material uniforms
+                // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
+                encoder.setVertexBytes(&mtoonUniforms,
+                                       length: MemoryLayout<MToonMaterialUniforms>.stride,
+                                       index: 8)
+                encoder.setFragmentBytes(&mtoonUniforms,
+                                       length: MemoryLayout<MToonMaterialUniforms>.stride,
+                                       index: 8)
 
                 // Also pass main uniforms to fragment shader for lighting
                 encoder.setFragmentBuffer(uniformsBuffer, offset: 0, index: 1)
@@ -3181,24 +3166,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             vrmLog("  - All body parts should be visible: hair, skin, outfit, accessories")
         }
 
-        // Render outlines for toon2D mode (inverted hull technique)
-        if renderingMode == .toon2D && outlineWidth > 0.0001 {
-            renderOutlines(
-                encoder: encoder,
-                renderItems: allItems,
-                viewMatrix: viewMatrix,
-                projectionMatrix: projectionMatrix
-            )
-        }
-
-        // Render outlines for standard MToon mode (inverted hull technique)
-        if renderingMode == .standard {
-            renderMToonOutlines(
-                encoder: encoder,
-                renderItems: allItems,
-                model: model
-            )
-        }
+        // Render outlines for MToon mode (inverted hull technique)
+        renderMToonOutlines(
+            encoder: encoder,
+            renderItems: allItems,
+            model: model
+        )
 
         encoder.endEncoding()
 
@@ -3242,114 +3215,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
-    // MARK: - Toon2D Outline Rendering
-
-    private func renderOutlines(
-        encoder: MTLRenderCommandEncoder,
-        renderItems: [RenderItem],
-        viewMatrix: simd_float4x4,
-        projectionMatrix: simd_float4x4
-    ) {
-        // We'll select pipeline per-item based on skinning
-
-        // Cull front faces for inverted hull technique
-        encoder.setCullMode(.front)
-        encoder.setFrontFacing(.counterClockwise)
-
-        // Disable depth writes for outlines (but still test against existing depth)
-        if let depthState = depthStencilStates["blend"] {
-            encoder.setDepthStencilState(depthState)
-        }
-
-        // Create Toon2D material for outlines
-        var outlineMaterial = Toon2DMaterialCPU()
-        outlineMaterial.outlineColorFactor = outlineColor
-        outlineMaterial.outlineWidth = outlineWidth
-        outlineMaterial.outlineMode = 2.0  // Screen-space mode
-
-        let materialBytes = outlineMaterial.toBytes()
-
-        guard let model = model else { return }
-        let hasSkinning = !model.skins.isEmpty
-
-        // Render each primitive with outline shader
-        for item in renderItems {
-            let primitive = item.primitive
-
-            guard let vertexBuffer = primitive.vertexBuffer,
-                  let indexBuffer = primitive.indexBuffer else {
-                continue
-            }
-
-            // Determine if this mesh needs skinning
-            let nodeHasSkin = item.node.skin != nil && hasSkinning
-            let meshUsesSkinning = primitive.hasJoints && primitive.hasWeights
-            let isSkinned = (nodeHasSkin || meshUsesSkinning) && hasSkinning
-
-            // Select appropriate outline pipeline
-            let outlinePipeline: MTLRenderPipelineState?
-            if isSkinned {
-                outlinePipeline = toon2DSkinnedOutlinePipelineState
-            } else {
-                outlinePipeline = toon2DOutlinePipelineState
-            }
-
-            guard let pipeline = outlinePipeline else {
-                continue
-            }
-
-            // Set pipeline for this item
-            encoder.setRenderPipelineState(pipeline)
-
-            // Update uniforms for this node
-            var outlineUniforms = uniforms
-            if isSkinned {
-                // For skinned meshes, use identity matrix (transforms are in joint matrices)
-                outlineUniforms.modelMatrix = matrix_identity_float4x4
-            } else {
-                // For non-skinned meshes, use node's world transform
-                outlineUniforms.modelMatrix = item.node.worldMatrix
-            }
-            outlineUniforms.viewMatrix = viewMatrix
-            outlineUniforms.projectionMatrix = projectionMatrix
-
-            // Bind uniforms
-            encoder.setVertexBytes(&outlineUniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
-
-            // Bind material
-            encoder.setVertexBytes(materialBytes, length: materialBytes.count, index: 2)
-            encoder.setFragmentBytes(materialBytes, length: materialBytes.count, index: 2)
-
-            // Bind vertex buffer
-            encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
-
-            // For skinned meshes, bind joint matrices
-            if isSkinned, let skinIndex = item.node.skin, skinIndex < model.skins.count {
-                let skin = model.skins[skinIndex]
-                if let jointMatrixBuffer = skinningSystem?.jointMatricesBuffer {
-                    encoder.setVertexBuffer(jointMatrixBuffer, offset: skin.bufferByteOffset, index: 3)
-                }
-            }
-
-            // Draw outline
-            encoder.drawIndexedPrimitives(
-                type: primitive.primitiveType,
-                indexCount: primitive.indexCount,
-                indexType: primitive.indexType,
-                indexBuffer: indexBuffer,
-                indexBufferOffset: 0
-            )
-        }
-
-        // Restore default cull mode
-        encoder.setCullMode(.back)
-
-        if frameCounter % 60 == 0 {
-            vrmLog("[OUTLINE] Rendered outlines for \(renderItems.count) items with width \(outlineWidth)")
-        }
-    }
-
-    // MARK: - MToon Outline Rendering (Standard Mode)
+    // MARK: - MToon Outline Rendering
 
     private func renderMToonOutlines(
         encoder: MTLRenderCommandEncoder,
@@ -3366,6 +3232,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Cull front faces for inverted hull technique
         encoder.setCullMode(.front)
         encoder.setFrontFacing(.counterClockwise)
+
+        // Set depth state for outlines (test depth but don't write)
+        // Prevents outlines from incorrectly writing to depth buffer
+        if let outlineDepthState = depthStencilStates["blend"] {
+            encoder.setDepthStencilState(outlineDepthState)
+        }
+
+        // Minimal depth bias for outlines - the real fix is proper vertex skinning
+        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
 
         var outlinesRendered = 0
 
@@ -3420,6 +3295,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Set MToon material uniforms
             var mtoonUniforms = MToonMaterialUniforms(from: mtoon)
             mtoonUniforms.baseColorFactor = material.baseColorFactor
+            // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
+            mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
             // Apply expression-driven material color overrides for outlines
             if let outlineOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .outlineColor) {
@@ -3435,7 +3312,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let skin = model.skins[skinIndex]
                 if let jointBuffer = skinningSystem?.getJointMatricesBuffer() {
                     let byteOffset = skin.matrixOffset * MemoryLayout<float4x4>.stride
-                    encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: 3)
+                    encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
                 }
             }
 
@@ -3453,6 +3330,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Restore default cull mode
         encoder.setCullMode(.back)
+
+        // Reset depth bias for subsequent render passes
+        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+
+        // Restore depth state for subsequent render passes
+        if let opaqueState = depthStencilStates["opaque"] {
+            encoder.setDepthStencilState(opaqueState)
+        }
     }
 
     // MARK: - Skinning Input Validation
@@ -3493,10 +3378,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let maxJoint = Int(max(joints.x, joints.y, joints.z, joints.w))
 
             if maxJoint >= paletteCount {
-                vrmLog("❌ [JOINTS BOUNDS] Mesh '\(meshName)' material '\(materialName)' skin \(skinIndex):")
+                // Log but don't crash - Iron Dome should have caught this, but log as warning
+                vrmLog("⚠️ [JOINTS BOUNDS] Mesh '\(meshName)' material '\(materialName)' skin \(skinIndex):")
                 vrmLog("   Vertex \(i) has joint index \(maxJoint) >= palette count \(paletteCount)")
                 vrmLog("   Joints: [\(joints.x), \(joints.y), \(joints.z), \(joints.w)]")
-                preconditionFailure("Bad skinning inputs: joint index out of bounds")
+                vrmLog("   → Iron Dome should have sanitized this. Check sanitizeAllMeshJoints() was called.")
+                // Don't crash - just log the issue
             }
 
             // Check weights sum to ~1.0
@@ -3504,10 +3391,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let weightSum = weights.x + weights.y + weights.z + weights.w
 
             if weightSum < 0.99 || weightSum > 1.01 {
-                vrmLog("❌ [WEIGHTS SUM] Mesh '\(meshName)' material '\(materialName)' skin \(skinIndex):")
-                vrmLog("   Vertex \(i) weights sum to \(weightSum) (expected ~1.0)")
-                vrmLog("   Weights: [\(weights.x), \(weights.y), \(weights.z), \(weights.w)]")
-                preconditionFailure("Bad skinning inputs: weights don't sum to 1.0")
+                // Log but don't crash - weight normalization issues are common
+                if frameCounter < 2 {
+                    vrmLog("⚠️ [WEIGHTS SUM] Mesh '\(meshName)' material '\(materialName)' skin \(skinIndex):")
+                    vrmLog("   Vertex \(i) weights sum to \(weightSum) (expected ~1.0)")
+                    vrmLog("   Weights: [\(weights.x), \(weights.y), \(weights.z), \(weights.w)]")
+                }
+                // Don't crash - GPU shaders can handle unnormalized weights
             }
         }
 

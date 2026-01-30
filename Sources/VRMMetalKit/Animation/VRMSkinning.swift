@@ -123,14 +123,18 @@ public class VRMSkinningSystem {
         totalMatrixCount = currentOffset
 
         // Allocate the large buffer for all skins
-        let totalBufferSize = currentByteOffset
+        // CRITICAL: Pad to at least 256 matrices so shader clamp to 255 is always safe
+        let minMatrixCount = 256
+        let paddedMatrixCount = max(totalMatrixCount, minMatrixCount)
+        let totalBufferSize = paddedMatrixCount * matrixSize
         jointMatricesBuffer = device.makeBuffer(length: totalBufferSize, options: .storageModeShared)
-        vrmLog("[SKINNING] Allocated buffer for \(totalMatrixCount) total matrices (\(totalBufferSize) bytes)")
+        vrmLog("[SKINNING] Allocated buffer for \(totalMatrixCount) matrices (padded to \(paddedMatrixCount), \(totalBufferSize) bytes)")
 
-        // Initialize all matrices to identity to prevent garbage
+        // Initialize ALL matrices to identity to prevent garbage reads
+        // This includes padding matrices that may be accessed by clamped garbage indices
         if let buffer = jointMatricesBuffer {
-            let pointer = buffer.contents().bindMemory(to: float4x4.self, capacity: totalMatrixCount)
-            for i in 0..<totalMatrixCount {
+            let pointer = buffer.contents().bindMemory(to: float4x4.self, capacity: paddedMatrixCount)
+            for i in 0..<paddedMatrixCount {
                 pointer[i] = float4x4(1)  // Identity matrix
             }
         }
@@ -578,16 +582,22 @@ public class VRMSkinningSystem {
         vrmLog("📊 [VERTEX VALIDATION] Mesh '\(meshName)' - Scanning \(min(128, vertexCount)) vertices:")
         vrmLog("   Palette size: \(paletteCount) joints")
 
+        // Use dynamic MemoryLayout to get correct offsets (critical for avoiding wedge artifacts)
+        let jointsOffset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
+        let weightsOffset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
+
+        vrmLog("📐 [VERTEX LAYOUT] joints offset: \(jointsOffset), weights offset: \(weightsOffset), stride: \(stride)")
+
         // Scan first 128 vertices (or all if fewer)
         for i in 0..<min(128, vertexCount) {
             let offset = i * stride
 
-            // Joints at offset 64 (ushort4 = 4 * uint16, stored as 8 bytes total)
-            let jointsPtr = pointer.advanced(by: offset + 64).assumingMemoryBound(to: UInt16.self)
-            let joints = [UInt32(jointsPtr[0]), UInt32(jointsPtr[1]), UInt32(jointsPtr[2]), UInt32(jointsPtr[3])]
+            // Use dynamic offsets instead of hardcoded values
+            let jointsPtr = pointer.advanced(by: offset + jointsOffset).assumingMemoryBound(to: UInt32.self)
+            let joints = [jointsPtr[0], jointsPtr[1], jointsPtr[2], jointsPtr[3]]
 
-            // Weights at offset 80 (float4 = 4 * float32)
-            let weightsPtr = pointer.advanced(by: offset + 80).assumingMemoryBound(to: Float.self)
+            // Use dynamic offsets instead of hardcoded values
+            let weightsPtr = pointer.advanced(by: offset + weightsOffset).assumingMemoryBound(to: Float.self)
             let weights = [weightsPtr[0], weightsPtr[1], weightsPtr[2], weightsPtr[3]]
 
             // Track statistics

@@ -159,15 +159,35 @@ public class VRMPrimitive {
         if let jointsAccessorIndex = gltfPrimitive.attributes["JOINTS_0"] {
             let joints = try bufferLoader.loadAccessorAsUInt32(jointsAccessorIndex)
             let jointCount = (joints.count / 4) * 4
+
+            // SANITIZE: Clamp sentinel values (65535, -1, etc.) to prevent vertex explosion
+            // VRM models typically have < 256 bones, so anything >= 256 is suspicious
+            let maxValidJoint: UInt32 = 255
+            var sanitizedCount = 0
+
             vertexData.joints = stride(from: 0, to: jointCount, by: 4).map { i in
-                SIMD4<UInt16>(UInt16(joints[i]), UInt16(joints[i+1]), UInt16(joints[i+2]), UInt16(joints[i+3]))
+                var j0 = joints[i]
+                var j1 = joints[i+1]
+                var j2 = joints[i+2]
+                var j3 = joints[i+3]
+
+                // Clamp out-of-bounds indices to 0 (root bone)
+                if j0 > maxValidJoint { j0 = 0; sanitizedCount += 1 }
+                if j1 > maxValidJoint { j1 = 0; sanitizedCount += 1 }
+                if j2 > maxValidJoint { j2 = 0; sanitizedCount += 1 }
+                if j3 > maxValidJoint { j3 = 0; sanitizedCount += 1 }
+
+                return SIMD4<UInt32>(j0, j1, j2, j3)
             }
 
-            // Compute required palette size from actual joint indices
-            let maxJoint = joints.max() ?? 0
+            // Compute required palette size from SANITIZED joint indices
+            let maxJoint = vertexData.joints.flatMap { [$0.x, $0.y, $0.z, $0.w] }.max() ?? 0
             primitive.requiredPaletteSize = Int(maxJoint) + 1
             primitive.hasJoints = true
 
+            if sanitizedCount > 0 {
+                vrmLog("[VRMPrimitive] ⚠️ SANITIZED \(sanitizedCount) out-of-bounds joint indices (sentinel values like 65535)")
+            }
             vrmLog("[VRMPrimitive] JOINTS_0 loaded: \(jointCount/4) vertices, maxJoint=\(maxJoint), requiredPalette=\(primitive.requiredPaletteSize)")
         }
 
@@ -591,6 +611,91 @@ public class VRMPrimitive {
         vrmLog("  - SoA positions buffer: \(morphPositionsSoA != nil) (\(totalDeltasSize) bytes)")
         vrmLog("  - SoA normals buffer: \(morphNormalsSoA != nil)")
     }
+
+    // MARK: - Iron Dome Sanitization
+
+    /// Sanitizes joint indices to prevent vertex explosions from out-of-bounds bone references.
+    ///
+    /// This is the "Iron Dome" sanitizer that catches:
+    /// - **Sentinel values**: 65535 (0xFFFF) used by some exporters to mean "no bone"
+    /// - **Out-of-bounds indices**: Joint indices >= actual bone count
+    ///
+    /// Both cases are remapped to joint 0 (root bone) with their weight zeroed out.
+    ///
+    /// - Parameter maxJointIndex: The maximum valid joint index (skin.joints.count - 1)
+    /// - Returns: Number of joints that were sanitized
+    @discardableResult
+    public func sanitizeJoints(maxJointIndex: Int) -> Int {
+        guard hasJoints, let vertexBuffer = vertexBuffer, vertexCount > 0 else {
+            return 0
+        }
+
+        let maxValid = UInt32(maxJointIndex)
+        var sanitizedCount = 0
+
+        // Get mutable access to vertex buffer
+        let vertexPointer = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+
+        for i in 0..<vertexCount {
+            var vertex = vertexPointer[i]
+            var modified = false
+
+            // Check and sanitize each joint index
+            // If index is out of bounds or sentinel (65535), remap to joint 0 and zero the weight
+            if vertex.joints.x > maxValid || vertex.joints.x == 65535 {
+                vertex.joints.x = 0
+                vertex.weights.x = 0
+                modified = true
+                sanitizedCount += 1
+            }
+            if vertex.joints.y > maxValid || vertex.joints.y == 65535 {
+                vertex.joints.y = 0
+                vertex.weights.y = 0
+                modified = true
+                sanitizedCount += 1
+            }
+            if vertex.joints.z > maxValid || vertex.joints.z == 65535 {
+                vertex.joints.z = 0
+                vertex.weights.z = 0
+                modified = true
+                sanitizedCount += 1
+            }
+            if vertex.joints.w > maxValid || vertex.joints.w == 65535 {
+                vertex.joints.w = 0
+                vertex.weights.w = 0
+                modified = true
+                sanitizedCount += 1
+            }
+
+            // Renormalize weights if any were zeroed
+            if modified {
+                let weightSum = vertex.weights.x + vertex.weights.y + vertex.weights.z + vertex.weights.w
+                if weightSum > 0.0001 {
+                    vertex.weights = vertex.weights / weightSum
+                } else {
+                    // All weights zeroed - set to 100% root bone
+                    vertex.weights = SIMD4<Float>(1, 0, 0, 0)
+                }
+                vertexPointer[i] = vertex
+            }
+        }
+
+        // Update requiredPaletteSize after sanitization
+        if sanitizedCount > 0 {
+            var newMaxJoint: UInt32 = 0
+            for i in 0..<vertexCount {
+                let joints = vertexPointer[i].joints
+                newMaxJoint = max(newMaxJoint, joints.x, joints.y, joints.z, joints.w)
+            }
+            requiredPaletteSize = Int(newMaxJoint) + 1
+
+            vrmLog("[IRON DOME] Sanitized \(sanitizedCount) out-of-bounds joint indices")
+            vrmLog("  - Max valid joint: \(maxJointIndex)")
+            vrmLog("  - New requiredPaletteSize: \(requiredPaletteSize)")
+        }
+
+        return sanitizedCount
+    }
 }
 
 // MARK: - Vertex Data
@@ -601,7 +706,7 @@ struct VertexData {
     var texCoords: [SIMD2<Float>] = []
     var colors: [SIMD4<Float>] = []
     var tangents: [SIMD4<Float>] = []
-    var joints: [SIMD4<UInt16>] = []
+    var joints: [SIMD4<UInt32>] = []  // Changed to UInt32 to avoid truncation
     var weights: [SIMD4<Float>] = []
 
     func interleaved() -> [VRMVertex] {
@@ -646,7 +751,7 @@ public struct VRMVertex {
     public var normal: SIMD3<Float> = [0, 1, 0]
     public var texCoord: SIMD2<Float> = [0, 0]
     public var color: SIMD4<Float> = [1, 1, 1, 1]
-    public var joints: SIMD4<UInt16> = [0, 0, 0, 0]
+    public var joints: SIMD4<UInt32> = [0, 0, 0, 0]  // Changed to UInt32 to match shader uint4
     public var weights: SIMD4<Float> = [1, 0, 0, 0]
 }
 
@@ -979,6 +1084,7 @@ public class VRMMaterial {
     public var baseColorFactor: SIMD4<Float> = [1, 1, 1, 1]
     public var baseColorTexture: VRMTexture?
     public var normalTexture: VRMTexture?  // Normal map for surface detail
+    public var emissiveTexture: VRMTexture?  // Emissive (glow) texture
     public var metallicFactor: Float = 0.0
     public var roughnessFactor: Float = 1.0
     public var emissiveFactor: SIMD3<Float> = [0, 0, 0]
@@ -989,12 +1095,46 @@ public class VRMMaterial {
     // MToon properties
     public var mtoon: VRMMToonMaterial?
 
+    // VRM spec version for version-aware shader behavior
+    // VRM 0.0 uses smoothstep shading, VRM 1.0 uses linearstep
+    public var vrmVersion: VRMSpecVersion = .v1_0
+
     // Render queue for sorting (VRM 0.x: Unity render queue values, higher = render later)
     // Default is 2000 (geometry), transparent materials typically 3000+
     public var renderQueue: Int = 2000
 
-    public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil) {
+    // VRM transparent with depth write - transparent materials that still write to depth buffer
+    // This is critical for proper layering of face materials (eyebrows, eyelashes over skin)
+    public var transparentWithZWrite: Bool = false
+
+    // Render queue offset from VRM extension (relative to category base)
+    public var renderQueueOffset: Int = 0
+
+    // Z-write enabled (for VRM 0.x compatibility)
+    public var zWriteEnabled: Bool = true
+
+    // Blend mode from VRM 0.x (0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite)
+    public var blendMode: Int = 0
+
+    /// Computed property: Is this material transparent but should write to depth?
+    /// Used for proper layering of overlapping transparent materials (e.g., eyebrows over face skin)
+    public var isTransparentWithZWrite: Bool {
+        // Explicit flag from VRM 1.0 extension
+        if transparentWithZWrite {
+            return true
+        }
+        // VRM 0.x: BlendMode 3 is explicitly TransparentWithZWrite
+        if blendMode == 3 {
+            return true
+        }
+        // VRM 0.x: Infer from properties - transparent material with zWrite enabled
+        let isTransparent = alphaMode == "BLEND" || blendMode == 2
+        return isTransparent && zWriteEnabled
+    }
+
+    public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil, vrmVersion: VRMSpecVersion = .v1_0) {
         self.name = gltfMaterial.name
+        self.vrmVersion = vrmVersion
 
         if let pbr = gltfMaterial.pbrMetallicRoughness {
             if let baseColor = pbr.baseColorFactor, baseColor.count == 4 {
@@ -1035,6 +1175,12 @@ public class VRMMaterial {
             normalTexture = textures[normalTextureInfo.index]
         }
 
+        // Load emissive texture (for glow effects)
+        if let emissiveTextureInfo = gltfMaterial.emissiveTexture,
+           emissiveTextureInfo.index < textures.count {
+            emissiveTexture = textures[emissiveTextureInfo.index]
+        }
+
         if let emissive = gltfMaterial.emissiveFactor, emissive.count == 3 {
             emissiveFactor = SIMD3<Float>(emissive[0], emissive[1], emissive[2])
         }
@@ -1048,6 +1194,30 @@ public class VRMMaterial {
         if let extensions = gltfMaterial.extensions,
            let mtoonExt = extensions["VRMC_materials_mtoon"] as? [String: Any] {
             mtoon = parseMToonExtension(mtoonExt, textures: textures)
+
+            // VRM 1.0: explicit transparentWithZWrite flag
+            if let twzw = mtoonExt["transparentWithZWrite"] as? Bool {
+                transparentWithZWrite = twzw
+            }
+            // VRM 1.0: renderQueueOffsetNumber for sorting within category
+            // Compute final renderQueue from base + offset per VRM 1.0 spec
+            if let rqOffset = mtoonExt["renderQueueOffsetNumber"] as? Int {
+                renderQueueOffset = rqOffset
+
+                // VRM 1.0 base render queue values per alpha mode
+                let base: Int
+                switch alphaMode.uppercased() {
+                case "OPAQUE":
+                    base = 2000
+                case "MASK":
+                    base = 2450
+                case "BLEND":
+                    base = 3000
+                default:
+                    base = 2000
+                }
+                renderQueue = base + rqOffset
+            }
         }
         // VRM 0.x: material properties from document-level VRM extension
         else if let vrm0Prop = vrm0MaterialProperty {
@@ -1066,6 +1236,16 @@ public class VRMMaterial {
             // Get renderQueue from VRM 0.x material (used for sorting transparent materials)
             if let queue = vrm0Prop.renderQueue {
                 renderQueue = queue
+            }
+
+            // VRM 0.x: Read _ZWrite and _BlendMode from floatProperties
+            // _ZWrite: 1 = writes to depth, 0 = no depth write
+            if let zWrite = vrm0Prop.floatProperties["_ZWrite"] {
+                zWriteEnabled = (zWrite == 1.0)
+            }
+            // _BlendMode: 0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite
+            if let bm = vrm0Prop.floatProperties["_BlendMode"] {
+                blendMode = Int(bm)
             }
         }
     }
