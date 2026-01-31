@@ -41,8 +41,10 @@ struct RenderItem {
     let depthWriteEnabled: Bool
     // Render queue offset for fine-grained sorting within a category
     let renderQueueOffset: Int
-    // Scene graph order for stable tie-breaking in sort
+    // Scene graph order for stable tie-breaking in sort (global across all meshes)
     let primitiveIndex: Int
+    // Per-mesh primitive index for morph buffer lookup (matches compute pass key)
+    let primIdxInMesh: Int
 }
 
 final class VRMRenderItemBuilder {
@@ -102,7 +104,7 @@ final class VRMRenderItemBuilder {
             }
             totalMeshes += 1
 
-            for primitive in mesh.primitives {
+            for (primIdxInMesh, primitive) in mesh.primitives.enumerated() {
                 // Get material reference for property-based detection
                 let material: VRMMaterial? = primitive.materialIndex.flatMap { idx in
                     idx < model.materials.count ? model.materials[idx] : nil
@@ -253,7 +255,8 @@ final class VRMRenderItemBuilder {
                     materialRenderQueue: materialRenderQueue,
                     depthWriteEnabled: depthWriteEnabled,
                     renderQueueOffset: materialRenderQueueOffset,
-                    primitiveIndex: globalPrimitiveIndex
+                    primitiveIndex: globalPrimitiveIndex,
+                    primIdxInMesh: primIdxInMesh
                 )
 
                 allItems.append(item)
