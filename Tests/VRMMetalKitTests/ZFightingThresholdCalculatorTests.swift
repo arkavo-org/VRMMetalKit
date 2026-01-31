@@ -38,7 +38,9 @@ final class ZFightingThresholdCalculatorTests: XCTestCase {
     /// Uses AvatarSample_A as the MASK material reference model
     func testMaskMaterialsGetHigherThreshold() async throws {
         // Arrange: Use AvatarSample_A which has MASK face materials
-        let modelPath = "/Users/arkavo/Documents/VRMModels/AvatarSample_A.vrm.glb"
+        guard let modelPath = ProcessInfo.processInfo.environment["VRM_MODELS_PATH"].map({ "\($0)/AvatarSample_A.vrm.glb" }) else {
+            throw XCTSkip("VRM_MODELS_PATH not set")
+        }
         try XCTSkipIf(
             !FileManager.default.fileExists(atPath: modelPath),
             "AvatarSample_A not found"
@@ -106,7 +108,9 @@ final class ZFightingThresholdCalculatorTests: XCTestCase {
 
     /// Test threshold calculation with real AvatarSample_A model
     func testAvatarSampleA_GetsMaskThreshold() async throws {
-        let modelPath = "/Users/arkavo/Documents/VRMModels/AvatarSample_A.vrm.glb"
+        guard let modelPath = ProcessInfo.processInfo.environment["VRM_MODELS_PATH"].map({ "\($0)/AvatarSample_A.vrm.glb" }) else {
+            throw XCTSkip("VRM_MODELS_PATH not set")
+        }
         try XCTSkipIf(
             !FileManager.default.fileExists(atPath: modelPath),
             "AvatarSample_A not found"
@@ -131,7 +135,9 @@ final class ZFightingThresholdCalculatorTests: XCTestCase {
 
     /// Test threshold calculation with real Seed-san model (OPAQUE)
     func testSeedSan_GetsOpaqueThreshold() async throws {
-        let modelPath = "/Users/arkavo/Documents/VRMModels/Seed-san.vrm"
+        guard let modelPath = ProcessInfo.processInfo.environment["VRM_MODELS_PATH"].map({ "\($0)/Seed-san.vrm" }) else {
+            throw XCTSkip("VRM_MODELS_PATH not set")
+        }
         try XCTSkipIf(
             !FileManager.default.fileExists(atPath: modelPath),
             "Seed-san not found"

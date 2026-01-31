@@ -188,17 +188,7 @@ final class AlphaToCoverageTests: XCTestCase {
     // MARK: - Helper Methods
     
     private var modelsDirectory: String {
-        let candidates: [String] = [
-            "/Users/arkavo/Documents/VRMModels",
-            ProcessInfo.processInfo.environment["VRM_MODELS_PATH"]
-        ].compactMap { $0 }
-        
-        for candidate in candidates {
-            if FileManager.default.fileExists(atPath: candidate) {
-                return candidate
-            }
-        }
-        return ""
+        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? ""
     }
     
     private func measureEdgeFlicker(

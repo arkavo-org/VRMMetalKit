@@ -31,19 +31,7 @@ final class ZFightingMultiModelTests: XCTestCase {
 
     /// Directory containing test VRM models
     private var modelsDirectory: String {
-        // Try common locations for VRM models
-        let candidates: [String] = [
-            "/Users/arkavo/Documents/VRMModels",
-            ProcessInfo.processInfo.environment["VRM_MODELS_PATH"],
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Documents/VRMModels").path
-        ].compactMap { $0 }
-
-        for candidate in candidates {
-            if FileManager.default.fileExists(atPath: candidate) {
-                return candidate
-            }
-        }
-        return ""  // Empty string will cause tests to skip
+        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? ""
     }
 
     /// Available test models

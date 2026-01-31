@@ -27,17 +27,7 @@ final class ZFightingMaterialTypeTests: XCTestCase {
     var helper: ZFightingTestHelper!
 
     private var modelsDirectory: String {
-        let candidates: [String] = [
-            "/Users/arkavo/Documents/VRMModels",
-            ProcessInfo.processInfo.environment["VRM_MODELS_PATH"]
-        ].compactMap { $0 }
-
-        for candidate in candidates {
-            if FileManager.default.fileExists(atPath: candidate) {
-                return candidate
-            }
-        }
-        return ""
+        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? ""
     }
 
     override func setUp() async throws {

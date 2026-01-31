@@ -38,17 +38,10 @@ final class MouthRenderingTests: XCTestCase {
     // MARK: - Test Helpers
     
     private var modelPath: String? {
-        let candidates = [
-            "/Users/arkavo/Projects/Muse/Resources/VRM/AvatarSample_A.vrm.glb",
-            ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"].flatMap { "\($0)/AvatarSample_A.vrm.glb" }
-        ].compactMap { $0 }
-        
-        for path in candidates {
-            if FileManager.default.fileExists(atPath: path) {
-                return path
-            }
+        ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"].flatMap { 
+            let path = "\($0)/AvatarSample_A.vrm.glb"
+            return FileManager.default.fileExists(atPath: path) ? path : nil
         }
-        return nil
     }
     
     // MARK: - RED Phase: Failing Tests
