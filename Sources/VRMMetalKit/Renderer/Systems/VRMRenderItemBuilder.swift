@@ -172,9 +172,9 @@ final class VRMRenderItemBuilder {
                     renderOrder = 5
                     faceEyeCount += 1
                 } else if materialLower.contains("mouth") || materialLower.contains("lip") {
-                    // Mouth/lip materials on face mesh - treat as face skin layer
-                    faceCategory = "skin"
-                    renderOrder = 1
+                    // Mouth/lip materials on face mesh - render AFTER base face skin
+                    faceCategory = "faceOverlay"
+                    renderOrder = 2  // After base skin (1), same as eyebrow
                     faceSkinCount += 1
                 } else if materialLower.contains("face") {
                     // Catch-all for any other face-related materials ( FaceMouth, FaceBase, etc.)

@@ -97,11 +97,11 @@ public struct MToonMaterialUniforms {
     public var alphaMode: UInt32 = 0
     public var alphaCutoff: Float = 0.5
 
-    // Block 12: 16 bytes - Version flag and padding
+    // Block 12: 16 bytes - Version flag and UV offset
     public var vrmVersion: UInt32 = 1  // Default to VRM 1.0
-    private var _padding3: Float = 0.0
-    private var _padding4: Float = 0.0
-    private var _padding5: Float = 0.0
+    public var uvOffsetX: Float = 0.0  // UV offset for texture remapping (e.g., face overlays)
+    public var uvOffsetY: Float = 0.0  // UV offset for texture remapping
+    public var uvScale: Float = 1.0    // UV scale for texture remapping
 
     public init() {}
 

@@ -36,15 +36,22 @@ public struct DepthBiasCalculator {
     
     /// Base depth bias values by material category
     private let baseBiasValues: [String: Float] = [
-        // Body/Clothing - minimal bias needed
+        // Body - minimal bias (base layer)
         "Body_SKIN": 0.005,
         "Body": 0.005,
-        "Cloth": 0.005,
+        
+        // Clothing - higher bias to render on top of body
+        // Hip/skirt boundary needs clear separation
+        "Cloth": 0.015,
+        "Clothing": 0.015,
+        "Skirt": 0.015,
+        "Bottoms": 0.015,
+        "Pants": 0.015,
         
         // Base face - slight bias
         "Face_SKIN": 0.01,
         "Face": 0.01,
-        "Skin": 0.01,
+        "Skin": 0.01,  // Note: Body_SKIN should be checked first
         
         // Face overlays - progressive bias for layering
         "Mouth": 0.02,
@@ -131,14 +138,21 @@ public struct DepthBiasCalculator {
             return exactMatch
         }
         
-        // Try partial matches
-        for (key, value) in baseBiasValues {
-            if lowercased.contains(key.lowercased()) {
-                return value
-            }
+        // PRIORITY 1: Check for clothing first (before body/skin)
+        // Hip/skirt boundary needs clear clothing identification
+        if lowercased.contains("cloth") || lowercased.contains("clothing") ||
+           lowercased.contains("skirt") || lowercased.contains("bottoms") ||
+           lowercased.contains("pants") {
+            return baseBiasValues["Cloth"] ?? 0.015
         }
         
-        // Check for material type hints in the name
+        // PRIORITY 2: Check for body materials (before generic skin)
+        // Body_SKIN should get body bias, not face skin bias
+        if lowercased.contains("body") {
+            return baseBiasValues["Body"] ?? 0.005
+        }
+        
+        // PRIORITY 3: Face-specific features
         if lowercased.contains("mouth") || lowercased.contains("lip") {
             return baseBiasValues["Mouth"] ?? defaultBias
         }
@@ -148,14 +162,24 @@ public struct DepthBiasCalculator {
         if lowercased.contains("eye") {
             return baseBiasValues["Eye"] ?? defaultBias
         }
-        if lowercased.contains("face") || lowercased.contains("skin") {
-            return baseBiasValues["Face_SKIN"] ?? defaultBias
+        if lowercased.contains("face") {
+            return baseBiasValues["Face"] ?? defaultBias
         }
-        if lowercased.contains("body") {
-            return baseBiasValues["Body_SKIN"] ?? defaultBias
+        
+        // PRIORITY 4: Generic skin (only if not body or face)
+        if lowercased.contains("skin") {
+            return baseBiasValues["Skin"] ?? defaultBias
         }
+        
         if lowercased.contains("highlight") {
             return baseBiasValues["Highlight"] ?? defaultBias
+        }
+        
+        // Try partial matches from baseBiasValues
+        for (key, value) in baseBiasValues {
+            if lowercased.contains(key.lowercased()) {
+                return value
+            }
         }
         
         return defaultBias

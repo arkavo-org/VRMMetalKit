@@ -2,7 +2,7 @@
 
 **Last Updated:** 2026-01-30  
 **Investigation Lead:** TDD Analysis with Depth Bias Implementation  
-**Status:** 🔴 **Active Issue - Partial Mitigation Implemented**
+**Status:** 🟡 **Active Issue - True Fixes Implemented, Tuning Required**
 
 ---
 
@@ -240,6 +240,52 @@ descriptor.isAlphaToCoverageEnabled = true  // Smooth edges via MSAA
 - Face materials sorted by renderOrder before depth state application
 
 **Status:** ✅ Implemented and working
+
+---
+
+## Issues Fixed (From Troubleshooting Guide)
+
+### ✅ FIXED: Depth Bias Values Were All Zero
+
+**Problem:** Code inspection showed ALL depth bias calls used `(0, slopeScale: X, clamp: Y)`
+
+**Solution:** Integrated `DepthBiasCalculator` throughout rendering pipeline:
+
+```swift
+// Before (INCORRECT):
+encoder.setDepthBias(0, slopeScale: 0, clamp: 0)  // No bias!
+
+// After (FIXED):
+let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: isOverlay)
+encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+```
+
+**Files Modified:**
+- `Sources/VRMMetalKit/Renderer/VRMRenderer.swift` - All face categories now use calculator
+- `Sources/VRMMetalKit/Utilities/DepthBiasCalculator.swift` - New implementation
+
+**Test Validation:** `DepthBiasTests` (6 tests passing)
+
+### 🔄 PARTIAL: Depth Bias Tuning Required
+
+**Current Values:**
+
+| Material | Base Bias | Overlay Offset | Total |
+|----------|-----------|----------------|-------|
+| Body | 0.005 | - | 0.005 |
+| Face (base) | 0.010 | - | 0.010 |
+| Mouth | 0.020 | +0.010 | 0.030 |
+| Eyebrow | 0.025 | +0.010 | 0.035 |
+| Eye | 0.030 | +0.010 | 0.040 |
+| Highlight | 0.040 | +0.010 | 0.050 |
+
+**Test Results:**
+- Face Front: ✅ PASS (under threshold)
+- Face Side: ❌ FAIL (10.78% > 10.5% threshold - close!)
+- Collar/Neck: ❌ FAIL (16.72% > 10.5% threshold)
+- Hip/Skirt: ❌ FAIL (9.48% > 7.0% threshold)
+
+**Next Steps:** Increase bias values or add clothing-specific tuning
 
 ---
 

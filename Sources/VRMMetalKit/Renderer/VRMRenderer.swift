@@ -1541,9 +1541,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         item.faceCategory = "clothing"
                         item.renderOrder = 8  // Same as transparentZWrite for proper layering
                         vrmLog("  → Assigned to: clothing queue (order=8)")
+                    } else if item.materialNameLower.contains("mouth") || item.materialNameLower.contains("lip") {
+                        // Face mouth/lip overlays - render after base face skin
+                        item.faceCategory = "faceOverlay"
+                        item.renderOrder = 2  // after skin (1), before eyebrow (2) - same as eyebrow but named differently
+                        faceSkinCount += 1
+                        vrmLog("  → Assigned to: face overlay queue (order=2)")
                     } else if item.materialNameLower.contains("skin") || (item.materialNameLower.contains("face") && !item.materialNameLower.contains("eye")) {
                         item.faceCategory = "skin"
-                        item.renderOrder = 1  // faceSkin
+                        item.renderOrder = 1  // faceSkin - base face renders first
                         faceSkinCount += 1
                         vrmLog("  → Assigned to: skin queue (order=1)")
                     } else if item.materialNameLower.contains("brow") {
@@ -2351,6 +2357,18 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
                         mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
+                        // UV FIX: Shift FaceMouth UVs to lip texture area (bottom right of atlas)
+                        // The mouth mesh UVs are centered at (0.4, 0.48) which is the blank face area
+                        // We need to shift them to the lip texture area around (0.7, 0.7)
+                        if item.materialNameLower.contains("mouth") || item.materialNameLower.contains("lip") {
+                            mtoonUniforms.uvOffsetX = 0.35  // Shift right to lip area
+                            mtoonUniforms.uvOffsetY = 0.25  // Shift down to lip area
+                            mtoonUniforms.uvScale = 0.5     // Scale down to fit lip texture
+                            if frameCounter <= 2 {
+                                vrmLog("🔧 [MOUTH UV FIX] Applied UV offset for \(item.materialName)")
+                            }
+                        }
+
                         // LIGHTING FIX: Zero emissive AFTER MToon init to prevent washout
                         mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
 
@@ -2567,7 +2585,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 case "clothing":
                     // Clothing renders AFTER body - wins at overlaps via render order
-                    // Depth bias: neutral (relies on render order, but has bias for safety)
                     if let faceState = depthStencilStates["face"] {
                         encoder.setDepthStencilState(faceState)
                     } else {
@@ -2575,8 +2592,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.back)
                     encoder.setFrontFacing(.counterClockwise)
-                    // Z-FIGHTING FIX: Clothing at collar/neck needs clear depth separation
-                    encoder.setDepthBias(0.05, slopeScale: 4.0, clamp: 1.0)
+                    // Apply depth bias for clothing (overlay layer)
+                    let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
+                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=clothing  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -2607,18 +2625,36 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoder.setCullMode(.back)
                     encoder.setFrontFacing(.counterClockwise)
 
-                    // Keep depth bias as secondary safeguard
-                    if materialNameLower.contains("mouth") {
-                        encoder.setDepthBias(0.02, slopeScale: 2.0, clamp: 0.1)
-                    } else if materialNameLower.contains("face") && materialNameLower.contains("skin") {
-                        encoder.setDepthBias(0.01, slopeScale: 2.0, clamp: 0.1)
-                    } else {
-                        encoder.setDepthBias(0.015, slopeScale: 2.0, clamp: 0.1)
-                    }
+                    // Apply material-specific depth bias from calculator
+                    let bias = depthBiasCalculator.depthBias(
+                        for: item.materialName,
+                        isOverlay: isOverlay
+                    )
+                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=skin  z=\(viewZ)  mat=\(item.materialName)  overlay=\(isOverlay)")
                     }
+
+                case "faceOverlay":
+                    // Face mouth/lip overlays - render on top of face skin
+                    // Uses face state with depth bias to win depth test
+                    if let faceState = depthStencilStates["face"] {
+                        encoder.setDepthStencilState(faceState)
+                    } else {
+                        encoder.setDepthStencilState(depthStencilStates["mask"])
+                    }
+                    encoder.setCullMode(.none)
+                    encoder.setFrontFacing(.counterClockwise)
+                    // Apply depth bias for mouth/lip overlays
+                    let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
+                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    print("🔧 [VRMMetalKit] Rendering faceOverlay: \(item.materialName) with bias=\(bias), indices=\(primitive.indexCount)")
+                    
+                    // DEBUG: Force OPAQUE mode to see if geometry is there
+                    mtoonUniforms.alphaMode = 0  // OPAQUE
+                    mtoonUniforms.alphaCutoff = 0.0
+                    print("🔧 [VRMMetalKit] DEBUG: Forcing OPAQUE mode for faceOverlay")
 
                 case "eyebrow", "eyeline":
                     // Face features render after skin - win via render order
@@ -2629,8 +2665,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    // Slope scale depth bias for MASK materials on curved surfaces
-                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
+                    // Apply depth bias for eyebrow/eyeline overlays
+                    let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
+                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=\(faceCategory)  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -2645,8 +2682,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    // Z-FIGHTING FIX: Eyes need highest priority to win over eyelids
-                    encoder.setDepthBias(0.02, slopeScale: 2.0, clamp: 0.1)
+                    // Apply depth bias for eye overlays (highest priority)
+                    let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
+                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=eye  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -2659,8 +2697,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    // Slope scale depth bias for blend materials on curved surfaces
-                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
+                    // Apply depth bias for highlight overlays (highest bias)
+                    let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
+                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=highlight  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -2676,8 +2715,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)  // Often double-sided for overlays
                     encoder.setFrontFacing(.counterClockwise)
-                    // Slope scale depth bias for transparent materials on curved surfaces
-                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
+                    // Apply depth bias for transparent overlays
+                    let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
+                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=transparentZWrite  pso=face(.lessEqual+depthWrite)  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -2690,21 +2730,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             } else {
                 // NON-FACE rendering: use standard alpha mode logic
+                // Apply material-specific depth bias for all non-face materials
+                let baseBias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: false)
+                
                 switch materialAlphaMode {
                 case "opaque":
                     encoder.setDepthStencilState(depthStencilStates["opaque"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "mask":
                     encoder.setDepthStencilState(depthStencilStates["mask"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
                     encoder.setFrontFacing(.counterClockwise)
-                    // Slope scale depth bias handles curved surfaces better than constant bias
-                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
+                    // Apply base depth bias for MASK materials
+                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "blend":
                     if let blendDepthState = depthStencilStates["blend"] {
@@ -2713,14 +2756,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         encoder.setDepthStencilState(depthStencilStates["opaque"])
                     }
                     encoder.setCullMode(.none)
-                    // Slope scale depth bias handles curved surfaces better than constant bias
-                    encoder.setDepthBias(0, slopeScale: 1.0, clamp: 0.01)
+                    // Apply base depth bias for BLEND materials
+                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 default:
                     encoder.setDepthStencilState(depthStencilStates["opaque"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
                     encoder.setCullMode(cullMode)
-                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                 }
             }
 
@@ -3458,6 +3501,110 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             vrmLog("✅ [SKINNING VALIDATION] Mesh '\(meshName)' skin \(skinIndex): \(sampleCount) vertices valid")
         }
     }
+
+    // MARK: - MSAA Alpha-to-Coverage Support
+    
+    /// Current drawable size for MSAA texture management
+    private var currentDrawableSize: CGSize = .zero
+    
+    /// Updates drawable size and creates/updates multisample textures if needed
+    /// Returns true if multisample texture was created/updated
+    @discardableResult
+    public func updateDrawableSize(_ size: CGSize) -> Bool {
+        // Only recreate if size changed and MSAA is enabled
+        guard size != currentDrawableSize || multisampleTexture == nil else {
+            return multisampleTexture != nil
+        }
+        
+        currentDrawableSize = size
+        
+        // Clean up existing texture
+        multisampleTexture = nil
+        
+        // Create multisample texture if MSAA enabled
+        guard usesMultisampling else {
+            return false
+        }
+        
+        let descriptor = MTLTextureDescriptor()
+        descriptor.textureType = .type2DMultisample
+        descriptor.width = Int(size.width)
+        descriptor.height = Int(size.height)
+        descriptor.pixelFormat = config.colorPixelFormat
+        descriptor.sampleCount = config.sampleCount
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .private
+        
+        // Debug logging
+        vrmLog("[MSAA] Creating texture: \(Int(size.width))x\(Int(size.height)), samples: \(config.sampleCount), format: \(config.colorPixelFormat)")
+        
+        multisampleTexture = device.makeTexture(descriptor: descriptor)
+        multisampleTexture?.label = "MSAA Color Texture (\(config.sampleCount)x)"
+        
+        if multisampleTexture != nil {
+            vrmLog("[MSAA] ✅ Created multisample texture: \(Int(size.width))x\(Int(size.height)) @ \(config.sampleCount)x")
+        } else {
+            vrmLog("❌ [MSAA] Failed to create multisample texture - descriptor may be invalid")
+            vrmLog("   Width: \(descriptor.width), Height: \(descriptor.height)")
+            vrmLog("   SampleCount: \(descriptor.sampleCount), PixelFormat: \(descriptor.pixelFormat)")
+        }
+        
+        return multisampleTexture != nil
+    }
+    
+    /// Returns render pass descriptor for multisample rendering
+    /// This is used when MSAA is enabled to render to multisample texture
+    public func getMultisampleRenderPassDescriptor() -> MTLRenderPassDescriptor? {
+        guard usesMultisampling, let multisampleTexture = multisampleTexture else {
+            return nil
+        }
+        
+        let descriptor = MTLRenderPassDescriptor()
+        
+        // Color attachment - multisample
+        let colorAttachment = descriptor.colorAttachments[0]
+        colorAttachment?.texture = multisampleTexture
+        colorAttachment?.loadAction = .clear
+        colorAttachment?.storeAction = .multisampleResolve
+        colorAttachment?.clearColor = MTLClearColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
+        
+        return descriptor
+    }
+    
+    /// Returns render pass descriptor for resolve pass
+    /// Used to blit multisample result to final drawable
+    public func getResolveRenderPassDescriptor() -> MTLRenderPassDescriptor? {
+        // For now, return a basic descriptor - actual resolve happens automatically
+        // when using .multisampleResolve store action
+        let descriptor = MTLRenderPassDescriptor()
+        return descriptor
+    }
+    
+    /// Returns pipeline descriptor for MASK materials with alpha-to-coverage
+    public func getMASKPipelineDescriptor() -> MTLRenderPipelineDescriptor? {
+        // Use the existing A2C pipeline if available
+        guard let a2cPipeline = maskAlphaToCoveragePipelineState else {
+            return nil
+        }
+        
+        // Create a descriptor from the existing pipeline
+        // This is a simplified version - in practice, you'd recreate from library
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.isAlphaToCoverageEnabled = true
+        descriptor.colorAttachments[0].pixelFormat = config.colorPixelFormat
+        
+        return descriptor
+    }
+    
+    // MARK: - CLI Rendering Support
+    
+    /// Sets the debug mode for rendering (used by CLI tool)
+    public func setDebugMode(_ mode: Int) {
+        currentDebugMode = mode
+    }
+    
+    /// Current debug mode (0 = normal, 1-16 = various debug visualizations)
+    private var currentDebugMode: Int = 0
 
 }
 
