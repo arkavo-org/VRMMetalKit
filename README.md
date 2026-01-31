@@ -370,8 +370,7 @@ VRMMetalKit/
 ├── Renderer/
 │   ├── VRMRenderer.swift      # Main renderer
 │   ├── VRMRenderer+Pipeline.swift # Pipeline setup
-│   ├── VRMGeometry.swift      # Mesh/primitive data
-│   └── VRMDebugRenderer.swift # Debug visualization
+│   └── VRMGeometry.swift      # Mesh/primitive data
 ├── Animation/
 │   ├── AnimationPlayer.swift  # Playback controller
 │   ├── VRMAnimationLoader.swift # VRMA import

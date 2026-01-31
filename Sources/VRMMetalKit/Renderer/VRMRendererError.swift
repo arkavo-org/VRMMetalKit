@@ -532,34 +532,3 @@ public enum VRMMaterialValidationError: LocalizedError {
     }
 }
 
-// MARK: - Debug Renderer Errors
-
-/// Errors that can occur in the debug renderer
-public enum VRMDebugRendererError: LocalizedError {
-    case vertexBufferNil(primitive: String)
-    case indexBufferNil(primitive: String)
-    case zeroIndexCount(primitive: String)
-    case indexBufferTooSmall(primitive: String, required: Int, actual: Int)
-    case vertexBufferTooSmall(primitive: String, required: Int, actual: Int)
-
-    public var errorDescription: String? {
-        switch self {
-        case .vertexBufferNil(let primitive):
-            return "❌ VRMDebugRenderer: Vertex buffer is nil for primitive '\(primitive)'"
-        case .indexBufferNil(let primitive):
-            return "❌ VRMDebugRenderer: Index buffer is nil for primitive '\(primitive)'"
-        case .zeroIndexCount(let primitive):
-            return "❌ VRMDebugRenderer: Index count is 0 for primitive '\(primitive)'"
-        case .indexBufferTooSmall(let primitive, let required, let actual):
-            return """
-            ❌ VRMDebugRenderer: Index buffer too small for primitive '\(primitive)'
-            Required: \(required) bytes, Actual: \(actual) bytes
-            """
-        case .vertexBufferTooSmall(let primitive, let required, let actual):
-            return """
-            ❌ VRMDebugRenderer: Vertex buffer too small for primitive '\(primitive)'
-            Required: \(required) bytes, Actual: \(actual) bytes
-            """
-        }
-    }
-}

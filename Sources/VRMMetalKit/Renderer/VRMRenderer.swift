@@ -480,9 +480,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Renders only the first mesh for debugging.
     public var debugSingleMesh = false
 
-    // Debug renderer for systematic testing
-    private var debugRenderer: VRMDebugRenderer?
-
     // Frame counter for debug logging
     var frameCounter = 0
 
@@ -519,17 +516,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Scene graph order for stable tie-breaking in sort
         let primitiveIndex: Int
-    }
-
-    /// Set the debug phase for systematic testing
-    public func setDebugPhase(_ phase: String) {
-        guard let debugPhase = VRMDebugRenderer.DebugPhase(rawValue: phase) else {
-            vrmLog("[VRMRenderer] Invalid debug phase: \(phase)")
-            vrmLog("[VRMRenderer] Valid phases: \(VRMDebugRenderer.DebugPhase.allCases.map { $0.rawValue }.joined(separator: ", "))")
-            return
-        }
-        debugRenderer?.currentPhase = debugPhase
-        vrmLog("[VRMRenderer] Set debug phase to: \(debugPhase.rawValue)")
     }
 
     /// Get current performance metrics
@@ -587,11 +573,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Initialize character priority system
         self.prioritySystem = CharacterPrioritySystem()
-
-        // Initialize debug renderer ONLY if explicitly needed
-        // DISABLED IN PRODUCTION: Comment out to prevent any accidental debug rendering
-        // self.debugRenderer = VRMDebugRenderer(device: device)
-        self.debugRenderer = nil  // Force nil to ensure no debug rendering
 
         super.init()
 
@@ -1685,10 +1666,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if debugSingleMesh {
             if let firstItem = allItems.first {
                 itemsToRender = [firstItem]
-                vrmLog("[VRMDebugRenderer] 🔧 Debug single-mesh mode: rendering only '\(firstItem.materialName)' from mesh '\(firstItem.mesh.name ?? "unnamed")'")
+                vrmLog("[DEBUG] 🔧 Debug single-mesh mode: rendering only '\(firstItem.materialName)' from mesh '\(firstItem.mesh.name ?? "unnamed")'")
             } else {
                 itemsToRender = []
-                vrmLog("[VRMDebugRenderer] 🔧 Debug single-mesh mode: no items to render")
+                vrmLog("[DEBUG] 🔧 Debug single-mesh mode: no items to render")
             }
         } else {
             itemsToRender = allItems
@@ -2894,25 +2875,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLog("[PATH TEST] Reached draw code, debugSingleMesh=\(debugSingleMesh)")
                 }
 
-                if debugSingleMesh, let debugRenderer = debugRenderer {
-                    vrmLog("[SHADER PATH DEBUG] WARNING: USING DEBUG RENDERER!")
-                    // Get joint buffer if this is a skinned mesh
-                    var jointBuffer: MTLBuffer? = nil
-                    if isSkinned, let skinIndex = item.node.skin ?? (primitive.hasJoints ? 0 : nil),
-                       skinIndex >= 0 && skinIndex < model.skins.count {
-                        jointBuffer = skinningSystem?.getJointMatricesBuffer()
-                    }
-
-                    debugRenderer.renderPrimitive(
-                        encoder: encoder,
-                        primitive: primitive,
-                        node: item.node,
-                        viewMatrix: viewMatrix,
-                        projectionMatrix: projectionMatrix,
-                        materials: model.materials,
-                        jointBuffer: jointBuffer
-                    )
-                } else {
+                // Normal production render path
                     if frameCounter < 2 {  // Only log first couple frames
                         vrmLog("[SHADER PATH DEBUG] Frame \(frameCounter): USING PRODUCTION RENDERER (mtoon_fragment_v2)")
                         vrmLog("[SHADER PATH DEBUG]   - pipeline = \(isSkinned ? "skinned" : "static") \(materialAlphaMode != "blend" ? "opaque" : "blend")")
@@ -3192,7 +3155,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         indexBuffer: indexBuffer,
                         indexBufferOffset: primitive.indexBufferOffset
                     )
-                }
                 totalPrimitivesDrawn += 1
                 totalTriangles += primitive.indexCount / 3
                 performanceTracker?.recordDrawCall(triangles: primitive.indexCount / 3, vertices: primitive.vertexCount)
