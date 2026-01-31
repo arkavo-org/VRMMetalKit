@@ -2075,9 +2075,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Binding order contract for vertex shader:
             // Uses ResourceIndices constants for strict validation
 
-            // OPTIMIZATION: Check if we have morphed positions using numeric key
-            let meshIdx = model.meshes.firstIndex(where: { $0 === item.mesh }) ?? -1
-            let primIdx = item.mesh.primitives.firstIndex(where: { $0 === primitive }) ?? -1
+            // Use cached meshIndex/primitiveIndex for O(1) lookup instead of O(n) search
+            // This ensures stable key matches the morph compute pass
+            let meshIdx = item.meshIndex
+            let primIdx = item.primitiveIndex
             let stableKey: MorphKey = (UInt64(meshIdx) << 32) | UInt64(primIdx)
             let hasMorphedPositions = morphedBuffers[stableKey] != nil
 
