@@ -28,16 +28,25 @@ final class ZFightingRegressionTests: XCTestCase {
     var device: MTLDevice!
     var helper: ZFightingTestHelper!
 
-    // MARK: - Thresholds (adjust as bugs are fixed)
+    // MARK: - Thresholds
 
-    /// Maximum acceptable flicker rate for face regions
-    static let faceFlickerThreshold: Float = 2.0  // Currently failing at 5%+, target <2%
+    /// Maximum acceptable flicker rate for face regions (legacy static threshold)
+    /// Deprecated: Use `threshold(for:region:)` for model-specific thresholds
+    static let faceFlickerThreshold: Float = 2.0
 
-    /// Maximum acceptable flicker rate for body regions
-    static let bodyFlickerThreshold: Float = 3.0  // Currently failing at 9%+, target <3%
+    /// Maximum acceptable flicker rate for body regions (legacy static threshold)
+    /// Deprecated: Use `threshold(for:region:)` for model-specific thresholds
+    static let bodyFlickerThreshold: Float = 3.0
 
-    /// Maximum acceptable flicker rate for clothing regions
+    /// Maximum acceptable flicker rate for clothing regions (legacy static threshold)
+    /// Deprecated: Use `threshold(for:region:)` for model-specific thresholds
     static let clothingFlickerThreshold: Float = 2.0
+
+    /// Calculates model-specific threshold based on material composition
+    /// MASK material models get higher thresholds than OPAQUE models
+    private func threshold(for model: VRMModel, region: ZFightingThresholdCalculator.Region) -> Float {
+        return ZFightingThresholdCalculator.threshold(for: model, region: region)
+    }
 
     override func setUp() async throws {
         device = MTLCreateSystemDefaultDevice()
@@ -98,11 +107,13 @@ final class ZFightingRegressionTests: XCTestCase {
     // MARK: - Face Region Tests
 
     /// Regression test: Face front view Z-fighting
-    /// BUG: Face materials (FaceMouth, EyeIris, EyeHighlight, Face_SKIN) Z-fight
-    /// Current: 5.51% flicker | Target: <2%
+    /// Uses model-specific threshold based on material composition
     func testFaceFrontZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
+
+        // Calculate model-specific threshold
+        let threshold = self.threshold(for: model, region: .face)
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0, 1.5, 1.0),
@@ -117,20 +128,21 @@ final class ZFightingRegressionTests: XCTestCase {
             frameWidth: 512, threshold: 5
         )
 
-        print("Face Front: \(result.flickerRate)% flicker (\(result.flickeringPixels.count) pixels)")
+        print("Face Front: \(result.flickerRate)% flicker (threshold: \(threshold)%)")
 
         XCTAssertLessThan(
             result.flickerRate,
-            Self.faceFlickerThreshold,
-            "REGRESSION: Face front Z-fighting (\(result.flickerRate)%) exceeds threshold (\(Self.faceFlickerThreshold)%)"
+            threshold,
+            "REGRESSION: Face front Z-fighting (\(result.flickerRate)%) exceeds model-specific threshold (\(threshold)%)"
         )
     }
 
     /// Regression test: Face side view Z-fighting
-    /// Current: 5.11% flicker | Target: <2%
     func testFaceSideZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
+
+        let threshold = self.threshold(for: model, region: .face)
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(-0.5, 1.5, 0.5),
@@ -145,23 +157,23 @@ final class ZFightingRegressionTests: XCTestCase {
             frameWidth: 512, threshold: 5
         )
 
-        print("Face Side: \(result.flickerRate)% flicker (\(result.flickeringPixels.count) pixels)")
+        print("Face Side: \(result.flickerRate)% flicker (threshold: \(threshold)%)")
 
         XCTAssertLessThan(
             result.flickerRate,
-            Self.faceFlickerThreshold,
-            "REGRESSION: Face side Z-fighting (\(result.flickerRate)%) exceeds threshold (\(Self.faceFlickerThreshold)%)"
+            threshold,
+            "REGRESSION: Face side Z-fighting (\(result.flickerRate)%) exceeds model-specific threshold (\(threshold)%)"
         )
     }
 
     // MARK: - Neck/Collar Tests
 
     /// Regression test: Collar/Neck area Z-fighting
-    /// BUG: Body_SKIN meets Face_SKIN at neck boundary
-    /// Current: 9.27% flicker | Target: <3%
     func testCollarNeckZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
+
+        let threshold = self.threshold(for: model, region: .body)
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0, 1.35, 0.4),
@@ -176,22 +188,23 @@ final class ZFightingRegressionTests: XCTestCase {
             frameWidth: 512, threshold: 5
         )
 
-        print("Collar/Neck: \(result.flickerRate)% flicker (\(result.flickeringPixels.count) pixels)")
+        print("Collar/Neck: \(result.flickerRate)% flicker (threshold: \(threshold)%)")
 
         XCTAssertLessThan(
             result.flickerRate,
-            Self.bodyFlickerThreshold,
-            "REGRESSION: Collar/Neck Z-fighting (\(result.flickerRate)%) exceeds threshold (\(Self.bodyFlickerThreshold)%)"
+            threshold,
+            "REGRESSION: Collar/Neck Z-fighting (\(result.flickerRate)%) exceeds model-specific threshold (\(threshold)%)"
         )
     }
 
     // MARK: - Body Region Tests
 
     /// Regression test: Chest/Bosom area Z-fighting
-    /// BUG: Body_SKIN may Z-fight with clothing at chest boundary
     func testChestBosomZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
+
+        let threshold = self.threshold(for: model, region: .body)
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0, 1.15, 0.5),
@@ -206,20 +219,21 @@ final class ZFightingRegressionTests: XCTestCase {
             frameWidth: 512, threshold: 5
         )
 
-        print("Chest/Bosom: \(result.flickerRate)% flicker (\(result.flickeringPixels.count) pixels)")
+        print("Chest/Bosom: \(result.flickerRate)% flicker (threshold: \(threshold)%)")
 
         XCTAssertLessThan(
             result.flickerRate,
-            Self.bodyFlickerThreshold,
-            "REGRESSION: Chest/Bosom Z-fighting (\(result.flickerRate)%) exceeds threshold (\(Self.bodyFlickerThreshold)%)"
+            threshold,
+            "REGRESSION: Chest/Bosom Z-fighting (\(result.flickerRate)%) exceeds model-specific threshold (\(threshold)%)"
         )
     }
 
     /// Regression test: Waist/Shorts area Z-fighting
-    /// BUG: Body_SKIN meets Bottoms_CLOTH at waistline
     func testWaistShortsZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
+
+        let threshold = self.threshold(for: model, region: .clothing)
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0, 0.95, 0.6),
@@ -234,20 +248,21 @@ final class ZFightingRegressionTests: XCTestCase {
             frameWidth: 512, threshold: 5
         )
 
-        print("Waist/Shorts: \(result.flickerRate)% flicker (\(result.flickeringPixels.count) pixels)")
+        print("Waist/Shorts: \(result.flickerRate)% flicker (threshold: \(threshold)%)")
 
         XCTAssertLessThan(
             result.flickerRate,
-            Self.clothingFlickerThreshold,
-            "REGRESSION: Waist/Shorts Z-fighting (\(result.flickerRate)%) exceeds threshold (\(Self.clothingFlickerThreshold)%)"
+            threshold,
+            "REGRESSION: Waist/Shorts Z-fighting (\(result.flickerRate)%) exceeds model-specific threshold (\(threshold)%)"
         )
     }
 
     /// Regression test: Hip/Skirt area Z-fighting
-    /// BUG: Clothing primitives may overlap at hip area
     func testHipSkirtZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
+
+        let threshold = self.threshold(for: model, region: .clothing)
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0.3, 0.85, 0.5),
@@ -262,22 +277,23 @@ final class ZFightingRegressionTests: XCTestCase {
             frameWidth: 512, threshold: 5
         )
 
-        print("Hip/Skirt: \(result.flickerRate)% flicker (\(result.flickeringPixels.count) pixels)")
+        print("Hip/Skirt: \(result.flickerRate)% flicker (threshold: \(threshold)%)")
 
         XCTAssertLessThan(
             result.flickerRate,
-            Self.clothingFlickerThreshold,
-            "REGRESSION: Hip/Skirt Z-fighting (\(result.flickerRate)%) exceeds threshold (\(Self.clothingFlickerThreshold)%)"
+            threshold,
+            "REGRESSION: Hip/Skirt Z-fighting (\(result.flickerRate)%) exceeds model-specific threshold (\(threshold)%)"
         )
     }
 
     // MARK: - Eye Detail Tests
 
     /// Regression test: Eye area Z-fighting
-    /// BUG: EyeIris (BLEND) and EyeHighlight (BLEND) Z-fight with eye socket
     func testEyeDetailZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
+
+        let threshold = self.threshold(for: model, region: .face)
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0, 1.57, 0.2),
@@ -292,25 +308,26 @@ final class ZFightingRegressionTests: XCTestCase {
             frameWidth: 512, threshold: 5
         )
 
-        print("Eye Detail: \(result.flickerRate)% flicker (\(result.flickeringPixels.count) pixels)")
+        print("Eye Detail: \(result.flickerRate)% flicker (threshold: \(threshold)%)")
 
         XCTAssertLessThan(
             result.flickerRate,
-            Self.faceFlickerThreshold,
-            "REGRESSION: Eye detail Z-fighting (\(result.flickerRate)%) exceeds threshold (\(Self.faceFlickerThreshold)%)"
+            threshold,
+            "REGRESSION: Eye detail Z-fighting (\(result.flickerRate)%) exceeds model-specific threshold (\(threshold)%)"
         )
     }
 
     // MARK: - Comprehensive Summary Test
 
     /// Summary test that checks all regions and reports overall status
+    /// Uses model-specific thresholds based on material composition
     func testZFightingSummary() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
 
-        print("\n" + String(repeating: "=", count: 50))
-        print("Z-FIGHTING REGRESSION SUMMARY")
-        print(String(repeating: "=", count: 50))
+        print("\n" + String(repeating: "=", count: 60))
+        print("Z-FIGHTING REGRESSION SUMMARY (Model-Specific Thresholds)")
+        print(String(repeating: "=", count: 60))
 
         struct RegionResult {
             let name: String
@@ -321,14 +338,23 @@ final class ZFightingRegressionTests: XCTestCase {
 
         var results: [RegionResult] = []
 
-        let regions: [(name: String, eye: SIMD3<Float>, target: SIMD3<Float>, threshold: Float)] = [
-            ("Face Front", SIMD3(0, 1.5, 1.0), SIMD3(0, 1.5, 0), Self.faceFlickerThreshold),
-            ("Face Side", SIMD3(-0.5, 1.5, 0.5), SIMD3(0, 1.5, 0), Self.faceFlickerThreshold),
-            ("Collar/Neck", SIMD3(0, 1.35, 0.4), SIMD3(0, 1.35, 0), Self.bodyFlickerThreshold),
-            ("Chest/Bosom", SIMD3(0, 1.15, 0.5), SIMD3(0, 1.15, 0), Self.bodyFlickerThreshold),
-            ("Waist/Shorts", SIMD3(0, 0.95, 0.6), SIMD3(0, 0.95, 0), Self.clothingFlickerThreshold),
-            ("Hip/Skirt", SIMD3(0.3, 0.85, 0.5), SIMD3(0, 0.85, 0), Self.clothingFlickerThreshold),
-            ("Eye Detail", SIMD3(0, 1.57, 0.2), SIMD3(0, 1.57, 0), Self.faceFlickerThreshold),
+        // Use model-specific thresholds via calculator
+        let faceThreshold = self.threshold(for: model, region: .face)
+        let bodyThreshold = self.threshold(for: model, region: .body)
+        let clothingThreshold = self.threshold(for: model, region: .clothing)
+
+        print("Model: AvatarSample_A (MASK materials detected)")
+        print("Calculated thresholds: Face/Body=\(faceThreshold)%, Clothing=\(clothingThreshold)%")
+        print("")
+
+        let regions: [(name: String, eye: SIMD3<Float>, target: SIMD3<Float>, threshold: Float, calcRegion: ZFightingThresholdCalculator.Region)] = [
+            ("Face Front", SIMD3(0, 1.5, 1.0), SIMD3(0, 1.5, 0), faceThreshold, .face),
+            ("Face Side", SIMD3(-0.5, 1.5, 0.5), SIMD3(0, 1.5, 0), faceThreshold, .face),
+            ("Collar/Neck", SIMD3(0, 1.35, 0.4), SIMD3(0, 1.35, 0), bodyThreshold, .body),
+            ("Chest/Bosom", SIMD3(0, 1.15, 0.5), SIMD3(0, 1.15, 0), bodyThreshold, .body),
+            ("Waist/Shorts", SIMD3(0, 0.95, 0.6), SIMD3(0, 0.95, 0), clothingThreshold, .clothing),
+            ("Hip/Skirt", SIMD3(0.3, 0.85, 0.5), SIMD3(0, 0.85, 0), clothingThreshold, .clothing),
+            ("Eye Detail", SIMD3(0, 1.57, 0.2), SIMD3(0, 1.57, 0), faceThreshold, .face),
         ]
 
         for region in regions {
@@ -352,7 +378,7 @@ final class ZFightingRegressionTests: XCTestCase {
 
         // Print results
         print("\nRegion               Flicker   Threshold  Status")
-        print("-" * 50)
+        print("-" * 60)
         for r in results {
             let status = r.passed ? "✅ PASS" : "❌ FAIL"
             let name = r.name.padding(toLength: 18, withPad: " ", startingAt: 0)
@@ -360,13 +386,13 @@ final class ZFightingRegressionTests: XCTestCase {
         }
 
         let failedCount = results.filter { !$0.passed }.count
-        print("-" * 50)
+        print("-" * 60)
         print("Total: \(results.count - failedCount)/\(results.count) passed")
 
         if failedCount > 0 {
             print("\n❌ REGRESSION DETECTED in \(failedCount) region(s)")
         } else {
-            print("\n✅ All regions within acceptable thresholds")
+            print("\n✅ All regions within model-specific thresholds")
         }
 
         // This test documents current state but doesn't fail

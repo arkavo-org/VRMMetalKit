@@ -171,6 +171,17 @@ final class VRMRenderItemBuilder {
                     faceCategory = "eye"
                     renderOrder = 5
                     faceEyeCount += 1
+                } else if materialLower.contains("mouth") || materialLower.contains("lip") {
+                    // Mouth/lip materials on face mesh - render AFTER base face skin
+                    faceCategory = "faceOverlay"
+                    renderOrder = 2  // After base skin (1), same as eyebrow
+                    faceSkinCount += 1
+                } else if materialLower.contains("face") {
+                    // Catch-all for any other face-related materials ( FaceMouth, FaceBase, etc.)
+                    // These should be treated as skin layer to prevent Z-fighting
+                    faceCategory = "skin"
+                    renderOrder = 1
+                    faceSkinCount += 1
                 }
                 // PRIORITY 4: Name-based clothing detection (fallback)
                 else if materialLower.contains("cloth") || materialLower.contains("tops") ||

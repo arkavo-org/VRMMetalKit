@@ -32,10 +32,10 @@ final class VRMRenderItemSelector {
         if input.debugSingleMesh {
             if let firstItem = items.first {
                 items = [firstItem]
-                vrmLog("[VRMDebugRenderer] 🔧 Debug single-mesh mode: rendering only '\(firstItem.materialName)' from mesh '\(firstItem.mesh.name ?? "unnamed")'")
+                vrmLog("[DEBUG] 🔧 Debug single-mesh mode: rendering only '\(firstItem.materialName)' from mesh '\(firstItem.mesh.name ?? "unnamed")'")
             } else {
                 items = []
-                vrmLog("[VRMDebugRenderer] 🔧 Debug single-mesh mode: no items to render")
+                vrmLog("[DEBUG] 🔧 Debug single-mesh mode: no items to render")
             }
         }
 

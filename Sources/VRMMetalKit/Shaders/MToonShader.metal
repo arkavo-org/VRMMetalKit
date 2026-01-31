@@ -118,11 +118,11 @@ struct MToonMaterial {
  uint32_t alphaMode;                        // 4 bytes (0: OPAQUE, 1: MASK, 2: BLEND)
  float alphaCutoff;                         // 4 bytes
 
- // Block 12: 16 bytes - Version flag and padding
+ // Block 12: 16 bytes - Version flag and UV offset
  uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
- float _padding3;                           // 4 bytes
- float _padding4;                           // 4 bytes
- float _padding5;                           // 4 bytes
+ float uvOffsetX;                           // 4 bytes - UV offset for texture remapping
+ float uvOffsetY;                           // 4 bytes - UV offset for texture remapping  
+ float uvScale;                             // 4 bytes - UV scale for texture remapping
 };
 
 struct VertexIn {
@@ -367,6 +367,12 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  // Choose UV coordinates (animated or static)
  float2 uv = in.texCoord;
+ 
+ // Apply UV offset for face overlay materials (e.g., mouth -> shift to lip texture area)
+ if (material.uvOffsetX != 0.0 || material.uvOffsetY != 0.0 || material.uvScale != 1.0) {
+     uv = uv * material.uvScale + float2(material.uvOffsetX, material.uvOffsetY);
+ }
+ 
  if (material.hasUvAnimationMaskTexture > 0) {
  float animationMask = uvAnimationMaskTexture.sample(textureSampler, in.texCoord).r;
  uv = mix(in.texCoord, in.animatedTexCoord, animationMask);
