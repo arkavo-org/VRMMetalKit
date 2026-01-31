@@ -27,16 +27,35 @@ final class VRM1CompatibilityTests: XCTestCase {
 
     // MARK: - Test Paths
     
+    private var projectRoot: String {
+        let fileManager = FileManager.default
+        let candidates: [String?] = [
+            ProcessInfo.processInfo.environment["PROJECT_ROOT"],
+            URL(fileURLWithPath: #file)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .path,
+            fileManager.currentDirectoryPath
+        ]
+        
+        for candidate in candidates.compactMap({ $0 }) {
+            let packagePath = "\(candidate)/Package.swift"
+            if fileManager.fileExists(atPath: packagePath) {
+                return candidate
+            }
+        }
+        return fileManager.currentDirectoryPath
+    }
+    
     private var vrmModelsPath: String {
-        return "/Users/arkavo/Documents/VRMModels"
+        // Use environment variable or fallback to project root
+        return ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? projectRoot
     }
     
     private var vrmaPath: String {
-        let gameOfModsPath = "/Users/arkavo/Projects/GameOfMods/GameOfMods"
-        if FileManager.default.fileExists(atPath: "\(gameOfModsPath)/VRMA_01.vrma") {
-            return gameOfModsPath
-        }
-        return "/Users/arkavo/Projects/VRMMetalKit"
+        // Use environment variable or fallback to project root
+        return ProcessInfo.processInfo.environment["VRMA_TEST_PATH"] ?? projectRoot
     }
     
     // MARK: - TDD RED: VRM 1.0 Detection Tests
@@ -225,7 +244,7 @@ final class VRM1CompatibilityTests: XCTestCase {
     ///
     /// Both models loading the same VRMA should have different coordinate handling
     func testVRM0vsVRM1BehaviorDifference() async throws {
-        let vrm0Path = "/Users/arkavo/Projects/VRMMetalKit/AliciaSolid.vrm"
+        let vrm0Path = "\(projectRoot)/AliciaSolid.vrm"
         let vrm1Path = "\(vrmModelsPath)/Seed-san.vrm"
         let vrmaPath = "\(self.vrmaPath)/VRMA_01.vrma"
         

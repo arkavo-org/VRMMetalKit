@@ -26,20 +26,58 @@ final class VRMFormatPerformanceTests: XCTestCase {
 
     // MARK: - Test Paths
     
+    /// Get test file path from environment variable or skip
+    private func getTestFilePath(envVar: String, defaultFile: String? = nil) -> String? {
+        if let path = ProcessInfo.processInfo.environment[envVar] {
+            return path
+        }
+        if let defaultFile = defaultFile {
+            // Try to find in current directory or Tests directory
+            let possiblePaths = [
+                defaultFile,
+                "Tests/\(defaultFile)",
+                "../\(defaultFile)",
+                "../../\(defaultFile)"
+            ]
+            for path in possiblePaths {
+                if FileManager.default.fileExists(atPath: path) {
+                    return path
+                }
+            }
+        }
+        return nil
+    }
+    
     private var vrmFiles: [(name: String, path: String)] {
-        [
-            ("AliciaSolid.vrm", "/Users/arkavo/Projects/VRMMetalKit/AliciaSolid.vrm"),
-            ("PompaGirl_v0.vrm", "/Users/arkavo/Projects/GameOfMods/Resources/vrm/PompaGirl_v0.vrm"),
-        ].filter { FileManager.default.fileExists(atPath: $0.path) }
+        var files: [(name: String, path: String)] = []
+        
+        if let aliciaPath = getTestFilePath(envVar: "ALICIA_SOLID_VRM", defaultFile: "AliciaSolid.vrm") {
+            files.append(("AliciaSolid.vrm", aliciaPath))
+        }
+        if let pompaPath = ProcessInfo.processInfo.environment["POMPA_GIRL_VRM"] {
+            files.append(("PompaGirl_v0.vrm", pompaPath))
+        }
+        
+        return files.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
     
     private var vrmGlbFiles: [(name: String, path: String)] {
-        [
-            ("AvatarSample_A.vrm.glb", "/Users/arkavo/Projects/Muse/Resources/VRM/AvatarSample_A.vrm.glb"),
-            ("AvatarSample_C.vrm.glb", "/Users/arkavo/Projects/Muse/Resources/VRM/AvatarSample_C.vrm.glb"),
-            ("Pokemon.vrm.glb", "/Users/arkavo/Projects/GameOfMods/Resources/vrm/Pokemon.vrm.glb"),
-            ("Roblox.vrm.glb", "/Users/arkavo/Projects/GameOfMods/Resources/vrm/Roblox.vrm.glb"),
-        ].filter { FileManager.default.fileExists(atPath: $0.path) }
+        var files: [(name: String, path: String)] = []
+        
+        if let avatarA = ProcessInfo.processInfo.environment["AVATAR_SAMPLE_A"] {
+            files.append(("AvatarSample_A.vrm.glb", avatarA))
+        }
+        if let avatarC = ProcessInfo.processInfo.environment["AVATAR_SAMPLE_C"] {
+            files.append(("AvatarSample_C.vrm.glb", avatarC))
+        }
+        if let pokemon = ProcessInfo.processInfo.environment["POKEMON_VRM"] {
+            files.append(("Pokemon.vrm.glb", pokemon))
+        }
+        if let roblox = ProcessInfo.processInfo.environment["ROBLOX_VRM"] {
+            files.append(("Roblox.vrm.glb", roblox))
+        }
+        
+        return files.filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     // MARK: - Performance Tests
@@ -164,11 +202,12 @@ final class VRMFormatPerformanceTests: XCTestCase {
         print(String(repeating: "=", count: 70))
         
         // Pick one file of each type
-        let vrmPath = vrmFiles.first?.path ?? "/Users/arkavo/Projects/VRMMetalKit/AliciaSolid.vrm"
-        let vrmGlbPath = vrmGlbFiles.first?.path ?? "/Users/arkavo/Projects/Muse/Resources/VRM/AvatarSample_A.vrm.glb"
-        
-        try XCTSkipIf(!FileManager.default.fileExists(atPath: vrmPath), "No .vrm file available")
-        try XCTSkipIf(!FileManager.default.fileExists(atPath: vrmGlbPath), "No .vrm.glb file available")
+        guard let vrmPath = vrmFiles.first?.path else {
+            throw XCTSkip("No .vrm file available. Set ALICIA_SOLID_VRM environment variable.")
+        }
+        guard let vrmGlbPath = vrmGlbFiles.first?.path else {
+            throw XCTSkip("No .vrm.glb file available. Set AVATAR_SAMPLE_A environment variable.")
+        }
         
         // Test .vrm
         print("\n📁 .vrm (AliciaSolid.vrm)")
@@ -214,11 +253,12 @@ final class VRMFormatPerformanceTests: XCTestCase {
         print("MEMORY USAGE COMPARISON")
         print(String(repeating: "=", count: 70))
         
-        let vrmPath = vrmFiles.first?.path ?? "/Users/arkavo/Projects/VRMMetalKit/AliciaSolid.vrm"
-        let vrmGlbPath = vrmGlbFiles.first?.path ?? "/Users/arkavo/Projects/Muse/Resources/VRM/AvatarSample_A.vrm.glb"
-        
-        try XCTSkipIf(!FileManager.default.fileExists(atPath: vrmPath), "No .vrm file available")
-        try XCTSkipIf(!FileManager.default.fileExists(atPath: vrmGlbPath), "No .vrm.glb file available")
+        guard let vrmPath = vrmFiles.first?.path else {
+            throw XCTSkip("No .vrm file available. Set ALICIA_SOLID_VRM environment variable.")
+        }
+        guard let vrmGlbPath = vrmGlbFiles.first?.path else {
+            throw XCTSkip("No .vrm.glb file available. Set AVATAR_SAMPLE_A environment variable.")
+        }
         
         // Measure .vrm memory
         print("\n📁 .vrm (AliciaSolid.vrm)")

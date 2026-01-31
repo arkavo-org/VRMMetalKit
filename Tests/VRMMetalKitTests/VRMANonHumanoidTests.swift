@@ -27,15 +27,13 @@ final class VRMANonHumanoidTests: XCTestCase {
     // MARK: - Test Paths
     
     private var vrmModelsPath: String {
-        return "/Users/arkavo/Documents/VRMModels"
+        // Use environment variable or fallback to project root
+        return ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? projectRoot
     }
     
     private var vrmaPath: String {
-        let gameOfModsPath = "/Users/arkavo/Projects/GameOfMods/GameOfMods"
-        if FileManager.default.fileExists(atPath: "\(gameOfModsPath)/VRMA_01.vrma") {
-            return gameOfModsPath
-        }
-        return "/Users/arkavo/Projects/VRMMetalKit"
+        // Use environment variable or fallback to project root
+        return ProcessInfo.processInfo.environment["VRMA_TEST_PATH"] ?? projectRoot
     }
     
     private var projectRoot: String {

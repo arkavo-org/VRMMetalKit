@@ -48,10 +48,9 @@ final class VRMABoneRetargetingTests: XCTestCase {
     }
     
     private var vrmaPath: String {
-        // Try GameOfMods path first, then fallback to project root
-        let gameOfModsPath = "/Users/arkavo/Projects/GameOfMods/GameOfMods"
-        if FileManager.default.fileExists(atPath: "\(gameOfModsPath)/VRMA_01.vrma") {
-            return gameOfModsPath
+        // Try environment variable first, then fallback to project root
+        if let envPath = ProcessInfo.processInfo.environment["VRMA_TEST_PATH"] {
+            return envPath
         }
         return projectRoot
     }

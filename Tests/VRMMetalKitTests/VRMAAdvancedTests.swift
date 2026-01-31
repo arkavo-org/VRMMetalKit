@@ -30,8 +30,12 @@ final class VRMAAdvancedTests: XCTestCase {
 
     // MARK: - Test Paths
     
-    private var vrmModelsPath: String { "/Users/arkavo/Documents/VRMModels" }
-    private var vrmaPath: String { "/Users/arkavo/Projects/GameOfMods/GameOfMods" }
+    private var vrmModelsPath: String { 
+        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? projectRoot 
+    }
+    private var vrmaPath: String { 
+        ProcessInfo.processInfo.environment["VRMA_TEST_PATH"] ?? projectRoot 
+    }
     private var projectRoot: String {
         let candidates: [String?] = [
             ProcessInfo.processInfo.environment["PROJECT_ROOT"],
