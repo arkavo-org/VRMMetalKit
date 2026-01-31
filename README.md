@@ -19,7 +19,6 @@ A high-performance Swift Package for loading and rendering VRM 1.0 avatars using
 
 🎭 **Best-in-Class Animation System**
 - VRMA (VRM Animation) loader with intelligent retargeting
-- **LipSyncLayer for real-time viseme-based mouth animation**
 - Humanoid bone mapping with three-tier fallback system
 - Non-humanoid node animation (hair, accessories, clothing)
 - Rest pose retargeting with quaternion delta computation
@@ -63,7 +62,7 @@ Or in Xcode: **File → Add Package Dependencies** and enter the repository URL.
 
 VRMMetalKit includes a command-line tool `VRMRender` for headless VRM rendering - perfect for batch processing, thumbnail generation, or CI/CD pipelines.
 
-![AliciaSolid Render](AliciaSolid.png)
+![AvatarSample_A Render](AvatarSample_A.png)
 
 ```bash
 # Basic render
@@ -321,29 +320,6 @@ swift build -Xswiftc -DVRM_METALKIT_ENABLE_DEBUG_ANIMATION
 ### Disable for Production
 
 Simply omit the flags and all logging code is compiled out with zero runtime cost.
-
-## Lip Sync Integration
-
-VRMMetalKit provides a `LipSyncLayer` for real-time mouth animation from audio:
-
-```swift
-// Setup
-let compositor = AnimationLayerCompositor()
-compositor.setup(model: model)
-
-let lipSyncLayer = LipSyncLayer()
-compositor.addLayer(lipSyncLayer)
-
-// In your render loop
-compositor.update(deltaTime: deltaTime, context: context)
-compositor.applyMorphsToController(renderer.expressionController)
-
-// Drive from audio analysis
-lipSyncLayer.setViseme(.aa, weight: 0.8)
-lipSyncLayer.setViseme(.ih, weight: 0.3)
-```
-
-See [LipSyncIntegrationGuide.md](docs/LipSyncIntegrationGuide.md) for complete documentation including Muse app integration.
 
 ## Advanced Features
 
