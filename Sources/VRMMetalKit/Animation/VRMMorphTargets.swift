@@ -404,9 +404,15 @@ public class VRMExpressionController: @unchecked Sendable {
 
     public func setExpressionWeight(_ preset: VRMExpressionPreset, weight: Float) {
         let clampedWeight = clamp(weight, min: 0, max: 1)
-        vrmLog("[VRMExpressionController] Setting expression \(preset) weight to \(clampedWeight)")
         currentWeights[preset] = clampedWeight
         updateMorphTargets()
+
+        // Debug: verify expression is registered and produces mesh weights
+        if clampedWeight > 0.01 {
+            let hasExpression = expressions[preset] != nil
+            let meshCount = meshMorphWeights.count
+            print("[VRMExpressionController] \(preset.rawValue)=\(String(format: "%.2f", clampedWeight)) registered=\(hasExpression) meshes=\(meshCount)")
+        }
     }
 
     public func setCustomExpressionWeight(_ name: String, weight: Float) {
@@ -565,8 +571,19 @@ public class VRMExpressionController: @unchecked Sendable {
     public func weightsForMesh(_ meshIndex: Int, morphCount: Int) -> [Float] {
         guard morphCount > 0 else { return [] }
         let arr = meshMorphWeights[meshIndex] ?? []
-        if arr.count >= morphCount { return Array(arr.prefix(morphCount)) }
-        return arr + Array(repeating: 0.0, count: morphCount - arr.count)
+        let result: [Float]
+        if arr.count >= morphCount {
+            result = Array(arr.prefix(morphCount))
+        } else {
+            result = arr + Array(repeating: 0.0, count: morphCount - arr.count)
+        }
+
+        // Debug: log non-zero weights
+        let nonZero = result.enumerated().filter { $0.element > 0.001 }
+        if !nonZero.isEmpty {
+            print("[VRMExpressionController] weightsForMesh(\(meshIndex)) non-zero: \(nonZero.map { "[\($0.offset)]=\(String(format: "%.2f", $0.element))" }.joined(separator: ", "))")
+        }
+        return result
     }
 
 
