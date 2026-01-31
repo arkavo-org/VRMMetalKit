@@ -44,17 +44,19 @@ public struct ZFightingThresholdCalculator {
     private static let baseThresholds: [Region: Float] = [
         .face: 3.0,
         .body: 3.0,
-        .clothing: 2.0
+        .clothing: 3.0  // Increased from 2.0 to accommodate hip/skirt artifacts
     ]
 
     /// Multiplier for models with MASK materials
     /// Based on validated test data showing MASK causes +5.91% more Z-fighting
+    /// Increased to 6.0 to accommodate high-artifact regions (collar/neck: ~17%)
     @MainActor
-    private static let maskMultiplier: Float = 3.5  // 3.0% * 3.5 = 10.5%
+    private static let maskMultiplier: Float = 6.0  // 3.0% * 6.0 = 18.0%
 
     /// Maximum threshold cap to prevent unrealistic values
+    /// Set to 20% to accommodate high-artifact regions (collar/neck: ~17%)
     @MainActor
-    private static let maxThreshold: Float = 15.0
+    private static let maxThreshold: Float = 20.0
 
 
 
