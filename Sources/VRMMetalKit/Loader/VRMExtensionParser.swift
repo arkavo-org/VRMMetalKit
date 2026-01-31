@@ -360,7 +360,10 @@ public class VRMExtensionParser {
             lookAt.type = type
         }
 
-        if let offset = dict["offsetFromHeadBone"] as? [Float], offset.count == 3 {
+        // Parse offsetFromHeadBone - JSON numbers are Double by default
+        if let offset = dict["offsetFromHeadBone"] as? [Double], offset.count == 3 {
+            lookAt.offsetFromHeadBone = SIMD3<Float>(Float(offset[0]), Float(offset[1]), Float(offset[2]))
+        } else if let offset = dict["offsetFromHeadBone"] as? [Float], offset.count == 3 {
             lookAt.offsetFromHeadBone = SIMD3<Float>(offset[0], offset[1], offset[2])
         }
 
@@ -386,11 +389,16 @@ public class VRMExtensionParser {
     private func parseRangeMap(_ dict: [String: Any]) -> VRMLookAtRangeMap {
         var rangeMap = VRMLookAtRangeMap()
 
-        if let inputMaxValue = dict["inputMaxValue"] as? Float {
+        // JSON numbers are Double by default, try Double first then Float
+        if let inputMaxValue = dict["inputMaxValue"] as? Double {
+            rangeMap.inputMaxValue = Float(inputMaxValue)
+        } else if let inputMaxValue = dict["inputMaxValue"] as? Float {
             rangeMap.inputMaxValue = inputMaxValue
         }
 
-        if let outputScale = dict["outputScale"] as? Float {
+        if let outputScale = dict["outputScale"] as? Double {
+            rangeMap.outputScale = Float(outputScale)
+        } else if let outputScale = dict["outputScale"] as? Float {
             rangeMap.outputScale = outputScale
         }
 

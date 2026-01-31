@@ -108,58 +108,25 @@ public class VRMMorphTargetSystem {
             vrmLog("[VRMMorphTargetSystem] Using package Metal library (Bundle.module)")
         }
 
-        if let library = library,
-           let function = library.makeFunction(name: "morph_accumulate_positions") {
-            // Found function in library
-            do {
-                morphAccumulatePipelineState = try device.makeComputePipelineState(function: function)
-                vrmLog("[VRMMorphTargetSystem] Morph accumulate compute pipeline created from library")
-                return
-            } catch {
-                vrmLog("[VRMMorphTargetSystem] Failed to create pipeline from library: \(error)")
-            }
+        // Fail fast if no library available - JIT compilation is disabled for production
+        guard let validLibrary = library else {
+            throw VRMMorphTargetError.failedToCreateComputePipeline(
+                "No Metal shader library available. " +
+                "Ensure VRMMetalKitShaders.metallib is included in the app bundle."
+            )
         }
-
-        // Fallback to inline shader source if no default library or function not found
-        let morphAccumulateSource = """
-#include <metal_stdlib>
-using namespace metal;
-
-struct ActiveMorph {
-    uint index;
-    float weight;
-};
-
-kernel void morph_accumulate_positions(
-    device const float3* basePos [[buffer(0)]],
-    device const float3* deltaPos [[buffer(1)]],
-    device const ActiveMorph* activeSet [[buffer(2)]],
-    constant uint& vertexCount [[buffer(3)]],
-    constant uint& morphCount [[buffer(4)]],
-    constant uint& activeCount [[buffer(5)]],
-    device float3* outPos [[buffer(6)]],
-    uint vid [[thread_position_in_grid]]
-) {
-    if (vid >= vertexCount) return;
-    float3 pos = basePos[vid];
-    for (uint k = 0; k < activeCount; ++k) {
-        uint morphIdx = activeSet[k].index;
-        float weight = activeSet[k].weight;
-        uint deltaIdx = morphIdx * vertexCount + vid;
-        pos += deltaPos[deltaIdx] * weight;
-    }
-    outPos[vid] = pos;
-}
-"""
+        
+        guard let function = validLibrary.makeFunction(name: "morph_accumulate_positions") else {
+            throw VRMMorphTargetError.missingShaderFunction(
+                "morph_accumulate_positions not found in shader library. " +
+                "Ensure shaders are compiled and bundled correctly."
+            )
+        }
+        
+        // Create pipeline from precompiled library (single code path, no JIT fallback)
         do {
-            let inlineLibrary = try device.makeLibrary(source: morphAccumulateSource, options: nil)
-            guard let inlineFunction = inlineLibrary.makeFunction(name: "morph_accumulate_positions") else {
-                throw VRMMorphTargetError.missingShaderFunction("morph_accumulate_positions")
-            }
-            morphAccumulatePipelineState = try device.makeComputePipelineState(function: inlineFunction)
-            vrmLog("[VRMMorphTargetSystem] Morph accumulate compute pipeline created from inline source")
-        } catch let error as VRMMorphTargetError {
-            throw error
+            morphAccumulatePipelineState = try device.makeComputePipelineState(function: function)
+            vrmLog("[VRMMorphTargetSystem] Morph accumulate compute pipeline created from precompiled library")
         } catch {
             throw VRMMorphTargetError.failedToCreateComputePipeline(error.localizedDescription)
         }

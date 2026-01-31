@@ -180,28 +180,48 @@ public enum VRMAnimationLoader {
         }()
 
         // Fallback heuristic if model mapping is missing
+        // Supports both VRM 1.0 naming (leftUpperArm) and Unity/VRM 0.0 naming (J_Bip_L_UpperArm)
         let heuristicNameToBone: (String) -> VRMHumanoidBone? = { name in
             let n = name.lowercased()
+            
+            // Detect side indicators:
+            // - Unity style: "_L_" or "_R_" (e.g., J_Bip_L_UpperArm)
+            // - VRM 1.0 style: "left" or "right" (e.g., leftUpperArm)
+            let isLeft = n.contains("_l_") || n.contains("left")
+            let isRight = n.contains("_r_") || n.contains("right")
+            
+            // Torso (no side)
             if n.contains("hips") { return .hips }
-            if n.contains("upperchest") { return .upperChest }
+            if n.contains("upperchest") || (n.contains("upper") && n.contains("chest")) { return .upperChest }
             if n.contains("chest") { return .chest }
             if n.contains("spine") { return .spine }
             if n.contains("neck") { return .neck }
             if n.contains("head") { return .head }
-            if n.contains("l_upperarm") { return .leftUpperArm }
-            if n.contains("l_lowerarm") { return .leftLowerArm }
-            if n.contains("l_hand") { return .leftHand }
-            if n.contains("r_upperarm") { return .rightUpperArm }
-            if n.contains("r_lowerarm") { return .rightLowerArm }
-            if n.contains("r_hand") { return .rightHand }
-            if n.contains("l_upperleg") { return .leftUpperLeg }
-            if n.contains("l_lowerleg") { return .leftLowerLeg }
-            if n.contains("l_foot") { return .leftFoot }
-            if n.contains("l_toe") { return .leftToes }
-            if n.contains("r_upperleg") { return .rightUpperLeg }
-            if n.contains("r_lowerleg") { return .rightLowerLeg }
-            if n.contains("r_foot") { return .rightFoot }
-            if n.contains("r_toe") { return .rightToes }
+            
+            // Left side bones
+            if isLeft {
+                if n.contains("upperarm") { return .leftUpperArm }
+                if n.contains("lowerarm") { return .leftLowerArm }
+                if n.contains("hand") && !n.contains("arm") { return .leftHand }
+                if n.contains("shoulder") { return .leftShoulder }
+                if n.contains("upperleg") { return .leftUpperLeg }
+                if n.contains("lowerleg") { return .leftLowerLeg }
+                if n.contains("foot") { return .leftFoot }
+                if n.contains("toe") { return .leftToes }
+            }
+            
+            // Right side bones
+            if isRight {
+                if n.contains("upperarm") { return .rightUpperArm }
+                if n.contains("lowerarm") { return .rightLowerArm }
+                if n.contains("hand") && !n.contains("arm") { return .rightHand }
+                if n.contains("shoulder") { return .rightShoulder }
+                if n.contains("upperleg") { return .rightUpperLeg }
+                if n.contains("lowerleg") { return .rightLowerLeg }
+                if n.contains("foot") { return .rightFoot }
+                if n.contains("toe") { return .rightToes }
+            }
+            
             return nil
         }
 

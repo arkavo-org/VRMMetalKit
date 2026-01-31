@@ -2630,12 +2630,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // Apply depth bias for mouth/lip overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    #if DEBUG
                     print("🔧 [VRMMetalKit] Rendering faceOverlay: \(item.materialName) with bias=\(bias), indices=\(primitive.indexCount)")
+                    #endif
                     
                     // DEBUG: Force OPAQUE mode to see if geometry is there
                     mtoonUniforms.alphaMode = 0  // OPAQUE
                     mtoonUniforms.alphaCutoff = 0.0
+                    #if DEBUG
                     print("🔧 [VRMMetalKit] DEBUG: Forcing OPAQUE mode for faceOverlay")
+                    #endif
 
                 case "eyebrow", "eyeline":
                     // Face features render after skin - win via render order
