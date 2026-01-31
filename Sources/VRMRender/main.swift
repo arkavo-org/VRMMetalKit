@@ -96,6 +96,8 @@ struct RenderOptions {
     var sampleCount: Int = 4
     var bgColorTop: SIMD3<Float> = SIMD3<Float>(0.15, 0.18, 0.25)
     var bgColorBottom: SIMD3<Float> = SIMD3<Float>(0.08, 0.08, 0.12)
+    var expression: String? = nil
+    var expressionWeight: Float = 1.0
 }
 
 // MARK: - Errors
@@ -145,6 +147,9 @@ func printUsage() {
         --camera-pos <x,y,z>       Camera position (default: 0,1.3,-1.8)
         --camera-target <x,y,z>    Camera look-at target (default: 0,1.3,0)
         --msaa <samples>           MSAA sample count (1, 2, 4, default: 4)
+        --expression <name>        Apply VRM expression (happy, angry, sad, relaxed,
+                                   surprised, aa, ih, ou, ee, oh, blink, etc.)
+        --expression-weight <0-1>  Expression weight (default: 1.0)
         --list-debug               List all debug modes
         --help                     Show this help message
     
@@ -229,6 +234,16 @@ func parseArguments() -> RenderOptions? {
             i += 1
             if i < args.count, let val = Int(args[i]) {
                 options.sampleCount = val
+            }
+        case "--expression":
+            i += 1
+            if i < args.count {
+                options.expression = args[i]
+            }
+        case "--expression-weight":
+            i += 1
+            if i < args.count, let val = Float(args[i]) {
+                options.expressionWeight = max(0, min(1, val))
             }
         default:
             if !arg.hasPrefix("-") {
@@ -356,7 +371,18 @@ struct VRMRenderCLI {
             
             print("  ✓ Model bounds: \(size)")
             print("  ✓ Center: \(center)")
-            
+
+            // Apply expression if specified
+            if let expressionName = options.expression {
+                if let preset = VRMExpressionPreset(rawValue: expressionName) {
+                    print("  ✓ Expression: \(expressionName) @ \(options.expressionWeight)")
+                    renderer.expressionController?.setExpressionWeight(preset, weight: options.expressionWeight)
+                } else {
+                    print("  ⚠️ Unknown expression: \(expressionName)")
+                    print("     Available: happy, angry, sad, relaxed, surprised, aa, ih, ou, ee, oh, blink, neutral")
+                }
+            }
+
             // Set up camera matrices
             let aspect = Float(options.width) / Float(options.height)
             renderer.projectionMatrix = perspective(fovRadians: Float(45.0 * .pi / 180.0), aspect: aspect, near: 0.01, far: 100.0)
