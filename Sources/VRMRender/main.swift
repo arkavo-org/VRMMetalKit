@@ -91,9 +91,11 @@ struct RenderOptions {
     var width: Int = 1024
     var height: Int = 1024
     var debugMode: Int = 0
-    var cameraPosition: SIMD3<Float> = SIMD3<Float>(0, 1.5, 2.0)
-    var cameraTarget: SIMD3<Float> = SIMD3<Float>(0, 1.5, 0)
-    var sampleCount: Int = 1
+    var cameraPosition: SIMD3<Float> = SIMD3<Float>(0, 1.3, -1.8)
+    var cameraTarget: SIMD3<Float> = SIMD3<Float>(0, 1.3, 0)
+    var sampleCount: Int = 4
+    var bgColorTop: SIMD3<Float> = SIMD3<Float>(0.15, 0.18, 0.25)
+    var bgColorBottom: SIMD3<Float> = SIMD3<Float>(0.08, 0.08, 0.12)
 }
 
 // MARK: - Errors
@@ -101,6 +103,8 @@ struct RenderOptions {
 enum RenderError: Error {
     case failedToCreateImage
     case failedToSaveImage
+    case failedToCreateTexture
+    case failedToCreateCommandBuffer
 }
 
 // MARK: - Debug Modes
@@ -138,9 +142,9 @@ func printUsage() {
         -w, --width <pixels>       Output width (default: 1024)
         -h, --height <pixels>      Output height (default: 1024)
         -d, --debug <mode>         Debug mode (0-16, default: 0)
-        --camera-pos <x,y,z>       Camera position (default: 0,1.5,2)
-        --camera-target <x,y,z>    Camera look-at target (default: 0,1.5,0)
-        --msaa <samples>           MSAA sample count (1, 2, 4, default: 1)
+        --camera-pos <x,y,z>       Camera position (default: 0,1.3,-1.8)
+        --camera-target <x,y,z>    Camera look-at target (default: 0,1.3,0)
+        --msaa <samples>           MSAA sample count (1, 2, 4, default: 4)
         --list-debug               List all debug modes
         --help                     Show this help message
     
@@ -247,6 +251,34 @@ func parseArguments() -> RenderOptions? {
     return options
 }
 
+// MARK: - Matrix Utilities
+
+func lookAt(eye: SIMD3<Float>, center: SIMD3<Float>, up: SIMD3<Float>) -> matrix_float4x4 {
+    let f = normalize(center - eye)
+    let s = normalize(cross(f, up))
+    let u = cross(s, f)
+    
+    var result = matrix_float4x4(diagonal: SIMD4<Float>(1, 1, 1, 1))
+    result.columns.0 = SIMD4<Float>(s.x, u.x, -f.x, 0)
+    result.columns.1 = SIMD4<Float>(s.y, u.y, -f.y, 0)
+    result.columns.2 = SIMD4<Float>(s.z, u.z, -f.z, 0)
+    result.columns.3 = SIMD4<Float>(-dot(s, eye), -dot(u, eye), dot(f, eye), 1)
+    
+    return result
+}
+
+func perspective(fovRadians: Float, aspect: Float, near: Float, far: Float) -> matrix_float4x4 {
+    let tanHalfFov = tan(fovRadians / 2)
+    
+    var result = matrix_float4x4()
+    result.columns.0 = SIMD4<Float>(1 / (aspect * tanHalfFov), 0, 0, 0)
+    result.columns.1 = SIMD4<Float>(0, 1 / tanHalfFov, 0, 0)
+    result.columns.2 = SIMD4<Float>(0, 0, -(far + near) / (far - near), -1)
+    result.columns.3 = SIMD4<Float>(0, 0, -(2 * far * near) / (far - near), 0)
+    
+    return result
+}
+
 // MARK: - Main
 
 @main
@@ -274,6 +306,7 @@ struct VRMRenderCLI {
         print("Output: \(options.outputPath)")
         print("Size:   \(options.width)x\(options.height)")
         print("MSAA:   \(options.sampleCount)x")
+    print("Quality: High (rim lighting, studio setup)")
         if options.debugMode > 0 {
             if let mode = debugModes.first(where: { $0.id == options.debugMode }) {
                 print("Debug:  \(mode.id) - \(mode.name)")
@@ -291,52 +324,125 @@ struct VRMRenderCLI {
             print("  ✓ Meshes: \(model.meshes.count)")
             print("")
             
-            // Print material info
-            print("Material Details:")
-            for (i, mat) in model.materials.enumerated() {
-                let name = mat.name ?? "Material_\(i)"
-                let alpha = mat.alphaMode
-                print("  [\(i)] \(name) - \(alpha)")
-            }
-            print("")
+            // Create renderer
+            print("Setting up renderer...")
+            var config = RendererConfig()
+            config.sampleCount = options.sampleCount
+            config.strict = .off
             
-            // Print mesh info for face materials
-            print("Mesh/Primitive Analysis for Face Materials:")
-            for (i, mat) in model.materials.enumerated() {
-                let name = mat.name ?? "Material_\(i)"
-                if name.lowercased().contains("face") || name.lowercased().contains("mouth") {
-                    print("  Material [\(i)]: \(name)")
-                    // Find meshes using this material
-                    for (meshIdx, mesh) in model.meshes.enumerated() {
-                        for (primIdx, prim) in mesh.primitives.enumerated() {
-                            if prim.materialIndex == i {
-                                print("    → Mesh \(meshIdx), Prim \(primIdx): \(prim.vertexCount) vertices, \(prim.indexCount) indices")
-                                print("      Has texCoords: \(prim.hasTexCoords)")
-                            }
-                        }
-                    }
+            let renderer = VRMRenderer(device: device, config: config)
+            renderer.loadModel(model)
+            
+            // Pure anime/cel-shading: Single key light for hard step shadows
+            // No fill light = hard edges between light and shadow (traditional anime look)
+            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85), 
+                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
+            
+            // Fill light disabled - crucial for cel-shading
+            renderer.disableLight(1)
+            
+            // Subtle rim light for edge definition only
+            renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0), 
+                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
+            
+            // Very low ambient for high contrast (anime style)
+            renderer.setAmbientColor(SIMD3<Float>(0.03, 0.03, 0.05))
+            
+            // Calculate bounding box for auto-framing
+            let (minBounds, maxBounds) = model.calculateBoundingBox()
+            let center = (minBounds + maxBounds) / 2
+            let size = maxBounds - minBounds
+            let maxDimension = max(size.x, max(size.y, size.z))
+            
+            print("  ✓ Model bounds: \(size)")
+            print("  ✓ Center: \(center)")
+            
+            // Set up camera matrices
+            let aspect = Float(options.width) / Float(options.height)
+            renderer.projectionMatrix = perspective(fovRadians: Float(45.0 * .pi / 180.0), aspect: aspect, near: 0.01, far: 100.0)
+            renderer.viewMatrix = lookAt(eye: options.cameraPosition, center: options.cameraTarget, up: SIMD3<Float>(0, 1, 0))
+            
+            print("")
+            print("Rendering...")
+            
+            // Create textures for offscreen rendering
+            let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm,
+                width: options.width,
+                height: options.height,
+                mipmapped: false
+            )
+            textureDescriptor.usage = [.renderTarget, .shaderRead]
+            textureDescriptor.storageMode = .shared
+            
+            guard let colorTexture = device.makeTexture(descriptor: textureDescriptor) else {
+                throw RenderError.failedToCreateTexture
+            }
+            
+            // Depth texture
+            let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .depth32Float,
+                width: options.width,
+                height: options.height,
+                mipmapped: false
+            )
+            depthDescriptor.usage = .renderTarget
+            depthDescriptor.storageMode = .shared
+            
+            guard let depthTexture = device.makeTexture(descriptor: depthDescriptor) else {
+                throw RenderError.failedToCreateTexture
+            }
+            
+            // Create render pass descriptor
+            let renderPassDescriptor = MTLRenderPassDescriptor()
+            renderPassDescriptor.colorAttachments[0].texture = colorTexture
+            renderPassDescriptor.colorAttachments[0].loadAction = .clear
+            renderPassDescriptor.colorAttachments[0].storeAction = .store
+            // Studio lighting background - dark blue-gray gradient
+            renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(
+                red: 0.12, 
+                green: 0.14, 
+                blue: 0.18, 
+                alpha: 1.0
+            )
+            
+            renderPassDescriptor.depthAttachment.texture = depthTexture
+            renderPassDescriptor.depthAttachment.loadAction = .clear
+            renderPassDescriptor.depthAttachment.storeAction = .dontCare
+            renderPassDescriptor.depthAttachment.clearDepth = 1.0
+            
+            // Create command buffer
+            guard let commandQueue = device.makeCommandQueue(),
+                  let commandBuffer = commandQueue.makeCommandBuffer() else {
+                throw RenderError.failedToCreateCommandBuffer
+            }
+            
+            // Render
+            renderer.drawOffscreenHeadless(
+                to: colorTexture,
+                depth: depthTexture,
+                commandBuffer: commandBuffer,
+                renderPassDescriptor: renderPassDescriptor
+            )
+            
+            // Add completion handler before commit
+            await withCheckedContinuation { continuation in
+                commandBuffer.addCompletedHandler { _ in
+                    continuation.resume()
                 }
+                commandBuffer.commit()
             }
             
-            // Export textures for inspection
+            print("  ✓ Rendered to texture")
             print("")
-            print("Exporting textures...")
-            let outputDir = (options.outputPath as NSString).deletingLastPathComponent
-            for (i, texture) in model.textures.enumerated() {
-                if let mtlTexture = texture.mtlTexture {
-                    let texturePath = "\(outputDir)/texture_\(i).png"
-                    do {
-                        try exportTexture(mtlTexture, to: texturePath, device: device)
-                        print("  ✓ Exported: \(texturePath)")
-                    } catch {
-                        print("  ✗ Failed to export texture \(i): \(error)")
-                    }
-                }
-            }
+            
+            // Export to PNG
+            print("Exporting to PNG...")
+            try exportTexture(colorTexture, to: options.outputPath, device: device)
+            print("  ✓ Saved: \(options.outputPath)")
             
             print("")
-            print("Model loaded successfully!")
-            print("Textures exported to: \(outputDir)")
+            print("✅ Render complete!")
             
         } catch {
             print("Error: \(error)")
