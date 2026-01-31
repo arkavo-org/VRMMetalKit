@@ -469,37 +469,72 @@ public class VRMModel: @unchecked Sendable {
         }
         
         if let device = device {
-            let textureLoader = TextureLoader(device: device, bufferLoader: bufferLoader, document: gltf, baseURL: baseURL)
-            for textureIndex in 0..<textureCount {
-                // Check cancellation every iteration
-                try await context?.checkCancellation()
-                
-                // Update progress
-                await context?.updateProgress(
-                    itemsCompleted: textureIndex,
-                    totalItems: textureCount
-                )
-                
-                let isNormalMap = normalMapTextureIndices.contains(textureIndex)
-                let useSRGB = !isNormalMap
-                let textureName = gltf.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
-                let formatStr = useSRGB ? "sRGB" : "LINEAR"
-                
+            let useParallelLoading = context?.options.optimizations.contains(.parallelTextureLoading) ?? false
+            
+            if useParallelLoading && textureCount > 1 {
+                // Use parallel texture loader for better performance
                 if !skipLogging {
-                    vrmLog("[VRMModel] Loading texture \(textureIndex) '\(textureName)' as \(formatStr)")
+                    vrmLog("[VRMModel] Using parallel texture loading (\(textureCount) textures)")
                 }
                 
-                if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
-                    let vrmTexture = VRMTexture(name: textureName)
-                    vrmTexture.mtlTexture = mtlTexture
-                    textures.append(vrmTexture)
-                    if !skipLogging {
-                        vrmLog("[VRMModel] ✅ Texture \(textureIndex) loaded: \(mtlTexture.width)x\(mtlTexture.height)")
+                let parallelLoader = ParallelTextureLoader(
+                    device: device,
+                    bufferLoader: bufferLoader,
+                    document: gltf,
+                    baseURL: baseURL,
+                    maxConcurrentLoads: min(4, textureCount)
+                )
+                
+                let indices = Array(0..<textureCount)
+                let loadedTextures = await parallelLoader.loadTexturesParallel(
+                    indices: indices,
+                    normalMapIndices: normalMapTextureIndices
+                ) { completed, total in
+                    Task {
+                        await context?.updateProgress(
+                            itemsCompleted: completed,
+                            totalItems: total
+                        )
                     }
-                } else {
-                    textures.append(VRMTexture(name: textureName))
-                    if !skipLogging {
-                        vrmLog("[VRMModel] ❌ Texture \(textureIndex) FAILED to load - using placeholder!")
+                }
+                
+                // Build textures array in order
+                var loadedCount = 0
+                for textureIndex in 0..<textureCount {
+                    let textureName = gltf.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
+                    if let mtlTexture = loadedTextures[textureIndex] {
+                        let vrmTexture = VRMTexture(name: textureName)
+                        vrmTexture.mtlTexture = mtlTexture
+                        textures.append(vrmTexture)
+                        loadedCount += 1
+                    } else {
+                        textures.append(VRMTexture(name: textureName))
+                    }
+                }
+                
+                if !skipLogging {
+                    vrmLog("[VRMModel] ✅ Parallel texture loading complete: \(loadedCount)/\(textureCount) loaded")
+                }
+            } else {
+                // Sequential loading (original implementation)
+                let textureLoader = TextureLoader(device: device, bufferLoader: bufferLoader, document: gltf, baseURL: baseURL)
+                for textureIndex in 0..<textureCount {
+                    try await context?.checkCancellation()
+                    await context?.updateProgress(
+                        itemsCompleted: textureIndex,
+                        totalItems: textureCount
+                    )
+                    
+                    let isNormalMap = normalMapTextureIndices.contains(textureIndex)
+                    let useSRGB = !isNormalMap
+                    let textureName = gltf.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
+                    
+                    if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
+                        let vrmTexture = VRMTexture(name: textureName)
+                        vrmTexture.mtlTexture = mtlTexture
+                        textures.append(vrmTexture)
+                    } else {
+                        textures.append(VRMTexture(name: textureName))
                     }
                 }
             }

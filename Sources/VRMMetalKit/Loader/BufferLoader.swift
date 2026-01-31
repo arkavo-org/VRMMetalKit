@@ -19,7 +19,7 @@ import Foundation
 import Metal
 import simd
 
-public class BufferLoader {
+public class BufferLoader: @unchecked Sendable {
     private let document: GLTFDocument
     private let binaryData: Data?
     private let baseURL: URL?

@@ -115,6 +115,12 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     /// Use parallel texture decoding where available.
     public static let parallelTextureDecoding = VRMLoadingOptimization(rawValue: 1 << 3)
     
+    /// Load textures in parallel using TaskGroup (significantly faster for models with many textures).
+    public static let parallelTextureLoading = VRMLoadingOptimization(rawValue: 1 << 4)
+    
+    /// Enable lazy texture loading (load textures on first use rather than at startup).
+    public static let lazyTextureLoading = VRMLoadingOptimization(rawValue: 1 << 5)
+    
     /// Default optimizations for production use.
     public static let `default`: VRMLoadingOptimization = [.skipVerboseLogging, .parallelTextureDecoding]
     
@@ -123,7 +129,8 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
         .skipVerboseLogging,
         .aggressiveTextureCompression,
         .skipSecondaryUVs,
-        .parallelTextureDecoding
+        .parallelTextureDecoding,
+        .parallelTextureLoading
     ]
 }
 
