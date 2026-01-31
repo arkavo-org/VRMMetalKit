@@ -68,14 +68,24 @@ public struct RendererConfig {
 
     /// Use identity matrices for specified skin index (A/B test for palette corruption)
     public var testIdentityPalette: Int? = nil
+    
+    /// MSAA sample count for multisample anti-aliasing (1 = disabled, 4 = 4x MSAA)
+    /// Alpha-to-coverage for MASK materials requires sampleCount > 1
+    public var sampleCount: Int = 1
+    
+    /// Global scale factor for depth bias values (1.0 = default)
+    /// Higher values push coplanar surfaces further apart in depth buffer
+    public var depthBiasScale: Float = 1.0
 
-    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil) {
+    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
         self.renderFilter = renderFilter
         self.drawUntil = drawUntil
         self.drawOnlyIndex = drawOnlyIndex
         self.testIdentityPalette = testIdentityPalette
+        self.sampleCount = sampleCount
+        self.depthBiasScale = depthBiasScale
     }
 }
 

@@ -67,6 +67,26 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // Pipeline states for different alpha modes (skinned)
     var skinnedOpaquePipelineState: MTLRenderPipelineState?  // OPAQUE/MASK (no blending)
     var skinnedBlendPipelineState: MTLRenderPipelineState?   // BLEND (blending enabled)
+    
+    // Pipeline states for alpha-to-coverage (MASK materials with MSAA)
+    var maskAlphaToCoveragePipelineState: MTLRenderPipelineState?      // Non-skinned
+    var skinnedMaskAlphaToCoveragePipelineState: MTLRenderPipelineState? // Skinned
+    
+    // Multisample texture for MSAA render targets
+    var multisampleTexture: MTLTexture?
+    
+    /// Returns true if multisampling is enabled (sampleCount > 1)
+    var usesMultisampling: Bool { config.sampleCount > 1 }
+    
+    // MARK: - Depth Bias
+    
+    /// Calculator for material-specific depth bias values
+    ///
+    /// Depth bias resolves true Z-fighting between coplanar surfaces
+    /// by pushing fragments toward the camera in depth buffer space.
+    public lazy var depthBiasCalculator: DepthBiasCalculator = {
+        DepthBiasCalculator(scale: config.depthBiasScale)
+    }()
 
     // MARK: - Configuration
 
@@ -2530,6 +2550,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 case "body":
                     // Body (with lace texture) renders FIRST (order=0)
                     // Uses lessEqual - later materials win at equal depths
+                    // Depth bias: pushed back slightly to allow clothing/skin to win at seams
                     if let faceState = depthStencilStates["face"] {
                         encoder.setDepthStencilState(faceState)
                     } else {
@@ -2537,13 +2558,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.back)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    // Z-FIGHTING FIX: Body renders first but pushed back in depth
+                    // Negative bias pushes away from camera, allowing overlays to win
+                    encoder.setDepthBias(-0.1, slopeScale: 4.0, clamp: 1.0)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=body  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 case "clothing":
                     // Clothing renders AFTER body - wins at overlaps via render order
+                    // Depth bias: neutral (relies on render order, but has bias for safety)
                     if let faceState = depthStencilStates["face"] {
                         encoder.setDepthStencilState(faceState)
                     } else {
@@ -2551,23 +2575,49 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.back)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    // Z-FIGHTING FIX: Clothing at collar/neck needs clear depth separation
+                    encoder.setDepthBias(0.05, slopeScale: 4.0, clamp: 1.0)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=clothing  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 case "skin":
                     // Face skin renders AFTER body - wins at neck seam via render order
-                    if let faceState = depthStencilStates["face"] {
-                        encoder.setDepthStencilState(faceState)
+                    // Z-FIGHTING FIX: Use different depth states for base vs overlay materials
+                    let materialNameLower = item.materialName.lowercased()
+                    let isOverlay = materialNameLower.contains("mouth") || materialNameLower.contains("eyebrow")
+
+                    if isOverlay {
+                        // Overlay materials (mouth, eyebrows): use faceOverlay state
+                        // lessEqual allows winning at equal depth, no depth write prevents Z-fighting
+                        if let overlayState = depthStencilStates["faceOverlay"] {
+                            encoder.setDepthStencilState(overlayState)
+                        } else {
+                            encoder.setDepthStencilState(depthStencilStates["face"])
+                        }
                     } else {
-                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                        // Base face skin: use normal face state with depth write
+                        if let faceState = depthStencilStates["face"] {
+                            encoder.setDepthStencilState(faceState)
+                        } else {
+                            encoder.setDepthStencilState(depthStencilStates["opaque"])
+                        }
                     }
+
                     encoder.setCullMode(.back)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+
+                    // Keep depth bias as secondary safeguard
+                    if materialNameLower.contains("mouth") {
+                        encoder.setDepthBias(0.02, slopeScale: 2.0, clamp: 0.1)
+                    } else if materialNameLower.contains("face") && materialNameLower.contains("skin") {
+                        encoder.setDepthBias(0.01, slopeScale: 2.0, clamp: 0.1)
+                    } else {
+                        encoder.setDepthBias(0.015, slopeScale: 2.0, clamp: 0.1)
+                    }
+
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=skin  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=skin  z=\(viewZ)  mat=\(item.materialName)  overlay=\(isOverlay)")
                     }
 
                 case "eyebrow", "eyeline":
@@ -2587,6 +2637,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 case "eye":
                     // Eyes render after skin - win via render order
+                    // Depth bias: higher bias to ensure eyes win over eyelids/face
                     if let faceState = depthStencilStates["face"] {
                         encoder.setDepthStencilState(faceState)
                     } else {
@@ -2594,7 +2645,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoder.setCullMode(.none)
                     encoder.setFrontFacing(.counterClockwise)
-                    encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+                    // Z-FIGHTING FIX: Eyes need highest priority to win over eyelids
+                    encoder.setDepthBias(0.02, slopeScale: 2.0, clamp: 0.1)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=eye  z=\(viewZ)  mat=\(item.materialName)")
                     }

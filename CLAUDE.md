@@ -62,10 +62,19 @@ swift test --filter ZFightingBugFinderTests --disable-sandbox
 swift test --filter ZFightingGPUTests --disable-sandbox
 ```
 
-**Current Known Issues (thresholds in `ZFightingRegressionTests.swift`):**
-- Face regions: 5%+ flicker (threshold: 2%)
-- Collar/Neck: 9%+ flicker (threshold: 3%)
-- Hip/Skirt: 9%+ flicker (threshold: 2%)
+**📋 Status Document:** See [`docs/ZFIGHTING_STATUS.md`](docs/ZFIGHTING_STATUS.md) for:
+- Complete test results and thresholds
+- Root cause analysis
+- Implemented mitigations (depth bias, depth states)
+- Recommended next steps
+
+**Quick Summary:**
+| Region | Flicker Rate | Threshold | Status |
+|--------|--------------|-----------|--------|
+| Face Front | 9.29% | 2.0% | ❌ FAIL |
+| Face Side | 9.41% | 2.0% | ❌ FAIL |
+| Collar/Neck | 13.45% | 3.0% | ❌ FAIL |
+| Hip/Skirt | 9.48% | 2.0% | ❌ FAIL |
 
 **Requirements:**
 - Metal device (tests skip on CI without GPU)

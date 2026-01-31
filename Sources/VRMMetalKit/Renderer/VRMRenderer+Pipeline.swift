@@ -116,6 +116,15 @@ extension VRMRenderer {
             depthStencilStates["face"] = state
         }
 
+        // Face overlay depth state - for materials that render on top of face skin (mouth, eyebrows)
+        // Uses lessEqual (wins at equal depth) but doesn't write depth to avoid Z-fighting
+        let faceOverlayDescriptor = MTLDepthStencilDescriptor()
+        faceOverlayDescriptor.depthCompareFunction = .lessEqual
+        faceOverlayDescriptor.isDepthWriteEnabled = false  // Don't write - prevents Z-fighting
+        if let state = device.makeDepthStencilState(descriptor: faceOverlayDescriptor) {
+            depthStencilStates["faceOverlay"] = state
+        }
+
         // Pre-create sampler states
         let samplerDescriptor = MTLSamplerDescriptor()
         samplerDescriptor.minFilter = .linear
@@ -252,6 +261,24 @@ extension VRMRenderer {
             )
             try strictValidator?.validatePipelineState(wireframeState, name: "mtoon_wireframe_pipeline")
             wireframePipelineState = wireframeState
+            
+            // Create MASK with Alpha-to-Coverage pipeline (reduces edge aliasing)
+            // This requires MSAA render target (sampleCount > 1)
+            let maskA2CDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
+            maskA2CDescriptor.label = "mtoon_mask_a2c"
+            maskA2CDescriptor.isAlphaToCoverageEnabled = true
+            let maskA2CColorAttachment = maskA2CDescriptor.colorAttachments[0]
+            maskA2CColorAttachment?.pixelFormat = config.colorPixelFormat
+            maskA2CColorAttachment?.isBlendingEnabled = false
+            
+            let maskA2CState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: maskA2CDescriptor,
+                key: "mtoon_mask_a2c"
+            )
+            try strictValidator?.validatePipelineState(maskA2CState, name: "mtoon_mask_a2c_pipeline")
+            maskAlphaToCoveragePipelineState = maskA2CState
+            vrmLog("[VRMRenderer] Created MASK alpha-to-coverage pipeline")
 
             // Create MToon OUTLINE pipeline (inverted hull technique)
             let outlineVertexFunction = library.makeFunction(name: "mtoon_outline_vertex")
@@ -431,6 +458,23 @@ extension VRMRenderer {
             try strictValidator?.validatePipelineState(skinnedBlendState, name: "skinned_blend_pipeline")
             skinnedBlendPipelineState = skinnedBlendState
             vrmLog("[SKINNED PSO] Created skinned blend pipeline successfully")
+            
+            // Create SKINNED MASK with Alpha-to-Coverage pipeline
+            let skinnedMaskA2CDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
+            skinnedMaskA2CDescriptor.label = "mtoon_skinned_mask_a2c"
+            skinnedMaskA2CDescriptor.isAlphaToCoverageEnabled = true
+            let skinnedMaskA2CColorAttachment = skinnedMaskA2CDescriptor.colorAttachments[0]
+            skinnedMaskA2CColorAttachment?.pixelFormat = config.colorPixelFormat
+            skinnedMaskA2CColorAttachment?.isBlendingEnabled = false
+            
+            let skinnedMaskA2CState = try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: skinnedMaskA2CDescriptor,
+                key: "mtoon_skinned_mask_a2c"
+            )
+            try strictValidator?.validatePipelineState(skinnedMaskA2CState, name: "skinned_mask_a2c_pipeline")
+            skinnedMaskAlphaToCoveragePipelineState = skinnedMaskA2CState
+            vrmLog("[SKINNED PSO] Created skinned MASK alpha-to-coverage pipeline")
 
             // Create SKINNED MToon OUTLINE pipeline (inverted hull technique)
             let skinnedOutlineVertexFunction = library.makeFunction(name: "skinned_mtoon_outline_vertex")
