@@ -11,3 +11,4 @@ DerivedData/
 *.vrma
 *.glb
 tmp/
+.arkavo/
