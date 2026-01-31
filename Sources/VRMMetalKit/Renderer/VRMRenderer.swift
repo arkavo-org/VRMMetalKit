@@ -514,8 +514,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // OPAQUE base=2000, MASK base=2450, BLEND base=3000
         let materialRenderQueue: Int
 
-        // Scene graph order for stable tie-breaking in sort
+        // Scene graph order for stable tie-breaking in sort (global)
         let primitiveIndex: Int
+
+        // Per-mesh primitive index for morph buffer lookup (matches compute pass key)
+        let primIdxInMesh: Int
     }
 
     /// Get current performance metrics
@@ -1366,7 +1369,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
             totalMeshesWithNodes += 1
 
-            for primitive in mesh.primitives {
+            for (primIdxInMesh, primitive) in mesh.primitives.enumerated() {
                 let alphaMode = primitive.materialIndex.flatMap { idx in
                     idx < model.materials.count ? model.materials[idx].alphaMode : nil
                 }?.lowercased() ?? "opaque"
@@ -1455,7 +1458,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     isEyeMaterial: isEyeMaterial,
                     renderOrder: 0,  // Will be set based on category
                     materialRenderQueue: materialRenderQueue,
-                    primitiveIndex: globalPrimitiveIndex
+                    primitiveIndex: globalPrimitiveIndex,
+                    primIdxInMesh: primIdxInMesh
                 )
 
                 // Enhanced face/body material detection and overrides
@@ -2075,10 +2079,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Binding order contract for vertex shader:
             // Uses ResourceIndices constants for strict validation
 
-            // Use cached meshIndex/primitiveIndex for O(1) lookup instead of O(n) search
-            // This ensures stable key matches the morph compute pass
+            // Use cached meshIndex/primIdxInMesh for O(1) lookup instead of O(n) search
+            // This ensures stable key matches the morph compute pass (per-mesh primitive index)
             let meshIdx = item.meshIndex
-            let primIdx = item.primitiveIndex
+            let primIdx = item.primIdxInMesh
             let stableKey: MorphKey = (UInt64(meshIdx) << 32) | UInt64(primIdx)
             let hasMorphedPositions = morphedBuffers[stableKey] != nil
 
