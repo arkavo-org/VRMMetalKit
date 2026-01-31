@@ -23,16 +23,25 @@ public class BufferLoader: @unchecked Sendable {
     private let document: GLTFDocument
     private let binaryData: Data?
     private let baseURL: URL?
+    
+    /// Preloaded buffer data (optional optimization)
+    private var preloadedData: [Int: Data]?
 
     /// The file path for error reporting
     internal var filePath: String? {
         return baseURL?.path
     }
 
-    public init(document: GLTFDocument, binaryData: Data?, baseURL: URL? = nil) {
+    public init(document: GLTFDocument, binaryData: Data?, baseURL: URL? = nil, preloadedData: [Int: Data]? = nil) {
         self.document = document
         self.binaryData = binaryData
         self.baseURL = baseURL
+        self.preloadedData = preloadedData
+    }
+    
+    /// Set preloaded buffer data (for use with BufferPreloader)
+    public func setPreloadedData(_ data: [Int: Data]) {
+        self.preloadedData = data
     }
 
     // MARK: - Accessor Loading
@@ -203,6 +212,11 @@ public class BufferLoader: @unchecked Sendable {
     // MARK: - Buffer Data Access
 
     public func getBufferData(bufferIndex: Int) throws -> Data {
+        // Check preloaded data first (optimization)
+        if let preloaded = preloadedData?[bufferIndex] {
+            return preloaded
+        }
+        
         guard let buffer = document.buffers?[safe: bufferIndex] else {
             throw VRMError.missingBuffer(
                 bufferIndex: bufferIndex,

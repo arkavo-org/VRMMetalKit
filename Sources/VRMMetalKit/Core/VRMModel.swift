@@ -430,12 +430,37 @@ public class VRMModel: @unchecked Sendable {
         context: VRMLoadingContext? = nil
     ) async throws {
         let skipLogging = context?.options.optimizations.contains(.skipVerboseLogging) ?? false
+        let useBufferPreloading = context?.options.optimizations.contains(.preloadBuffers) ?? false
         
         if !skipLogging {
             vrmLog("[VRMModel] Starting loadResources")
         }
         
-        let bufferLoader = BufferLoader(document: gltf, binaryData: binaryData, baseURL: baseURL)
+        // === Loading Phase: Buffer Preloading ===
+        var preloadedBuffers: [Int: Data]?
+        if useBufferPreloading {
+            await context?.updatePhase(.preloadingBuffers, progress: 0)
+            
+            if !skipLogging {
+                vrmLog("[VRMModel] Preloading buffers in parallel...")
+            }
+            
+            let preloader = BufferPreloader(document: gltf, baseURL: baseURL)
+            preloadedBuffers = await preloader.preloadAllBuffers(binaryData: binaryData)
+            
+            if !skipLogging {
+                vrmLog("[VRMModel] ✅ Preloaded \(preloadedBuffers?.count ?? 0) buffers")
+            }
+            
+            await context?.updatePhase(.preloadingBuffers, progress: 1.0)
+        }
+        
+        let bufferLoader = BufferLoader(
+            document: gltf,
+            binaryData: binaryData,
+            baseURL: baseURL,
+            preloadedData: preloadedBuffers
+        )
 
         // Identify which textures are used as normal maps (need linear format, not sRGB)
         var normalMapTextureIndices = Set<Int>()
@@ -573,13 +598,54 @@ public class VRMModel: @unchecked Sendable {
             vrmLog("[VRMModel] Loading \(meshCount) meshes")
         }
         
-        for meshIndex in 0..<meshCount {
-            try await context?.checkCancellation()
-            await context?.updateProgress(itemsCompleted: meshIndex, totalItems: meshCount)
+        let useParallelMeshLoading = context?.options.optimizations.contains(.parallelMeshLoading) ?? false
+        
+        if useParallelMeshLoading && meshCount > 1 {
+            // Use parallel mesh loading for better performance
+            if !skipLogging {
+                vrmLog("[VRMModel] Using parallel mesh loading (\(meshCount) meshes)")
+            }
             
-            if let gltfMesh = gltf.meshes?[safe: meshIndex] {
-                let mesh = try await VRMMesh.load(from: gltfMesh, document: gltf, device: device, bufferLoader: bufferLoader)
-                meshes.append(mesh)
+            let parallelLoader = ParallelMeshLoader(
+                device: device,
+                document: gltf,
+                bufferLoader: bufferLoader
+            )
+            
+            let indices = Array(0..<meshCount)
+            let loadedMeshes = await parallelLoader.loadMeshesParallel(
+                indices: indices
+            ) { completed, total in
+                Task {
+                    await context?.updateProgress(
+                        itemsCompleted: completed,
+                        totalItems: total
+                    )
+                }
+            }
+            
+            // Build meshes array in order
+            var loadedCount = 0
+            for meshIndex in 0..<meshCount {
+                if let mesh = loadedMeshes[meshIndex] {
+                    meshes.append(mesh)
+                    loadedCount += 1
+                }
+            }
+            
+            if !skipLogging {
+                vrmLog("[VRMModel] ✅ Parallel mesh loading complete: \(loadedCount)/\(meshCount) loaded")
+            }
+        } else {
+            // Sequential loading
+            for meshIndex in 0..<meshCount {
+                try await context?.checkCancellation()
+                await context?.updateProgress(itemsCompleted: meshIndex, totalItems: meshCount)
+                
+                if let gltfMesh = gltf.meshes?[safe: meshIndex] {
+                    let mesh = try await VRMMesh.load(from: gltfMesh, document: gltf, device: device, bufferLoader: bufferLoader)
+                    meshes.append(mesh)
+                }
             }
         }
 

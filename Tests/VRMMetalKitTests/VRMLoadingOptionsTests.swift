@@ -31,13 +31,14 @@ final class VRMLoadingOptionsTests: XCTestCase {
         // Given & When & Then
         XCTAssertEqual(VRMLoadingPhase.parsingGLTF.weight, 0.05)
         XCTAssertEqual(VRMLoadingPhase.parsingVRMExtension.weight, 0.05)
-        XCTAssertEqual(VRMLoadingPhase.loadingTextures.weight, 0.35)
+        XCTAssertEqual(VRMLoadingPhase.preloadingBuffers.weight, 0.03)
+        XCTAssertEqual(VRMLoadingPhase.loadingTextures.weight, 0.34)
         XCTAssertEqual(VRMLoadingPhase.loadingMaterials.weight, 0.10)
         XCTAssertEqual(VRMLoadingPhase.loadingMeshes.weight, 0.20)
         XCTAssertEqual(VRMLoadingPhase.buildingHierarchy.weight, 0.05)
         XCTAssertEqual(VRMLoadingPhase.loadingSkins.weight, 0.10)
         XCTAssertEqual(VRMLoadingPhase.sanitizingJoints.weight, 0.05)
-        XCTAssertEqual(VRMLoadingPhase.initializingPhysics.weight, 0.05)
+        XCTAssertEqual(VRMLoadingPhase.initializingPhysics.weight, 0.03)
         XCTAssertEqual(VRMLoadingPhase.complete.weight, 0.0)
     }
     

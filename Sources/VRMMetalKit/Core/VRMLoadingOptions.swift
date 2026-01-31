@@ -13,6 +13,7 @@ import Foundation
 public enum VRMLoadingPhase: String, CaseIterable, Sendable {
     case parsingGLTF = "Parsing GLTF"
     case parsingVRMExtension = "Parsing VRM Extension"
+    case preloadingBuffers = "Preloading Buffers"
     case loadingTextures = "Loading Textures"
     case loadingMaterials = "Loading Materials"
     case loadingMeshes = "Loading Meshes"
@@ -27,13 +28,14 @@ public enum VRMLoadingPhase: String, CaseIterable, Sendable {
         switch self {
         case .parsingGLTF: return 0.05
         case .parsingVRMExtension: return 0.05
-        case .loadingTextures: return 0.35  // Textures are the slowest
+        case .preloadingBuffers: return 0.03
+        case .loadingTextures: return 0.34  // Textures are the slowest
         case .loadingMaterials: return 0.10
         case .loadingMeshes: return 0.20
         case .buildingHierarchy: return 0.05
         case .loadingSkins: return 0.10
         case .sanitizingJoints: return 0.05
-        case .initializingPhysics: return 0.05
+        case .initializingPhysics: return 0.03
         case .complete: return 0.0
         }
     }
@@ -121,6 +123,12 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     /// Enable lazy texture loading (load textures on first use rather than at startup).
     public static let lazyTextureLoading = VRMLoadingOptimization(rawValue: 1 << 5)
     
+    /// Load meshes in parallel using TaskGroup (faster for models with many meshes).
+    public static let parallelMeshLoading = VRMLoadingOptimization(rawValue: 1 << 6)
+    
+    /// Preload all buffers in parallel at start (eliminates I/O during mesh/texture loading).
+    public static let preloadBuffers = VRMLoadingOptimization(rawValue: 1 << 7)
+    
     /// Default optimizations for production use.
     public static let `default`: VRMLoadingOptimization = [.skipVerboseLogging, .parallelTextureDecoding]
     
@@ -130,7 +138,9 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
         .aggressiveTextureCompression,
         .skipSecondaryUVs,
         .parallelTextureDecoding,
-        .parallelTextureLoading
+        .parallelTextureLoading,
+        .parallelMeshLoading,
+        .preloadBuffers
     ]
 }
 

@@ -48,7 +48,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         // Process textures concurrently using TaskGroup
         await withTaskGroup(of: Void.self) { group in
             for textureIndex in indices {
-                group.addTask {
+                let task: @Sendable () async -> Void = { [unowned self] in
                     let isNormalMap = normalMapIndices.contains(textureIndex)
                     let texture = try? await self.loadTexture(at: textureIndex, sRGB: !isNormalMap)
                     
@@ -62,6 +62,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
                         progressCallback?(current, totalCount)
                     }
                 }
+                group.addTask(operation: task)
             }
             
             await group.waitForAll()
@@ -237,7 +238,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
     }
 }
 
-// MARK: - Unchecked Helper Types
+// MARK: - Helper Types
 
 /// Thread-safe dictionary for texture results
 private final class UncheckedTextureDictionary: @unchecked Sendable {
@@ -245,15 +246,15 @@ private final class UncheckedTextureDictionary: @unchecked Sendable {
     private let lock = NSLock()
     
     func set(_ texture: MTLTexture, for index: Int) {
-        lock.withLock {
-            dict[index] = texture
-        }
+        lock.lock()
+        dict[index] = texture
+        lock.unlock()
     }
     
     func getAll() -> [Int: MTLTexture] {
-        return lock.withLock {
-            return dict
-        }
+        lock.lock()
+        defer { lock.unlock() }
+        return dict
     }
 }
 
@@ -263,20 +264,14 @@ private final class UncheckedProgressBox: @unchecked Sendable {
     private let lock = NSLock()
     
     var countValue: Int {
-        return lock.withLock { count }
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
     
     func increment() {
-        lock.withLock {
-            count += 1
-        }
-    }
-}
-
-extension NSLocking {
-    func withLock<T>(_ block: () -> T) -> T {
-        lock()
-        defer { unlock() }
-        return block()
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }
