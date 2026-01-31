@@ -129,6 +129,9 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     /// Preload all buffers in parallel at start (eliminates I/O during mesh/texture loading).
     public static let preloadBuffers = VRMLoadingOptimization(rawValue: 1 << 7)
     
+    /// Process materials in parallel (faster for models with many materials).
+    public static let parallelMaterialLoading = VRMLoadingOptimization(rawValue: 1 << 8)
+    
     /// Default optimizations for production use.
     public static let `default`: VRMLoadingOptimization = [.skipVerboseLogging, .parallelTextureDecoding]
     
@@ -140,7 +143,8 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
         .parallelTextureDecoding,
         .parallelTextureLoading,
         .parallelMeshLoading,
-        .preloadBuffers
+        .preloadBuffers,
+        .parallelMaterialLoading
     ]
 }
 

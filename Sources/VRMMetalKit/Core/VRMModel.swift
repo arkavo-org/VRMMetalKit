@@ -579,14 +579,56 @@ public class VRMModel: @unchecked Sendable {
             vrmLog("[VRMModel] Loading \(materialCount) materials")
         }
         
-        for materialIndex in 0..<materialCount {
-            try await context?.checkCancellation()
-            await context?.updateProgress(itemsCompleted: materialIndex, totalItems: materialCount)
+        let useParallelMaterials = context?.options.optimizations.contains(.parallelMaterialLoading) ?? false
+        
+        if useParallelMaterials && materialCount > 1 {
+            // Use parallel material loading
+            if !skipLogging {
+                vrmLog("[VRMModel] Using parallel material loading (\(materialCount) materials)")
+            }
             
-            if let gltfMaterial = gltf.materials?[safe: materialIndex] {
-                let vrm0Prop = materialIndex < vrm0MaterialProperties.count ? vrm0MaterialProperties[materialIndex] : nil
-                let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop, vrmVersion: specVersion)
-                materials.append(material)
+            let parallelLoader = ParallelMaterialLoader(
+                document: gltf,
+                textures: textures,
+                vrm0MaterialProperties: vrm0MaterialProperties,
+                vrmVersion: specVersion
+            )
+            
+            let indices = Array(0..<materialCount)
+            let loadedMaterials = await parallelLoader.loadMaterialsParallel(
+                indices: indices
+            ) { completed, total in
+                Task {
+                    await context?.updateProgress(
+                        itemsCompleted: completed,
+                        totalItems: total
+                    )
+                }
+            }
+            
+            // Build materials array in order
+            var loadedCount = 0
+            for materialIndex in 0..<materialCount {
+                if let material = loadedMaterials[materialIndex] {
+                    materials.append(material)
+                    loadedCount += 1
+                }
+            }
+            
+            if !skipLogging {
+                vrmLog("[VRMModel] ✅ Parallel material loading complete: \(loadedCount)/\(materialCount) loaded")
+            }
+        } else {
+            // Sequential loading
+            for materialIndex in 0..<materialCount {
+                try await context?.checkCancellation()
+                await context?.updateProgress(itemsCompleted: materialIndex, totalItems: materialCount)
+                
+                if let gltfMaterial = gltf.materials?[safe: materialIndex] {
+                    let vrm0Prop = materialIndex < vrm0MaterialProperties.count ? vrm0MaterialProperties[materialIndex] : nil
+                    let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop, vrmVersion: specVersion)
+                    materials.append(material)
+                }
             }
         }
 
