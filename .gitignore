@@ -12,3 +12,4 @@ DerivedData/
 *.glb
 tmp/
 .arkavo/
+*.metallib

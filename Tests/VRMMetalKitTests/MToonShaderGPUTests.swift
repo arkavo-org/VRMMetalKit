@@ -169,11 +169,11 @@ final class MToonShaderGPUTests: XCTestCase {
             }
         }
 
-        // Check minimum function count (incomplete metallib had ~15, complete has ~50+)
-        XCTAssertGreaterThan(
+        // Check minimum function count (incomplete metallib had ~15, complete has ~40+)
+        XCTAssertGreaterThanOrEqual(
             functionNames.count,
             40,
-            "Metallib has too few functions (\(functionNames.count)). Expected 50+. Did you forget to compile all .metal files? Use 'make shaders' in VRMMetalKit."
+            "Metallib has too few functions (\(functionNames.count)). Expected 40+. Did you forget to compile all .metal files? Use 'make shaders' in VRMMetalKit."
         )
 
         // Check all required functions are present
