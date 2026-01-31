@@ -301,7 +301,7 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - Loading
 
-    /// Loads a VRM model from a file URL.
+    /// Loads a VRM model from a file URL with progress and cancellation support.
     ///
     /// This is the primary entry point for loading VRM avatars. The method parses the VRM/GLB file,
     /// loads all resources (meshes, textures, materials), and initializes physics if a Metal device is provided.
@@ -309,23 +309,48 @@ public class VRMModel: @unchecked Sendable {
     /// - Parameters:
     ///   - url: File URL to a `.vrm` or `.glb` file.
     ///   - device: Optional Metal device for GPU resources. If provided, textures and physics buffers are created.
+    ///   - options: Loading options including progress callbacks and cancellation support.
     ///
     /// - Returns: A fully loaded `VRMModel` ready for rendering.
     ///
-    /// - Throws: `VRMError` if the file is invalid or missing required data.
+    /// - Throws: `VRMError` if the file is invalid or missing required data, or if loading is cancelled.
     ///
     /// ## Example
     /// ```swift
     /// let device = MTLCreateSystemDefaultDevice()!
-    /// let model = try await VRMModel.load(from: modelURL, device: device)
+    /// 
+    /// // With progress
+    /// let options = VRMLoadingOptions(
+    ///     progressCallback: { progress in
+    ///         print("Loading: \(Int(progress.overallProgress * 100))%")
+    ///     }
+    /// )
+    /// let model = try await VRMModel.load(from: modelURL, device: device, options: options)
     /// ```
     ///
     /// ## Performance
     /// Loading is asynchronous and may take 100-500ms depending on model complexity.
     /// Textures are loaded in parallel for better performance.
-    public static func load(from url: URL, device: MTLDevice? = nil) async throws -> VRMModel {
+    public static func load(
+        from url: URL,
+        device: MTLDevice? = nil,
+        options: VRMLoadingOptions = .default
+    ) async throws -> VRMModel {
+        let context = await VRMLoadingContext(options: options)
+        
+        await context.updatePhase(.parsingGLTF, progress: 0.0)
+        
         let data = try Data(contentsOf: url)
-        let model = try await load(from: data, filePath: url.path, device: device)
+        try await context.checkCancellation()
+        
+        await context.updatePhase(.parsingGLTF, progress: 1.0)
+        
+        let model = try await load(
+            from: data,
+            filePath: url.path,
+            device: device,
+            context: context
+        )
         // Store the base URL for loading external resources
         model.baseURL = url.deletingLastPathComponent()
         return model
@@ -344,16 +369,28 @@ public class VRMModel: @unchecked Sendable {
     ///
     /// - Throws: `VRMError` if the data is invalid.
     public static func load(from data: Data, filePath: String? = nil, device: MTLDevice? = nil) async throws -> VRMModel {
-        vrmLog("[VRMModel] Starting load from data")
+        try await load(from: data, filePath: filePath, device: device, context: nil)
+    }
+    
+    /// Internal loading method with context for progress and cancellation.
+    private static func load(
+        from data: Data,
+        filePath: String? = nil,
+        device: MTLDevice? = nil,
+        context: VRMLoadingContext?
+    ) async throws -> VRMModel {
+        let skipLogging = await context?.options.optimizations.contains(.skipVerboseLogging) ?? false
+        
+        if !skipLogging {
+            vrmLog("[VRMModel] Starting load from data")
+        }
+        
         let parser = GLTFParser()
         let (document, binaryData) = try parser.parse(data: data, filePath: filePath)
-        vrmLog("[VRMModel] Parsed GLTF document")
-
-        // Debug: Print what extensions we found
-        if let extensions = document.extensions {
-            vrmLog("[VRMModel] Found extensions: \(extensions.keys)")
-        } else {
-            vrmLog("[VRMModel] No extensions found in document")
+        try await context?.checkCancellation()
+        
+        if !skipLogging {
+            vrmLog("[VRMModel] Parsed GLTF document")
         }
 
         // Check for VRM 1.0 (VRMC_vrm) or VRM 0.0 (VRM)
@@ -365,108 +402,176 @@ public class VRMModel: @unchecked Sendable {
             )
         }
 
-        vrmLog("[VRMModel] Parsing VRM extension")
+        await context?.updatePhase(.parsingVRMExtension, progress: 0.5)
+        
         let vrmParser = VRMExtensionParser()
         let model = try vrmParser.parseVRMExtension(vrmExtension, document: document, filePath: filePath)
         model.device = device
-        vrmLog("[VRMModel] VRM extension parsed, starting loadResources")
-
+        
+        await context?.updatePhase(.parsingVRMExtension, progress: 1.0)
+        
         // Load resources with buffer data
-        try await model.loadResources(binaryData: binaryData)
+        try await model.loadResources(binaryData: binaryData, context: context)
 
         // Initialize SpringBone GPU system if device and spring bone data present
         if let device = device, model.springBone != nil {
+            await context?.updatePhase(.initializingPhysics, progress: 0.5)
             try model.initializeSpringBoneGPUSystem(device: device)
-            vrmLog("[VRMModel] SpringBone GPU buffers initialized: \(model.springBoneBuffers?.numBones ?? 0) bones")
+            await context?.updatePhase(.initializingPhysics, progress: 1.0)
         }
+        
+        await context?.updatePhase(.complete, progress: 1.0)
 
         return model
     }
 
-    private func loadResources(binaryData: Data? = nil) async throws {
-        vrmLog("[VRMModel] Starting loadResources")
+    private func loadResources(
+        binaryData: Data? = nil,
+        context: VRMLoadingContext? = nil
+    ) async throws {
+        let skipLogging = context?.options.optimizations.contains(.skipVerboseLogging) ?? false
+        
+        if !skipLogging {
+            vrmLog("[VRMModel] Starting loadResources")
+        }
+        
         let bufferLoader = BufferLoader(document: gltf, binaryData: binaryData, baseURL: baseURL)
 
         // Identify which textures are used as normal maps (need linear format, not sRGB)
         var normalMapTextureIndices = Set<Int>()
-        vrmLog("[VRMModel] 🔍 Scanning \(gltf.materials?.count ?? 0) materials for normal map textures...")
+        if !skipLogging {
+            vrmLog("[VRMModel] 🔍 Scanning \(gltf.materials?.count ?? 0) materials for normal map textures...")
+        }
         for (matIdx, material) in (gltf.materials ?? []).enumerated() {
             let matName = material.name ?? "material_\(matIdx)"
             if let normalTexture = material.normalTexture {
                 normalMapTextureIndices.insert(normalTexture.index)
-                vrmLog("[VRMModel] ⚠️ Material '\(matName)' uses texture \(normalTexture.index) as NORMAL MAP (will use linear format)")
+                if !skipLogging {
+                    vrmLog("[VRMModel] ⚠️ Material '\(matName)' uses texture \(normalTexture.index) as NORMAL MAP (will use linear format)")
+                }
             }
-            // Log base color texture for comparison
-            if let baseColorTex = material.pbrMetallicRoughness?.baseColorTexture {
-                vrmLog("[VRMModel] ✅ Material '\(matName)' uses texture \(baseColorTex.index) as BASE COLOR (will use sRGB)")
+            if !skipLogging {
+                if let baseColorTex = material.pbrMetallicRoughness?.baseColorTexture {
+                    vrmLog("[VRMModel] ✅ Material '\(matName)' uses texture \(baseColorTex.index) as BASE COLOR (will use sRGB)")
+                }
             }
         }
-        vrmLog("[VRMModel] 📊 Normal map texture indices: \(normalMapTextureIndices.sorted())")
+        if !skipLogging {
+            vrmLog("[VRMModel] 📊 Normal map texture indices: \(normalMapTextureIndices.sorted())")
+        }
 
-        // Load ALL textures first - must complete before materials reference them
-        vrmLog("[VRMModel] Loading \(gltf.textures?.count ?? 0) textures")
+        // === Loading Phase: Textures ===
+        let textureCount = gltf.textures?.count ?? 0
+        await context?.updatePhase(.loadingTextures, totalItems: textureCount)
+        
+        if !skipLogging {
+            vrmLog("[VRMModel] Loading \(textureCount) textures")
+        }
+        
         if let device = device {
             let textureLoader = TextureLoader(device: device, bufferLoader: bufferLoader, document: gltf, baseURL: baseURL)
-            for textureIndex in 0..<(gltf.textures?.count ?? 0) {
-                // Normal maps should be linear (sRGB=false), color textures should be sRGB (sRGB=true)
+            for textureIndex in 0..<textureCount {
+                // Check cancellation every iteration
+                try await context?.checkCancellation()
+                
+                // Update progress
+                await context?.updateProgress(
+                    itemsCompleted: textureIndex,
+                    totalItems: textureCount
+                )
+                
                 let isNormalMap = normalMapTextureIndices.contains(textureIndex)
                 let useSRGB = !isNormalMap
                 let textureName = gltf.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
                 let formatStr = useSRGB ? "sRGB" : "LINEAR"
-                vrmLog("[VRMModel] Loading texture \(textureIndex) '\(textureName)' as \(formatStr)")
+                
+                if !skipLogging {
+                    vrmLog("[VRMModel] Loading texture \(textureIndex) '\(textureName)' as \(formatStr)")
+                }
+                
                 if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
                     let vrmTexture = VRMTexture(name: textureName)
                     vrmTexture.mtlTexture = mtlTexture
                     textures.append(vrmTexture)
-                    vrmLog("[VRMModel] ✅ Texture \(textureIndex) loaded: \(mtlTexture.width)x\(mtlTexture.height) format=\(mtlTexture.pixelFormat.rawValue)")
+                    if !skipLogging {
+                        vrmLog("[VRMModel] ✅ Texture \(textureIndex) loaded: \(mtlTexture.width)x\(mtlTexture.height)")
+                    }
                 } else {
-                    // Add placeholder texture
                     textures.append(VRMTexture(name: textureName))
-                    vrmLog("[VRMModel] ❌ Texture \(textureIndex) FAILED to load - using placeholder!")
+                    if !skipLogging {
+                        vrmLog("[VRMModel] ❌ Texture \(textureIndex) FAILED to load - using placeholder!")
+                    }
                 }
             }
         } else {
             // No device, create empty texture placeholders
-            for textureIndex in 0..<(gltf.textures?.count ?? 0) {
+            for textureIndex in 0..<textureCount {
                 let textureName = gltf.textures?[safe: textureIndex]?.name
                 textures.append(VRMTexture(name: textureName))
             }
         }
 
-        // Load materials AFTER all textures are loaded to avoid index out of bounds
-        vrmLog("[VRMModel] Loading \(gltf.materials?.count ?? 0) materials (VRM 0.x props: \(vrm0MaterialProperties.count))")
-        for materialIndex in 0..<(gltf.materials?.count ?? 0) {
+        // === Loading Phase: Materials ===
+        let materialCount = gltf.materials?.count ?? 0
+        await context?.updatePhase(.loadingMaterials, totalItems: materialCount)
+        
+        if !skipLogging {
+            vrmLog("[VRMModel] Loading \(materialCount) materials")
+        }
+        
+        for materialIndex in 0..<materialCount {
+            try await context?.checkCancellation()
+            await context?.updateProgress(itemsCompleted: materialIndex, totalItems: materialCount)
+            
             if let gltfMaterial = gltf.materials?[safe: materialIndex] {
-                // Pass VRM 0.x material property if available (MToon data at document level)
-                // Also pass VRM spec version for version-aware shading in shader
                 let vrm0Prop = materialIndex < vrm0MaterialProperties.count ? vrm0MaterialProperties[materialIndex] : nil
                 let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop, vrmVersion: specVersion)
                 materials.append(material)
             }
         }
 
-        // Load meshes
-        vrmLog("[VRMModel] Loading \(gltf.meshes?.count ?? 0) meshes")
-        for meshIndex in 0..<(gltf.meshes?.count ?? 0) {
+        // === Loading Phase: Meshes ===
+        let meshCount = gltf.meshes?.count ?? 0
+        await context?.updatePhase(.loadingMeshes, totalItems: meshCount)
+        
+        if !skipLogging {
+            vrmLog("[VRMModel] Loading \(meshCount) meshes")
+        }
+        
+        for meshIndex in 0..<meshCount {
+            try await context?.checkCancellation()
+            await context?.updateProgress(itemsCompleted: meshIndex, totalItems: meshCount)
+            
             if let gltfMesh = gltf.meshes?[safe: meshIndex] {
                 let mesh = try await VRMMesh.load(from: gltfMesh, document: gltf, device: device, bufferLoader: bufferLoader)
                 meshes.append(mesh)
             }
         }
 
-        // Build node hierarchy
+        // === Loading Phase: Hierarchy ===
+        await context?.updatePhase(.buildingHierarchy, progress: 0)
+        try await context?.checkCancellation()
         buildNodeHierarchy()
+        await context?.updatePhase(.buildingHierarchy, progress: 1.0)
 
-        // Load skins
-        for skinIndex in 0..<(gltf.skins?.count ?? 0) {
+        // === Loading Phase: Skins ===
+        let skinCount = gltf.skins?.count ?? 0
+        await context?.updatePhase(.loadingSkins, totalItems: skinCount)
+        
+        for skinIndex in 0..<skinCount {
+            try await context?.checkCancellation()
+            await context?.updateProgress(itemsCompleted: skinIndex, totalItems: skinCount)
+            
             if let gltfSkin = gltf.skins?[skinIndex] {
                 let skin = try VRMSkin(from: gltfSkin, nodes: nodes, document: gltf, bufferLoader: bufferLoader)
                 skins.append(skin)
             }
         }
 
-        // IRON DOME: Sanitize joint indices now that we know actual bone counts
+        // IRON DOME: Sanitize joint indices
+        await context?.updatePhase(.sanitizingJoints, progress: 0.5)
         sanitizeAllMeshJoints()
+        await context?.updatePhase(.sanitizingJoints, progress: 1.0)
     }
 
     /// "Iron Dome" joint sanitization - ensures all mesh joint indices are within valid bounds.
@@ -974,6 +1079,9 @@ public enum VRMError: Error {
 
     // Material Errors
     case invalidMaterial(materialIndex: Int, reason: String, filePath: String?)
+    
+    // Loading Errors
+    case loadingCancelled
 }
 
 extension VRMError: LocalizedError {
@@ -1174,6 +1282,18 @@ extension VRMError: LocalizedError {
             • Alpha mode is one of: OPAQUE, MASK, BLEND
 
             VRM MToon Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md
+            """
+            
+        case .loadingCancelled:
+            return """
+            ⚠️ Loading Cancelled
+            
+            The VRM model loading was cancelled by the user.
+            
+            Suggestion: If this was unexpected, check that:
+            • The loading task wasn't explicitly cancelled
+            • The parent Task wasn't cancelled
+            • No timeout or cancellation token was triggered
             """
         }
     }

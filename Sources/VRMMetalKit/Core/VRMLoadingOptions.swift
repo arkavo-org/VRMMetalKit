@@ -1,461 +1,289 @@
 //
-// Copyright 2025 Arkavo
+//  VRMLoadingOptions.swift
+//  VRMMetalKit
 //
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+//  Created by Kimi Code CLI on 2026-01-30.
 //
 
 import Foundation
 
-/// Configuration options for loading VRM models with resource limits to prevent exhaustion.
-///
-/// VRMLoadingOptions allows you to set maximum limits on model complexity to prevent
-/// memory exhaustion, performance degradation, or denial-of-service from malicious models.
-///
-/// ## Usage
-///
-/// ```swift
-/// // Default limits (balanced for desktop)
-/// let options = VRMLoadingOptions.default
-///
-/// // Mobile-optimized limits
-/// let mobileOptions = VRMLoadingOptions.mobile
-///
-/// // Custom limits
-/// var customOptions = VRMLoadingOptions.default
-/// customOptions.maxTriangles = 50_000
-/// customOptions.maxTextures = 20
-/// customOptions.enforcement = .strict
-///
-/// // Load with limits
-/// let model = try GLTFParser.loadVRM(from: url, device: device, options: customOptions)
-/// ```
-///
-/// ## Enforcement Modes
-///
-/// - `.warn`: Log warnings when limits exceeded but continue loading (development)
-/// - `.strict`: Throw error when limits exceeded (production, security-critical)
-///
-/// ## Presets
-///
-/// - `VRMLoadingOptions.default`: Balanced limits for desktop (macOS, high-end iOS devices)
-/// - `VRMLoadingOptions.mobile`: Conservative limits for mobile devices
-/// - `VRMLoadingOptions.desktop`: Generous limits for high-end desktop workstations
-/// - `VRMLoadingOptions.unlimited`: No limits (use with caution!)
-///
-public struct VRMLoadingOptions: Sendable {
-    /// Enforcement mode for resource limits
-    public enum EnforcementMode: Sendable {
-        /// Log warnings when limits exceeded but continue loading
-        case warn
-        /// Throw error when limits exceeded
-        case strict
-    }
+// MARK: - VRMLoadingPhase
 
-    /// Enforcement mode for resource limits (default: .warn)
-    public var enforcement: EnforcementMode = .warn
-
-    // MARK: - Geometry Limits
-
-    /// Maximum triangles per model (default: 100,000)
-    /// Typical VRM avatar: 5,000-30,000 triangles
-    public var maxTriangles: Int = 100_000
-
-    /// Maximum vertices per mesh primitive (default: 65,536)
-    /// Metal limit: UInt16 index = 65,536 max vertices
-    public var maxVerticesPerMesh: Int = 65_536
-
-    // MARK: - Texture Limits
-
-    /// Maximum number of textures per model (default: 50)
-    /// Typical VRM: 5-20 textures (body, face, hair, clothes)
-    public var maxTextures: Int = 50
-
-    /// Maximum texture dimension in pixels (default: 4096×4096)
-    /// Larger textures consume excessive memory and GPU bandwidth
-    public var maxTextureSize: Int = 4096
-
-    /// Maximum total texture memory in megabytes (default: 512 MB)
-    /// Prevents models with hundreds of high-res textures
-    public var maxTextureMemoryMB: Int = 512
-
-    // MARK: - Skeletal Animation Limits
-
-    /// Maximum bones (joints) per model (default: 500)
-    /// VRM humanoid: 55 bones (spec), but some models add accessories/hair
-    public var maxBones: Int = 500
-
-    /// Maximum bones per skin (default: 256)
-    /// Metal uniform buffer limit for joint matrices
-    public var maxBonesPerSkin: Int = 256
-
-    // MARK: - Morph Target Limits
-
-    /// Maximum morph targets per mesh (default: 100)
-    /// VRM expressions: ~10-20 morphs, but some models have 50+
-    public var maxMorphTargetsPerMesh: Int = 100
-
-    /// Maximum total morph targets across all meshes (default: 500)
-    /// Prevents models with excessive blend shapes
-    public var maxTotalMorphTargets: Int = 500
-
-    // MARK: - Scene Complexity Limits
-
-    /// Maximum number of nodes (transforms) in scene graph (default: 1000)
-    /// Typical VRM: 100-300 nodes
-    public var maxNodes: Int = 1000
-
-    /// Maximum number of meshes (default: 200)
-    /// Typical VRM: 10-50 meshes
-    public var maxMeshes: Int = 200
-
-    /// Maximum number of materials (default: 100)
-    /// Typical VRM: 5-30 materials
-    public var maxMaterials: Int = 100
-
-    // MARK: - Physics Limits
-
-    /// Maximum SpringBone chains (default: 50)
-    /// Typical VRM: 5-20 chains (hair, skirt, tail)
-    public var maxSpringBoneChains: Int = 50
-
-    /// Maximum SpringBone colliders (default: 100)
-    /// Typical VRM: 10-30 colliders (body, head, hands)
-    public var maxSpringBoneColliders: Int = 100
-
-    // MARK: - Presets
-
-    /// Default balanced limits for desktop platforms (macOS, high-end iOS)
-    public static let `default` = VRMLoadingOptions()
-
-    /// Conservative limits optimized for mobile devices (iPhone, iPad)
-    public static let mobile = VRMLoadingOptions(
-        enforcement: .strict,
-        maxTriangles: 30_000,
-        maxTextures: 20,
-        maxTextureSize: 2048,
-        maxTextureMemoryMB: 256,
-        maxBones: 256,
-        maxMorphTargetsPerMesh: 50,
-        maxTotalMorphTargets: 200,
-        maxNodes: 500,
-        maxMeshes: 50,
-        maxMaterials: 30,
-        maxSpringBoneChains: 20,
-        maxSpringBoneColliders: 50
-    )
-
-    /// Generous limits for high-end desktop workstations
-    public static let desktop = VRMLoadingOptions(
-        enforcement: .warn,
-        maxTriangles: 500_000,
-        maxTextures: 100,
-        maxTextureSize: 8192,
-        maxTextureMemoryMB: 2048,
-        maxBones: 1000,
-        maxMorphTargetsPerMesh: 200,
-        maxTotalMorphTargets: 1000,
-        maxNodes: 5000,
-        maxMeshes: 500,
-        maxMaterials: 200,
-        maxSpringBoneChains: 100,
-        maxSpringBoneColliders: 200
-    )
-
-    /// No limits (use with caution - vulnerable to DoS)
-    public static let unlimited = VRMLoadingOptions(
-        enforcement: .warn,
-        maxTriangles: Int.max,
-        maxTextures: Int.max,
-        maxTextureSize: 16384,
-        maxTextureMemoryMB: 8192,
-        maxBones: Int.max,
-        maxMorphTargetsPerMesh: Int.max,
-        maxTotalMorphTargets: Int.max,
-        maxNodes: Int.max,
-        maxMeshes: Int.max,
-        maxMaterials: Int.max,
-        maxSpringBoneChains: Int.max,
-        maxSpringBoneColliders: Int.max
-    )
-
-    public init(
-        enforcement: EnforcementMode = .warn,
-        maxTriangles: Int = 100_000,
-        maxVerticesPerMesh: Int = 65_536,
-        maxTextures: Int = 50,
-        maxTextureSize: Int = 4096,
-        maxTextureMemoryMB: Int = 512,
-        maxBones: Int = 500,
-        maxBonesPerSkin: Int = 256,
-        maxMorphTargetsPerMesh: Int = 100,
-        maxTotalMorphTargets: Int = 500,
-        maxNodes: Int = 1000,
-        maxMeshes: Int = 200,
-        maxMaterials: Int = 100,
-        maxSpringBoneChains: Int = 50,
-        maxSpringBoneColliders: Int = 100
-    ) {
-        self.enforcement = enforcement
-        self.maxTriangles = maxTriangles
-        self.maxVerticesPerMesh = maxVerticesPerMesh
-        self.maxTextures = maxTextures
-        self.maxTextureSize = maxTextureSize
-        self.maxTextureMemoryMB = maxTextureMemoryMB
-        self.maxBones = maxBones
-        self.maxBonesPerSkin = maxBonesPerSkin
-        self.maxMorphTargetsPerMesh = maxMorphTargetsPerMesh
-        self.maxTotalMorphTargets = maxTotalMorphTargets
-        self.maxNodes = maxNodes
-        self.maxMeshes = maxMeshes
-        self.maxMaterials = maxMaterials
-        self.maxSpringBoneChains = maxSpringBoneChains
-        self.maxSpringBoneColliders = maxSpringBoneColliders
-    }
-}
-
-/// Errors thrown when resource limits are exceeded
-public enum VRMResourceLimitError: Error, LocalizedError {
-    case triangleLimitExceeded(actual: Int, limit: Int)
-    case vertexLimitExceeded(meshIndex: Int, actual: Int, limit: Int)
-    case textureLimitExceeded(actual: Int, limit: Int)
-    case textureSizeLimitExceeded(textureIndex: Int, width: Int, height: Int, limit: Int)
-    case textureMemoryLimitExceeded(actualMB: Int, limitMB: Int)
-    case boneLimitExceeded(actual: Int, limit: Int)
-    case bonesPerSkinLimitExceeded(skinIndex: Int, actual: Int, limit: Int)
-    case morphTargetLimitExceeded(meshIndex: Int, actual: Int, limit: Int)
-    case totalMorphTargetLimitExceeded(actual: Int, limit: Int)
-    case nodeLimitExceeded(actual: Int, limit: Int)
-    case meshLimitExceeded(actual: Int, limit: Int)
-    case materialLimitExceeded(actual: Int, limit: Int)
-    case springBoneChainLimitExceeded(actual: Int, limit: Int)
-    case springBoneColliderLimitExceeded(actual: Int, limit: Int)
-
-    public var errorDescription: String? {
+/// Represents a specific phase of the VRM loading process.
+public enum VRMLoadingPhase: String, CaseIterable, Sendable {
+    case parsingGLTF = "Parsing GLTF"
+    case parsingVRMExtension = "Parsing VRM Extension"
+    case loadingTextures = "Loading Textures"
+    case loadingMaterials = "Loading Materials"
+    case loadingMeshes = "Loading Meshes"
+    case buildingHierarchy = "Building Hierarchy"
+    case loadingSkins = "Loading Skins"
+    case sanitizingJoints = "Sanitizing Joints"
+    case initializingPhysics = "Initializing Physics"
+    case complete = "Complete"
+    
+    /// The relative weight/importance of this phase in overall progress (0.0-1.0).
+    public var weight: Double {
         switch self {
-        case .triangleLimitExceeded(let actual, let limit):
-            return """
-            ❌ Triangle Limit Exceeded
-
-            Model has \(actual) triangles, exceeding limit of \(limit).
-
-            This may indicate:
-            • Overly detailed model (reduce polygon count)
-            • Malicious model attempting DoS
-            • Need to increase VRMLoadingOptions.maxTriangles
-
-            Suggestion: Optimize model in Blender/Maya, or increase limit if trusted source.
-            """
-
-        case .vertexLimitExceeded(let meshIndex, let actual, let limit):
-            return """
-            ❌ Vertex Limit Exceeded for Mesh #\(meshIndex)
-
-            Mesh has \(actual) vertices, exceeding limit of \(limit).
-
-            Metal index buffer (UInt16) supports max 65,536 vertices per mesh.
-
-            Suggestion: Split mesh into multiple primitives or use UInt32 indices.
-            """
-
-        case .textureLimitExceeded(let actual, let limit):
-            return """
-            ❌ Texture Count Limit Exceeded
-
-            Model has \(actual) textures, exceeding limit of \(limit).
-
-            Suggestion: Consolidate textures into atlases or increase limit.
-            """
-
-        case .textureSizeLimitExceeded(let idx, let width, let height, let limit):
-            return """
-            ❌ Texture Size Limit Exceeded for Texture #\(idx)
-
-            Texture is \(width)×\(height)px, exceeding limit of \(limit)×\(limit)px.
-
-            Large textures consume excessive GPU memory and bandwidth.
-
-            Suggestion: Resize texture to \(limit)×\(limit) or smaller.
-            """
-
-        case .textureMemoryLimitExceeded(let actualMB, let limitMB):
-            return """
-            ❌ Texture Memory Limit Exceeded
-
-            Total texture memory: \(actualMB) MB, exceeding limit of \(limitMB) MB.
-
-            This model uses excessive texture memory.
-
-            Suggestion: Reduce texture resolution or count, or increase limit.
-            """
-
-        case .boneLimitExceeded(let actual, let limit):
-            return """
-            ❌ Bone Count Limit Exceeded
-
-            Model has \(actual) bones, exceeding limit of \(limit).
-
-            Suggestion: Remove accessory bones or increase limit.
-            """
-
-        case .bonesPerSkinLimitExceeded(let skinIndex, let actual, let limit):
-            return """
-            ❌ Bones Per Skin Limit Exceeded for Skin #\(skinIndex)
-
-            Skin has \(actual) bones, exceeding limit of \(limit).
-
-            Metal uniform buffer limit: 256 joint matrices.
-
-            Suggestion: Split model into multiple skins.
-            """
-
-        case .morphTargetLimitExceeded(let meshIndex, let actual, let limit):
-            return """
-            ❌ Morph Target Limit Exceeded for Mesh #\(meshIndex)
-
-            Mesh has \(actual) morph targets, exceeding limit of \(limit).
-
-            Suggestion: Reduce blend shapes or increase limit.
-            """
-
-        case .totalMorphTargetLimitExceeded(let actual, let limit):
-            return """
-            ❌ Total Morph Target Limit Exceeded
-
-            Model has \(actual) total morph targets, exceeding limit of \(limit).
-
-            Suggestion: Reduce blend shapes across all meshes.
-            """
-
-        case .nodeLimitExceeded(let actual, let limit):
-            return """
-            ❌ Node Count Limit Exceeded
-
-            Model has \(actual) nodes, exceeding limit of \(limit).
-
-            Excessive node count may indicate complex scene graph.
-
-            Suggestion: Simplify hierarchy or increase limit.
-            """
-
-        case .meshLimitExceeded(let actual, let limit):
-            return """
-            ❌ Mesh Count Limit Exceeded
-
-            Model has \(actual) meshes, exceeding limit of \(limit).
-
-            Suggestion: Merge meshes or increase limit.
-            """
-
-        case .materialLimitExceeded(let actual, let limit):
-            return """
-            ❌ Material Count Limit Exceeded
-
-            Model has \(actual) materials, exceeding limit of \(limit).
-
-            Suggestion: Consolidate materials or increase limit.
-            """
-
-        case .springBoneChainLimitExceeded(let actual, let limit):
-            return """
-            ❌ SpringBone Chain Limit Exceeded
-
-            Model has \(actual) SpringBone chains, exceeding limit of \(limit).
-
-            Suggestion: Reduce physics chains or increase limit.
-            """
-
-        case .springBoneColliderLimitExceeded(let actual, let limit):
-            return """
-            ❌ SpringBone Collider Limit Exceeded
-
-            Model has \(actual) colliders, exceeding limit of \(limit).
-
-            Suggestion: Reduce collider count or increase limit.
-            """
+        case .parsingGLTF: return 0.05
+        case .parsingVRMExtension: return 0.05
+        case .loadingTextures: return 0.35  // Textures are the slowest
+        case .loadingMaterials: return 0.10
+        case .loadingMeshes: return 0.20
+        case .buildingHierarchy: return 0.05
+        case .loadingSkins: return 0.10
+        case .sanitizingJoints: return 0.05
+        case .initializingPhysics: return 0.05
+        case .complete: return 0.0
         }
     }
 }
 
-/// Runtime resource usage statistics for a loaded VRM model
-public struct VRMResourceUsage {
-    public let triangles: Int
-    public let vertices: Int
-    public let textures: Int
-    public let textureMemoryMB: Int
-    public let bones: Int
-    public let morphTargets: Int
-    public let nodes: Int
-    public let meshes: Int
-    public let materials: Int
-    public let springBoneChains: Int
-    public let springBoneColliders: Int
+// MARK: - VRMLoadingProgress
 
-    /// Check if usage exceeds limits
-    public func validate(against options: VRMLoadingOptions) throws {
-        if triangles > options.maxTriangles {
-            throw VRMResourceLimitError.triangleLimitExceeded(actual: triangles, limit: options.maxTriangles)
-        }
-        if textures > options.maxTextures {
-            throw VRMResourceLimitError.textureLimitExceeded(actual: textures, limit: options.maxTextures)
-        }
-        if textureMemoryMB > options.maxTextureMemoryMB {
-            throw VRMResourceLimitError.textureMemoryLimitExceeded(actualMB: textureMemoryMB, limitMB: options.maxTextureMemoryMB)
-        }
-        if bones > options.maxBones {
-            throw VRMResourceLimitError.boneLimitExceeded(actual: bones, limit: options.maxBones)
-        }
-        if morphTargets > options.maxTotalMorphTargets {
-            throw VRMResourceLimitError.totalMorphTargetLimitExceeded(actual: morphTargets, limit: options.maxTotalMorphTargets)
-        }
-        if nodes > options.maxNodes {
-            throw VRMResourceLimitError.nodeLimitExceeded(actual: nodes, limit: options.maxNodes)
-        }
-        if meshes > options.maxMeshes {
-            throw VRMResourceLimitError.meshLimitExceeded(actual: meshes, limit: options.maxMeshes)
-        }
-        if materials > options.maxMaterials {
-            throw VRMResourceLimitError.materialLimitExceeded(actual: materials, limit: options.maxMaterials)
-        }
-        if springBoneChains > options.maxSpringBoneChains {
-            throw VRMResourceLimitError.springBoneChainLimitExceeded(actual: springBoneChains, limit: options.maxSpringBoneChains)
-        }
-        if springBoneColliders > options.maxSpringBoneColliders {
-            throw VRMResourceLimitError.springBoneColliderLimitExceeded(actual: springBoneColliders, limit: options.maxSpringBoneColliders)
-        }
+/// Represents the current loading progress with detailed information.
+public struct VRMLoadingProgress: Sendable {
+    /// The current phase of loading.
+    public let currentPhase: VRMLoadingPhase
+    
+    /// Progress within the current phase (0.0-1.0).
+    public let phaseProgress: Double
+    
+    /// Overall progress across all phases (0.0-1.0).
+    public let overallProgress: Double
+    
+    /// Number of items completed in current phase (if applicable).
+    public let itemsCompleted: Int
+    
+    /// Total number of items in current phase (if applicable).
+    public let totalItems: Int
+    
+    /// Time elapsed since loading started.
+    public let elapsedTime: TimeInterval
+    
+    /// Estimated time remaining.
+    public let estimatedTimeRemaining: TimeInterval?
+    
+    /// Human-readable description of current operation.
+    public let operationDescription: String
+    
+    /// Progress as a percentage (0-100).
+    public var percentage: Int {
+        Int((overallProgress * 100).rounded())
     }
-
-    /// Generate human-readable report
-    public func report(options: VRMLoadingOptions) -> String {
-        let usage = [
-            ("Triangles", triangles, options.maxTriangles),
-            ("Vertices", vertices, Int.max),  // No direct limit
-            ("Textures", textures, options.maxTextures),
-            ("Texture Memory (MB)", textureMemoryMB, options.maxTextureMemoryMB),
-            ("Bones", bones, options.maxBones),
-            ("Morph Targets", morphTargets, options.maxTotalMorphTargets),
-            ("Nodes", nodes, options.maxNodes),
-            ("Meshes", meshes, options.maxMeshes),
-            ("Materials", materials, options.maxMaterials),
-            ("SpringBone Chains", springBoneChains, options.maxSpringBoneChains),
-            ("SpringBone Colliders", springBoneColliders, options.maxSpringBoneColliders),
-        ]
-
-        var report = "VRM Resource Usage:\n"
-        for (name, actual, limit) in usage {
-            let percentage = limit == Int.max ? 0 : (actual * 100) / limit
-            let status = actual > limit ? "❌ EXCEEDED" : percentage > 80 ? "⚠️  HIGH" : "✅"
-            report += String(format: "  %@ %-25s %6d / %6d (%3d%%)\n", status, name + ":", actual, limit, percentage)
-        }
-        return report
+    
+    public init(
+        currentPhase: VRMLoadingPhase,
+        phaseProgress: Double,
+        overallProgress: Double,
+        itemsCompleted: Int = 0,
+        totalItems: Int = 0,
+        elapsedTime: TimeInterval = 0,
+        estimatedTimeRemaining: TimeInterval? = nil,
+        operationDescription: String = ""
+    ) {
+        self.currentPhase = currentPhase
+        self.phaseProgress = phaseProgress
+        self.overallProgress = overallProgress
+        self.itemsCompleted = itemsCompleted
+        self.totalItems = totalItems
+        self.elapsedTime = elapsedTime
+        self.estimatedTimeRemaining = estimatedTimeRemaining
+        self.operationDescription = operationDescription
     }
 }
+
+// MARK: - VRMLoadingOptimization
+
+/// Performance optimization options for VRM loading.
+public struct VRMLoadingOptimization: OptionSet, Sendable {
+    public let rawValue: Int
+    
+    public init(rawValue: Int) {
+        self.rawValue = rawValue
+    }
+    
+    /// Skip verbose logging during loading for better performance.
+    public static let skipVerboseLogging = VRMLoadingOptimization(rawValue: 1 << 0)
+    
+    /// Use aggressive texture compression (may reduce quality slightly).
+    public static let aggressiveTextureCompression = VRMLoadingOptimization(rawValue: 1 << 1)
+    
+    /// Skip loading secondary UV channels if present.
+    public static let skipSecondaryUVs = VRMLoadingOptimization(rawValue: 1 << 2)
+    
+    /// Use parallel texture decoding where available.
+    public static let parallelTextureDecoding = VRMLoadingOptimization(rawValue: 1 << 3)
+    
+    /// Default optimizations for production use.
+    public static let `default`: VRMLoadingOptimization = [.skipVerboseLogging, .parallelTextureDecoding]
+    
+    /// Maximum performance optimizations (may reduce quality).
+    public static let maximumPerformance: VRMLoadingOptimization = [
+        .skipVerboseLogging,
+        .aggressiveTextureCompression,
+        .skipSecondaryUVs,
+        .parallelTextureDecoding
+    ]
+}
+
+// MARK: - VRMLoadingOptions
+
+/// Configuration options for VRM model loading with progress and cancellation support.
+public struct VRMLoadingOptions: Sendable {
+    
+    /// Callback for progress updates during loading.
+    public let progressCallback: (@Sendable (VRMLoadingProgress) -> Void)?
+    
+    /// Minimum interval between progress callback invocations.
+    public let progressUpdateInterval: TimeInterval
+    
+    /// Whether to enable cancellation support.
+    public let enableCancellation: Bool
+    
+    /// Performance optimizations to apply.
+    public let optimizations: VRMLoadingOptimization
+    
+    /// Creates loading options.
+    ///
+    /// - Parameters:
+    ///   - progressCallback: Called periodically with loading progress. Runs on MainActor.
+    ///   - progressUpdateInterval: Minimum seconds between progress updates (default: 0.1).
+    ///   - enableCancellation: Whether to check for Task cancellation (default: true).
+    ///   - optimizations: Performance optimizations to apply (default: .default).
+    public init(
+        progressCallback: (@Sendable (VRMLoadingProgress) -> Void)? = nil,
+        progressUpdateInterval: TimeInterval = 0.1,
+        enableCancellation: Bool = true,
+        optimizations: VRMLoadingOptimization = .default
+    ) {
+        self.progressCallback = progressCallback
+        self.progressUpdateInterval = progressUpdateInterval
+        self.enableCancellation = enableCancellation
+        self.optimizations = optimizations
+    }
+    
+    /// Default options with no progress callback.
+    public static let `default` = VRMLoadingOptions()
+}
+
+// MARK: - VRMLoadingContext
+
+/// Actor for thread-safe loading state management.
+internal actor VRMLoadingContext {
+    let options: VRMLoadingOptions
+    let startTime: Date
+    var phaseStartTime: Date
+    var currentPhase: VRMLoadingPhase
+    var phaseProgress: Double
+    var lastProgressUpdate: Date
+    var totalItemsInPhase: Int
+    
+    init(options: VRMLoadingOptions) async {
+        self.options = options
+        self.startTime = Date()
+        self.phaseStartTime = Date()
+        self.currentPhase = .parsingGLTF
+        self.phaseProgress = 0.0
+        self.lastProgressUpdate = Date.distantPast
+        self.totalItemsInPhase = 0
+    }
+    
+    /// Check if loading should be cancelled.
+    func checkCancellation() throws {
+        guard options.enableCancellation else { return }
+        
+        if Task.isCancelled {
+            throw VRMError.loadingCancelled
+        }
+    }
+    
+    /// Update to a new loading phase.
+    func updatePhase(_ phase: VRMLoadingPhase, progress: Double = 0.0) async {
+        currentPhase = phase
+        phaseProgress = progress
+        phaseStartTime = Date()
+        
+        // Report progress on phase change
+        await reportProgressIfNeeded(force: true)
+    }
+    
+    /// Update to a new phase with item count.
+    func updatePhase(_ phase: VRMLoadingPhase, totalItems: Int) async {
+        currentPhase = phase
+        phaseProgress = 0.0
+        totalItemsInPhase = totalItems
+        phaseStartTime = Date()
+        
+        await reportProgressIfNeeded(force: true)
+    }
+    
+    /// Update progress within current phase.
+    func updateProgress(itemsCompleted: Int, totalItems: Int) async {
+        phaseProgress = totalItems > 0 ? Double(itemsCompleted) / Double(totalItems) : 0.0
+        await reportProgressIfNeeded()
+    }
+    
+    /// Report progress if enough time has elapsed or forced.
+    private func reportProgressIfNeeded(force: Bool = false) async {
+        let now = Date()
+        let timeSinceLastUpdate = now.timeIntervalSince(lastProgressUpdate)
+        
+        guard force || timeSinceLastUpdate >= options.progressUpdateInterval else {
+            return
+        }
+        
+        lastProgressUpdate = now
+        
+        // Calculate overall progress
+        let elapsedTime = now.timeIntervalSince(startTime)
+        let overallProgress = calculateOverallProgress()
+        
+        // Calculate estimated time remaining
+        var estimatedTimeRemaining: TimeInterval? = nil
+        if overallProgress > 0.01 {
+            let totalEstimatedTime = elapsedTime / overallProgress
+            estimatedTimeRemaining = totalEstimatedTime - elapsedTime
+        }
+        
+        let loadingProgress = VRMLoadingProgress(
+            currentPhase: currentPhase,
+            phaseProgress: phaseProgress,
+            overallProgress: overallProgress,
+            itemsCompleted: Int(Double(totalItemsInPhase) * phaseProgress),
+            totalItems: totalItemsInPhase,
+            elapsedTime: elapsedTime,
+            estimatedTimeRemaining: estimatedTimeRemaining,
+            operationDescription: "\(currentPhase.rawValue) (\(Int(phaseProgress * 100))%)"
+        )
+        
+        // Call the callback on the main actor
+        if let callback = options.progressCallback {
+            await MainActor.run {
+                callback(loadingProgress)
+            }
+        }
+    }
+    
+    /// Calculate overall progress based on phase weights.
+    private func calculateOverallProgress() -> Double {
+        var progress: Double = 0.0
+        var reachedCurrentPhase = false
+        
+        for phase in VRMLoadingPhase.allCases {
+            if phase == currentPhase {
+                progress += phase.weight * phaseProgress
+                reachedCurrentPhase = true
+                break
+            } else if !reachedCurrentPhase {
+                progress += phase.weight
+            }
+        }
+        
+        return min(progress, 1.0)
+    }
+}
+
+// MARK: - VRMError Extension
+
+// Note: VRMError.loadingCancelled is defined in VRMModel.swift
