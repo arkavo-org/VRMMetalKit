@@ -107,6 +107,12 @@ public class VRMModel: @unchecked Sendable {
     /// VRM 0.x MToon material properties stored at document level.
     public var vrm0MaterialProperties: [VRM0MaterialProperty] = []
 
+    /// Node constraints for twist bones and other constrained nodes.
+    ///
+    /// VRM 1.0 parses these from VRMC_node_constraint extension.
+    /// VRM 0.0 synthesizes constraints automatically from humanoid bone definitions.
+    public var nodeConstraints: [VRMNodeConstraint] = []
+
     // MARK: - glTF Data
 
     /// The underlying glTF document structure.

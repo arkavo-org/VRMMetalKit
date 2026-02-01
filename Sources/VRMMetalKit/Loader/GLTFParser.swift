@@ -122,6 +122,7 @@ public struct GLTFNode: Codable {
     public let mesh: Int?
     public let skin: Int?
     public let weights: [Float]?
+    public let extensions: [String: AnyCodable]?
 }
 
 public struct GLTFMesh: Codable {

@@ -62,6 +62,16 @@ public enum VRMHumanoidBone: String, CaseIterable, Sendable {
     case leftToes
     case rightToes
 
+    // Twist Bones (VRM 0.0/1.0)
+    case leftUpperArmTwist
+    case rightUpperArmTwist
+    case leftLowerArmTwist
+    case rightLowerArmTwist
+    case leftUpperLegTwist
+    case rightUpperLegTwist
+    case leftLowerLegTwist
+    case rightLowerLegTwist
+
     // Optional Head
     case leftEye
     case rightEye

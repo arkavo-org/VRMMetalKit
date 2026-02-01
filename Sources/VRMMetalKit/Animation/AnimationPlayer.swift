@@ -53,6 +53,7 @@ public final class AnimationPlayer: @unchecked Sendable {
     private var isPlaying = false
     private var currentMorphWeights: [String: Float] = [:]
     private var hasLoggedFirstFrame = false
+    private let constraintSolver = ConstraintSolver()
 
     public init() {}
 
@@ -171,7 +172,12 @@ public final class AnimationPlayer: @unchecked Sendable {
                 }
             }
 
-            // 4. Propagate World Transforms
+            // 4. Solve node constraints (twist bones, etc.)
+            if !model.nodeConstraints.isEmpty {
+                constraintSolver.solve(constraints: model.nodeConstraints, nodes: model.nodes)
+            }
+
+            // 5. Propagate World Transforms
             model.updateNodeTransforms()
 
             if debugFirstFrame {

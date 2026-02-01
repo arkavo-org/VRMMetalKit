@@ -91,7 +91,8 @@ final class AnimationTests: XCTestCase {
             scale: nil,
             mesh: nil,
             skin: nil,
-            weights: nil
+            weights: nil,
+            extensions: nil
         )
         return VRMNode(index: index, gltfNode: gltfNode)
     }
