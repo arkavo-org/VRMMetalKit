@@ -100,15 +100,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public var model: VRMModel?
 
     /// Model rotation correction for VRM coordinate system differences.
-    /// VRM 1.0 (glTF) models face +Z; VRM 0.0 (Unity) models face -Z.
-    /// Apply 180° Y rotation to VRM 1.0 models so they face the camera at -Z.
+    /// Standard camera setup: camera at +Z looking towards origin.
+    /// VRM 0.0 (Unity) models face -Z (away from camera) → need 180° Y rotation.
+    /// VRM 1.0 (glTF) models face +Z (towards camera) → no rotation needed.
     private var vrmVersionRotation: matrix_float4x4 {
         guard let model = model else { return matrix_identity_float4x4 }
         if model.isVRM0 {
-            return matrix_identity_float4x4
-        } else {
-            // VRM 1.0 faces +Z, rotate 180° around Y to face -Z (towards camera)
+            // VRM 0.0 faces -Z, rotate 180° around Y to face +Z (towards camera at +Z)
             return matrix_float4x4(simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0)))
+        } else {
+            // VRM 1.0 already faces +Z (towards camera at +Z), no rotation needed
+            return matrix_identity_float4x4
         }
     }
 
