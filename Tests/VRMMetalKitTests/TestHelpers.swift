@@ -200,6 +200,53 @@ func createMultiBoneRotationClip(
     return clip
 }
 
+// MARK: - Test Model Path Helpers
+
+/// Get the project root directory for test files
+/// Uses environment variable VRM_TEST_MODELS_PATH if set, otherwise falls back to auto-detection
+func getProjectRoot(filePath: String = #file) -> String {
+    // First, check for environment variable
+    if let envPath = ProcessInfo.processInfo.environment["VRM_TEST_MODELS_PATH"] {
+        return envPath
+    }
+    
+    // Auto-detect from package structure
+    let fileManager = FileManager.default
+    let candidates: [String?] = [
+        ProcessInfo.processInfo.environment["PROJECT_ROOT"],
+        ProcessInfo.processInfo.environment["SRCROOT"],
+        URL(fileURLWithPath: filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .path,
+        fileManager.currentDirectoryPath
+    ]
+    
+    for candidate in candidates.compactMap({ $0 }) {
+        let packagePath = "\(candidate)/Package.swift"
+        if fileManager.fileExists(atPath: packagePath) {
+            return candidate
+        }
+    }
+    return fileManager.currentDirectoryPath
+}
+
+/// Get path to a test model file
+/// Checks VRM_TEST_MODELS_PATH environment variable first, then falls back to project root
+func getTestModelPath(_ filename: String) -> String {
+    // First check environment variable for test models directory
+    if let envPath = ProcessInfo.processInfo.environment["VRM_TEST_MODELS_PATH"] {
+        let envFilePath = "\(envPath)/\(filename)"
+        if FileManager.default.fileExists(atPath: envFilePath) {
+            return envFilePath
+        }
+    }
+    
+    // Fall back to project root
+    return "\(getProjectRoot())/\(filename)"
+}
+
 // MARK: - Float Comparison Helpers
 
 /// Assert floats are approximately equal
