@@ -96,26 +96,27 @@ public class VRMMorphTargetSystem {
 
     private func setupComputePipeline() throws {
         // Try to load compute pipeline from compiled Metal library
-        // First try default library, then fall back to package resources
+        // First try package resources (Bundle.module), then fall back to default library
         var library: MTLLibrary?
 
-        if let defaultLib = device.makeDefaultLibrary() {
-            library = defaultLib
-            vrmLog("[VRMMorphTargetSystem] Using default Metal library")
-        } else if let url = Bundle.module.url(forResource: "VRMMetalKitShaders", withExtension: "metallib"),
-                  let packageLib = try? device.makeLibrary(URL: url) {
+        // Try package bundle first (for SPM packages)
+        if let url = Bundle.module.url(forResource: "VRMMetalKitShaders", withExtension: "metallib"),
+           let packageLib = try? device.makeLibrary(URL: url) {
             library = packageLib
             vrmLog("[VRMMorphTargetSystem] Using package Metal library (Bundle.module)")
+        } else if let defaultLib = device.makeDefaultLibrary() {
+            library = defaultLib
+            vrmLog("[VRMMorphTargetSystem] Using default Metal library")
         }
 
-        // Fail fast if no library available - JIT compilation is disabled for production
+        // Fail fast if no library available
         guard let validLibrary = library else {
             throw VRMMorphTargetError.failedToCreateComputePipeline(
                 "No Metal shader library available. " +
                 "Ensure VRMMetalKitShaders.metallib is included in the app bundle."
             )
         }
-        
+
         guard let function = validLibrary.makeFunction(name: "morph_accumulate_positions") else {
             throw VRMMorphTargetError.missingShaderFunction(
                 "morph_accumulate_positions not found in shader library. " +
@@ -404,7 +405,6 @@ public class VRMExpressionController: @unchecked Sendable {
 
     public func setExpressionWeight(_ preset: VRMExpressionPreset, weight: Float) {
         let clampedWeight = clamp(weight, min: 0, max: 1)
-        vrmLog("[VRMExpressionController] Setting expression \(preset) weight to \(clampedWeight)")
         currentWeights[preset] = clampedWeight
         updateMorphTargets()
     }

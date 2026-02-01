@@ -195,6 +195,11 @@ public class AnimationLayerCompositor {
         layers
     }
 
+    /// Get the current composited morph weights (for debugging/inspection)
+    public func getCompositedMorphs() -> [String: Float] {
+        compositedMorphs
+    }
+
     /// Update all layers and apply composited result to model
     public func update(deltaTime: Float, context: AnimationContext) {
         guard let model = model else { return }
