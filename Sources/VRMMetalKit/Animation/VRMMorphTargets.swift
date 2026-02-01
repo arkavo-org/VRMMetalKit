@@ -96,26 +96,27 @@ public class VRMMorphTargetSystem {
 
     private func setupComputePipeline() throws {
         // Try to load compute pipeline from compiled Metal library
-        // First try default library, then fall back to package resources
+        // First try package resources (Bundle.module), then fall back to default library
         var library: MTLLibrary?
 
-        if let defaultLib = device.makeDefaultLibrary() {
-            library = defaultLib
-            vrmLog("[VRMMorphTargetSystem] Using default Metal library")
-        } else if let url = Bundle.module.url(forResource: "VRMMetalKitShaders", withExtension: "metallib"),
-                  let packageLib = try? device.makeLibrary(URL: url) {
+        // Try package bundle first (for SPM packages)
+        if let url = Bundle.module.url(forResource: "VRMMetalKitShaders", withExtension: "metallib"),
+           let packageLib = try? device.makeLibrary(URL: url) {
             library = packageLib
             vrmLog("[VRMMorphTargetSystem] Using package Metal library (Bundle.module)")
+        } else if let defaultLib = device.makeDefaultLibrary() {
+            library = defaultLib
+            vrmLog("[VRMMorphTargetSystem] Using default Metal library")
         }
 
-        // Fail fast if no library available - JIT compilation is disabled for production
+        // Fail fast if no library available
         guard let validLibrary = library else {
             throw VRMMorphTargetError.failedToCreateComputePipeline(
                 "No Metal shader library available. " +
                 "Ensure VRMMetalKitShaders.metallib is included in the app bundle."
             )
         }
-        
+
         guard let function = validLibrary.makeFunction(name: "morph_accumulate_positions") else {
             throw VRMMorphTargetError.missingShaderFunction(
                 "morph_accumulate_positions not found in shader library. " +
@@ -406,13 +407,6 @@ public class VRMExpressionController: @unchecked Sendable {
         let clampedWeight = clamp(weight, min: 0, max: 1)
         currentWeights[preset] = clampedWeight
         updateMorphTargets()
-
-        // Debug: verify expression is registered and produces mesh weights
-        if clampedWeight > 0.01 {
-            let hasExpression = expressions[preset] != nil
-            let meshCount = meshMorphWeights.count
-            print("[VRMExpressionController] \(preset.rawValue)=\(String(format: "%.2f", clampedWeight)) registered=\(hasExpression) meshes=\(meshCount)")
-        }
     }
 
     public func setCustomExpressionWeight(_ name: String, weight: Float) {
@@ -571,19 +565,8 @@ public class VRMExpressionController: @unchecked Sendable {
     public func weightsForMesh(_ meshIndex: Int, morphCount: Int) -> [Float] {
         guard morphCount > 0 else { return [] }
         let arr = meshMorphWeights[meshIndex] ?? []
-        let result: [Float]
-        if arr.count >= morphCount {
-            result = Array(arr.prefix(morphCount))
-        } else {
-            result = arr + Array(repeating: 0.0, count: morphCount - arr.count)
-        }
-
-        // Debug: log non-zero weights
-        let nonZero = result.enumerated().filter { $0.element > 0.001 }
-        if !nonZero.isEmpty {
-            print("[VRMExpressionController] weightsForMesh(\(meshIndex)) non-zero: \(nonZero.map { "[\($0.offset)]=\(String(format: "%.2f", $0.element))" }.joined(separator: ", "))")
-        }
-        return result
+        if arr.count >= morphCount { return Array(arr.prefix(morphCount)) }
+        return arr + Array(repeating: 0.0, count: morphCount - arr.count)
     }
 
 

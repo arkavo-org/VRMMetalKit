@@ -2639,12 +2639,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     print("🔧 [VRMMetalKit] Rendering faceOverlay: \(item.materialName) with bias=\(bias), indices=\(primitive.indexCount)")
                     #endif
                     
-                    // DEBUG: Force OPAQUE mode to see if geometry is there
+                    // Force OPAQUE mode for faceOverlay
                     mtoonUniforms.alphaMode = 0  // OPAQUE
                     mtoonUniforms.alphaCutoff = 0.0
-                    #if DEBUG
-                    print("🔧 [VRMMetalKit] DEBUG: Forcing OPAQUE mode for faceOverlay")
-                    #endif
 
                 case "eyebrow", "eyeline":
                     // Face features render after skin - win via render order
