@@ -207,6 +207,7 @@ extension VRMRenderer {
             basePipelineDescriptor.fragmentFunction = fragmentFunc
             basePipelineDescriptor.vertexDescriptor = vertexDescriptor
             basePipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
+            basePipelineDescriptor.rasterSampleCount = config.sampleCount
 
             // Create OPAQUE/MASK pipeline (no blending)
             let opaqueDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
@@ -291,6 +292,7 @@ extension VRMRenderer {
                 outlineDescriptor.fragmentFunction = outlineFragmentFunc
                 outlineDescriptor.vertexDescriptor = vertexDescriptor
                 outlineDescriptor.depthAttachmentPixelFormat = .depth32Float
+                outlineDescriptor.rasterSampleCount = config.sampleCount
 
                 let outlineColorAttachment = outlineDescriptor.colorAttachments[0]
                 outlineColorAttachment?.pixelFormat = config.colorPixelFormat
@@ -420,6 +422,7 @@ extension VRMRenderer {
             basePipelineDescriptor.fragmentFunction = fragmentFunc
             basePipelineDescriptor.vertexDescriptor = vertexDescriptor
             basePipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
+            basePipelineDescriptor.rasterSampleCount = config.sampleCount
 
             // Create SKINNED OPAQUE/MASK pipeline (no blending)
             let skinnedOpaqueDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
@@ -487,6 +490,7 @@ extension VRMRenderer {
                 skinnedOutlineDescriptor.fragmentFunction = skinnedOutlineFragmentFunc
                 skinnedOutlineDescriptor.vertexDescriptor = vertexDescriptor
                 skinnedOutlineDescriptor.depthAttachmentPixelFormat = .depth32Float
+                skinnedOutlineDescriptor.rasterSampleCount = config.sampleCount
 
                 let skinnedOutlineColorAttachment = skinnedOutlineDescriptor.colorAttachments[0]
                 skinnedOutlineColorAttachment?.pixelFormat = config.colorPixelFormat
@@ -555,6 +559,7 @@ extension VRMRenderer {
             pipelineDescriptor.vertexFunction = vertexFunction
             pipelineDescriptor.fragmentFunction = fragmentFunction
             pipelineDescriptor.vertexDescriptor = vertexDescriptor
+            pipelineDescriptor.rasterSampleCount = config.sampleCount
 
             // Color attachment (BGRA8)
             pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm

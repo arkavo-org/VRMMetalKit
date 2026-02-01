@@ -283,45 +283,64 @@ struct VRMVideoRendererCLI {
         // Setup renderer
         print("🎨 Setting up renderer...")
         var config = RendererConfig()
-        config.sampleCount = 1  // No MSAA for video rendering
+        config.sampleCount = 4  // Enable 4x MSAA for alpha-to-coverage on MASK materials
         config.strict = .off
-        
+
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
-        
+
         // Set up lighting
-        renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85), 
+        renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
                           color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
         renderer.disableLight(1)
-        renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0), 
+        renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
                           color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
         renderer.setAmbientColor(SIMD3<Float>(0.03, 0.03, 0.05))
-        
-        // Create textures
+
+        // Create resolve texture (final output, non-multisampled)
         // Use BGRA format to match AVFoundation's pixel buffer format (kCVPixelFormatType_32BGRA)
-        let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+        let resolveDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm,
             width: options.width,
             height: options.height,
             mipmapped: false
         )
-        colorDescriptor.usage = [.renderTarget, .shaderRead]
-        colorDescriptor.storageMode = .managed
-        
-        guard let colorTexture = device.makeTexture(descriptor: colorDescriptor) else {
+        resolveDescriptor.usage = [.renderTarget, .shaderRead]
+        resolveDescriptor.storageMode = .managed
+
+        guard let resolveTexture = device.makeTexture(descriptor: resolveDescriptor) else {
             throw VideoRenderError.failedToCreateTexture
         }
-        
-        let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+
+        // Create multisample color texture for MSAA rendering
+        let msaaColorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm,
+            width: options.width,
+            height: options.height,
+            mipmapped: false
+        )
+        msaaColorDescriptor.textureType = .type2DMultisample
+        msaaColorDescriptor.sampleCount = config.sampleCount
+        msaaColorDescriptor.usage = .renderTarget
+        msaaColorDescriptor.storageMode = .private
+
+        guard let msaaColorTexture = device.makeTexture(descriptor: msaaColorDescriptor) else {
+            throw VideoRenderError.failedToCreateTexture
+        }
+
+        // Create multisample depth texture
+        let msaaDepthDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .depth32Float,
             width: options.width,
             height: options.height,
             mipmapped: false
         )
-        depthDescriptor.usage = .renderTarget
-        depthDescriptor.storageMode = .private
-        
-        guard let depthTexture = device.makeTexture(descriptor: depthDescriptor) else {
+        msaaDepthDescriptor.textureType = .type2DMultisample
+        msaaDepthDescriptor.sampleCount = config.sampleCount
+        msaaDepthDescriptor.usage = .renderTarget
+        msaaDepthDescriptor.storageMode = .private
+
+        guard let msaaDepthTexture = device.makeTexture(descriptor: msaaDepthDescriptor) else {
             throw VideoRenderError.failedToCreateTexture
         }
         
@@ -399,21 +418,22 @@ struct VRMVideoRendererCLI {
                     continue
                 }
                 
-                // Render pass
+                // Render pass with MSAA
                 let renderPassDescriptor = MTLRenderPassDescriptor()
-                renderPassDescriptor.colorAttachments[0].texture = colorTexture
+                renderPassDescriptor.colorAttachments[0].texture = msaaColorTexture
+                renderPassDescriptor.colorAttachments[0].resolveTexture = resolveTexture
                 renderPassDescriptor.colorAttachments[0].loadAction = .clear
                 renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1.0)
-                renderPassDescriptor.colorAttachments[0].storeAction = .store
-                renderPassDescriptor.depthAttachment.texture = depthTexture
+                renderPassDescriptor.colorAttachments[0].storeAction = .multisampleResolve
+                renderPassDescriptor.depthAttachment.texture = msaaDepthTexture
                 renderPassDescriptor.depthAttachment.loadAction = .clear
                 renderPassDescriptor.depthAttachment.clearDepth = 1.0
                 renderPassDescriptor.depthAttachment.storeAction = .dontCare
-                
-                // Draw
+
+                // Draw to MSAA texture (resolves to resolveTexture)
                 renderer.drawOffscreenHeadless(
-                    to: colorTexture,
-                    depth: depthTexture,
+                    to: msaaColorTexture,
+                    depth: msaaDepthTexture,
                     commandBuffer: commandBuffer,
                     renderPassDescriptor: renderPassDescriptor
                 )
@@ -425,8 +445,8 @@ struct VRMVideoRendererCLI {
                     await Task.yield()
                 }
                 
-                // Copy to pixel buffer (CPU readback)
-                copyTextureToPixelBuffer(colorTexture, to: pixelBuffer, device: device, commandBuffer: commandBuffer)
+                // Copy resolved texture to pixel buffer (CPU readback)
+                copyTextureToPixelBuffer(resolveTexture, to: pixelBuffer, device: device, commandBuffer: commandBuffer)
                 
                 // Append frame
                 let presentationTime = CMTimeMultiply(frameDuration, multiplier: Int32(frameIndex))
