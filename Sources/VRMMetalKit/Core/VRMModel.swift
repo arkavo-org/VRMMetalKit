@@ -1056,6 +1056,110 @@ public class VRMModel: @unchecked Sendable {
         }
         vrmLog(String(repeating: "=", count: 80) + "\n")
     }
+
+    // MARK: - Convenience Methods for Bone Manipulation
+
+    /// Sets the local rotation for a specific humanoid bone.
+    ///
+    /// This is a convenience method for directly manipulating bone rotations. The rotation
+    /// is applied in the bone's local space (relative to its parent).
+    ///
+    /// - Parameters:
+    ///   - rotation: The quaternion rotation to apply in local space
+    ///   - bone: The humanoid bone to rotate (e.g., `.leftUpperArm`, `.head`)
+    ///
+    /// ## Example
+    /// ```swift
+    /// // Rotate the head to look left
+    /// let rotation = simd_quatf(angle: Float.pi/4, axis: SIMD3<Float>(0, 1, 0))
+    /// model.setLocalRotation(rotation, for: .head)
+    /// ```
+    public func setLocalRotation(_ rotation: simd_quatf, for bone: VRMHumanoidBone) {
+        guard let humanoid = humanoid,
+              let nodeIndex = humanoid.getBoneNode(bone),
+              nodeIndex < nodes.count else {
+            vrmLog("[VRMModel] Warning: Cannot set rotation for bone \(bone) - bone not found")
+            return
+        }
+        
+        withLock {
+            nodes[nodeIndex].rotation = rotation
+            nodes[nodeIndex].updateLocalMatrix()
+        }
+    }
+
+    /// Gets the local rotation for a specific humanoid bone.
+    ///
+    /// - Parameter bone: The humanoid bone to query (e.g., `.leftUpperArm`, `.head`)
+    /// - Returns: The current local rotation quaternion, or `nil` if the bone doesn't exist
+    ///
+    /// ## Example
+    /// ```swift
+    /// // Get current head rotation
+    /// if let currentRotation = model.getLocalRotation(for: .head) {
+    ///     print("Head is rotated: \(currentRotation)")
+    /// }
+    /// ```
+    public func getLocalRotation(for bone: VRMHumanoidBone) -> simd_quatf? {
+        guard let humanoid = humanoid,
+              let nodeIndex = humanoid.getBoneNode(bone),
+              nodeIndex < nodes.count else {
+            return nil
+        }
+        
+        return withLock {
+            nodes[nodeIndex].rotation
+        }
+    }
+
+    /// Sets the translation of the hips bone.
+    ///
+    /// This is commonly used for root motion - moving the character's entire body
+    /// through the scene. The hips is the root of the humanoid skeleton.
+    ///
+    /// - Parameter translation: The translation vector in local space (typically relative to parent)
+    ///
+    /// ## Example
+    /// ```swift
+    /// // Move character up by 1 unit (jump)
+    /// model.setHipsTranslation(SIMD3<Float>(0, 1, 0))
+    /// ```
+    public func setHipsTranslation(_ translation: simd_float3) {
+        guard let humanoid = humanoid,
+              let hipsIndex = humanoid.getBoneNode(.hips),
+              hipsIndex < nodes.count else {
+            vrmLog("[VRMModel] Warning: Cannot set hips translation - hips bone not found")
+            return
+        }
+        
+        withLock {
+            nodes[hipsIndex].translation = translation
+            nodes[hipsIndex].updateLocalMatrix()
+        }
+    }
+
+    /// Gets the current translation of the hips bone.
+    ///
+    /// - Returns: The current hips translation in local space, or `nil` if hips bone doesn't exist
+    ///
+    /// ## Example
+    /// ```swift
+    /// // Get current hips position
+    /// if let hipsPos = model.getHipsTranslation() {
+    ///     print("Character is at: \(hipsPos)")
+    /// }
+    /// ```
+    public func getHipsTranslation() -> simd_float3? {
+        guard let humanoid = humanoid,
+              let hipsIndex = humanoid.getBoneNode(.hips),
+              hipsIndex < nodes.count else {
+            return nil
+        }
+        
+        return withLock {
+            nodes[hipsIndex].translation
+        }
+    }
 }
 
 // MARK: - Supporting Classes

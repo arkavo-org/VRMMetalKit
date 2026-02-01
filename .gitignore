@@ -4,7 +4,7 @@
 xcuserdata/
 DerivedData/
 .swiftpm/configuration/registries.json
-.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspata
 .netrc
 *.log
 *.vrm
@@ -13,3 +13,8 @@ DerivedData/
 tmp/
 .arkavo/
 *.metallib
+
+# Test model symlinks (use ENV VAR instead)
+/Seed-san.vrm
+/VRM1_Constraint_Twist_Sample.vrm
+/AliciaSolid.vrm

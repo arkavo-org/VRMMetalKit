@@ -281,7 +281,15 @@ public enum VRMAnimationLoader {
             }
 
             let sampler = makeExpressionWeightSampler(track: translationTrack)
+            
+            // Add as both morph track (for backward compatibility) and expression track
             clip.addMorphTrack(key: expressionName, sample: sampler)
+            
+            // Also add to expression tracks if it's a known preset
+            if let preset = VRMExpressionPreset(rawValue: expressionName) {
+                let expressionTrack = ExpressionTrack(expression: preset, sampler: sampler)
+                clip.addExpressionTrack(expressionTrack)
+            }
 
             #if DEBUG
             vrmLogLoader("[VRMAnimationLoader] Added expression track '\(expressionName)' from node \(nodeIndex)")

@@ -23,6 +23,7 @@ public struct AnimationClip {
     public var jointTracks: [JointTrack] = []
     public var morphTracks: [MorphTrack] = []
     public var nodeTracks: [NodeTrack] = []  // For non-humanoid nodes (hair, bust, accessories)
+    public var expressionTracks: [ExpressionTrack] = []  // VRM expression animation tracks
 
     public init(duration: Float) {
         self.duration = duration
@@ -61,6 +62,10 @@ public struct AnimationClip {
     public mutating func addMorphTrack(key: String, sample: @escaping (Float) -> Float) {
         morphTracks.append(MorphTrack(key: key, sampler: sample))
     }
+
+    public mutating func addExpressionTrack(_ track: ExpressionTrack) {
+        expressionTracks.append(track)
+    }
 }
 
 public struct JointTrack {
@@ -96,6 +101,22 @@ public struct MorphTrack {
 
     public init(key: String, sampler: @escaping (Float) -> Float) {
         self.key = key
+        self.sampler = sampler
+    }
+
+    public func sample(at time: Float) -> Float {
+        return sampler(time)
+    }
+}
+
+/// Track for VRM expression animation (facial expressions, etc.)
+/// Maps to VRMExpressionPreset for standardized expression names
+public struct ExpressionTrack {
+    public let expression: VRMExpressionPreset
+    public let sampler: (Float) -> Float
+
+    public init(expression: VRMExpressionPreset, sampler: @escaping (Float) -> Float) {
+        self.expression = expression
         self.sampler = sampler
     }
 
