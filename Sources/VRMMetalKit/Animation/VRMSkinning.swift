@@ -24,6 +24,7 @@ import simd
 public class VRMSkinningSystem {
     private let device: MTLDevice
     public var jointMatricesBuffer: MTLBuffer?  // Made public for debugging/validation
+    public var dualQuaternionBuffer: MTLBuffer?  // For dual quaternion skinning
     private var totalMatrixCount = 0
     private var lastUpdatedSkinIndex: Int? = nil  // Cache to avoid redundant updates
     private var debugFrameCount = 0
@@ -130,12 +131,26 @@ public class VRMSkinningSystem {
         jointMatricesBuffer = device.makeBuffer(length: totalBufferSize, options: .storageModeShared)
         vrmLog("[SKINNING] Allocated buffer for \(totalMatrixCount) matrices (padded to \(paddedMatrixCount), \(totalBufferSize) bytes)")
 
+        // Allocate dual quaternion buffer (32 bytes per joint)
+        let dqSize = MemoryLayout<DualQuaternion>.stride  // 32 bytes
+        let totalDQBufferSize = paddedMatrixCount * dqSize
+        dualQuaternionBuffer = device.makeBuffer(length: totalDQBufferSize, options: .storageModeShared)
+        vrmLog("[SKINNING] Allocated DQ buffer for \(totalMatrixCount) dual quaternions (padded to \(paddedMatrixCount), \(totalDQBufferSize) bytes)")
+
         // Initialize ALL matrices to identity to prevent garbage reads
         // This includes padding matrices that may be accessed by clamped garbage indices
         if let buffer = jointMatricesBuffer {
             let pointer = buffer.contents().bindMemory(to: float4x4.self, capacity: paddedMatrixCount)
             for i in 0..<paddedMatrixCount {
                 pointer[i] = float4x4(1)  // Identity matrix
+            }
+        }
+
+        // Initialize DQ buffer to identity dual quaternions
+        if let buffer = dualQuaternionBuffer {
+            let pointer = buffer.contents().bindMemory(to: DualQuaternion.self, capacity: paddedMatrixCount)
+            for i in 0..<paddedMatrixCount {
+                pointer[i] = .identity
             }
         }
     }
@@ -452,8 +467,41 @@ public class VRMSkinningSystem {
         }
     }
 
+    /// Update dual quaternion buffer for a skin (for DQS skinning mode)
+    ///
+    /// Must be called after updateJointMatrices so world transforms are current.
+    public func updateDualQuaternions(for skin: VRMSkin, skinIndex: Int) {
+        guard let buffer = dualQuaternionBuffer else { return }
+
+        var dualQuats: [DualQuaternion] = []
+        dualQuats.reserveCapacity(skin.joints.count)
+
+        for (index, joint) in skin.joints.enumerated() {
+            let worldMatrix = joint.worldMatrix
+            let inverseBindMatrix = skin.inverseBindMatrices[index]
+            let skinMatrix = worldMatrix * inverseBindMatrix
+
+            // Convert skin matrix to dual quaternion
+            dualQuats.append(DualQuaternion(matrix: skinMatrix))
+        }
+
+        // Calculate byte offset for this skin (same layout as matrix buffer)
+        let dqStride = MemoryLayout<DualQuaternion>.stride
+        let byteOffset = skin.matrixOffset * dqStride
+
+        // Write to buffer at the correct offset
+        let pointer = buffer.contents().advanced(by: byteOffset).bindMemory(to: DualQuaternion.self, capacity: skin.joints.count)
+        for (i, dq) in dualQuats.enumerated() {
+            pointer[i] = dq
+        }
+    }
+
     public func getJointMatricesBuffer() -> MTLBuffer? {
         return jointMatricesBuffer
+    }
+
+    public func getDualQuaternionBuffer() -> MTLBuffer? {
+        return dualQuaternionBuffer
     }
 
     public func getBufferOffset(for skin: VRMSkin) -> Int {

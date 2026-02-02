@@ -37,6 +37,14 @@ public enum RenderFilter: Sendable {
     case primitive(Int)
 }
 
+/// Skinning algorithm for vertex transformation
+public enum SkinningMode: Sendable {
+    /// Linear Blend Skinning (default) - fast but causes volume loss
+    case linearBlend
+    /// Dual Quaternion Skinning - volume-preserving but slightly more expensive
+    case dualQuaternion
+}
+
 /// Renderer configuration including strict mode settings
 public struct RendererConfig {
     /// Strict mode level for validation
@@ -77,7 +85,12 @@ public struct RendererConfig {
     /// Higher values push coplanar surfaces further apart in depth buffer
     public var depthBiasScale: Float = 1.0
 
-    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0) {
+    /// Skinning algorithm for vertex transformation
+    /// - `.linearBlend`: Traditional matrix blending (default)
+    /// - `.dualQuaternion`: Volume-preserving quaternion blending
+    public var skinningMode: SkinningMode = .linearBlend
+
+    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, skinningMode: SkinningMode = .linearBlend) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
         self.renderFilter = renderFilter
@@ -86,6 +99,7 @@ public struct RendererConfig {
         self.testIdentityPalette = testIdentityPalette
         self.sampleCount = sampleCount
         self.depthBiasScale = depthBiasScale
+        self.skinningMode = skinningMode
     }
 }
 
@@ -231,6 +245,8 @@ public struct ResourceIndices {
     public static let hasMorphedPositionsFlag = 22
     // Joint matrices - moved to high index to avoid argument table collision
     public static let jointMatricesBuffer = 25
+    // Dual quaternions for DQS skinning (32 bytes per joint)
+    public static let dualQuaternionsBuffer = 26
 
     // Fragment shader buffer indices
     public static let materialUniforms = 0

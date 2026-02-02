@@ -1222,6 +1222,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("[SKINNING] Updating \(skin.joints.count) joint matrices for skin \(skinIndex) at offset \(skin.matrixOffset)")
                 skinningSystem?.updateJointMatrices(for: skin, skinIndex: skinIndex)
 
+                // Update dual quaternions if in DQS mode
+                if config.skinningMode == .dualQuaternion {
+                    skinningSystem?.updateDualQuaternions(for: skin, skinIndex: skinIndex)
+                }
+
                 // PHASE 1 VALIDATION: GPU readback check (every 60 frames)
                 if frameCounter % 60 == 0 && skinIndex == 0 {
                     vrmLog("\n═══ PHASE 1: GPU VALIDATION ═══")
@@ -2017,7 +2022,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             // Log which PSO is being used - CRITICAL for debugging
             if frameCounter < 2 {
-                vrmLog("[PSO] Setting pipeline: \(pipeline.label ?? "UNKNOWN")")
+                print("[PSO] Frame \(frameCounter): Setting pipeline: \(pipeline.label ?? "UNKNOWN") for \(item.materialName)")
             }
             encoder.setRenderPipelineState(pipeline)
 
@@ -2191,6 +2196,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
 
                         encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
+
+                        // Bind dual quaternion buffer for DQS skinning mode
+                        if config.skinningMode == .dualQuaternion,
+                           let dqBuffer = skinningSystem?.getDualQuaternionBuffer() {
+                            // DQ buffer uses same offset calculation (32 bytes per joint vs 64 for matrices)
+                            let dqByteOffset = skin.matrixOffset * MemoryLayout<DualQuaternion>.stride
+                            encoder.setVertexBuffer(dqBuffer, offset: dqByteOffset, index: ResourceIndices.dualQuaternionsBuffer)
+                        }
                     }
                 } else {
                     // Skin index is out of range - this shouldn't happen
@@ -3378,6 +3391,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if let jointBuffer = skinningSystem?.getJointMatricesBuffer() {
                     let byteOffset = skin.matrixOffset * MemoryLayout<float4x4>.stride
                     encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
+
+                    // Bind dual quaternion buffer for DQS skinning mode
+                    if config.skinningMode == .dualQuaternion,
+                       let dqBuffer = skinningSystem?.getDualQuaternionBuffer() {
+                        let dqByteOffset = skin.matrixOffset * MemoryLayout<DualQuaternion>.stride
+                        encoder.setVertexBuffer(dqBuffer, offset: dqByteOffset, index: ResourceIndices.dualQuaternionsBuffer)
+                    }
                 }
             }
 

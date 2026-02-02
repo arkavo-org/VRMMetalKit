@@ -16,6 +16,7 @@
 
 
 #include <metal_stdlib>
+#include "DualQuaternionSkinning.metal"
 using namespace metal;
 
 struct Uniforms {
@@ -479,4 +480,204 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.color = in.color;
 
  return out;
+}
+
+// MARK: - Dual Quaternion Skinning Vertex Shaders
+
+// DQS variant of skinned_mtoon_vertex - volume-preserving skinning
+vertex VertexOut skinned_mtoon_vertex_dqs(VertexIn in [[stage_in]],
+                                           constant Uniforms& uniforms [[buffer(1)]],
+                                           constant MToonMaterial& material [[buffer(8)]],
+                                           device const DualQuaternion* dualQuaternions [[buffer(26)]],
+                                           device float3* morphedPositions [[buffer(20)]],
+                                           constant uint& hasMorphed [[buffer(22)]],
+                                           uint vertexID [[vertex_id]]) {
+    VertexOut out;
+
+    // Use morphed positions if available, otherwise use original
+    float3 basePosition;
+    if (hasMorphed > 0) {
+        basePosition = float3(morphedPositions[vertexID]);
+    } else {
+        basePosition = in.position;
+    }
+
+    // Blend dual quaternions with safe bounds checking
+    uint maxJoint = 255;
+    DualQuaternion blendedDQ = dq_blend_safe(dualQuaternions, in.joints, in.weights, maxJoint);
+
+    // Transform position and normal using dual quaternion
+    float3 skinnedPosition = dq_transform_point(blendedDQ, basePosition);
+    float3 skinnedNormal = dq_transform_normal(blendedDQ, in.normal);
+
+    // Sanity check for NaN/Inf only (extreme check disabled for balloon test)
+    bool posHasNaN = any(isnan(skinnedPosition)) || any(isinf(skinnedPosition));
+    bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
+    if (posHasNaN || normalHasNaN) {
+        skinnedPosition = basePosition;
+        skinnedNormal = in.normal;
+    }
+    skinnedNormal = normalize(skinnedNormal);
+
+    // Transform to world space
+    float4 worldPos = uniforms.modelMatrix * float4(skinnedPosition, 1.0);
+    out.worldPosition = worldPos.xyz;
+
+    // Transform normal to world space
+    out.worldNormal = normalize((uniforms.normalMatrix * float4(skinnedNormal, 0.0)).xyz);
+
+    // Transform to clip space
+    float4 viewPosition = uniforms.viewMatrix * worldPos;
+    out.position = uniforms.projectionMatrix * viewPosition;
+
+    // Calculate view direction
+    float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                      uniforms.viewMatrix[1].xyz,
+                                      uniforms.viewMatrix[2].xyz);
+    float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+    out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
+
+    // Calculate view-space normal for MatCap
+    out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
+
+    // Pass through texture coordinates and vertex color
+    out.texCoord = in.texCoord;
+    out.animatedTexCoord = in.texCoord;
+    out.color = in.color;
+
+    return out;
+}
+
+// DQS variant of simplified skinned vertex shader
+vertex VertexOut skinned_vertex_dqs(VertexIn in [[stage_in]],
+                                     constant Uniforms& uniforms [[buffer(1)]],
+                                     device const DualQuaternion* dualQuaternions [[buffer(26)]],
+                                     uint vertexID [[vertex_id]]) {
+    VertexOut out;
+
+    // Blend dual quaternions with safe bounds checking
+    uint maxJoint = 255;
+    DualQuaternion blendedDQ = dq_blend_safe(dualQuaternions, in.joints, in.weights, maxJoint);
+
+    // Transform position and normal using dual quaternion
+    float3 skinnedPosition = dq_transform_point(blendedDQ, in.position);
+    float3 skinnedNormal = dq_transform_normal(blendedDQ, in.normal);
+
+    // Sanity check for NaN/Inf only (removed extreme check for DQS)
+    bool posHasNaN = any(isnan(skinnedPosition)) || any(isinf(skinnedPosition));
+    bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
+    if (posHasNaN || normalHasNaN) {
+        skinnedPosition = in.position;
+        skinnedNormal = in.normal;
+    }
+    skinnedNormal = normalize(skinnedNormal);
+
+    // Transform to world space
+    float4 worldPos = uniforms.modelMatrix * float4(skinnedPosition, 1.0);
+    out.worldPosition = worldPos.xyz;
+
+    // Transform normal to world space
+    out.worldNormal = normalize((uniforms.normalMatrix * float4(skinnedNormal, 0.0)).xyz);
+
+    // Transform to clip space
+    float4 viewPosition = uniforms.viewMatrix * worldPos;
+    out.position = uniforms.projectionMatrix * viewPosition;
+
+    // Calculate view direction
+    float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                      uniforms.viewMatrix[1].xyz,
+                                      uniforms.viewMatrix[2].xyz);
+    float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+    out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
+
+    // Calculate view-space normal for MatCap
+    out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
+
+    // Pass through texture coordinates and vertex color
+    out.texCoord = in.texCoord;
+    out.animatedTexCoord = in.texCoord;
+    out.color = in.color;
+
+    return out;
+}
+
+// DQS variant of outline vertex shader
+vertex VertexOut skinned_mtoon_outline_vertex_dqs(VertexIn in [[stage_in]],
+                                                   constant Uniforms& uniforms [[buffer(1)]],
+                                                   constant MToonMaterial& material [[buffer(8)]],
+                                                   device const DualQuaternion* dualQuaternions [[buffer(26)]]) {
+    VertexOut out;
+
+    // Blend dual quaternions with safe bounds checking
+    uint maxJoint = 255;
+    DualQuaternion blendedDQ = dq_blend_safe(dualQuaternions, in.joints, in.weights, maxJoint);
+
+    // Transform position and normal using dual quaternion
+    float3 skinnedPosition = dq_transform_point(blendedDQ, in.position);
+    float3 skinnedNormal = dq_transform_normal(blendedDQ, in.normal);
+
+    // Sanity check for NaN/Inf only
+    bool posHasNaN = any(isnan(skinnedPosition)) || any(isinf(skinnedPosition));
+    bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
+    if (posHasNaN || normalHasNaN) {
+        skinnedPosition = in.position;
+        skinnedNormal = in.normal;
+    }
+    skinnedNormal = normalize(skinnedNormal);
+
+    // Transform to world space
+    float4 worldPos = uniforms.modelMatrix * float4(skinnedPosition, 1.0);
+    float3 worldNormal = normalize((uniforms.normalMatrix * float4(skinnedNormal, 0.0)).xyz);
+
+    // Get outline width from material
+    float outlineWidth = material.outlineWidthFactor;
+
+    // Extract camera world position
+    float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                      uniforms.viewMatrix[1].xyz,
+                                      uniforms.viewMatrix[2].xyz);
+    float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+    float3 viewDir = normalize(cameraWorldPos - worldPos.xyz);
+
+    // Apply outline extrusion
+    if (material.outlineMode == 1) {
+        // World coordinates
+        float distanceScale = length(worldPos.xyz - cameraWorldPos) * 0.01;
+        worldPos.xyz += worldNormal * outlineWidth * distanceScale;
+    } else if (material.outlineMode == 2) {
+        // Screen coordinates
+        float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
+        float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
+        float2 screenNormal = normalize(viewNormal.xy);
+        float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
+        float2 offsetNDC = screenNormal * outlineWidth * pixelsToNDC;
+        clipPos.xy += offsetNDC * clipPos.w;
+        out.position = clipPos;
+        out.worldPosition = worldPos.xyz;
+        out.worldNormal = worldNormal;
+        out.viewDirection = viewDir;
+        out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
+        out.texCoord = in.texCoord;
+        out.animatedTexCoord = in.texCoord;
+        out.color = in.color;
+        return out;
+    }
+
+    out.worldPosition = worldPos.xyz;
+    out.worldNormal = worldNormal;
+
+    // Transform to clip space
+    float4 viewPosition = uniforms.viewMatrix * worldPos;
+    out.position = uniforms.projectionMatrix * viewPosition;
+
+    // Calculate view direction and view normal
+    out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
+    out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
+
+    // Pass through texture coordinates and vertex color
+    out.texCoord = in.texCoord;
+    out.animatedTexCoord = in.texCoord;
+    out.color = in.color;
+
+    return out;
 }

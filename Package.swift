@@ -42,7 +42,8 @@ let package = Package(
                 "Shaders/DebugShaders.metal",
                 "Shaders/MToonShader.metal",
                 "Shaders/SkinnedShader.metal",
-                "Shaders/SpriteShader.metal"
+                "Shaders/SpriteShader.metal",
+                "Shaders/DualQuaternionSkinning.metal"
             ],
             resources: [
                 .copy("Resources/VRMMetalKitShaders.metallib")
@@ -62,6 +63,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "VRMVideoRenderer",
+            dependencies: ["VRMMetalKit"]
+        ),
+        .executableTarget(
+            name: "VRMVisualRegression",
             dependencies: ["VRMMetalKit"]
         ),
         .testTarget(

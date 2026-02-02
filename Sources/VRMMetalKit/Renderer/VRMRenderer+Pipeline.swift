@@ -479,6 +479,71 @@ extension VRMRenderer {
             skinnedMaskAlphaToCoveragePipelineState = skinnedMaskA2CState
             vrmLog("[SKINNED PSO] Created skinned MASK alpha-to-coverage pipeline")
 
+            // Create Dual Quaternion Skinning (DQS) pipeline variants
+            // These use volume-preserving skinning instead of LBS
+            if config.skinningMode == .dualQuaternion {
+                let dqsVertexFunction = library.makeFunction(name: "skinned_mtoon_vertex_dqs")
+                if let dqsVertexFunc = dqsVertexFunction {
+                    // DQS Opaque
+                    let dqsOpaqueDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
+                    dqsOpaqueDescriptor.label = "mtoon_skinned_dqs_opaque"
+                    dqsOpaqueDescriptor.vertexFunction = dqsVertexFunc
+                    let dqsOpaqueColorAttachment = dqsOpaqueDescriptor.colorAttachments[0]
+                    dqsOpaqueColorAttachment?.pixelFormat = config.colorPixelFormat
+                    dqsOpaqueColorAttachment?.isBlendingEnabled = false
+
+                    let dqsOpaqueState = try VRMPipelineCache.shared.getPipelineState(
+                        device: device,
+                        descriptor: dqsOpaqueDescriptor,
+                        key: "mtoon_skinned_dqs_opaque"
+                    )
+                    // Override the standard skinned pipelines with DQS versions
+                    skinnedOpaquePipelineState = dqsOpaqueState
+                    vrmLog("[DQS] Created DQS opaque pipeline - overriding standard LBS pipeline")
+
+                    // DQS Blend
+                    let dqsBlendDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
+                    dqsBlendDescriptor.label = "mtoon_skinned_dqs_blend"
+                    dqsBlendDescriptor.vertexFunction = dqsVertexFunc
+                    let dqsBlendColorAttachment = dqsBlendDescriptor.colorAttachments[0]
+                    dqsBlendColorAttachment?.pixelFormat = config.colorPixelFormat
+                    dqsBlendColorAttachment?.isBlendingEnabled = true
+                    dqsBlendColorAttachment?.sourceRGBBlendFactor = .sourceAlpha
+                    dqsBlendColorAttachment?.destinationRGBBlendFactor = .oneMinusSourceAlpha
+                    dqsBlendColorAttachment?.rgbBlendOperation = .add
+                    dqsBlendColorAttachment?.sourceAlphaBlendFactor = .sourceAlpha
+                    dqsBlendColorAttachment?.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+                    dqsBlendColorAttachment?.alphaBlendOperation = .add
+
+                    let dqsBlendState = try VRMPipelineCache.shared.getPipelineState(
+                        device: device,
+                        descriptor: dqsBlendDescriptor,
+                        key: "mtoon_skinned_dqs_blend"
+                    )
+                    skinnedBlendPipelineState = dqsBlendState
+                    vrmLog("[DQS] Created DQS blend pipeline")
+
+                    // DQS MASK A2C
+                    let dqsMaskA2CDescriptor = basePipelineDescriptor.copy() as! MTLRenderPipelineDescriptor
+                    dqsMaskA2CDescriptor.label = "mtoon_skinned_dqs_mask_a2c"
+                    dqsMaskA2CDescriptor.vertexFunction = dqsVertexFunc
+                    dqsMaskA2CDescriptor.isAlphaToCoverageEnabled = true
+                    let dqsMaskA2CColorAttachment = dqsMaskA2CDescriptor.colorAttachments[0]
+                    dqsMaskA2CColorAttachment?.pixelFormat = config.colorPixelFormat
+                    dqsMaskA2CColorAttachment?.isBlendingEnabled = false
+
+                    let dqsMaskA2CState = try VRMPipelineCache.shared.getPipelineState(
+                        device: device,
+                        descriptor: dqsMaskA2CDescriptor,
+                        key: "mtoon_skinned_dqs_mask_a2c"
+                    )
+                    skinnedMaskAlphaToCoveragePipelineState = dqsMaskA2CState
+                    vrmLog("[DQS] Created DQS MASK A2C pipeline")
+                } else {
+                    vrmLog("[DQS] Warning: skinned_mtoon_vertex_dqs function not found - falling back to LBS")
+                }
+            }
+
             // Create SKINNED MToon OUTLINE pipeline (inverted hull technique)
             let skinnedOutlineVertexFunction = library.makeFunction(name: "skinned_mtoon_outline_vertex")
             let skinnedOutlineFragmentFunction = library.makeFunction(name: "mtoon_outline_fragment")

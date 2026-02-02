@@ -87,6 +87,8 @@ func printUsage() {
         --ortho                 Use orthographic projection
         --hevc                  Use HEVC codec instead of H.264
         --root-motion           Enable root motion (hips translation)
+        --dqs                   Use Dual Quaternion Skinning (volume-preserving)
+        --side-view             Rotate model 90° so arms are perpendicular to camera
         --help                  Show this help message
     
     EXAMPLES:
@@ -112,6 +114,8 @@ struct RenderOptions {
     var rootMotion: Bool = false
     var handednessFix: Bool = true  // Enable by default
     var containerRotation: Bool = true  // Enable by default to fix "lying down" issue
+    var dualQuaternionSkinning: Bool = false  // Use DQS instead of LBS
+    var sideView: Bool = false  // Rotate model 90° so arms are perpendicular to camera
 }
 
 func parseArguments() -> RenderOptions? {
@@ -166,6 +170,10 @@ func parseArguments() -> RenderOptions? {
             options.hevc = true
         case "--root-motion":
             options.rootMotion = true
+        case "--dqs":
+            options.dualQuaternionSkinning = true
+        case "--side-view":
+            options.sideView = true
         default:
             break
         }
@@ -286,8 +294,31 @@ struct VRMVideoRendererCLI {
         config.sampleCount = 4  // Enable 4x MSAA for alpha-to-coverage on MASK materials
         config.strict = .off
 
+        // Enable Dual Quaternion Skinning if requested
+        if options.dualQuaternionSkinning {
+            // Clear pipeline cache to ensure fresh DQS pipelines are created
+            VRMPipelineCache.shared.clearCache()
+            config.skinningMode = .dualQuaternion
+            print("   🦴 Skinning: Dual Quaternion (volume-preserving)")
+        } else {
+            print("   🦴 Skinning: Linear Blend (default)")
+        }
+
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
+
+        // Apply side-view rotation if requested (rotate 90° Y so arms are perpendicular to camera)
+        if options.sideView {
+            print("   🔄 Side view: Rotating model 90° around Y axis")
+            let sideViewRotation = simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(0, 1, 0))
+            for node in model.nodes where node.parent == nil {
+                node.rotation = simd_mul(sideViewRotation, node.rotation)
+                node.updateLocalMatrix()
+            }
+            for node in model.nodes where node.parent == nil {
+                node.updateWorldTransform()
+            }
+        }
 
         // Set up lighting
         renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
