@@ -2641,9 +2641,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     print("🔧 [VRMMetalKit] Rendering faceOverlay: \(item.materialName) with bias=\(bias), indices=\(primitive.indexCount)")
                     #endif
                     
-                    // Force OPAQUE mode for faceOverlay
-                    mtoonUniforms.alphaMode = 0  // OPAQUE
-                    mtoonUniforms.alphaCutoff = 0.0
+                    // Face overlays use MASK mode for proper alpha cutout
+                    // This allows mouth/lip shapes to be properly masked without
+                    // edge artifacts from OPAQUE mode blending
 
                 case "eyebrow", "eyeline":
                     // Face features render after skin - win via render order
