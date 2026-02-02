@@ -23,6 +23,7 @@ import simd
 public enum VRMSpecVersion: String {
     case v0_0 = "0.0"
     case v1_0 = "1.0"
+    case v1_1 = "1.1"
 }
 
 // MARK: - Humanoid Bones

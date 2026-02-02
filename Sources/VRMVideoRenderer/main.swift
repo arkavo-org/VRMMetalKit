@@ -394,10 +394,10 @@ struct VRMVideoRendererCLI {
                         up: SIMD3<Float>(0, 1, 0)
                     )
                 } else {
-                    // Standard camera setup: at +Z looking towards -Z
-                    // VRM models (after vrmVersionRotation) face -Z towards this camera
+                    // Standard camera setup: at -Z looking towards +Z
+                    // VRM 1.0 models face +Z, so camera at -Z sees the front
                     renderer.viewMatrix = lookAt(
-                        eye: SIMD3<Float>(0, 1, 3),
+                        eye: SIMD3<Float>(0, 1, -3),
                         center: SIMD3<Float>(0, 1, 0),
                         up: SIMD3<Float>(0, 1, 0)
                     )

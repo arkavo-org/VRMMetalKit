@@ -15,6 +15,8 @@
 6. **Commit:** Git commit with clear message.
 7. **Push & PR:** Push branch and create PR referencing the issue (e.g., "Fixes #123").
 
+do not put temporary contextual/informational comments in code or CLAUDE.md
+
 ## Build & Test Commands
 
 ### Core Commands
@@ -46,49 +48,10 @@ make shaders      # Compiles to Resources/VRMMetalKitShaders.metallib
 make clean        # Cleans temp files
 ```
 
-### Z-Fighting Tests
-GPU-based tests that detect Z-fighting (rendering artifacts where coplanar surfaces flicker).
-
-```bash
-# Regression tests - FAIL if Z-fighting exceeds thresholds
-# Run after renderer changes to ensure bugs don't regress
-swift test --filter ZFightingRegressionTests --disable-sandbox
-
-# Bug finder - detailed analysis with flicker heatmaps
-# Use to investigate new Z-fighting issues
-swift test --filter ZFightingBugFinderTests --disable-sandbox
-
-# Full GPU test suite - includes positive tests proving detection works
-swift test --filter ZFightingGPUTests --disable-sandbox
-```
-
-**📋 Status Document:** See [`docs/ZFIGHTING_STATUS.md`](docs/ZFIGHTING_STATUS.md) for:
-- Complete test results and thresholds
-- Root cause analysis
-- Implemented mitigations (depth bias, depth states)
-- Recommended next steps
-
-**Quick Summary (After Depth Bias Mitigation):**
-| Region | Flicker Rate | Threshold | Status | Root Cause |
-|--------|--------------|-----------|--------|------------|
-| Face Front | 5.12% | 2.0% | ⚠️ NEAR | MASK edge aliasing |
-| Face Side | 10.78% | 10.5% | ❌ MARGINAL | MASK edge aliasing |
-| Collar/Neck | 16.72% | 10.5% | ❌ FAIL | MASK edge aliasing |
-| Hip/Skirt | 9.48% | 7.0% | ❌ FAIL | MASK edge aliasing |
-
-**Root Cause Analysis:**
-Z-fighting is NOT the issue. The flickering occurs in MASK materials where alpha cutout edges shimmer due to lack of anti-aliasing. MSAA Alpha-to-Coverage has been implemented to address this:
-
 ```bash
 # MSAA Alpha-to-Coverage tests
 swift test --filter MSAAAlphaToCoverageTests --disable-sandbox
 ```
-
-**MSAA Implementation (10/10 tests passing):**
-- ✅ Configuration via `RendererConfig.sampleCount`
-- ✅ Multisample texture creation
-- ✅ MASK pipelines with `isAlphaToCoverageEnabled = true`
-- ✅ Resolve pass infrastructure
 
 **Usage:**
 ```swift
@@ -131,7 +94,7 @@ let renderer = VRMRenderer(device: device, config: config)
 ## Key Implementation Details
 
 ### 1. VRM Animation Retargeting
-*   **Principle:** VRMA animations may have different rest poses than the VRM model (T-pose).
+Stick to the logic that treats Rest Pose and Animation Data as two separate, immutable sources of truth. Do not try to infer one from the other.
 *   **Logic:** We compute `delta = inverse(animRest) * animRotation` and apply it as `modelRest * delta`.
 *   **Location:** `VRMAnimationLoader.swift` (look for `makeRotationSampler`).
 
@@ -152,4 +115,3 @@ Errors must implement `LocalizedError`. Messages should be LLM-friendly:
 *   **Source Code:** Apache License 2.0.
 *   **Assets/Models:** VRM Platform License 1.0 (check model metadata).
 *   *Note:* New files must include the Apache 2.0 header.
-- do not put temporary contextual/informational comments in code

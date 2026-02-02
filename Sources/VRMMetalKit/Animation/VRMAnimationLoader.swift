@@ -331,10 +331,13 @@ public enum VRMAnimationLoader {
         //   - Coordinate conversion applied first (negate X and Z)
         //   - Then same logic as above based on rest pose similarity
 
-        // Use first keyframe as rest pose fallback (for delta calculations in samplers)
-        let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
-        let translationRest = tracks["translation"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.translation
-        let scaleRest = tracks["scale"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.scale
+        // Use animation rest pose from node hierarchy (NOT from animation keyframes)
+        // Rest pose and animation data are separate sources of truth:
+        // - animationRest: the skeleton's bind pose from VRMA node transforms
+        // - tracks: the actual animation data (rotations relative to bind pose)
+        let rotationRest = animationRest.rotation
+        let translationRest = animationRest.translation
+        let scaleRest = animationRest.scale
 
         // Validate rest pose mismatch for debugging
         if let modelRest = modelRest {
@@ -408,9 +411,10 @@ public enum VRMAnimationLoader {
         // We just pass through the animation data as-is (with coordinate conversion if needed)
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
 
-        let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
-        let translationRest = tracks["translation"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.translation
-        let scaleRest = tracks["scale"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.scale
+        // Use animation rest pose from node hierarchy (NOT from animation keyframes)
+        let rotationRest = animationRest.rotation
+        let translationRest = animationRest.translation
+        let scaleRest = animationRest.scale
 
         var rotationSampler: ((Float) -> simd_quatf)? = nil
         if let rot = tracks["rotation"] {
