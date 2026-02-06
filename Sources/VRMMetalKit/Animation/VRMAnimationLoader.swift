@@ -281,7 +281,15 @@ public enum VRMAnimationLoader {
             }
 
             let sampler = makeExpressionWeightSampler(track: translationTrack)
+            
+            // Add as both morph track (for backward compatibility) and expression track
             clip.addMorphTrack(key: expressionName, sample: sampler)
+            
+            // Also add to expression tracks if it's a known preset
+            if let preset = VRMExpressionPreset(rawValue: expressionName) {
+                let expressionTrack = ExpressionTrack(expression: preset, sampler: sampler)
+                clip.addExpressionTrack(expressionTrack)
+            }
 
             #if DEBUG
             vrmLogLoader("[VRMAnimationLoader] Added expression track '\(expressionName)' from node \(nodeIndex)")
@@ -307,21 +315,29 @@ public enum VRMAnimationLoader {
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
         let modelRest = modelRestTransforms[bone]
 
-        // VRMA HUMANOID BONE RETARGETING POLICY:
-        // Enable retargeting to handle cases where animation rest pose differs from model bind pose.
-        // This prevents skeletal deformation when VRMA animations were authored with different skeleton proportions.
+        // VRMA HUMANOID BONE RETARGETING POLICY (Normalized Rig Approach):
         //
-        // Retargeting formula (applied in samplers):
-        //   delta = inverse(animationRest) * animationRotation
-        //   result = modelRest * delta
+        // For VRM 1.0 + VRMA (matching coordinate systems, both T-pose):
+        //   - Animation rotations are applied directly to bones
+        //   - No rest-pose multiplication needed (normalized rig concept)
+        //   - Equivalent to: bone.quaternion = animRotation
         //
-        // This transforms animation data from the animation's rest space to the model's rest space,
-        // preserving the animation's intent while adapting to different bind poses.
+        // For different rest poses (A-pose animation on T-pose model):
+        //   - Delta retargeting transforms animation from animation's rest space to model's rest space
+        //   - Formula: delta = inverse(animationRest) * animRotation
+        //              result = modelRest * delta
+        //
+        // For VRM 0.0 models:
+        //   - Coordinate conversion applied first (negate X and Z)
+        //   - Then same logic as above based on rest pose similarity
 
-        // Use first keyframe as rest pose fallback (for delta calculations in samplers)
-        let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
-        let translationRest = tracks["translation"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.translation
-        let scaleRest = tracks["scale"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.scale
+        // Use animation rest pose from node hierarchy (NOT from animation keyframes)
+        // Rest pose and animation data are separate sources of truth:
+        // - animationRest: the skeleton's bind pose from VRMA node transforms
+        // - tracks: the actual animation data (rotations relative to bind pose)
+        let rotationRest = animationRest.rotation
+        let translationRest = animationRest.translation
+        let scaleRest = animationRest.scale
 
         // Validate rest pose mismatch for debugging
         if let modelRest = modelRest {
@@ -395,9 +411,10 @@ public enum VRMAnimationLoader {
         // We just pass through the animation data as-is (with coordinate conversion if needed)
         let animationRest = animationRestTransforms[nodeIndex] ?? RestTransform.identity
 
-        let rotationRest = tracks["rotation"].flatMap { trackRotationRest($0) } ?? animationRest.rotation
-        let translationRest = tracks["translation"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.translation
-        let scaleRest = tracks["scale"].flatMap { trackVectorRest($0, componentCount: 3) } ?? animationRest.scale
+        // Use animation rest pose from node hierarchy (NOT from animation keyframes)
+        let rotationRest = animationRest.rotation
+        let translationRest = animationRest.translation
+        let scaleRest = animationRest.scale
 
         var rotationSampler: ((Float) -> simd_quatf)? = nil
         if let rot = tracks["rotation"] {
@@ -482,29 +499,26 @@ private func componentCount(for path: String) -> Int? {
     }
 }
 
-// Rotation Retargeting with Delta-Based Alignment
+// Rotation Retargeting (Delta-Based)
 //
 // VRM ANIMATION SPEC:
 // ------------------
-// VRMA animation data is preserved as authored. The first keyframe can be any pose
-// (T-pose, idle, crouch, wave, etc.). T-pose is the VRM model's humanoid rest pose,
-// NOT a requirement on the animation's first frame.
+// VRMA animations target humanoid bones identified by extension data.
+// Retargeting transforms animation from animation's rest space to model's rest space.
 //
 // Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/
 //
-// Retargeting Formula (local space):
-//   delta = inverse(animationRest) * animationRotation
-//   result = modelRest * delta
+// Formula (per VRMC_node_constraint-1.0):
+//   delta = inverse(animationRestRotation) * animationRotation
+//   result = modelRestRotation * delta
 //
-// This transforms the animation rotation from the animation's rest pose space
-// to the target VRM model's rest pose space, preserving the animation's intent
-// while adapting to different skeleton proportions.
+// This works for all cases:
+// - Identical rest poses: delta = animRotation, result = modelRest * animRotation
+// - Different rest poses: delta transforms animation to model's coordinate frame
 //
 // VRM 0.0 Coordinate Conversion:
-// When applying VRMA (VRM 1.0 format) animations to VRM 0.0 models, coordinate
-// conversion is needed because VRM 0.0 uses Unity's left-handed system while
-// VRM 1.0/VRMA uses glTF's right-handed system. The conversion negates X and Z
-// components per three-vrm createVRMAnimationClip.ts.
+// When applying VRMA to VRM 0.0 models, coordinate conversion negates X and Z
+// quaternion components (equivalent to 180-degree Y rotation).
 private func makeRotationSampler(track: KeyTrack,
                                  animationRestRotation: simd_quatf,
                                  modelRestRotation: simd_quatf?,
@@ -512,6 +526,7 @@ private func makeRotationSampler(track: KeyTrack,
     let modelRest = modelRestRotation
     let rotationRest = simd_normalize(animationRestRotation)
 
+    // No model rest data available - just apply animation directly with optional VRM 0.0 conversion
     if modelRest == nil {
         return { t in
             var result = sampleQuaternion(track, at: t)
@@ -532,38 +547,11 @@ private func makeRotationSampler(track: KeyTrack,
             animRotation = convertRotationForVRM0(animRotation)
         }
 
+        // Delta retargeting (per VRM spec):
+        // delta = inverse(animRest) * animRotation
+        // result = modelRest * delta
         let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
         let result = simd_normalize(modelRestNormalized * delta)
-
-        #if VRM_METALKIT_ENABLE_DEBUG_ANIMATION
-        // Log retargeting math for debugging
-        if t < 0.1 {  // Only log first frame
-            vrmLogAnimation("""
-                [RETARGET] t=\(String(format: "%.3f", t)) convertForVRM0=\(convertForVRM0)
-                  rotationRest:  quat(\(String(format: "% .6f", rotationRest.imag.x)), \
-                \(String(format: "% .6f", rotationRest.imag.y)), \
-                \(String(format: "% .6f", rotationRest.imag.z)), \
-                \(String(format: "% .6f", rotationRest.real)))
-                  animRotation:  quat(\(String(format: "% .6f", animRotation.imag.x)), \
-                \(String(format: "% .6f", animRotation.imag.y)), \
-                \(String(format: "% .6f", animRotation.imag.z)), \
-                \(String(format: "% .6f", animRotation.real)))
-                  modelRest:     quat(\(String(format: "% .6f", modelRestNormalized.imag.x)), \
-                \(String(format: "% .6f", modelRestNormalized.imag.y)), \
-                \(String(format: "% .6f", modelRestNormalized.imag.z)), \
-                \(String(format: "% .6f", modelRestNormalized.real)))
-                  delta:         quat(\(String(format: "% .6f", delta.imag.x)), \
-                \(String(format: "% .6f", delta.imag.y)), \
-                \(String(format: "% .6f", delta.imag.z)), \
-                \(String(format: "% .6f", delta.real)))
-                  RESULT:        quat(\(String(format: "% .6f", result.imag.x)), \
-                \(String(format: "% .6f", result.imag.y)), \
-                \(String(format: "% .6f", result.imag.z)), \
-                \(String(format: "% .6f", result.real)))
-                """)
-        }
-        #endif
-
         return result
     }
 }

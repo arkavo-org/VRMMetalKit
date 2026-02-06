@@ -13,3 +13,8 @@ DerivedData/
 tmp/
 .arkavo/
 *.metallib
+
+# Test model symlinks (use ENV VAR instead)
+/Seed-san.vrm
+/VRM1_Constraint_Twist_Sample.vrm
+/AliciaSolid.vrm

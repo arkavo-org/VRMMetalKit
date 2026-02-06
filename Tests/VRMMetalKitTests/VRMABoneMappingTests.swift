@@ -366,7 +366,7 @@ final class VRMABoneMappingTests: XCTestCase {
     
     /// Test that VRMA animation correctly maps bones when extension data is present
     /// This verifies that the VRMC_vrm_animation humanoid mapping takes precedence
-    func testVRMAExtensionBoneMappingPriority() {
+    func testVRMAExtensionBoneMappingPriority() throws {
         // This test verifies the bone mapping priority order:
         // 1. VRMA extension humanoid mapping (highest priority)
         // 2. Model node name to bone mapping
@@ -382,7 +382,7 @@ final class VRMABoneMappingTests: XCTestCase {
         // }
         
         // This test passes because the logic is correctly implemented
-        XCTAssertTrue(true, "VRMA extension bone mapping priority is correct")
+        throw XCTSkip("VRMA extension bone mapping priority needs assertions")
     }
     
     /// Test coordinate conversion for VRM 0.0 models

@@ -148,7 +148,7 @@ final class ExpressionTests: XCTestCase {
         }
     }
 
-    func testMoodResetsOtherMoods() {
+    func testMoodResetsOtherMoods() throws {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
             return
@@ -157,7 +157,7 @@ final class ExpressionTests: XCTestCase {
         controller.setMood(.happy, intensity: 1.0)
         controller.setMood(.sad, intensity: 0.5)
 
-        XCTAssertTrue(true, "Setting new mood should reset previous mood weights")
+        throw XCTSkip("Setting new mood should reset previous mood weights")
     }
 
     func testExpressionCyclingMaintainsConsistency() {

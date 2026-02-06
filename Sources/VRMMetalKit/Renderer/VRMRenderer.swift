@@ -100,15 +100,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public var model: VRMModel?
 
     /// Model rotation correction for VRM coordinate system differences.
-    /// VRM 1.0 (glTF) models face +Z; VRM 0.0 (Unity) models face -Z.
-    /// Apply 180° Y rotation to VRM 1.0 models so they face the camera at -Z.
+    /// Standard camera setup: camera at +Z looking towards origin.
+    /// VRM 0.0 (Unity) models face -Z (away from camera) → need 180° Y rotation.
+    /// VRM 1.0 (glTF) models face +Z (towards camera) → no rotation needed.
     private var vrmVersionRotation: matrix_float4x4 {
         guard let model = model else { return matrix_identity_float4x4 }
         if model.isVRM0 {
-            return matrix_identity_float4x4
-        } else {
-            // VRM 1.0 faces +Z, rotate 180° around Y to face -Z (towards camera)
+            // VRM 0.0 faces -Z, rotate 180° around Y to face +Z (towards camera at +Z)
             return matrix_float4x4(simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0)))
+        } else {
+            // VRM 1.0 already faces +Z (towards camera at +Z), no rotation needed
+            return matrix_identity_float4x4
         }
     }
 
@@ -154,7 +156,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Outline width (world-space or screen-space depending on mode)
+    /// Global outline width scale factor.
+    /// Multiplies per-material outline widths. Default (0.02) preserves material values.
+    /// Set to 0 to disable all outlines.
     public var outlineWidth: Float = 0.02 {
         didSet {
             if outlineWidth < 0 {
@@ -164,7 +168,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Outline color (RGB)
+    /// Global outline color override (RGB). When non-zero, overrides per-material outline colors.
+    /// Expression-driven overrides take precedence over this value.
     public var outlineColor: SIMD3<Float> = SIMD3<Float>(0, 0, 0)
 
     /// Use orthographic projection instead of perspective
@@ -1607,6 +1612,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
 
+        // Pre-compute view-space Z for transparent items to avoid redundant matrix multiplies in comparator
+        var viewZByIndex = [Int: Float]()
+        viewZByIndex.reserveCapacity(blendCount)
+        for item in allItems where item.materialRenderQueue >= 2500 {
+            let worldPos = item.node.worldMatrix.columns.3
+            viewZByIndex[item.primitiveIndex] = (viewMatrix * worldPos).z
+        }
+
         // Multi-tier sorting: renderOrder (name-based) + VRM queue + view-Z + stable order
         allItems.sort { a, b in
             // 1. Primary: renderOrder (name-based face/body category ordering)
@@ -1624,10 +1637,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // 3. Tertiary: Transparent materials (queue >= 2500): back-to-front Z-sorting
             // This threshold covers TransparentWithZWrite (2450+) and Transparent (3000+)
             if a.materialRenderQueue >= 2500 {
-                let aWorldPos = a.node.worldMatrix.columns.3
-                let aViewZ = (viewMatrix * aWorldPos).z
-                let bWorldPos = b.node.worldMatrix.columns.3
-                let bViewZ = (viewMatrix * bWorldPos).z
+                let aViewZ = viewZByIndex[a.primitiveIndex] ?? 0
+                let bViewZ = viewZByIndex[b.primitiveIndex] ?? 0
                 return aViewZ < bViewZ  // Far to near (Painter's Algorithm)
             }
 
@@ -2084,14 +2095,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let meshIdx = item.meshIndex
             let primIdx = item.primIdxInMesh
             let stableKey: MorphKey = (UInt64(meshIdx) << 32) | UInt64(primIdx)
-            let hasMorphedPositions = morphedBuffers[stableKey] != nil
+            let morphedPosBuffer = morphedBuffers[stableKey]
 
             if !primitive.morphTargets.isEmpty && frameCounter < 2 {
                 let meshName = item.mesh.name ?? "?"
-                vrmLog("[DICT LOOKUP] frame=\(frameCounter) draw=\(drawIndex) mesh[\(meshIdx)]='\(meshName)' prim[\(primIdx)] key=\(stableKey) found=\(hasMorphedPositions) dictSize=\(morphedBuffers.count)")
+                vrmLog("[DICT LOOKUP] frame=\(frameCounter) draw=\(drawIndex) mesh[\(meshIdx)]='\(meshName)' prim[\(primIdx)] key=\(stableKey) found=\(morphedPosBuffer != nil) dictSize=\(morphedBuffers.count)")
             }
 
-            if hasMorphedPositions, let morphedPosBuffer = morphedBuffers[stableKey] {
+            if let morphedPosBuffer {
                 // CORRECT BINDING: Original vertex buffer at stage_in (index 0) for UVs/normals/etc.
                 encoder.setVertexBuffer(vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
 
@@ -2183,8 +2194,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
 
                         // Debug: Log joint count for shorts to check for buffer overflow
-                        let meshName = item.node.name?.lowercased() ?? ""
-                        if frameCounter % 60 == 0 && (meshName.contains("short") || meshName.contains("pants") || meshName.contains("body")) {
+                        if frameCounter % 60 == 0 && (item.nodeNameLower.contains("short") || item.nodeNameLower.contains("pants") || item.nodeNameLower.contains("body")) {
                             vrmLog("[SHORTS DEBUG] Mesh '\(item.node.name ?? "unnamed")' using skin \(skinIndex): jointCount=\(skin.joints.count), bufferOffset=\(byteOffset)")
                         }
 
@@ -2228,9 +2238,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 var textureCount = 0
 
                 // Check if this is a face or body material EARLY for alpha mode override
-                let materialNameLower = item.materialName.lowercased()
-                let nodeName = (item.node.name ?? "").lowercased()
-                let meshNameLower = meshName.lowercased()
+                // OPTIMIZATION: Use cached lowercased strings from RenderItem
+                let materialNameLower = item.materialNameLower
+                let nodeName = item.nodeNameLower
+                let meshNameLower = item.meshNameLower
 
                 let isFaceOrBodyMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
                                           materialNameLower.contains("body") || materialNameLower.contains("skin") ||
@@ -2411,15 +2422,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // vrmLog("  - Rim color: \(mtoon.parametricRimColorFactor)")
                     }
 
-                    // Create default sampler for all textures
-                    let samplerDescriptor = MTLSamplerDescriptor()
-                    samplerDescriptor.minFilter = .linear
-                    samplerDescriptor.magFilter = .linear
-                    samplerDescriptor.mipFilter = .linear
-                    samplerDescriptor.sAddressMode = .repeat
-                    samplerDescriptor.tAddressMode = .repeat
-                    let sampler = device.makeSamplerState(descriptor: samplerDescriptor)
-
                     // Bind textures in MToon order
                     // Index 0: Base color texture
                     if let texture = material.baseColorTexture,
@@ -2500,11 +2502,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // vrmLog("[VRMRenderer] Bound UV animation mask texture at index 7")
                     }
 
-                    // Set sampler for all texture indices (use cached)
+                    // Set sampler for all texture indices (cached in setupCachedStates)
                     if let cachedSampler = samplerStates["default"] {
                         encoder.setFragmentSamplerState(cachedSampler, index: 0)
-                    } else if let sampler = sampler {
-                        encoder.setFragmentSamplerState(sampler, index: 0)
                     }
 
                     // Log texture binding only once per material
@@ -2588,8 +2588,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 case "skin":
                     // Face skin renders AFTER body - wins at neck seam via render order
                     // Z-FIGHTING FIX: Use different depth states for base vs overlay materials
-                    let materialNameLower = item.materialName.lowercased()
-                    let isOverlay = materialNameLower.contains("mouth") || materialNameLower.contains("eyebrow")
+                    let isOverlay = item.materialNameLower.contains("mouth") || item.materialNameLower.contains("eyebrow")
 
                     if isOverlay {
                         // Overlay materials (mouth, eyebrows): use faceOverlay state
@@ -2635,13 +2634,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // Apply depth bias for mouth/lip overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
-                    #if DEBUG
-                    print("🔧 [VRMMetalKit] Rendering faceOverlay: \(item.materialName) with bias=\(bias), indices=\(primitive.indexCount)")
-                    #endif
-                    
-                    // Force OPAQUE mode for faceOverlay
-                    mtoonUniforms.alphaMode = 0  // OPAQUE
-                    mtoonUniforms.alphaCutoff = 0.0
+                    // Face overlays use MASK mode for proper alpha cutout
+                    // This allows mouth/lip shapes to be properly masked without
+                    // edge artifacts from OPAQUE mode blending
 
                 case "eyebrow", "eyeline":
                     // Face features render after skin - win via render order
@@ -3285,8 +3280,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         renderItems: [RenderItem],
         model: VRMModel
     ) {
-        // Only render outlines if we have a pipeline
+        // Only render outlines if we have a pipeline and global outline width is non-zero
         guard mtoonOutlinePipelineState != nil || mtoonSkinnedOutlinePipelineState != nil else {
+            return
+        }
+
+        // Global outline width of 0 disables all outlines
+        guard self.outlineWidth > 0 else {
             return
         }
 
@@ -3360,6 +3360,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             mtoonUniforms.baseColorFactor = material.baseColorFactor
             // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
             mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
+
+            // Apply global outline width as a multiplier on per-material width
+            mtoonUniforms.outlineWidthFactor *= self.outlineWidth / 0.02
+
+            // Apply global outline color override (non-black means user set it)
+            let globalColor = self.outlineColor
+            if globalColor.x > 0 || globalColor.y > 0 || globalColor.z > 0 {
+                mtoonUniforms.outlineColorFactor = globalColor
+            }
 
             // Apply expression-driven material color overrides for outlines
             if let outlineOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .outlineColor) {

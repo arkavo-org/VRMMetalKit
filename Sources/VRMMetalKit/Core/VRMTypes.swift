@@ -23,6 +23,7 @@ import simd
 public enum VRMSpecVersion: String {
     case v0_0 = "0.0"
     case v1_0 = "1.0"
+    case v1_1 = "1.1"
 }
 
 // MARK: - Humanoid Bones
@@ -61,6 +62,16 @@ public enum VRMHumanoidBone: String, CaseIterable, Sendable {
     // Optional Legs
     case leftToes
     case rightToes
+
+    // Twist Bones (VRM 0.0/1.0)
+    case leftUpperArmTwist
+    case rightUpperArmTwist
+    case leftLowerArmTwist
+    case rightLowerArmTwist
+    case leftUpperLegTwist
+    case rightUpperLegTwist
+    case leftLowerLegTwist
+    case rightLowerLegTwist
 
     // Optional Head
     case leftEye

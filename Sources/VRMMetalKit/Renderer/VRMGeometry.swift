@@ -879,7 +879,7 @@ extension VRMPrimitive {
 public class VRMNode {
     public let index: Int
     public let name: String?
-    public var parent: VRMNode?
+    public weak var parent: VRMNode?
     public var children: [VRMNode] = []
 
     // Transform components

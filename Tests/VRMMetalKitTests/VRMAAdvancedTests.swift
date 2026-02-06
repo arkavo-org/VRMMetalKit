@@ -298,7 +298,7 @@ final class VRMAAdvancedTests: XCTestCase {
         print("Animation tracks: \(clip.jointTracks.count)")
         
         // Document that SpringBone and animation should coexist
-        XCTAssertTrue(true, "SpringBone and animation can work together")
+        throw XCTSkip("SpringBone and animation coexistence needs assertions")
     }
     
     /// Test SpringBone colliders exist
@@ -361,11 +361,11 @@ final class VRMAAdvancedTests: XCTestCase {
         }
         
         // Blending would interpolate between rot1 and rot2
-        XCTAssertTrue(true, "Blending documented")
+        throw XCTSkip("Animation blending not yet implemented")
     }
     
     /// Test animation layer prioritization
-    func testAnimationLayerPriority() {
+    func testAnimationLayerPriority() throws {
         print("\n=== Animation Layer Priority ===")
         print("Priority order (highest to lowest):")
         print("  1. VRMA animation (direct bone control)")
@@ -373,7 +373,7 @@ final class VRMAAdvancedTests: XCTestCase {
         print("  3. Procedural layers (breathing)")
         print("  4. Base pose")
         
-        XCTAssertTrue(true, "Layer priority documented")
+        throw XCTSkip("Layer priority not yet implemented")
     }
 
     // ============================================================================
@@ -418,7 +418,7 @@ final class VRMAAdvancedTests: XCTestCase {
         print("Poses identical: \(sameRotation)")
         
         // Animation should produce variation
-        XCTAssertTrue(true, "Animation variation documented")
+        throw XCTSkip("Animation variation needs assertions")
     }
     
     /// Test that animation affects bone transforms
@@ -454,6 +454,6 @@ final class VRMAAdvancedTests: XCTestCase {
             print("\(bone): animated=\(hasTransform ? "✓" : "✗")")
         }
         
-        XCTAssertTrue(true, "Bone transforms documented")
+        throw XCTSkip("Bone transform validation needs assertions")
     }
 }

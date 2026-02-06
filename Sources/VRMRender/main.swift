@@ -91,7 +91,7 @@ struct RenderOptions {
     var width: Int = 1024
     var height: Int = 1024
     var debugMode: Int = 0
-    var cameraPosition: SIMD3<Float> = SIMD3<Float>(0, 1.3, -1.8)
+    var cameraPosition: SIMD3<Float> = SIMD3<Float>(0, 1.3, 1.8)
     var cameraTarget: SIMD3<Float> = SIMD3<Float>(0, 1.3, 0)
     var sampleCount: Int = 4
     var bgColorTop: SIMD3<Float> = SIMD3<Float>(0.15, 0.18, 0.25)
@@ -144,7 +144,7 @@ func printUsage() {
         -w, --width <pixels>       Output width (default: 1024)
         -h, --height <pixels>      Output height (default: 1024)
         -d, --debug <mode>         Debug mode (0-16, default: 0)
-        --camera-pos <x,y,z>       Camera position (default: 0,1.3,-1.8)
+        --camera-pos <x,y,z>       Camera position (default: 0,1.3,1.8)
         --camera-target <x,y,z>    Camera look-at target (default: 0,1.3,0)
         --msaa <samples>           MSAA sample count (1, 2, 4, default: 4)
         --expression <name>        Apply VRM expression (happy, angry, sad, relaxed,

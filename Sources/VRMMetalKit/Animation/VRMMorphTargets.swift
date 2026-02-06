@@ -70,8 +70,8 @@ public class VRMMorphTargetSystem {
     private var morphedPositionBuffers: [Int: MTLBuffer] = [:] // primitiveID -> buffer
     private var morphedNormalBuffers: [Int: MTLBuffer] = [:]   // Phase B
 
-    // Compute pipeline for GPU morphing (mandatory)
-    public var morphAccumulatePipelineState: MTLComputePipelineState!
+    // Compute pipeline for GPU morphing
+    public var morphAccumulatePipelineState: MTLComputePipelineState?
     private let commandQueue: MTLCommandQueue
 
     public init(device: MTLDevice) throws {
@@ -262,11 +262,15 @@ public class VRMMorphTargetSystem {
         }
         #endif
 
+        guard let pipelineState = morphAccumulatePipelineState else {
+            return false
+        }
+
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return false
         }
 
-        computeEncoder.setComputePipelineState(morphAccumulatePipelineState)
+        computeEncoder.setComputePipelineState(pipelineState)
 
         // Set buffers
         computeEncoder.setBuffer(basePositions, offset: 0, index: 0)
@@ -356,6 +360,7 @@ public class VRMExpressionController: @unchecked Sendable {
     private var customExpressions: [String: VRMExpression] = [:]
     private var currentWeights: [VRMExpressionPreset: Float] = [:]
     private var morphTargetSystem: VRMMorphTargetSystem?
+    private var animationTimer: Timer?
 
     // Track morph weights per mesh
     private var meshMorphWeights: [Int: [Float]] = [:]  // meshIndex -> morph weights for that mesh
@@ -369,6 +374,11 @@ public class VRMExpressionController: @unchecked Sendable {
         for preset in VRMExpressionPreset.allCases {
             currentWeights[preset] = 0
         }
+    }
+
+    deinit {
+        animationTimer?.invalidate()
+        animationTimer = nil
     }
 
     public func setMorphTargetSystem(_ system: VRMMorphTargetSystem) {
@@ -464,10 +474,13 @@ public class VRMExpressionController: @unchecked Sendable {
                                   to targetWeight: Float,
                                   duration: Float,
                                   completion: (@Sendable () -> Void)? = nil) {
+        // Invalidate any existing animation timer to prevent overlapping animations
+        animationTimer?.invalidate()
+
         let startWeight = currentWeights[preset] ?? 0
         let startTime = CACurrentMediaTime()
 
-        Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [weak self] timer in
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0/60.0, repeats: true) { [weak self] timer in
             // Compute progress off-actor to avoid sending non-Sendable values
             let elapsed = Float(CACurrentMediaTime() - startTime)
             let progress = min(elapsed / duration, 1.0)
@@ -483,6 +496,7 @@ public class VRMExpressionController: @unchecked Sendable {
 
             if progress >= 1.0 {
                 timer.invalidate()
+                self?.animationTimer = nil
             }
         }
     }
@@ -699,13 +713,12 @@ private func lerp(_ a: Float, _ b: Float, _ t: Float) -> Float {
 /// - Note: Always create and use VRMExpressionMixer on the main thread.
 public class VRMExpressionMixer: @unchecked Sendable {
     private var controller: VRMExpressionController
-    private var autoBlinkEnabled = true
+    private var autoBlinkEnabled = false
     private var blinkTimer: Timer?
     private var lastBlinkTime: TimeInterval = 0
 
     public init(controller: VRMExpressionController) {
         self.controller = controller
-        startAutoBlink()
     }
 
     public func setAutoBlinkEnabled(_ enabled: Bool) {
@@ -719,6 +732,8 @@ public class VRMExpressionMixer: @unchecked Sendable {
 
     private func startAutoBlink() {
         guard autoBlinkEnabled else { return }
+        // Invalidate existing timer before creating a new one
+        blinkTimer?.invalidate()
 
         blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in
