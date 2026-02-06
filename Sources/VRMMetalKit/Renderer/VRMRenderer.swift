@@ -156,7 +156,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Outline width (world-space or screen-space depending on mode)
+    /// Global outline width scale factor.
+    /// Multiplies per-material outline widths. Default (0.02) preserves material values.
+    /// Set to 0 to disable all outlines.
     public var outlineWidth: Float = 0.02 {
         didSet {
             if outlineWidth < 0 {
@@ -166,7 +168,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Outline color (RGB)
+    /// Global outline color override (RGB). When non-zero, overrides per-material outline colors.
+    /// Expression-driven overrides take precedence over this value.
     public var outlineColor: SIMD3<Float> = SIMD3<Float>(0, 0, 0)
 
     /// Use orthographic projection instead of perspective
@@ -2637,10 +2640,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // Apply depth bias for mouth/lip overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
-                    #if DEBUG
-                    print("🔧 [VRMMetalKit] Rendering faceOverlay: \(item.materialName) with bias=\(bias), indices=\(primitive.indexCount)")
-                    #endif
-                    
                     // Face overlays use MASK mode for proper alpha cutout
                     // This allows mouth/lip shapes to be properly masked without
                     // edge artifacts from OPAQUE mode blending
@@ -3287,8 +3286,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         renderItems: [RenderItem],
         model: VRMModel
     ) {
-        // Only render outlines if we have a pipeline
+        // Only render outlines if we have a pipeline and global outline width is non-zero
         guard mtoonOutlinePipelineState != nil || mtoonSkinnedOutlinePipelineState != nil else {
+            return
+        }
+
+        // Global outline width of 0 disables all outlines
+        guard self.outlineWidth > 0 else {
             return
         }
 
@@ -3362,6 +3366,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             mtoonUniforms.baseColorFactor = material.baseColorFactor
             // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
             mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
+
+            // Apply global outline width as a multiplier on per-material width
+            mtoonUniforms.outlineWidthFactor *= self.outlineWidth / 0.02
+
+            // Apply global outline color override (non-black means user set it)
+            let globalColor = self.outlineColor
+            if globalColor.x > 0 || globalColor.y > 0 || globalColor.z > 0 {
+                mtoonUniforms.outlineColorFactor = globalColor
+            }
 
             // Apply expression-driven material color overrides for outlines
             if let outlineOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .outlineColor) {
