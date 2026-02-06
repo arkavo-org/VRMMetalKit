@@ -1612,6 +1612,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
 
+        // Pre-compute view-space Z for transparent items to avoid redundant matrix multiplies in comparator
+        var viewZByIndex = [Int: Float]()
+        viewZByIndex.reserveCapacity(blendCount)
+        for item in allItems where item.materialRenderQueue >= 2500 {
+            let worldPos = item.node.worldMatrix.columns.3
+            viewZByIndex[item.primitiveIndex] = (viewMatrix * worldPos).z
+        }
+
         // Multi-tier sorting: renderOrder (name-based) + VRM queue + view-Z + stable order
         allItems.sort { a, b in
             // 1. Primary: renderOrder (name-based face/body category ordering)
@@ -1629,10 +1637,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // 3. Tertiary: Transparent materials (queue >= 2500): back-to-front Z-sorting
             // This threshold covers TransparentWithZWrite (2450+) and Transparent (3000+)
             if a.materialRenderQueue >= 2500 {
-                let aWorldPos = a.node.worldMatrix.columns.3
-                let aViewZ = (viewMatrix * aWorldPos).z
-                let bWorldPos = b.node.worldMatrix.columns.3
-                let bViewZ = (viewMatrix * bWorldPos).z
+                let aViewZ = viewZByIndex[a.primitiveIndex] ?? 0
+                let bViewZ = viewZByIndex[b.primitiveIndex] ?? 0
                 return aViewZ < bViewZ  // Far to near (Painter's Algorithm)
             }
 
@@ -2089,14 +2095,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let meshIdx = item.meshIndex
             let primIdx = item.primIdxInMesh
             let stableKey: MorphKey = (UInt64(meshIdx) << 32) | UInt64(primIdx)
-            let hasMorphedPositions = morphedBuffers[stableKey] != nil
+            let morphedPosBuffer = morphedBuffers[stableKey]
 
             if !primitive.morphTargets.isEmpty && frameCounter < 2 {
                 let meshName = item.mesh.name ?? "?"
-                vrmLog("[DICT LOOKUP] frame=\(frameCounter) draw=\(drawIndex) mesh[\(meshIdx)]='\(meshName)' prim[\(primIdx)] key=\(stableKey) found=\(hasMorphedPositions) dictSize=\(morphedBuffers.count)")
+                vrmLog("[DICT LOOKUP] frame=\(frameCounter) draw=\(drawIndex) mesh[\(meshIdx)]='\(meshName)' prim[\(primIdx)] key=\(stableKey) found=\(morphedPosBuffer != nil) dictSize=\(morphedBuffers.count)")
             }
 
-            if hasMorphedPositions, let morphedPosBuffer = morphedBuffers[stableKey] {
+            if let morphedPosBuffer {
                 // CORRECT BINDING: Original vertex buffer at stage_in (index 0) for UVs/normals/etc.
                 encoder.setVertexBuffer(vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
 
@@ -2188,8 +2194,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
 
                         // Debug: Log joint count for shorts to check for buffer overflow
-                        let meshName = item.node.name?.lowercased() ?? ""
-                        if frameCounter % 60 == 0 && (meshName.contains("short") || meshName.contains("pants") || meshName.contains("body")) {
+                        if frameCounter % 60 == 0 && (item.nodeNameLower.contains("short") || item.nodeNameLower.contains("pants") || item.nodeNameLower.contains("body")) {
                             vrmLog("[SHORTS DEBUG] Mesh '\(item.node.name ?? "unnamed")' using skin \(skinIndex): jointCount=\(skin.joints.count), bufferOffset=\(byteOffset)")
                         }
 
@@ -2233,9 +2238,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 var textureCount = 0
 
                 // Check if this is a face or body material EARLY for alpha mode override
-                let materialNameLower = item.materialName.lowercased()
-                let nodeName = (item.node.name ?? "").lowercased()
-                let meshNameLower = meshName.lowercased()
+                // OPTIMIZATION: Use cached lowercased strings from RenderItem
+                let materialNameLower = item.materialNameLower
+                let nodeName = item.nodeNameLower
+                let meshNameLower = item.meshNameLower
 
                 let isFaceOrBodyMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
                                           materialNameLower.contains("body") || materialNameLower.contains("skin") ||
@@ -2416,15 +2422,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // vrmLog("  - Rim color: \(mtoon.parametricRimColorFactor)")
                     }
 
-                    // Create default sampler for all textures
-                    let samplerDescriptor = MTLSamplerDescriptor()
-                    samplerDescriptor.minFilter = .linear
-                    samplerDescriptor.magFilter = .linear
-                    samplerDescriptor.mipFilter = .linear
-                    samplerDescriptor.sAddressMode = .repeat
-                    samplerDescriptor.tAddressMode = .repeat
-                    let sampler = device.makeSamplerState(descriptor: samplerDescriptor)
-
                     // Bind textures in MToon order
                     // Index 0: Base color texture
                     if let texture = material.baseColorTexture,
@@ -2505,11 +2502,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // vrmLog("[VRMRenderer] Bound UV animation mask texture at index 7")
                     }
 
-                    // Set sampler for all texture indices (use cached)
+                    // Set sampler for all texture indices (cached in setupCachedStates)
                     if let cachedSampler = samplerStates["default"] {
                         encoder.setFragmentSamplerState(cachedSampler, index: 0)
-                    } else if let sampler = sampler {
-                        encoder.setFragmentSamplerState(sampler, index: 0)
                     }
 
                     // Log texture binding only once per material
@@ -2593,8 +2588,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 case "skin":
                     // Face skin renders AFTER body - wins at neck seam via render order
                     // Z-FIGHTING FIX: Use different depth states for base vs overlay materials
-                    let materialNameLower = item.materialName.lowercased()
-                    let isOverlay = materialNameLower.contains("mouth") || materialNameLower.contains("eyebrow")
+                    let isOverlay = item.materialNameLower.contains("mouth") || item.materialNameLower.contains("eyebrow")
 
                     if isOverlay {
                         // Overlay materials (mouth, eyebrows): use faceOverlay state
