@@ -265,7 +265,7 @@ final class VRMANonHumanoidTests: XCTestCase {
         }
         
         // The separation should be clean - no humanoid bones in nodeTracks
-        XCTAssertTrue(true, "Separation documented")
+        throw XCTSkip("Separation not yet validated")
     }
     
     /// RED: Test VRM 1.0 model with non-humanoid nodes
@@ -371,7 +371,7 @@ final class VRMANonHumanoidTests: XCTestCase {
     ///
     /// Non-humanoid nodes should follow the same coordinate conversion
     /// as humanoid bones based on VRM version
-    func testNonHumanoidCoordinateConversion() {
+    func testNonHumanoidCoordinateConversion() throws {
         // This is a documentation test
         print("\n=== Non-Humanoid Coordinate Conversion ===")
         print("Expected behavior:")
@@ -379,6 +379,6 @@ final class VRMANonHumanoidTests: XCTestCase {
         print("  - VRM 1.0: No conversion (right-handed)")
         print("  - Same as humanoid bones")
         
-        XCTAssertTrue(true, "Behavior documented")
+        throw XCTSkip("Non-humanoid coordinate conversion not yet implemented")
     }
 }

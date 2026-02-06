@@ -183,7 +183,7 @@ final class VRM1_0RenderingOrientationTests: XCTestCase {
     // MARK: - Coordinate System Documentation Tests
 
     /// Test: Verify VRM coordinate system assumptions are documented correctly
-    func testCoordinateSystemAssumptions() {
+    func testCoordinateSystemAssumptions() throws {
         // VRM 0.0 (Unity): Left-handed, Y-up, forward is -Z
         // VRM 1.0 (glTF): Right-handed, Y-up, forward is +Z
         // Camera: Positioned at -Z, looking at origin
@@ -196,7 +196,7 @@ final class VRM1_0RenderingOrientationTests: XCTestCase {
         // - VRM 1.0 facing -Z + camera at -Z = camera sees FRONT (correct)
 
         // This test documents the coordinate system assumptions
-        XCTAssertTrue(true, "Coordinate system assumptions documented")
+        throw XCTSkip("Coordinate system assumptions need validation")
     }
 
     // MARK: - Model Loading Consistency Tests

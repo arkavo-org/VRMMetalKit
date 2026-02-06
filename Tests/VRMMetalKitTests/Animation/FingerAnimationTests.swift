@@ -287,7 +287,7 @@ final class FingerAnimationTests: XCTestCase {
                       "VRMA with finger animation not found")
         
         // Load and verify all finger bones are animated
-        XCTAssertTrue(true, "All fingers - needs test data")
+        throw XCTSkip("All fingers - needs test data")
     }
     
     // MARK: - Finger Coordination Tests

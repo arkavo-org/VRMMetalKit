@@ -91,7 +91,7 @@ final class RootMotionTests: XCTestCase {
         // TODO: player.rootMotion should contain the movement
         // XCTAssertEqual(player.rootMotion.position.z, 1.0, accuracy: 0.001)
         
-        XCTAssertTrue(true, "Root motion extraction - needs implementation")
+        throw XCTSkip("Root motion extraction not yet implemented")
     }
     
     /// 🔴 RED: Root motion direction
@@ -115,7 +115,7 @@ final class RootMotionTests: XCTestCase {
             print("Direction \(name): \(direction)")
         }
         
-        XCTAssertTrue(true, "Root motion direction test")
+        throw XCTSkip("Root motion direction not yet implemented")
     }
     
     /// 🔴 RED: Root motion velocity
@@ -134,7 +134,7 @@ final class RootMotionTests: XCTestCase {
         // let velocity = rootMotion.velocity
         // XCTAssertEqual(velocity.z, 1.0, accuracy: 0.001)
         
-        XCTAssertTrue(true, "Root motion velocity - needs implementation")
+        throw XCTSkip("Root motion velocity not yet implemented")
     }
     
     /// 🔴 RED: Root motion rotation (Y rotation from hips)
@@ -150,7 +150,7 @@ final class RootMotionTests: XCTestCase {
         ))
         
         // TODO: Extract root rotation
-        XCTAssertTrue(true, "Root motion rotation - needs implementation")
+        throw XCTSkip("Root motion rotation not yet implemented")
     }
     
     // MARK: - Root Motion Application
@@ -179,7 +179,7 @@ final class RootMotionTests: XCTestCase {
         // TODO: characterTransform.position should be updated
         // XCTAssertEqual(characterTransform.position.z, 1.0, accuracy: 0.001)
         
-        XCTAssertTrue(true, "Root motion application - needs implementation")
+        throw XCTSkip("Root motion application not yet implemented")
     }
     
     /// 🔴 RED: Root motion without application
@@ -199,7 +199,7 @@ final class RootMotionTests: XCTestCase {
         
         // Assert: Hips should have moved locally
         // But character transform should not change
-        XCTAssertTrue(true, "Root motion disabled - needs implementation")
+        throw XCTSkip("Root motion disabled not yet implemented")
     }
     
     /// 🔴 RED: Root motion with vertical movement
@@ -215,7 +215,7 @@ final class RootMotionTests: XCTestCase {
         ))
         
         // TODO: Vertical root motion handling
-        XCTAssertTrue(true, "Vertical root motion - needs implementation")
+        throw XCTSkip("Vertical root motion not yet implemented")
     }
     
     // MARK: - Root Motion Looping
@@ -241,7 +241,7 @@ final class RootMotionTests: XCTestCase {
         // Assert: Should have moved 3 units
         // XCTAssertEqual(rootMotion.accumulatedPosition.z, 3.0, accuracy: 0.01)
         
-        XCTAssertTrue(true, "Root motion looping - needs implementation")
+        throw XCTSkip("Root motion looping not yet implemented")
     }
     
     /// 🔴 RED: Root motion loop reset
@@ -258,13 +258,13 @@ final class RootMotionTests: XCTestCase {
         
         // Sample at end and beginning of loop
         // Should be smooth transition
-        XCTAssertTrue(true, "Root motion loop reset - needs implementation")
+        throw XCTSkip("Root motion loop reset not yet implemented")
     }
     
     /// 🔴 RED: Root motion accumulation
     func testRootMotionAccumulation() throws {
         // Multiple loops should accumulate correctly
-        XCTAssertTrue(true, "Root motion accumulation - needs implementation")
+        throw XCTSkip("Root motion accumulation not yet implemented")
     }
     
     // MARK: - Root Motion Blending
@@ -275,14 +275,14 @@ final class RootMotionTests: XCTestCase {
     func testRootMotionBlending() throws {
         // Walking to running transition
         // Root motion should smoothly change velocity
-        XCTAssertTrue(true, "Root motion blending - needs implementation")
+        throw XCTSkip("Root motion blending not yet implemented")
     }
     
     /// 🔴 RED: Root motion scale
     func testRootMotionScale() throws {
         // Animation speed affects root motion
         // 2x speed = 2x root motion
-        XCTAssertTrue(true, "Root motion scale - needs implementation")
+        throw XCTSkip("Root motion scale not yet implemented")
     }
     
     // MARK: - Root Motion Constraints
@@ -292,19 +292,19 @@ final class RootMotionTests: XCTestCase {
     /// Root motion should work with foot IK.
     func testRootMotionWithIK() throws {
         // Foot IK should adjust to root motion
-        XCTAssertTrue(true, "Root motion with IK - needs implementation")
+        throw XCTSkip("Root motion with IK not yet implemented")
     }
     
     /// 🔴 RED: Root motion on slopes
     func testRootMotionOnSlopes() throws {
         // Root motion should handle uneven terrain
-        XCTAssertTrue(true, "Root motion on slopes - needs implementation")
+        throw XCTSkip("Root motion on slopes not yet implemented")
     }
     
     /// 🔴 RED: Root motion collision
     func testRootMotionCollision() throws {
         // Root motion should be stoppable by collision
-        XCTAssertTrue(true, "Root motion collision - needs implementation")
+        throw XCTSkip("Root motion collision not yet implemented")
     }
     
     // MARK: - Root Motion Events
@@ -314,13 +314,13 @@ final class RootMotionTests: XCTestCase {
     /// Callbacks for foot down, etc.
     func testRootMotionEvents() throws {
         // Footstep events based on root motion
-        XCTAssertTrue(true, "Root motion events - needs implementation")
+        throw XCTSkip("Root motion events not yet implemented")
     }
     
     /// 🔴 RED: Root motion prediction
     func testRootMotionPrediction() throws {
         // Predict where root motion will be
-        XCTAssertTrue(true, "Root motion prediction - needs implementation")
+        throw XCTSkip("Root motion prediction not yet implemented")
     }
 }
 

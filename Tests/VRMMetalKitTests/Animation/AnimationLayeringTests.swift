@@ -99,7 +99,7 @@ final class AnimationLayeringTests: XCTestCase {
         // XCTAssertNotEqual(combinedRotation, baseRotation, "Additive layer should affect rotation")
         
         // Placeholder assertion until layering is implemented
-        XCTAssertTrue(true, "Layering test - needs implementation")
+        throw XCTSkip("Layering not yet implemented")
     }
     
     /// 🔴 RED: Base layer + additive layer combination
@@ -117,7 +117,7 @@ final class AnimationLayeringTests: XCTestCase {
         // TODO: player.setAdditiveLayer(breathingClip, weight: 0.5)
         
         // Should combine both animations
-        XCTAssertTrue(true, "Base + additive - needs implementation")
+        throw XCTSkip("Base + additive not yet implemented")
     }
     
     /// 🔴 RED: Layer priority/order
@@ -126,7 +126,7 @@ final class AnimationLayeringTests: XCTestCase {
         // when affecting the same bones
         
         // TODO: Implement layer priority system
-        XCTAssertTrue(true, "Layer priority - needs implementation")
+        throw XCTSkip("Layer priority not yet implemented")
     }
     
     // MARK: - Cross-Fade Tests
@@ -163,21 +163,21 @@ final class AnimationLayeringTests: XCTestCase {
         // let angle = extractAngle(midRotation)
         // XCTAssertEqual(angle, 0, accuracy: 0.1, "Mid cross-fade should be ~0°")
         
-        XCTAssertTrue(true, "Cross-fade - needs implementation")
+        throw XCTSkip("Cross-fade not yet implemented")
     }
     
     /// 🔴 RED: Cross-fade timing
     func testCrossFadeTiming() throws {
         // Cross-fade should complete in specified duration
         // TODO: Implement cross-fade timing tests
-        XCTAssertTrue(true, "Cross-fade timing - needs implementation")
+        throw XCTSkip("Cross-fade timing not yet implemented")
     }
     
     /// 🔴 RED: Cross-fade interruption
     func testCrossFadeInterruption() throws {
         // Starting a new cross-fade during an ongoing one should handle gracefully
         // TODO: Implement interruption test
-        XCTAssertTrue(true, "Cross-fade interruption - needs implementation")
+        throw XCTSkip("Cross-fade interruption not yet implemented")
     }
     
     // MARK: - Blending Weights
@@ -200,25 +200,25 @@ final class AnimationLayeringTests: XCTestCase {
         // At 75/25, should be 15°
         // At 25/75, should be -15°
         
-        XCTAssertTrue(true, "Blending weights - needs implementation")
+        throw XCTSkip("Blending weights not yet implemented")
     }
     
     /// 🔴 RED: Weight of 0 means no contribution
     func testZeroWeightNoContribution() throws {
         // Layer with weight 0 should not affect output
-        XCTAssertTrue(true, "Zero weight - needs implementation")
+        throw XCTSkip("Zero weight not yet implemented")
     }
     
     /// 🔴 RED: Weight of 1 means full contribution
     func testFullWeightContribution() throws {
         // Layer with weight 1 should fully apply
-        XCTAssertTrue(true, "Full weight - needs implementation")
+        throw XCTSkip("Full weight not yet implemented")
     }
     
     /// 🔴 RED: Weight changes over time
     func testWeightAnimation() throws {
         // Weights should be animatable for fade in/out effects
-        XCTAssertTrue(true, "Weight animation - needs implementation")
+        throw XCTSkip("Weight animation not yet implemented")
     }
     
     // MARK: - Additive Animation Tests
@@ -227,14 +227,14 @@ final class AnimationLayeringTests: XCTestCase {
     func testAdditiveAnimation() throws {
         // Additive animations add delta to base pose
         // rather than replacing it
-        XCTAssertTrue(true, "Additive animation - needs implementation")
+        throw XCTSkip("Additive animation not yet implemented")
     }
     
     /// 🔴 RED: Multiple additive layers
     func testMultipleAdditiveLayers() throws {
         // Should support multiple additive layers
         // (e.g., breathing + fidgeting + recoil)
-        XCTAssertTrue(true, "Multiple additive - needs implementation")
+        throw XCTSkip("Multiple additive not yet implemented")
     }
     
     // MARK: - Masking Tests
@@ -245,13 +245,13 @@ final class AnimationLayeringTests: XCTestCase {
     func testAnimationMasking() throws {
         // Apply animation only to upper body
         // Lower body continues with base animation
-        XCTAssertTrue(true, "Animation masking - needs implementation")
+        throw XCTSkip("Animation masking not yet implemented")
     }
     
     /// 🔴 RED: Bone-specific masking
     func testBoneSpecificMasking() throws {
         // Mask specific bones from animation
-        XCTAssertTrue(true, "Bone masking - needs implementation")
+        throw XCTSkip("Bone masking not yet implemented")
     }
     
     // MARK: - Helper Methods

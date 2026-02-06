@@ -209,7 +209,7 @@ final class AnimationEdgeCaseTests: XCTestCase {
     /// 🔴 RED: Partial bone mapping
     func testPartialBoneMapping() throws {
         // Some bones map, some don't
-        XCTAssertTrue(true, "Partial mapping - needs test data")
+        throw XCTSkip("Partial mapping needs test data")
     }
     
     // MARK: - Quaternion Neighborhood Tests
@@ -300,7 +300,7 @@ final class AnimationEdgeCaseTests: XCTestCase {
     /// 🔴 RED: Infinity in animation data
     func testInfinityHandling() throws {
         // Should handle infinity gracefully
-        XCTAssertTrue(true, "Infinity handling - needs implementation")
+        throw XCTSkip("Infinity handling not yet implemented")
     }
     
     // MARK: - Time Boundary Tests
@@ -390,13 +390,13 @@ final class AnimationEdgeCaseTests: XCTestCase {
     /// 🔴 RED: Deep hierarchy
     func testDeepHierarchy() throws {
         // Test animation on deeply nested bones
-        XCTAssertTrue(true, "Deep hierarchy - needs complex model")
+        throw XCTSkip("Deep hierarchy needs complex model")
     }
     
     /// 🔴 RED: Memory efficiency
     func testMemoryEfficiency() throws {
         // Should not leak memory with repeated play/reset
-        XCTAssertTrue(true, "Memory efficiency - needs profiling")
+        throw XCTSkip("Memory efficiency needs profiling")
     }
 }
 

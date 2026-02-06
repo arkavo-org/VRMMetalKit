@@ -269,7 +269,7 @@ final class VRMABoneRetargetingTests: XCTestCase {
     /// 
     /// When animation rest pose differs from model bind pose,
     /// retargeting should preserve the animation's relative motion
-    func testRetargetingPreservesAnimationIntent() {
+    func testRetargetingPreservesAnimationIntent() throws {
         // This is a conceptual test documenting expected behavior
         // Full testing would require known animation/model pairs
         
@@ -281,6 +281,6 @@ final class VRMABoneRetargetingTests: XCTestCase {
         
         // Retargeting formula: result = modelRest * inverse(animationRest) * animationValue
         // This is verified indirectly through integration tests
-        XCTAssertTrue(true, "Retargeting formula documented in code")
+        throw XCTSkip("Retargeting intent preservation needs known animation/model pairs")
     }
 }

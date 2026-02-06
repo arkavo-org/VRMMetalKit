@@ -117,7 +117,7 @@ final class ZFightingDepthPrecisionTests: XCTestCase {
 
     // MARK: - Reverse-Z vs Standard-Z Comparison
 
-    func testReverseZImprovesNearPlanePrecision() {
+    func testReverseZImprovesNearPlanePrecision() throws {
         // Reverse-Z provides better precision distribution
         // This is a documentation test showing the benefit
 
@@ -141,7 +141,7 @@ final class ZFightingDepthPrecisionTests: XCTestCase {
         }
 
         // The test passes if calculations complete - this is primarily documentation
-        XCTAssertTrue(true, "Reverse-Z precision comparison completed")
+        throw XCTSkip("Reverse-Z precision comparison needs assertions")
     }
 
     // MARK: - VRM-Specific Distance Tests

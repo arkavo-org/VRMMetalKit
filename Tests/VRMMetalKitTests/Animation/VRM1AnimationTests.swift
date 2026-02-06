@@ -314,7 +314,7 @@ final class VRM1AnimationTests: XCTestCase {
         }
         
         // Test passes if we can access expression data
-        XCTAssertTrue(true, "Expression override data accessible")
+        throw XCTSkip("Expression override validation needs assertions")
     }
     
     // MARK: - Constraint Tests
