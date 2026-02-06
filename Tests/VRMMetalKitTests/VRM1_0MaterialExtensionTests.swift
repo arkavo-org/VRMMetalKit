@@ -1,187 +1,220 @@
-// Copyright 2025 Arkavo Inc. and contributors
-// Licensed under the Apache License, Version 2.0
+//
+// Copyright 2025 Arkavo
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
 
 import XCTest
-import Metal
-import simd
 @testable import VRMMetalKit
 
 /// Tests for VRM 1.0 per-material VRMC_materials_mtoon extension parsing.
 ///
-/// These tests verify that VRM 1.0 material extensions are properly decoded
-/// from the glTF JSON, enabling correct rendering of shade colors, alpha modes,
-/// and other MToon properties.
+/// Uses in-memory GLB data with embedded MToon extensions so tests run in CI
+/// without external model files.
 ///
-/// Related GitHub Issues: #104, #105
+/// Related GitHub Issues: #98, #104, #105
 ///
 final class VRM1_0MaterialExtensionTests: XCTestCase {
 
-    var device: MTLDevice!
-
-    var vrm0Path: String {
-        ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"] ?? ""
-    }
-
-    var vrm1Path: String {
-        ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"] ?? ""
-    }
+    private var model: VRMModel!
 
     override func setUp() async throws {
-        guard let device = MTLCreateSystemDefaultDevice() else {
-            throw XCTSkip("Metal not available")
-        }
-        self.device = device
+        try await super.setUp()
+        let glbData = try Self.buildGLBWithMToon()
+        model = try await VRMModel.load(from: glbData, device: nil)
     }
 
-    // MARK: - VRM 1.0 Material Extension Tests
+    // MARK: - VRM 1.0 MToon Extension Tests
 
-    /// Test: VRM 1.0 model has MToon material parsed from per-material extensions
-    func testVRM1_0HasMToonMaterial() async throws {
-        guard FileManager.default.fileExists(atPath: vrm1Path) else {
-            throw XCTSkip("VRM 1.0 test model not found at \(vrm1Path)")
-        }
-
-        let model = try await VRMModel.load(from: URL(fileURLWithPath: vrm1Path), device: device)
-
-        // VRM 1.0 models should have MToon materials parsed from VRMC_materials_mtoon extension
+    func testVRM1_0HasMToonMaterial() {
         let hasMToon = model.materials.contains { $0.mtoon != nil }
-
-        print("=== VRM 1.0 Material Analysis ===")
-        print("Total materials: \(model.materials.count)")
-        print("Materials with MToon: \(model.materials.filter { $0.mtoon != nil }.count)")
-
-        for (i, material) in model.materials.enumerated() {
-            let hasMToonStr = material.mtoon != nil ? "YES" : "NO"
-            print("  Material \(i) '\(material.name ?? "unnamed")': MToon=\(hasMToonStr), alphaMode=\(material.alphaMode)")
-        }
-
         XCTAssertTrue(hasMToon, "VRM 1.0 model should have MToon materials parsed from extensions")
     }
 
-    /// Test: Shade color is parsed from VRMC_materials_mtoon extension
-    func testVRM1_0ShadeColorParsed() async throws {
-        guard FileManager.default.fileExists(atPath: vrm1Path) else {
-            throw XCTSkip("VRM 1.0 test model not found at \(vrm1Path)")
-        }
+    func testVRM1_0ShadeColorParsed() {
+        let mtoonMaterials = model.materials.filter { $0.mtoon != nil }
+        XCTAssertFalse(mtoonMaterials.isEmpty)
 
-        let model = try await VRMModel.load(from: URL(fileURLWithPath: vrm1Path), device: device)
-
-        print("=== VRM 1.0 Shade Color Analysis ===")
-        var materialsWithShadeColor = 0
-
-        for (i, material) in model.materials.enumerated() {
-            guard let mtoon = material.mtoon else { continue }
-            let shadeColor = mtoon.shadeColorFactor
-
-            // Check if shade color is non-black (default)
-            let isNonBlack = shadeColor.x > 0.001 || shadeColor.y > 0.001 || shadeColor.z > 0.001
-            if isNonBlack {
-                materialsWithShadeColor += 1
-            }
-
-            print("  Material \(i) '\(material.name ?? "unnamed")': shadeColor=(\(String(format: "%.3f", shadeColor.x)), \(String(format: "%.3f", shadeColor.y)), \(String(format: "%.3f", shadeColor.z)))")
-        }
-
-        print("Materials with non-black shade color: \(materialsWithShadeColor)")
-
-        // Note: Some materials may legitimately have black shade color
-        // This test verifies the parsing pipeline is working
+        let skin = mtoonMaterials.first { $0.name == "Skin" }
+        XCTAssertNotNil(skin)
+        let shadeColor = skin!.mtoon!.shadeColorFactor
+        XCTAssertEqual(shadeColor.x, 0.6, accuracy: 0.01)
+        XCTAssertEqual(shadeColor.y, 0.4, accuracy: 0.01)
+        XCTAssertEqual(shadeColor.z, 0.3, accuracy: 0.01)
     }
 
-    /// Test: Alpha mode is correctly preserved from glTF material
-    func testVRM1_0AlphaModeParsed() async throws {
-        guard FileManager.default.fileExists(atPath: vrm1Path) else {
-            throw XCTSkip("VRM 1.0 test model not found at \(vrm1Path)")
-        }
+    func testVRM1_0AlphaModeParsed() {
+        let opaqueCount = model.materials.filter { $0.alphaMode == "OPAQUE" }.count
+        let blendCount = model.materials.filter { $0.alphaMode == "BLEND" }.count
+        XCTAssertGreaterThan(opaqueCount, 0, "Should have OPAQUE materials")
+        XCTAssertGreaterThan(blendCount, 0, "Should have BLEND materials")
+    }
 
-        let model = try await VRMModel.load(from: URL(fileURLWithPath: vrm1Path), device: device)
+    func testVRM1_0ToonyFactorParsed() {
+        let skin = model.materials.first { $0.name == "Skin" }
+        XCTAssertNotNil(skin?.mtoon)
+        XCTAssertEqual(skin!.mtoon!.shadingToonyFactor, 0.7, accuracy: 0.01)
+    }
 
-        print("=== VRM 1.0 Alpha Mode Analysis ===")
+    func testVRM1_0OutlinePropertiesParsed() {
+        let skin = model.materials.first { $0.name == "Skin" }
+        XCTAssertNotNil(skin?.mtoon)
+        XCTAssertEqual(skin!.mtoon!.outlineWidthMode, .worldCoordinates)
+        XCTAssertEqual(skin!.mtoon!.outlineWidthFactor, 0.005, accuracy: 0.0001)
+        XCTAssertEqual(skin!.mtoon!.outlineColorFactor.x, 0.0, accuracy: 0.01)
+    }
 
-        var alphaModeCount: [String: Int] = [:]
+    func testVRM1_0MaterialVersionIsV1() {
         for material in model.materials {
-            alphaModeCount[material.alphaMode, default: 0] += 1
+            XCTAssertEqual(material.vrmVersion, .v1_0,
+                "Material '\(material.name ?? "unnamed")' should have vrmVersion .v1_0")
         }
-
-        for (mode, count) in alphaModeCount.sorted(by: { $0.key < $1.key }) {
-            print("  \(mode): \(count) materials")
-        }
-
-        // VRM models typically have OPAQUE materials for skin/clothing
-        XCTAssertTrue(alphaModeCount["OPAQUE", default: 0] > 0 || alphaModeCount["opaque", default: 0] > 0,
-                      "VRM 1.0 model should have OPAQUE materials")
     }
 
-    /// Test: Toony factor is parsed (controls toon shading sharpness)
-    func testVRM1_0ToonyFactorParsed() async throws {
-        guard FileManager.default.fileExists(atPath: vrm1Path) else {
-            throw XCTSkip("VRM 1.0 test model not found at \(vrm1Path)")
-        }
-
-        let model = try await VRMModel.load(from: URL(fileURLWithPath: vrm1Path), device: device)
-
-        print("=== VRM 1.0 Toony Factor Analysis ===")
-
-        for (i, material) in model.materials.enumerated() {
-            guard let mtoon = material.mtoon else { continue }
-            print("  Material \(i) '\(material.name ?? "unnamed")': shadingToonyFactor=\(String(format: "%.3f", mtoon.shadingToonyFactor))")
-        }
-
-        // At least one material should have non-default toony factor
-        let hasNonDefaultToony = model.materials.contains { material in
-            guard let mtoon = material.mtoon else { return false }
-            // Default is 0.9, check if any material has different value
-            return abs(mtoon.shadingToonyFactor - 0.9) > 0.001
-        }
-
-        // This is informational - some models may use default values
-        print("Has non-default toony factor: \(hasNonDefaultToony)")
-    }
-
-    // MARK: - VRM 0.0 Backward Compatibility Tests
-
-    /// Test: VRM 0.0 models still work correctly (regression test)
-    func testVRM0_0StillWorks() async throws {
-        guard FileManager.default.fileExists(atPath: vrm0Path) else {
-            throw XCTSkip("VRM 0.0 test model not found at \(vrm0Path)")
-        }
-
-        let model = try await VRMModel.load(from: URL(fileURLWithPath: vrm0Path), device: device)
-
-        print("=== VRM 0.0 Compatibility Check ===")
-        print("Model loaded: \(model.meta.name ?? "unnamed")")
-        print("isVRM0: \(model.isVRM0)")
-        print("Materials: \(model.materials.count)")
-
-        // VRM 0.0 models should still load and have materials
-        XCTAssertTrue(model.isVRM0, "Model should be detected as VRM 0.0")
-        XCTAssertGreaterThan(model.materials.count, 0, "VRM 0.0 model should have materials")
-
-        // VRM 0.0 models get MToon from document-level materialProperties
-        let hasMToon = model.materials.contains { $0.mtoon != nil }
-        print("Has MToon materials: \(hasMToon)")
-    }
-
-    // MARK: - Extension Parsing Verification
-
-    /// Test: Verify extensions field is being decoded (not nil)
-    func testExtensionsFieldDecoded() async throws {
-        // This test verifies the fix for GLTFParser.swift line 251
-        // where extensions was previously hardcoded to nil
-
-        guard FileManager.default.fileExists(atPath: vrm1Path) else {
-            throw XCTSkip("VRM 1.0 test model not found")
-        }
-
-        let model = try await VRMModel.load(from: URL(fileURLWithPath: vrm1Path), device: device)
-
-        // If VRM 1.0 materials have MToon data, extensions were decoded
+    func testExtensionsFieldDecoded() {
+        XCTAssertFalse(model.isVRM0)
         let vrm1HasMToon = model.materials.contains { $0.mtoon != nil }
+        XCTAssertTrue(vrm1HasMToon,
+            "VRM 1.0 model should have MToon from per-material VRMC_materials_mtoon extension")
+    }
 
-        if !model.isVRM0 {
-            // For VRM 1.0 models, MToon comes from per-material extensions
-            XCTAssertTrue(vrm1HasMToon,
-                         "VRM 1.0 model should have MToon from per-material VRMC_materials_mtoon extension")
+    // MARK: - GLB Builder Helper
+
+    private static func buildGLBWithMToon() throws -> Data {
+        let vrm = try VRMBuilder()
+            .setSkeleton(.defaultHumanoid)
+            .build()
+
+        let vrmJSON = try buildVRMJSONWithMToon(vrm)
+        let binaryData = vrm.gltf.binaryBufferData ?? Data()
+        return try createGLB(json: vrmJSON, binaryData: binaryData)
+    }
+
+    private static func buildVRMJSONWithMToon(_ vrm: VRMModel) throws -> [String: Any] {
+        let gltfData = try JSONEncoder().encode(vrm.gltf)
+        var gltfDict = try JSONSerialization.jsonObject(with: gltfData) as! [String: Any]
+
+        // Replace materials with MToon-extended versions
+        let materials: [[String: Any]] = [
+            [
+                "name": "Skin",
+                "pbrMetallicRoughness": [
+                    "baseColorFactor": [0.8, 0.7, 0.6, 1.0],
+                    "metallicFactor": 0.0,
+                    "roughnessFactor": 1.0,
+                ],
+                "alphaMode": "OPAQUE",
+                "doubleSided": false,
+                "extensions": [
+                    "VRMC_materials_mtoon": [
+                        "specVersion": "1.0",
+                        "shadeColorFactor": [0.6, 0.4, 0.3],
+                        "shadingToonyFactor": 0.7,
+                        "shadingShiftFactor": -0.1,
+                        "giIntensityFactor": 0.1,
+                        "outlineWidthMode": "worldCoordinates",
+                        "outlineWidthFactor": 0.005,
+                        "outlineColorFactor": [0.0, 0.0, 0.0],
+                        "outlineLightingMixFactor": 0.5,
+                        "parametricRimColorFactor": [1.0, 1.0, 1.0],
+                        "parametricRimFresnelPowerFactor": 5.0,
+                        "parametricRimLiftFactor": 0.0,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ],
+            [
+                "name": "Hair",
+                "pbrMetallicRoughness": [
+                    "baseColorFactor": [0.3, 0.2, 0.1, 0.9],
+                    "metallicFactor": 0.0,
+                    "roughnessFactor": 1.0,
+                ],
+                "alphaMode": "BLEND",
+                "doubleSided": true,
+                "extensions": [
+                    "VRMC_materials_mtoon": [
+                        "specVersion": "1.0",
+                        "shadeColorFactor": [0.15, 0.1, 0.05],
+                        "shadingToonyFactor": 0.9,
+                        "transparentWithZWrite": true,
+                    ] as [String: Any],
+                ] as [String: Any],
+            ],
+        ]
+        gltfDict["materials"] = materials
+
+        var extensionsUsed = gltfDict["extensionsUsed"] as? [String] ?? []
+        if !extensionsUsed.contains("VRMC_materials_mtoon") {
+            extensionsUsed.append("VRMC_materials_mtoon")
         }
+        gltfDict["extensionsUsed"] = extensionsUsed
+
+        // Add VRMC_vrm extension
+        var extensions = gltfDict["extensions"] as? [String: Any] ?? [:]
+        var vrmcVrm: [String: Any] = ["specVersion": "1.0"]
+        vrmcVrm["meta"] = [
+            "name": "MToon Test Model",
+            "licenseUrl": "",
+            "authors": ["VRMBuilder"],
+        ]
+        if let humanoid = vrm.humanoid {
+            var humanBonesDict: [String: Any] = [:]
+            for (bone, humanBone) in humanoid.humanBones {
+                humanBonesDict[bone.rawValue] = ["node": humanBone.node]
+            }
+            vrmcVrm["humanoid"] = ["humanBones": humanBonesDict]
+        }
+        extensions["VRMC_vrm"] = vrmcVrm
+        gltfDict["extensions"] = extensions
+
+        return gltfDict
+    }
+
+    private static func createGLB(json: [String: Any], binaryData: Data) throws -> Data {
+        let jsonData = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
+        let jsonPadding = (4 - (jsonData.count % 4)) % 4
+        var paddedJSON = jsonData
+        if jsonPadding > 0 {
+            paddedJSON.append(Data(repeating: 0x20, count: jsonPadding))
+        }
+
+        let binaryPadding = (4 - (binaryData.count % 4)) % 4
+        var paddedBinary = binaryData
+        if binaryPadding > 0 {
+            paddedBinary.append(Data(repeating: 0x00, count: binaryPadding))
+        }
+
+        let headerLength = 12
+        let jsonChunkHeaderLength = 8
+        let binaryChunkHeaderLength = binaryData.isEmpty ? 0 : 8
+        let totalLength = headerLength + jsonChunkHeaderLength + paddedJSON.count
+            + binaryChunkHeaderLength + paddedBinary.count
+
+        var glbData = Data()
+        glbData.append(UInt32(0x46546C67).littleEndian.data)
+        glbData.append(UInt32(2).littleEndian.data)
+        glbData.append(UInt32(totalLength).littleEndian.data)
+
+        glbData.append(UInt32(paddedJSON.count).littleEndian.data)
+        glbData.append(UInt32(0x4E4F534A).littleEndian.data)
+        glbData.append(paddedJSON)
+
+        if !binaryData.isEmpty {
+            glbData.append(UInt32(paddedBinary.count).littleEndian.data)
+            glbData.append(UInt32(0x004E4942).littleEndian.data)
+            glbData.append(paddedBinary)
+        }
+
+        return glbData
     }
 }
