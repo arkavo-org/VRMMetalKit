@@ -1496,17 +1496,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLog("  - Effective double-sided: \(item.effectiveDoubleSided)")
                 }
 
-                // Promote OPAQUE → MASK only for VRM 0.x Cutout materials (blendMode=1).
-                // glTF maps Cutout to alphaMode=MASK, but some loaders lose this.
-                if item.effectiveAlphaMode == "opaque" && !item.isFaceMaterial {
-                    if let matIdx = primitive.materialIndex, matIdx < model.materials.count {
-                        let mat = model.materials[matIdx]
-                        if mat.blendMode == 1 && mat.baseColorTexture != nil {
-                            item.effectiveAlphaMode = "mask"
-                            item.effectiveAlphaCutoff = mat.alphaCutoff
-                            vrmLog("[ALPHA FIX] Promoted '\(materialName)' from OPAQUE to MASK (VRM0 Cutout)")
-                        }
-                    }
+                // Demote MASK → OPAQUE for body/skin materials.
+                // Body textures have alpha=0 padding that would cause holes via MASK discard.
+                // Clothing materials (tops, bottoms, shoes) keep MASK for proper cutout.
+                let isBodyOrSkinMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin")
+                if isBodyOrSkinMaterial && !item.isFaceMaterial && item.effectiveAlphaMode == "mask" {
+                    item.effectiveAlphaMode = "opaque"
+                    vrmLog("[ALPHA FIX] Demoted '\(materialName)' from MASK to OPAQUE (body/skin)")
                 }
 
 
