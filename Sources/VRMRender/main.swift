@@ -346,6 +346,7 @@ struct VRMRenderCLI {
             config.strict = .off
             
             let renderer = VRMRenderer(device: device, config: config)
+            renderer.debugUVs = Int32(options.debugMode)
             renderer.loadModel(model)
             
             // Pure anime/cel-shading: Single key light for hard step shadows

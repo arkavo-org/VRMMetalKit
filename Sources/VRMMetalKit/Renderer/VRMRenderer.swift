@@ -1442,8 +1442,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
                 let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
                                       meshNameLower.contains("face") || meshNameLower.contains("eye")
-                let isBodyOrSkinMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin") ||
-                                         nodeNameLower.contains("body") || meshNameLower.contains("body")
+                let isBodyOrSkinMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin")
 
                 var item = RenderItem(
                     node: node,

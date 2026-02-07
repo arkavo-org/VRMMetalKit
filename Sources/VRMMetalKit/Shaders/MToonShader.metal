@@ -268,7 +268,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Show baseColorFactor directly
  return material.baseColorFactor;
  } else if (uniforms.debugUVs == 4) {
- // Show sampled texture directly
+ // Show sampled texture RGB directly
  float4 texColor = baseColorTexture.sample(textureSampler, in.texCoord);
  return float4(texColor.rgb, 1.0);
  } else if (uniforms.debugUVs == 5) {
