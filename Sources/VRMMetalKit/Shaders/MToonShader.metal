@@ -288,11 +288,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Show light direction
  return float4(uniforms.lightDirection.xyz * 0.5 + 0.5, 1.0);
  } else if (uniforms.debugUVs == 9) {
- // Show normal flip: RED = normal was flipped (faces away), GREEN = not flipped
- float3 normal = normalize(in.worldNormal);
- float3 viewDir = normalize(in.viewDirection);
- bool needsFlip = dot(normal, viewDir) < 0.0;
- return float4(needsFlip ? 1.0 : 0.0, needsFlip ? 0.0 : 1.0, 0.0, 1.0);
+ // Show front/back face: RED = back face, GREEN = front face
+ return float4(isFrontFace ? 0.0 : 1.0, isFrontFace ? 1.0 : 0.0, 0.0, 1.0);
  } else if (uniforms.debugUVs == 10) {
  // Show view direction (should point from vertex toward camera)
  return float4(normalize(in.viewDirection) * 0.5 + 0.5, 1.0);
@@ -412,25 +409,20 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  shadeColor *= shadeTexColor;
  }
 
- // Normal mapping - perturb the surface normal for detail like nose contours
  float3 normal = normalize(in.worldNormal);
- if (material.hasNormalTexture > 0) {
- float3 normalMapSample = normalTexture.sample(textureSampler, uv).xyz;
- normalMapSample = normalMapSample * 2.0 - 1.0;
- // Approximate normal perturbation (proper tangent space would be more accurate)
- // Using higher strength (0.8) for more visible facial contours
- normal = normalize(normal + normalMapSample * 0.8);
- }
-
- // Two-sided lighting: flip normal if it faces away from camera
- // This handles both backfaces AND front faces with inverted normals (common in cloth/ruffles)
- float3 viewDir = normalize(in.viewDirection);
  float3 viewNormal = in.viewNormal;
+
  bool normalWasFlipped = false;
- if (dot(normal, viewDir) < 0.0) {
+ if (!isFrontFace) {
      normal = -normal;
      viewNormal = -viewNormal;
      normalWasFlipped = true;
+ }
+
+ if (material.hasNormalTexture > 0) {
+     float3 normalMapSample = normalTexture.sample(textureSampler, uv).xyz;
+     normalMapSample = normalMapSample * 2.0 - 1.0;
+     normal = normalize(normal + normalMapSample * 0.8);
  }
 
  // DEBUG: Show magenta where normal was flipped (enable with debugUVs=11)
@@ -519,9 +511,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Accumulate weighted contributions (manual normalization factor allows artistic control)
  float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
- // Global illumination equalization - mix toward balanced lighting
- float3 giColor = uniforms.ambientColor.xyz * baseColor.rgb;
- litColor = mix(litColor, (litColor + giColor) * 0.5, material.giIntensityFactor);
+ // Indirect diffuse: ambient always contributes at base color (matches three-vrm)
+ float3 indirectDiffuse = uniforms.ambientColor.xyz * baseColor.rgb;
+ litColor += indirectDiffuse;
 
  // Emissive
  float3 emissive = float3(material.emissiveR, material.emissiveG, material.emissiveB);

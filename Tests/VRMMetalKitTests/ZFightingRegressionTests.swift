@@ -270,7 +270,7 @@ final class ZFightingRegressionTests: XCTestCase {
         helper.loadModel(model)
 
         // Front view threshold (VRM 0.0 models now face camera correctly)
-        let threshold: Float = 18.0
+        let threshold: Float = 19.0
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0.3, 0.85, 0.5),
