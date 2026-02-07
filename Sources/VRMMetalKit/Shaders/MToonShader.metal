@@ -312,19 +312,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
- float shadowStep;
- if (material.vrmVersion == 0) {
-     shadowStep = smoothstep(shadingShift - toony * 0.5,
-                            shadingShift + toony * 0.5, NdotL);
- } else {
-     // VRM 1.0: linearstep formula
-     float range = (1.0 - toony) * 2.0;
-     if (range <= 0.0001) {
-         shadowStep = shading >= (1.0 - toony) ? 1.0 : 0.0;
-     } else {
-         shadowStep = saturate((shading - (-1.0 + toony)) / range);
-     }
- }
+ // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
+ float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading);
  return float4(shadowStep, shadowStep, shadowStep, 1.0);
  } else if (uniforms.debugUVs == 24) {
 // Debug mode 24: Show alpha mode (RED=OPAQUE, GREEN=MASK, BLUE=BLEND)
@@ -434,17 +423,8 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
- float lightingFactor;
- if (material.vrmVersion == 0) {
-     // VRM 0.0: smoothstep formula
-     lightingFactor = smoothstep(shadingShift - toony * 0.5,
-                                 shadingShift + toony * 0.5, NdotL);
- } else {
-     // VRM 1.0: linearstep formula per spec
-     float lower = -1.0 + toony;
-     float upper = 1.0 - toony;
-     lightingFactor = saturate((shading - lower) / (upper - lower));
- }
+ // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
+ float lightingFactor = linearstep(-1.0 + toony, 1.0 - toony, shading);
  return float4(lightingFactor, lightingFactor, lightingFactor, 1.0);
  } else if (uniforms.debugUVs == 16) {
  // Debug mode 16: Show raw NdotL as color
@@ -556,17 +536,9 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // Half-Lambert: remap from [-1,1] to [0,1] for softer anime-style shadows
  float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
  float NdotL = rawNdotL * 0.5 + 0.5;
- float shadowStep;
- if (material.vrmVersion == 0) {
-     // VRM 0.0: Original smoothstep formula (params were designed for this)
-     shadowStep = smoothstep(shadingShift - toony * 0.5,
-                            shadingShift + toony * 0.5,
-                            NdotL);
- } else {
-     // VRM 1.0: Spec-compliant linearstep formula for sharp cel-shading
-     float shading = NdotL + shadingShift;
-     shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading);
- }
+ // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
+ float shading0 = NdotL + shadingShift;
+ float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading0);
  float weight = intensity0 / totalIntensity;
  lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor.xyz * weight;
  }
@@ -576,15 +548,8 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // Half-Lambert for fill light
  float rawNdotL1 = dot(normal, -uniforms.light1Direction.xyz);
  float NdotL1 = rawNdotL1 * 0.5 + 0.5;
- float shadowStep1;
- if (material.vrmVersion == 0) {
-     shadowStep1 = smoothstep(shadingShift - toony * 0.5,
-                             shadingShift + toony * 0.5,
-                             NdotL1);
- } else {
-     float shading1 = NdotL1 + shadingShift;
-     shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
- }
+ float shading1 = NdotL1 + shadingShift;
+ float shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
  float weight1 = intensity1 / totalIntensity;
  lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color.xyz * weight1;
  }
@@ -594,15 +559,8 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // Half-Lambert for rim light
  float rawNdotL2 = dot(normal, -uniforms.light2Direction.xyz);
  float NdotL2 = rawNdotL2 * 0.5 + 0.5;
- float shadowStep2;
- if (material.vrmVersion == 0) {
-     shadowStep2 = smoothstep(shadingShift - toony * 0.5,
-                             shadingShift + toony * 0.5,
-                             NdotL2);
- } else {
-     float shading2 = NdotL2 + shadingShift;
-     shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
- }
+ float shading2 = NdotL2 + shadingShift;
+ float shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
  float weight2 = intensity2 / totalIntensity;
  lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
  }
@@ -808,9 +766,8 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
  shadingShift += (shiftTexValue - 0.5) * material.shadingShiftTextureScale;
  }
 
- float ramp = smoothstep(shadingShift - material.shadingToonyFactor * 0.5,
-                    shadingShift + material.shadingToonyFactor * 0.5,
-                    nl);
+ float shading = nl + shadingShift;
+ float ramp = linearstep(-1.0 + material.shadingToonyFactor, 1.0 - material.shadingToonyFactor, shading);
  return float4(ramp, ramp, ramp, 1.0);
 }
 
