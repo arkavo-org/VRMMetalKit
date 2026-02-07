@@ -352,7 +352,10 @@ public struct VRM0MaterialProperty {
         mtoon.shadingShiftFactor = shadingShiftFactor
 
         // Shade texture from texture properties
-        if let shadeTexIndex = textureProperties["_ShadeTexture"] {
+        // Skip when same as main texture - prevents blue padding artifacts
+        if let shadeTexIndex = textureProperties["_ShadeTexture"],
+           let mainTexIndex = textureProperties["_MainTex"],
+           shadeTexIndex != mainTexIndex {
             mtoon.shadeMultiplyTexture = shadeTexIndex
         }
 

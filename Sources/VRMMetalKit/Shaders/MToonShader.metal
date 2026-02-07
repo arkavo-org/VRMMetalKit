@@ -268,7 +268,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Show baseColorFactor directly
  return material.baseColorFactor;
  } else if (uniforms.debugUVs == 4) {
- // Show sampled texture directly
+ // Show sampled texture RGB directly
  float4 texColor = baseColorTexture.sample(textureSampler, in.texCoord);
  return float4(texColor.rgb, 1.0);
  } else if (uniforms.debugUVs == 5) {
@@ -288,11 +288,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Show light direction
  return float4(uniforms.lightDirection.xyz * 0.5 + 0.5, 1.0);
  } else if (uniforms.debugUVs == 9) {
- // Show normal flip: RED = normal was flipped (faces away), GREEN = not flipped
- float3 normal = normalize(in.worldNormal);
- float3 viewDir = normalize(in.viewDirection);
- bool needsFlip = dot(normal, viewDir) < 0.0;
- return float4(needsFlip ? 1.0 : 0.0, needsFlip ? 0.0 : 1.0, 0.0, 1.0);
+ // Show front/back face: RED = back face, GREEN = front face
+ return float4(isFrontFace ? 0.0 : 1.0, isFrontFace ? 1.0 : 0.0, 0.0, 1.0);
  } else if (uniforms.debugUVs == 10) {
  // Show view direction (should point from vertex toward camera)
  return float4(normalize(in.viewDirection) * 0.5 + 0.5, 1.0);
@@ -315,20 +312,106 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
- float shadowStep;
- if (material.vrmVersion == 0) {
-     shadowStep = smoothstep(shadingShift - toony * 0.5,
-                            shadingShift + toony * 0.5, NdotL);
- } else {
-     // VRM 1.0: linearstep formula
-     float range = (1.0 - toony) * 2.0;
-     if (range <= 0.0001) {
-         shadowStep = shading >= (1.0 - toony) ? 1.0 : 0.0;
-     } else {
-         shadowStep = saturate((shading - (-1.0 + toony)) / range);
-     }
- }
+ // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
+ float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading);
  return float4(shadowStep, shadowStep, shadowStep, 1.0);
+ } else if (uniforms.debugUVs == 24) {
+// Debug mode 24: Show alpha mode (RED=OPAQUE, GREEN=MASK, BLUE=BLEND)
+if (material.alphaMode == 0) return float4(1.0, 0.0, 0.0, 1.0);
+if (material.alphaMode == 1) return float4(0.0, 1.0, 0.0, 1.0);
+return float4(0.0, 0.0, 1.0, 1.0);
+ } else if (uniforms.debugUVs == 25) {
+// Debug mode 25: Raw texture RGBA channels: R=texR, G=texG, B=texAlpha (with MASK discard)
+float4 texSample = float4(1.0);
+if (material.hasBaseColorTexture > 0) {
+    texSample = baseColorTexture.sample(textureSampler, in.texCoord);
+}
+float4 dbgBase25 = material.baseColorFactor * texSample;
+if (material.alphaMode == 1 && dbgBase25.a < material.alphaCutoff) {
+    discard_fragment();
+}
+return float4(texSample.r, texSample.g, texSample.a, 1.0);
+ } else if (uniforms.debugUVs == 26) {
+// Debug mode 26: Texture alpha WITH MASK discard (grayscale)
+float4 dbgBase26 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase26 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase26.a < material.alphaCutoff) {
+    discard_fragment();
+}
+return float4(dbgBase26.a, dbgBase26.a, dbgBase26.a, 1.0);
+ } else if (uniforms.debugUVs == 27) {
+// Debug mode 27: Shade color factor (identifies material by unique shade color)
+float4 dbgBase27 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase27 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase27.a < material.alphaCutoff) {
+    discard_fragment();
+}
+return float4(material.shadeColorR, material.shadeColorG, material.shadeColorB, 1.0);
+ } else if (uniforms.debugUVs == 28) {
+// Debug mode 28: Alpha mode with correct discard (RED=OPAQUE, GREEN=MASK, BLUE=BLEND)
+float4 dbgBase28 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase28 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase28.a < material.alphaCutoff) {
+    discard_fragment();
+}
+if (material.alphaMode == 0) return float4(1.0, 0.0, 0.0, 1.0);
+if (material.alphaMode == 1) return float4(0.0, 1.0, 0.0, 1.0);
+return float4(0.0, 0.0, 1.0, 1.0);
+ } else if (uniforms.debugUVs == 30) {
+// Debug 30: Base color texture RGB after MASK discard (no lighting)
+float4 dbgBase30 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase30 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase30.a < material.alphaCutoff) {
+    discard_fragment();
+}
+return float4(dbgBase30.rgb, 1.0);
+ } else if (uniforms.debugUVs == 31) {
+// Debug 31: Raw shade texture sample after MASK discard
+float4 dbgBase31 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase31 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase31.a < material.alphaCutoff) {
+    discard_fragment();
+}
+if (material.hasShadeMultiplyTexture > 0) {
+    return float4(shadeMultiplyTexture.sample(textureSampler, in.texCoord).rgb, 1.0);
+}
+return float4(0.5, 0.5, 0.5, 1.0); // Gray = no shade texture
+ } else if (uniforms.debugUVs == 33) {
+// Debug 33: Shade color value (shadeColorR/G/B from material)
+float3 sc = float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
+return float4(sc, 1.0);
+ } else if (uniforms.debugUVs == 34) {
+// Debug 34: Show hasShadeMultiplyTexture (RED=has texture, BLACK=no texture)
+if (material.hasShadeMultiplyTexture > 0) {
+    return float4(1.0, 0.0, 0.0, 1.0);  // RED = has shade texture
+} else {
+    return float4(0.0, 0.0, 0.0, 1.0);  // BLACK = no shade texture
+}
+ } else if (uniforms.debugUVs == 32) {
+// Debug 32: Matcap contribution after MASK discard
+float4 dbgBase32 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase32 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase32.a < material.alphaCutoff) {
+    discard_fragment();
+}
+if (material.hasMatcapTexture > 0) {
+    float3 vn = normalize(in.viewNormal);
+    float2 mcUV = vn.xy * 0.5 + 0.5;
+    return float4(matcapTexture.sample(textureSampler, mcUV).rgb, 1.0);
+}
+return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  } else if (uniforms.debugUVs == 15) {
  // Debug mode 15: Visualize lightingFactor (the lit/shadow interpolation)
  // WHITE = fully lit (baseColor), BLACK = fully shadow (shadeColor)
@@ -340,17 +423,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
- float lightingFactor;
- if (material.vrmVersion == 0) {
-     // VRM 0.0: smoothstep formula
-     lightingFactor = smoothstep(shadingShift - toony * 0.5,
-                                 shadingShift + toony * 0.5, NdotL);
- } else {
-     // VRM 1.0: linearstep formula per spec
-     float lower = -1.0 + toony;
-     float upper = 1.0 - toony;
-     lightingFactor = saturate((shading - lower) / (upper - lower));
- }
+ // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
+ float lightingFactor = linearstep(-1.0 + toony, 1.0 - toony, shading);
  return float4(lightingFactor, lightingFactor, lightingFactor, 1.0);
  } else if (uniforms.debugUVs == 16) {
  // Debug mode 16: Show raw NdotL as color
@@ -411,26 +485,23 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float3 shadeTexColor = shadeMultiplyTexture.sample(textureSampler, uv).rgb;
  shadeColor *= shadeTexColor;
  }
+ // Note: When _ShadeTexture == _MainTex (VRM 0.0), we skip shadeMultiplyTexture
+ // assignment in VRMTypes.swift. shadeColor uses shadeColorFactor directly.
 
- // Normal mapping - perturb the surface normal for detail like nose contours
  float3 normal = normalize(in.worldNormal);
- if (material.hasNormalTexture > 0) {
- float3 normalMapSample = normalTexture.sample(textureSampler, uv).xyz;
- normalMapSample = normalMapSample * 2.0 - 1.0;
- // Approximate normal perturbation (proper tangent space would be more accurate)
- // Using higher strength (0.8) for more visible facial contours
- normal = normalize(normal + normalMapSample * 0.8);
- }
-
- // Two-sided lighting: flip normal if it faces away from camera
- // This handles both backfaces AND front faces with inverted normals (common in cloth/ruffles)
- float3 viewDir = normalize(in.viewDirection);
  float3 viewNormal = in.viewNormal;
+
  bool normalWasFlipped = false;
- if (dot(normal, viewDir) < 0.0) {
+ if (!isFrontFace) {
      normal = -normal;
      viewNormal = -viewNormal;
      normalWasFlipped = true;
+ }
+
+ if (material.hasNormalTexture > 0) {
+     float3 normalMapSample = normalTexture.sample(textureSampler, uv).xyz;
+     normalMapSample = normalMapSample * 2.0 - 1.0;
+     normal = normalize(normal + normalMapSample * 0.8);
  }
 
  // DEBUG: Show magenta where normal was flipped (enable with debugUVs=11)
@@ -465,17 +536,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Half-Lambert: remap from [-1,1] to [0,1] for softer anime-style shadows
  float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
  float NdotL = rawNdotL * 0.5 + 0.5;
- float shadowStep;
- if (material.vrmVersion == 0) {
-     // VRM 0.0: Original smoothstep formula (params were designed for this)
-     shadowStep = smoothstep(shadingShift - toony * 0.5,
-                            shadingShift + toony * 0.5,
-                            NdotL);
- } else {
-     // VRM 1.0: Spec-compliant linearstep formula for sharp cel-shading
-     float shading = NdotL + shadingShift;
-     shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading);
- }
+ // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
+ float shading0 = NdotL + shadingShift;
+ float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading0);
  float weight = intensity0 / totalIntensity;
  lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor.xyz * weight;
  }
@@ -485,15 +548,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Half-Lambert for fill light
  float rawNdotL1 = dot(normal, -uniforms.light1Direction.xyz);
  float NdotL1 = rawNdotL1 * 0.5 + 0.5;
- float shadowStep1;
- if (material.vrmVersion == 0) {
-     shadowStep1 = smoothstep(shadingShift - toony * 0.5,
-                             shadingShift + toony * 0.5,
-                             NdotL1);
- } else {
-     float shading1 = NdotL1 + shadingShift;
-     shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
- }
+ float shading1 = NdotL1 + shadingShift;
+ float shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
  float weight1 = intensity1 / totalIntensity;
  lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color.xyz * weight1;
  }
@@ -503,15 +559,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Half-Lambert for rim light
  float rawNdotL2 = dot(normal, -uniforms.light2Direction.xyz);
  float NdotL2 = rawNdotL2 * 0.5 + 0.5;
- float shadowStep2;
- if (material.vrmVersion == 0) {
-     shadowStep2 = smoothstep(shadingShift - toony * 0.5,
-                             shadingShift + toony * 0.5,
-                             NdotL2);
- } else {
-     float shading2 = NdotL2 + shadingShift;
-     shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
- }
+ float shading2 = NdotL2 + shadingShift;
+ float shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
  float weight2 = intensity2 / totalIntensity;
  lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
  }
@@ -519,9 +568,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Accumulate weighted contributions (manual normalization factor allows artistic control)
  float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
- // Global illumination equalization - mix toward balanced lighting
- float3 giColor = uniforms.ambientColor.xyz * baseColor.rgb;
- litColor = mix(litColor, (litColor + giColor) * 0.5, material.giIntensityFactor);
+ // Indirect diffuse: ambient always contributes at base color (matches three-vrm)
+ float3 indirectDiffuse = uniforms.ambientColor.xyz * baseColor.rgb;
+ litColor += indirectDiffuse;
 
  // Emissive
  float3 emissive = float3(material.emissiveR, material.emissiveG, material.emissiveB);
@@ -570,6 +619,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  // ADD rim to final color (standard MToon behavior per spec)
  litColor += finalRim;
+ }
+ 
+ // DEBUG 35: Final lit color before gamma/sRGB conversion
+ if (uniforms.debugUVs == 35) {
+     return float4(litColor, 1.0);
  }
 
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
@@ -712,9 +766,8 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
  shadingShift += (shiftTexValue - 0.5) * material.shadingShiftTextureScale;
  }
 
- float ramp = smoothstep(shadingShift - material.shadingToonyFactor * 0.5,
-                    shadingShift + material.shadingToonyFactor * 0.5,
-                    nl);
+ float shading = nl + shadingShift;
+ float ramp = linearstep(-1.0 + material.shadingToonyFactor, 1.0 - material.shadingToonyFactor, shading);
  return float4(ramp, ramp, ramp, 1.0);
 }
 

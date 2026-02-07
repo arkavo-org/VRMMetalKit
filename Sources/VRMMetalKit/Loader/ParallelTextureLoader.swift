@@ -241,6 +241,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
             return nil
         }
         
+        context.setBlendMode(.copy)
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
         
         texture.replace(

@@ -93,19 +93,41 @@ func printUsage() {
         -f, --fps <fps>         Frames per second (default: 30)
         -d, --duration <secs>   Duration in seconds (default: 5.0)
         --orbit                 Enable orbiting camera
+        --orbit-target <target> Orbit focus: face, hips, body (default: body)
         --ortho                 Use orthographic projection
         --hevc                  Use HEVC codec instead of H.264
         --root-motion           Enable root motion (hips translation)
         --help                  Show this help message
-    
+
     EXAMPLES:
         swift run VRMVideoRenderer model.vrm anim.vrma output.mov
+        swift run VRMVideoRenderer model.vrm anim.vrma output.mov --orbit --orbit-target face
+        swift run VRMVideoRenderer model.vrm anim.vrma output.mov --orbit --orbit-target hips
         swift run VRMVideoRenderer model.vrm anim.vrma output.mov -w 1280 -h 720 -f 60
-        swift run VRMVideoRenderer model.vrm anim.vrma output.mov --orbit --duration 10
     """)
 }
 
 // MARK: - Parse Arguments
+
+enum OrbitTarget: String {
+    case body, face, hips
+
+    var centerY: Float {
+        switch self {
+        case .body: return 1.0
+        case .face: return 1.45
+        case .hips: return 0.85
+        }
+    }
+
+    var radius: Float {
+        switch self {
+        case .body: return 3.0
+        case .face: return 0.6
+        case .hips: return 1.5
+        }
+    }
+}
 
 struct RenderOptions {
     var vrmPath: String = ""
@@ -116,6 +138,7 @@ struct RenderOptions {
     var fps: Int = 30
     var duration: Double = 5.0
     var orbitCamera: Bool = false
+    var orbitTarget: OrbitTarget = .body
     var orthographic: Bool = false
     var hevc: Bool = false
     var rootMotion: Bool = false
@@ -169,6 +192,13 @@ func parseArguments() -> RenderOptions? {
             }
         case "--orbit":
             options.orbitCamera = true
+        case "--orbit-target":
+            i += 1
+            if i < args.count, let target = OrbitTarget(rawValue: args[i]) {
+                options.orbitTarget = target
+            } else {
+                print("Warning: Invalid orbit target. Use: face, hips, body")
+            }
         case "--ortho":
             options.orthographic = true
         case "--hevc":
@@ -395,11 +425,12 @@ struct VRMVideoRendererCLI {
                 
                 // Update camera
                 if options.orbitCamera {
-                    let angle = Float(frameIndex) * 0.01
-                    let radius: Float = 3.0
+                    let angle = Float(frameIndex) / Float(totalFrames) * 2.0 * Float.pi
+                    let radius = options.orbitTarget.radius
+                    let centerY = options.orbitTarget.centerY
                     renderer.viewMatrix = lookAt(
-                        eye: SIMD3<Float>(sin(angle) * radius, 1.0, cos(angle) * radius),
-                        center: SIMD3<Float>(0, 1, 0),
+                        eye: SIMD3<Float>(sin(angle) * radius, centerY, cos(angle) * radius),
+                        center: SIMD3<Float>(0, centerY, 0),
                         up: SIMD3<Float>(0, 1, 0)
                     )
                 } else {
