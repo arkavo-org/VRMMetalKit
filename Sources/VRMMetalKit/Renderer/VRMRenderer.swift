@@ -1442,8 +1442,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
                 let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
                                       meshNameLower.contains("face") || meshNameLower.contains("eye")
-                let isBodyOrSkinMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin")
-
                 var item = RenderItem(
                     node: node,
                     mesh: mesh,
@@ -1498,11 +1496,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLog("  - Effective double-sided: \(item.effectiveDoubleSided)")
                 }
 
-                // DON'T override MASK to OPAQUE for face materials - they often need transparency!
-                // Only do this for body/skin materials where it helps with rendering
-                if isBodyOrSkinMaterial && !nodeOrMeshIsFace && item.effectiveAlphaMode == "mask" {
-                    item.effectiveAlphaMode = "opaque"
-                    vrmLog("[ALPHA OVERRIDE] Converting MASK to OPAQUE for face/body/skin material: \(materialName)")
+                // Promote OPAQUE → MASK only for VRM 0.x Cutout materials (blendMode=1).
+                // glTF maps Cutout to alphaMode=MASK, but some loaders lose this.
+                if item.effectiveAlphaMode == "opaque" && !item.isFaceMaterial {
+                    if let matIdx = primitive.materialIndex, matIdx < model.materials.count {
+                        let mat = model.materials[matIdx]
+                        if mat.blendMode == 1 && mat.baseColorTexture != nil {
+                            item.effectiveAlphaMode = "mask"
+                            item.effectiveAlphaCutoff = mat.alphaCutoff
+                            vrmLog("[ALPHA FIX] Promoted '\(materialName)' from OPAQUE to MASK (VRM0 Cutout)")
+                        }
+                    }
                 }
 
 
@@ -2328,14 +2332,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         default: mtoonUniforms.alphaMode = 0
                         }
                         mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
-                    } else if materialAlphaMode == "mask" && (materialNameLower.contains("skin") || materialNameLower.contains("body")) {
-                        // For non-face body/skin, convert MASK→OPAQUE to avoid punch-through artifacts
-                        mtoonUniforms.alphaMode = 0
-                        mtoonUniforms.alphaCutoff = 0.0
-                        if frameCounter % 60 == 0 { vrmLog("[ALPHA OVERRIDE] MASK→OPAQUE for body/skin: \(item.materialName)") }
                     } else {
                         // Use EFFECTIVE alpha mode for other materials and non-mask face materials
-                        switch materialAlphaMode {
+                        switch item.effectiveAlphaMode {
                         case "mask":
                             mtoonUniforms.alphaMode = 1
                         case "blend":
@@ -2370,7 +2369,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                         // ALPHA FIX: Restore effectiveAlphaMode AFTER MToon init
                         // MToon extension may have wrong alphaMode; use our detected/fixed value
-                        switch materialAlphaMode {
+                        switch item.effectiveAlphaMode {
                         case "mask":
                             mtoonUniforms.alphaMode = 1
                             mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
@@ -2381,23 +2380,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
                     } else {
                         // NO MToon extension - use default PBR values
-                        // Apply SELECTIVE alpha mode override for face/body materials AFTER MToon init
-                        if isFaceOrBodyMaterial && materialAlphaMode == "mask" {
-                            // Only override MASK mode to prevent incorrect discard
-                            mtoonUniforms.alphaMode = 0  // Force OPAQUE instead of MASK
-                            mtoonUniforms.alphaCutoff = 0.0  // Disable cutoff
-                        } else {
-                            // Use EFFECTIVE alpha mode (includes overrides)
-                            switch materialAlphaMode {
-                            case "mask":
-                                mtoonUniforms.alphaMode = 1
-                            case "blend":
-                                mtoonUniforms.alphaMode = 2
-                            default:
-                                mtoonUniforms.alphaMode = 0
-                            }
+                        switch item.effectiveAlphaMode {
+                        case "mask":
+                            mtoonUniforms.alphaMode = 1
+                        case "blend":
+                            mtoonUniforms.alphaMode = 2
+                        default:
+                            mtoonUniforms.alphaMode = 0
+                        }
                         mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
-                    }
 
                     // Eye material rendering adjustments
                     if let faceCat = item.faceCategory, faceCat == "eye" {
@@ -2432,14 +2423,18 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // Index 1: Shade multiply texture (from MToon)
-                    if let mtoon = material.mtoon,
-                       let textureIndex = mtoon.shadeMultiplyTexture,
-                       textureIndex < model.textures.count,
-                       let mtlTexture = model.textures[textureIndex].mtlTexture {
-                        encoder.setFragmentTexture(mtlTexture, index: 1)
-                        mtoonUniforms.hasShadeMultiplyTexture = 1
-                        textureCount += 1
-                        // vrmLog("[VRMRenderer] Bound shade multiply texture at index 1")
+                    if let mtoon = material.mtoon {
+                        if let textureIndex = mtoon.shadeMultiplyTexture {
+                            if textureIndex < model.textures.count,
+                               let mtlTexture = model.textures[textureIndex].mtlTexture {
+                                encoder.setFragmentTexture(mtlTexture, index: 1)
+                                mtoonUniforms.hasShadeMultiplyTexture = 1
+                                textureCount += 1
+                            }
+                        } else {
+                            encoder.setFragmentTexture(nil, index: 1)
+                            mtoonUniforms.hasShadeMultiplyTexture = 0
+                        }
                     }
 
                     // Index 2: Shading shift texture
@@ -2821,6 +2816,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 // Set MToon material uniforms
                 // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
+                // Encode uniforms
+                // (Debug code removed)
                 encoder.setVertexBytes(&mtoonUniforms,
                                        length: MemoryLayout<MToonMaterialUniforms>.stride,
                                        index: 8)

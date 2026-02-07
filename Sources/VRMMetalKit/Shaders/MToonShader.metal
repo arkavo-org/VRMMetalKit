@@ -326,6 +326,103 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      }
  }
  return float4(shadowStep, shadowStep, shadowStep, 1.0);
+ } else if (uniforms.debugUVs == 24) {
+// Debug mode 24: Show alpha mode (RED=OPAQUE, GREEN=MASK, BLUE=BLEND)
+if (material.alphaMode == 0) return float4(1.0, 0.0, 0.0, 1.0);
+if (material.alphaMode == 1) return float4(0.0, 1.0, 0.0, 1.0);
+return float4(0.0, 0.0, 1.0, 1.0);
+ } else if (uniforms.debugUVs == 25) {
+// Debug mode 25: Raw texture RGBA channels: R=texR, G=texG, B=texAlpha (with MASK discard)
+float4 texSample = float4(1.0);
+if (material.hasBaseColorTexture > 0) {
+    texSample = baseColorTexture.sample(textureSampler, in.texCoord);
+}
+float4 dbgBase25 = material.baseColorFactor * texSample;
+if (material.alphaMode == 1 && dbgBase25.a < material.alphaCutoff) {
+    discard_fragment();
+}
+return float4(texSample.r, texSample.g, texSample.a, 1.0);
+ } else if (uniforms.debugUVs == 26) {
+// Debug mode 26: Texture alpha WITH MASK discard (grayscale)
+float4 dbgBase26 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase26 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase26.a < material.alphaCutoff) {
+    discard_fragment();
+}
+return float4(dbgBase26.a, dbgBase26.a, dbgBase26.a, 1.0);
+ } else if (uniforms.debugUVs == 27) {
+// Debug mode 27: Shade color factor (identifies material by unique shade color)
+float4 dbgBase27 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase27 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase27.a < material.alphaCutoff) {
+    discard_fragment();
+}
+return float4(material.shadeColorR, material.shadeColorG, material.shadeColorB, 1.0);
+ } else if (uniforms.debugUVs == 28) {
+// Debug mode 28: Alpha mode with correct discard (RED=OPAQUE, GREEN=MASK, BLUE=BLEND)
+float4 dbgBase28 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase28 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase28.a < material.alphaCutoff) {
+    discard_fragment();
+}
+if (material.alphaMode == 0) return float4(1.0, 0.0, 0.0, 1.0);
+if (material.alphaMode == 1) return float4(0.0, 1.0, 0.0, 1.0);
+return float4(0.0, 0.0, 1.0, 1.0);
+ } else if (uniforms.debugUVs == 30) {
+// Debug 30: Base color texture RGB after MASK discard (no lighting)
+float4 dbgBase30 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase30 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase30.a < material.alphaCutoff) {
+    discard_fragment();
+}
+return float4(dbgBase30.rgb, 1.0);
+ } else if (uniforms.debugUVs == 31) {
+// Debug 31: Raw shade texture sample after MASK discard
+float4 dbgBase31 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase31 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase31.a < material.alphaCutoff) {
+    discard_fragment();
+}
+if (material.hasShadeMultiplyTexture > 0) {
+    return float4(shadeMultiplyTexture.sample(textureSampler, in.texCoord).rgb, 1.0);
+}
+return float4(0.5, 0.5, 0.5, 1.0); // Gray = no shade texture
+ } else if (uniforms.debugUVs == 33) {
+// Debug 33: Shade color value (shadeColorR/G/B from material)
+float3 sc = float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
+return float4(sc, 1.0);
+ } else if (uniforms.debugUVs == 34) {
+// Debug 34: Show hasShadeMultiplyTexture (RED=has texture, BLACK=no texture)
+if (material.hasShadeMultiplyTexture > 0) {
+    return float4(1.0, 0.0, 0.0, 1.0);  // RED = has shade texture
+} else {
+    return float4(0.0, 0.0, 0.0, 1.0);  // BLACK = no shade texture
+}
+ } else if (uniforms.debugUVs == 32) {
+// Debug 32: Matcap contribution after MASK discard
+float4 dbgBase32 = material.baseColorFactor;
+if (material.hasBaseColorTexture > 0) {
+    dbgBase32 *= baseColorTexture.sample(textureSampler, in.texCoord);
+}
+if (material.alphaMode == 1 && dbgBase32.a < material.alphaCutoff) {
+    discard_fragment();
+}
+if (material.hasMatcapTexture > 0) {
+    float3 vn = normalize(in.viewNormal);
+    float2 mcUV = vn.xy * 0.5 + 0.5;
+    return float4(matcapTexture.sample(textureSampler, mcUV).rgb, 1.0);
+}
+return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  } else if (uniforms.debugUVs == 15) {
  // Debug mode 15: Visualize lightingFactor (the lit/shadow interpolation)
  // WHITE = fully lit (baseColor), BLACK = fully shadow (shadeColor)
@@ -408,6 +505,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  float3 shadeTexColor = shadeMultiplyTexture.sample(textureSampler, uv).rgb;
  shadeColor *= shadeTexColor;
  }
+ // Note: When _ShadeTexture == _MainTex (VRM 0.0), we skip shadeMultiplyTexture
+ // assignment in VRMTypes.swift. shadeColor uses shadeColorFactor directly.
 
  float3 normal = normalize(in.worldNormal);
  float3 viewNormal = in.viewNormal;
@@ -562,6 +661,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  // ADD rim to final color (standard MToon behavior per spec)
  litColor += finalRim;
+ }
+ 
+ // DEBUG 35: Final lit color before gamma/sRGB conversion
+ if (uniforms.debugUVs == 35) {
+     return float4(litColor, 1.0);
  }
 
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)

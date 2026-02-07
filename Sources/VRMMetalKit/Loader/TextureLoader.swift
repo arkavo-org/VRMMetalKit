@@ -272,8 +272,9 @@ public class TextureLoader {
         vrmLog("[TextureLoader] Creating CGContext...")
         let colorSpace = CGColorSpaceCreateDeviceRGB()
 
-        // Use premultiplied alpha for proper blending
-        // Metal expects premultiplied alpha for correct transparency compositing
+        // premultipliedLast preserves the alpha channel in RGBA layout.
+        // IMPORTANT: Must use .copy blend mode when drawing to avoid
+        // source-over compositing which destroys alpha=0 pixels.
         guard let context = CGContext(
             data: bitmapData,
             width: width,
@@ -289,6 +290,7 @@ public class TextureLoader {
         vrmLog("[TextureLoader] CGContext created with premultiplied alpha")
 
         vrmLog("[TextureLoader] Drawing image to context...")
+        context.setBlendMode(.copy)
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
         vrmLog("[TextureLoader] Image drawn")
 

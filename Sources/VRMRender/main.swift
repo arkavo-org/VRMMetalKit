@@ -362,7 +362,7 @@ struct VRMRenderCLI {
                               color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
             
             // Very low ambient for high contrast (anime style)
-            renderer.setAmbientColor(SIMD3<Float>(0.03, 0.03, 0.05))
+            renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))  // Neutral gray, no blue tint
             
             // Calculate bounding box for auto-framing
             let (minBounds, maxBounds) = model.calculateBoundingBox()
