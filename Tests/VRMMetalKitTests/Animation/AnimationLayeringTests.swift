@@ -278,11 +278,11 @@ final class AnimationLayeringTests: XCTestCase {
     }
 }
 
-// MARK: - AnimationLayer (Future Implementation)
+// MARK: - AnimationLayerSpec (Future Implementation)
 
-/// Represents an animation layer for blending
+/// Represents a planned animation layer for blending
 /// 🔴 RED: This class needs to be implemented
-public struct AnimationLayer {
+public struct AnimationLayerSpec {
     let name: String
     let clip: AnimationClip
     let weight: Float

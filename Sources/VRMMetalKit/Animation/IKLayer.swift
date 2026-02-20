@@ -38,7 +38,7 @@ public final class IKLayer: AnimationLayer {
         case right
     }
 
-    public enum GroundingMode {
+    public enum GroundingMode: Sendable {
         case walkCycle       // Original: use FootContactDetector
         case idleGrounding   // Pin both feet at rest positions
     }
