@@ -2550,7 +2550,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoder.setDepthStencilState(depthStencilStates["opaque"])
                     }
-                    encoder.setCullMode(.back)
+                    encoder.setCullMode(isDoubleSided ? .none : .back)
                     encoder.setFrontFacing(.counterClockwise)
                     // Z-FIGHTING FIX: Body renders first but pushed back in depth
                     // Negative bias pushes away from camera, allowing overlays to win
@@ -2566,7 +2566,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoder.setDepthStencilState(depthStencilStates["opaque"])
                     }
-                    encoder.setCullMode(.back)
+                    encoder.setCullMode(isDoubleSided ? .none : .back)
                     encoder.setFrontFacing(.counterClockwise)
                     // Apply depth bias for clothing (overlay layer)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
@@ -2597,7 +2597,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
                     }
 
-                    encoder.setCullMode(.back)
+                    encoder.setCullMode(isDoubleSided ? .none : .back)
                     encoder.setFrontFacing(.counterClockwise)
 
                     // Apply material-specific depth bias from calculator
@@ -2697,7 +2697,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 default:
                     // Unknown face category - fallback to opaque
                     encoder.setDepthStencilState(depthStencilStates["opaque"])
-                    encoder.setCullMode(.back)
+                    encoder.setCullMode(isDoubleSided ? .none : .back)
                     encoder.setFrontFacing(.counterClockwise)
                 }
             } else {
