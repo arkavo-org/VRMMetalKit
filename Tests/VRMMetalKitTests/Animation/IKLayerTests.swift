@@ -353,6 +353,8 @@ final class IKLayerTests: XCTestCase {
 
     func testCompositor_GetCompositedBoneRotation_ReturnsValueAfterUpdate() {
         let compositor = AnimationLayerCompositor()
+        let model = createMinimalModel()
+        compositor.setup(model: model)
         let mockLayer = MockBoneLayer(bone: .head, rotation: simd_quatf(angle: .pi / 4, axis: SIMD3<Float>(0, 1, 0)))
         compositor.addLayer(mockLayer)
 
@@ -365,6 +367,8 @@ final class IKLayerTests: XCTestCase {
 
     func testCompositor_GetCompositedBoneRotation_UnaffectedBoneReturnsNil() {
         let compositor = AnimationLayerCompositor()
+        let model = createMinimalModel()
+        compositor.setup(model: model)
         let mockLayer = MockBoneLayer(bone: .head, rotation: simd_quatf(angle: .pi / 4, axis: SIMD3<Float>(0, 1, 0)))
         compositor.addLayer(mockLayer)
 
@@ -373,6 +377,14 @@ final class IKLayerTests: XCTestCase {
 
         XCTAssertNil(compositor.getCompositedBoneRotation(.hips),
             "Bone not affected by any layer should return nil")
+    }
+
+    // MARK: - Helpers
+
+    private func createMinimalModel() -> VRMModel {
+        let json = #"{"asset":{"version":"2.0"}}"#
+        let gltf = try! JSONDecoder().decode(GLTFDocument.self, from: Data(json.utf8))
+        return VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: nil, gltf: gltf)
     }
 }
 

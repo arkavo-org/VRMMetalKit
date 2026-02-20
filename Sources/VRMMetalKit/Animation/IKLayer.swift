@@ -64,9 +64,10 @@ public final class IKLayer: AnimationLayer {
     /// Grounding mode: walkCycle uses FootContactDetector, idleGrounding pins both feet
     public var groundingMode: GroundingMode = .walkCycle
 
-    /// Rest positions captured during initialize() for idle grounding
-    private var leftFootRestPosition: SIMD3<Float>?
-    private var rightFootRestPosition: SIMD3<Float>?
+    /// Hip-to-foot offsets captured during initialize() for idle grounding.
+    /// Stored as offsets from hips so they work regardless of model world position.
+    private var leftFootHipOffset: SIMD3<Float>?
+    private var rightFootHipOffset: SIMD3<Float>?
 
     /// Contact detector configuration
     public var contactConfig: FootContactDetector.Config {
@@ -98,9 +99,15 @@ public final class IKLayer: AnimationLayer {
         self.model = model
         calculateLegLengths()
 
-        // Capture rest positions for idle grounding
-        leftFootRestPosition = getJointWorldPosition(.leftFoot)
-        rightFootRestPosition = getJointWorldPosition(.rightFoot)
+        // Capture hip-to-foot offsets for idle grounding (position-independent)
+        if let hipPos = getJointWorldPosition(.hips) {
+            if let leftFoot = getJointWorldPosition(.leftFoot) {
+                leftFootHipOffset = leftFoot - hipPos
+            }
+            if let rightFoot = getJointWorldPosition(.rightFoot) {
+                rightFootHipOffset = rightFoot - hipPos
+            }
+        }
     }
 
     public func update(deltaTime: Float, context: AnimationContext) {
@@ -113,13 +120,17 @@ public final class IKLayer: AnimationLayer {
 
         switch groundingMode {
         case .idleGrounding:
-            if let leftTarget = leftFootRestPosition {
+            // Compute foot targets relative to current hip position
+            guard let hipPos = getJointWorldPosition(.hips) else { break }
+            if let offset = leftFootHipOffset {
+                let leftTarget = hipPos + offset
                 if let result = solveIKForLeg(side: .left, targetFootPos: leftTarget) {
                     bones[.leftUpperLeg] = ProceduralBoneTransform(rotation: result.rootRotation)
                     bones[.leftLowerLeg] = ProceduralBoneTransform(rotation: result.midRotation)
                 }
             }
-            if let rightTarget = rightFootRestPosition {
+            if let offset = rightFootHipOffset {
+                let rightTarget = hipPos + offset
                 if let result = solveIKForLeg(side: .right, targetFootPos: rightTarget) {
                     bones[.rightUpperLeg] = ProceduralBoneTransform(rotation: result.rootRotation)
                     bones[.rightLowerLeg] = ProceduralBoneTransform(rotation: result.midRotation)
