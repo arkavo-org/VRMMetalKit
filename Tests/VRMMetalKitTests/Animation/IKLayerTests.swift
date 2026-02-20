@@ -321,4 +321,93 @@ final class IKLayerTests: XCTestCase {
         layer.kneeForwardDirection = SIMD3<Float>(0, 0, -1)
         XCTAssertEqual(layer.kneeForwardDirection, SIMD3<Float>(0, 0, -1))
     }
+
+    func testIKLayer_DefaultGroundingMode() {
+        let layer = IKLayer()
+        switch layer.groundingMode {
+        case .walkCycle:
+            break // expected
+        case .idleGrounding:
+            XCTFail("Default grounding mode should be .walkCycle")
+        }
+    }
+
+    func testIKLayer_GroundingModeSettable() {
+        let layer = IKLayer()
+        layer.groundingMode = .idleGrounding
+        switch layer.groundingMode {
+        case .idleGrounding:
+            break // expected
+        case .walkCycle:
+            XCTFail("Grounding mode should be .idleGrounding after setting")
+        }
+    }
+
+    // MARK: - Compositor Bone Accessor Tests
+
+    func testCompositor_GetCompositedBoneRotation_ReturnsNilBeforeUpdate() {
+        let compositor = AnimationLayerCompositor()
+        XCTAssertNil(compositor.getCompositedBoneRotation(.head),
+            "Should return nil when no layers have been evaluated")
+    }
+
+    func testCompositor_GetCompositedBoneRotation_ReturnsValueAfterUpdate() {
+        let compositor = AnimationLayerCompositor()
+        let model = createMinimalModel()
+        compositor.setup(model: model)
+        let mockLayer = MockBoneLayer(bone: .head, rotation: simd_quatf(angle: .pi / 4, axis: SIMD3<Float>(0, 1, 0)))
+        compositor.addLayer(mockLayer)
+
+        let context = AnimationContext(time: 0, deltaTime: 1.0 / 60.0)
+        compositor.update(deltaTime: context.deltaTime, context: context)
+
+        let result = compositor.getCompositedBoneRotation(.head)
+        XCTAssertNotNil(result, "Should return rotation after layer evaluation")
+    }
+
+    func testCompositor_GetCompositedBoneRotation_UnaffectedBoneReturnsNil() {
+        let compositor = AnimationLayerCompositor()
+        let model = createMinimalModel()
+        compositor.setup(model: model)
+        let mockLayer = MockBoneLayer(bone: .head, rotation: simd_quatf(angle: .pi / 4, axis: SIMD3<Float>(0, 1, 0)))
+        compositor.addLayer(mockLayer)
+
+        let context = AnimationContext(time: 0, deltaTime: 1.0 / 60.0)
+        compositor.update(deltaTime: context.deltaTime, context: context)
+
+        XCTAssertNil(compositor.getCompositedBoneRotation(.hips),
+            "Bone not affected by any layer should return nil")
+    }
+
+    // MARK: - Helpers
+
+    private func createMinimalModel() -> VRMModel {
+        let json = #"{"asset":{"version":"2.0"}}"#
+        let gltf = try! JSONDecoder().decode(GLTFDocument.self, from: Data(json.utf8))
+        return VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: nil, gltf: gltf)
+    }
+}
+
+// MARK: - Mock Layer for Compositor Tests
+
+private final class MockBoneLayer: AnimationLayer {
+    let identifier: String = "mockBone"
+    let priority: Int = 1
+    var isEnabled: Bool = true
+    let affectedBones: Set<VRMHumanoidBone>
+
+    private let bone: VRMHumanoidBone
+    private let rotation: simd_quatf
+
+    init(bone: VRMHumanoidBone, rotation: simd_quatf) {
+        self.bone = bone
+        self.rotation = rotation
+        self.affectedBones = [bone]
+    }
+
+    func update(deltaTime: Float, context: AnimationContext) {}
+
+    func evaluate() -> LayerOutput {
+        LayerOutput(bones: [bone: ProceduralBoneTransform(rotation: rotation)])
+    }
 }
