@@ -38,6 +38,11 @@ public final class IKLayer: AnimationLayer {
         case right
     }
 
+    public enum GroundingMode {
+        case walkCycle       // Original: use FootContactDetector
+        case idleGrounding   // Pin both feet at rest positions
+    }
+
     public let identifier: String = "footIK"
     public let priority: Int = 4
     public var isEnabled: Bool = true
@@ -55,6 +60,13 @@ public final class IKLayer: AnimationLayer {
 
     /// Forward direction for knee pole vector (default: +Z in VRM coordinate system)
     public var kneeForwardDirection: SIMD3<Float> = SIMD3<Float>(0, 0, 1)
+
+    /// Grounding mode: walkCycle uses FootContactDetector, idleGrounding pins both feet
+    public var groundingMode: GroundingMode = .walkCycle
+
+    /// Rest positions captured during initialize() for idle grounding
+    private var leftFootRestPosition: SIMD3<Float>?
+    private var rightFootRestPosition: SIMD3<Float>?
 
     /// Contact detector configuration
     public var contactConfig: FootContactDetector.Config {
@@ -85,6 +97,10 @@ public final class IKLayer: AnimationLayer {
     public func initialize(with model: VRMModel) {
         self.model = model
         calculateLegLengths()
+
+        // Capture rest positions for idle grounding
+        leftFootRestPosition = getJointWorldPosition(.leftFoot)
+        rightFootRestPosition = getJointWorldPosition(.rightFoot)
     }
 
     public func update(deltaTime: Float, context: AnimationContext) {
@@ -93,30 +109,47 @@ public final class IKLayer: AnimationLayer {
             return
         }
 
-        let leftFootPos = getJointWorldPosition(.leftFoot) ?? .zero
-        let rightFootPos = getJointWorldPosition(.rightFoot) ?? .zero
-
-        contactDetector.update(
-            leftFootPos: leftFootPos,
-            rightFootPos: rightFootPos,
-            deltaTime: deltaTime
-        )
-
         var bones: [VRMHumanoidBone: ProceduralBoneTransform] = [:]
 
-        if contactDetector.isLeftFootPlanted,
-           let targetPos = contactDetector.leftFootPlantedPosition {
-            if let result = solveIKForLeg(side: .left, targetFootPos: targetPos) {
-                bones[.leftUpperLeg] = ProceduralBoneTransform(rotation: result.rootRotation)
-                bones[.leftLowerLeg] = ProceduralBoneTransform(rotation: result.midRotation)
+        switch groundingMode {
+        case .idleGrounding:
+            if let leftTarget = leftFootRestPosition {
+                if let result = solveIKForLeg(side: .left, targetFootPos: leftTarget) {
+                    bones[.leftUpperLeg] = ProceduralBoneTransform(rotation: result.rootRotation)
+                    bones[.leftLowerLeg] = ProceduralBoneTransform(rotation: result.midRotation)
+                }
             }
-        }
+            if let rightTarget = rightFootRestPosition {
+                if let result = solveIKForLeg(side: .right, targetFootPos: rightTarget) {
+                    bones[.rightUpperLeg] = ProceduralBoneTransform(rotation: result.rootRotation)
+                    bones[.rightLowerLeg] = ProceduralBoneTransform(rotation: result.midRotation)
+                }
+            }
 
-        if contactDetector.isRightFootPlanted,
-           let targetPos = contactDetector.rightFootPlantedPosition {
-            if let result = solveIKForLeg(side: .right, targetFootPos: targetPos) {
-                bones[.rightUpperLeg] = ProceduralBoneTransform(rotation: result.rootRotation)
-                bones[.rightLowerLeg] = ProceduralBoneTransform(rotation: result.midRotation)
+        case .walkCycle:
+            let leftFootPos = getJointWorldPosition(.leftFoot) ?? .zero
+            let rightFootPos = getJointWorldPosition(.rightFoot) ?? .zero
+
+            contactDetector.update(
+                leftFootPos: leftFootPos,
+                rightFootPos: rightFootPos,
+                deltaTime: deltaTime
+            )
+
+            if contactDetector.isLeftFootPlanted,
+               let targetPos = contactDetector.leftFootPlantedPosition {
+                if let result = solveIKForLeg(side: .left, targetFootPos: targetPos) {
+                    bones[.leftUpperLeg] = ProceduralBoneTransform(rotation: result.rootRotation)
+                    bones[.leftLowerLeg] = ProceduralBoneTransform(rotation: result.midRotation)
+                }
+            }
+
+            if contactDetector.isRightFootPlanted,
+               let targetPos = contactDetector.rightFootPlantedPosition {
+                if let result = solveIKForLeg(side: .right, targetFootPos: targetPos) {
+                    bones[.rightUpperLeg] = ProceduralBoneTransform(rotation: result.rootRotation)
+                    bones[.rightLowerLeg] = ProceduralBoneTransform(rotation: result.midRotation)
+                }
             }
         }
 

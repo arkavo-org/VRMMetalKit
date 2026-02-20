@@ -200,6 +200,11 @@ public class AnimationLayerCompositor {
         compositedMorphs
     }
 
+    /// Get the composited rotation for a specific bone after all layers are evaluated
+    public func getCompositedBoneRotation(_ bone: VRMHumanoidBone) -> simd_quatf? {
+        compositedBones[bone]?.rotation
+    }
+
     /// Update all layers and apply composited result to model
     public func update(deltaTime: Float, context: AnimationContext) {
         guard let model = model else { return }
