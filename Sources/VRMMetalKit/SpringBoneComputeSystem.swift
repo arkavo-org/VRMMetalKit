@@ -667,6 +667,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         cpuRestLengths = restLengths
         cpuParentIndices = parentIndices
 
+        // cpuRestLengths is immutable after setup, so the scale derived from
+        // it is constant for the model's lifetime — compute once here.
+        cachedModelScale = calculateModelScaleFromRestLengths()
+
         if !sphereColliders.isEmpty {
             buffers.updateSphereColliders(sphereColliders)
         }
@@ -1269,9 +1273,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // 3. Capture collider transforms
         captureTargetColliderTransforms(model: model, springBone: springBone)
-
-        // Cache model scale for scale-aware thresholds
-        cachedModelScale = calculateModelScaleFromRestLengths()
     }
 
     /// Captures world-space bind directions based on current animated parent orientations
