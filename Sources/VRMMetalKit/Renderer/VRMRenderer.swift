@@ -984,10 +984,27 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///   - renderPassDescriptor: Render pass configuration with attachments.
     @MainActor
     public func drawOffscreenHeadless(to colorTexture: MTLTexture, depth: MTLTexture, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
-        let dummyView = DummyView(size: CGSize(width: colorTexture.width, height: colorTexture.height))
-        vrmLog("[VRMRenderer] drawOffscreenHeadless called - size: \(colorTexture.width)x\(colorTexture.height)")
-        drawCore(in: dummyView, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
+        // MTKView.init() runs __initCommon which builds a CVDisplayLink; that's
+        // multiple milliseconds of work per call. drawCore() only needs the
+        // view for its drawableSize, so reuse a single DummyView keyed by
+        // size rather than allocating one per frame.
+        let w = colorTexture.width, h = colorTexture.height
+        let view: DummyView
+        if let cached = cachedDummyView,
+           let cachedSize = cachedDummyViewSize,
+           cachedSize == (w, h) {
+            view = cached
+        } else {
+            view = DummyView(size: CGSize(width: w, height: h))
+            cachedDummyView = view
+            cachedDummyViewSize = (w, h)
+        }
+        vrmLog("[VRMRenderer] drawOffscreenHeadless called - size: \(w)x\(h)")
+        drawCore(in: view, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
     }
+
+    private var cachedDummyView: DummyView?
+    private var cachedDummyViewSize: (Int, Int)?
 
     /// Renders the VRM model to the view.
     ///
