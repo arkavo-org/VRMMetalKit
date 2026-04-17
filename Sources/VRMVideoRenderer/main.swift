@@ -28,6 +28,7 @@ enum VideoRenderError: Error {
     case failedToCreateRenderer
     case failedToLoadModel
     case failedToLoadAnimation
+    case failedToCreateCommandQueue
     case videoEncodingFailed
     case missingArguments
     case fileNotFound(String)
@@ -418,7 +419,14 @@ struct VRMVideoRendererCLI {
         let startTime = Date()
         let frameDuration = CMTime(value: 1, timescale: CMTimeScale(options.fps))
         let totalFrames = Int(options.duration * Double(options.fps))
-            
+
+        // Reuse a single command queue across the whole run. Creating one per
+        // frame spawns a Metal driver thread per iteration, which accumulates
+        // until the OS watchdog kills the process on long videos.
+        guard let sharedCommandQueue = device.makeCommandQueue() else {
+            throw VideoRenderError.failedToCreateCommandQueue
+        }
+
             for frameIndex in 0..<totalFrames {
                 // Update animation
                 player.update(deltaTime: 1.0 / Float(options.fps), model: model)
@@ -451,10 +459,9 @@ struct VRMVideoRendererCLI {
                     renderer.projectionMatrix = perspective(fovRadians: Float.pi / 4, aspect: aspectRatio, near: 0.1, far: 100)
                 }
                 
-                // Create pixel buffer
+                // Create pixel buffer (command queue hoisted above loop)
                 guard let pixelBuffer = createPixelBuffer(width: options.width, height: options.height),
-                      let commandQueue = device.makeCommandQueue(),
-                      let commandBuffer = commandQueue.makeCommandBuffer() else {
+                      let commandBuffer = sharedCommandQueue.makeCommandBuffer() else {
                     continue
                 }
                 

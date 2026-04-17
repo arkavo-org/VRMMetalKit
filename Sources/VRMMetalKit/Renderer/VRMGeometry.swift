@@ -1384,10 +1384,6 @@ extension float4x4 {
         columns.3.z = t.z
     }
 
-    init(_ quaternion: simd_quatf) {
-        self = simd_matrix4x4(quaternion)
-    }
-
     init(scaling s: SIMD3<Float>) {
         self = matrix_identity_float4x4
         columns.0.x = s.x

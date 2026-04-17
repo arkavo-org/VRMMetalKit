@@ -104,6 +104,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // Cached model scale for scale-aware thresholds
     private var cachedModelScale: Float = 1.0
 
+    // Reused buffer for writeBonesToNodes() chain walks; keeps capacity
+    // across frames so springs don't each allocate their own tuple array.
+    private var chainNodePositions: [(VRMNode, SIMD3<Float>, Int)] = []
+
     /// Flag to request physics state reset on next update (e.g., when returning to idle)
     var requestPhysicsReset = false
 
@@ -667,6 +671,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         cpuRestLengths = restLengths
         cpuParentIndices = parentIndices
 
+        // cpuRestLengths is immutable after setup, so the scale derived from
+        // it is constant for the model's lifetime — compute once here.
+        cachedModelScale = calculateModelScaleFromRestLengths()
+
         if !sphereColliders.isEmpty {
             buffers.updateSphereColliders(sphereColliders)
         }
@@ -999,28 +1007,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
         skippedReadbacks = 0
 
-        // Check if positions have extreme values
-        let maxMagnitude = positions.prefix(buffers.numBones).map { simd_length($0) }.max() ?? 0
-        vrmLog("[SpringBone] Read \(positions.count) positions. Max magnitude: \(maxMagnitude)")
-
-        // Map bone index to spring/joint for node updates
+        // Map bone index to spring/joint for node updates. Reuse a single
+        // nodePositions buffer across all springs instead of allocating per
+        // spring per frame; springs typically hold 5-30 joints.
         var globalBoneIndex = 0
+        chainNodePositions.reserveCapacity(32)
         for spring in springBone.springs {
             guard globalBoneIndex < positions.count else { break }
 
-            // Build array of (node, position, globalIndex) tuples for this chain
-            var nodePositions: [(VRMNode, SIMD3<Float>, Int)] = []
+            chainNodePositions.removeAll(keepingCapacity: true)
             for joint in spring.joints {
                 guard let node = model.nodes[safe: joint.node],
                       globalBoneIndex < positions.count else { continue }
 
-                nodePositions.append((node, positions[globalBoneIndex], globalBoneIndex))
+                chainNodePositions.append((node, positions[globalBoneIndex], globalBoneIndex))
                 globalBoneIndex += 1
             }
 
             // Update node transforms based on GPU-computed positions
-            if nodePositions.count >= 2 {
-                updateNodeTransformsForChain(nodePositions: nodePositions)
+            if chainNodePositions.count >= 2 {
+                updateNodeTransformsForChain(nodePositions: chainNodePositions)
             }
         }
     }
@@ -1251,7 +1257,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         guard let springBone = model.springBone else { return }
 
         // 1. Capture root positions
-        targetRootPositions = []
+        targetRootPositions.removeAll(keepingCapacity: true)
         for spring in springBone.springs {
             if let firstJoint = spring.joints.first,
                let node = model.nodes[safe: firstJoint.node] {
@@ -1269,14 +1275,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // 3. Capture collider transforms
         captureTargetColliderTransforms(model: model, springBone: springBone)
-
-        // Cache model scale for scale-aware thresholds
-        cachedModelScale = calculateModelScaleFromRestLengths()
     }
 
     /// Captures world-space bind directions based on current animated parent orientations
     private func captureTargetWorldBindDirections(model: VRMModel, springBone: VRMSpringBone) {
-        targetWorldBindDirections = []
+        targetWorldBindDirections.removeAll(keepingCapacity: true)
 
         var boneIndex = 0
         for spring in springBone.springs {
@@ -1321,9 +1324,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        targetSphereColliders = []
-        targetCapsuleColliders = []
-        targetPlaneColliders = []
+        targetSphereColliders.removeAll(keepingCapacity: true)
+        targetCapsuleColliders.removeAll(keepingCapacity: true)
+        targetPlaneColliders.removeAll(keepingCapacity: true)
 
         for (colliderIndex, collider) in springBone.colliders.enumerated() {
             guard let colliderNode = model.nodes[safe: collider.node] else { continue }
@@ -1488,13 +1491,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
     }
 
-    /// Stores current target transforms as previous for next frame's interpolation
+    /// Stores current target transforms as previous for next frame's interpolation.
+    /// Uses swap instead of assignment so both arrays retain their backing storage
+    /// across frames; the next capture overwrites in place via removeAll+append.
     private func commitAllTransforms() {
-        previousRootPositions = targetRootPositions
-        previousWorldBindDirections = targetWorldBindDirections
-        previousSphereColliders = targetSphereColliders
-        previousCapsuleColliders = targetCapsuleColliders
-        previousPlaneColliders = targetPlaneColliders
+        swap(&previousRootPositions, &targetRootPositions)
+        swap(&previousWorldBindDirections, &targetWorldBindDirections)
+        swap(&previousSphereColliders, &targetSphereColliders)
+        swap(&previousCapsuleColliders, &targetCapsuleColliders)
+        swap(&previousPlaneColliders, &targetPlaneColliders)
     }
 
     // MARK: - Teleportation Detection

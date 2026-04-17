@@ -48,7 +48,10 @@ let package = Package(
                 .copy("Resources/VRMMetalKitShaders.metallib")
             ],
             swiftSettings: [
-                .define("VRM_METALKIT_ENABLE_DEBUG_ANIMATION"),
+                // Debug flags (VRM_METALKIT_ENABLE_LOGS / _DEBUG_ANIMATION /
+                // _DEBUG_PHYSICS / _DEBUG_LOADER) are opt-in at build time via
+                // `-Xswiftc -D<FLAG>`. Leaving them off by default keeps the
+                // hot path clean of string-building and validation work.
                 .enableExperimentalFeature("StrictConcurrency")
             ]
         ),
@@ -62,6 +65,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "VRMVideoRenderer",
+            dependencies: ["VRMMetalKit"]
+        ),
+        .executableTarget(
+            name: "VRMBenchmark",
             dependencies: ["VRMMetalKit"]
         ),
         .testTarget(

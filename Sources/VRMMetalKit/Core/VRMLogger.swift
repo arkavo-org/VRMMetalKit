@@ -59,7 +59,7 @@ func vrmLog(
     function: StaticString = #function,
     line: UInt = #line
 ) {
-#if true  // FORCE LOGGING ALWAYS for debugging
+#if VRM_METALKIT_ENABLE_LOGS
     let categoryDescription = String(describing: category)
     let functionDescription = String(describing: function)
     let prefix = "[VRMMetalKit][\(level.rawValue)][\(categoryDescription).\(functionDescription)#\(line)]"

@@ -23,16 +23,29 @@ import Metal
 /// ensuring they pass depth tests against coplanar surfaces. This resolves true Z-fighting
 /// between overlapping geometry.
 ///
+/// ## Thread safety
+/// This class caches resolved bias values in a non-synchronised dictionary.
+/// It is intended to be used from a single context (typically the main actor
+/// via `VRMRenderer.drawCore`). Calling from multiple threads concurrently
+/// is a data race.
+///
 /// ## Usage
 /// ```swift
 /// let calculator = DepthBiasCalculator()
 /// let bias = calculator.depthBias(for: "FaceMouth", isOverlay: true)
 /// renderEncoder.setDepthBias(bias, slopeScale: 2.0, clamp: 0.1)
 /// ```
-public struct DepthBiasCalculator {
-    
+public final class DepthBiasCalculator {
+
     /// Global scale factor applied to all depth bias values
     public var scale: Float = 1.0
+
+    /// Memoized results of lookupBias. Material names repeat across every
+    /// frame (same primitives) but the lookup path does multiple substring
+    /// scans against a ~20-entry keyword table, which profiling showed as
+    /// the dominant CPU cost in the post-MTKView-cache render loop. Caching
+    /// the resolved Float turns each subsequent call into a dictionary hit.
+    private var biasCache: [String: Float] = [:]
     
     /// Base depth bias values by material category
     private let baseBiasValues: [String: Float] = [
@@ -131,8 +144,17 @@ public struct DepthBiasCalculator {
     // MARK: - Private Methods
     
     private func lookupBias(for materialName: String) -> Float {
+        if let cached = biasCache[materialName] {
+            return cached
+        }
+        let result = computeBias(for: materialName)
+        biasCache[materialName] = result
+        return result
+    }
+
+    private func computeBias(for materialName: String) -> Float {
         let lowercased = materialName.lowercased()
-        
+
         // Try exact match first
         if let exactMatch = baseBiasValues[materialName] {
             return exactMatch

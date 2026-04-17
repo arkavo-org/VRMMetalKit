@@ -906,7 +906,7 @@ public class VRMModel: @unchecked Sendable {
     }
 
     public func initializeSpringBoneGPUSystem(device: MTLDevice) throws {
-        guard let springBone = springBone else {
+        guard springBone != nil else {
             return // No SpringBone data in this model
         }
 
