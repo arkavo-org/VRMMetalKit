@@ -108,11 +108,12 @@ vertex DebugVertexOut debug_skinned_vertex(DebugVertexIn in [[stage_in]],
     float4 normalizedWeights = in.weights / max(weightSum, 0.00001);
 
     // Calculate skinning matrix from joint transforms
+    uint4 clampedJoints = min(in.joints, uint4(255));
     float4x4 skinMatrix =
-        normalizedWeights.x * jointMatrices[in.joints.x] +
-        normalizedWeights.y * jointMatrices[in.joints.y] +
-        normalizedWeights.z * jointMatrices[in.joints.z] +
-        normalizedWeights.w * jointMatrices[in.joints.w];
+        normalizedWeights.x * jointMatrices[clampedJoints.x] +
+        normalizedWeights.y * jointMatrices[clampedJoints.y] +
+        normalizedWeights.z * jointMatrices[clampedJoints.z] +
+        normalizedWeights.w * jointMatrices[clampedJoints.w];
 
     float4 skinnedPos = skinMatrix * float4(in.position, 1.0);
     float4 worldPos = uniforms.modelMatrix * skinnedPos;
