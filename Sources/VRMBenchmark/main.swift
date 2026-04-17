@@ -227,25 +227,34 @@ struct VRMBenchmarkCLI {
         }
 
         func renderOnce(_ cpuTimeMs: inout Double) {
-            let rpd = MTLRenderPassDescriptor()
-            rpd.colorAttachments[0].texture = colorTex
-            rpd.colorAttachments[0].loadAction = .clear
-            rpd.colorAttachments[0].storeAction = .store
-            rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.12, green: 0.14, blue: 0.18, alpha: 1)
-            rpd.depthAttachment.texture = depthTex
-            rpd.depthAttachment.loadAction = .clear
-            rpd.depthAttachment.storeAction = .dontCare
-            rpd.depthAttachment.clearDepth = 1.0
+            // Wrap in autoreleasepool so Metal objects (command buffers, render
+            // pass descriptors, encoders) are released every frame instead of
+            // accumulating until the outer pool drains. Without this, running
+            // 500+ frames in a tight loop leaks driver threads and can trigger
+            // a system watchdog panic.
+            var ms = 0.0
+            autoreleasepool {
+                let rpd = MTLRenderPassDescriptor()
+                rpd.colorAttachments[0].texture = colorTex
+                rpd.colorAttachments[0].loadAction = .clear
+                rpd.colorAttachments[0].storeAction = .store
+                rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.12, green: 0.14, blue: 0.18, alpha: 1)
+                rpd.depthAttachment.texture = depthTex
+                rpd.depthAttachment.loadAction = .clear
+                rpd.depthAttachment.storeAction = .dontCare
+                rpd.depthAttachment.clearDepth = 1.0
 
-            guard let cb = commandQueue.makeCommandBuffer() else { return }
+                guard let cb = commandQueue.makeCommandBuffer() else { return }
 
-            let t0 = CACurrentMediaTime()
-            renderer.drawOffscreenHeadless(
-                to: colorTex, depth: depthTex,
-                commandBuffer: cb, renderPassDescriptor: rpd)
-            cb.commit()
-            cb.waitUntilCompleted()
-            cpuTimeMs = (CACurrentMediaTime() - t0) * 1000.0
+                let t0 = CACurrentMediaTime()
+                renderer.drawOffscreenHeadless(
+                    to: colorTex, depth: depthTex,
+                    commandBuffer: cb, renderPassDescriptor: rpd)
+                cb.commit()
+                cb.waitUntilCompleted()
+                ms = (CACurrentMediaTime() - t0) * 1000.0
+            }
+            cpuTimeMs = ms
         }
 
         // Warm-up
