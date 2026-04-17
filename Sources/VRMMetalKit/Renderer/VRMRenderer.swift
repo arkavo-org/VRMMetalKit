@@ -633,11 +633,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Initialize skinning system with all skins for proper offset allocation
         if !model.skins.isEmpty {
             skinningSystem?.setupForSkins(model.skins)
-
-            // DIFFERENTIAL TRANSFORM ANALYSIS: Capture clean baseline for skin 4
-            if model.skins.count > 4 {
-                skinningSystem?.captureCleanBaseline(for: model.skins[4], skinIndex: 4)
-            }
         }
 
         // Load expressions if available
