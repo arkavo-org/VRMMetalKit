@@ -118,11 +118,11 @@ struct MToonMaterial {
  uint32_t alphaMode;                        // 4 bytes
  float alphaCutoff;                         // 4 bytes
 
- // Block 12: 16 bytes - Version flag and padding
+ // Block 12: 16 bytes - Version flag and UV offset
  uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
- float _padding3;                           // 4 bytes
- float _padding4;                           // 4 bytes
- float _padding5;                           // 4 bytes
+ float uvOffsetX;                           // 4 bytes - UV offset for texture remapping
+ float uvOffsetY;                           // 4 bytes - UV offset for texture remapping
+ float uvScale;                             // 4 bytes - UV scale for texture remapping
 };
 
 struct VertexIn {
@@ -274,7 +274,7 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
 
  // Pass through texture coordinates and vertex color
  out.texCoord = in.texCoord;
- out.animatedTexCoord = in.texCoord;  // Will be animated in fragment shader if needed
+ out.animatedTexCoord = animateUV(in.texCoord, material);
  out.color = in.color;
 
  return out;
