@@ -24,11 +24,13 @@ import VRMMetalKit
 
 struct BenchmarkOptions {
     var inputPath: String = ""
+    var vrmaPath: String? = nil
     var frames: Int = 500
     var warmup: Int = 30
     var width: Int = 1024
     var height: Int = 1024
     var sampleCount: Int = 1
+    var fps: Double = 60
     var label: String = "baseline"
 }
 
@@ -40,15 +42,19 @@ func usage() {
     CPU frame-time percentiles plus renderer counters.
 
     Options:
+      --vrma PATH      Optional VRMA animation file; enables per-frame
+                       animation playback so skinning and spring physics
+                       do real work each frame (recommended).
       --frames N       Number of measured frames (default 500)
       --warmup N       Warm-up frames (default 30)
+      --fps N          Animation playback rate in frames/sec (default 60)
       --width W        Render width  (default 1024)
       --height H       Render height (default 1024)
       --sample-count N MSAA sample count (default 1)
       --label NAME     Tag printed in the report header (default "baseline")
 
     Recommended invocation:
-      swift run -c release VRMBenchmark <path> --frames 500
+      swift run -c release VRMBenchmark <vrm-path> --vrma <vrma-path> --frames 500
 
     Env fallback: if no <path> argument is given, AVATAR_SAMPLE_A is used.
     """)
@@ -74,6 +80,10 @@ func parseArguments() -> BenchmarkOptions? {
             i += 1; opts.height = Int(args[i]) ?? opts.height
         case "--sample-count":
             i += 1; opts.sampleCount = Int(args[i]) ?? opts.sampleCount
+        case "--vrma":
+            i += 1; opts.vrmaPath = args[i]
+        case "--fps":
+            i += 1; opts.fps = Double(args[i]) ?? opts.fps
         case "--label":
             i += 1; opts.label = args[i]
         default:
@@ -187,6 +197,31 @@ struct VRMBenchmarkCLI {
         }
         let loadMs = (CFAbsoluteTimeGetCurrent() - loadStart) * 1000.0
 
+        // Optional VRMA animation. When supplied, we run the animation player
+        // every frame so skinning, spring physics, and morph paths do real
+        // work (a static pose skips most of the per-frame CPU cost).
+        let player: AnimationPlayer?
+        let animDurationSec: Double
+        if let vrmaPath = opts.vrmaPath {
+            guard FileManager.default.fileExists(atPath: vrmaPath) else {
+                print("ERROR: VRMA file not found: \(vrmaPath)"); exit(1)
+            }
+            do {
+                let clip = try VRMAnimationLoader.loadVRMA(
+                    from: URL(fileURLWithPath: vrmaPath), model: model)
+                let p = AnimationPlayer()
+                p.load(clip)
+                p.play()
+                player = p
+                animDurationSec = Double(clip.duration)
+            } catch {
+                print("ERROR: failed to load VRMA: \(error)"); exit(1)
+            }
+        } else {
+            player = nil
+            animDurationSec = 0
+        }
+
         // Configure renderer
         var config = RendererConfig()
         config.sampleCount = opts.sampleCount
@@ -226,6 +261,8 @@ struct VRMBenchmarkCLI {
             print("ERROR: failed to create depth texture"); exit(1)
         }
 
+        let dt = Float(1.0 / opts.fps)
+
         func renderOnce(_ cpuTimeMs: inout Double) {
             // Wrap in autoreleasepool so Metal objects (command buffers, render
             // pass descriptors, encoders) are released every frame instead of
@@ -247,6 +284,9 @@ struct VRMBenchmarkCLI {
                 guard let cb = commandQueue.makeCommandBuffer() else { return }
 
                 let t0 = CACurrentMediaTime()
+                // Advance animation before drawing so per-frame measurement
+                // captures both the animation CPU cost and the render cost.
+                player?.update(deltaTime: dt, model: model)
                 renderer.drawOffscreenHeadless(
                     to: colorTex, depth: depthTex,
                     commandBuffer: cb, renderPassDescriptor: rpd)
@@ -285,6 +325,7 @@ struct VRMBenchmarkCLI {
         VRMMetalKit Render Benchmark — \(opts.label)
         ======================================================================
         Model          : \(url.lastPathComponent)
+        Animation      : \(opts.vrmaPath.map { "\(($0 as NSString).lastPathComponent) (\(String(format: "%.2f", animDurationSec))s @ \(opts.fps) fps)" } ?? "none (static pose)")
         Load time      : \(String(format: "%.1f ms", loadMs))
         Resolution     : \(opts.width)x\(opts.height) (MSAA \(opts.sampleCount)x)
         Warmup frames  : \(opts.warmup)
