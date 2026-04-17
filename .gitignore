@@ -18,3 +18,8 @@ tmp/
 /Seed-san.vrm
 /VRM1_Constraint_Twist_Sample.vrm
 /AliciaSolid.vrm
+
+# VRMA asset packs and local render output
+VRMA_Avatar_Mega_Pack/
+VRMA_Locomotion_Pack/
+emote-output/
