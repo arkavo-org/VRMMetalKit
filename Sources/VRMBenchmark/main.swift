@@ -65,27 +65,46 @@ func parseArguments() -> BenchmarkOptions? {
     let args = Array(CommandLine.arguments.dropFirst())
 
     var i = 0
+    // Reads the value following a value-flag, returns nil if the flag was
+    // the last token so we fail cleanly instead of index-out-of-range.
+    func nextValue(for flag: String) -> String? {
+        i += 1
+        guard i < args.count else {
+            print("ERROR: missing value for \(flag)")
+            return nil
+        }
+        return args[i]
+    }
+
     while i < args.count {
         let a = args[i]
         switch a {
         case "-h", "--help":
             usage(); return nil
         case "--frames":
-            i += 1; opts.frames = Int(args[i]) ?? opts.frames
+            guard let v = nextValue(for: a) else { return nil }
+            opts.frames = Int(v) ?? opts.frames
         case "--warmup":
-            i += 1; opts.warmup = Int(args[i]) ?? opts.warmup
+            guard let v = nextValue(for: a) else { return nil }
+            opts.warmup = Int(v) ?? opts.warmup
         case "--width":
-            i += 1; opts.width = Int(args[i]) ?? opts.width
+            guard let v = nextValue(for: a) else { return nil }
+            opts.width = Int(v) ?? opts.width
         case "--height":
-            i += 1; opts.height = Int(args[i]) ?? opts.height
+            guard let v = nextValue(for: a) else { return nil }
+            opts.height = Int(v) ?? opts.height
         case "--sample-count":
-            i += 1; opts.sampleCount = Int(args[i]) ?? opts.sampleCount
+            guard let v = nextValue(for: a) else { return nil }
+            opts.sampleCount = Int(v) ?? opts.sampleCount
         case "--vrma":
-            i += 1; opts.vrmaPath = args[i]
+            guard let v = nextValue(for: a) else { return nil }
+            opts.vrmaPath = v
         case "--fps":
-            i += 1; opts.fps = Double(args[i]) ?? opts.fps
+            guard let v = nextValue(for: a) else { return nil }
+            opts.fps = Double(v) ?? opts.fps
         case "--label":
-            i += 1; opts.label = args[i]
+            guard let v = nextValue(for: a) else { return nil }
+            opts.label = v
         default:
             if opts.inputPath.isEmpty && !a.hasPrefix("--") {
                 opts.inputPath = a

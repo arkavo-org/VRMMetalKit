@@ -28,7 +28,7 @@ enum VideoRenderError: Error {
     case failedToCreateRenderer
     case failedToLoadModel
     case failedToLoadAnimation
-    case failedToCreateCommandBuffer
+    case failedToCreateCommandQueue
     case videoEncodingFailed
     case missingArguments
     case fileNotFound(String)
@@ -424,7 +424,7 @@ struct VRMVideoRendererCLI {
         // frame spawns a Metal driver thread per iteration, which accumulates
         // until the OS watchdog kills the process on long videos.
         guard let sharedCommandQueue = device.makeCommandQueue() else {
-            throw VideoRenderError.failedToCreateCommandBuffer
+            throw VideoRenderError.failedToCreateCommandQueue
         }
 
             for frameIndex in 0..<totalFrames {

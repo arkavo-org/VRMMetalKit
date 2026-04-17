@@ -23,6 +23,12 @@ import Metal
 /// ensuring they pass depth tests against coplanar surfaces. This resolves true Z-fighting
 /// between overlapping geometry.
 ///
+/// ## Thread safety
+/// This class caches resolved bias values in a non-synchronised dictionary.
+/// It is intended to be used from a single context (typically the main actor
+/// via `VRMRenderer.drawCore`). Calling from multiple threads concurrently
+/// is a data race.
+///
 /// ## Usage
 /// ```swift
 /// let calculator = DepthBiasCalculator()
