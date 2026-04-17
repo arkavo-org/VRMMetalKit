@@ -492,6 +492,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var cachedRenderItems: [RenderItem]?
     private var cacheNeedsRebuild = true
 
+    // Scratch dictionary reused by the transparency-sort pass to avoid a
+    // per-frame dictionary allocation. Keys are primitiveIndex.
+    private var viewZByIndex: [Int: Float] = [:]
+
     // RENDER ITEM: Structure for sorting and rendering primitives
     private struct RenderItem {
         let node: VRMNode
@@ -1607,7 +1611,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
 
         // Pre-compute view-space Z for transparent items to avoid redundant matrix multiplies in comparator
-        var viewZByIndex = [Int: Float]()
+        viewZByIndex.removeAll(keepingCapacity: true)
         viewZByIndex.reserveCapacity(blendCount)
         for item in allItems where item.materialRenderQueue >= 2500 {
             let worldPos = item.node.worldMatrix.columns.3

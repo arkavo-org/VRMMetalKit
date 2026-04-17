@@ -104,6 +104,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // Cached model scale for scale-aware thresholds
     private var cachedModelScale: Float = 1.0
 
+    // Reused buffer for writeBonesToNodes() chain walks; keeps capacity
+    // across frames so springs don't each allocate their own tuple array.
+    private var chainNodePositions: [(VRMNode, SIMD3<Float>, Int)] = []
+
     /// Flag to request physics state reset on next update (e.g., when returning to idle)
     var requestPhysicsReset = false
 
@@ -1003,28 +1007,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
         skippedReadbacks = 0
 
-        // Check if positions have extreme values
-        let maxMagnitude = positions.prefix(buffers.numBones).map { simd_length($0) }.max() ?? 0
-        vrmLog("[SpringBone] Read \(positions.count) positions. Max magnitude: \(maxMagnitude)")
-
-        // Map bone index to spring/joint for node updates
+        // Map bone index to spring/joint for node updates. Reuse a single
+        // nodePositions buffer across all springs instead of allocating per
+        // spring per frame; springs typically hold 5-30 joints.
         var globalBoneIndex = 0
+        chainNodePositions.reserveCapacity(32)
         for spring in springBone.springs {
             guard globalBoneIndex < positions.count else { break }
 
-            // Build array of (node, position, globalIndex) tuples for this chain
-            var nodePositions: [(VRMNode, SIMD3<Float>, Int)] = []
+            chainNodePositions.removeAll(keepingCapacity: true)
             for joint in spring.joints {
                 guard let node = model.nodes[safe: joint.node],
                       globalBoneIndex < positions.count else { continue }
 
-                nodePositions.append((node, positions[globalBoneIndex], globalBoneIndex))
+                chainNodePositions.append((node, positions[globalBoneIndex], globalBoneIndex))
                 globalBoneIndex += 1
             }
 
             // Update node transforms based on GPU-computed positions
-            if nodePositions.count >= 2 {
-                updateNodeTransformsForChain(nodePositions: nodePositions)
+            if chainNodePositions.count >= 2 {
+                updateNodeTransformsForChain(nodePositions: chainNodePositions)
             }
         }
     }
