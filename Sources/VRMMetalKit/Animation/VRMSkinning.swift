@@ -96,16 +96,24 @@ public class VRMSkinningSystem {
         markSkinUpdated(skinIndex: skinIndex)
         debugFrameCount += 1
 
-        for (index, joint) in skin.joints.enumerated() {
-            let skinMatrix = joint.worldMatrix * skin.inverseBindMatrices[index]
-
-            // Diagonal-only NaN/Inf guard. Sufficient to catch garbage without
-            // allocating a per-joint validation array.
-            let diagValid = skinMatrix[0][0].isFinite
-                && skinMatrix[1][1].isFinite
-                && skinMatrix[2][2].isFinite
-                && skinMatrix[3][3].isFinite
-            pointer[index] = diagValid ? skinMatrix : matrix_identity_float4x4
+        // Iterate via unsafe buffer pointers so the hot loop doesn't
+        // retain/release each VRMNode reference or the array containers on
+        // every element. Profile sampling showed ARC traffic in this loop
+        // was the dominant non-GPU cost per frame.
+        skin.joints.withUnsafeBufferPointer { joints in
+            skin.inverseBindMatrices.withUnsafeBufferPointer { ibms in
+                let count = joints.count
+                for index in 0..<count {
+                    let skinMatrix = joints[index].worldMatrix * ibms[index]
+                    // Diagonal-only NaN/Inf guard. Sufficient to catch garbage
+                    // without allocating a per-joint validation array.
+                    let diagValid = skinMatrix[0][0].isFinite
+                        && skinMatrix[1][1].isFinite
+                        && skinMatrix[2][2].isFinite
+                        && skinMatrix[3][3].isFinite
+                    pointer[index] = diagValid ? skinMatrix : matrix_identity_float4x4
+                }
+            }
         }
     }
 
