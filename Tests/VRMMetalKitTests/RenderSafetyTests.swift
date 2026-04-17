@@ -824,11 +824,9 @@ final class RenderSafetyTests: XCTestCase {
         for (meshIndex, mesh) in model.meshes.enumerated() {
             // Find the skin for this mesh
             var skin: VRMSkin?
-            var meshNode: VRMNode?
             var skinIndex: Int?
             for node in model.nodes {
                 if let nodeMeshIndex = node.mesh, nodeMeshIndex == meshIndex {
-                    meshNode = node
                     if let si = node.skin, si < model.skins.count {
                         skin = model.skins[si]
                         skinIndex = si
@@ -1242,12 +1240,10 @@ final class RenderSafetyTests: XCTestCase {
         // List which mesh uses which skin
         print("\n--- MESH-SKIN MAPPING ---")
         for (meshIndex, mesh) in model.meshes.enumerated() {
-            var foundNode: VRMNode?
             var foundSkinIndex: Int?
 
             for node in model.nodes {
                 if let nodeMeshIndex = node.mesh, nodeMeshIndex == meshIndex {
-                    foundNode = node
                     foundSkinIndex = node.skin
                     break
                 }

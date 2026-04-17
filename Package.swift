@@ -64,6 +64,10 @@ let package = Package(
             name: "VRMVideoRenderer",
             dependencies: ["VRMMetalKit"]
         ),
+        .executableTarget(
+            name: "VRMBenchmark",
+            dependencies: ["VRMMetalKit"]
+        ),
         .testTarget(
             name: "VRMMetalKitTests",
             dependencies: ["VRMMetalKit"],

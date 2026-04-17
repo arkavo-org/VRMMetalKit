@@ -28,7 +28,6 @@ final class SpriteCacheSystemTests: XCTestCase {
 
         let characterID = "testCharacter"
         let poseCount = 10
-        let threadCount = 4
 
         // Generate unique pose hashes
         let poseHashes: [UInt64] = (0..<poseCount).map { UInt64($0) }
@@ -60,7 +59,7 @@ final class SpriteCacheSystemTests: XCTestCase {
         DispatchQueue.concurrentPerform(iterations: poseCount) { index in
             let poseHash = poseHashes[index]
 
-            cache.renderToCache(
+            _ = cache.renderToCache(
                 characterID: characterID,
                 poseHash: poseHash,
                 completion: { cachedPose in
@@ -71,13 +70,6 @@ final class SpriteCacheSystemTests: XCTestCase {
                     completionExpectation.fulfill()
                 }
             ) { encoder, texture in
-                // Simple rendering: clear to unique color based on pose index
-                let color = MTLClearColor(
-                    red: Double(index) / Double(poseCount),
-                    green: 0.5,
-                    blue: 0.5,
-                    alpha: 1.0
-                )
                 // Encoding is already set up by renderToCache
             }
         }
@@ -122,7 +114,7 @@ final class SpriteCacheSystemTests: XCTestCase {
 
         // Attempt to render the same pose 5 times simultaneously
         DispatchQueue.concurrentPerform(iterations: 5) { _ in
-            cache.renderToCache(
+            _ = cache.renderToCache(
                 characterID: "char1",
                 poseHash: poseHash,
                 completion: { cachedPose in
@@ -174,7 +166,7 @@ final class SpriteCacheSystemTests: XCTestCase {
 
         // First render (cache miss)
         let firstExpectation = XCTestExpectation(description: "First render")
-        cache.renderToCache(
+        _ = cache.renderToCache(
             characterID: "char1",
             poseHash: poseHash,
             waitUntilCompleted: true
@@ -209,7 +201,7 @@ final class SpriteCacheSystemTests: XCTestCase {
 
         let expectation = XCTestExpectation(description: "Render completes")
 
-        cache.renderToCache(
+        _ = cache.renderToCache(
             characterID: "errorTest",
             poseHash: 777,
             completion: { cachedPose in
@@ -233,7 +225,7 @@ final class SpriteCacheSystemTests: XCTestCase {
 
         // Populate cache
         for i in 0..<poseCount {
-            cache.renderToCache(
+            _ = cache.renderToCache(
                 characterID: "char1",
                 poseHash: UInt64(i),
                 waitUntilCompleted: true
@@ -259,7 +251,7 @@ final class SpriteCacheSystemTests: XCTestCase {
 
         // Add some entries
         for i in 0..<5 {
-            cache.renderToCache(
+            _ = cache.renderToCache(
                 characterID: "char1",
                 poseHash: UInt64(i),
                 waitUntilCompleted: true
@@ -282,13 +274,13 @@ final class SpriteCacheSystemTests: XCTestCase {
 
         // Add entries for two characters
         for i in 0..<3 {
-            cache.renderToCache(
+            _ = cache.renderToCache(
                 characterID: "char1",
                 poseHash: UInt64(i),
                 waitUntilCompleted: true
             ) { encoder, texture in }
 
-            cache.renderToCache(
+            _ = cache.renderToCache(
                 characterID: "char2",
                 poseHash: UInt64(i + 100),
                 waitUntilCompleted: true

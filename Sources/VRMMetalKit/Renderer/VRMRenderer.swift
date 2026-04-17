@@ -3551,8 +3551,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     
     /// Returns pipeline descriptor for MASK materials with alpha-to-coverage
     public func getMASKPipelineDescriptor() -> MTLRenderPipelineDescriptor? {
-        // Use the existing A2C pipeline if available
-        guard let a2cPipeline = maskAlphaToCoveragePipelineState else {
+        guard maskAlphaToCoveragePipelineState != nil else {
             return nil
         }
         

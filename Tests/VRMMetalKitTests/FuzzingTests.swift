@@ -316,7 +316,7 @@ final class FuzzingTests: XCTestCase {
         let collector = FuzzingResultCollector()
 
         for i in 0..<50 {
-            let uniforms = generator.randomMToonUniforms()
+            _ = generator.randomMToonUniforms()
 
             // Check that the uniforms struct has valid layout
             let size = MemoryLayout<MToonMaterialUniforms>.size
@@ -545,7 +545,6 @@ final class FuzzingTests: XCTestCase {
         let collector = FuzzingResultCollector()
 
         // Simulate renderer state
-        var isModelLoaded = false
         var viewportWidth: Float = 1920
         var viewportHeight: Float = 1080
         var expressionWeights: [String: Float] = [:]
@@ -565,10 +564,9 @@ final class FuzzingTests: XCTestCase {
 
             switch action {
             case .loadModel:
-                isModelLoaded = true
+                break
 
             case .unloadModel:
-                isModelLoaded = false
                 expressionWeights.removeAll()
 
             case .setExpression:
@@ -783,7 +781,7 @@ extension FuzzingTests {
 
         // Test subset of combinations (full matrix is large)
         for alpha in AlphaMode.allCases {
-            for cull in CullMode.allCases {
+            for _ in CullMode.allCases {
                 for outline in OutlineMode.allCases {
                     combinations += 1
 

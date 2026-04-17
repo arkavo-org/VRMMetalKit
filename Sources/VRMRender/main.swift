@@ -368,8 +368,7 @@ struct VRMRenderCLI {
             let (minBounds, maxBounds) = model.calculateBoundingBox()
             let center = (minBounds + maxBounds) / 2
             let size = maxBounds - minBounds
-            let maxDimension = max(size.x, max(size.y, size.z))
-            
+
             print("  ✓ Model bounds: \(size)")
             print("  ✓ Center: \(center)")
 
