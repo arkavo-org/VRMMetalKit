@@ -1251,7 +1251,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         guard let springBone = model.springBone else { return }
 
         // 1. Capture root positions
-        targetRootPositions = []
+        targetRootPositions.removeAll(keepingCapacity: true)
         for spring in springBone.springs {
             if let firstJoint = spring.joints.first,
                let node = model.nodes[safe: firstJoint.node] {
@@ -1276,7 +1276,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     /// Captures world-space bind directions based on current animated parent orientations
     private func captureTargetWorldBindDirections(model: VRMModel, springBone: VRMSpringBone) {
-        targetWorldBindDirections = []
+        targetWorldBindDirections.removeAll(keepingCapacity: true)
 
         var boneIndex = 0
         for spring in springBone.springs {
@@ -1321,9 +1321,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        targetSphereColliders = []
-        targetCapsuleColliders = []
-        targetPlaneColliders = []
+        targetSphereColliders.removeAll(keepingCapacity: true)
+        targetCapsuleColliders.removeAll(keepingCapacity: true)
+        targetPlaneColliders.removeAll(keepingCapacity: true)
 
         for (colliderIndex, collider) in springBone.colliders.enumerated() {
             guard let colliderNode = model.nodes[safe: collider.node] else { continue }
@@ -1488,13 +1488,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
     }
 
-    /// Stores current target transforms as previous for next frame's interpolation
+    /// Stores current target transforms as previous for next frame's interpolation.
+    /// Uses swap instead of assignment so both arrays retain their backing storage
+    /// across frames; the next capture overwrites in place via removeAll+append.
     private func commitAllTransforms() {
-        previousRootPositions = targetRootPositions
-        previousWorldBindDirections = targetWorldBindDirections
-        previousSphereColliders = targetSphereColliders
-        previousCapsuleColliders = targetCapsuleColliders
-        previousPlaneColliders = targetPlaneColliders
+        swap(&previousRootPositions, &targetRootPositions)
+        swap(&previousWorldBindDirections, &targetWorldBindDirections)
+        swap(&previousSphereColliders, &targetSphereColliders)
+        swap(&previousCapsuleColliders, &targetCapsuleColliders)
+        swap(&previousPlaneColliders, &targetPlaneColliders)
     }
 
     // MARK: - Teleportation Detection
