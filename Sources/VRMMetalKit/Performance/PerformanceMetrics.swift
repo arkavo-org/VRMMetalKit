@@ -27,6 +27,7 @@ public struct PerformanceMetrics: Codable {
         case gpuTimeP95Ms
         case cpuTimeMs
         case drawCalls
+        case culledDraws
         case stateChanges
         case morphComputes
         case triangleCount
@@ -56,6 +57,7 @@ public struct PerformanceMetrics: Codable {
         try container.encode(gpuTimeP95Ms.isFinite ? gpuTimeP95Ms : 0, forKey: .gpuTimeP95Ms)
         try container.encode(cpuTimeMs.isFinite ? cpuTimeMs : 0, forKey: .cpuTimeMs)
         try container.encode(drawCalls, forKey: .drawCalls)
+        try container.encode(culledDraws, forKey: .culledDraws)
         try container.encode(stateChanges, forKey: .stateChanges)
         try container.encode(morphComputes, forKey: .morphComputes)
         try container.encode(triangleCount, forKey: .triangleCount)
@@ -82,6 +84,7 @@ public struct PerformanceMetrics: Codable {
         gpuTimeP95Ms = try container.decode(Double.self, forKey: .gpuTimeP95Ms)
         cpuTimeMs = try container.decode(Double.self, forKey: .cpuTimeMs)
         drawCalls = try container.decode(Int.self, forKey: .drawCalls)
+        culledDraws = (try? container.decode(Int.self, forKey: .culledDraws)) ?? 0
         stateChanges = try container.decode(Int.self, forKey: .stateChanges)
         morphComputes = try container.decode(Int.self, forKey: .morphComputes)
         triangleCount = try container.decode(Int.self, forKey: .triangleCount)
@@ -104,6 +107,7 @@ public struct PerformanceMetrics: Codable {
     public var gpuTimeP95Ms: Double = 0
     public var cpuTimeMs: Double = 0
     public var drawCalls: Int = 0
+    public var culledDraws: Int = 0
     public var stateChanges: Int = 0
     public var morphComputes: Int = 0
     public var triangleCount: Int = 0
@@ -138,6 +142,7 @@ public class PerformanceTracker {
 
     // Accumulated metrics
     private var totalDrawCalls: Int = 0
+    private var totalCulledDraws: Int = 0
     private var totalStateChanges: Int = 0
     private var totalMorphComputes: Int = 0
     private var totalTriangles: Int = 0
@@ -150,6 +155,7 @@ public class PerformanceTracker {
 
     struct FrameMetrics {
         var drawCalls: Int = 0
+        var culledDraws: Int = 0
         var stateChanges: Int = 0
         var morphComputes: Int = 0
         var triangles: Int = 0
@@ -181,6 +187,7 @@ public class PerformanceTracker {
     public func endFrame() {
         frameCount += 1
         totalDrawCalls += currentFrameMetrics.drawCalls
+        totalCulledDraws += currentFrameMetrics.culledDraws
         totalStateChanges += currentFrameMetrics.stateChanges
         totalMorphComputes += currentFrameMetrics.morphComputes
         totalTriangles += currentFrameMetrics.triangles
@@ -188,6 +195,11 @@ public class PerformanceTracker {
         totalTextureBindings += currentFrameMetrics.textureBindings
         totalBufferBindings += currentFrameMetrics.bufferBindings
         totalPipelineChanges += currentFrameMetrics.pipelineChanges
+    }
+
+    /// Track a primitive culled by frustum (counts toward culledDraws, not drawCalls).
+    public func recordCulledDraw() {
+        currentFrameMetrics.culledDraws += 1
     }
 
     /// Record a GPU timestamp (in seconds)
@@ -261,6 +273,7 @@ public class PerformanceTracker {
         // Average per-frame metrics
         if frameCount > 0 {
             metrics.drawCalls = totalDrawCalls / frameCount
+            metrics.culledDraws = totalCulledDraws / frameCount
             metrics.stateChanges = totalStateChanges / frameCount
             metrics.morphComputes = totalMorphComputes / frameCount
             metrics.triangleCount = totalTriangles / frameCount
@@ -284,6 +297,7 @@ public class PerformanceTracker {
         lastFrameTime = 0
         frameCount = 0
         totalDrawCalls = 0
+        totalCulledDraws = 0
         totalStateChanges = 0
         totalMorphComputes = 0
         totalTriangles = 0

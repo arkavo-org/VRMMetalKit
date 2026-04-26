@@ -39,6 +39,7 @@ struct BenchmarkOptions {
     var wireframe: Bool = false
     var lighting: String = "standard"
     var debugUVs: Int32 = 0
+    var cameraOffsetY: Float = 0  // Shift camera target/eye in Y to push avatar off-screen for cull tests
 }
 
 func usage() {
@@ -128,6 +129,9 @@ func parseArguments() -> BenchmarkOptions? {
         case "--debug-uvs":
             guard let v = nextValue(for: a) else { return nil }
             opts.debugUVs = Int32(v) ?? opts.debugUVs
+        case "--camera-offset-y":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.cameraOffsetY = Float(v) ?? opts.cameraOffsetY
         case "--vrma":
             guard let v = nextValue(for: a) else { return nil }
             opts.vrmaPath = v
@@ -452,8 +456,8 @@ struct VRMBenchmarkCLI {
         renderer.projectionMatrix = perspectiveMatrix(
             fovRadians: 45.0 * .pi / 180.0, aspect: aspect, near: 0.01, far: 100.0)
         renderer.viewMatrix = lookAtMatrix(
-            eye: SIMD3<Float>(0, 1.3, 1.8),
-            center: SIMD3<Float>(0, 1.3, 0),
+            eye: SIMD3<Float>(0, 1.3 + opts.cameraOffsetY, 1.8),
+            center: SIMD3<Float>(0, 1.3 + opts.cameraOffsetY, 0),
             up: SIMD3<Float>(0, 1, 0))
 
         // Offscreen targets (reused every frame)
@@ -620,6 +624,7 @@ struct VRMBenchmarkCLI {
             Renderer counters (per frame, averaged)
             ----------------------------------------------------------------------
               draw calls        : \(perFrame(m.drawCalls))
+              culled draws      : \(perFrame(m.culledDraws))
               pipeline changes  : \(perFrame(m.pipelineChanges))
               state changes     : \(perFrame(m.stateChanges))
               texture bindings  : \(perFrame(m.textureBindings))

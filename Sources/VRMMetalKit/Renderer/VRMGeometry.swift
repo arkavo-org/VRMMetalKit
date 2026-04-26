@@ -86,6 +86,10 @@ public class VRMPrimitive {
     public var basePositionsBuffer: MTLBuffer? // Base positions for compute
     public var baseNormalsBuffer: MTLBuffer?   // Base normals for compute
 
+    /// Local-space AABB of base positions (pre-skinning, pre-morph). Set by `load`.
+    public var localMin: SIMD3<Float> = SIMD3<Float>(repeating: 0)
+    public var localMax: SIMD3<Float> = SIMD3<Float>(repeating: 0)
+
     public init() {}
 
     public static func load(from gltfPrimitive: GLTFPrimitive,
@@ -120,6 +124,16 @@ public class VRMPrimitive {
                 SIMD3<Float>(positions[i], positions[i+1], positions[i+2])
             }
             primitive.vertexCount = vertexData.positions.count
+            if !vertexData.positions.isEmpty {
+                var lo = vertexData.positions[0]
+                var hi = vertexData.positions[0]
+                for p in vertexData.positions {
+                    lo = simd_min(lo, p)
+                    hi = simd_max(hi, p)
+                }
+                primitive.localMin = lo
+                primitive.localMax = hi
+            }
         } else {
             throw VRMError.missingVertexAttribute(
                 meshIndex: 0, // We don't have meshIndex in this context, but this is a required POSITION attribute

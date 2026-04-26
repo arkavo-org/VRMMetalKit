@@ -167,6 +167,32 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - Bounding Box Calculation
 
+    /// Cached union of all primitive local-space AABBs. Populated lazily on first
+    /// access from already-computed `VRMPrimitive.localMin/localMax`. Used by
+    /// the renderer for whole-model frustum culling without touching GPU buffers.
+    private var _cachedLocalBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+
+    public var modelLocalBounds: (min: SIMD3<Float>, max: SIMD3<Float>) {
+        if let b = _cachedLocalBounds { return b }
+        var lo = SIMD3<Float>(repeating: Float.infinity)
+        var hi = SIMD3<Float>(repeating: -Float.infinity)
+        var found = false
+        for mesh in meshes {
+            for primitive in mesh.primitives where primitive.vertexCount > 0 {
+                lo = simd_min(lo, primitive.localMin)
+                hi = simd_max(hi, primitive.localMax)
+                found = true
+            }
+        }
+        if !found {
+            lo = SIMD3<Float>(-0.5, 0, -0.5)
+            hi = SIMD3<Float>(0.5, 1.8, 0.5)
+        }
+        let bounds = (min: lo, max: hi)
+        _cachedLocalBounds = bounds
+        return bounds
+    }
+
     /// Calculate axis-aligned bounding box from all mesh vertices in model space
     /// - Parameter includeAnimated: If true, considers current world transforms; if false, uses bind pose
     /// - Returns: Min and max corners of the bounding box
