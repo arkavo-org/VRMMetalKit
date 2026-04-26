@@ -1729,8 +1729,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 case .material(let name):
                     shouldRender = materialName == name
                 case .primitive(let primIndex):
-                    let meshPrimIndex = item.mesh.primitives.firstIndex(where: { $0 === item.primitive }) ?? -1
-                    shouldRender = meshPrimIndex == primIndex
+                    shouldRender = item.primIdxInMesh == primIndex
                 }
 
                 if !shouldRender {
@@ -1738,7 +1737,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
 
                 if frameCounter == 1 {
-                    let meshPrimIndex = item.mesh.primitives.firstIndex(where: { $0 === item.primitive }) ?? -1
+                    let meshPrimIndex = item.primIdxInMesh
                     vrmLog("[FILTER] Rendering: mesh='\(meshName)', material='\(materialName)', primIndex=\(meshPrimIndex)")
 
                     // Log detailed primitive information once
@@ -1833,7 +1832,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             // PER-DRAW LOGGING: Comprehensive state dump
             let prim = item.primitive
-            let meshPrimIndex = item.mesh.primitives.firstIndex(where: { $0 === prim }) ?? -1
+            let meshPrimIndex = item.primIdxInMesh
 
             // Get skinning info
             var skinIdxStr = "none"
@@ -3591,4 +3590,3 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var currentDebugMode: Int = 0
 
 }
-

@@ -51,7 +51,7 @@ final class VRMRenderItemSelector {
             let materialName = item.materialName
             vrmLog("[RENDER CHECK] Item \(index): mesh='\(meshName)', material='\(materialName)')")
 
-            let meshPrimIndex = item.mesh.primitives.firstIndex(where: { $0 === item.primitive }) ?? -1
+            let meshPrimIndex = item.primIdxInMesh
 
             let shouldRender: Bool
             switch filter {

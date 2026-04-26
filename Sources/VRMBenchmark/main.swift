@@ -194,6 +194,13 @@ struct FrameStats {
     }
 }
 
+struct RenderFrameSample {
+    let animationMs: Double
+    let encodeMs: Double
+    let waitMs: Double
+    let totalMs: Double
+}
+
 func printStats(title: String, label: String, unit: String, stats: FrameStats, wallMs: Double) {
     print("""
 
@@ -214,6 +221,11 @@ func printStats(title: String, label: String, unit: String, stats: FrameStats, w
     ======================================================================
 
     """)
+}
+
+func printCompactStats(label: String, samples: [Double]) {
+    let stats = FrameStats.compute(samples)
+    print("  \(label.padding(toLength: 10, withPad: " ", startingAt: 0)): mean \(String(format: "%7.3f ms", stats.meanMs))  median \(String(format: "%7.3f ms", stats.medianMs))  p95 \(String(format: "%7.3f ms", stats.p95Ms))")
 }
 
 func loadingOptions(for preset: String) -> VRMLoadingOptions {
@@ -415,13 +427,16 @@ struct VRMBenchmarkCLI {
 
         let dt = Float(1.0 / opts.fps)
 
-        func renderOnce(_ cpuTimeMs: inout Double) {
+        func renderOnce(_ sample: inout RenderFrameSample) {
             // Wrap in autoreleasepool so Metal objects (command buffers, render
             // pass descriptors, encoders) are released every frame instead of
             // accumulating until the outer pool drains. Without this, running
             // 500+ frames in a tight loop leaks driver threads and can trigger
             // a system watchdog panic.
-            var ms = 0.0
+            var animationMs = 0.0
+            var encodeMs = 0.0
+            var waitMs = 0.0
+            var totalMs = 0.0
             autoreleasepool {
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = colorTex
@@ -438,37 +453,50 @@ struct VRMBenchmarkCLI {
                 let t0 = CACurrentMediaTime()
                 // Advance animation before drawing so per-frame measurement
                 // captures both the animation CPU cost and the render cost.
+                let animationStart = CACurrentMediaTime()
                 player?.update(deltaTime: dt, model: model)
+                animationMs = (CACurrentMediaTime() - animationStart) * 1000.0
+
+                let encodeStart = CACurrentMediaTime()
                 renderer.drawOffscreenHeadless(
                     to: colorTex, depth: depthTex,
                     commandBuffer: cb, renderPassDescriptor: rpd)
+                encodeMs = (CACurrentMediaTime() - encodeStart) * 1000.0
+
+                let waitStart = CACurrentMediaTime()
                 cb.commit()
                 cb.waitUntilCompleted()
-                ms = (CACurrentMediaTime() - t0) * 1000.0
+                waitMs = (CACurrentMediaTime() - waitStart) * 1000.0
+                totalMs = (CACurrentMediaTime() - t0) * 1000.0
             }
-            cpuTimeMs = ms
+            sample = RenderFrameSample(
+                animationMs: animationMs,
+                encodeMs: encodeMs,
+                waitMs: waitMs,
+                totalMs: totalMs)
         }
 
         // Warm-up
-        var discard = 0.0
+        var discard = RenderFrameSample(animationMs: 0, encodeMs: 0, waitMs: 0, totalMs: 0)
         for _ in 0..<opts.warmup {
             renderOnce(&discard)
         }
         renderer.resetPerformanceMetrics()
 
         // Measure
-        var samples: [Double] = []
+        var samples: [RenderFrameSample] = []
         samples.reserveCapacity(opts.frames)
         let benchStart = CACurrentMediaTime()
         for _ in 0..<opts.frames {
-            var ms = 0.0
-            renderOnce(&ms)
-            samples.append(ms)
+            var sample = RenderFrameSample(animationMs: 0, encodeMs: 0, waitMs: 0, totalMs: 0)
+            renderOnce(&sample)
+            samples.append(sample)
         }
         let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
 
         // Report
-        let stats = FrameStats.compute(samples)
+        let totalSamples = samples.map(\.totalMs)
+        let stats = FrameStats.compute(totalSamples)
         let rendererMetrics = renderer.getPerformanceMetrics()
 
         print("""
@@ -495,11 +523,19 @@ struct VRMBenchmarkCLI {
           eff FPS: \(String(format: "%.1f", 1000.0 / max(stats.meanMs, 0.0001)))
         """)
 
+        print("""
+
+        Render phase breakdown (per frame)
+        ----------------------------------------------------------------------
+        """)
+        printCompactStats(label: "animation", samples: samples.map(\.animationMs))
+        printCompactStats(label: "encode", samples: samples.map(\.encodeMs))
+        printCompactStats(label: "gpu wait", samples: samples.map(\.waitMs))
+
         if let m = rendererMetrics {
-            // PerformanceTracker counters are cumulative across measured frames.
-            let frames = max(stats.count, 1)
-            let perFrame: (Int) -> String = { total in
-                String(format: "%.1f", Double(total) / Double(frames))
+            // PerformanceTracker returns counters averaged per frame.
+            let perFrame: (Int) -> String = { value in
+                String(format: "%d", value)
             }
             print("""
 

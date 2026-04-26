@@ -997,6 +997,7 @@ public class VRMNode {
     }
 
     public func updateWorldTransform() {
+        #if DEBUG
         // Check for NaNs before using localMatrix
         if localMatrix[0][0].isNaN || localMatrix[0][1].isNaN || localMatrix[0][2].isNaN || localMatrix[0][3].isNaN ||
            localMatrix[1][0].isNaN || localMatrix[1][1].isNaN || localMatrix[1][2].isNaN || localMatrix[1][3].isNaN ||
@@ -1006,6 +1007,7 @@ public class VRMNode {
             // Optionally, reset localMatrix to identity to prevent crash
             localMatrix = matrix_identity_float4x4
         }
+        #endif
 
         if let parent = parent {
             worldMatrix = parent.worldMatrix * localMatrix
