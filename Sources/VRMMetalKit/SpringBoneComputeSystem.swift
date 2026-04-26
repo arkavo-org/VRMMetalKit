@@ -211,6 +211,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     private var updateCounter = 0
 
+    /// Caller-controlled simulation quality. Drives substep rate, substep cap,
+    /// and constraint-iteration count. Mirrored from `VRMRenderer.springBoneQuality`
+    /// via a `didSet` on the renderer so callers only set it in one place.
+    /// Defaults to `.ultra` to match the legacy global-constant behavior.
+    var quality: VRMConstants.SpringBoneQuality = .ultra
+
     func update(model: VRMModel, deltaTime: TimeInterval) {
         guard let buffers = model.springBoneBuffers,
               let globalParams = model.springBoneGlobalParams,
@@ -218,10 +224,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return
         }
 
+        let rateHz = quality.substepRateHz
+        guard rateHz > 0 else { return }  // .off
+
         // Fixed timestep accumulation
         timeAccumulator += deltaTime
-        let fixedDeltaTime = 1.0 / VRMConstants.Physics.substepRateHz // Fixed update at configured rate
-        let maxSubsteps = VRMConstants.Physics.maxSubstepsPerFrame
+        let fixedDeltaTime = 1.0 / rateHz
+        let maxSubsteps = quality.maxSubstepsPerFrame
 
         // Calculate total substeps this frame BEFORE the loop (for interpolation)
         frameSubstepCount = min(Int(timeAccumulator / fixedDeltaTime), maxSubsteps)
@@ -406,7 +415,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Distance constraint iterations (step 2: enforce bone length)
         // VRM spec: run distance constraint BEFORE collision, do not run it after
-        let iterations = VRMConstants.Physics.constraintIterations
+        let iterations = quality.constraintIterations
         for _ in 0..<iterations {
             computeEncoder.setComputePipelineState(distancePipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)

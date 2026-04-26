@@ -389,7 +389,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// - `.high`: 90Hz substeps, 2 constraint iterations
     /// - `.medium`: 60Hz substeps, 2 constraint iterations
     /// - `.low`: 30Hz substeps, 1 constraint iteration (fastest)
-    public var springBoneQuality: VRMConstants.SpringBoneQuality = .ultra
+    public var springBoneQuality: VRMConstants.SpringBoneQuality = .ultra {
+        didSet {
+            springBoneComputeSystem?.quality = springBoneQuality
+        }
+    }
 
     private var lastUpdateTime: CFTimeInterval = 0
     var temporaryGravity: SIMD3<Float>?
