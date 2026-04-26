@@ -253,6 +253,8 @@ func printCompactStats(label: String, samples: [Double]) {
 
 func loadingOptions(for preset: String) -> VRMLoadingOptions {
     switch preset {
+    case "default":
+        return .default
     case "safe", "parallel":
         return VRMLoadingOptions(optimizations: [
             .skipVerboseLogging,
@@ -265,7 +267,8 @@ func loadingOptions(for preset: String) -> VRMLoadingOptions {
     case "max", "maximum", "maximumperformance":
         return VRMLoadingOptions(optimizations: .maximumPerformance)
     default:
-        return .default
+        FileHandle.standardError.write(Data("ERROR: unknown --loading preset '\(preset)'. Expected default, safe, or max.\n".utf8))
+        exit(1)
     }
 }
 
@@ -306,7 +309,13 @@ struct VRMBenchmarkCLI {
                     print("ERROR: failed to load VRM: \(error)")
                     exit(1)
                 }
-                samples.append((CACurrentMediaTime() - t0) * 1000.0)
+                let elapsedMs = (CACurrentMediaTime() - t0) * 1000.0
+                autoreleasepool {
+                    // Per-iteration drain so CG/Foundation autoreleased objects
+                    // from texture decode and glTF parse don't accumulate across
+                    // long sample runs.
+                    samples.append(elapsedMs)
+                }
             }
             let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
             printStats(
@@ -453,7 +462,8 @@ struct VRMBenchmarkCLI {
             pixelFormat: .rgba8Unorm, width: opts.width, height: opts.height, mipmapped: false)
         colorDesc.textureType = useMSAA ? .type2DMultisample : .type2D
         colorDesc.sampleCount = max(1, opts.sampleCount)
-        colorDesc.usage = [.renderTarget, .shaderRead]
+        // Multisample textures aren't sampleable; only the resolve target needs .shaderRead.
+        colorDesc.usage = useMSAA ? .renderTarget : [.renderTarget, .shaderRead]
         colorDesc.storageMode = .private
         guard let colorTex = device.makeTexture(descriptor: colorDesc) else {
             print("ERROR: failed to create color texture"); exit(1)
