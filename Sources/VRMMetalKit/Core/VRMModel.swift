@@ -193,6 +193,26 @@ public class VRMModel: @unchecked Sendable {
         return bounds
     }
 
+    /// Whole-model frustum cull. Returns `true` when the model's bind-pose
+    /// `modelLocalBounds`, transformed by `modelMatrix`, lies entirely outside
+    /// `frustum`. Constant-time — does not touch GPU buffers, the node
+    /// hierarchy, or animation state, so it is safe (and intended) to call
+    /// before spring-bone simulation, skinning, and `VRMRenderer.draw(...)`
+    /// to skip those costs for off-screen instances.
+    ///
+    /// The returned answer is approximate at the bind-pose extent: an avatar
+    /// that animates outside its bind-pose AABB (e.g. raised arms beyond the
+    /// rest extent) may be culled when partially visible. For typical idle /
+    /// locomotion clips the bind-pose envelope is conservative enough.
+    public func isOutsideFrustum(_ frustum: Frustum, modelMatrix: matrix_float4x4) -> Bool {
+        let local = modelLocalBounds
+        let world = AABBTransform.worldAABB(
+            localMin: local.min,
+            localMax: local.max,
+            modelMatrix: modelMatrix)
+        return frustum.cullsAABB(min: world.min, max: world.max)
+    }
+
     /// Calculate axis-aligned bounding box from all mesh vertices in model space
     /// - Parameter includeAnimated: If true, considers current world transforms; if false, uses bind pose
     /// - Returns: Min and max corners of the bounding box

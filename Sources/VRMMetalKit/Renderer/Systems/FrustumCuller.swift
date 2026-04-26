@@ -21,18 +21,18 @@ import simd
 /// inward-facing convention: a point `p` is INSIDE the plane when
 /// `dot(plane.xyz, p) + plane.w >= 0`. The AABB is fully outside the
 /// frustum when any single plane rejects all 8 corners.
-struct Frustum {
-    var left: SIMD4<Float>
-    var right: SIMD4<Float>
-    var bottom: SIMD4<Float>
-    var top: SIMD4<Float>
-    var near: SIMD4<Float>
-    var far: SIMD4<Float>
+public struct Frustum {
+    public var left: SIMD4<Float>
+    public var right: SIMD4<Float>
+    public var bottom: SIMD4<Float>
+    public var top: SIMD4<Float>
+    public var near: SIMD4<Float>
+    public var far: SIMD4<Float>
 
     /// Build planes from a row-major or column-major view-projection matrix.
     /// `simd_float4x4` in Swift uses column-major; rows are accessed via
     /// transpose. We extract using the standard Gribb/Hartmann method.
-    init(viewProjection vp: matrix_float4x4) {
+    public init(viewProjection vp: matrix_float4x4) {
         // simd_float4x4 columns: vp.columns.0 = column 0, etc.
         // Row i = (col0[i], col1[i], col2[i], col3[i]).
         let r0 = SIMD4<Float>(vp.columns.0.x, vp.columns.1.x, vp.columns.2.x, vp.columns.3.x)
@@ -59,7 +59,7 @@ struct Frustum {
     /// Uses the n-vertex (positive vertex) optimization: for each plane, test
     /// only the AABB corner farthest in the plane's outward direction. If that
     /// corner is on the negative side, the whole box is outside.
-    func cullsAABB(min lo: SIMD3<Float>, max hi: SIMD3<Float>) -> Bool {
+    public func cullsAABB(min lo: SIMD3<Float>, max hi: SIMD3<Float>) -> Bool {
         let planes = [left, right, bottom, top, near, far]
         for plane in planes {
             // Pick the corner that's farthest in the inward-normal direction.
@@ -75,11 +75,11 @@ struct Frustum {
     }
 }
 
-enum AABBTransform {
+public enum AABBTransform {
     /// Transform a local-space AABB by a model matrix into world space.
     /// Uses the standard Arvo (1990) abs-extent expansion: O(1) regardless
     /// of vertex count.
-    static func worldAABB(
+    public static func worldAABB(
         localMin lo: SIMD3<Float>,
         localMax hi: SIMD3<Float>,
         modelMatrix m: matrix_float4x4
