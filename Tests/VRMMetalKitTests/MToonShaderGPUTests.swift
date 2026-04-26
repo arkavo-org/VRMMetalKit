@@ -52,7 +52,7 @@ final class MToonShaderGPUTests: XCTestCase {
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
     /// Updated: Fixed NdotL inversion - negated lightDirection in shader for correct convention
-    static let knownGoodShaderHash = "f447a3c028a45b958441b6022950bec28a3d134e72df8d062e1b72b5f02508ee"
+    static let knownGoodShaderHash = "9f388b7c9763b9091a6247b8de2b036fcd8ac07a96be65ee33f8559ca00f0055"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.

@@ -34,6 +34,10 @@ struct BenchmarkOptions {
     var fps: Double = 60
     var label: String = "baseline"
     var loadingPreset: String = "default"
+    var outlineWidth: Float = 0.02
+    var enableSpringBone: Bool = false
+    var wireframe: Bool = false
+    var lighting: String = "standard"
 }
 
 func usage() {
@@ -57,6 +61,10 @@ func usage() {
       --width W        Render width  (default 1024)
       --height H       Render height (default 1024)
       --sample-count N MSAA sample count (default 1)
+      --outline-width N Global MToon outline width (default 0.02, use 0 to disable)
+      --spring-bone    Enable GPU spring-bone physics during render mode
+      --wireframe      Enable wireframe rendering during render mode
+      --lighting MODE  Lighting mode: standard, single, ambient (default standard)
       --label NAME     Tag printed in the report header (default "baseline")
 
     Recommended invocation:
@@ -105,6 +113,16 @@ func parseArguments() -> BenchmarkOptions? {
         case "--sample-count":
             guard let v = nextValue(for: a) else { return nil }
             opts.sampleCount = Int(v) ?? opts.sampleCount
+        case "--outline-width":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.outlineWidth = Float(v) ?? opts.outlineWidth
+        case "--spring-bone":
+            opts.enableSpringBone = true
+        case "--wireframe":
+            opts.wireframe = true
+        case "--lighting":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.lighting = v.lowercased()
         case "--vrma":
             guard let v = nextValue(for: a) else { return nil }
             opts.vrmaPath = v
@@ -393,11 +411,26 @@ struct VRMBenchmarkCLI {
         let renderer = VRMRenderer(device: device, config: config)
         renderer.performanceTracker = PerformanceTracker()
         renderer.loadModel(model)
-        renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
-        renderer.disableLight(1)
-        renderer.setLight(2, direction: SIMD3<Float>(0, 0.2, 1),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 0.3)
+        renderer.outlineWidth = opts.outlineWidth
+        renderer.enableSpringBone = opts.enableSpringBone
+        renderer.debugWireframe = opts.wireframe
+        switch opts.lighting {
+        case "ambient":
+            renderer.disableLight(0)
+            renderer.disableLight(1)
+            renderer.disableLight(2)
+        case "single":
+            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                              color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+            renderer.disableLight(1)
+            renderer.disableLight(2)
+        default:
+            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                              color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+            renderer.disableLight(1)
+            renderer.setLight(2, direction: SIMD3<Float>(0, 0.2, 1),
+                              color: SIMD3<Float>(1, 1, 1), intensity: 0.3)
+        }
         renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
 
         let aspect = Float(opts.width) / Float(opts.height)
@@ -409,16 +442,35 @@ struct VRMBenchmarkCLI {
             up: SIMD3<Float>(0, 1, 0))
 
         // Offscreen targets (reused every frame)
+        let useMSAA = opts.sampleCount > 1
         let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: opts.width, height: opts.height, mipmapped: false)
+        colorDesc.textureType = useMSAA ? .type2DMultisample : .type2D
+        colorDesc.sampleCount = max(1, opts.sampleCount)
         colorDesc.usage = [.renderTarget, .shaderRead]
         colorDesc.storageMode = .private
         guard let colorTex = device.makeTexture(descriptor: colorDesc) else {
             print("ERROR: failed to create color texture"); exit(1)
         }
 
+        let resolveTex: MTLTexture?
+        if useMSAA {
+            let resolveDesc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm, width: opts.width, height: opts.height, mipmapped: false)
+            resolveDesc.usage = [.renderTarget, .shaderRead]
+            resolveDesc.storageMode = .private
+            guard let texture = device.makeTexture(descriptor: resolveDesc) else {
+                print("ERROR: failed to create resolve texture"); exit(1)
+            }
+            resolveTex = texture
+        } else {
+            resolveTex = nil
+        }
+
         let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .depth32Float, width: opts.width, height: opts.height, mipmapped: false)
+        depthDesc.textureType = useMSAA ? .type2DMultisample : .type2D
+        depthDesc.sampleCount = max(1, opts.sampleCount)
         depthDesc.usage = .renderTarget
         depthDesc.storageMode = .private
         guard let depthTex = device.makeTexture(descriptor: depthDesc) else {
@@ -441,7 +493,12 @@ struct VRMBenchmarkCLI {
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = colorTex
                 rpd.colorAttachments[0].loadAction = .clear
-                rpd.colorAttachments[0].storeAction = .store
+                if let resolveTex {
+                    rpd.colorAttachments[0].resolveTexture = resolveTex
+                    rpd.colorAttachments[0].storeAction = .multisampleResolve
+                } else {
+                    rpd.colorAttachments[0].storeAction = .store
+                }
                 rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.12, green: 0.14, blue: 0.18, alpha: 1)
                 rpd.depthAttachment.texture = depthTex
                 rpd.depthAttachment.loadAction = .clear
@@ -508,6 +565,10 @@ struct VRMBenchmarkCLI {
         Animation      : \(opts.vrmaPath.map { "\(($0 as NSString).lastPathComponent) (\(String(format: "%.2f", animDurationSec))s @ \(opts.fps) fps)" } ?? "none (static pose)")
         Load time      : \(String(format: "%.1f ms", loadMs))
         Resolution     : \(opts.width)x\(opts.height) (MSAA \(opts.sampleCount)x)
+        Outline width  : \(String(format: "%.4f", opts.outlineWidth))
+        Spring bone    : \(opts.enableSpringBone ? "enabled" : "disabled")
+        Wireframe      : \(opts.wireframe ? "enabled" : "disabled")
+        Lighting       : \(opts.lighting)
         Warmup frames  : \(opts.warmup)
         Measured frames: \(opts.frames)
         Total wall time: \(String(format: "%.1f ms", wallMs))
@@ -549,6 +610,7 @@ struct VRMBenchmarkCLI {
               morph computes    : \(perFrame(m.morphComputes))
               triangles         : \(perFrame(m.triangleCount))
               vertices          : \(perFrame(m.vertexCount))
+              gpu p95           : \(String(format: "%.3f ms", m.gpuTimeP95Ms))
             """)
         }
         print("======================================================================\n")

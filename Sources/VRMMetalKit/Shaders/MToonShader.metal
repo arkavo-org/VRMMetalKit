@@ -176,6 +176,14 @@ float2 calculateMatCapUV(float3 viewNormal) {
  return viewNormal.xy * 0.5 + 0.5;
 }
 
+static inline bool needsViewVectors(constant MToonMaterial& material, constant Uniforms& uniforms) {
+ bool hasRim = material.parametricRimColorR > 0.0 ||
+               material.parametricRimColorG > 0.0 ||
+               material.parametricRimColorB > 0.0;
+ return material.hasMatcapTexture > 0 || hasRim ||
+        uniforms.debugUVs == 10 || uniforms.debugUVs == 32;
+}
+
 // VRM 1.0 MToon spec uses linearstep for toon shading
 // Creates sharp anime-style shadow boundaries (not smooth gradients)
 static inline float linearstep(float a, float b, float t) {
@@ -221,12 +229,13 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  // Transform normal to world space
  out.worldNormal = normalize((uniforms.normalMatrix * float4(morphedNormal, 0.0)).xyz);
 
- // Transform normal to view space for MatCap
- out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(morphedNormal, 0.0)).xyz);
-
  out.texCoord = in.texCoord;
  out.animatedTexCoord = animateUV(in.texCoord, material);
  out.color = in.color;
+
+ if (needsViewVectors(material, uniforms)) {
+ // Transform normal to view space for MatCap/rim.
+ out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(morphedNormal, 0.0)).xyz);
 
  // Calculate view direction - extract camera world position from view matrix
  // View matrix = [R | -R*t] where R is rotation, t is camera position
@@ -236,6 +245,10 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
                                    uniforms.viewMatrix[2].xyz);
  float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  out.viewDirection = normalize(cameraPos - out.worldPosition);
+ } else {
+ out.viewDirection = float3(0.0, 0.0, 1.0);
+ out.viewNormal = float3(0.0, 0.0, 1.0);
+ }
 
  return out;
 }
