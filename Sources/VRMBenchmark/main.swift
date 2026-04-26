@@ -23,6 +23,7 @@ import VRMMetalKit
 // MARK: - CLI
 
 struct BenchmarkOptions {
+    var mode: String = "render"
     var inputPath: String = ""
     var vrmaPath: String? = nil
     var frames: Int = 500
@@ -32,6 +33,7 @@ struct BenchmarkOptions {
     var sampleCount: Int = 1
     var fps: Double = 60
     var label: String = "baseline"
+    var loadingPreset: String = "default"
 }
 
 func usage() {
@@ -45,6 +47,10 @@ func usage() {
       --vrma PATH      Optional VRMA animation file; enables per-frame
                        animation playback so skinning and spring physics
                        do real work each frame (recommended).
+      --mode NAME      Benchmark mode: render, animation, transforms, load
+                       (default render).
+      --loading NAME   Loading options preset: default, safe, or max
+                       (default default).
       --frames N       Number of measured frames (default 500)
       --warmup N       Warm-up frames (default 30)
       --fps N          Animation playback rate in frames/sec (default 60)
@@ -84,6 +90,9 @@ func parseArguments() -> BenchmarkOptions? {
         case "--frames":
             guard let v = nextValue(for: a) else { return nil }
             opts.frames = Int(v) ?? opts.frames
+        case "--mode":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.mode = v.lowercased()
         case "--warmup":
             guard let v = nextValue(for: a) else { return nil }
             opts.warmup = Int(v) ?? opts.warmup
@@ -105,6 +114,9 @@ func parseArguments() -> BenchmarkOptions? {
         case "--label":
             guard let v = nextValue(for: a) else { return nil }
             opts.label = v
+        case "--loading":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.loadingPreset = v.lowercased()
         default:
             if opts.inputPath.isEmpty && !a.hasPrefix("--") {
                 opts.inputPath = a
@@ -182,9 +194,48 @@ struct FrameStats {
     }
 }
 
+func printStats(title: String, label: String, unit: String, stats: FrameStats, wallMs: Double) {
+    print("""
+
+    ======================================================================
+    \(title) — \(label)
+    ======================================================================
+    Samples        : \(stats.count)
+    Total wall time: \(String(format: "%.1f ms", wallMs))
+
+    Per-sample time (\(unit))
+    ----------------------------------------------------------------------
+      min    : \(String(format: "%7.3f ms", stats.minMs))
+      median : \(String(format: "%7.3f ms", stats.medianMs))
+      mean   : \(String(format: "%7.3f ms", stats.meanMs))   (±\(String(format: "%.3f", stats.stddevMs)) stddev)
+      p95    : \(String(format: "%7.3f ms", stats.p95Ms))
+      p99    : \(String(format: "%7.3f ms", stats.p99Ms))
+      max    : \(String(format: "%7.3f ms", stats.maxMs))
+    ======================================================================
+
+    """)
+}
+
+func loadingOptions(for preset: String) -> VRMLoadingOptions {
+    switch preset {
+    case "safe", "parallel":
+        return VRMLoadingOptions(optimizations: [
+            .skipVerboseLogging,
+            .parallelTextureDecoding,
+            .parallelTextureLoading,
+            .parallelMeshLoading,
+            .preloadBuffers,
+            .parallelMaterialLoading
+        ])
+    case "max", "maximum", "maximumperformance":
+        return VRMLoadingOptions(optimizations: .maximumPerformance)
+    default:
+        return .default
+    }
+}
+
 // MARK: - Main
 
-@main
 struct VRMBenchmarkCLI {
     @MainActor
     static func main() async {
@@ -204,12 +255,40 @@ struct VRMBenchmarkCLI {
             exit(1)
         }
 
+        if opts.mode == "load" {
+            let loadOptions = loadingOptions(for: opts.loadingPreset)
+            var samples: [Double] = []
+            samples.reserveCapacity(opts.frames)
+            let benchStart = CACurrentMediaTime()
+            for _ in 0..<opts.frames {
+                let t0 = CACurrentMediaTime()
+                do {
+                    _ = try await VRMModel.load(
+                        from: URL(fileURLWithPath: opts.inputPath),
+                        device: device,
+                        options: loadOptions)
+                } catch {
+                    print("ERROR: failed to load VRM: \(error)")
+                    exit(1)
+                }
+                samples.append((CACurrentMediaTime() - t0) * 1000.0)
+            }
+            let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
+            printStats(
+                title: "VRMMetalKit Load Benchmark",
+                label: opts.label,
+                unit: "VRMModel.load",
+                stats: FrameStats.compute(samples),
+                wallMs: wallMs)
+            return
+        }
+
         // Load model
         let url = URL(fileURLWithPath: opts.inputPath)
         let loadStart = CFAbsoluteTimeGetCurrent()
         let model: VRMModel
         do {
-            model = try await VRMModel.load(from: url, device: device)
+            model = try await VRMModel.load(from: url, device: device, options: loadingOptions(for: opts.loadingPreset))
         } catch {
             print("ERROR: failed to load VRM: \(error)")
             exit(1)
@@ -239,6 +318,60 @@ struct VRMBenchmarkCLI {
         } else {
             player = nil
             animDurationSec = 0
+        }
+
+        if opts.mode == "animation" {
+            guard let player = player else {
+                print("ERROR: --mode animation requires --vrma PATH")
+                exit(1)
+            }
+            let dt = Float(1.0 / opts.fps)
+            for _ in 0..<opts.warmup {
+                player.update(deltaTime: dt, model: model)
+            }
+            var samples: [Double] = []
+            samples.reserveCapacity(opts.frames)
+            let benchStart = CACurrentMediaTime()
+            for _ in 0..<opts.frames {
+                let t0 = CACurrentMediaTime()
+                player.update(deltaTime: dt, model: model)
+                samples.append((CACurrentMediaTime() - t0) * 1000.0)
+            }
+            let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
+            printStats(
+                title: "VRMMetalKit Animation Benchmark",
+                label: opts.label,
+                unit: "AnimationPlayer.update",
+                stats: FrameStats.compute(samples),
+                wallMs: wallMs)
+            return
+        }
+
+        if opts.mode == "transforms" {
+            for _ in 0..<opts.warmup {
+                model.updateNodeTransforms()
+            }
+            var samples: [Double] = []
+            samples.reserveCapacity(opts.frames)
+            let benchStart = CACurrentMediaTime()
+            for _ in 0..<opts.frames {
+                let t0 = CACurrentMediaTime()
+                model.updateNodeTransforms()
+                samples.append((CACurrentMediaTime() - t0) * 1000.0)
+            }
+            let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
+            printStats(
+                title: "VRMMetalKit Transform Propagation Benchmark",
+                label: opts.label,
+                unit: "VRMModel.updateNodeTransforms",
+                stats: FrameStats.compute(samples),
+                wallMs: wallMs)
+            return
+        }
+
+        guard opts.mode == "render" else {
+            print("ERROR: unknown --mode \(opts.mode). Expected render, animation, transforms, or load.")
+            exit(1)
         }
 
         // Configure renderer
@@ -385,3 +518,5 @@ struct VRMBenchmarkCLI {
         print("======================================================================\n")
     }
 }
+
+await VRMBenchmarkCLI.main()

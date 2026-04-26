@@ -256,8 +256,8 @@ func copyTextureToPixelBuffer(_ texture: MTLTexture, to pixelBuffer: CVPixelBuff
 
 // MARK: - Main
 
-@main
 struct VRMVideoRendererCLI {
+    @MainActor
     static func main() async {
         guard let options = parseArguments() else {
             exit(0)
@@ -526,3 +526,5 @@ struct VRMVideoRendererCLI {
         print("   🎬 Average: \(String(format: "%.1f", Double(totalFrames) / totalTime)) fps")
     }
 }
+
+await VRMVideoRendererCLI.main()

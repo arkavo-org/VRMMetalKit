@@ -149,7 +149,17 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     public static let parallelMaterialLoading = VRMLoadingOptimization(rawValue: 1 << 8)
     
     /// Default optimizations for production use.
-    public static let `default`: VRMLoadingOptimization = [.skipVerboseLogging, .parallelTextureDecoding]
+    ///
+    /// Keeps quality-preserving behavior while enabling parallel loading paths
+    /// for textures, meshes, materials, and shared buffers.
+    public static let `default`: VRMLoadingOptimization = [
+        .skipVerboseLogging,
+        .parallelTextureDecoding,
+        .parallelTextureLoading,
+        .parallelMeshLoading,
+        .preloadBuffers,
+        .parallelMaterialLoading
+    ]
     
     /// Maximum performance optimizations (may reduce quality).
     public static let maximumPerformance: VRMLoadingOptimization = [

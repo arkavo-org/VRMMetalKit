@@ -296,8 +296,8 @@ func perspective(fovRadians: Float, aspect: Float, near: Float, far: Float) -> m
 
 // MARK: - Main
 
-@main
 struct VRMRenderCLI {
+    @MainActor
     static func main() async {
         guard let options = parseArguments() else {
             exit(0)
@@ -476,3 +476,5 @@ struct VRMRenderCLI {
         }
     }
 }
+
+await VRMRenderCLI.main()

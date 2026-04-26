@@ -385,7 +385,7 @@ public class VRMModel: @unchecked Sendable {
         device: MTLDevice? = nil,
         context: VRMLoadingContext?
     ) async throws -> VRMModel {
-        let skipLogging = await context?.options.optimizations.contains(.skipVerboseLogging) ?? false
+        let skipLogging = context?.options.optimizations.contains(.skipVerboseLogging) ?? false
         
         if !skipLogging {
             vrmLog("[VRMModel] Starting load from data")
