@@ -176,12 +176,19 @@ float2 calculateMatCapUV(float3 viewNormal) {
  return viewNormal.xy * 0.5 + 0.5;
 }
 
-static inline bool needsViewVectors(constant MToonMaterial& material, constant Uniforms& uniforms) {
- bool hasRim = material.parametricRimColorR > 0.0 ||
-               material.parametricRimColorG > 0.0 ||
-               material.parametricRimColorB > 0.0;
- return material.hasMatcapTexture > 0 || hasRim ||
-        uniforms.debugUVs == 10 || uniforms.debugUVs == 32;
+static inline bool hasParametricRim(constant MToonMaterial& material) {
+ return material.parametricRimColorR > 0.0 ||
+        material.parametricRimColorG > 0.0 ||
+        material.parametricRimColorB > 0.0;
+}
+
+static inline bool needsViewNormal(constant MToonMaterial& material, constant Uniforms& uniforms) {
+ return material.hasMatcapTexture > 0 || hasParametricRim(material) ||
+        uniforms.debugUVs == 32;
+}
+
+static inline bool needsViewDirection(constant MToonMaterial& material, constant Uniforms& uniforms) {
+ return hasParametricRim(material) || uniforms.debugUVs == 10;
 }
 
 // VRM 1.0 MToon spec uses linearstep for toon shading
@@ -233,10 +240,14 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  out.animatedTexCoord = animateUV(in.texCoord, material);
  out.color = in.color;
 
- if (needsViewVectors(material, uniforms)) {
+ if (needsViewNormal(material, uniforms)) {
  // Transform normal to view space for MatCap/rim.
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(morphedNormal, 0.0)).xyz);
+ } else {
+ out.viewNormal = float3(0.0, 0.0, 1.0);
+ }
 
+ if (needsViewDirection(material, uniforms)) {
  // Calculate view direction - extract camera world position from view matrix
  // View matrix = [R | -R*t] where R is rotation, t is camera position
  // So cameraPos = -R^T * translation = -transpose(R) * viewMatrix[3].xyz
@@ -247,7 +258,6 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  out.viewDirection = normalize(cameraPos - out.worldPosition);
  } else {
  out.viewDirection = float3(0.0, 0.0, 1.0);
- out.viewNormal = float3(0.0, 0.0, 1.0);
  }
 
  return out;
@@ -269,7 +279,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
                         texture2d<float> uvAnimationMaskTexture [[texture(7)]],
                         sampler textureSampler [[sampler(0)]]) {
 
- // 🎯 DEBUG MODES
+ // Debug modes are cold in production; keep the normal path to one branch.
+ if (uniforms.debugUVs != 0) {
  if (uniforms.debugUVs == 1) {
  // UV debug - red/green gradient
  return float4(in.texCoord.x, in.texCoord.y, 0.0, 1.0);
@@ -449,6 +460,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
      return float4(0.0, NdotL, 0.0, 1.0);  // Green = positive (correct for front-lit)
  } else {
      return float4(-NdotL, 0.0, 0.0, 1.0); // Red = negative (WRONG for front-lit)
+ }
  }
  }
 

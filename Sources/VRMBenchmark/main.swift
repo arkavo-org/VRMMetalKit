@@ -38,6 +38,7 @@ struct BenchmarkOptions {
     var enableSpringBone: Bool = false
     var wireframe: Bool = false
     var lighting: String = "standard"
+    var debugUVs: Int32 = 0
 }
 
 func usage() {
@@ -65,6 +66,7 @@ func usage() {
       --spring-bone    Enable GPU spring-bone physics during render mode
       --wireframe      Enable wireframe rendering during render mode
       --lighting MODE  Lighting mode: standard, single, ambient (default standard)
+      --debug-uvs N    Set renderer debugUVs mode for fragment isolation (default 0)
       --label NAME     Tag printed in the report header (default "baseline")
 
     Recommended invocation:
@@ -123,6 +125,9 @@ func parseArguments() -> BenchmarkOptions? {
         case "--lighting":
             guard let v = nextValue(for: a) else { return nil }
             opts.lighting = v.lowercased()
+        case "--debug-uvs":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.debugUVs = Int32(v) ?? opts.debugUVs
         case "--vrma":
             guard let v = nextValue(for: a) else { return nil }
             opts.vrmaPath = v
@@ -414,6 +419,7 @@ struct VRMBenchmarkCLI {
         renderer.outlineWidth = opts.outlineWidth
         renderer.enableSpringBone = opts.enableSpringBone
         renderer.debugWireframe = opts.wireframe
+        renderer.debugUVs = opts.debugUVs
         switch opts.lighting {
         case "ambient":
             renderer.disableLight(0)
@@ -569,6 +575,7 @@ struct VRMBenchmarkCLI {
         Spring bone    : \(opts.enableSpringBone ? "enabled" : "disabled")
         Wireframe      : \(opts.wireframe ? "enabled" : "disabled")
         Lighting       : \(opts.lighting)
+        Debug UVs      : \(opts.debugUVs)
         Warmup frames  : \(opts.warmup)
         Measured frames: \(opts.frames)
         Total wall time: \(String(format: "%.1f ms", wallMs))
