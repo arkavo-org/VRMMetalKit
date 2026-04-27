@@ -217,7 +217,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Defaults to `.ultra` to match the legacy global-constant behavior.
     var quality: VRMConstants.SpringBoneQuality = .ultra
 
-    func update(model: VRMModel, deltaTime: TimeInterval) {
+    /// Run spring-bone simulation. If `commandBuffer` is non-nil, all substep compute
+    /// passes are encoded into it (no internal `makeCommandBuffer`/`commit`) — caller
+    /// owns the buffer's lifecycle. If `nil`, the legacy path is used (one fresh
+    /// command buffer per substep, committed immediately) for backward compatibility.
+    ///
+    /// The shared-buffer path eliminates the per-substep `commandQueue.makeCommandBuffer`
+    /// + `commit` overhead the audit identified as the renderer's #2 GPU bottleneck.
+    func update(model: VRMModel, deltaTime: TimeInterval, commandBuffer: MTLCommandBuffer? = nil) {
         guard let buffers = model.springBoneBuffers,
               let globalParams = model.springBoneGlobalParams,
               buffers.numBones > 0 else {
@@ -280,7 +287,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
 
             // Execute XPBD pipeline
-            executeXPBDStep(buffers: buffers, globalParams: params)
+            executeXPBDStep(buffers: buffers, globalParams: params, sharedCommandBuffer: commandBuffer)
 
             // Debug: Log bone positions occasionally
             updateCounter += 1
@@ -346,15 +353,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         lastUpdateTime = CACurrentMediaTime()
     }
 
-    private func executeXPBDStep(buffers: SpringBoneBuffers, globalParams: SpringBoneGlobalParams) {
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
-              let kinematicPipeline = kinematicPipeline,
+    private func executeXPBDStep(buffers: SpringBoneBuffers,
+                                  globalParams: SpringBoneGlobalParams,
+                                  sharedCommandBuffer: MTLCommandBuffer? = nil) {
+        guard let kinematicPipeline = kinematicPipeline,
               let predictPipeline = predictPipeline,
               let distancePipeline = distancePipeline,
               let collideSpheresPipeline = collideSpheresPipeline,
               let collideCapsulesPipeline = collideCapsulesPipeline,
               let collidePlanesPipeline = collidePlanesPipeline else {
             return
+        }
+        // If a host-owned buffer was passed in, encode into it (no commit).
+        // Otherwise fall back to legacy per-substep buffer with own commit.
+        let usingSharedBuffer = sharedCommandBuffer != nil
+        let commandBuffer: MTLCommandBuffer
+        if let shared = sharedCommandBuffer {
+            commandBuffer = shared
+        } else {
+            guard let made = commandQueue.makeCommandBuffer() else { return }
+            commandBuffer = made
         }
 
         let numBones = buffers.numBones
@@ -462,7 +480,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             self.captureCompletedPositions(from: buffers, frameID: frameID)
         }
 
-        commandBuffer.commit()
+        // Only commit when we own the buffer. Caller commits the shared buffer.
+        if !usingSharedBuffer {
+            commandBuffer.commit()
+        }
     }
 
     func populateSpringBoneData(model: VRMModel) throws {

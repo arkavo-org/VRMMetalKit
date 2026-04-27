@@ -395,6 +395,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
+    /// When `true`, `drawCore` skips the safety-net root-node `updateWorldTransform`
+    /// pass before encoding. Set this on hosts that already update world transforms
+    /// every frame (e.g. callers that tick `AnimationPlayer.update` per frame, which
+    /// itself calls `model.updateNodeTransforms`). Saves one full hierarchy walk per
+    /// instance per frame.
+    ///
+    /// Defaults to `false` to preserve the historical guarantee that `draw` produces
+    /// correct results even if the caller mutated `node.localMatrix` without telling
+    /// anyone.
+    public var skipPreDrawTransformUpdate: Bool = false
+
     private var lastUpdateTime: CFTimeInterval = 0
     var temporaryGravity: SIMD3<Float>?
     var temporaryWind: SIMD3<Float>?
@@ -1073,10 +1084,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         vrmLog("[VRMRenderer] Model has \(model.nodes.count) nodes, \(model.meshes.count) meshes")
 
-        // CRITICAL: Update world transforms for all nodes
-        // This must be done before rendering to calculate proper positions
-        for node in model.nodes where node.parent == nil {
-            node.updateWorldTransform()
+        // CRITICAL: Update world transforms for all nodes.
+        // This must be done before rendering to calculate proper positions UNLESS the
+        // host has already done it (e.g. via AnimationPlayer.update, which calls
+        // model.updateNodeTransforms internally). Hosts that always tick per-frame can
+        // opt out via `skipPreDrawTransformUpdate`.
+        if !skipPreDrawTransformUpdate {
+            for node in model.nodes where node.parent == nil {
+                node.updateWorldTransform()
+            }
         }
 
         // DEBUG: Check if transforms are actually set
@@ -1130,6 +1146,55 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if frameCounter == 1 || frameCounter % 60 == 0 {
             if !morphedBuffers.isEmpty {
                 vrmLog("[VRMRenderer] Frame \(frameCounter): \(morphedBuffers.count) primitives have morphed positions")
+            }
+        }
+
+        // Debug SpringBone status once
+        if !hasLoggedSpringBone {
+            vrmLog("[VRMRenderer] Draw called: enableSpringBone=\(enableSpringBone), springBone=\(model.springBone != nil ? "exists" : "nil"), springBoneComputeSystem=\(springBoneComputeSystem != nil ? "exists" : "nil")")
+            hasLoggedSpringBone = true
+        }
+
+        // Update SpringBone GPU physics BEFORE the render encoder is created.
+        // Spring-bone now shares the renderer's command buffer (audit's #2 bottleneck
+        // fix), so its compute encoder must be opened+closed before any other encoder
+        // (compute or render) is active on the same buffer — Metal forbids overlap.
+        if enableSpringBone, model.springBone != nil {
+
+            // Calculate actual deltaTime
+            let currentTime = CACurrentMediaTime()
+            let deltaTime = lastUpdateTime > 0 ? Float(currentTime - lastUpdateTime) : 1.0 / 60.0
+            lastUpdateTime = currentTime
+
+            // Clamp deltaTime to reasonable values (prevent huge jumps)
+            let clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
+
+            // Update temporary forces if any
+            updateSpringBoneForces(deltaTime: clampedDeltaTime)
+
+            // Run GPU physics simulation. Pipe the substep work into the renderer's
+            // own command buffer so we don't pay 1-N extra makeCommandBuffer + commit
+            // round trips per instance per frame (audit's #2 GPU bottleneck).
+            if let springBoneCompute = springBoneComputeSystem {
+                springBoneCompute.update(model: model,
+                                         deltaTime: TimeInterval(clampedDeltaTime),
+                                         commandBuffer: commandBuffer)
+
+                // Read back GPU positions and update node transforms
+                springBoneCompute.writeBonesToNodes(model: model)
+
+                // CRITICAL: Propagate spring bone transforms through entire hierarchy before skinning
+                model.updateNodeTransforms()
+
+                // Periodic status logging
+                if frameCounter % 120 == 1 {  // Every 2 seconds at 60fps
+                    vrmLogPhysics("[SpringBone] GPU physics running: \(model.springBoneBuffers?.numBones ?? 0) bones simulated")
+                }
+            } else {
+                vrmLogPhysics("⚠️ [VRMRenderer] Warning: SpringBone GPU system is nil despite having SpringBone data")
+                if frameCounter % 120 == 1 {
+                    vrmLogPhysics("❌ [SpringBone] ERROR: GPU system is nil despite Spring Bone data present")
+                }
             }
         }
 
@@ -1188,51 +1253,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
         }
 
-        // Debug SpringBone status once
-        if !hasLoggedSpringBone {
-            vrmLog("[VRMRenderer] Draw called: enableSpringBone=\(enableSpringBone), springBone=\(model.springBone != nil ? "exists" : "nil"), springBoneComputeSystem=\(springBoneComputeSystem != nil ? "exists" : "nil")")
-            hasLoggedSpringBone = true
-        }
-
-        // Update SpringBone GPU physics if enabled
-        // IMPORTANT: Must be done BEFORE skinning matrix update so SpringBone transforms are included
-        if enableSpringBone, model.springBone != nil {
-
-            // Calculate actual deltaTime
-            let currentTime = CACurrentMediaTime()
-            let deltaTime = lastUpdateTime > 0 ? Float(currentTime - lastUpdateTime) : 1.0 / 60.0
-            lastUpdateTime = currentTime
-
-            // Clamp deltaTime to reasonable values (prevent huge jumps)
-            let clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
-
-            // Update temporary forces if any
-            updateSpringBoneForces(deltaTime: clampedDeltaTime)
-
-            // Run GPU physics simulation
-            if let springBoneCompute = springBoneComputeSystem {
-                springBoneCompute.update(model: model, deltaTime: TimeInterval(clampedDeltaTime))
-
-                // Read back GPU positions and update node transforms
-                springBoneCompute.writeBonesToNodes(model: model)
-
-                // CRITICAL: Propagate spring bone transforms through entire hierarchy before skinning
-                model.updateNodeTransforms()
-
-                // Periodic status logging
-                if frameCounter % 120 == 1 {  // Every 2 seconds at 60fps
-                    vrmLogPhysics("[SpringBone] GPU physics running: \(model.springBoneBuffers?.numBones ?? 0) bones simulated")
-                }
-            } else {
-                vrmLogPhysics("⚠️ [VRMRenderer] Warning: SpringBone GPU system is nil despite having SpringBone data")
-                if frameCounter % 120 == 1 {
-                    vrmLogPhysics("❌ [SpringBone] ERROR: GPU system is nil despite Spring Bone data present")
-                }
-            }
-        } else if model.springBone != nil {
-            // SpringBone disabled but data exists
-            // vrmLog("[VRMRenderer] SpringBone disabled (enableSpringBone=\(enableSpringBone))")
-        }
+        // SpringBone GPU physics now runs BEFORE the render encoder is created
+        // (moved earlier in this function to satisfy Metal's "one encoder at a time
+        // per command buffer" rule when sharing the renderer's command buffer).
 
         // CRITICAL UPDATE ORDER: Update all skinning matrices BEFORE any drawing
         // This ensures all joint palettes are fresh for the entire frame
