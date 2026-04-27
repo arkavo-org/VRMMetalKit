@@ -40,6 +40,8 @@ struct BenchmarkOptions {
     var lighting: String = "standard"
     var debugUVs: Int32 = 0
     var cameraOffsetY: Float = 0  // Shift camera target/eye in Y to push avatar off-screen for cull tests
+    var springBoneQuality: String = "ultra"  // off, low, medium, high, ultra
+    var skipPreDrawTransform: Bool = false   // opt out of renderer's safety-net root transform pass
 }
 
 func usage() {
@@ -65,6 +67,8 @@ func usage() {
       --sample-count N MSAA sample count (default 1)
       --outline-width N Global MToon outline width (default 0.02, use 0 to disable)
       --spring-bone    Enable GPU spring-bone physics during render mode
+      --spring-bone-quality NAME  off|low|medium|high|ultra (default ultra)
+      --skip-pre-draw  Set renderer.skipPreDrawTransformUpdate=true (opts out of safety-net hierarchy walk)
       --wireframe      Enable wireframe rendering during render mode
       --lighting MODE  Lighting mode: standard, single, ambient (default standard)
       --debug-uvs N    Set renderer debugUVs mode for fragment isolation (default 0)
@@ -132,6 +136,11 @@ func parseArguments() -> BenchmarkOptions? {
         case "--camera-offset-y":
             guard let v = nextValue(for: a) else { return nil }
             opts.cameraOffsetY = Float(v) ?? opts.cameraOffsetY
+        case "--spring-bone-quality":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.springBoneQuality = v.lowercased()
+        case "--skip-pre-draw":
+            opts.skipPreDrawTransform = true
         case "--vrma":
             guard let v = nextValue(for: a) else { return nil }
             opts.vrmaPath = v
@@ -431,6 +440,17 @@ struct VRMBenchmarkCLI {
         renderer.loadModel(model)
         renderer.outlineWidth = opts.outlineWidth
         renderer.enableSpringBone = opts.enableSpringBone
+        renderer.skipPreDrawTransformUpdate = opts.skipPreDrawTransform
+        switch opts.springBoneQuality {
+        case "off":    renderer.springBoneQuality = .off
+        case "low":    renderer.springBoneQuality = .low
+        case "medium": renderer.springBoneQuality = .medium
+        case "high":   renderer.springBoneQuality = .high
+        case "ultra":  renderer.springBoneQuality = .ultra
+        default:
+            FileHandle.standardError.write(Data("ERROR: unknown --spring-bone-quality '\(opts.springBoneQuality)'. Expected off/low/medium/high/ultra.\n".utf8))
+            exit(1)
+        }
         renderer.debugWireframe = opts.wireframe
         renderer.debugUVs = opts.debugUVs
         switch opts.lighting {
