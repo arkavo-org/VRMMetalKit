@@ -43,9 +43,32 @@ echo "📂 Shader directory: $SHADERS_DIR"
 echo "📦 Output library: $RESOURCES_DIR/$OUTPUT_LIB"
 echo ""
 
+TOOLCHAIN_BIN=""
+for candidate in /private/var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-*/Metal.xctoolchain/usr/bin; do
+    if [[ -x "$candidate/metal" ]]; then
+        TOOLCHAIN_BIN="$candidate"
+        break
+    fi
+done
+
+if [[ -n "$TOOLCHAIN_BIN" ]]; then
+    METAL=("$TOOLCHAIN_BIN/metal")
+    METALLIB=("$TOOLCHAIN_BIN/metallib")
+    METAL_OBJDUMP=("$TOOLCHAIN_BIN/metal-objdump")
+    METAL_NM=("$TOOLCHAIN_BIN/metal-nm")
+    echo "🧰 Using installed Metal Toolchain component"
+    echo ""
+else
+    METAL=(xcrun -sdk "$SDK_NAME" metal)
+    METALLIB=(xcrun -sdk "$SDK_NAME" metallib)
+    METAL_OBJDUMP=(xcrun -sdk "$SDK_NAME" metal-objdump)
+    METAL_NM=(xcrun -sdk "$SDK_NAME" metal-nm)
+fi
+
 # Create build and resources directories
 mkdir -p "$BUILD_DIR"
 mkdir -p "$RESOURCES_DIR"
+mkdir -p "$BUILD_DIR/module-cache"
 
 # Find all .metal files
 METAL_FILES=("$SHADERS_DIR"/*.metal)
@@ -72,10 +95,11 @@ for metal_file in "${METAL_FILES[@]}"; do
 
     echo "   Compiling $filename.metal..."
 
-    if xcrun -sdk "$SDK_NAME" metal \
+    if "${METAL[@]}" \
         -c "$metal_file" \
         -o "$air_file" \
         -std=metal3.0 \
+        -fmodules-cache-path="$BUILD_DIR/module-cache" \
         -Wall \
         -Wextra \
         2>&1; then
@@ -98,7 +122,7 @@ echo ""
 # Step 2: Link all .air files into a single .metallib
 echo "🔗 Step 2: Linking .air → .metallib..."
 
-if xcrun -sdk "$SDK_NAME" metallib \
+if "${METALLIB[@]}" \
     "${AIR_FILES[@]}" \
     -o "$RESOURCES_DIR/$OUTPUT_LIB"; then
     echo "   ✅ Successfully created $OUTPUT_LIB"
@@ -112,7 +136,7 @@ echo ""
 # Step 3: Verify the metallib
 echo "🔍 Step 3: Verifying shader library..."
 
-if xcrun -sdk "$SDK_NAME" metal-objdump \
+if "${METAL_OBJDUMP[@]}" \
     -macho -private-headers \
     "$RESOURCES_DIR/$OUTPUT_LIB" > /dev/null 2>&1; then
     echo "   ✅ Shader library is valid"
@@ -123,7 +147,7 @@ fi
 # List functions in the library
 echo ""
 echo "📚 Shader functions in library:"
-xcrun -sdk "$SDK_NAME" metal-nm "$RESOURCES_DIR/$OUTPUT_LIB" 2>/dev/null | grep -E "(__kernel|__vertex|__fragment)" | awk '{print "   - " $3}' || echo "   (Could not list functions)"
+"${METAL_NM[@]}" "$RESOURCES_DIR/$OUTPUT_LIB" 2>/dev/null | grep -E "(__kernel|__vertex|__fragment)" | awk '{print "   - " $3}' || echo "   (Could not list functions)"
 
 # Cleanup intermediate files
 echo ""

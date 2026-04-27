@@ -23,6 +23,7 @@ import VRMMetalKit
 // MARK: - CLI
 
 struct BenchmarkOptions {
+    var mode: String = "render"
     var inputPath: String = ""
     var vrmaPath: String? = nil
     var frames: Int = 500
@@ -32,6 +33,15 @@ struct BenchmarkOptions {
     var sampleCount: Int = 1
     var fps: Double = 60
     var label: String = "baseline"
+    var loadingPreset: String = "default"
+    var outlineWidth: Float = 0.02
+    var enableSpringBone: Bool = false
+    var wireframe: Bool = false
+    var lighting: String = "standard"
+    var debugUVs: Int32 = 0
+    var cameraOffsetY: Float = 0  // Shift camera target/eye in Y to push avatar off-screen for cull tests
+    var springBoneQuality: String = "ultra"  // off, low, medium, high, ultra
+    var skipPreDrawTransform: Bool = false   // opt out of renderer's safety-net root transform pass
 }
 
 func usage() {
@@ -45,12 +55,23 @@ func usage() {
       --vrma PATH      Optional VRMA animation file; enables per-frame
                        animation playback so skinning and spring physics
                        do real work each frame (recommended).
+      --mode NAME      Benchmark mode: render, animation, transforms, load
+                       (default render).
+      --loading NAME   Loading options preset: default, safe, or max
+                       (default default).
       --frames N       Number of measured frames (default 500)
       --warmup N       Warm-up frames (default 30)
       --fps N          Animation playback rate in frames/sec (default 60)
       --width W        Render width  (default 1024)
       --height H       Render height (default 1024)
       --sample-count N MSAA sample count (default 1)
+      --outline-width N Global MToon outline width (default 0.02, use 0 to disable)
+      --spring-bone    Enable GPU spring-bone physics during render mode
+      --spring-bone-quality NAME  off|low|medium|high|ultra (default ultra)
+      --skip-pre-draw  Set renderer.skipPreDrawTransformUpdate=true (opts out of safety-net hierarchy walk)
+      --wireframe      Enable wireframe rendering during render mode
+      --lighting MODE  Lighting mode: standard, single, ambient (default standard)
+      --debug-uvs N    Set renderer debugUVs mode for fragment isolation (default 0)
       --label NAME     Tag printed in the report header (default "baseline")
 
     Recommended invocation:
@@ -84,6 +105,9 @@ func parseArguments() -> BenchmarkOptions? {
         case "--frames":
             guard let v = nextValue(for: a) else { return nil }
             opts.frames = Int(v) ?? opts.frames
+        case "--mode":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.mode = v.lowercased()
         case "--warmup":
             guard let v = nextValue(for: a) else { return nil }
             opts.warmup = Int(v) ?? opts.warmup
@@ -96,6 +120,27 @@ func parseArguments() -> BenchmarkOptions? {
         case "--sample-count":
             guard let v = nextValue(for: a) else { return nil }
             opts.sampleCount = Int(v) ?? opts.sampleCount
+        case "--outline-width":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.outlineWidth = Float(v) ?? opts.outlineWidth
+        case "--spring-bone":
+            opts.enableSpringBone = true
+        case "--wireframe":
+            opts.wireframe = true
+        case "--lighting":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.lighting = v.lowercased()
+        case "--debug-uvs":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.debugUVs = Int32(v) ?? opts.debugUVs
+        case "--camera-offset-y":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.cameraOffsetY = Float(v) ?? opts.cameraOffsetY
+        case "--spring-bone-quality":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.springBoneQuality = v.lowercased()
+        case "--skip-pre-draw":
+            opts.skipPreDrawTransform = true
         case "--vrma":
             guard let v = nextValue(for: a) else { return nil }
             opts.vrmaPath = v
@@ -105,6 +150,9 @@ func parseArguments() -> BenchmarkOptions? {
         case "--label":
             guard let v = nextValue(for: a) else { return nil }
             opts.label = v
+        case "--loading":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.loadingPreset = v.lowercased()
         default:
             if opts.inputPath.isEmpty && !a.hasPrefix("--") {
                 opts.inputPath = a
@@ -182,9 +230,63 @@ struct FrameStats {
     }
 }
 
+struct RenderFrameSample {
+    let animationMs: Double
+    let encodeMs: Double
+    let waitMs: Double
+    let totalMs: Double
+}
+
+func printStats(title: String, label: String, unit: String, stats: FrameStats, wallMs: Double) {
+    print("""
+
+    ======================================================================
+    \(title) — \(label)
+    ======================================================================
+    Samples        : \(stats.count)
+    Total wall time: \(String(format: "%.1f ms", wallMs))
+
+    Per-sample time (\(unit))
+    ----------------------------------------------------------------------
+      min    : \(String(format: "%7.3f ms", stats.minMs))
+      median : \(String(format: "%7.3f ms", stats.medianMs))
+      mean   : \(String(format: "%7.3f ms", stats.meanMs))   (±\(String(format: "%.3f", stats.stddevMs)) stddev)
+      p95    : \(String(format: "%7.3f ms", stats.p95Ms))
+      p99    : \(String(format: "%7.3f ms", stats.p99Ms))
+      max    : \(String(format: "%7.3f ms", stats.maxMs))
+    ======================================================================
+
+    """)
+}
+
+func printCompactStats(label: String, samples: [Double]) {
+    let stats = FrameStats.compute(samples)
+    print("  \(label.padding(toLength: 10, withPad: " ", startingAt: 0)): mean \(String(format: "%7.3f ms", stats.meanMs))  median \(String(format: "%7.3f ms", stats.medianMs))  p95 \(String(format: "%7.3f ms", stats.p95Ms))")
+}
+
+func loadingOptions(for preset: String) -> VRMLoadingOptions {
+    switch preset {
+    case "default":
+        return .default
+    case "safe", "parallel":
+        return VRMLoadingOptions(optimizations: [
+            .skipVerboseLogging,
+            .parallelTextureDecoding,
+            .parallelTextureLoading,
+            .parallelMeshLoading,
+            .preloadBuffers,
+            .parallelMaterialLoading
+        ])
+    case "max", "maximum", "maximumperformance":
+        return VRMLoadingOptions(optimizations: .maximumPerformance)
+    default:
+        FileHandle.standardError.write(Data("ERROR: unknown --loading preset '\(preset)'. Expected default, safe, or max.\n".utf8))
+        exit(1)
+    }
+}
+
 // MARK: - Main
 
-@main
 struct VRMBenchmarkCLI {
     @MainActor
     static func main() async {
@@ -204,12 +306,46 @@ struct VRMBenchmarkCLI {
             exit(1)
         }
 
+        if opts.mode == "load" {
+            let loadOptions = loadingOptions(for: opts.loadingPreset)
+            var samples: [Double] = []
+            samples.reserveCapacity(opts.frames)
+            let benchStart = CACurrentMediaTime()
+            for _ in 0..<opts.frames {
+                let t0 = CACurrentMediaTime()
+                do {
+                    _ = try await VRMModel.load(
+                        from: URL(fileURLWithPath: opts.inputPath),
+                        device: device,
+                        options: loadOptions)
+                } catch {
+                    print("ERROR: failed to load VRM: \(error)")
+                    exit(1)
+                }
+                let elapsedMs = (CACurrentMediaTime() - t0) * 1000.0
+                autoreleasepool {
+                    // Per-iteration drain so CG/Foundation autoreleased objects
+                    // from texture decode and glTF parse don't accumulate across
+                    // long sample runs.
+                    samples.append(elapsedMs)
+                }
+            }
+            let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
+            printStats(
+                title: "VRMMetalKit Load Benchmark",
+                label: opts.label,
+                unit: "VRMModel.load",
+                stats: FrameStats.compute(samples),
+                wallMs: wallMs)
+            return
+        }
+
         // Load model
         let url = URL(fileURLWithPath: opts.inputPath)
         let loadStart = CFAbsoluteTimeGetCurrent()
         let model: VRMModel
         do {
-            model = try await VRMModel.load(from: url, device: device)
+            model = try await VRMModel.load(from: url, device: device, options: loadingOptions(for: opts.loadingPreset))
         } catch {
             print("ERROR: failed to load VRM: \(error)")
             exit(1)
@@ -241,6 +377,60 @@ struct VRMBenchmarkCLI {
             animDurationSec = 0
         }
 
+        if opts.mode == "animation" {
+            guard let player = player else {
+                print("ERROR: --mode animation requires --vrma PATH")
+                exit(1)
+            }
+            let dt = Float(1.0 / opts.fps)
+            for _ in 0..<opts.warmup {
+                player.update(deltaTime: dt, model: model)
+            }
+            var samples: [Double] = []
+            samples.reserveCapacity(opts.frames)
+            let benchStart = CACurrentMediaTime()
+            for _ in 0..<opts.frames {
+                let t0 = CACurrentMediaTime()
+                player.update(deltaTime: dt, model: model)
+                samples.append((CACurrentMediaTime() - t0) * 1000.0)
+            }
+            let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
+            printStats(
+                title: "VRMMetalKit Animation Benchmark",
+                label: opts.label,
+                unit: "AnimationPlayer.update",
+                stats: FrameStats.compute(samples),
+                wallMs: wallMs)
+            return
+        }
+
+        if opts.mode == "transforms" {
+            for _ in 0..<opts.warmup {
+                model.updateNodeTransforms()
+            }
+            var samples: [Double] = []
+            samples.reserveCapacity(opts.frames)
+            let benchStart = CACurrentMediaTime()
+            for _ in 0..<opts.frames {
+                let t0 = CACurrentMediaTime()
+                model.updateNodeTransforms()
+                samples.append((CACurrentMediaTime() - t0) * 1000.0)
+            }
+            let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
+            printStats(
+                title: "VRMMetalKit Transform Propagation Benchmark",
+                label: opts.label,
+                unit: "VRMModel.updateNodeTransforms",
+                stats: FrameStats.compute(samples),
+                wallMs: wallMs)
+            return
+        }
+
+        guard opts.mode == "render" else {
+            print("ERROR: unknown --mode \(opts.mode). Expected render, animation, transforms, or load.")
+            exit(1)
+        }
+
         // Configure renderer
         var config = RendererConfig()
         config.sampleCount = opts.sampleCount
@@ -248,32 +438,79 @@ struct VRMBenchmarkCLI {
         let renderer = VRMRenderer(device: device, config: config)
         renderer.performanceTracker = PerformanceTracker()
         renderer.loadModel(model)
-        renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
-        renderer.disableLight(1)
-        renderer.setLight(2, direction: SIMD3<Float>(0, 0.2, 1),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 0.3)
+        renderer.outlineWidth = opts.outlineWidth
+        renderer.enableSpringBone = opts.enableSpringBone
+        renderer.skipPreDrawTransformUpdate = opts.skipPreDrawTransform
+        switch opts.springBoneQuality {
+        case "off":    renderer.springBoneQuality = .off
+        case "low":    renderer.springBoneQuality = .low
+        case "medium": renderer.springBoneQuality = .medium
+        case "high":   renderer.springBoneQuality = .high
+        case "ultra":  renderer.springBoneQuality = .ultra
+        default:
+            FileHandle.standardError.write(Data("ERROR: unknown --spring-bone-quality '\(opts.springBoneQuality)'. Expected off/low/medium/high/ultra.\n".utf8))
+            exit(1)
+        }
+        renderer.debugWireframe = opts.wireframe
+        renderer.debugUVs = opts.debugUVs
+        switch opts.lighting {
+        case "ambient":
+            renderer.disableLight(0)
+            renderer.disableLight(1)
+            renderer.disableLight(2)
+        case "single":
+            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                              color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+            renderer.disableLight(1)
+            renderer.disableLight(2)
+        default:
+            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                              color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+            renderer.disableLight(1)
+            renderer.setLight(2, direction: SIMD3<Float>(0, 0.2, 1),
+                              color: SIMD3<Float>(1, 1, 1), intensity: 0.3)
+        }
         renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
 
         let aspect = Float(opts.width) / Float(opts.height)
         renderer.projectionMatrix = perspectiveMatrix(
             fovRadians: 45.0 * .pi / 180.0, aspect: aspect, near: 0.01, far: 100.0)
         renderer.viewMatrix = lookAtMatrix(
-            eye: SIMD3<Float>(0, 1.3, 1.8),
-            center: SIMD3<Float>(0, 1.3, 0),
+            eye: SIMD3<Float>(0, 1.3 + opts.cameraOffsetY, 1.8),
+            center: SIMD3<Float>(0, 1.3 + opts.cameraOffsetY, 0),
             up: SIMD3<Float>(0, 1, 0))
 
         // Offscreen targets (reused every frame)
+        let useMSAA = opts.sampleCount > 1
         let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: opts.width, height: opts.height, mipmapped: false)
-        colorDesc.usage = [.renderTarget, .shaderRead]
+        colorDesc.textureType = useMSAA ? .type2DMultisample : .type2D
+        colorDesc.sampleCount = max(1, opts.sampleCount)
+        // Multisample textures aren't sampleable; only the resolve target needs .shaderRead.
+        colorDesc.usage = useMSAA ? .renderTarget : [.renderTarget, .shaderRead]
         colorDesc.storageMode = .private
         guard let colorTex = device.makeTexture(descriptor: colorDesc) else {
             print("ERROR: failed to create color texture"); exit(1)
         }
 
+        let resolveTex: MTLTexture?
+        if useMSAA {
+            let resolveDesc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm, width: opts.width, height: opts.height, mipmapped: false)
+            resolveDesc.usage = [.renderTarget, .shaderRead]
+            resolveDesc.storageMode = .private
+            guard let texture = device.makeTexture(descriptor: resolveDesc) else {
+                print("ERROR: failed to create resolve texture"); exit(1)
+            }
+            resolveTex = texture
+        } else {
+            resolveTex = nil
+        }
+
         let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .depth32Float, width: opts.width, height: opts.height, mipmapped: false)
+        depthDesc.textureType = useMSAA ? .type2DMultisample : .type2D
+        depthDesc.sampleCount = max(1, opts.sampleCount)
         depthDesc.usage = .renderTarget
         depthDesc.storageMode = .private
         guard let depthTex = device.makeTexture(descriptor: depthDesc) else {
@@ -282,18 +519,26 @@ struct VRMBenchmarkCLI {
 
         let dt = Float(1.0 / opts.fps)
 
-        func renderOnce(_ cpuTimeMs: inout Double) {
+        func renderOnce(_ sample: inout RenderFrameSample) {
             // Wrap in autoreleasepool so Metal objects (command buffers, render
             // pass descriptors, encoders) are released every frame instead of
             // accumulating until the outer pool drains. Without this, running
             // 500+ frames in a tight loop leaks driver threads and can trigger
             // a system watchdog panic.
-            var ms = 0.0
+            var animationMs = 0.0
+            var encodeMs = 0.0
+            var waitMs = 0.0
+            var totalMs = 0.0
             autoreleasepool {
                 let rpd = MTLRenderPassDescriptor()
                 rpd.colorAttachments[0].texture = colorTex
                 rpd.colorAttachments[0].loadAction = .clear
-                rpd.colorAttachments[0].storeAction = .store
+                if let resolveTex {
+                    rpd.colorAttachments[0].resolveTexture = resolveTex
+                    rpd.colorAttachments[0].storeAction = .multisampleResolve
+                } else {
+                    rpd.colorAttachments[0].storeAction = .store
+                }
                 rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.12, green: 0.14, blue: 0.18, alpha: 1)
                 rpd.depthAttachment.texture = depthTex
                 rpd.depthAttachment.loadAction = .clear
@@ -305,37 +550,50 @@ struct VRMBenchmarkCLI {
                 let t0 = CACurrentMediaTime()
                 // Advance animation before drawing so per-frame measurement
                 // captures both the animation CPU cost and the render cost.
+                let animationStart = CACurrentMediaTime()
                 player?.update(deltaTime: dt, model: model)
+                animationMs = (CACurrentMediaTime() - animationStart) * 1000.0
+
+                let encodeStart = CACurrentMediaTime()
                 renderer.drawOffscreenHeadless(
                     to: colorTex, depth: depthTex,
                     commandBuffer: cb, renderPassDescriptor: rpd)
+                encodeMs = (CACurrentMediaTime() - encodeStart) * 1000.0
+
+                let waitStart = CACurrentMediaTime()
                 cb.commit()
                 cb.waitUntilCompleted()
-                ms = (CACurrentMediaTime() - t0) * 1000.0
+                waitMs = (CACurrentMediaTime() - waitStart) * 1000.0
+                totalMs = (CACurrentMediaTime() - t0) * 1000.0
             }
-            cpuTimeMs = ms
+            sample = RenderFrameSample(
+                animationMs: animationMs,
+                encodeMs: encodeMs,
+                waitMs: waitMs,
+                totalMs: totalMs)
         }
 
         // Warm-up
-        var discard = 0.0
+        var discard = RenderFrameSample(animationMs: 0, encodeMs: 0, waitMs: 0, totalMs: 0)
         for _ in 0..<opts.warmup {
             renderOnce(&discard)
         }
         renderer.resetPerformanceMetrics()
 
         // Measure
-        var samples: [Double] = []
+        var samples: [RenderFrameSample] = []
         samples.reserveCapacity(opts.frames)
         let benchStart = CACurrentMediaTime()
         for _ in 0..<opts.frames {
-            var ms = 0.0
-            renderOnce(&ms)
-            samples.append(ms)
+            var sample = RenderFrameSample(animationMs: 0, encodeMs: 0, waitMs: 0, totalMs: 0)
+            renderOnce(&sample)
+            samples.append(sample)
         }
         let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
 
         // Report
-        let stats = FrameStats.compute(samples)
+        let totalSamples = samples.map(\.totalMs)
+        let stats = FrameStats.compute(totalSamples)
         let rendererMetrics = renderer.getPerformanceMetrics()
 
         print("""
@@ -347,6 +605,11 @@ struct VRMBenchmarkCLI {
         Animation      : \(opts.vrmaPath.map { "\(($0 as NSString).lastPathComponent) (\(String(format: "%.2f", animDurationSec))s @ \(opts.fps) fps)" } ?? "none (static pose)")
         Load time      : \(String(format: "%.1f ms", loadMs))
         Resolution     : \(opts.width)x\(opts.height) (MSAA \(opts.sampleCount)x)
+        Outline width  : \(String(format: "%.4f", opts.outlineWidth))
+        Spring bone    : \(opts.enableSpringBone ? "enabled" : "disabled")
+        Wireframe      : \(opts.wireframe ? "enabled" : "disabled")
+        Lighting       : \(opts.lighting)
+        Debug UVs      : \(opts.debugUVs)
         Warmup frames  : \(opts.warmup)
         Measured frames: \(opts.frames)
         Total wall time: \(String(format: "%.1f ms", wallMs))
@@ -362,17 +625,26 @@ struct VRMBenchmarkCLI {
           eff FPS: \(String(format: "%.1f", 1000.0 / max(stats.meanMs, 0.0001)))
         """)
 
+        print("""
+
+        Render phase breakdown (per frame)
+        ----------------------------------------------------------------------
+        """)
+        printCompactStats(label: "animation", samples: samples.map(\.animationMs))
+        printCompactStats(label: "encode", samples: samples.map(\.encodeMs))
+        printCompactStats(label: "gpu wait", samples: samples.map(\.waitMs))
+
         if let m = rendererMetrics {
-            // PerformanceTracker counters are cumulative across measured frames.
-            let frames = max(stats.count, 1)
-            let perFrame: (Int) -> String = { total in
-                String(format: "%.1f", Double(total) / Double(frames))
+            // PerformanceTracker returns counters averaged per frame.
+            let perFrame: (Int) -> String = { value in
+                String(format: "%d", value)
             }
             print("""
 
             Renderer counters (per frame, averaged)
             ----------------------------------------------------------------------
               draw calls        : \(perFrame(m.drawCalls))
+              culled draws      : \(perFrame(m.culledDraws))
               pipeline changes  : \(perFrame(m.pipelineChanges))
               state changes     : \(perFrame(m.stateChanges))
               texture bindings  : \(perFrame(m.textureBindings))
@@ -380,8 +652,11 @@ struct VRMBenchmarkCLI {
               morph computes    : \(perFrame(m.morphComputes))
               triangles         : \(perFrame(m.triangleCount))
               vertices          : \(perFrame(m.vertexCount))
+              gpu p95           : \(String(format: "%.3f ms", m.gpuTimeP95Ms))
             """)
         }
         print("======================================================================\n")
     }
 }
+
+await VRMBenchmarkCLI.main()

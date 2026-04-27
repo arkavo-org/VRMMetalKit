@@ -146,6 +146,21 @@ struct VertexOut {
  float3 viewNormal; // For MatCap sampling
 };
 
+static inline bool hasParametricRim(constant MToonMaterial& material) {
+ return material.parametricRimColorR > 0.0 ||
+        material.parametricRimColorG > 0.0 ||
+        material.parametricRimColorB > 0.0;
+}
+
+static inline bool needsViewNormal(constant MToonMaterial& material, constant Uniforms& uniforms) {
+ return material.hasMatcapTexture > 0 || hasParametricRim(material) ||
+        uniforms.debugUVs == 32;
+}
+
+static inline bool needsViewDirection(constant MToonMaterial& material, constant Uniforms& uniforms) {
+ return hasParametricRim(material) || uniforms.debugUVs == 10;
+}
+
 // UV Animation utility function (rotation first, then scroll)
 static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
  float2 result = uv;
@@ -261,6 +276,7 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  float4 viewPosition = uniforms.viewMatrix * worldPos;
  out.position = uniforms.projectionMatrix * viewPosition;
 
+ if (needsViewDirection(material, uniforms)) {
  // Calculate view direction (from vertex to camera)
  // Extract camera world position from view matrix: cameraPos = -R^T * translation
  float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
@@ -268,9 +284,16 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                    uniforms.viewMatrix[2].xyz);
  float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
+ } else {
+ out.viewDirection = float3(0.0, 0.0, 1.0);
+ }
 
- // Calculate view-space normal for MatCap
+ if (needsViewNormal(material, uniforms)) {
+ // Calculate view-space normal for MatCap/rim
  out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
+ } else {
+ out.viewNormal = float3(0.0, 0.0, 1.0);
+ }
 
  // Pass through texture coordinates and vertex color
  out.texCoord = in.texCoord;

@@ -167,6 +167,52 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - Bounding Box Calculation
 
+    /// Cached union of all primitive local-space AABBs. Populated lazily on first
+    /// access from already-computed `VRMPrimitive.localMin/localMax`. Used by
+    /// the renderer for whole-model frustum culling without touching GPU buffers.
+    private var _cachedLocalBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+
+    public var modelLocalBounds: (min: SIMD3<Float>, max: SIMD3<Float>) {
+        if let b = _cachedLocalBounds { return b }
+        var lo = SIMD3<Float>(repeating: Float.infinity)
+        var hi = SIMD3<Float>(repeating: -Float.infinity)
+        var found = false
+        for mesh in meshes {
+            for primitive in mesh.primitives where primitive.vertexCount > 0 {
+                lo = simd_min(lo, primitive.localMin)
+                hi = simd_max(hi, primitive.localMax)
+                found = true
+            }
+        }
+        if !found {
+            lo = SIMD3<Float>(-0.5, 0, -0.5)
+            hi = SIMD3<Float>(0.5, 1.8, 0.5)
+        }
+        let bounds = (min: lo, max: hi)
+        _cachedLocalBounds = bounds
+        return bounds
+    }
+
+    /// Whole-model frustum cull. Returns `true` when the model's bind-pose
+    /// `modelLocalBounds`, transformed by `modelMatrix`, lies entirely outside
+    /// `frustum`. Constant-time — does not touch GPU buffers, the node
+    /// hierarchy, or animation state, so it is safe (and intended) to call
+    /// before spring-bone simulation, skinning, and `VRMRenderer.draw(...)`
+    /// to skip those costs for off-screen instances.
+    ///
+    /// The returned answer is approximate at the bind-pose extent: an avatar
+    /// that animates outside its bind-pose AABB (e.g. raised arms beyond the
+    /// rest extent) may be culled when partially visible. For typical idle /
+    /// locomotion clips the bind-pose envelope is conservative enough.
+    public func isOutsideFrustum(_ frustum: Frustum, modelMatrix: matrix_float4x4) -> Bool {
+        let local = modelLocalBounds
+        let world = AABBTransform.worldAABB(
+            localMin: local.min,
+            localMax: local.max,
+            modelMatrix: modelMatrix)
+        return frustum.cullsAABB(min: world.min, max: world.max)
+    }
+
     /// Calculate axis-aligned bounding box from all mesh vertices in model space
     /// - Parameter includeAnimated: If true, considers current world transforms; if false, uses bind pose
     /// - Returns: Min and max corners of the bounding box
@@ -385,7 +431,7 @@ public class VRMModel: @unchecked Sendable {
         device: MTLDevice? = nil,
         context: VRMLoadingContext?
     ) async throws -> VRMModel {
-        let skipLogging = await context?.options.optimizations.contains(.skipVerboseLogging) ?? false
+        let skipLogging = context?.options.optimizations.contains(.skipVerboseLogging) ?? false
         
         if !skipLogging {
             vrmLog("[VRMModel] Starting load from data")

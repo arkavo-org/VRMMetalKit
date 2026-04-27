@@ -389,7 +389,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// - `.high`: 90Hz substeps, 2 constraint iterations
     /// - `.medium`: 60Hz substeps, 2 constraint iterations
     /// - `.low`: 30Hz substeps, 1 constraint iteration (fastest)
-    public var springBoneQuality: VRMConstants.SpringBoneQuality = .ultra
+    public var springBoneQuality: VRMConstants.SpringBoneQuality = .ultra {
+        didSet {
+            springBoneComputeSystem?.quality = springBoneQuality
+        }
+    }
+
+    /// When `true`, `drawCore` skips the safety-net root-node `updateWorldTransform`
+    /// pass before encoding. Set this on hosts that already update world transforms
+    /// every frame (e.g. callers that tick `AnimationPlayer.update` per frame, which
+    /// itself calls `model.updateNodeTransforms`). Saves one full hierarchy walk per
+    /// instance per frame.
+    ///
+    /// Defaults to `false` to preserve the historical guarantee that `draw` produces
+    /// correct results even if the caller mutated `node.localMatrix` without telling
+    /// anyone.
+    public var skipPreDrawTransformUpdate: Bool = false
 
     private var lastUpdateTime: CFTimeInterval = 0
     var temporaryGravity: SIMD3<Float>?
@@ -549,6 +564,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var samplerStates: [String: MTLSamplerState] = [:]
     private var lastPipelineState: MTLRenderPipelineState?
     private var lastMaterialId: Int = -1
+
+    /// Encoder state cache: skips redundant Metal binding calls within a single render pass.
+    private let encoderStateCache = EncoderStateCache()
     // Dummy buffer to satisfy Metal validation when morphs are not used
     private var emptyFloat3Buffer: MTLBuffer?
 
@@ -1066,10 +1084,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         vrmLog("[VRMRenderer] Model has \(model.nodes.count) nodes, \(model.meshes.count) meshes")
 
-        // CRITICAL: Update world transforms for all nodes
-        // This must be done before rendering to calculate proper positions
-        for node in model.nodes where node.parent == nil {
-            node.updateWorldTransform()
+        // CRITICAL: Update world transforms for all nodes.
+        // This must be done before rendering to calculate proper positions UNLESS the
+        // host has already done it (e.g. via AnimationPlayer.update, which calls
+        // model.updateNodeTransforms internally). Hosts that always tick per-frame can
+        // opt out via `skipPreDrawTransformUpdate`.
+        if !skipPreDrawTransformUpdate {
+            for node in model.nodes where node.parent == nil {
+                node.updateWorldTransform()
+            }
         }
 
         // DEBUG: Check if transforms are actually set
@@ -1126,6 +1149,55 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
         }
 
+        // Debug SpringBone status once
+        if !hasLoggedSpringBone {
+            vrmLog("[VRMRenderer] Draw called: enableSpringBone=\(enableSpringBone), springBone=\(model.springBone != nil ? "exists" : "nil"), springBoneComputeSystem=\(springBoneComputeSystem != nil ? "exists" : "nil")")
+            hasLoggedSpringBone = true
+        }
+
+        // Update SpringBone GPU physics BEFORE the render encoder is created.
+        // Spring-bone now shares the renderer's command buffer (audit's #2 bottleneck
+        // fix), so its compute encoder must be opened+closed before any other encoder
+        // (compute or render) is active on the same buffer — Metal forbids overlap.
+        if enableSpringBone, model.springBone != nil {
+
+            // Calculate actual deltaTime
+            let currentTime = CACurrentMediaTime()
+            let deltaTime = lastUpdateTime > 0 ? Float(currentTime - lastUpdateTime) : 1.0 / 60.0
+            lastUpdateTime = currentTime
+
+            // Clamp deltaTime to reasonable values (prevent huge jumps)
+            let clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
+
+            // Update temporary forces if any
+            updateSpringBoneForces(deltaTime: clampedDeltaTime)
+
+            // Run GPU physics simulation. Pipe the substep work into the renderer's
+            // own command buffer so we don't pay 1-N extra makeCommandBuffer + commit
+            // round trips per instance per frame (audit's #2 GPU bottleneck).
+            if let springBoneCompute = springBoneComputeSystem {
+                springBoneCompute.update(model: model,
+                                         deltaTime: TimeInterval(clampedDeltaTime),
+                                         commandBuffer: commandBuffer)
+
+                // Read back GPU positions and update node transforms
+                springBoneCompute.writeBonesToNodes(model: model)
+
+                // CRITICAL: Propagate spring bone transforms through entire hierarchy before skinning
+                model.updateNodeTransforms()
+
+                // Periodic status logging
+                if frameCounter % 120 == 1 {  // Every 2 seconds at 60fps
+                    vrmLogPhysics("[SpringBone] GPU physics running: \(model.springBoneBuffers?.numBones ?? 0) bones simulated")
+                }
+            } else {
+                vrmLogPhysics("⚠️ [VRMRenderer] Warning: SpringBone GPU system is nil despite having SpringBone data")
+                if frameCounter % 120 == 1 {
+                    vrmLogPhysics("❌ [SpringBone] ERROR: GPU system is nil despite Spring Bone data present")
+                }
+            }
+        }
+
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             if config.strict != .off {
                 do {
@@ -1136,6 +1208,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
             return
         }
+        encoderStateCache.reset()
 
         // Debug: Log rendering statistics
         var totalMeshesWithNodes = 0
@@ -1180,51 +1253,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
         }
 
-        // Debug SpringBone status once
-        if !hasLoggedSpringBone {
-            vrmLog("[VRMRenderer] Draw called: enableSpringBone=\(enableSpringBone), springBone=\(model.springBone != nil ? "exists" : "nil"), springBoneComputeSystem=\(springBoneComputeSystem != nil ? "exists" : "nil")")
-            hasLoggedSpringBone = true
-        }
-
-        // Update SpringBone GPU physics if enabled
-        // IMPORTANT: Must be done BEFORE skinning matrix update so SpringBone transforms are included
-        if enableSpringBone, model.springBone != nil {
-
-            // Calculate actual deltaTime
-            let currentTime = CACurrentMediaTime()
-            let deltaTime = lastUpdateTime > 0 ? Float(currentTime - lastUpdateTime) : 1.0 / 60.0
-            lastUpdateTime = currentTime
-
-            // Clamp deltaTime to reasonable values (prevent huge jumps)
-            let clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
-
-            // Update temporary forces if any
-            updateSpringBoneForces(deltaTime: clampedDeltaTime)
-
-            // Run GPU physics simulation
-            if let springBoneCompute = springBoneComputeSystem {
-                springBoneCompute.update(model: model, deltaTime: TimeInterval(clampedDeltaTime))
-
-                // Read back GPU positions and update node transforms
-                springBoneCompute.writeBonesToNodes(model: model)
-
-                // CRITICAL: Propagate spring bone transforms through entire hierarchy before skinning
-                model.updateNodeTransforms()
-
-                // Periodic status logging
-                if frameCounter % 120 == 1 {  // Every 2 seconds at 60fps
-                    vrmLogPhysics("[SpringBone] GPU physics running: \(model.springBoneBuffers?.numBones ?? 0) bones simulated")
-                }
-            } else {
-                vrmLogPhysics("⚠️ [VRMRenderer] Warning: SpringBone GPU system is nil despite having SpringBone data")
-                if frameCounter % 120 == 1 {
-                    vrmLogPhysics("❌ [SpringBone] ERROR: GPU system is nil despite Spring Bone data present")
-                }
-            }
-        } else if model.springBone != nil {
-            // SpringBone disabled but data exists
-            // vrmLog("[VRMRenderer] SpringBone disabled (enableSpringBone=\(enableSpringBone))")
-        }
+        // SpringBone GPU physics now runs BEFORE the render encoder is created
+        // (moved earlier in this function to satisfy Metal's "one encoder at a time
+        // per command buffer" rule when sharing the renderer's command buffer).
 
         // CRITICAL UPDATE ORDER: Update all skinning matrices BEFORE any drawing
         // This ensures all joint palettes are fresh for the entire frame
@@ -1272,15 +1303,29 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // We'll set the pipeline per-mesh based on whether it has a skin
-        encoder.setDepthStencilState(depthStencilStates["opaque"])
+        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
 
         // Enable back-face culling for proper rendering
-        encoder.setCullMode(.back)
-        encoder.setFrontFacing(.counterClockwise) // glTF uses CCW winding
+        encoderStateCache.setCullMode(encoder,.back)
+        encoderStateCache.setFrontFacing(encoder,.counterClockwise) // glTF uses CCW winding
 
         // Update uniforms with camera matrices
         uniforms.viewMatrix = viewMatrix
         uniforms.projectionMatrix = projectionMatrix
+
+        // Build a frustum from the current view-projection for per-primitive culling.
+        // The world-space VRM bounds are pre-rotated by vrmVersionRotation so we
+        // bake that into the matrix used for AABB transformation below.
+        let frameFrustum = Frustum(viewProjection: simd_mul(projectionMatrix, viewMatrix))
+        // Skinned primitives can move outside their rest-pose AABB during animation;
+        // inflate the model-space bounds by 50% to give room without producing
+        // visible pop-in. This is conservative: tighter per-frame bounds would
+        // require sampling joint world transforms.
+        let modelLocalBounds = model.modelLocalBounds
+        let inflatedHalfExtent = (modelLocalBounds.max - modelLocalBounds.min) * 0.25
+        let inflatedModelMin = modelLocalBounds.min - inflatedHalfExtent
+        let inflatedModelMax = modelLocalBounds.max + inflatedHalfExtent
+        var culledThisFrame = 0
 
         // Use stored light directions directly (world-space lighting)
         // Camera-following lights caused washout - reverting to fixed world-space
@@ -1729,8 +1774,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 case .material(let name):
                     shouldRender = materialName == name
                 case .primitive(let primIndex):
-                    let meshPrimIndex = item.mesh.primitives.firstIndex(where: { $0 === item.primitive }) ?? -1
-                    shouldRender = meshPrimIndex == primIndex
+                    shouldRender = item.primIdxInMesh == primIndex
                 }
 
                 if !shouldRender {
@@ -1738,7 +1782,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
 
                 if frameCounter == 1 {
-                    let meshPrimIndex = item.mesh.primitives.firstIndex(where: { $0 === item.primitive }) ?? -1
+                    let meshPrimIndex = item.primIdxInMesh
                     vrmLog("[FILTER] Rendering: mesh='\(meshName)', material='\(materialName)', primIndex=\(meshPrimIndex)")
 
                     // Log detailed primitive information once
@@ -1833,7 +1877,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             // PER-DRAW LOGGING: Comprehensive state dump
             let prim = item.primitive
-            let meshPrimIndex = item.mesh.primitives.firstIndex(where: { $0 === prim }) ?? -1
+            let meshPrimIndex = item.primIdxInMesh
 
             // Get skinning info
             var skinIdxStr = "none"
@@ -1980,6 +2024,36 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // If wedge artifacts appear, this should be moved to load time and cached
             let primitive = item.primitive
 
+            // Frustum culling: skip primitives whose world-space AABB is entirely
+            // outside the camera frustum. For skinned primitives the rest-pose
+            // local bounds may not capture animated extremes, so we use the
+            // inflated model-space bounds instead (transformed by vrmRotation
+            // since skinned vertices are baked into world space by the joint
+            // matrices). For rigid primitives we use their tight local bounds
+            // transformed by the node's world matrix.
+            let cullModelMatrix: matrix_float4x4
+            let cullLocalMin: SIMD3<Float>
+            let cullLocalMax: SIMD3<Float>
+            let isSkinnedForCull = (item.node.skin != nil || (item.primitive.hasJoints && item.primitive.hasWeights)) && hasSkinning
+            if isSkinnedForCull {
+                cullModelMatrix = vrmVersionRotation
+                cullLocalMin = inflatedModelMin
+                cullLocalMax = inflatedModelMax
+            } else {
+                cullModelMatrix = simd_mul(vrmVersionRotation, item.node.worldMatrix)
+                cullLocalMin = primitive.localMin
+                cullLocalMax = primitive.localMax
+            }
+            let worldAABB = AABBTransform.worldAABB(
+                localMin: cullLocalMin,
+                localMax: cullLocalMax,
+                modelMatrix: cullModelMatrix)
+            if frameFrustum.cullsAABB(min: worldAABB.min, max: worldAABB.max) {
+                culledThisFrame &+= 1
+                performanceTracker?.recordCulledDraw()
+                continue
+            }
+
             if frameCounter <= 2 {
                 vrmLog("[WEDGE DEBUG] Mesh: '\(meshName)', Primitive: \(meshPrimIndex), Material: '\(item.materialName)'")
                 vrmLog("  - Primitive type: \(primitive.primitiveType == .triangle ? "triangles" : "other(\(primitive.primitiveType.rawValue))")")
@@ -2043,12 +2117,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             if frameCounter < 2 {
                 vrmLog("[PSO] Setting pipeline: \(pipeline.label ?? "UNKNOWN")")
             }
-            encoder.setRenderPipelineState(pipeline)
+            encoderStateCache.setRenderPipelineState(encoder, pipeline)
 
             // Set triangle fill mode for wireframe debug
             #if os(macOS)
             if debugWireframe {
-                encoder.setTriangleFillMode(.lines)
+                encoderStateCache.setTriangleFillMode(encoder, .lines)
             }
             #endif
 
@@ -2119,10 +2193,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             if let morphedPosBuffer {
                 // CORRECT BINDING: Original vertex buffer at stage_in (index 0) for UVs/normals/etc.
-                encoder.setVertexBuffer(vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
+                encoderStateCache.setVertexBuffer(encoder, vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
 
                 // Morphed positions as shader expects
-                encoder.setVertexBuffer(morphedPosBuffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
+                encoderStateCache.setVertexBuffer(encoder, morphedPosBuffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
 
                 // Signal presence of morphed positions to the shader
                 var hasMorphedFlag: UInt32 = 1
@@ -2134,18 +2208,18 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             } else {
                 // No morphed positions - use original vertex buffer for all attributes
-                encoder.setVertexBuffer(vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
+                encoderStateCache.setVertexBuffer(encoder, vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
 
                 // Bind a small dummy buffer to satisfy Metal debug validation, and set flag=0
                 if emptyFloat3Buffer == nil {
                     emptyFloat3Buffer = device.makeBuffer(length: MemoryLayout<SIMD3<Float>>.stride, options: .storageModeShared)
                 }
-                encoder.setVertexBuffer(emptyFloat3Buffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
+                encoderStateCache.setVertexBuffer(encoder, emptyFloat3Buffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
                 var hasMorphedFlag: UInt32 = 0
                 encoder.setVertexBytes(&hasMorphedFlag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
             }
 
-            encoder.setVertexBuffer(uniformsBuffer, offset: 0, index: ResourceIndices.uniformsBuffer)
+            encoderStateCache.setVertexBuffer(encoder, uniformsBuffer, offset: 0, index: ResourceIndices.uniformsBuffer)
 
             // Update and set joint matrices for skinned meshes
             // meshUsesSkinning was already defined above
@@ -2213,7 +2287,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             vrmLog("[SHORTS DEBUG] Mesh '\(item.node.name ?? "unnamed")' using skin \(skinIndex): jointCount=\(skin.joints.count), bufferOffset=\(byteOffset)")
                         }
 
-                        encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
+                        encoderStateCache.setVertexBuffer(encoder, jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
                     }
                 } else {
                     // Skin index is out of range - this shouldn't happen
@@ -2428,7 +2502,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // Index 0: Base color texture
                     if let texture = material.baseColorTexture,
                        let mtlTexture = texture.mtlTexture {
-                        encoder.setFragmentTexture(mtlTexture, index: 0)
+                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 0)
                         mtoonUniforms.hasBaseColorTexture = 1
                         textureCount += 1
                         performanceTracker?.recordStateChange(type: .texture)
@@ -2439,12 +2513,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         if let textureIndex = mtoon.shadeMultiplyTexture {
                             if textureIndex < model.textures.count,
                                let mtlTexture = model.textures[textureIndex].mtlTexture {
-                                encoder.setFragmentTexture(mtlTexture, index: 1)
+                                encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 1)
                                 mtoonUniforms.hasShadeMultiplyTexture = 1
                                 textureCount += 1
                             }
                         } else {
-                            encoder.setFragmentTexture(nil, index: 1)
+                            encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
                             mtoonUniforms.hasShadeMultiplyTexture = 0
                         }
                     }
@@ -2454,23 +2528,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                        let shadingShift = mtoon.shadingShiftTexture,
                        shadingShift.index < model.textures.count,
                        let mtlTexture = model.textures[shadingShift.index].mtlTexture {
-                        encoder.setFragmentTexture(mtlTexture, index: 2)
+                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 2)
                         mtoonUniforms.hasShadingShiftTexture = 1
                         mtoonUniforms.shadingShiftTextureScale = shadingShift.scale ?? 1.0
                         textureCount += 1
-                        // vrmLog("[VRMRenderer] Bound shading shift texture at index 2")
                     }
 
                     // Index 3: Normal texture (provides surface detail)
                     if let mtlTexture = material.normalTexture?.mtlTexture {
-                        encoder.setFragmentTexture(mtlTexture, index: 3)
+                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 3)
                         mtoonUniforms.hasNormalTexture = 1
                         textureCount += 1
                     }
 
                     // Index 4: Emissive texture
                     if let mtlTexture = material.emissiveTexture?.mtlTexture {
-                        encoder.setFragmentTexture(mtlTexture, index: 4)
+                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 4)
                         mtoonUniforms.hasEmissiveTexture = 1
                         textureCount += 1
                     }
@@ -2480,10 +2553,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                        let textureIndex = mtoon.matcapTexture,
                        textureIndex < model.textures.count,
                        let mtlTexture = model.textures[textureIndex].mtlTexture {
-                        encoder.setFragmentTexture(mtlTexture, index: 5)
+                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 5)
                         mtoonUniforms.hasMatcapTexture = 1
                         textureCount += 1
-                        // vrmLog("[VRMRenderer] Bound matcap texture at index 5")
                     }
 
                     // Index 6: Rim multiply texture
@@ -2491,10 +2563,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                        let textureIndex = mtoon.rimMultiplyTexture,
                        textureIndex < model.textures.count,
                        let mtlTexture = model.textures[textureIndex].mtlTexture {
-                        encoder.setFragmentTexture(mtlTexture, index: 6)
+                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 6)
                         mtoonUniforms.hasRimMultiplyTexture = 1
                         textureCount += 1
-                        // vrmLog("[VRMRenderer] Bound rim multiply texture at index 6")
                     }
 
                     // Index 7: UV animation mask texture
@@ -2502,10 +2573,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                        let textureIndex = mtoon.uvAnimationMaskTexture,
                        textureIndex < model.textures.count,
                        let mtlTexture = model.textures[textureIndex].mtlTexture {
-                        encoder.setFragmentTexture(mtlTexture, index: 7)
+                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 7)
                         mtoonUniforms.hasUvAnimationMaskTexture = 1
                         textureCount += 1
-                        // vrmLog("[VRMRenderer] Bound UV animation mask texture at index 7")
                     }
 
                     // Set sampler for all texture indices (cached in setupCachedStates)
@@ -2562,12 +2632,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // Uses lessEqual - later materials win at equal depths
                     // Depth bias: pushed back slightly to allow clothing/skin to win at seams
                     if let faceState = depthStencilStates["face"] {
-                        encoder.setDepthStencilState(faceState)
+                        encoderStateCache.setDepthStencilState(encoder,faceState)
                     } else {
-                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoder.setCullMode(isDoubleSided ? .none : .back)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,isDoubleSided ? .none : .back)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Z-FIGHTING FIX: Body renders first but pushed back in depth
                     // Negative bias pushes away from camera, allowing overlays to win
                     encoder.setDepthBias(-0.1, slopeScale: 4.0, clamp: 1.0)
@@ -2578,12 +2648,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 case "clothing":
                     // Clothing renders AFTER body - wins at overlaps via render order
                     if let faceState = depthStencilStates["face"] {
-                        encoder.setDepthStencilState(faceState)
+                        encoderStateCache.setDepthStencilState(encoder,faceState)
                     } else {
-                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoder.setCullMode(isDoubleSided ? .none : .back)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,isDoubleSided ? .none : .back)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for clothing (overlay layer)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
@@ -2600,21 +2670,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // Overlay materials (mouth, eyebrows): use faceOverlay state
                         // lessEqual allows winning at equal depth, no depth write prevents Z-fighting
                         if let overlayState = depthStencilStates["faceOverlay"] {
-                            encoder.setDepthStencilState(overlayState)
+                            encoderStateCache.setDepthStencilState(encoder,overlayState)
                         } else {
-                            encoder.setDepthStencilState(depthStencilStates["face"])
+                            encoderStateCache.setDepthStencilState(encoder,depthStencilStates["face"])
                         }
                     } else {
                         // Base face skin: use normal face state with depth write
                         if let faceState = depthStencilStates["face"] {
-                            encoder.setDepthStencilState(faceState)
+                            encoderStateCache.setDepthStencilState(encoder,faceState)
                         } else {
-                            encoder.setDepthStencilState(depthStencilStates["opaque"])
+                            encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                         }
                     }
 
-                    encoder.setCullMode(isDoubleSided ? .none : .back)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,isDoubleSided ? .none : .back)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
 
                     // Apply material-specific depth bias from calculator
                     let bias = depthBiasCalculator.depthBias(
@@ -2631,12 +2701,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // Face mouth/lip overlays - render on top of face skin
                     // Uses face state with depth bias to win depth test
                     if let faceState = depthStencilStates["face"] {
-                        encoder.setDepthStencilState(faceState)
+                        encoderStateCache.setDepthStencilState(encoder,faceState)
                     } else {
-                        encoder.setDepthStencilState(depthStencilStates["mask"])
+                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["mask"])
                     }
-                    encoder.setCullMode(.none)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,.none)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for mouth/lip overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
@@ -2647,12 +2717,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 case "eyebrow", "eyeline":
                     // Face features render after skin - win via render order
                     if let faceState = depthStencilStates["face"] {
-                        encoder.setDepthStencilState(faceState)
+                        encoderStateCache.setDepthStencilState(encoder,faceState)
                     } else {
-                        encoder.setDepthStencilState(depthStencilStates["mask"])
+                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["mask"])
                     }
-                    encoder.setCullMode(.none)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,.none)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for eyebrow/eyeline overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
@@ -2664,12 +2734,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // Eyes render after skin - win via render order
                     // Depth bias: higher bias to ensure eyes win over eyelids/face
                     if let faceState = depthStencilStates["face"] {
-                        encoder.setDepthStencilState(faceState)
+                        encoderStateCache.setDepthStencilState(encoder,faceState)
                     } else {
-                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoder.setCullMode(.none)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,.none)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for eye overlays (highest priority)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
@@ -2679,12 +2749,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 case "highlight":
                     // Eye highlights render last - win via render order
                     if let blendDepthState = depthStencilStates["blend"] {
-                        encoder.setDepthStencilState(blendDepthState)
+                        encoderStateCache.setDepthStencilState(encoder,blendDepthState)
                     } else {
-                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoder.setCullMode(.none)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,.none)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for highlight overlays (highest bias)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
@@ -2697,12 +2767,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // Uses face state (.lessEqual + depth write) to occlude what's behind
                     // Key for lace, collar, and semi-transparent overlays
                     if let faceState = depthStencilStates["face"] {
-                        encoder.setDepthStencilState(faceState)
+                        encoderStateCache.setDepthStencilState(encoder,faceState)
                     } else {
-                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoder.setCullMode(.none)  // Often double-sided for overlays
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,.none)  // Often double-sided for overlays
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for transparent overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
@@ -2712,9 +2782,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 default:
                     // Unknown face category - fallback to opaque
-                    encoder.setDepthStencilState(depthStencilStates["opaque"])
-                    encoder.setCullMode(isDoubleSided ? .none : .back)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
+                    encoderStateCache.setCullMode(encoder,isDoubleSided ? .none : .back)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                 }
             } else {
                 // NON-FACE rendering: use standard alpha mode logic
@@ -2723,34 +2793,34 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 
                 switch materialAlphaMode {
                 case "opaque":
-                    encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
-                    encoder.setCullMode(cullMode)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,cullMode)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "mask":
-                    encoder.setDepthStencilState(depthStencilStates["mask"])
+                    encoderStateCache.setDepthStencilState(encoder,depthStencilStates["mask"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
-                    encoder.setCullMode(cullMode)
-                    encoder.setFrontFacing(.counterClockwise)
+                    encoderStateCache.setCullMode(encoder,cullMode)
+                    encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply base depth bias for MASK materials
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "blend":
                     if let blendDepthState = depthStencilStates["blend"] {
-                        encoder.setDepthStencilState(blendDepthState)
+                        encoderStateCache.setDepthStencilState(encoder,blendDepthState)
                     } else {
-                        encoder.setDepthStencilState(depthStencilStates["opaque"])
+                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoder.setCullMode(.none)
+                    encoderStateCache.setCullMode(encoder,.none)
                     // Apply base depth bias for BLEND materials
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 default:
-                    encoder.setDepthStencilState(depthStencilStates["opaque"])
+                    encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     let cullMode = isDoubleSided ? MTLCullMode.none : .back
-                    encoder.setCullMode(cullMode)
+                    encoderStateCache.setCullMode(encoder,cullMode)
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                 }
             }
@@ -2838,7 +2908,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                        index: 8)
 
                 // Also pass main uniforms to fragment shader for lighting
-                encoder.setFragmentBuffer(uniformsBuffer, offset: 0, index: 1)
+                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: 0, index: 1)
 
                 // CRITICAL DEBUG: Test if we're reaching draw code
                 if frameCounter < 2 {
@@ -3197,7 +3267,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                        index: 8)
 
                 // Also pass main uniforms to fragment shader for lighting
-                encoder.setFragmentBuffer(uniformsBuffer, offset: 0, index: 1)
+                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: 0, index: 1)
 
                 encoder.drawPrimitives(
                     type: primitive.primitiveType,
@@ -3236,7 +3306,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         renderMToonOutlines(
             encoder: encoder,
             renderItems: allItems,
-            model: model
+            model: model,
+            frustum: frameFrustum,
+            inflatedModelMin: inflatedModelMin,
+            inflatedModelMax: inflatedModelMax
         )
 
         encoder.endEncoding()
@@ -3286,7 +3359,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private func renderMToonOutlines(
         encoder: MTLRenderCommandEncoder,
         renderItems: [RenderItem],
-        model: VRMModel
+        model: VRMModel,
+        frustum: Frustum,
+        inflatedModelMin: SIMD3<Float>,
+        inflatedModelMax: SIMD3<Float>
     ) {
         // Only render outlines if we have a pipeline and global outline width is non-zero
         guard mtoonOutlinePipelineState != nil || mtoonSkinnedOutlinePipelineState != nil else {
@@ -3301,13 +3377,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let hasSkinning = !model.skins.isEmpty
 
         // Cull front faces for inverted hull technique
-        encoder.setCullMode(.front)
-        encoder.setFrontFacing(.counterClockwise)
+        encoderStateCache.setCullMode(encoder,.front)
+        encoderStateCache.setFrontFacing(encoder,.counterClockwise)
 
         // Set depth state for outlines (test depth but don't write)
         // Prevents outlines from incorrectly writing to depth buffer
         if let outlineDepthState = depthStencilStates["blend"] {
-            encoder.setDepthStencilState(outlineDepthState)
+            encoderStateCache.setDepthStencilState(encoder,outlineDepthState)
         }
 
         // Minimal depth bias for outlines - the real fix is proper vertex skinning
@@ -3342,6 +3418,29 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let nodeHasSkin = item.node.skin != nil && hasSkinning
             let meshUsesSkinning = primitive.hasJoints && primitive.hasWeights
             let isSkinned = (nodeHasSkin || meshUsesSkinning) && hasSkinning
+
+            // Frustum cull: skip outline draw if primitive's world AABB is outside view.
+            // Use inflated model bounds for skinned, primitive local bounds for rigid.
+            let outlineCullModel: matrix_float4x4
+            let outlineCullMin: SIMD3<Float>
+            let outlineCullMax: SIMD3<Float>
+            if isSkinned {
+                outlineCullModel = vrmVersionRotation
+                outlineCullMin = inflatedModelMin
+                outlineCullMax = inflatedModelMax
+            } else {
+                outlineCullModel = simd_mul(vrmVersionRotation, item.node.worldMatrix)
+                outlineCullMin = primitive.localMin
+                outlineCullMax = primitive.localMax
+            }
+            let outlineAABB = AABBTransform.worldAABB(
+                localMin: outlineCullMin,
+                localMax: outlineCullMax,
+                modelMatrix: outlineCullModel)
+            if frustum.cullsAABB(min: outlineAABB.min, max: outlineAABB.max) {
+                performanceTracker?.recordCulledDraw()
+                continue
+            }
 
             // Select appropriate outline pipeline
             let outlinePipeline: MTLRenderPipelineState?
@@ -3409,14 +3508,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Restore default cull mode
-        encoder.setCullMode(.back)
+        encoderStateCache.setCullMode(encoder,.back)
 
         // Reset depth bias for subsequent render passes
         encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
 
         // Restore depth state for subsequent render passes
         if let opaqueState = depthStencilStates["opaque"] {
-            encoder.setDepthStencilState(opaqueState)
+            encoderStateCache.setDepthStencilState(encoder,opaqueState)
         }
     }
 
@@ -3591,4 +3690,3 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var currentDebugMode: Int = 0
 
 }
-
