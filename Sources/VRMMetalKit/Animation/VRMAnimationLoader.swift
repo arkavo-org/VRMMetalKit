@@ -524,7 +524,15 @@ private func makeRotationSampler(track: KeyTrack,
                                  modelRestRotation: simd_quatf?,
                                  convertForVRM0: Bool = false) -> ((Float) -> simd_quatf)? {
     let modelRest = modelRestRotation
-    let rotationRest = simd_normalize(animationRestRotation)
+    // Convert the rest rotation into the same coordinate space the per-frame
+    // rotations will be expressed in. Without this, delta = inverse(restA) *
+    // rotationB mixes spaces and produces a residual frame rotation that is
+    // identity for pure-Y axis rotations but visible (e.g., 180° X) on idle
+    // hips/root tracks — exactly the upside-down VRM 0.0 + VRMA symptom.
+    let restForDelta: simd_quatf = convertForVRM0
+        ? convertRotationForVRM0(animationRestRotation)
+        : animationRestRotation
+    let rotationRest = simd_normalize(restForDelta)
 
     // No model rest data available - just apply animation directly with optional VRM 0.0 conversion
     if modelRest == nil {
@@ -586,6 +594,13 @@ private func makeTranslationSampler(track: KeyTrack,
                                     animationRestTranslation: SIMD3<Float>,
                                     modelRestTranslation: SIMD3<Float>?,
                                     convertForVRM0: Bool = false) -> ((Float) -> SIMD3<Float>)? {
+    // Convert the rest translation into the same space the per-frame
+    // translations will be in. Symmetry fix: delta = animT - restT must
+    // subtract values from the same coordinate frame.
+    let restForDelta: SIMD3<Float> = convertForVRM0
+        ? convertTranslationForVRM0(animationRestTranslation)
+        : animationRestTranslation
+
     guard let modelRest = modelRestTranslation else {
         return { t in
             var result = sampleVector3(track, at: t)
@@ -604,7 +619,7 @@ private func makeTranslationSampler(track: KeyTrack,
             animTranslation = convertTranslationForVRM0(animTranslation)
         }
 
-        let delta = animTranslation - animationRestTranslation
+        let delta = animTranslation - restForDelta
         return modelRest + delta
     }
 }
