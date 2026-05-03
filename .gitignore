@@ -3,6 +3,13 @@
 /Packages
 xcuserdata/
 DerivedData/
+.xcode-derived/
+.xcode-derived-main/
+default.profraw
+*.profraw
+emote-output/
+VRMA_Avatar_Mega_Pack/
+VRMA_Locomotion_Pack/
 .swiftpm/configuration/registries.json
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc

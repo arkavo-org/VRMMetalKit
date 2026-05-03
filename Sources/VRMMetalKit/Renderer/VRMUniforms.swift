@@ -48,8 +48,15 @@ struct Uniforms {
     var _padding2: Float = 0                                      // 4 bytes padding
     var _padding3: Float = 0                                      // 4 bytes padding to align to 16 bytes
     var toonBands: Int32 = 3                                      // 4 bytes, offset 416
-    var _padding5: Float = 0                                      // 4 bytes padding
-    var _padding6: Float = 0                                      // 4 bytes padding
+    /// 0 = legacy MToon rim only. >0.5 = enable an additive directional rim
+    /// term in the fragment shader:
+    /// `pow(1 - N·V, power) * max(0, N·L) * lightColor * intensity`, summed
+    /// over all enabled lights and added on top of the lit pass independently
+    /// of base albedo. Lets a pure-black silhouette still show a directional
+    /// warm edge.
+    var additiveDirectionalRimEnabled: Float = 0                  // 4 bytes, offset 420
+    /// Fresnel exponent for the additive rim. Higher = narrower rim. Typical 4..12.
+    var additiveDirectionalRimPower: Float = 5                    // 4 bytes, offset 424
     var _padding7: Float = 0                                      // 4 bytes padding to align to 16 bytes
     // Total: 432 bytes (27 x 16-byte blocks)
 

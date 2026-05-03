@@ -111,6 +111,10 @@ func printUsage() {
         --hero-lighting         Use a softer 3-point lighting + lifted ambient for
                                 hero/portrait shots instead of the cel-shading default.
                                 Pair with `--outline-scale 0.0` for a clean stillshot.
+        --silhouette            Render avatar as a pure-black silhouette
+                                with an additive directional rim
+        --rim-power <float>     Fresnel exponent for silhouette rim
+                                (typical 4..12, default: 5)
         --help                  Show this help message
 
     EXAMPLES:
@@ -166,6 +170,8 @@ struct RenderOptions {
     var dumpBonesFilter: String? = nil
     var outlineScale: Float = 1.0
     var heroLighting: Bool = false
+    var silhouette: Bool = false
+    var rimPower: Float = 5.0
 }
 
 func parseArguments() -> RenderOptions? {
@@ -240,6 +246,13 @@ func parseArguments() -> RenderOptions? {
             }
         case "--hero-lighting":
             options.heroLighting = true
+        case "--silhouette":
+            options.silhouette = true
+        case "--rim-power":
+            i += 1
+            if i < args.count, let val = Float(args[i]) {
+                options.rimPower = max(0, val)
+            }
         default:
             break
         }
@@ -377,15 +390,35 @@ struct VRMVideoRendererCLI {
         renderer.enableSpringBone = true
 
         // Set up lighting
-        if options.heroLighting {
+        if options.silhouette {
+            // Silhouette mode (most specific override): black materials + warm rim.
+            // Disable auto-material overrides so the face baseColor stays black
+            // (renderer otherwise force-whitens face materials for contour readability).
+            renderer.disableAutoMaterialOverrides = true
+            renderer.additiveDirectionalRimEnabled = true
+            renderer.additiveDirectionalRimPower = options.rimPower
+            for material in model.materials {
+                material.baseColorFactor = SIMD4<Float>(0, 0, 0, material.baseColorFactor.w)
+                material.emissiveFactor = SIMD3<Float>(0, 0, 0)
+                if var mtoon = material.mtoon {
+                    mtoon.shadeColorFactor = SIMD3<Float>(0, 0, 0)
+                    mtoon.parametricRimColorFactor = SIMD3<Float>(0, 0, 0)
+                    mtoon.matcapFactor = SIMD3<Float>(0, 0, 0)
+                    material.mtoon = mtoon
+                }
+            }
+            renderer.setAmbientColor(SIMD3<Float>(0, 0, 0))
+            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                              color: SIMD3<Float>(1.0, 0.9, 0.7), intensity: 1.0)
+            renderer.disableLight(1)
+            renderer.disableLight(2)
+            print("   🌒 Silhouette mode (rim power \(options.rimPower))")
+        } else if options.heroLighting {
             // Hero/portrait setup: 3-point with soft fill and lifted ambient.
-            // Key: front-right, slightly warm.
             renderer.setLight(0, direction: SIMD3<Float>(0.3, -0.3, -0.85),
                               color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 1.0)
-            // Fill: front-left, cool, half-strength.
             renderer.setLight(1, direction: SIMD3<Float>(-0.5, -0.1, -0.85),
                               color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.55)
-            // Rim: behind, slightly warm, edge highlight.
             renderer.setLight(2, direction: SIMD3<Float>(0.0, -0.4, 0.85),
                               color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.4)
             renderer.setAmbientColor(SIMD3<Float>(0.18, 0.18, 0.2))

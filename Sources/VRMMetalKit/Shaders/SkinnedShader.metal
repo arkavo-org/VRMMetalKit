@@ -41,8 +41,8 @@ struct Uniforms {
  float _padding2;
  float _padding3;
  int toonBands;
- float _padding5;
- float _padding6;
+ float additiveDirectionalRimEnabled;
+ float additiveDirectionalRimPower;
  float _padding7;
 };
 

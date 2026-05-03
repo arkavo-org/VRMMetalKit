@@ -41,8 +41,8 @@ struct Uniforms {
  float _padding2;
  float _padding3;
  int toonBands;                // Number of cel-shading bands
- float _padding5;
- float _padding6;
+ float additiveDirectionalRimEnabled;  // 0 = off (legacy), >0.5 = enable additive directional rim
+ float additiveDirectionalRimPower;    // Fresnel exponent for the additive rim (typical 4..12)
  float _padding7;
 };
 
@@ -664,7 +664,36 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // ADD rim to final color (standard MToon behavior per spec)
  litColor += finalRim;
  }
- 
+
+ // Additive directional rim — opt-in via uniforms.additiveDirectionalRimEnabled.
+ // Computes `pow(1 - N·V, power) * max(0, N·L) * lightColor * intensity` for
+ // each enabled scene light and adds the result on top of litColor, completely
+ // independent of base albedo. Lets a fully crushed (base = 0) material still
+ // show a warm directional edge — silhouette + rim aesthetic.
+ if (uniforms.additiveDirectionalRimEnabled > 0.5) {
+ float3 Nworld = normalize(in.worldNormal);
+ if (!isFrontFace) Nworld = -Nworld;
+ float3 Vworld = normalize(in.viewDirection);
+ float NdotV_world = saturate(dot(Nworld, Vworld));
+ float fresnel = pow(saturate(1.0 - NdotV_world),
+                     max(uniforms.additiveDirectionalRimPower, 0.0001));
+
+ float3 dirRim = float3(0.0);
+ if (intensity0 > 0.0) {
+ float NdotL = saturate(dot(Nworld, -uniforms.lightDirection.xyz));
+ dirRim += fresnel * NdotL * uniforms.lightColor.xyz * intensity0;
+ }
+ if (intensity1 > 0.0) {
+ float NdotL = saturate(dot(Nworld, -uniforms.light1Direction.xyz));
+ dirRim += fresnel * NdotL * uniforms.light1Color.xyz * intensity1;
+ }
+ if (intensity2 > 0.0) {
+ float NdotL = saturate(dot(Nworld, -uniforms.light2Direction.xyz));
+ dirRim += fresnel * NdotL * uniforms.light2Color.xyz * intensity2;
+ }
+ litColor += dirRim;
+ }
+
  // DEBUG 35: Final lit color before gamma/sRGB conversion
  if (uniforms.debugUVs == 35) {
      return float4(litColor, 1.0);
