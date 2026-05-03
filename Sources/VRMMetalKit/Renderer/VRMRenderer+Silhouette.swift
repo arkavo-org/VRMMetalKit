@@ -53,9 +53,18 @@ public struct SilhouetteRenderConfig: Sendable {
 
     // MARK: Materials
 
-    /// 0..1 emissive scale for eye materials. 1.0 = the iris texture / colour
-    /// glows at full original brightness. Lower for a moodier read.
-    public var eyeEmissiveScale: Float = 1.0
+    /// Emissive multiplier for eye materials. The iris/sclera texture is
+    /// sampled, multiplied by this scalar, and added to the lit pass. The
+    /// rasterizer then clamps to [0,1] per channel. Useful values:
+    ///   - 1.0: iris glows at the texture's authored brightness — usually
+    ///          subtle and reads as "lit eyes" rather than "luminous eyes."
+    ///   - 2.5: brighter iris colours saturate, sclera blows out to white,
+    ///          giving the "hologram / ghost in the machine" host aesthetic
+    ///          where the eyes act as a bright focal point against the
+    ///          crushed body. Default.
+    ///   - 4.0+: hard-saturated white iris cores; iris hue only survives
+    ///          where the source texture is darkest. Use sparingly.
+    public var eyeEmissiveScale: Float = 2.5
 
     /// Predicate returning `true` for material names that should self-
     /// illuminate (eye sclera/iris/pupil) instead of being crushed to black.
