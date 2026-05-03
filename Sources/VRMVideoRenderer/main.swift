@@ -391,27 +391,9 @@ struct VRMVideoRendererCLI {
 
         // Set up lighting
         if options.silhouette {
-            // Silhouette mode (most specific override): black materials + warm rim.
-            // Disable auto-material overrides so the face baseColor stays black
-            // (renderer otherwise force-whitens face materials for contour readability).
-            renderer.disableAutoMaterialOverrides = true
-            renderer.additiveDirectionalRimEnabled = true
-            renderer.additiveDirectionalRimPower = options.rimPower
-            for material in model.materials {
-                material.baseColorFactor = SIMD4<Float>(0, 0, 0, material.baseColorFactor.w)
-                material.emissiveFactor = SIMD3<Float>(0, 0, 0)
-                if var mtoon = material.mtoon {
-                    mtoon.shadeColorFactor = SIMD3<Float>(0, 0, 0)
-                    mtoon.parametricRimColorFactor = SIMD3<Float>(0, 0, 0)
-                    mtoon.matcapFactor = SIMD3<Float>(0, 0, 0)
-                    material.mtoon = mtoon
-                }
-            }
-            renderer.setAmbientColor(SIMD3<Float>(0, 0, 0))
-            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                              color: SIMD3<Float>(1.0, 0.9, 0.7), intensity: 1.0)
-            renderer.disableLight(1)
-            renderer.disableLight(2)
+            var sil = SilhouetteRenderConfig()
+            sil.rimFresnelPower = options.rimPower
+            renderer.applySilhouetteMode(model: model, config: sil)
             print("   🌒 Silhouette mode (rim power \(options.rimPower))")
         } else if options.heroLighting {
             // Hero/portrait setup: 3-point with soft fill and lifted ambient.
