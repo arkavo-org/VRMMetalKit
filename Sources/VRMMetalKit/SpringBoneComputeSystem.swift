@@ -61,6 +61,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     private var globalParamsBuffer: MTLBuffer?
     private var animatedRootPositionsBuffer: MTLBuffer?
+    /// Holds the previous frame's animated root positions so the kinematic
+    /// kernel can write a clean velocity history into `bonePosPrev[root]`
+    /// instead of reading from `bonePosCurr[root]` (which can be contaminated
+    /// by collision pushes — Bug #4 in issue #138).
+    private var animatedRootPositionsPrevBuffer: MTLBuffer?
     private var rootBoneIndicesBuffer: MTLBuffer?
     private var numRootBonesBuffer: MTLBuffer?
     private var rootBoneIndices: [UInt32] = []
@@ -253,6 +258,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             checkTeleportationAndReset(model: model, buffers: buffers)
         }
 
+        // Snapshot the previous frame's animated root positions BEFORE we
+        // overwrite animatedRootPositionsBuffer with this frame's pose. The
+        // kinematic kernel reads previousPos from this buffer so velocity is
+        // measured against last frame's animated target — independent of any
+        // collision pushes that may have touched bonePosCurr (Bug #4).
+        if frameSubstepCount > 0,
+           let curr = animatedRootPositionsBuffer,
+           let prev = animatedRootPositionsPrevBuffer {
+            prev.contents().copyMemory(from: curr.contents(), byteCount: curr.length)
+        }
+
         var stepsThisFrame = 0
 
         // Process fixed steps (clamped to avoid spiral-of-death)
@@ -411,16 +427,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.setBuffer(bindDirections, offset: 0, index: 11)
         }
 
-        // First update kinematic root bones with animated positions
-        // Note: Kinematic kernel uses buffer indices 8-10 to avoid conflicts with colliders (5-7)
+        // First update kinematic root bones with animated positions.
+        // Kinematic kernel uses buffer indices 8-10, 12 to avoid conflicts with
+        // colliders (5-7) and bindDirections (11). Index 12 is the previous-
+        // frame animated-position mirror used to write a clean velocity
+        // history into bonePosPrev[root] (Bug #4 fix).
         if !rootBoneIndices.isEmpty,
            let animatedRootPositionsBuffer = animatedRootPositionsBuffer,
+           let animatedRootPositionsPrevBuffer = animatedRootPositionsPrevBuffer,
            let rootBoneIndicesBuffer = rootBoneIndicesBuffer,
            let numRootBonesBuffer = numRootBonesBuffer {
             computeEncoder.setComputePipelineState(kinematicPipeline)
             computeEncoder.setBuffer(animatedRootPositionsBuffer, offset: 0, index: 8)
             computeEncoder.setBuffer(rootBoneIndicesBuffer, offset: 0, index: 9)
             computeEncoder.setBuffer(numRootBonesBuffer, offset: 0, index: 10)
+            computeEncoder.setBuffer(animatedRootPositionsPrevBuffer, offset: 0, index: 12)
             let rootGridSize = MTLSize(width: rootBoneIndices.count, height: 1, depth: 1)
             computeEncoder.dispatchThreads(rootGridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
@@ -794,8 +815,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Initialize buffers for root bone kinematic updates
         let numRootBones = rootBoneIndices.count
         if numRootBones > 0 {
-            animatedRootPositionsBuffer = device.makeBuffer(length: MemoryLayout<SIMD3<Float>>.stride * numRootBones,
+            let positionsLength = MemoryLayout<SIMD3<Float>>.stride * numRootBones
+            animatedRootPositionsBuffer = device.makeBuffer(length: positionsLength,
                                                            options: [.storageModeShared])
+            // Mirror buffer holding the previous frame's animated positions —
+            // copied from animatedRootPositionsBuffer at frame boundaries (see
+            // update()). The kinematic kernel reads previousPos from here so
+            // velocity history isn't tied to bonePosCurr.
+            animatedRootPositionsPrevBuffer = device.makeBuffer(length: positionsLength,
+                                                                options: [.storageModeShared])
             rootBoneIndicesBuffer = device.makeBuffer(bytes: rootBoneIndices,
                                                      length: MemoryLayout<UInt32>.stride * numRootBones,
                                                      options: [.storageModeShared])
