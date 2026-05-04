@@ -339,6 +339,7 @@ struct VRMVideoRendererCLI {
 
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
+        renderer.enableSpringBone = true
 
         // Set up lighting
         renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
