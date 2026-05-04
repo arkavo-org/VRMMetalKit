@@ -4,64 +4,20 @@
 import Foundation
 import XCTest
 import simd
+@testable import VRMMetalKit
 
-/// One row from a `--dump-bones` CSV produced by `VRMVideoRenderer`. Each row
-/// captures a single bone at a single frame, along with its parent's world
-/// position and the rigid-follow expectation (where the bone *would* sit if it
-/// followed its parent perfectly without any physics lag).
-struct TrajectorySample: Equatable {
-    let frame: Int
-    let time: Double
-    let bone: String
-    /// World position of the bone after physics.
-    let world: SIMD3<Float>
-    /// World position of the bone's parent (or = world if no parent).
-    let parent: SIMD3<Float>
-    /// Rigid-follow expectation: parent.worldMatrix * (initialTranslation, 1).
-    let rigid: SIMD3<Float>
-}
+/// Test-side assertion helpers that consume `BoneTrajectoryDumper.Sample`
+/// arrays — either parsed from a CSV or collected directly in-memory by the
+/// dumper running alongside the simulation. The parser lives on
+/// `BoneTrajectoryDumper` itself so there is one canonical sample type.
 
-extension TrajectorySample {
-
-    /// Parse a CSV file produced by `VRMVideoRenderer --dump-bones`.
-    static func parseCSV(at path: String) throws -> [TrajectorySample] {
-        let content = try String(contentsOfFile: path, encoding: .utf8)
-        return try parseCSV(content: content)
-    }
-
-    static func parseCSV(content: String) throws -> [TrajectorySample] {
-        var samples: [TrajectorySample] = []
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: true)
-        for (index, raw) in lines.enumerated() {
-            // Skip header row.
-            if index == 0, raw.hasPrefix("frame,") { continue }
-            let fields = raw.split(separator: ",", omittingEmptySubsequences: false)
-            guard fields.count == 12,
-                  let frame = Int(fields[0]),
-                  let time = Double(fields[1]) else { continue }
-            let bone = String(fields[2])
-            let nums = fields[3..<12].compactMap { Float($0) }
-            guard nums.count == 9 else { continue }
-            samples.append(TrajectorySample(
-                frame: frame,
-                time: time,
-                bone: bone,
-                world: SIMD3(nums[0], nums[1], nums[2]),
-                parent: SIMD3(nums[3], nums[4], nums[5]),
-                rigid: SIMD3(nums[6], nums[7], nums[8])
-            ))
-        }
-        return samples
-    }
-}
-
-/// Asserts that the named bone deviates from its rigid-follow expectation by at
-/// least `minLagDegrees` of angular offset (relative to its parent) at some
+/// Asserts that the named bone deviates from its rigid-follow expectation by
+/// at least `minLagDegrees` of angular offset (relative to its parent) at some
 /// point during `window`. Used to verify that inertia compensation actually
 /// engages during fast motion — without compensation, the bone tracks rigid
 /// follow exactly and the lag is ~0°.
 func assertLagDuringFastMotion(
-    samples: [TrajectorySample],
+    samples: [BoneTrajectoryDumper.Sample],
     bone: String,
     window: Range<Int>,
     minLagDegrees: Float,
@@ -103,12 +59,12 @@ func assertLagDuringFastMotion(
 
 /// Asserts that during a settled (post-motion) window, the bone's RMS
 /// world-position deviation from the window mean is below `maxRMS`, AND the
-/// trajectory decays — RMS of the last third of the window must be < the
+/// trajectory decays — RMS of the last third of the window must be <
 /// `minDecayRatio` × RMS of the first third. The decay check is what
-/// distinguishes flutter (sustained low-amplitude oscillation) from real
-/// damped settling.
+/// distinguishes flutter (sustained or growing low-amplitude oscillation)
+/// from real damped settling.
 func assertNoFlutter(
-    samples: [TrajectorySample],
+    samples: [BoneTrajectoryDumper.Sample],
     bone: String,
     settledWindow: Range<Int>,
     maxRMS: Float,
@@ -155,7 +111,7 @@ func assertNoFlutter(
         ratio, minDecayRatio,
         "Bone '\(bone)' did not decay within settled window: first-third " +
         "RMS = \(firstRMS), last-third RMS = \(lastRMS), ratio = \(ratio); " +
-        "expected < \(minDecayRatio). Sustained oscillation suggests flutter.",
+        "expected < \(minDecayRatio). Sustained or growing oscillation suggests flutter.",
         file: file, line: line
     )
 }

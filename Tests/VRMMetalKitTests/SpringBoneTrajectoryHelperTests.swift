@@ -3,12 +3,16 @@
 
 import XCTest
 import simd
+@testable import VRMMetalKit
 
 /// Sanity tests for the trajectory CSV parser and the lag/flutter assertion
 /// helpers. These verify the helpers themselves, using synthetic trajectories
 /// — no Metal, no rendering. Real trajectory-driven physics tests live in
-/// separate files and depend on `VRMVideoRenderer --dump-bones` output.
+/// separate files and depend on `BoneTrajectoryDumper` running alongside
+/// `SpringBoneComputeSystem`.
 final class SpringBoneTrajectoryHelperTests: XCTestCase {
+
+    typealias Sample = BoneTrajectoryDumper.Sample
 
     // MARK: - Parser
 
@@ -18,7 +22,7 @@ final class SpringBoneTrajectoryHelperTests: XCTestCase {
         0,0.000000,Hair_L,0.100000,1.500000,0.000000,0.000000,1.500000,0.000000,0.100000,1.500000,0.000000
         1,0.033333,Hair_L,0.090000,1.490000,0.000000,0.000000,1.490000,0.000000,0.100000,1.490000,0.000000
         """
-        let samples = try TrajectorySample.parseCSV(content: csv)
+        let samples = BoneTrajectoryDumper.parseCSV(content: csv)
         XCTAssertEqual(samples.count, 2)
         XCTAssertEqual(samples[0].frame, 0)
         XCTAssertEqual(samples[0].bone, "Hair_L")
@@ -35,7 +39,7 @@ final class SpringBoneTrajectoryHelperTests: XCTestCase {
         1,too,few,fields
         2,0.033333,Bone,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0
         """
-        let samples = try TrajectorySample.parseCSV(content: csv)
+        let samples = BoneTrajectoryDumper.parseCSV(content: csv)
         XCTAssertEqual(samples.count, 2)
         XCTAssertEqual(samples[0].frame, 0)
         XCTAssertEqual(samples[1].frame, 2)
@@ -47,12 +51,10 @@ final class SpringBoneTrajectoryHelperTests: XCTestCase {
         // bone at origin, parent above at (0,1,0), rigid expectation at (0.5,0,0).
         // actual vec = (0,-1,0), expect vec = (0.5,-1,0). Angle ≈ atan(0.5) ≈ 26.57°.
         let samples = [
-            TrajectorySample(
-                frame: 30, time: 1.0, bone: "Hair",
-                world: SIMD3(0, 0, 0),
-                parent: SIMD3(0, 1, 0),
-                rigid: SIMD3(0.5, 0, 0)
-            )
+            Sample(frame: 30, time: 1.0, bone: "Hair",
+                   world: SIMD3(0, 0, 0),
+                   parent: SIMD3(0, 1, 0),
+                   rigid: SIMD3(0.5, 0, 0))
         ]
         assertLagDuringFastMotion(
             samples: samples, bone: "Hair",
@@ -63,12 +65,10 @@ final class SpringBoneTrajectoryHelperTests: XCTestCase {
     func testAssertLagFailsWhenBoneTracksRigidFollow() {
         // actual == rigid → lag is 0°. Expect failure.
         let samples = [
-            TrajectorySample(
-                frame: 30, time: 1.0, bone: "Hair",
-                world: SIMD3(0.5, 0, 0),
-                parent: SIMD3(0, 1, 0),
-                rigid: SIMD3(0.5, 0, 0)
-            )
+            Sample(frame: 30, time: 1.0, bone: "Hair",
+                   world: SIMD3(0.5, 0, 0),
+                   parent: SIMD3(0, 1, 0),
+                   rigid: SIMD3(0.5, 0, 0))
         ]
         XCTExpectFailure("Bone tracking rigid-follow exactly should fail the lag assertion") {
             assertLagDuringFastMotion(
@@ -80,8 +80,8 @@ final class SpringBoneTrajectoryHelperTests: XCTestCase {
 
     func testAssertLagFailsWhenBoneIsAbsentFromWindow() {
         let samples = [
-            TrajectorySample(frame: 0, time: 0.0, bone: "Hair",
-                             world: .zero, parent: .zero, rigid: .zero)
+            Sample(frame: 0, time: 0.0, bone: "Hair",
+                   world: .zero, parent: .zero, rigid: .zero)
         ]
         XCTExpectFailure("No samples in window should produce an explicit failure") {
             assertLagDuringFastMotion(samples: samples, bone: "Hair",
@@ -93,12 +93,12 @@ final class SpringBoneTrajectoryHelperTests: XCTestCase {
 
     func testAssertNoFlutterPassesOnDampedDecay() {
         // Amplitude decays exponentially across the window.
-        var samples: [TrajectorySample] = []
+        var samples: [Sample] = []
         for f in 100..<160 {
             let t = Float(f - 100)
             let amplitude = 0.001 * exp(-t * 0.1)  // decays from 0.001 to ~0.000025
             let osc = SIMD3<Float>(amplitude * sin(t * 0.5), 0, 0)
-            samples.append(TrajectorySample(
+            samples.append(Sample(
                 frame: f, time: Double(f) / 30.0, bone: "Hair",
                 world: SIMD3(0, 1, 0) + osc,
                 parent: SIMD3(0, 1.5, 0),
@@ -112,11 +112,11 @@ final class SpringBoneTrajectoryHelperTests: XCTestCase {
 
     func testAssertNoFlutterFailsOnSustainedOscillation() {
         // Constant-amplitude oscillation: small RMS but no decay.
-        var samples: [TrajectorySample] = []
+        var samples: [Sample] = []
         for f in 100..<160 {
             let t = Float(f - 100)
             let osc = SIMD3<Float>(0.001 * sin(t * 0.5), 0, 0)
-            samples.append(TrajectorySample(
+            samples.append(Sample(
                 frame: f, time: Double(f) / 30.0, bone: "Hair",
                 world: SIMD3(0, 1, 0) + osc,
                 parent: SIMD3(0, 1.5, 0),
@@ -131,14 +131,12 @@ final class SpringBoneTrajectoryHelperTests: XCTestCase {
     }
 
     func testAssertNoFlutterFailsOnLargeAmplitude() {
-        // Amplitude well above the RMS threshold (and decaying — proves the
-        // amplitude check fires independently of the decay check).
-        var samples: [TrajectorySample] = []
+        var samples: [Sample] = []
         for f in 100..<160 {
             let t = Float(f - 100)
             let amplitude = 0.05 * exp(-t * 0.1)  // way above 0.005 m
             let osc = SIMD3<Float>(amplitude * sin(t * 0.5), 0, 0)
-            samples.append(TrajectorySample(
+            samples.append(Sample(
                 frame: f, time: Double(f) / 30.0, bone: "Hair",
                 world: SIMD3(0, 1, 0) + osc,
                 parent: SIMD3(0, 1.5, 0),
