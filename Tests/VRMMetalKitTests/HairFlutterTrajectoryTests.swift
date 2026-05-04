@@ -141,7 +141,78 @@ final class HairFlutterTrajectoryTests: XCTestCase {
         )
     }
 
+    /// Bug #11 — `externalVelocity` was dead code: the predict shader applied
+    /// `inertialForce = -externalVelocity * 0.5` per substep, but no Swift
+    /// path ever set the field to a non-zero value. PR for Bug #11 adds
+    /// `VRMRenderer.characterVelocity` and wires it through
+    /// `updateSpringBoneForces` into `globalParams.externalVelocity`.
+    ///
+    /// Test idea: with the avatar standing still on Idle.vrma, set
+    /// `characterVelocity = (5, 0, 0)` (simulating the character running
+    /// in +X). Hair tips should drift in -X (trailing behind) by a
+    /// measurable amount over a few seconds.
+    @MainActor
+    func testCharacterVelocityProducesInertialHairDrift() async throws {
+        let aliciaPath = Self.assetPath(
+            envKey: "MUSE_RESOURCES_PATH",
+            envSuffix: "/VRM/AliciaSolid.vrm",
+            fallback: "/Users/arkavo/Projects/Muse/Resources/VRM/AliciaSolid.vrm"
+        )
+        let idlePath = Self.assetPath(
+            envKey: "VRMA_LOCOMOTION_PACK",
+            envSuffix: "/Idle.vrma",
+            fallback: "/Users/arkavo/Projects/VRMMetalKit/VRMA_Locomotion_Pack/Idle.vrma"
+        )
+        guard FileManager.default.fileExists(atPath: aliciaPath),
+              FileManager.default.fileExists(atPath: idlePath) else {
+            throw XCTSkip("Test assets not available")
+        }
+
+        let withVelocity = try await renderTrajectory(
+            vrmPath: aliciaPath, vrmaPath: idlePath,
+            fps: 30, frameCount: 150,
+            filter: "hair[0-9]+_(L|R)",
+            characterVelocity: SIMD3<Float>(5, 0, 0)
+        )
+        let withoutVelocity = try await renderTrajectory(
+            vrmPath: aliciaPath, vrmaPath: idlePath,
+            fps: 30, frameCount: 150,
+            filter: "hair[0-9]+_(L|R)",
+            characterVelocity: .zero
+        )
+
+        // Compare mean X position of hair tip across the post-settle window.
+        // With characterVelocity=(5,0,0), inertialForce = (-2.5, 0, 0) m/s²
+        // gets injected each substep, drifting the chain in -X relative to
+        // the same simulation with zero velocity.
+        let bone = "hair8_L"
+        let window = 60..<150
+        let meanX_with    = Self.meanX(samples: withVelocity, bone: bone, window: window)
+        let meanX_without = Self.meanX(samples: withoutVelocity, bone: bone, window: window)
+        let drift = meanX_with - meanX_without
+
+        XCTAssertLessThan(
+            drift, -0.005,
+            "Setting renderer.characterVelocity=(5,0,0) should drift hair " +
+            "tip in -X by at least 5 mm. Mean X with velocity: \(meanX_with), " +
+            "without: \(meanX_without), drift: \(drift). " +
+            "Bug #11: externalVelocity isn't being plumbed through to the " +
+            "predict shader's inertialForce term."
+        )
+    }
+
     // MARK: - Helpers
+
+    private static func meanX(samples: [BoneTrajectoryDumper.Sample],
+                              bone: String, window: Range<Int>) -> Float {
+        let xs = samples.compactMap { sample -> Float? in
+            guard sample.bone == bone, window.contains(sample.frame) else { return nil }
+            return sample.world.x
+        }
+        guard !xs.isEmpty else { return .nan }
+        return xs.reduce(0, +) / Float(xs.count)
+    }
+
 
     /// Run a 5-second physics simulation through `VRMRenderer.drawOffscreenHeadless`
     /// and collect the trajectory in memory. Shared by all renderer-driven tests
@@ -152,7 +223,8 @@ final class HairFlutterTrajectoryTests: XCTestCase {
         vrmaPath: String,
         fps: Float,
         frameCount: Int,
-        filter: String
+        filter: String,
+        characterVelocity: SIMD3<Float> = .zero
     ) async throws -> [BoneTrajectoryDumper.Sample] {
         let model = try await VRMModel.load(
             from: URL(fileURLWithPath: vrmPath),
@@ -172,6 +244,7 @@ final class HairFlutterTrajectoryTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
         renderer.enableSpringBone = true
+        renderer.characterVelocity = characterVelocity
         renderer.viewMatrix = matrix_identity_float4x4
         renderer.projectionMatrix = matrix_identity_float4x4
 

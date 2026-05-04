@@ -93,6 +93,10 @@ extension VRMRenderer {
     }
 
     func updateSpringBoneForces(deltaTime: Float) {
+        // Bug #11: feed character locomotion velocity into the spring-bone
+        // predict kernel each frame so hair/clothing trails behind movement.
+        model?.springBoneGlobalParams?.externalVelocity = characterVelocity
+
         // Apply temporary forces if timer is active
         if forceTimer > 0 {
             if let gravity = temporaryGravity {
