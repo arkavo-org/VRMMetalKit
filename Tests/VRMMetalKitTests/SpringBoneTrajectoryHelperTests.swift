@@ -130,6 +130,65 @@ final class SpringBoneTrajectoryHelperTests: XCTestCase {
         }
     }
 
+    // MARK: - assertSpringChainsStable
+
+    func testAssertStablePassesOnSensibleTrajectory() {
+        let samples = (0..<10).map { i in
+            Sample(frame: i, time: Double(i) * 0.033, bone: "Hair",
+                   world: SIMD3(0.05 * Float(i % 3), 1, 0),
+                   parent: SIMD3(0, 1.05, 0),
+                   rigid: SIMD3(0.05, 1, 0))
+        }
+        assertSpringChainsStable(samples: samples)
+    }
+
+    func testAssertStableFailsOnNaNPosition() {
+        let samples = [
+            Sample(frame: 0, time: 0, bone: "Hair",
+                   world: SIMD3(0, 0.5, 0), parent: SIMD3(0, 1, 0), rigid: SIMD3(0, 0.5, 0)),
+            Sample(frame: 1, time: 0.033, bone: "Hair",
+                   world: SIMD3(.nan, 0.5, 0), parent: SIMD3(0, 1, 0), rigid: SIMD3(0, 0.5, 0))
+        ]
+        XCTExpectFailure("NaN world position should fail stability") {
+            assertSpringChainsStable(samples: samples)
+        }
+    }
+
+    func testAssertStableFailsOnExplodingLinkLength() {
+        let samples = [
+            Sample(frame: 0, time: 0, bone: "Hair",
+                   world: SIMD3(0, 0.95, 0), parent: SIMD3(0, 1, 0), rigid: SIMD3(0, 0.95, 0)),
+            Sample(frame: 1, time: 0.033, bone: "Hair",
+                   world: SIMD3(7, 1, 0),  // link length = 7m
+                   parent: SIMD3(0, 1, 0), rigid: SIMD3(0, 0.95, 0))
+        ]
+        XCTExpectFailure("Parent-bone distance > maxLinkLength should fail stability") {
+            assertSpringChainsStable(samples: samples, maxLinkLength: 0.5)
+        }
+    }
+
+    func testAssertStableFailsOnOutOfWorldBoundsPosition() {
+        let samples = [
+            Sample(frame: 0, time: 0, bone: "Hair",
+                   world: SIMD3(50, 50, 50),  // way out of bounds
+                   parent: SIMD3(50, 50, 50), rigid: SIMD3(50, 50, 50))
+        ]
+        XCTExpectFailure("World position outside ±maxAbsoluteCoordinate should fail") {
+            assertSpringChainsStable(samples: samples, maxAbsoluteCoordinate: 10)
+        }
+    }
+
+    func testAssertStableRespectsNamedBoneFilter() {
+        // 'Bad' bone has NaN, but we only check 'Good' bone — should pass.
+        let samples = [
+            Sample(frame: 0, time: 0, bone: "Good",
+                   world: SIMD3(0, 1, 0), parent: SIMD3(0, 1.05, 0), rigid: SIMD3(0, 1, 0)),
+            Sample(frame: 0, time: 0, bone: "Bad",
+                   world: SIMD3(.nan, 0, 0), parent: SIMD3(0, 0, 0), rigid: SIMD3(0, 0, 0))
+        ]
+        assertSpringChainsStable(samples: samples, bones: ["Good"])
+    }
+
     func testAssertNoFlutterFailsOnLargeAmplitude() {
         var samples: [Sample] = []
         for f in 100..<160 {

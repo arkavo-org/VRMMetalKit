@@ -115,3 +115,71 @@ func assertNoFlutter(
         file: file, line: line
     )
 }
+
+/// Asserts that every sample in the trajectory has a finite world position,
+/// stays within an absolute world bound, and sits within `maxLinkLength` of
+/// its parent. Catches NaN/Inf propagation (Bug #1, Bug #5 symptoms),
+/// catastrophic chain stretching, and any future physics regression that
+/// causes spring chains to explode during rendering. Optionally restrict to
+/// a named subset of bones.
+func assertSpringChainsStable(
+    samples: [BoneTrajectoryDumper.Sample],
+    bones: Set<String>? = nil,
+    maxAbsoluteCoordinate: Float = 10.0,
+    maxLinkLength: Float = 0.5,
+    file: StaticString = #file,
+    line: UInt = #line
+) {
+    var nanCount = 0
+    var farFromOriginCount = 0
+    var stretchedLinkCount = 0
+    var maxObservedLink: Float = 0
+    var firstFailure: String?
+
+    for sample in samples {
+        if let bones = bones, !bones.contains(sample.bone) { continue }
+
+        let w = sample.world
+        let p = sample.parent
+
+        let isFinite = w.x.isFinite && w.y.isFinite && w.z.isFinite
+                    && p.x.isFinite && p.y.isFinite && p.z.isFinite
+        if !isFinite {
+            nanCount += 1
+            if firstFailure == nil {
+                firstFailure = "frame \(sample.frame) bone '\(sample.bone)' has NaN/Inf: world=\(w) parent=\(p)"
+            }
+            continue
+        }
+
+        if abs(w.x) > maxAbsoluteCoordinate
+            || abs(w.y) > maxAbsoluteCoordinate
+            || abs(w.z) > maxAbsoluteCoordinate {
+            farFromOriginCount += 1
+            if firstFailure == nil {
+                firstFailure = "frame \(sample.frame) bone '\(sample.bone)' world=\(w) " +
+                               "exceeds absolute bound ±\(maxAbsoluteCoordinate) m"
+            }
+        }
+
+        let linkLength = simd_distance(w, p)
+        if linkLength > maxObservedLink { maxObservedLink = linkLength }
+        if linkLength > maxLinkLength {
+            stretchedLinkCount += 1
+            if firstFailure == nil {
+                firstFailure = "frame \(sample.frame) bone '\(sample.bone)' is " +
+                               "\(linkLength) m from parent (max allowed \(maxLinkLength) m)"
+            }
+        }
+    }
+
+    if nanCount > 0 || farFromOriginCount > 0 || stretchedLinkCount > 0 {
+        XCTFail(
+            "Spring chain stability check failed: " +
+            "NaN/Inf rows=\(nanCount), out-of-bounds rows=\(farFromOriginCount), " +
+            "stretched links=\(stretchedLinkCount), max observed link=\(maxObservedLink) m. " +
+            "First failure: \(firstFailure ?? "<none>")",
+            file: file, line: line
+        )
+    }
+}
