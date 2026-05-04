@@ -98,6 +98,9 @@ func printUsage() {
         --ortho                 Use orthographic projection
         --hevc                  Use HEVC codec instead of H.264
         --root-motion           Enable root motion (hips translation)
+        --dump-bones <path>     Write per-frame bone trajectory CSV alongside the .mov
+        --dump-bones-filter <regex>
+                                Regex on bone name to limit dump output (default: all)
         --help                  Show this help message
 
     EXAMPLES:
@@ -145,6 +148,8 @@ struct RenderOptions {
     var rootMotion: Bool = false
     var handednessFix: Bool = true  // Enable by default
     var containerRotation: Bool = true  // Enable by default to fix "lying down" issue
+    var dumpBonesPath: String? = nil
+    var dumpBonesFilter: String? = nil
 }
 
 func parseArguments() -> RenderOptions? {
@@ -206,6 +211,12 @@ func parseArguments() -> RenderOptions? {
             options.hevc = true
         case "--root-motion":
             options.rootMotion = true
+        case "--dump-bones":
+            i += 1
+            if i < args.count { options.dumpBonesPath = args[i] }
+        case "--dump-bones-filter":
+            i += 1
+            if i < args.count { options.dumpBonesFilter = args[i] }
         default:
             break
         }
@@ -427,6 +438,18 @@ struct VRMVideoRendererCLI {
             throw VideoRenderError.failedToCreateCommandQueue
         }
 
+        // Optional bone trajectory CSV dumper for physics-verification tests.
+        let boneDumper: BoneTrajectoryDumper?
+        if let path = options.dumpBonesPath {
+            boneDumper = try BoneTrajectoryDumper(path: path, filterPattern: options.dumpBonesFilter)
+            print("📈 Dumping bone trajectories to: \(path)")
+            if let pattern = options.dumpBonesFilter {
+                print("   Filter: \(pattern)")
+            }
+        } else {
+            boneDumper = nil
+        }
+
             for frameIndex in 0..<totalFrames {
                 // Update animation
                 player.update(deltaTime: 1.0 / Float(options.fps), model: model)
@@ -505,7 +528,17 @@ struct VRMVideoRendererCLI {
                 
                 adaptor.append(pixelBuffer, withPresentationTime: presentationTime)
                 CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
-                
+
+                // Sample bone trajectories AFTER GPU completion. Note that
+                // node.worldMatrix here reflects the writeBonesToNodes call that
+                // ran at the start of this frame's draw — which consumed the
+                // previous frame's physics snapshot. The 1-frame physics lag is
+                // consistent across the run and acceptable for trajectory analysis.
+                if let dumper = boneDumper {
+                    let timeSeconds = Double(frameIndex) / Double(options.fps)
+                    dumper.recordFrame(model: model, frameIndex: frameIndex, timeSeconds: timeSeconds)
+                }
+
                 // Progress
                 if frameIndex % 30 == 0 || frameIndex == totalFrames - 1 {
                     let progress = Double(frameIndex + 1) / Double(totalFrames) * 100
@@ -517,7 +550,8 @@ struct VRMVideoRendererCLI {
             
         writerInput.markAsFinished()
         await videoWriter.finishWriting()
-        
+        boneDumper?.finish()
+
         let totalTime = Date().timeIntervalSince(startTime)
         print("")
         print("✅ Render complete!")
