@@ -68,8 +68,12 @@ kernel void springBoneDistance(
         float3 direction = delta / currentLength;
         bonePosCurr[id] = bonePosCurr[parentIndex] + direction * restLength;
     } else if (restLength > epsilon && currentLength < epsilon) {
-        // If bone fully collapsed to parent position, use bind direction to push out
-        float3 bindDir = bindDirections[id];
+        // If bone fully collapsed to parent position, push out along the
+        // parent→child direction stored at the parent's slot. bindDirections[N]
+        // points from N toward N's child — so for bone `id`, the relevant bind
+        // direction lives at bindDirections[parentIndex], not bindDirections[id]
+        // (which points toward `id`'s OWN child / grandchild of parent).
+        float3 bindDir = bindDirections[parentIndex];
         float bindLen = length(bindDir);
         float3 pushDir = (bindLen > 0.001) ? (bindDir / bindLen) : float3(0, -1, 0);
         bonePosCurr[id] = bonePosCurr[parentIndex] + pushDir * restLength;

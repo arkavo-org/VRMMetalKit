@@ -152,6 +152,10 @@ kernel void springBoneCollideSpheres(
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numSpheres == 0) return;
+    // Skip root bones — they are kinematic (driven by animation), and writing
+    // collision pushes into bonePosCurr[root] corrupts the kinematic kernel's
+    // velocity history on the next substep.
+    if (boneParams[id].parentIndex == 0xFFFFFFFFu) return;
 
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
@@ -167,6 +171,7 @@ kernel void springBoneCollideCapsules(
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numCapsules == 0) return;
+    if (boneParams[id].parentIndex == 0xFFFFFFFFu) return;
 
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
@@ -182,6 +187,7 @@ kernel void springBoneCollidePlanes(
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numPlanes == 0) return;
+    if (boneParams[id].parentIndex == 0xFFFFFFFFu) return;
 
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;

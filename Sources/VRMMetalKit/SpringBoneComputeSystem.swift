@@ -506,9 +506,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var colliderToGroupIndex: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
             for colliderIndex in group.colliders {
-                // Use first group if collider belongs to multiple groups
+                // Use first group if collider belongs to multiple groups.
+                // Clamp to 31 so the shader's `1u << groupIndex` is well-defined
+                // (UB at >=32). Bone masks are already truncated to <32.
                 if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(groupIndex)
+                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
                 }
             }
         }
@@ -673,22 +675,24 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var boneIdx = 0
         for spring in springBone.springs {
             for joint in spring.joints {
-                guard boneIdx < boneBindDirections.count,
-                      let jointNode = model.nodes[safe: joint.node] else {
-                    boneIdx += 1
-                    continue
-                }
+                // Every joint contributes exactly one entry so the count
+                // matches numBones — otherwise SpringBoneBuffers.updateBindDirections
+                // rejects the update and the GPU buffer stays uninitialised.
+                guard boneIdx < boneBindDirections.count else { break }
+                defer { boneIdx += 1 }
+
                 let localDir = boneBindDirections[boneIdx]
-                // Transform by the node's actual parent (matches how we stored it)
-                if let nodeParent = jointNode.parent {
+                if let jointNode = model.nodes[safe: joint.node],
+                   let nodeParent = jointNode.parent {
                     let parentRot = extractRotation(from: nodeParent.worldMatrix)
                     let worldDir = simd_act(parentRot, localDir)
                     initialWorldBindDirections.append(simd_normalize(worldDir))
                 } else {
-                    // Root bone - local is world
+                    // Missing node or chain root: fall back to the bone's
+                    // own local direction (already a sensible non-zero unit
+                    // vector populated by the first pass).
                     initialWorldBindDirections.append(localDir)
                 }
-                boneIdx += 1
             }
         }
         buffers.updateBindDirections(initialWorldBindDirections)
@@ -851,12 +855,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             )
         }
 
-        // Build collider-to-group index mapping for animated updates
+        // Build collider-to-group index mapping for animated updates.
+        // Clamp to 31 so the shader's `1u << groupIndex` is well-defined.
         var colliderToGroupIndex: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
             for colliderIndex in group.colliders {
                 if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(groupIndex)
+                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
                 }
             }
         }
@@ -1047,11 +1052,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             chainNodePositions.removeAll(keepingCapacity: true)
             for joint in spring.joints {
-                guard let node = model.nodes[safe: joint.node],
-                      globalBoneIndex < positions.count else { continue }
-
+                // Every joint occupies one slot in the GPU positions array,
+                // including joints whose node is missing. Advance the global
+                // index unconditionally so downstream joints stay aligned with
+                // their physics outputs.
+                guard globalBoneIndex < positions.count else { break }
+                defer { globalBoneIndex += 1 }
+                guard let node = model.nodes[safe: joint.node] else { continue }
                 chainNodePositions.append((node, positions[globalBoneIndex], globalBoneIndex))
-                globalBoneIndex += 1
             }
 
             // Update node transforms based on GPU-computed positions
@@ -1344,12 +1352,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     /// Captures collider transforms based on current animated node positions/orientations
     private func captureTargetColliderTransforms(model: VRMModel, springBone: VRMSpringBone) {
-        // Build collider-to-group index mapping
+        // Build collider-to-group index mapping. Clamp to 31 so the shader's
+        // `1u << groupIndex` is well-defined (UB at >=32).
         var colliderToGroupIndex: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
             for colliderIndex in group.colliders {
                 if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(groupIndex)
+                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
                 }
             }
         }

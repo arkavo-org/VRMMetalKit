@@ -78,7 +78,10 @@ final class SpringBoneBugAuditTDDTests: XCTestCase {
         // Skeleton: A(0)→B(1)→C(2).  Spring chain: A, nil(missing), B, C.
         let nodeA = VRMNode(index: 0, gltfNode: try createGLTFNode(name: "A", translation: SIMD3<Float>(0, 0, 0)))
         let nodeB = VRMNode(index: 1, gltfNode: try createGLTFNode(name: "B", translation: SIMD3<Float>(1, 1, 0)))
-        let nodeC = VRMNode(index: 2, gltfNode: try createGLTFNode(name: "C", translation: SIMD3<Float>(2, 1, 0)))
+        // C's LOCAL translation (relative to its parent B). With B at world (1,1,0)
+        // this puts C at world (2, 1, 0) — matching the GPU snapshot we install
+        // below so the chain's bind direction B→C equals the physics direction.
+        let nodeC = VRMNode(index: 2, gltfNode: try createGLTFNode(name: "C", translation: SIMD3<Float>(1, 0, 0)))
         nodeB.parent = nodeA; nodeA.children.append(nodeB)
         nodeC.parent = nodeB; nodeB.children.append(nodeC)
         model.nodes = [nodeA, nodeB, nodeC]
