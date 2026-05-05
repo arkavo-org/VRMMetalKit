@@ -234,7 +234,10 @@ extension VRMRenderer {
             blendColorAttachment?.sourceRGBBlendFactor = .sourceAlpha
             blendColorAttachment?.destinationRGBBlendFactor = .oneMinusSourceAlpha
             blendColorAttachment?.rgbBlendOperation = .add
-            blendColorAttachment?.sourceAlphaBlendFactor = .sourceAlpha
+            // Alpha union: final.a = src.a + dst.a*(1-src.a). `.one` (not `.sourceAlpha`)
+            // keeps dst.a=1 when src draws over an already-opaque pixel, so transparent
+            // MTKView compositing doesn't bleed background through stacked BLEND layers.
+            blendColorAttachment?.sourceAlphaBlendFactor = .one
             blendColorAttachment?.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             blendColorAttachment?.alphaBlendOperation = .add
 
@@ -449,7 +452,8 @@ extension VRMRenderer {
             skinnedBlendColorAttachment?.sourceRGBBlendFactor = .sourceAlpha
             skinnedBlendColorAttachment?.destinationRGBBlendFactor = .oneMinusSourceAlpha
             skinnedBlendColorAttachment?.rgbBlendOperation = .add
-            skinnedBlendColorAttachment?.sourceAlphaBlendFactor = .sourceAlpha
+            // See comment on the non-skinned BLEND pipeline above.
+            skinnedBlendColorAttachment?.sourceAlphaBlendFactor = .one
             skinnedBlendColorAttachment?.destinationAlphaBlendFactor = .oneMinusSourceAlpha
             skinnedBlendColorAttachment?.alphaBlendOperation = .add
 
