@@ -403,11 +403,12 @@ final class VRMRendererTests: XCTestCase {
 
     /// Test default ambient color value
     func testDefaultAmbientColor() {
-        // Verify default ambient color is 0.05
+        // Default ambient was raised from 0.05 to 0.15 in GitHub Issue #147
+        // to prevent overly dark shadow areas for hands-off consumers.
         let ambient = renderer.uniforms.ambientColor
-        XCTAssertEqual(ambient.x, 0.05, accuracy: 0.001, "Default ambient R should be 0.05")
-        XCTAssertEqual(ambient.y, 0.05, accuracy: 0.001, "Default ambient G should be 0.05")
-        XCTAssertEqual(ambient.z, 0.05, accuracy: 0.001, "Default ambient B should be 0.05")
+        XCTAssertEqual(ambient.x, 0.15, accuracy: 0.001, "Default ambient R should be 0.15")
+        XCTAssertEqual(ambient.y, 0.15, accuracy: 0.001, "Default ambient G should be 0.15")
+        XCTAssertEqual(ambient.z, 0.15, accuracy: 0.001, "Default ambient B should be 0.15")
     }
 
     /// Test setAmbientColor() with valid values

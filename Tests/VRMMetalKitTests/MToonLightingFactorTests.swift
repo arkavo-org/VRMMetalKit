@@ -575,6 +575,22 @@ final class LightingTestRenderer {
         return try renderInternal(uniforms: &uniforms, material: &materialCopy)
     }
 
+    /// Render with a specific debug mode and custom ambient intensity.
+    /// This is needed for tests that need to read pre-saturation litColor (debug mode 35)
+    /// while also controlling ambient intensity.
+    func renderWithDebugMode(
+        _ debugMode: Int32,
+        material: MToonMaterialUniforms,
+        lightDir: SIMD3<Float>,
+        ambientIntensity: Float
+    ) throws -> Data {
+        var uniforms = createUniforms(lightDir: lightDir, debugMode: debugMode)
+        uniforms.ambientColor = SIMD3<Float>(repeating: ambientIntensity)
+        var materialCopy = material
+
+        return try renderInternal(uniforms: &uniforms, material: &materialCopy)
+    }
+
     private func createUniforms(lightDir: SIMD3<Float>, debugMode: Int32) -> Uniforms {
         var uniforms = Uniforms()
         uniforms.modelMatrix = matrix_identity_float4x4

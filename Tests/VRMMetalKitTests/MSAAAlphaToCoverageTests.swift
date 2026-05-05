@@ -61,7 +61,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         if let texture = renderer.multisampleTexture {
             XCTAssertEqual(texture.sampleCount, 4, "Texture should have 4 samples")
             XCTAssertEqual(texture.textureType, .type2DMultisample, "Texture should be multisample type")
-            XCTAssertEqual(texture.pixelFormat, .bgra8Unorm, "Texture should match color format")
+            XCTAssertEqual(texture.pixelFormat, .bgra8Unorm_srgb, "Texture should match color format")
         }
     }
     

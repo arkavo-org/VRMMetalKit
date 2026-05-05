@@ -1262,6 +1262,15 @@ public class VRMMaterial {
             // _BlendMode: 0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite
             if let bm = vrm0Prop.floatProperties["_BlendMode"] {
                 blendMode = Int(bm)
+                // Map VRM 0.x blend mode to glTF alphaMode for pipeline selection.
+                // Without this, materials like AliciaSolid's bangs (_BlendMode=3)
+                // stay as glTF "OPAQUE" and render without alpha blending.
+                switch blendMode {
+                case 0: alphaMode = "OPAQUE"
+                case 1: alphaMode = "MASK"
+                case 2, 3: alphaMode = "BLEND"
+                default: alphaMode = "OPAQUE"
+                }
             }
         }
     }
@@ -1271,14 +1280,27 @@ public class VRMMaterial {
         return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
     }
 
+    /// Helper to extract Float array from AnyCodable-decoded values.
+    /// AnyCodable decodes JSON integers as `Int` and floats as `Double`,
+    /// so a simple `as? [Double]` cast fails for `[1, 1, 1]`.
+    private func floatArray(from value: Any, count: Int) -> [Float]? {
+        guard let array = value as? [Any], array.count >= count else { return nil }
+        return array.compactMap {
+            if let intVal = $0 as? Int { return Float(intVal) }
+            if let doubleVal = $0 as? Double { return Float(doubleVal) }
+            if let floatVal = $0 as? Float { return floatVal }
+            return nil
+        }
+    }
+
     private func parseMToonExtension(_ mtoonExt: [String: Any], textures: [VRMTexture]) -> VRMMToonMaterial {
         var mtoon = VRMMToonMaterial()
 
         // Shade color factor
-        if let shadeColorFactor = mtoonExt["shadeColorFactor"] as? [Double], shadeColorFactor.count >= 3 {
-            mtoon.shadeColorFactor = SIMD3<Float>(Float(shadeColorFactor[0]),
-                                                  Float(shadeColorFactor[1]),
-                                                  Float(shadeColorFactor[2]))
+        if let shadeColorFactor = floatArray(from: mtoonExt["shadeColorFactor"], count: 3) {
+            mtoon.shadeColorFactor = SIMD3<Float>(shadeColorFactor[0],
+                                                  shadeColorFactor[1],
+                                                  shadeColorFactor[2])
         }
 
         // Shading properties
@@ -1295,17 +1317,17 @@ public class VRMMaterial {
         }
 
         // MatCap properties
-        if let matcapFactor = mtoonExt["matcapFactor"] as? [Double], matcapFactor.count >= 3 {
-            mtoon.matcapFactor = SIMD3<Float>(Float(matcapFactor[0]),
-                                              Float(matcapFactor[1]),
-                                              Float(matcapFactor[2]))
+        if let matcapFactor = floatArray(from: mtoonExt["matcapFactor"], count: 3) {
+            mtoon.matcapFactor = SIMD3<Float>(matcapFactor[0],
+                                              matcapFactor[1],
+                                              matcapFactor[2])
         }
 
         // Parametric rim lighting
-        if let parametricRimColorFactor = mtoonExt["parametricRimColorFactor"] as? [Double], parametricRimColorFactor.count >= 3 {
-            mtoon.parametricRimColorFactor = SIMD3<Float>(Float(parametricRimColorFactor[0]),
-                                                          Float(parametricRimColorFactor[1]),
-                                                          Float(parametricRimColorFactor[2]))
+        if let parametricRimColorFactor = floatArray(from: mtoonExt["parametricRimColorFactor"], count: 3) {
+            mtoon.parametricRimColorFactor = SIMD3<Float>(parametricRimColorFactor[0],
+                                                          parametricRimColorFactor[1],
+                                                          parametricRimColorFactor[2])
         }
         if let parametricRimFresnelPowerFactor = mtoonExt["parametricRimFresnelPowerFactor"] as? Double {
             mtoon.parametricRimFresnelPowerFactor = Float(parametricRimFresnelPowerFactor)
@@ -1324,10 +1346,10 @@ public class VRMMaterial {
         if let outlineWidthFactor = mtoonExt["outlineWidthFactor"] as? Double {
             mtoon.outlineWidthFactor = Float(outlineWidthFactor)
         }
-        if let outlineColorFactor = mtoonExt["outlineColorFactor"] as? [Double], outlineColorFactor.count >= 3 {
-            mtoon.outlineColorFactor = SIMD3<Float>(Float(outlineColorFactor[0]),
-                                                    Float(outlineColorFactor[1]),
-                                                    Float(outlineColorFactor[2]))
+        if let outlineColorFactor = floatArray(from: mtoonExt["outlineColorFactor"], count: 3) {
+            mtoon.outlineColorFactor = SIMD3<Float>(outlineColorFactor[0],
+                                                    outlineColorFactor[1],
+                                                    outlineColorFactor[2])
         }
         if let outlineLightingMixFactor = mtoonExt["outlineLightingMixFactor"] as? Double {
             mtoon.outlineLightingMixFactor = Float(outlineLightingMixFactor)

@@ -30,15 +30,18 @@ struct Uniforms {
     // This provides front lighting for VRM 1.0 while not breaking VRM 0.0 eyebrows
     var lightDirection_packed = SIMD4<Float>(-0.25, -0.5, -0.83, 0.0) // 16 bytes, offset 256 (xyz = direction)
     var lightColor_packed = SIMD4<Float>(1.0, 1.0, 1.0, 1.732)    // 16 bytes, offset 272 (xyz = color, w = intensity)
-    var ambientColor_packed = SIMD4<Float>(0.05, 0.05, 0.05, 0.0)   // 16 bytes, offset 288 (SIMD3 + padding)
+    // Raised from 0.05 to 0.15 for hands-off consumers (GitHub #147).
+    // This is the most universally visible lighting fix.
+    var ambientColor_packed = SIMD4<Float>(0.15, 0.15, 0.15, 0.0)   // 16 bytes, offset 288 (SIMD3 + padding)
 
-    // Light 1 (fill light)
-    var light1Direction_packed = SIMD4<Float>(0, 0, 0, 0)         // 16 bytes, offset 304 (xyz = direction)
-    var light1Color_packed = SIMD4<Float>(0, 0, 0, 0)             // 16 bytes, offset 320 (xyz = color, w = intensity)
+    // Light 1 (fill light) - soft cool fill from left-front to lift shadows
+    // Direction: from (-0.6, -0.2, 0.8)
+    var light1Direction_packed = SIMD4<Float>(-0.58, -0.19, 0.79, 0.0)
+    var light1Color_packed = SIMD4<Float>(0.45, 0.48, 0.55, 0.83)   // intensity ~0.83
 
-    // Light 2 (rim/back light)
-    var light2Direction_packed = SIMD4<Float>(0, 0, 0, 0)         // 16 bytes, offset 336 (xyz = direction)
-    var light2Color_packed = SIMD4<Float>(0, 0, 0, 0)             // 16 bytes, offset 352 (xyz = color, w = intensity)
+    // Light 2 (rim/back light) - warm rim from upper-back-right
+    var light2Direction_packed = SIMD4<Float>(0.32, 0.85, -0.42, 0.0)
+    var light2Color_packed = SIMD4<Float>(0.55, 0.50, 0.45, 0.75)   // intensity ~0.75
 
     // Other fields
     var viewportSize_packed = SIMD4<Float>(1280, 720, 0.0, 0.0)   // 16 bytes, offset 368 (SIMD2 + padding)

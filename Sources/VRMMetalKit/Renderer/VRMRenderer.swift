@@ -530,6 +530,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let meshNameLower: String
         let isFaceMaterial: Bool
         let isEyeMaterial: Bool
+        let isTransparentWithZWrite: Bool
 
         // OPTIMIZATION: Render order for single-array sorting (avoids concatenation)
         var renderOrder: Int  // 0=opaque, 1=faceSkin, 2=faceEyebrow, 3=faceEyeline, 4=mask, 5=faceEye, 6=faceHighlight, 7=blend
@@ -1519,6 +1520,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     meshNameLower: meshNameLower,
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
+                    isTransparentWithZWrite: (primitive.materialIndex.flatMap { idx in
+                        idx < model.materials.count ? model.materials[idx].isTransparentWithZWrite : false
+                    } ?? false),
                     renderOrder: 0,  // Will be set based on category
                     materialRenderQueue: materialRenderQueue,
                     primitiveIndex: globalPrimitiveIndex,
@@ -2371,9 +2375,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     mtoonUniforms.metallicFactor = material.metallicFactor
                     mtoonUniforms.roughnessFactor = material.roughnessFactor
                     mtoonUniforms.emissiveFactor = material.emissiveFactor
-
-                    // LIGHTING FIX: Zero out emissive to prevent washout
-                    mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
+                    // NOTE: Previously force-zeroed here. Removed to honor artist-authored
+                    // emissive values per MToon spec. Visual impact depends on model;
+                    // many VRoid/Unity-authored models do not rely on emissive for eyes.
 
                     // DEBUG: Log original baseColorFactor for all materials
                     #if DEBUG
@@ -2450,8 +2454,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             }
                         }
 
-                        // LIGHTING FIX: Zero emissive AFTER MToon init to prevent washout
-                        mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
+                        // NOTE: Previously force-zeroed emissive here. Removed for
+                        // spec compliance (see mtoonUniforms.emissiveFactor above).
 
                         // ALPHA FIX: Restore effectiveAlphaMode AFTER MToon init
                         // MToon extension may have wrong alphaMode; use our detected/fixed value
@@ -2808,10 +2812,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "blend":
-                    if let blendDepthState = depthStencilStates["blend"] {
-                        encoderStateCache.setDepthStencilState(encoder,blendDepthState)
+                    // TransparentWithZWrite materials need depth write even in the non-face path
+                    if item.isTransparentWithZWrite {
+                        if let blendZWriteState = depthStencilStates["blendZWrite"] {
+                            encoderStateCache.setDepthStencilState(encoder, blendZWriteState)
+                        } else {
+                            encoderStateCache.setDepthStencilState(encoder, depthStencilStates["opaque"])
+                        }
                     } else {
-                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
+                        if let blendDepthState = depthStencilStates["blend"] {
+                            encoderStateCache.setDepthStencilState(encoder, blendDepthState)
+                        } else {
+                            encoderStateCache.setDepthStencilState(encoder, depthStencilStates["opaque"])
+                        }
                     }
                     encoderStateCache.setCullMode(encoder,.none)
                     // Apply base depth bias for BLEND materials

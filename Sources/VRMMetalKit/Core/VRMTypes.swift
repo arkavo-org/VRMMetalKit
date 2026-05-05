@@ -352,10 +352,10 @@ public struct VRM0MaterialProperty {
         mtoon.shadingShiftFactor = shadingShiftFactor
 
         // Shade texture from texture properties
-        // Skip when same as main texture - prevents blue padding artifacts
-        if let shadeTexIndex = textureProperties["_ShadeTexture"],
-           let mainTexIndex = textureProperties["_MainTex"],
-           shadeTexIndex != mainTexIndex {
+        // When _ShadeTexture == _MainTex (common in VRM 0.0), we still set it
+        // so the shader multiplies shadeColorFactor by the texture, matching
+        // Unity MToon behavior. The shader handles this with hasShadeMultiplyTexture.
+        if let shadeTexIndex = textureProperties["_ShadeTexture"] {
             mtoon.shadeMultiplyTexture = shadeTexIndex
         }
 

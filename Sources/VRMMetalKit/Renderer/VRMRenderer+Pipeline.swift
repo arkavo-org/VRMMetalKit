@@ -100,6 +100,14 @@ extension VRMRenderer {
             depthStencilStates["blend"] = state
         }
 
+        // Blend with depth write (TransparentWithZWrite for non-face materials)
+        let blendZWriteDescriptor = MTLDepthStencilDescriptor()
+        blendZWriteDescriptor.depthCompareFunction = .lessEqual
+        blendZWriteDescriptor.isDepthWriteEnabled = true
+        if let state = device.makeDepthStencilState(descriptor: blendZWriteDescriptor) {
+            depthStencilStates["blendZWrite"] = state
+        }
+
         // Kill switch test state (always pass, no depth write)
         let alwaysDepthDescriptor = MTLDepthStencilDescriptor()
         alwaysDepthDescriptor.depthCompareFunction = .always  // Always pass depth test
