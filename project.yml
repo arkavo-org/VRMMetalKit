@@ -17,6 +17,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.arkavo.VRMMetalKit
+        GENERATE_INFOPLIST_FILE: YES
     sources:
       - path: CIWrapper/Sources
     dependencies:
