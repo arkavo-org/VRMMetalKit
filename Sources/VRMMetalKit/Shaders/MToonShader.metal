@@ -593,8 +593,9 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // Accumulate weighted contributions (manual normalization factor allows artistic control)
  float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
- // Indirect diffuse: ambient always contributes at base color (matches three-vrm)
- float3 indirectDiffuse = uniforms.ambientColor.xyz * baseColor.rgb;
+ // Indirect diffuse: ambient contributes at base color, scaled by giIntensityFactor.
+ // giEqualizationFactor would apply here once hemisphere irradiance / IBL is added.
+ float3 indirectDiffuse = uniforms.ambientColor.xyz * baseColor.rgb * material.giIntensityFactor;
  litColor += indirectDiffuse;
 
  // Emissive

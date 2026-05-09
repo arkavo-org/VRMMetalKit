@@ -575,7 +575,24 @@ final class LightingTestRenderer {
         return try renderInternal(uniforms: &uniforms, material: &materialCopy)
     }
 
-    private func createUniforms(lightDir: SIMD3<Float>, debugMode: Int32) -> Uniforms {
+    /// Render with full control over lights and ambient (for TDD regression tests)
+    func render(
+        material: MToonMaterialUniforms,
+        lightDir: SIMD3<Float>,
+        lightColor: SIMD3<Float>,
+        ambientColor: SIMD3<Float>
+    ) throws -> Data {
+        var uniforms = createUniforms(lightDir: lightDir, debugMode: 0)
+        uniforms.lightColor = lightColor
+        uniforms.ambientColor = ambientColor
+        uniforms.light1Color = SIMD3<Float>(0, 0, 0)
+        uniforms.light2Color = SIMD3<Float>(0, 0, 0)
+        var materialCopy = material
+
+        return try renderInternal(uniforms: &uniforms, material: &materialCopy)
+    }
+
+    func createUniforms(lightDir: SIMD3<Float>, debugMode: Int32) -> Uniforms {
         var uniforms = Uniforms()
         uniforms.modelMatrix = matrix_identity_float4x4
         uniforms.viewMatrix = simd_float4x4(translation: SIMD3<Float>(0, 0, -2))
@@ -596,7 +613,7 @@ final class LightingTestRenderer {
         return uniforms
     }
 
-    private func renderInternal(uniforms: inout Uniforms, material: inout MToonMaterialUniforms) throws -> Data {
+    func renderInternal(uniforms: inout Uniforms, material: inout MToonMaterialUniforms) throws -> Data {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             throw LightingTestError.commandBufferCreationFailed
         }

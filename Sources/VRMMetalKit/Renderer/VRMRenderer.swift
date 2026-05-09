@@ -582,6 +582,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // Dummy buffer to satisfy Metal validation when morphs are not used
     private var emptyFloat3Buffer: MTLBuffer?
 
+    /// Creates a new VRMRenderer with the given Metal device.
+    ///
+    /// Automatically configures 3-point lighting so that hands-off consumers
+    /// get a usable image immediately. Apps that want different lighting can
+    /// call `setLight(_:direction:color:intensity:)` or `setup3PointLighting()`
+    /// after init to override the defaults.
     public init(device: MTLDevice, config: RendererConfig = RendererConfig(strict: .off)) {
         self.device = device
         self.commandQueue = device.makeCommandQueue()!
@@ -637,6 +643,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[VRMRenderer] About to setup sprite pipeline...")
         setupSpritePipeline()
         vrmLog("[VRMRenderer] Finished setup sprite pipeline")
+
+        // Issue #147: Auto-configure 3-point lighting so hands-off consumers
+        // get a usable image immediately. Apps that want different lighting
+        // can still override after init.
+        setup3PointLighting()
         setupCachedStates()
         setupTripleBuffering()
     }
@@ -2382,10 +2393,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     mtoonUniforms.baseColorFactor = material.baseColorFactor
                     mtoonUniforms.metallicFactor = material.metallicFactor
                     mtoonUniforms.roughnessFactor = material.roughnessFactor
+                    // Issue #146: Preserve authored emissive so eye highlights,
+                    // mouth interiors, and accent materials self-illuminate.
+                    // Regressed by: RendererLightingCorrectnessTests.testEmissiveFactorContributesWithNoLights
                     mtoonUniforms.emissiveFactor = material.emissiveFactor
-
-                    // LIGHTING FIX: Zero out emissive to prevent washout
-                    mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
 
                     // DEBUG: Log original baseColorFactor for all materials
                     #if DEBUG
@@ -2461,9 +2472,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                 vrmLog("🔧 [MOUTH UV FIX] Applied UV offset for \(item.materialName)")
                             }
                         }
-
-                        // LIGHTING FIX: Zero emissive AFTER MToon init to prevent washout
-                        mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
 
                         // ALPHA FIX: Restore effectiveAlphaMode AFTER MToon init
                         // MToon extension may have wrong alphaMode; use our detected/fixed value
