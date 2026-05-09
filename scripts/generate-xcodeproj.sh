@@ -29,16 +29,24 @@ testables = """      <Testables>
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "VRMMetalKitTests"
-               BuildableName = "VRMMetalKitPackageTests.xctest"
+               BuildableName = "VRMMetalKitTests"
                BlueprintName = "VRMMetalKitTests"
                ReferencedContainer = "container:">
             </BuildableReference>
          </TestableReference>
       </Testables>"""
 
-patched, n = re.subn(r"<Testables>\s*</Testables>", testables, src, count=1)
+src, n = re.subn(r"<Testables>\s*</Testables>", testables, src, count=1)
 if n != 1:
     raise SystemExit("Did not find empty <Testables/> block to patch")
-scheme.write_text(patched)
+
+# Match Xcode's normalized scheme format so opening the project does not
+# dirty the working tree on every run.
+src = src.replace('version = "1.7"', 'version = "1.3"')
+src = re.sub(r'\n\s+runPostActionsOnFailure = "NO">', ">", src)
+src = re.sub(r'\n\s+onlyGenerateCoverageForSpecifiedTargets = "NO">', ">", src)
+src = re.sub(r"\n\s+<CommandLineArguments>\s*</CommandLineArguments>", "", src)
+
+scheme.write_text(src)
 print("Patched", scheme)
 PY
