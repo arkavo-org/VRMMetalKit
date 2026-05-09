@@ -142,7 +142,14 @@ final class BoneParamsLayoutTests: XCTestCase {
             ? simd_normalize(unnormalized)
             : SIMD3<Float>(0, -1, 0)
 
-        XCTAssertEqual(normalized, SIMD3<Float>(0, -1, 0),
+        // Per-component compare with accuracy tolerance: simd_normalize uses
+        // an rsqrt approximation on some Apple Silicon configurations, which
+        // can return 0.99999994 instead of exactly 1.0.
+        XCTAssertEqual(normalized.x, 0.0, accuracy: 1e-6,
+                      "Direction [0, -2, 0] should normalize to [0, -1, 0]")
+        XCTAssertEqual(normalized.y, -1.0, accuracy: 1e-6,
+                      "Direction [0, -2, 0] should normalize to [0, -1, 0]")
+        XCTAssertEqual(normalized.z, 0.0, accuracy: 1e-6,
                       "Direction [0, -2, 0] should normalize to [0, -1, 0]")
 
         let diagonal = SIMD3<Float>(1, -1, 0)

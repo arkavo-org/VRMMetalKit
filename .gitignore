@@ -18,3 +18,14 @@ tmp/
 /Seed-san.vrm
 /VRM1_Constraint_Twist_Sample.vrm
 /AliciaSolid.vrm
+
+# Local Xcode derived-data directories
+.xcode-derived/
+.xcode-derived-main/
+
+# Local VRMA asset packs (use VRMA_*_PACK env vars)
+/VRMA_Avatar_Mega_Pack/
+/VRMA_Locomotion_Pack/
+
+# Local renderer output
+/emote-output/
