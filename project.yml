@@ -1,0 +1,30 @@
+name: VRMMetalKitCI
+options:
+  bundleIdPrefix: com.arkavo.vrmmetalkit
+  deploymentTarget:
+    macOS: "26.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+packages:
+  VRMMetalKit:
+    path: .
+
+targets:
+  VRMMetalKitHost:
+    type: framework
+    platform: macOS
+    sources:
+      - path: CIWrapper/Sources
+    dependencies:
+      - package: VRMMetalKit
+        product: VRMMetalKit
+    scheme:
+      testTargets: []
+      gatherCoverageData: false
+
+# Schemes are NOT defined in this file. The shared
+# VRMMetalKitCI.xcodeproj/xcshareddata/xcschemes/VRMMetalKitHost.xcscheme
+# is hand-maintained because XcodeGen does not yet support referencing a
+# Swift Package's test product as a Testable. Re-running `xcodegen generate`
+# regenerates the project.pbxproj only and leaves the scheme XML alone.
