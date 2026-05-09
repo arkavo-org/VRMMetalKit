@@ -1,6 +1,6 @@
 name: VRMMetalKitCI
 options:
-  bundleIdPrefix: com.arkavo.vrmmetalkit
+  bundleIdPrefix: org.arkavo
   deploymentTarget:
     macOS: "26.0"
   developmentLanguage: en
@@ -14,6 +14,9 @@ targets:
   VRMMetalKitHost:
     type: framework
     platform: macOS
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.arkavo.VRMMetalKit
     sources:
       - path: CIWrapper/Sources
     dependencies:

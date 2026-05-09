@@ -152,7 +152,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.arkavo.vrmmetalkit.VRMMetalKitHost;
+				PRODUCT_BUNDLE_IDENTIFIER = org.arkavo.VRMMetalKit;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				VERSIONING_SYSTEM = "apple-generic";
@@ -237,7 +237,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.arkavo.vrmmetalkit.VRMMetalKitHost;
+				PRODUCT_BUNDLE_IDENTIFIER = org.arkavo.VRMMetalKit;
 				SDKROOT = macosx;
 				SKIP_INSTALL = YES;
 				VERSIONING_SYSTEM = "apple-generic";
