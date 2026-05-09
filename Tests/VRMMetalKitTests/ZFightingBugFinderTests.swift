@@ -58,29 +58,16 @@ final class ZFightingBugFinderTests: XCTestCase {
     }
 
     private var museResourcesPath: String? {
-        let fileManager = FileManager.default
-
-        if let envPath = ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"] {
-            if fileManager.fileExists(atPath: "\(envPath)/AvatarSample_A.vrm.glb") {
-                return envPath
-            }
-        }
-
-        let relativePath = "\(projectRoot)/../Muse/Resources/VRM"
-        if fileManager.fileExists(atPath: "\(relativePath)/AvatarSample_A.vrm.glb") {
-            return relativePath
-        }
-
-        return nil
+        FileManager.default.fileExists(atPath: "\(projectRoot)/AvatarSample_A_1.0.vrm.glb") ? projectRoot : nil
     }
 
     private func loadAvatarSampleA() async throws -> VRMModel {
         guard let resourcesPath = museResourcesPath else {
-            throw XCTSkip("Muse resources not found - set MUSE_RESOURCES_PATH or place at ../Muse/Resources/VRM")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found in project root")
         }
-        let modelPath = "\(resourcesPath)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(resourcesPath)/AvatarSample_A_1.0.vrm.glb"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
-                      "AvatarSample_A.vrm.glb not found at \(modelPath)")
+                      "AvatarSample_A_1.0.vrm.glb not found at \(modelPath)")
         let modelURL = URL(fileURLWithPath: modelPath)
         return try await VRMModel.load(from: modelURL, device: device)
     }
@@ -92,7 +79,7 @@ final class ZFightingBugFinderTests: XCTestCase {
         let model = try await loadAvatarSampleA()
 
         print("\n" + String(repeating: "=", count: 60))
-        print("Z-FIGHTING BUG FINDER: AvatarSample_A.vrm.glb")
+        print("Z-FIGHTING BUG FINDER: AvatarSample_A_1.0.vrm.glb")
         print(String(repeating: "=", count: 60))
 
         // Diagnostics

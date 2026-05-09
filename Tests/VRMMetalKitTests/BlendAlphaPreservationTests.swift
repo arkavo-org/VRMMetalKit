@@ -48,7 +48,7 @@ final class BlendAlphaPreservationTests: XCTestCase {
     /// triggers the bug.
     func testBlendOverOpaqueRegionsPreservesFramebufferAlpha() async throws {
         guard let modelPath = locateAvatarSampleA() else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found (set MUSE_RESOURCES_PATH)")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found (set MUSE_RESOURCES_PATH)")
         }
 
         let model = try await VRMModel.load(
@@ -116,13 +116,8 @@ final class BlendAlphaPreservationTests: XCTestCase {
     // MARK: - Helpers
 
     private func locateAvatarSampleA() -> String? {
-        if let envPath = ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"] {
-            let p = "\(envPath)/AvatarSample_A.vrm.glb"
-            if FileManager.default.fileExists(atPath: p) { return p }
-        }
-        let fallback = "../Muse/Resources/VRM/AvatarSample_A.vrm.glb"
-        if FileManager.default.fileExists(atPath: fallback) { return fallback }
-        return nil
+        let bundled = getTestVRM10ModelPath()
+        return FileManager.default.fileExists(atPath: bundled) ? bundled : nil
     }
 
     private func renderToTransparentTarget(

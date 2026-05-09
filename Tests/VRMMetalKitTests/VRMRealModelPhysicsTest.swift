@@ -12,7 +12,10 @@ final class VRMRealModelPhysicsTest: XCTestCase {
 
     var device: MTLDevice!
     var modelPath: String {
-        ProcessInfo.processInfo.environment["VRM_TEST_MODEL_PATH"] ?? ""
+        if let envPath = ProcessInfo.processInfo.environment["VRM_TEST_MODEL_PATH"], !envPath.isEmpty {
+            return envPath
+        }
+        return getTestVRM10ModelPath()
     }
 
     override func setUp() async throws {
@@ -38,7 +41,7 @@ final class VRMRealModelPhysicsTest: XCTestCase {
         }
 
         print("=== Hair Response to Jump Test ===")
-        print("Model: AvatarSample_A.vrm.glb")
+        print("Model: AvatarSample_A_1.0.vrm.glb")
         print("Spring bone chains: \(model.springBone?.springs.count ?? 0)")
 
         // Phase 1: Let physics settle (must exceed settling frames - model has 120)

@@ -65,28 +65,15 @@ final class MorphBufferKeyMatchTests: XCTestCase {
         return fileManager.currentDirectoryPath
     }
 
-    private var museResourcesPath: String? {
-        let fileManager = FileManager.default
-
-        if let envPath = ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"] {
-            if fileManager.fileExists(atPath: "\(envPath)/AvatarSample_A.vrm.glb") {
-                return envPath
-            }
-        }
-
-        let relativePath = "\(projectRoot)/../Muse/Resources/VRM"
-        if fileManager.fileExists(atPath: "\(relativePath)/AvatarSample_A.vrm.glb") {
-            return relativePath
-        }
-
-        return nil
+    private var resourcesPath: String? {
+        FileManager.default.fileExists(atPath: "\(projectRoot)/AvatarSample_A_1.0.vrm.glb") ? projectRoot : nil
     }
 
     private func loadAvatarSampleA() async throws -> VRMModel {
-        guard let resourcesPath = museResourcesPath else {
-            throw XCTSkip("Muse resources not found - set MUSE_RESOURCES_PATH")
+        guard let resourcesPath else {
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found in project root")
         }
-        let modelPath = "\(resourcesPath)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(resourcesPath)/AvatarSample_A_1.0.vrm.glb"
         let modelURL = URL(fileURLWithPath: modelPath)
         return try await VRMModel.load(from: modelURL, device: device)
     }

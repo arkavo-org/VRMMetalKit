@@ -63,10 +63,9 @@ final class VRMFormatPerformanceTests: XCTestCase {
     
     private var vrmGlbFiles: [(name: String, path: String)] {
         var files: [(name: String, path: String)] = []
-        
-        if let avatarA = ProcessInfo.processInfo.environment["AVATAR_SAMPLE_A"] {
-            files.append(("AvatarSample_A.vrm.glb", avatarA))
-        }
+
+        let avatarA = ProcessInfo.processInfo.environment["AVATAR_SAMPLE_A"] ?? getTestVRM10ModelPath()
+        files.append(("AvatarSample_A_1.0.vrm.glb", avatarA))
         if let avatarC = ProcessInfo.processInfo.environment["AVATAR_SAMPLE_C"] {
             files.append(("AvatarSample_C.vrm.glb", avatarC))
         }
@@ -223,7 +222,7 @@ final class VRMFormatPerformanceTests: XCTestCase {
         print("  File Size:                 \(String(format: "%7.2f", Double(vrmData.count)/1024.0/1024.0)) MB")
         
         // Test .vrm.glb
-        print("\n📁 .vrm.glb (AvatarSample_A.vrm.glb)")
+        print("\n📁 .vrm.glb (AvatarSample_A_1.0.vrm.glb)")
         print(String(repeating: "-", count: 50))
         
         let vrmGlbUrl = URL(fileURLWithPath: vrmGlbPath)
@@ -271,7 +270,7 @@ final class VRMFormatPerformanceTests: XCTestCase {
         print("  Textures:   \(vrmModel.textures.count)")
         
         // Measure .vrm.glb memory
-        print("\n📁 .vrm.glb (AvatarSample_A.vrm.glb)")
+        print("\n📁 .vrm.glb (AvatarSample_A_1.0.vrm.glb)")
         
         let t3 = CFAbsoluteTimeGetCurrent()
         let vrmGlbModel = try await VRMModel.load(from: URL(fileURLWithPath: vrmGlbPath), device: device)

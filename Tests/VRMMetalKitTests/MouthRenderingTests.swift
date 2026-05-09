@@ -38,10 +38,8 @@ final class MouthRenderingTests: XCTestCase {
     // MARK: - Test Helpers
     
     private var modelPath: String? {
-        ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"].flatMap { 
-            let path = "\($0)/AvatarSample_A.vrm.glb"
-            return FileManager.default.fileExists(atPath: path) ? path : nil
-        }
+        let candidate = getTestVRM10ModelPath()
+        return FileManager.default.fileExists(atPath: candidate) ? candidate : nil
     }
     
     // MARK: - RED Phase: Failing Tests
@@ -52,7 +50,7 @@ final class MouthRenderingTests: XCTestCase {
     /// This test verifies the texture is loaded and has non-transparent pixels.
     func testMouthTextureExistsAndHasContent() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -86,7 +84,7 @@ final class MouthRenderingTests: XCTestCase {
     /// not the blank face area.
     func testMouthGeometryHasValidUVs() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -131,7 +129,7 @@ final class MouthRenderingTests: XCTestCase {
     /// UVs should be in range ~[0.5,1.0] x [0.5,1.0] for the mouth area.
     func testMouthUVsPointToMouthTextureArea() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -195,7 +193,7 @@ final class MouthRenderingTests: XCTestCase {
     /// to prevent MASK mode from discarding the pixels.
     func testMouthTextureAlphaAboveCutoff() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -246,7 +244,7 @@ final class MouthRenderingTests: XCTestCase {
     /// This test verifies which texture index the mouth material uses.
     func testMouthUsesCorrectTexture() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -292,7 +290,7 @@ final class MouthRenderingTests: XCTestCase {
     ///   to shift sampling to the lip texture area in the bottom right.
     func testMouthVsFaceUVComparison() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
