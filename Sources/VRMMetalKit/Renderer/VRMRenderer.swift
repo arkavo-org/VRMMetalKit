@@ -582,6 +582,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // Dummy buffer to satisfy Metal validation when morphs are not used
     private var emptyFloat3Buffer: MTLBuffer?
 
+    /// Creates a new VRMRenderer with the given Metal device.
+    ///
+    /// Automatically configures 3-point lighting so that hands-off consumers
+    /// get a usable image immediately. Apps that want different lighting can
+    /// call `setLight(_:direction:color:intensity:)` or `setup3PointLighting()`
+    /// after init to override the defaults.
     public init(device: MTLDevice, config: RendererConfig = RendererConfig(strict: .off)) {
         self.device = device
         self.commandQueue = device.makeCommandQueue()!
@@ -2387,6 +2393,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     mtoonUniforms.baseColorFactor = material.baseColorFactor
                     mtoonUniforms.metallicFactor = material.metallicFactor
                     mtoonUniforms.roughnessFactor = material.roughnessFactor
+                    // Issue #146: Preserve authored emissive so eye highlights,
+                    // mouth interiors, and accent materials self-illuminate.
+                    // Regressed by: RendererLightingCorrectnessTests.testEmissiveFactorContributesWithNoLights
                     mtoonUniforms.emissiveFactor = material.emissiveFactor
 
                     // DEBUG: Log original baseColorFactor for all materials
