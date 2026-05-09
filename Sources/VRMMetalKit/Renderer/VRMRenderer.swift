@@ -2389,9 +2389,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     mtoonUniforms.roughnessFactor = material.roughnessFactor
                     mtoonUniforms.emissiveFactor = material.emissiveFactor
 
-                    // LIGHTING FIX: Zero out emissive to prevent washout
-                    mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
-
                     // DEBUG: Log original baseColorFactor for all materials
                     #if DEBUG
                     if frameCounter <= 2 {
@@ -2466,9 +2463,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                 vrmLog("🔧 [MOUTH UV FIX] Applied UV offset for \(item.materialName)")
                             }
                         }
-
-                        // LIGHTING FIX: Zero emissive AFTER MToon init to prevent washout
-                        mtoonUniforms.emissiveFactor = SIMD3<Float>(0, 0, 0)
 
                         // ALPHA FIX: Restore effectiveAlphaMode AFTER MToon init
                         // MToon extension may have wrong alphaMode; use our detected/fixed value
