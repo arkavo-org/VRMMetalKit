@@ -1,4 +1,4 @@
-name: CodeQL (Swift)
+name: CodeQL
 
 on:
   push:
@@ -13,6 +13,30 @@ permissions:
   contents: read
 
 jobs:
+  actions:
+    name: Analyze (actions)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: actions
+          build-mode: none
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:actions'
+
   swift:
     name: Analyze (swift)
     runs-on: macos-latest
@@ -35,13 +59,6 @@ jobs:
           xcode-select -p || true
           swift --version || true
           echo "::endgroup::"
-          echo "::group::Available SDKs"
-          xcodebuild -showsdks 2>&1 || true
-          echo "::endgroup::"
-          echo "::group::Swift toolchains on disk"
-          ls /Library/Developer/Toolchains 2>/dev/null || true
-          ls "$HOME/Library/Developer/Toolchains" 2>/dev/null || true
-          echo "::endgroup::"
 
       - name: Select Xcode with Swift 6.2
         run: |
@@ -49,7 +66,6 @@ jobs:
           XCODE=$(ls -d /Applications/Xcode_26* /Applications/Xcode_27* 2>/dev/null | sort -V | tail -1)
           if [ -z "$XCODE" ]; then
             echo "::error::No Xcode 26 (or newer) found; Package.swift requires Swift 6.2"
-            echo "Available Xcodes:"
             ls /Applications | grep -i Xcode || true
             exit 1
           fi

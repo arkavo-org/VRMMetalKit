@@ -1,4 +1,4 @@
-name: Feature Checks
+name: Lint
 
 on:
   push:
@@ -11,34 +11,29 @@ permissions:
   contents: read
 
 jobs:
-  validate:
-    name: Code Validation
+  lint:
+    name: Static checks
     runs-on: ubuntu-latest
-    container:
-      image: swift:6.2
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Show Swift version
-      run: swift --version
-
-    - name: Check for merge conflicts
+    - name: Check for merge conflict markers
       run: |
         if grep -r "<<<<<<< HEAD" --include="*.swift" --include="*.metal" .; then
           echo "::error::Merge conflict markers found"
           exit 1
         fi
 
-    - name: Check file permissions
+    - name: Check Swift files are not executable
       run: |
         if find . -name "*.swift" -perm /111 | grep .; then
           echo "::error::Swift files should not be executable"
           exit 1
         fi
 
-    - name: Verify license headers
+    - name: Verify Apache 2.0 license headers
       run: |
         missing=0
         for file in $(find Sources -type f \( -name "*.swift" -o -name "*.metal" \)); do
@@ -49,80 +44,49 @@ jobs:
         done
         exit $missing
 
-    - name: Check for hardcoded file paths in code
+    - name: Check for hardcoded file paths
       run: |
-        echo "Checking for hardcoded file paths in all Swift files..."
         errors=0
 
-        # Check for /Users/ paths
+        # /Users/, /home/, C:\ / D:\ — absolute paths leak local environment.
         if grep -r "/Users/" Sources/ Tests/ --include="*.swift" | grep -v "// "; then
           echo "::error::Hardcoded /Users/ paths found"
           errors=1
         fi
 
-        # Check for /home/ paths (Linux)
         if grep -r "/home/" Sources/ Tests/ --include="*.swift" | grep -v "// "; then
           echo "::error::Hardcoded /home/ paths found"
           errors=1
         fi
 
-        # Check for C:\ or D:\ paths (Windows)
         if grep -r "[C-D]:\\\\" Sources/ Tests/ --include="*.swift" | grep -v "// "; then
           echo "::error::Hardcoded Windows drive paths found"
           errors=1
         fi
 
-        # Check for absolute paths starting with /
+        # URL(fileURLWithPath: "/...") with a literal absolute path.
         if grep -rE "URL\(fileURLWithPath: \"/" Sources/ Tests/ --include="*.swift" | grep -v "temporaryDirectory" | grep -v "// "; then
-          echo "::error::Hardcoded absolute paths found in URL(fileURLWithPath:). Use Bundle.module or FileManager.default.temporaryDirectory"
+          echo "::error::Hardcoded absolute paths in URL(fileURLWithPath:). Use Bundle.module or FileManager.default.temporaryDirectory"
           errors=1
         fi
 
-        # Check for hardcoded project paths
         if grep -r "Projects/" Sources/ Tests/ --include="*.swift" | grep -v "// "; then
           echo "::error::Hardcoded project paths found"
           errors=1
         fi
 
-        if [ $errors -eq 0 ]; then
-          echo "✅ No hardcoded file paths found"
-        else
+        if [ $errors -ne 0 ]; then
           echo ""
-          echo "Use one of these approaches instead:"
-          echo "  1. Bundle.module.url(forResource:withExtension:subdirectory:) for package resources"
-          echo "  2. FileManager.default.temporaryDirectory for temporary files"
+          echo "Use one of these instead:"
+          echo "  1. Bundle.module.url(forResource:withExtension:subdirectory:)"
+          echo "  2. FileManager.default.temporaryDirectory"
           echo "  3. Programmatic data generation"
           echo "  4. Relative paths with proper base directory resolution"
           exit 1
         fi
 
-    - name: Check for trailing whitespace
+    - name: Warn on trailing whitespace
       run: |
         if find Sources Tests -type f \( -name "*.swift" -o -name "*.metal" \) -exec grep -l '[[:space:]]$' {} +; then
           echo "::warning::Files with trailing whitespace found"
         fi
-
-    - name: Validate Package.swift
-      run: |
-        swift package dump-package > /dev/null
-        echo "✅ Package.swift is valid"
-
-    - name: Resolve dependencies
-      run: |
-        swift package resolve
-        echo "✅ Dependencies resolved successfully"
-
-    - name: Check Swift syntax
-      run: |
-        echo "Checking Swift syntax for all files..."
-        errors=0
-        for file in $(find Sources Tests -name "*.swift"); do
-          if ! swift -frontend -parse "$file" -sdk / > /dev/null 2>&1; then
-            echo "::error file=$file::Syntax error in $file"
-            errors=1
-          fi
-        done
-        if [ $errors -eq 0 ]; then
-          echo "✅ All Swift files have valid syntax"
-        fi
-        exit $errors
