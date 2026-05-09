@@ -112,8 +112,7 @@ final class VRMAExpressionTests: XCTestCase {
                       "VRMA file not found")
         
         guard let device = MTLCreateSystemDefaultDevice() else {
-            XCTFail("Metal device not available")
-            return
+            throw XCTSkip("Metal device not available")
         }
         
         let modelURL = URL(fileURLWithPath: modelPath)
@@ -148,8 +147,7 @@ final class VRMAExpressionTests: XCTestCase {
                       "VRMA file not found")
         
         guard let device = MTLCreateSystemDefaultDevice() else {
-            XCTFail("Metal device not available")
-            return
+            throw XCTSkip("Metal device not available")
         }
         
         let modelURL = URL(fileURLWithPath: modelPath)
@@ -192,8 +190,7 @@ final class VRMAExpressionTests: XCTestCase {
                       "VRM model not found")
         
         guard let device = MTLCreateSystemDefaultDevice() else {
-            XCTFail("Metal device not available")
-            return
+            throw XCTSkip("Metal device not available")
         }
         
         let modelURL = URL(fileURLWithPath: modelPath)
@@ -248,8 +245,7 @@ final class VRMAExpressionTests: XCTestCase {
                       "VRMA file not found")
         
         guard let device = MTLCreateSystemDefaultDevice() else {
-            XCTFail("Metal device not available")
-            return
+            throw XCTSkip("Metal device not available")
         }
         
         let modelURL = URL(fileURLWithPath: modelPath)
@@ -282,8 +278,7 @@ final class VRMAExpressionTests: XCTestCase {
         let vrm1Path = "\(vrmModelsPath)/Seed-san.vrm"
         
         guard let device = MTLCreateSystemDefaultDevice() else {
-            XCTFail("Metal device not available")
-            return
+            throw XCTSkip("Metal device not available")
         }
         
         print("\n=== VRM Model Expression Availability ===")

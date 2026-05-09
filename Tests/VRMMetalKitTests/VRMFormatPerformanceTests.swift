@@ -85,8 +85,7 @@ final class VRMFormatPerformanceTests: XCTestCase {
     /// Compare loading performance: .vrm vs .vrm.glb
     func testVRMLoadingPerformanceComparison() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
-            XCTFail("Metal not available")
-            return
+            throw XCTSkip("Metal not available")
         }
         
         print("\n" + String(repeating: "=", count: 70))
@@ -193,8 +192,7 @@ final class VRMFormatPerformanceTests: XCTestCase {
     /// Detailed breakdown of loading phases
     func testLoadingPhaseBreakdown() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
-            XCTFail("Metal not available")
-            return
+            throw XCTSkip("Metal not available")
         }
         
         print("\n" + String(repeating: "=", count: 70))
@@ -245,8 +243,7 @@ final class VRMFormatPerformanceTests: XCTestCase {
     /// Memory usage comparison
     func testMemoryUsageComparison() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
-            XCTFail("Metal not available")
-            return
+            throw XCTSkip("Metal not available")
         }
         
         print("\n" + String(repeating: "=", count: 70))
@@ -293,8 +290,7 @@ final class VRMFormatPerformanceTests: XCTestCase {
     /// Stress test: Multiple consecutive loads
     func testConsecutiveLoadStress() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
-            XCTFail("Metal not available")
-            return
+            throw XCTSkip("Metal not available")
         }
         
         print("\n" + String(repeating: "=", count: 70))
