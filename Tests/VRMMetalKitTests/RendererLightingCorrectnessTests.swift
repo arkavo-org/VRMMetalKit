@@ -221,6 +221,37 @@ final class RendererLightingCorrectnessTests: XCTestCase {
             "giIntensityFactor=1.0 should be brighter than 0.0 (#145). 0.0=\(center0), 1.0=\(center1)"
         )
     }
+
+    // MARK: - Defaults & override stacking (PR #158 follow-ups)
+
+    /// Default `giIntensityFactor` should match the VRM 0.x MToon spec value (0.1).
+    /// Bumped from 0.05 in PR #158 follow-up to halve the silent dimming caused by
+    /// the new `indirectDiffuse *= giIntensityFactor` shader path.
+    func testDefaultGIIntensityFactorMatchesSpec() {
+        XCTAssertEqual(MToonMaterialUniforms().giIntensityFactor, 0.1, accuracy: 0.0001)
+    }
+
+    /// `setLight(0, …)` after init overrides only the key light. The auto-configured
+    /// fill (1) and rim (2) lights from `setup3PointLighting()` remain in place.
+    /// Documents the intended override-stacking semantics introduced in #147.
+    func testPartialLightOverrideRetainsAutoFillAndRim() {
+        let renderer = VRMRenderer(device: device)
+
+        renderer.setLight(0,
+                          direction: SIMD3<Float>(0, -1, 0),
+                          color: SIMD3<Float>(0.5, 0.5, 0.5))
+
+        XCTAssertNotEqual(
+            renderer.uniforms.light1Color,
+            SIMD3<Float>(0, 0, 0),
+            "Fill light should remain configured after key-only setLight override"
+        )
+        XCTAssertNotEqual(
+            renderer.uniforms.light2Color,
+            SIMD3<Float>(0, 0, 0),
+            "Rim light should remain configured after key-only setLight override"
+        )
+    }
 }
 
 // MARK: - Helpers

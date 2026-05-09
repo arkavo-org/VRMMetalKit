@@ -281,7 +281,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         setLight(index, direction: SIMD3<Float>(0, 1, 0), color: SIMD3<Float>(0, 0, 0))
     }
 
-    /// Configure classic 3-point lighting setup for VTuber/character rendering
+    /// Configure classic 3-point lighting setup for VTuber/character rendering.
+    ///
+    /// Auto-invoked from `init` (see #147). To replace it with a single-key setup,
+    /// call `disableLight(1)` and `disableLight(2)` after init — calling
+    /// `setLight(0, …)` alone overrides only the key light and leaves the
+    /// auto-configured fill (light 1) and rim (light 2) in place.
+    ///
     /// - Parameters:
     ///   - keyIntensity: Key light intensity (default 1.0)
     ///   - fillIntensity: Fill light intensity (default 0.5)
