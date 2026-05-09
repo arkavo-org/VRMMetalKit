@@ -31,7 +31,7 @@ extension VRMRenderer {
         // - Block 0: baseColorFactor (16 bytes)
         // - Block 1: shadeColorFactor + shadingToonyFactor (16 bytes)
         // - Block 2: shadingShiftFactor + emissiveFactor (16 bytes)
-        // - Block 3: metallicFactor + roughnessFactor + giIntensityFactor + shadingShiftTextureScale (16 bytes)
+        // - Block 3: metallicFactor + roughnessFactor + giEqualizationFactor + shadingShiftTextureScale (16 bytes)
         // - Block 4: matcapFactor + hasMatcapTexture (16 bytes)
         // - Block 5: parametricRimColorFactor + parametricRimFresnelPowerFactor (16 bytes)
         // - Block 6: parametricRimLiftFactor + rimLightingMixFactor + hasRimMultiplyTexture + padding (16 bytes)

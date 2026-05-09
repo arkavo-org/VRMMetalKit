@@ -443,7 +443,7 @@ public enum VRMMaterialValidationError: LocalizedError {
     case rimFresnelPowerNegative(Float)
     case rimLightingMixOutOfRange(Float)
     case outlineLightingMixOutOfRange(Float)
-    case giIntensityOutOfRange(Float)
+    case giEqualizationOutOfRange(Float)
     case shadingToonyOutOfRange(Float)
     case shadingShiftOutOfRange(Float)
 
@@ -499,14 +499,15 @@ public enum VRMMaterialValidationError: LocalizedError {
             The outline lighting mix factor must be between 0 and 1.
             """
 
-        case .giIntensityOutOfRange(let intensity):
+        case .giEqualizationOutOfRange(let value):
             return """
-            ❌ MToon Material Validation: GI Intensity Out of Range
+            ❌ MToon Material Validation: GI Equalization Factor Out of Range
 
-            GI intensity: \(intensity)
+            giEqualizationFactor: \(value)
             Valid range: [0.0, 1.0]
 
-            The GI intensity factor must be between 0 and 1.
+            Per MToon 1.0 spec, giEqualizationFactor mixes lit-side (1.0) and
+            shade-side (0.0) in indirect diffuse. The default is 0.9.
             """
 
         case .shadingToonyOutOfRange(let toony):

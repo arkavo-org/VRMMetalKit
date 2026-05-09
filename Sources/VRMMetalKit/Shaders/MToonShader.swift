@@ -46,7 +46,7 @@ public struct MToonMaterialUniforms {
     // Block 3: 16 bytes - PBR factors
     public var metallicFactor: Float = 0.0
     public var roughnessFactor: Float = 1.0
-    public var giIntensityFactor: Float = 0.1
+    public var giEqualizationFactor: Float = 0.9
     public var shadingShiftTextureScale: Float = 1.0
 
     // Block 4: 16 bytes - MatCap properties (packed float3 + int)
@@ -136,7 +136,7 @@ public struct MToonMaterialUniforms {
         self.shadeColorFactor = mtoon.shadeColorFactor
         self.shadingToonyFactor = mtoon.shadingToonyFactor
         self.shadingShiftFactor = mtoon.shadingShiftFactor
-        self.giIntensityFactor = mtoon.giIntensityFactor
+        self.giEqualizationFactor = mtoon.giEqualizationFactor
         self.shadingShiftTextureScale = mtoon.shadingShiftTexture?.scale ?? 1.0
 
         self.matcapFactor = mtoon.matcapFactor
@@ -199,8 +199,8 @@ public struct MToonMaterialUniforms {
         }
 
         // Validate GI intensity
-        guard giIntensityFactor >= 0 && giIntensityFactor <= 1 else {
-            throw VRMMaterialValidationError.giIntensityOutOfRange(giIntensityFactor)
+        guard giEqualizationFactor >= 0 && giEqualizationFactor <= 1 else {
+            throw VRMMaterialValidationError.giEqualizationOutOfRange(giEqualizationFactor)
         }
 
         // Validate shading toony factor

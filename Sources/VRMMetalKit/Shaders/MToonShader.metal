@@ -67,7 +67,7 @@ struct MToonMaterial {
  // Block 3: 16 bytes - PBR factors
  float metallicFactor;                      // 4 bytes
  float roughnessFactor;                     // 4 bytes
- float giIntensityFactor;                   // 4 bytes
+ float giEqualizationFactor;                   // 4 bytes
  float shadingShiftTextureScale;            // 4 bytes
 
  // Block 4: 16 bytes - MatCap properties (packed float3 + int)
@@ -611,9 +611,11 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // Accumulate weighted contributions (manual normalization factor allows artistic control)
  float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
- // Indirect diffuse: ambient contributes at base color, scaled by giIntensityFactor.
- // giEqualizationFactor would apply here once hemisphere irradiance / IBL is added.
- float3 indirectDiffuse = uniforms.ambientColor.xyz * baseColor.rgb * material.giIntensityFactor;
+ // Indirect diffuse (MToon 1.0 spec): ambient irradiance modulates the
+ // lit-side / shade-side mix per giEqualizationFactor. 1.0 = fully lit-side,
+ // 0.0 = fully shade-side, default 0.9 (matches three-vrm).
+ float3 giAlbedo = mix(shadeColor, baseColor.rgb, material.giEqualizationFactor);
+ float3 indirectDiffuse = uniforms.ambientColor.xyz * giAlbedo;
  litColor += indirectDiffuse;
 
  // Emissive
