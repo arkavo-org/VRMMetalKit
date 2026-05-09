@@ -20,8 +20,9 @@ import simd
 /// `BoneTrajectoryDumper` reads `node.worldMatrix` into in-memory samples
 /// that the assertion helpers consume.
 ///
-/// Test assets are looked up via env vars with hard-coded local fallbacks.
-/// CI without the assets gets `XCTSkip`, not a failure.
+/// Test assets are looked up via env vars (`MUSE_RESOURCES_PATH`,
+/// `VRMA_LOCOMOTION_PACK`, `VRMA_AVATAR_MEGA_PACK`). When unset or the
+/// referenced asset is absent, the test gets `XCTSkip`, not a failure.
 final class HairFlutterTrajectoryTests: XCTestCase {
 
     private var device: MTLDevice!
@@ -40,23 +41,16 @@ final class HairFlutterTrajectoryTests: XCTestCase {
     /// animation movements pump the chain into sustained oscillation.
     @MainActor
     func testAliciaIdleHairChainDoesNotFlutterPostSettle() async throws {
-        let aliciaPath = Self.assetPath(
+        let aliciaPath = try Self.requireAssetPath(
             envKey: "MUSE_RESOURCES_PATH",
             envSuffix: "/VRM/AliciaSolid.vrm",
-            fallback: "/Users/arkavo/Projects/Muse/Resources/VRM/AliciaSolid.vrm"
+            description: "AliciaSolid.vrm"
         )
-        let idlePath = Self.assetPath(
+        let idlePath = try Self.requireAssetPath(
             envKey: "VRMA_LOCOMOTION_PACK",
             envSuffix: "/Idle.vrma",
-            fallback: "/Users/arkavo/Projects/VRMMetalKit/VRMA_Locomotion_Pack/Idle.vrma"
+            description: "Idle.vrma"
         )
-
-        guard FileManager.default.fileExists(atPath: aliciaPath) else {
-            throw XCTSkip("AliciaSolid.vrm not found at \(aliciaPath)")
-        }
-        guard FileManager.default.fileExists(atPath: idlePath) else {
-            throw XCTSkip("Idle.vrma not found at \(idlePath)")
-        }
 
         let samples = try await renderTrajectory(
             vrmPath: aliciaPath,
@@ -103,23 +97,16 @@ final class HairFlutterTrajectoryTests: XCTestCase {
     /// it passes today and should keep passing as Bug fixes land.
     @MainActor
     func testAliciaJumpRunsWithoutNaNOrChainExplosion() async throws {
-        let aliciaPath = Self.assetPath(
+        let aliciaPath = try Self.requireAssetPath(
             envKey: "MUSE_RESOURCES_PATH",
             envSuffix: "/VRM/AliciaSolid.vrm",
-            fallback: "/Users/arkavo/Projects/Muse/Resources/VRM/AliciaSolid.vrm"
+            description: "AliciaSolid.vrm"
         )
-        let jumpPath = Self.assetPath(
+        let jumpPath = try Self.requireAssetPath(
             envKey: "VRMA_AVATAR_MEGA_PACK",
             envSuffix: "/Action_Jump.vrma",
-            fallback: "/Users/arkavo/Projects/VRMMetalKit/VRMA_Avatar_Mega_Pack/Action_Jump.vrma"
+            description: "Action_Jump.vrma"
         )
-
-        guard FileManager.default.fileExists(atPath: aliciaPath) else {
-            throw XCTSkip("AliciaSolid.vrm not found at \(aliciaPath)")
-        }
-        guard FileManager.default.fileExists(atPath: jumpPath) else {
-            throw XCTSkip("Action_Jump.vrma not found at \(jumpPath)")
-        }
 
         let samples = try await renderTrajectory(
             vrmPath: aliciaPath,
@@ -153,20 +140,16 @@ final class HairFlutterTrajectoryTests: XCTestCase {
     /// measurable amount over a few seconds.
     @MainActor
     func testCharacterVelocityProducesInertialHairDrift() async throws {
-        let aliciaPath = Self.assetPath(
+        let aliciaPath = try Self.requireAssetPath(
             envKey: "MUSE_RESOURCES_PATH",
             envSuffix: "/VRM/AliciaSolid.vrm",
-            fallback: "/Users/arkavo/Projects/Muse/Resources/VRM/AliciaSolid.vrm"
+            description: "AliciaSolid.vrm"
         )
-        let idlePath = Self.assetPath(
+        let idlePath = try Self.requireAssetPath(
             envKey: "VRMA_LOCOMOTION_PACK",
             envSuffix: "/Idle.vrma",
-            fallback: "/Users/arkavo/Projects/VRMMetalKit/VRMA_Locomotion_Pack/Idle.vrma"
+            description: "Idle.vrma"
         )
-        guard FileManager.default.fileExists(atPath: aliciaPath),
-              FileManager.default.fileExists(atPath: idlePath) else {
-            throw XCTSkip("Test assets not available")
-        }
 
         let withVelocity = try await renderTrajectory(
             vrmPath: aliciaPath, vrmaPath: idlePath,
@@ -302,10 +285,21 @@ final class HairFlutterTrajectoryTests: XCTestCase {
     }
 
 
-    private static func assetPath(envKey: String, envSuffix: String, fallback: String) -> String {
-        if let base = ProcessInfo.processInfo.environment[envKey], !base.isEmpty {
-            return base + envSuffix
+    /// Resolves an asset path from `<envKey><envSuffix>`. Throws `XCTSkip`
+    /// when the env var is unset/empty or the file does not exist, so CI
+    /// (which has neither the env vars nor the assets) skips cleanly.
+    private static func requireAssetPath(
+        envKey: String,
+        envSuffix: String,
+        description: String
+    ) throws -> String {
+        guard let base = ProcessInfo.processInfo.environment[envKey], !base.isEmpty else {
+            throw XCTSkip("\(envKey) not set; cannot locate \(description)")
         }
-        return fallback
+        let path = base + envSuffix
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("\(description) not found at \(path)")
+        }
+        return path
     }
 }
