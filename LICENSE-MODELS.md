@@ -52,6 +52,17 @@ Test VRM models included in this repository are either:
 
 For test models downloaded from external sources, please refer to the original source for licensing terms.
 
+## Bundled Fixtures
+
+Both fixtures below are redistributed in this repository under permissive licenses with attribution to **pixiv VRoid Project**.
+
+| File | Spec | Embedded License | Notes |
+|---|---|---|---|
+| `AvatarSample_A_0.0.vrm.glb` | VRM 0.x | `licenseName: CC_BY`; `commercialUssageName: Allow` | Creative Commons Attribution — redistribution permitted with credit to the original author. |
+| `AvatarSample_A_1.0.vrm.glb` | VRM 1.0 | `licenseUrl: https://vrm.dev/licenses/1.0/`; `allowRedistribution: true`; `modification: allowModificationRedistribution`; commercial: `corporation` | VRM Platform License 1.0 with explicit redistribution permission. |
+
+**Attribution**: AvatarSample_A © pixiv VRoid Project. Used under CC BY (0.x) / VPL 1.0 (1.0) for testing and demonstration.
+
 ## More Information
 
 - VRM Specification: https://github.com/vrm-c/vrm-specification
