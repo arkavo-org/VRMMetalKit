@@ -102,9 +102,15 @@ func printUsage() {
         --dump-bones-filter <regex>
                                 Regex on bone name to limit dump output (default: all)
         --outline-scale <float> Multiply every material's outlineWidthFactor by this
-                                value (default: 1.0; try 0.5 to soften toon outlines)
+                                value. Default 1.0. Try 0.5 to soften toon outlines.
+                                Use 0.0 for hero/portrait stills — the toon outline
+                                pass renders dark silhouette edges on Face_SKIN that
+                                read as "drawn-on decals" at 3/4 head profiles. Off
+                                produces a cleaner profile at the cost of the cel
+                                outline aesthetic.
         --hero-lighting         Use a softer 3-point lighting + lifted ambient for
-                                hero/portrait shots instead of the cel-shading default
+                                hero/portrait shots instead of the cel-shading default.
+                                Pair with `--outline-scale 0.0` for a clean stillshot.
         --help                  Show this help message
 
     EXAMPLES:
@@ -112,6 +118,10 @@ func printUsage() {
         swift run VRMVideoRenderer model.vrm anim.vrma output.mov --orbit --orbit-target face
         swift run VRMVideoRenderer model.vrm anim.vrma output.mov --orbit --orbit-target hips
         swift run VRMVideoRenderer model.vrm anim.vrma output.mov -w 1280 -h 720 -f 60
+        # Hero/portrait still extracted from a video render:
+        swift run VRMVideoRenderer model.vrm anim.vrma /tmp/hero.mov \\
+            -w 2048 -h 2048 -f 30 -d 4 --hero-lighting --outline-scale 0.0
+        ffmpeg -y -i /tmp/hero.mov -ss 2.5 -frames:v 1 -update 1 hero.png
     """)
 }
 
