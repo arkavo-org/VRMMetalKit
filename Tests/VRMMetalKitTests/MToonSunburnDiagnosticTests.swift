@@ -206,7 +206,7 @@ final class MToonSunburnDiagnosticTests: XCTestCase {
         material.shadingToonyFactor = 0.9
         material.shadingShiftFactor = 0.0
         material.vrmVersion = 1
-        material.giIntensityFactor = 0.0
+        material.giEqualizationFactor = 0.0
 
         let frameData = try renderer.renderWithMaterial(
             material: material,
@@ -257,7 +257,7 @@ final class MToonSunburnDiagnosticTests: XCTestCase {
         material.shadingToonyFactor = 0.9
         material.shadingShiftFactor = -2.0  // Extreme negative shift forces everything into shadow
         material.vrmVersion = 1
-        material.giIntensityFactor = 0.0  // No GI to isolate floor effect
+        material.giEqualizationFactor = 0.0  // No GI to isolate floor effect
 
         // Front light - but with extreme negative shift, still shows shadow
         let frameData = try renderer.renderWithMaterial(
@@ -305,7 +305,7 @@ final class MToonSunburnDiagnosticTests: XCTestCase {
         material.shadingToonyFactor = 0.9
         material.shadingShiftFactor = 0.5  // Shift to always lit
         material.vrmVersion = 1
-        material.giIntensityFactor = 0.0
+        material.giEqualizationFactor = 0.0
 
         let frameData = try renderer.renderWithMaterial(
             material: material,
@@ -572,7 +572,7 @@ final class SunburnTestRenderer {
         material.shadingToonyFactor = toonyFactor
         material.shadingShiftFactor = shadingShift
         material.vrmVersion = vrmVersion
-        material.giIntensityFactor = 0.0
+        material.giEqualizationFactor = 0.0
 
         return try render(
             material: material,

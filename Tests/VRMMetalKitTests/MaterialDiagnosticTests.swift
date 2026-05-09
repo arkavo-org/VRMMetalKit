@@ -60,7 +60,7 @@ final class MaterialDiagnosticTests: XCTestCase {
                 print("    * Shade Color: \(mtoon.shadeColorFactor)")
                 print("    * Shading Toony: \(mtoon.shadingToonyFactor)")
                 print("    * Shading Shift: \(mtoon.shadingShiftFactor)")
-                print("    * GI Intensity: \(mtoon.giIntensityFactor)")
+                print("    * GI Equalization: \(mtoon.giEqualizationFactor)")
                 print("    * Has Shade Multiply Texture: \(mtoon.shadeMultiplyTexture != nil)")
             } else {
                 print("  - MToon: NONE (using default PBR)")

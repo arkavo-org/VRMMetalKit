@@ -378,7 +378,7 @@ final class MToonPipelineDiagnosticTests: XCTestCase {
                 print("    shadeColorFactor: (\(mtoon.shadeColorFactor.x), \(mtoon.shadeColorFactor.y), \(mtoon.shadeColorFactor.z))")
                 print("    shadingToonyFactor: \(mtoon.shadingToonyFactor)")
                 print("    shadingShiftFactor: \(mtoon.shadingShiftFactor)")
-                print("    giIntensityFactor: \(mtoon.giIntensityFactor)")
+                print("    giEqualizationFactor: \(mtoon.giEqualizationFactor)")
 
                 // Calculate warmth (sunburn indicator)
                 let shade = mtoon.shadeColorFactor

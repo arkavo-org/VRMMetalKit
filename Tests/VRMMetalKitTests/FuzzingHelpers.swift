@@ -151,7 +151,7 @@ struct FuzzGenerator {
         uniforms.shadingShiftFactor = randomFloat(in: -2...2)
         uniforms.metallicFactor = randomFloat(in: -2...2)
         uniforms.roughnessFactor = randomFloat(in: -2...2)
-        uniforms.giIntensityFactor = randomFloat(in: -2...2)
+        uniforms.giEqualizationFactor = randomFloat(in: -2...2)
 
         uniforms.outlineWidthFactor = randomFloat(in: -10...10)
         uniforms.outlineMode = randomFloat(in: -5...5)

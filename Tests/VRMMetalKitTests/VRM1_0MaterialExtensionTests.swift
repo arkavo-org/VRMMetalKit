@@ -121,7 +121,7 @@ final class VRM1_0MaterialExtensionTests: XCTestCase {
                         "shadeColorFactor": [0.6, 0.4, 0.3],
                         "shadingToonyFactor": 0.7,
                         "shadingShiftFactor": -0.1,
-                        "giIntensityFactor": 0.1,
+                        "giEqualizationFactor": 0.1,
                         "outlineWidthMode": "worldCoordinates",
                         "outlineWidthFactor": 0.005,
                         "outlineColorFactor": [0.0, 0.0, 0.0],
