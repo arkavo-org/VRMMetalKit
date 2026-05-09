@@ -1,0 +1,305 @@
+// Copyright 2025 Arkavo Inc. and contributors
+// Licensed under the Apache License, Version 2.0
+
+import XCTest
+import Metal
+import simd
+@testable import VRMMetalKit
+
+/// In-process trajectory-driven physics tests that catch Bug #6 (inertia
+/// compensation disabled in `SpringBonePredict.metal`) by measuring whether
+/// post-settle hair amplitude **decays** or **grows** over time. Sustained
+/// or growing oscillation in the absence of input motion is the flutter
+/// signature.
+///
+/// The test uses `VRMRenderer.drawOffscreenHeadless(...)` against a tiny
+/// throwaway color/depth texture — that gets the production model-init
+/// path (`populateSpringBoneData`, `warmupPhysics`, the per-frame
+/// `update` → `writeBonesToNodes` → `updateNodeTransforms` chain) for
+/// free. After each frame completes on the GPU,
+/// `BoneTrajectoryDumper` reads `node.worldMatrix` into in-memory samples
+/// that the assertion helpers consume.
+///
+/// Test assets are looked up via env vars (`MUSE_RESOURCES_PATH`,
+/// `VRMA_LOCOMOTION_PACK`, `VRMA_AVATAR_MEGA_PACK`). When unset or the
+/// referenced asset is absent, the test gets `XCTSkip`, not a failure.
+final class HairFlutterTrajectoryTests: XCTestCase {
+
+    private var device: MTLDevice!
+
+    override func setUpWithError() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal not available")
+        }
+        self.device = device
+    }
+
+    /// AliciaSolid + Idle.vrma. After the bind-pose-to-gravity settling
+    /// completes (~first 2 seconds at 30 fps), the chain tip should not
+    /// keep growing in amplitude. Today this fails because Bug #6's
+    /// inertia compensation is disabled — without it, even tiny idle
+    /// animation movements pump the chain into sustained oscillation.
+    @MainActor
+    func testAliciaIdleHairChainDoesNotFlutterPostSettle() async throws {
+        let aliciaPath = try Self.requireAssetPath(
+            envKey: "MUSE_RESOURCES_PATH",
+            envSuffix: "/VRM/AliciaSolid.vrm",
+            description: "AliciaSolid.vrm"
+        )
+        let idlePath = try Self.requireAssetPath(
+            envKey: "VRMA_LOCOMOTION_PACK",
+            envSuffix: "/Idle.vrma",
+            description: "Idle.vrma"
+        )
+
+        let samples = try await renderTrajectory(
+            vrmPath: aliciaPath,
+            vrmaPath: idlePath,
+            fps: 30,
+            frameCount: 150,
+            filter: "hair[0-9]+_(L|R)"
+        )
+        XCTAssertGreaterThan(samples.count, 0, "Dumper produced no samples")
+
+        // hair8_L is the chain tip on Alicia's left side — most sensitive to
+        // accumulated flutter at the chain end.
+        //
+        // Window 60..<150 skips the first ~2 seconds of settling so we
+        // measure steady-state behavior only.
+        //
+        // Threshold context: Idle.vrma loops, so the chain reaches a small
+        // dynamic equilibrium (~16 mm RMS) rather than truly damping. Decay
+        // ratio cycles between 0.55 and 3.1 depending on which window of the
+        // cycle you sample. Pre-audit (all bugs present): decay ≈ 2.1× in
+        // this window — clear sustained pumping. Post-audit-fix (PR A + PR
+        // B): decay ≈ 1.2× — the chain is small-amplitude noisy but no
+        // longer pumping. minDecayRatio is set to 2.0 so this catches the
+        // pre-fix flutter signal while accepting realistic small-amplitude
+        // variation under a cyclic animation. Bug #6's compensation only
+        // engages above ~2 mm/frame parent motion (smoothstep gate); Idle's
+        // sub-mm twitches don't trigger it, which is by design — fast-motion
+        // gating belongs in a separate trajectory test.
+        //
+        // maxRMS catches gross chain explosion regressions.
+        assertNoFlutter(
+            samples: samples,
+            bone: "hair8_L",
+            settledWindow: 60..<150,
+            maxRMS: 0.050,
+            minDecayRatio: 2.0
+        )
+    }
+
+    /// AliciaSolid + Action_Jump.vrma — a fast-motion clip with crouch, push-off,
+    /// peak, and landing phases. The spring physics should stay sane through all
+    /// of it: no NaN/Inf, no bone teleporting outside reasonable world bounds, no
+    /// chain link stretching catastrophically. This is a regression guardrail —
+    /// it passes today and should keep passing as Bug fixes land.
+    @MainActor
+    func testAliciaJumpRunsWithoutNaNOrChainExplosion() async throws {
+        let aliciaPath = try Self.requireAssetPath(
+            envKey: "MUSE_RESOURCES_PATH",
+            envSuffix: "/VRM/AliciaSolid.vrm",
+            description: "AliciaSolid.vrm"
+        )
+        let jumpPath = try Self.requireAssetPath(
+            envKey: "VRMA_AVATAR_MEGA_PACK",
+            envSuffix: "/Action_Jump.vrma",
+            description: "Action_Jump.vrma"
+        )
+
+        let samples = try await renderTrajectory(
+            vrmPath: aliciaPath,
+            vrmaPath: jumpPath,
+            fps: 30,
+            frameCount: 120,
+            filter: "(hair|skirt|mituami)[0-9_]*(L|R)?"
+        )
+        XCTAssertGreaterThan(samples.count, 0, "Dumper produced no samples")
+
+        // Alicia is human-scale — every spring joint should stay within ±5 m of
+        // world origin. Hair link rest lengths are ≤100 mm, skirt links similar;
+        // 0.3 m is comfortable headroom for fast motion without flagging
+        // legitimate physics swings.
+        assertSpringChainsStable(
+            samples: samples,
+            maxAbsoluteCoordinate: 5.0,
+            maxLinkLength: 0.3
+        )
+    }
+
+    /// Bug #11 — `externalVelocity` was dead code: the predict shader applied
+    /// `inertialForce = -externalVelocity * 0.5` per substep, but no Swift
+    /// path ever set the field to a non-zero value. PR for Bug #11 adds
+    /// `VRMRenderer.characterVelocity` and wires it through
+    /// `updateSpringBoneForces` into `globalParams.externalVelocity`.
+    ///
+    /// Test idea: with the avatar standing still on Idle.vrma, set
+    /// `characterVelocity = (5, 0, 0)` (simulating the character running
+    /// in +X). Hair tips should drift in -X (trailing behind) by a
+    /// measurable amount over a few seconds.
+    @MainActor
+    func testCharacterVelocityProducesInertialHairDrift() async throws {
+        let aliciaPath = try Self.requireAssetPath(
+            envKey: "MUSE_RESOURCES_PATH",
+            envSuffix: "/VRM/AliciaSolid.vrm",
+            description: "AliciaSolid.vrm"
+        )
+        let idlePath = try Self.requireAssetPath(
+            envKey: "VRMA_LOCOMOTION_PACK",
+            envSuffix: "/Idle.vrma",
+            description: "Idle.vrma"
+        )
+
+        let withVelocity = try await renderTrajectory(
+            vrmPath: aliciaPath, vrmaPath: idlePath,
+            fps: 30, frameCount: 150,
+            filter: "hair[0-9]+_(L|R)",
+            characterVelocity: SIMD3<Float>(5, 0, 0)
+        )
+        let withoutVelocity = try await renderTrajectory(
+            vrmPath: aliciaPath, vrmaPath: idlePath,
+            fps: 30, frameCount: 150,
+            filter: "hair[0-9]+_(L|R)",
+            characterVelocity: .zero
+        )
+
+        // Compare mean X position of hair tip across the post-settle window.
+        // With characterVelocity=(5,0,0), inertialForce = (-2.5, 0, 0) m/s²
+        // gets injected each substep, drifting the chain in -X relative to
+        // the same simulation with zero velocity.
+        let bone = "hair8_L"
+        let window = 60..<150
+        let meanX_with    = Self.meanX(samples: withVelocity, bone: bone, window: window)
+        let meanX_without = Self.meanX(samples: withoutVelocity, bone: bone, window: window)
+        let drift = meanX_with - meanX_without
+
+        XCTAssertLessThan(
+            drift, -0.005,
+            "Setting renderer.characterVelocity=(5,0,0) should drift hair " +
+            "tip in -X by at least 5 mm. Mean X with velocity: \(meanX_with), " +
+            "without: \(meanX_without), drift: \(drift). " +
+            "Bug #11: externalVelocity isn't being plumbed through to the " +
+            "predict shader's inertialForce term."
+        )
+    }
+
+    // MARK: - Helpers
+
+    private static func meanX(samples: [BoneTrajectoryDumper.Sample],
+                              bone: String, window: Range<Int>) -> Float {
+        let xs = samples.compactMap { sample -> Float? in
+            guard sample.bone == bone, window.contains(sample.frame) else { return nil }
+            return sample.world.x
+        }
+        guard !xs.isEmpty else { return .nan }
+        return xs.reduce(0, +) / Float(xs.count)
+    }
+
+
+    /// Run a 5-second physics simulation through `VRMRenderer.drawOffscreenHeadless`
+    /// and collect the trajectory in memory. Shared by all renderer-driven tests
+    /// in this file.
+    @MainActor
+    private func renderTrajectory(
+        vrmPath: String,
+        vrmaPath: String,
+        fps: Float,
+        frameCount: Int,
+        filter: String,
+        characterVelocity: SIMD3<Float> = .zero
+    ) async throws -> [BoneTrajectoryDumper.Sample] {
+        let model = try await VRMModel.load(
+            from: URL(fileURLWithPath: vrmPath),
+            device: device
+        )
+        let clip = try VRMAnimationLoader.loadVRMA(
+            from: URL(fileURLWithPath: vrmaPath),
+            model: model
+        )
+        let player = AnimationPlayer()
+        player.load(clip)
+        player.play()
+
+        var config = RendererConfig()
+        config.sampleCount = 1
+        config.strict = .off
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.loadModel(model)
+        renderer.enableSpringBone = true
+        renderer.characterVelocity = characterVelocity
+        renderer.viewMatrix = matrix_identity_float4x4
+        renderer.projectionMatrix = matrix_identity_float4x4
+
+        let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: 64, height: 64, mipmapped: false)
+        colorDesc.usage = [.renderTarget, .shaderRead]
+        colorDesc.storageMode = .private
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float, width: 64, height: 64, mipmapped: false)
+        depthDesc.usage = .renderTarget
+        depthDesc.storageMode = .private
+        guard let colorTex = device.makeTexture(descriptor: colorDesc),
+              let depthTex = device.makeTexture(descriptor: depthDesc),
+              let queue = device.makeCommandQueue() else {
+            throw XCTSkip("Could not allocate Metal resources")
+        }
+
+        let dumper = try BoneTrajectoryDumper(filterPattern: filter)
+        let dt: Float = 1.0 / fps
+
+        for frameIndex in 0..<frameCount {
+            player.update(deltaTime: dt, model: model)
+
+            guard let cb = queue.makeCommandBuffer() else {
+                XCTFail("Could not create command buffer at frame \(frameIndex)")
+                return dumper.inMemorySamples
+            }
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = colorTex
+            rpd.colorAttachments[0].loadAction = .clear
+            rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+            rpd.colorAttachments[0].storeAction = .store
+            rpd.depthAttachment.texture = depthTex
+            rpd.depthAttachment.loadAction = .clear
+            rpd.depthAttachment.clearDepth = 1.0
+            rpd.depthAttachment.storeAction = .dontCare
+
+            renderer.drawOffscreenHeadless(
+                to: colorTex, depth: depthTex,
+                commandBuffer: cb, renderPassDescriptor: rpd
+            )
+            cb.commit()
+            while cb.status != .completed && cb.status != .error {
+                await Task.yield()
+            }
+
+            dumper.recordFrame(
+                model: model,
+                frameIndex: frameIndex,
+                timeSeconds: Double(frameIndex) * Double(dt)
+            )
+        }
+
+        return dumper.inMemorySamples
+    }
+
+
+    /// Resolves an asset path from `<envKey><envSuffix>`. Throws `XCTSkip`
+    /// when the env var is unset/empty or the file does not exist, so CI
+    /// (which has neither the env vars nor the assets) skips cleanly.
+    private static func requireAssetPath(
+        envKey: String,
+        envSuffix: String,
+        description: String
+    ) throws -> String {
+        guard let base = ProcessInfo.processInfo.environment[envKey], !base.isEmpty else {
+            throw XCTSkip("\(envKey) not set; cannot locate \(description)")
+        }
+        let path = base + envSuffix
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("\(description) not found at \(path)")
+        }
+        return path
+    }
+}

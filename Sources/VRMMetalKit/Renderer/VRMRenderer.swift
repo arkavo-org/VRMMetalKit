@@ -380,6 +380,18 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// - Note: The model must have spring bone data for this to have any effect.
     public var enableSpringBone: Bool = false
 
+    /// Character root velocity in world space, used by the spring-bone predict
+    /// kernel to apply inertial force opposite to character motion. Set this
+    /// each frame from the host application's locomotion code (e.g., the
+    /// vector by which the character translated this frame, divided by
+    /// deltaTime). Hair and clothing trail behind character movement when
+    /// this is non-zero.
+    ///
+    /// Closes Bug #11 from issue #138 — the shader read `externalVelocity`
+    /// but no Swift code path ever set it, so the global character-movement
+    /// inertia feature was dead code.
+    public var characterVelocity: SIMD3<Float> = .zero
+
     /// Quality preset for spring bone physics simulation.
     ///
     /// Higher quality uses more substeps and constraint iterations for more stable physics,

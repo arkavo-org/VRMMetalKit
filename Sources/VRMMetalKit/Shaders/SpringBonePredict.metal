@@ -107,22 +107,24 @@ kernel void springBonePredict(
 
     // INERTIA COMPENSATION: When parent moves UP, child should maintain its WORLD position
     // momentarily due to inertia. Without compensation, constraint corrections from the
-    // previous frame become velocity this frame - when parent moves up, constraint pulls
-    // child up, and that becomes upward velocity.
+    // previous frame become velocity this frame — when parent moves up, the distance
+    // constraint pulls child up, and that becomes upward velocity that pumps the chain
+    // into sustained oscillation (the flutter signature).
     //
     // SETTLING PERIOD: Skip compensation during initial frames to let bones settle naturally
     // with gravity. Otherwise compensation fights the settling and bones stay in bind pose.
     //
     // DIRECTION-AWARE: Only compensate for UPWARD parent movement (fighting gravity).
-    // During descent/landing, let hair float naturally - compensating downward movement
+    // During descent/landing, let hair float naturally — compensating downward movement
     // would create upward force and make hair shoot up on landing.
     //
     // We scale the compensation based on movement magnitude:
-    // INERTIA COMPENSATION DISABLED FOR DEBUGGING
-    // If flutter stops with this disabled, the compensation logic is the culprit.
     // - Small movements (idle breathing/sway): minimal compensation, hair follows gently
     // - Large movements (jumps): full compensation, hair trails behind with inertia
-    /*
+    //
+    // Re-enabled by Bug #6 fix. Bug #4 (kinematic prev-position contamination) is fixed
+    // separately so `bonePosPrev[parentIndex]` here now reflects the parent's previous
+    // animated frame, not whatever value bonePosCurr happened to be carrying.
     if (globalParams.settlingFrames == 0) {
         float3 parentDelta = bonePosCurr[parentIndex] - bonePosPrev[parentIndex];
 
@@ -138,7 +140,6 @@ kernel void springBonePredict(
         float compensationFactor = smoothstep(0.002, 0.02, parentSpeed);
         velocity = velocity - compensatedDelta * compensationFactor;
     }
-    */
 
     // Now save current position as previous for next frame
     bonePosPrev[id] = bonePosCurr[id];

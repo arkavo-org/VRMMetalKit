@@ -61,6 +61,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     private var globalParamsBuffer: MTLBuffer?
     private var animatedRootPositionsBuffer: MTLBuffer?
+    /// Holds the previous frame's animated root positions so the kinematic
+    /// kernel can write a clean velocity history into `bonePosPrev[root]`
+    /// instead of reading from `bonePosCurr[root]` (which can be contaminated
+    /// by collision pushes — Bug #4 in issue #138).
+    private var animatedRootPositionsPrevBuffer: MTLBuffer?
     private var rootBoneIndicesBuffer: MTLBuffer?
     private var numRootBonesBuffer: MTLBuffer?
     private var rootBoneIndices: [UInt32] = []
@@ -253,6 +258,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             checkTeleportationAndReset(model: model, buffers: buffers)
         }
 
+        // Snapshot the previous frame's animated root positions BEFORE we
+        // overwrite animatedRootPositionsBuffer with this frame's pose. The
+        // kinematic kernel reads previousPos from this buffer so velocity is
+        // measured against last frame's animated target — independent of any
+        // collision pushes that may have touched bonePosCurr (Bug #4).
+        if frameSubstepCount > 0,
+           let curr = animatedRootPositionsBuffer,
+           let prev = animatedRootPositionsPrevBuffer {
+            prev.contents().copyMemory(from: curr.contents(), byteCount: curr.length)
+        }
+
         var stepsThisFrame = 0
 
         // Process fixed steps (clamped to avoid spiral-of-death)
@@ -411,16 +427,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.setBuffer(bindDirections, offset: 0, index: 11)
         }
 
-        // First update kinematic root bones with animated positions
-        // Note: Kinematic kernel uses buffer indices 8-10 to avoid conflicts with colliders (5-7)
+        // First update kinematic root bones with animated positions.
+        // Kinematic kernel uses buffer indices 8-10, 12 to avoid conflicts with
+        // colliders (5-7) and bindDirections (11). Index 12 is the previous-
+        // frame animated-position mirror used to write a clean velocity
+        // history into bonePosPrev[root] (Bug #4 fix).
         if !rootBoneIndices.isEmpty,
            let animatedRootPositionsBuffer = animatedRootPositionsBuffer,
+           let animatedRootPositionsPrevBuffer = animatedRootPositionsPrevBuffer,
            let rootBoneIndicesBuffer = rootBoneIndicesBuffer,
            let numRootBonesBuffer = numRootBonesBuffer {
             computeEncoder.setComputePipelineState(kinematicPipeline)
             computeEncoder.setBuffer(animatedRootPositionsBuffer, offset: 0, index: 8)
             computeEncoder.setBuffer(rootBoneIndicesBuffer, offset: 0, index: 9)
             computeEncoder.setBuffer(numRootBonesBuffer, offset: 0, index: 10)
+            computeEncoder.setBuffer(animatedRootPositionsPrevBuffer, offset: 0, index: 12)
             let rootGridSize = MTLSize(width: rootBoneIndices.count, height: 1, depth: 1)
             computeEncoder.dispatchThreads(rootGridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
@@ -506,9 +527,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var colliderToGroupIndex: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
             for colliderIndex in group.colliders {
-                // Use first group if collider belongs to multiple groups
+                // Use first group if collider belongs to multiple groups.
+                // Clamp to 31 so the shader's `1u << groupIndex` is well-defined
+                // (UB at >=32). Bone masks are already truncated to <32.
                 if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(groupIndex)
+                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
                 }
             }
         }
@@ -673,22 +696,24 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var boneIdx = 0
         for spring in springBone.springs {
             for joint in spring.joints {
-                guard boneIdx < boneBindDirections.count,
-                      let jointNode = model.nodes[safe: joint.node] else {
-                    boneIdx += 1
-                    continue
-                }
+                // Every joint contributes exactly one entry so the count
+                // matches numBones — otherwise SpringBoneBuffers.updateBindDirections
+                // rejects the update and the GPU buffer stays uninitialised.
+                guard boneIdx < boneBindDirections.count else { break }
+                defer { boneIdx += 1 }
+
                 let localDir = boneBindDirections[boneIdx]
-                // Transform by the node's actual parent (matches how we stored it)
-                if let nodeParent = jointNode.parent {
+                if let jointNode = model.nodes[safe: joint.node],
+                   let nodeParent = jointNode.parent {
                     let parentRot = extractRotation(from: nodeParent.worldMatrix)
                     let worldDir = simd_act(parentRot, localDir)
                     initialWorldBindDirections.append(simd_normalize(worldDir))
                 } else {
-                    // Root bone - local is world
+                    // Missing node or chain root: fall back to the bone's
+                    // own local direction (already a sensible non-zero unit
+                    // vector populated by the first pass).
                     initialWorldBindDirections.append(localDir)
                 }
-                boneIdx += 1
             }
         }
         buffers.updateBindDirections(initialWorldBindDirections)
@@ -790,8 +815,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Initialize buffers for root bone kinematic updates
         let numRootBones = rootBoneIndices.count
         if numRootBones > 0 {
-            animatedRootPositionsBuffer = device.makeBuffer(length: MemoryLayout<SIMD3<Float>>.stride * numRootBones,
+            let positionsLength = MemoryLayout<SIMD3<Float>>.stride * numRootBones
+            animatedRootPositionsBuffer = device.makeBuffer(length: positionsLength,
                                                            options: [.storageModeShared])
+            // Mirror buffer holding the previous frame's animated positions —
+            // copied from animatedRootPositionsBuffer at frame boundaries (see
+            // update()). The kinematic kernel reads previousPos from here so
+            // velocity history isn't tied to bonePosCurr.
+            animatedRootPositionsPrevBuffer = device.makeBuffer(length: positionsLength,
+                                                                options: [.storageModeShared])
             rootBoneIndicesBuffer = device.makeBuffer(bytes: rootBoneIndices,
                                                      length: MemoryLayout<UInt32>.stride * numRootBones,
                                                      options: [.storageModeShared])
@@ -851,12 +883,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             )
         }
 
-        // Build collider-to-group index mapping for animated updates
+        // Build collider-to-group index mapping for animated updates.
+        // Clamp to 31 so the shader's `1u << groupIndex` is well-defined.
         var colliderToGroupIndex: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
             for colliderIndex in group.colliders {
                 if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(groupIndex)
+                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
                 }
             }
         }
@@ -1047,11 +1080,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             chainNodePositions.removeAll(keepingCapacity: true)
             for joint in spring.joints {
-                guard let node = model.nodes[safe: joint.node],
-                      globalBoneIndex < positions.count else { continue }
-
+                // Every joint occupies one slot in the GPU positions array,
+                // including joints whose node is missing. Advance the global
+                // index unconditionally so downstream joints stay aligned with
+                // their physics outputs.
+                guard globalBoneIndex < positions.count else { break }
+                defer { globalBoneIndex += 1 }
+                guard let node = model.nodes[safe: joint.node] else { continue }
                 chainNodePositions.append((node, positions[globalBoneIndex], globalBoneIndex))
-                globalBoneIndex += 1
             }
 
             // Update node transforms based on GPU-computed positions
@@ -1344,12 +1380,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     /// Captures collider transforms based on current animated node positions/orientations
     private func captureTargetColliderTransforms(model: VRMModel, springBone: VRMSpringBone) {
-        // Build collider-to-group index mapping
+        // Build collider-to-group index mapping. Clamp to 31 so the shader's
+        // `1u << groupIndex` is well-defined (UB at >=32).
         var colliderToGroupIndex: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
             for colliderIndex in group.colliders {
                 if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(groupIndex)
+                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
                 }
             }
         }
