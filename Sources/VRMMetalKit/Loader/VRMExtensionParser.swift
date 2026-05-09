@@ -661,9 +661,14 @@ public class VRMExtensionParser {
                         var joint = VRMSpringJoint(node: node)
                         joint.hitRadius = jointDict["hitRadius"] as? Float ?? 0.0
                         joint.stiffness = jointDict["stiffness"] as? Float ?? 1.0
-                        // Apply minimum gravityPower of 1.0 when model specifies 0
-                        let rawGravityPower = jointDict["gravityPower"] as? Float ?? 0.0
-                        joint.gravityPower = rawGravityPower > 0 ? rawGravityPower : 1.0
+                        // Preserve the author's `gravityPower`. A duplicate
+                        // auto-fix used to override 0 to 1.0 here, fighting models
+                        // that intentionally set 0 (e.g. AvatarSample_A's "Hair"
+                        // and "Bust" springs which use `stiffness=0.8` to hold
+                        // shape without gravity). The system-level auto-fix was
+                        // already removed in PR #143; this duplicate is the
+                        // remaining override.
+                        joint.gravityPower = jointDict["gravityPower"] as? Float ?? 0.0
                         joint.dragForce = jointDict["dragForce"] as? Float ?? 0.4
 
                         if let gravityDir = jointDict["gravityDir"] as? [Float], gravityDir.count == 3 {
