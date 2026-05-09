@@ -125,14 +125,7 @@ kernel void springBonePredict(
     // Re-enabled by Bug #6 fix. Bug #4 (kinematic prev-position contamination) is fixed
     // separately so `bonePosPrev[parentIndex]` here now reflects the parent's previous
     // animated frame, not whatever value bonePosCurr happened to be carrying.
-    //
-    // Gated on `gravityPower > 0`. Authors who pick `gravityPower=0` (e.g.
-    // AvatarSample_A's "Hair" springs at stiffness≈0.85) want the chain held by
-    // stiffness alone — there's no gravity to act as the restoring force after
-    // inertia displacement, so world-space inertia preservation produces a
-    // ballooning chain that takes seconds to settle. With gravity, compensation
-    // is the right model (chain has weight and lags behind on parent rise).
-    if (globalParams.settlingFrames == 0 && boneParams[id].gravityPower > 0.0) {
+    if (globalParams.settlingFrames == 0) {
         float3 parentDelta = bonePosCurr[parentIndex] - bonePosPrev[parentIndex];
 
         // Only compensate for upward Y movement - no lateral compensation
