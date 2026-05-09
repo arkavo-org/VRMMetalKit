@@ -637,6 +637,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[VRMRenderer] About to setup sprite pipeline...")
         setupSpritePipeline()
         vrmLog("[VRMRenderer] Finished setup sprite pipeline")
+
+        // Issue #147: Auto-configure 3-point lighting so hands-off consumers
+        // get a usable image immediately. Apps that want different lighting
+        // can still override after init.
+        setup3PointLighting()
         setupCachedStates()
         setupTripleBuffering()
     }
