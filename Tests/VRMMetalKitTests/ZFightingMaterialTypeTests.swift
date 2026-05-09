@@ -150,7 +150,7 @@ final class ZFightingMaterialTypeTests: XCTestCase {
         let modelPath = "\(modelsDirectory)/AvatarSample_A.vrm.glb"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath), "Model not found")
 
-        let model = try await VRMModel.load(
+        _ = try await VRMModel.load(
             from: URL(fileURLWithPath: modelPath),
             device: device
         )
@@ -242,9 +242,9 @@ final class ZFightingMaterialTypeTests: XCTestCase {
 
         // Optionally force all materials to OPAQUE
         if forceOpaque {
-            for i in 0..<model.materials.count {
-                // Note: This would require making materials mutable or using a renderer override
-                // For now, just document the intent
+            for _ in 0..<model.materials.count {
+                // Forcing materials to OPAQUE would require making them mutable
+                // or using a renderer override; not implemented here.
             }
         }
 

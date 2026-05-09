@@ -79,7 +79,7 @@ final class CoordinateSystemTests: XCTestCase {
     /// Test that hips translation is applied when root motion is enabled
     func testHipsTranslationAppliedWithRootMotion() async throws {
         // Arrange: Create a mock scenario
-        let hipsTranslation = SIMD3<Float>(1.0, 0.5, 2.0)  // X=1, Y=0.5, Z=2
+        _ = SIMD3<Float>(1.0, 0.5, 2.0)  // X=1, Y=0.5, Z=2
         
         // With root motion enabled, hips should move
         let applyRootMotion = true

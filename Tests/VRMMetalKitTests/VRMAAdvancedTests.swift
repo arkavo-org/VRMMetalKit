@@ -407,8 +407,8 @@ final class VRMAAdvancedTests: XCTestCase {
         let time1: Float = 0
         let time2: Float = clip.duration / 2
         
-        let (rot1, trans1, _) = hipsTrack.sample(at: time1)
-        let (rot2, trans2, _) = hipsTrack.sample(at: time2)
+        let (rot1, _, _) = hipsTrack.sample(at: time1)
+        let (rot2, _, _) = hipsTrack.sample(at: time2)
         
         print("Hips at t=0: \(rot1?.vector ?? SIMD4<Float>(repeating: 0))")
         print("Hips at t=\(time2): \(rot2?.vector ?? SIMD4<Float>(repeating: 0))")

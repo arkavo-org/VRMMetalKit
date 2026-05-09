@@ -197,7 +197,7 @@ final class MaterialDiagnosticTests: XCTestCase {
                     print("  - Material: \(name) (index: \(materialIndex))")
                     print("  - Alpha Mode: \(material.alphaMode)")
                     print("  - Alpha Cutoff: \(material.alphaCutoff)")
-                    print("  - Render Queue: \(material.renderQueue ?? -1)")
+                    print("  - Render Queue: \(material.renderQueue)")
                     print("  - Vertex Count: \(primitive.vertexCount)")
                     print("  - Index Count: \(primitive.indexCount)")
                     print("")

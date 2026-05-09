@@ -501,7 +501,7 @@ final class ThreeVRMReferenceTests: XCTestCase {
     /// Verifies collider positions update correctly when skeleton animates
     func testColliderPositionUpdates_WhenSkeletonAnimates() throws {
         let model = try buildModelWithLegCollider()
-        let system = try SpringBoneComputeSystem(device: device)
+        _ = try SpringBoneComputeSystem(device: device)
 
         // Record initial collider position
         guard let springBone = model.springBone,
@@ -520,7 +520,7 @@ final class ThreeVRMReferenceTests: XCTestCase {
         colliderNode.updateWorldTransform()
 
         // Verify collider moved
-        let newWorldPos = colliderNode.worldPosition
+        _ = colliderNode.worldPosition
 
         // The node itself doesn't move (rotation around its own position),
         // but if there was an offset, it would rotate
@@ -661,7 +661,6 @@ final class ThreeVRMReferenceTests: XCTestCase {
 
         // Check that skirt bones (indices 1+) don't go below collider - radius - hitRadius
         let minAllowedY = colliderCenter.y - radius
-        var anyBoneBelowCollider = false
 
         for i in 1..<numBones {
             let boneY = positions[i].y
@@ -669,13 +668,12 @@ final class ThreeVRMReferenceTests: XCTestCase {
             let effectiveMinY = minAllowedY - hitRadius
 
             if boneY < effectiveMinY - 0.01 {  // Small tolerance
-                anyBoneBelowCollider = true
                 print("Bone \(i) at Y=\(boneY) is below collider min Y=\(effectiveMinY)")
             }
         }
 
-        // The test currently documents the behavior - it may fail if collision isn't working
-        // XCTAssertFalse(anyBoneBelowCollider, "Skirt bones should not pass through leg colliders")
+        // The test currently documents the behavior — collision validation is
+        // disabled until the system reliably keeps skirt bones above leg colliders.
 
         // For now, just verify the collision system ran without crashes
         XCTAssertTrue(numBones > 0, "Model should have spring bones")

@@ -43,7 +43,7 @@ final class AlphaToCoverageTests: XCTestCase {
     /// edges instead of hard alpha testing. This reduces edge aliasing.
     func testMASKMaterialsSupportAlphaToCoverage() throws {
         // Arrange
-        var config = RendererConfig(strict: .off)
+        let config = RendererConfig(strict: .off)
         
         // Act - Create renderer with MSAA enabled
         let renderer = VRMRenderer(device: device, config: config)
@@ -130,7 +130,7 @@ final class AlphaToCoverageTests: XCTestCase {
     /// Alpha-to-coverage is only created for MASK materials
     func testOPAQUEMaterialsDoNotUseAlphaToCoverage() {
         // Arrange
-        var config = RendererConfig(strict: .off)
+        let config = RendererConfig(strict: .off)
         
         // Act
         let renderer = VRMRenderer(device: device, config: config)

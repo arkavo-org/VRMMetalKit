@@ -42,7 +42,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
     /// With sampleCount > 1, renderer must create a multisample render target.
     func testRendererCreatesMultisampleTextureWithMSAA() throws {
         // Arrange - Initialize renderer with MTKView to trigger pipeline setup
-        var config = RendererConfig(strict: .off, sampleCount: 4)
+        let config = RendererConfig(strict: .off, sampleCount: 4)
         let renderer = VRMRenderer(device: device, config: config)
         
         print("MSAA Enabled: \(renderer.usesMultisampling)")
@@ -72,7 +72,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         // Arrange
         let width = 1024
         let height = 768
-        var config = RendererConfig(strict: .off, sampleCount: 4)
+        let config = RendererConfig(strict: .off, sampleCount: 4)
         let renderer = VRMRenderer(device: device, config: config)
         
         // Act
@@ -93,7 +93,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
     /// With sampleCount = 1, no multisample texture needed.
     func testNoMultisampleTextureWithoutMSAA() throws {
         // Arrange
-        var config = RendererConfig(strict: .off, sampleCount: 1)
+        let config = RendererConfig(strict: .off, sampleCount: 1)
         let renderer = VRMRenderer(device: device, config: config)
         
         // Act
@@ -109,7 +109,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
     /// When rendering MASK materials with MSAA enabled, use A2C pipeline.
     func testMASKMaterialsUseAlphaToCoverageWithMSAA() throws {
         // Arrange
-        var config = RendererConfig(strict: .off, sampleCount: 4)
+        let config = RendererConfig(strict: .off, sampleCount: 4)
         let renderer = VRMRenderer(device: device, config: config)
         
         // Act & Assert
@@ -178,7 +178,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
     /// When MSAA enabled, render pass must use multisample textures.
     func testRenderPassDescriptorConfiguredForMultisample() throws {
         // Arrange
-        var config = RendererConfig(strict: .off, sampleCount: 4)
+        let config = RendererConfig(strict: .off, sampleCount: 4)
         let renderer = VRMRenderer(device: device, config: config)
         renderer.updateDrawableSize(CGSize(width: 512, height: 512))
         
@@ -206,7 +206,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
     /// The A2C pipeline must have isAlphaToCoverageEnabled = true.
     func testPipelineDescriptorHasAlphaToCoverageEnabled() throws {
         // Arrange
-        var config = RendererConfig(strict: .off, sampleCount: 4)
+        let config = RendererConfig(strict: .off, sampleCount: 4)
         let renderer = VRMRenderer(device: device, config: config)
         
         // Act
@@ -223,7 +223,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
     /// Resolve pass setup should be available for MSAA.
     func testResolveConfigurationExists() throws {
         // Arrange
-        var config = RendererConfig(strict: .off, sampleCount: 4)
+        let config = RendererConfig(strict: .off, sampleCount: 4)
         let renderer = VRMRenderer(device: device, config: config)
         
         // Act & Assert

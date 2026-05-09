@@ -169,9 +169,10 @@ final class RootMotionTests: XCTestCase {
         player.load(clip)
         player.applyRootMotion = true
         
-        // Initial position
-        let initialPosition = SIMD3<Float>(0, 0, 0)
-        
+        // Initial position would be SIMD3<Float>(0, 0, 0) — unused while
+        // root-motion API is stubbed.
+
+
         // Act: Apply animation
         player.update(deltaTime: 1.0, model: model)
         

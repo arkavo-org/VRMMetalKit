@@ -201,7 +201,6 @@ final class ZFightingDepthPrecisionTests: XCTestCase {
         print("-" * 50)
 
         var bestPrecision: Float = .infinity
-        var bestRatio: (near: Float, far: Float) = (0, 0)
 
         for (near, far) in testRatios {
             let precision = depthPrecisionAtDistance(
@@ -212,7 +211,6 @@ final class ZFightingDepthPrecisionTests: XCTestCase {
 
             if precision < bestPrecision {
                 bestPrecision = precision
-                bestRatio = (near, far)
             }
         }
 

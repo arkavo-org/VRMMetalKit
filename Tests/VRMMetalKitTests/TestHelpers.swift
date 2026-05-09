@@ -25,7 +25,7 @@ func assertQuaternionsEqual(
     _ q1: simd_quatf,
     _ q2: simd_quatf,
     tolerance: Float = 0.001,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
 ) {
     let dot = abs(simd_dot(q1.vector, q2.vector))
@@ -42,7 +42,7 @@ func assertQuaternionsEqual(
 func assertQuaternionIsIdentity(
     _ q: simd_quatf,
     tolerance: Float = 0.001,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
 ) {
     let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
@@ -255,7 +255,7 @@ func assertFloatsEqual(
     _ b: Float,
     tolerance: Float = 0.001,
     message: String = "",
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
 ) {
     let diff = abs(a - b)
@@ -273,7 +273,7 @@ func assertFloatInRange(
     _ value: Float,
     min: Float,
     max: Float,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
 ) {
     XCTAssertGreaterThanOrEqual(value, min, "Value \(value) below minimum \(min)", file: file, line: line)

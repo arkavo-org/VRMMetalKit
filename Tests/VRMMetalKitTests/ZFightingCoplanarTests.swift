@@ -285,8 +285,7 @@ final class ZFightingCoplanarTests: XCTestCase {
     // MARK: - Edge Case Tests
 
     func testVeryCloseToNearPlane() {
-        // Objects very close to near plane have best precision
-        let nearPlane: Float = 0.1
+        // Objects very close to near plane have best precision (nearPlane = 0.1)
         let objectDistance: Float = 0.15  // 15cm from camera
 
         let offsetNeeded: Float = 0.00001  // 0.01mm

@@ -5,10 +5,15 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 jobs:
   release:
     name: Create Release
     runs-on: macos-latest
+    permissions:
+      contents: write
 
     steps:
     - name: Checkout

@@ -70,7 +70,7 @@ final class ToonRampTests: XCTestCase {
 
         // High toony (sharp transition)
         let toonyHigh: Float = 0.95
-        let rampSharp = smoothstep(shift - toonyHigh * 0.5, shift + toonyHigh * 0.5, ndotl)
+        _ = smoothstep(shift - toonyHigh * 0.5, shift + toonyHigh * 0.5, ndotl)
 
         // Sharp transition should be closer to binary (0 or 1)
         // At NdotL=0.1, soft should give intermediate value, sharp should give value closer to middle
