@@ -131,7 +131,6 @@ final class MToonLightingIntegrationTests: XCTestCase {
         let rimIntensity: Float = 0.3
 
         let totalIntensity = keyIntensity + fillIntensity + rimIntensity
-        let normFactor: Float = 1.0  // Can be adjusted for artistic control
 
         // Weights should sum to 1.0 before normalization factor
         let keyWeight = keyIntensity / totalIntensity

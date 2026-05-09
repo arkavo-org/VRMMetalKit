@@ -19,7 +19,7 @@ final class SkeletonFilterManagerTests: XCTestCase {
             rotationFilter: .none,
             scaleFilter: .none
         )
-        var manager = SkeletonFilterManager(config: config)
+        let manager = SkeletonFilterManager(config: config)
 
         let joint = "spine"
 
@@ -71,7 +71,7 @@ final class SkeletonFilterManagerTests: XCTestCase {
             rotationFilter: .none,
             scaleFilter: .none
         )
-        var manager = SkeletonFilterManager(config: config)
+        let manager = SkeletonFilterManager(config: config)
 
         let joint = "leftHand"
 
@@ -117,12 +117,9 @@ final class SkeletonFilterManagerTests: XCTestCase {
             rotationFilter: .ema(alpha: 0.5),
             scaleFilter: .none
         )
-        var manager = SkeletonFilterManager(config: config)
+        let manager = SkeletonFilterManager(config: config)
 
         let joint = "head"
-
-        // Identity rotation
-        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
 
         // 90-degree rotation around Y (using axis-angle)
         let halfAngle = (Float.pi / 2) * 0.5
@@ -143,7 +140,7 @@ final class SkeletonFilterManagerTests: XCTestCase {
     /// Test that quaternion SLERP handles sign flipping correctly
     func testRotationFilterQuaternionSignFlipping() {
         let config = SkeletonSmoothingConfig.default
-        var manager = SkeletonFilterManager(config: config)
+        let manager = SkeletonFilterManager(config: config)
 
         let joint = "neck"
 
@@ -167,7 +164,7 @@ final class SkeletonFilterManagerTests: XCTestCase {
 
     /// Test that reset clears all filter state properly
     func testResetClearsFilterState() {
-        var manager = SkeletonFilterManager(config: .default)
+        let manager = SkeletonFilterManager(config: .default)
 
         let joint = "hips"
 
@@ -189,7 +186,7 @@ final class SkeletonFilterManagerTests: XCTestCase {
 
     /// Test resetAll clears all joints
     func testResetAllClearsAllJoints() {
-        var manager = SkeletonFilterManager(config: .default)
+        let manager = SkeletonFilterManager(config: .default)
 
         // Build state for multiple joints
         _ = manager.updatePosition(joint: "hips", position: SIMD3<Float>(1, 1, 1))
@@ -210,7 +207,7 @@ final class SkeletonFilterManagerTests: XCTestCase {
 
     /// Test that Vec3FilterState update performance is acceptable
     func testVec3FilterStatePerformance() {
-        var manager = SkeletonFilterManager(config: .default)
+        let manager = SkeletonFilterManager(config: .default)
 
         let joints = ["hips", "spine", "chest", "neck", "head",
                       "leftShoulder", "leftUpperArm", "leftLowerArm", "leftHand",
@@ -239,7 +236,7 @@ final class SkeletonFilterManagerTests: XCTestCase {
 
     /// Test full skeleton update performance (position + rotation)
     func testFullSkeletonUpdatePerformance() {
-        var manager = SkeletonFilterManager(config: .default)
+        let manager = SkeletonFilterManager(config: .default)
 
         let joints = ["hips", "spine", "chest", "neck", "head",
                       "leftUpperArm", "leftLowerArm", "rightUpperArm", "rightLowerArm"]
@@ -266,7 +263,7 @@ final class SkeletonFilterManagerTests: XCTestCase {
 
     /// Test handling of extreme position values
     func testExtremePositionValues() {
-        var manager = SkeletonFilterManager(config: .default)
+        let manager = SkeletonFilterManager(config: .default)
 
         let joint = "test"
 
@@ -289,7 +286,7 @@ final class SkeletonFilterManagerTests: XCTestCase {
 
     /// Test handling of NaN values (should not corrupt filter state)
     func testNaNHandling() {
-        var manager = SkeletonFilterManager(config: .default)
+        let manager = SkeletonFilterManager(config: .default)
 
         let joint = "test"
 

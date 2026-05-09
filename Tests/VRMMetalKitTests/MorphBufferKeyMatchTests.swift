@@ -357,9 +357,6 @@ final class MorphBufferKeyMatchTests: XCTestCase {
         let builder = VRMRenderItemBuilder()
         let result = builder.buildItems(model: model, frameCounter: 0)
 
-        // Group items by mesh to track what the global vs per-mesh indices would be
-        var previousMeshPrimitiveCount = 0
-
         for item in result.items {
             let meshIdx = item.meshIndex
             let globalPrimIdx = item.primitiveIndex

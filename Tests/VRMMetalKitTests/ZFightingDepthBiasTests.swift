@@ -36,7 +36,7 @@ final class ZFightingDepthBiasTests: XCTestCase {
         self.renderer = VRMRenderer(device: device)
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         renderer = nil
         device = nil
     }

@@ -220,19 +220,21 @@ final class VRMModelConvenienceTests: XCTestCase {
         // Test that concurrent access doesn't crash
         let expectation = XCTestExpectation(description: "Concurrent access")
         expectation.expectedFulfillmentCount = 2
-        
+
+        let model = self.model!
+
         DispatchQueue.global().async {
             for i in 0..<100 {
                 let rotation = simd_quatf(angle: Float(i) * 0.01, axis: SIMD3<Float>(0, 1, 0))
-                self.model.setLocalRotation(rotation, for: .head)
+                model.setLocalRotation(rotation, for: .head)
             }
             expectation.fulfill()
         }
-        
+
         DispatchQueue.global().async {
             for i in 0..<100 {
                 let translation = SIMD3<Float>(Float(i) * 0.01, 0, 0)
-                self.model.setHipsTranslation(translation)
+                model.setHipsTranslation(translation)
             }
             expectation.fulfill()
         }

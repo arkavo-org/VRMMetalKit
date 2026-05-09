@@ -21,7 +21,7 @@ func assertLagDuringFastMotion(
     bone: String,
     window: Range<Int>,
     minLagDegrees: Float,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
 ) {
     let inWindow = samples.filter { $0.bone == bone && window.contains($0.frame) }
@@ -69,7 +69,7 @@ func assertNoFlutter(
     settledWindow: Range<Int>,
     maxRMS: Float,
     minDecayRatio: Float,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
 ) {
     let inWindow = samples
@@ -127,7 +127,7 @@ func assertSpringChainsStable(
     bones: Set<String>? = nil,
     maxAbsoluteCoordinate: Float = 10.0,
     maxLinkLength: Float = 0.5,
-    file: StaticString = #file,
+    file: StaticString = #filePath,
     line: UInt = #line
 ) {
     var nanCount = 0

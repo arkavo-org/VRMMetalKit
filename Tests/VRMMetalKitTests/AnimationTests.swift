@@ -761,7 +761,7 @@ final class AnimationTests: XCTestCase {
                 var hasLargeRotation = false
 
                 print("\n  \(bone):")
-                for (i, t) in sampleTimes.enumerated() {
+                for (_, t) in sampleTimes.enumerated() {
                     let (rotation, translation, _) = track.sample(at: t)
 
                     if let r = rotation {
@@ -922,8 +922,8 @@ final class AnimationTests: XCTestCase {
         let vrmaFiles = ["VRMA_01.vrma", "VRMA_02.vrma", "VRMA_03.vrma",
                          "VRMA_04.vrma", "VRMA_05.vrma", "VRMA_06.vrma", "VRMA_07.vrma"]
 
-        let keyBones: [VRMHumanoidBone] = [.hips, .spine, .chest, .leftUpperArm, .rightUpperArm,
-                                            .leftLowerArm, .rightLowerArm, .leftUpperLeg, .rightUpperLeg]
+        _ = [VRMHumanoidBone.hips, .spine, .chest, .leftUpperArm, .rightUpperArm,
+             .leftLowerArm, .rightLowerArm, .leftUpperLeg, .rightUpperLeg]
 
         print("\n" + String(repeating: "=", count: 100))
         print("VRMA FILES COMPARISON - Upper Arm Z-Rotation at t=0")

@@ -143,7 +143,7 @@ final class SpringBoneRotationTests: XCTestCase {
 
         // After 90° Z-rotation, DOWN (0, -1, 0) should become SIDE (±1, 0, 0)
         // Using right-hand rule: rotating (0, -1, 0) by +90° around Z gives (-1, 0, 0)
-        let expectedX: Float = -1.0  // Or 1.0 depending on coordinate system handedness
+        // (expectedX would be ±1.0 depending on coordinate system handedness)
 
         // Check if direction is now horizontal (X or Z dominant, Y near zero)
         let isHorizontal = abs(rotatedBindDir.y) < 0.3 &&

@@ -87,8 +87,8 @@ final class AnimationLayeringTests: XCTestCase {
             return
         }
         
-        let baseRotation = model.nodes[leftArmIndex].rotation
-        
+        _ = model.nodes[leftArmIndex].rotation
+
         // Act: Add additive layer
         // TODO: This API doesn't exist yet - needs implementation
         // player.loadAdditive(additiveClip, layer: 1, weight: 1.0)
@@ -108,7 +108,7 @@ final class AnimationLayeringTests: XCTestCase {
         let baseClip = createIdleAnimation()
         
         // Create additive pose (breathing)
-        let breathingClip = createBreathingAnimation()
+        _ = createBreathingAnimation()
         
         // Apply both
         let player = AnimationPlayer()
@@ -153,7 +153,7 @@ final class AnimationLayeringTests: XCTestCase {
         
         // Assert: Should be approximately 0° (halfway between 45° and -45°)
         guard let humanoid = model.humanoid,
-              let hipsIndex = humanoid.getBoneNode(.hips) else {
+              humanoid.getBoneNode(.hips) != nil else {
             XCTFail("Model should have hips")
             return
         }

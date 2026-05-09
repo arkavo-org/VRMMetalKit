@@ -65,7 +65,7 @@ final class FacingAndPitchTests: XCTestCase {
         
         // Model's forward (+Z) after both rotations
         let modelForward = SIMD3<Float>(0, 0, 1)
-        let worldForward = combined.act(modelForward)
+        _ = combined.act(modelForward)
         
         // Should face toward camera (-Z in world space after stand-up)
         // After stand-up, model's Z becomes world's -Y

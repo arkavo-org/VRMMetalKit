@@ -250,7 +250,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
 
         // Get rest lengths from spring bone data
         guard let springBone = model.springBone,
-              let spring = springBone.springs.first else {
+              springBone.springs.first != nil else {
             XCTFail("No spring bone data")
             return
         }

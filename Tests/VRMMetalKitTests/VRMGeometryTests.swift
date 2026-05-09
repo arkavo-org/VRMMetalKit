@@ -383,20 +383,18 @@ final class VRMGeometryTests: XCTestCase {
 
     // MARK: - Index Buffer Type Tests
 
+    private func indexType(forVertexCount count: Int) -> MTLIndexType {
+        count <= 65535 ? .uint16 : .uint32
+    }
+
     func testIndexTypeUInt16() {
         // Less than 65536 vertices
-        let vertexCount = 1000
-        let indexType: MTLIndexType = vertexCount <= 65535 ? .uint16 : .uint32
-
-        XCTAssertEqual(indexType, .uint16)
+        XCTAssertEqual(indexType(forVertexCount: 1000), .uint16)
     }
 
     func testIndexTypeUInt32() {
         // More than 65535 vertices
-        let vertexCount = 100000
-        let indexType: MTLIndexType = vertexCount > 65535 ? .uint32 : .uint16
-
-        XCTAssertEqual(indexType, .uint32)
+        XCTAssertEqual(indexType(forVertexCount: 100000), .uint32)
     }
 
     func testIndexStrideCalculation() {
