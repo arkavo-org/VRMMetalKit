@@ -21,6 +21,19 @@ import MetalKit
 import simd
 import QuartzCore  // For CACurrentMediaTime
 
+/// VRM 1.0 spec per-frame update order: LookAt → Expression → Constraint → SpringBone
+///
+/// VRMMetalKit distributes this across two sites:
+/// - Expression weights are aggregated by `VRMExpressionController` (set by the user or `AnimationPlayer`).
+/// - `AnimationPlayer.update` applies node animation, solves constraints (step 4), then propagates
+///   world transforms (step 5).
+/// - `VRMRenderer.drawCore` runs SpringBone GPU simulation, then applies LookAt to eye-bone rotations.
+///
+/// The split is correct: LookAt writes only to eye-bone rotations, which are independent of
+/// the spring-physics bones read by SpringBone. SpringBone reads skeletal nodes that are not
+/// driven by LookAt, so running SpringBone before LookAt within `drawCore` does not violate
+/// the per-frame contract.
+
 /// VRMRenderer manages the rendering pipeline for VRM models using Metal.
 ///
 /// ## Thread Safety
@@ -111,6 +124,33 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         } else {
             // VRM 1.0 already faces +Z (towards camera at +Z), no rotation needed
             return matrix_identity_float4x4
+        }
+    }
+
+    // MARK: - Camera Mode (First-Person / Third-Person)
+
+    /// Camera perspective mode for VRM first-person rendering.
+    ///
+    /// Set to `.firstPerson` when rendering from the avatar's head perspective (e.g., in VR).
+    /// Head-skinned vertices and `firstPersonOnly` meshes are culled in first-person mode.
+    /// Third-person (the default) renders all meshes according to their annotation.
+    public enum VRMCameraMode {
+        /// Standard third-person view. All geometry renders normally. (Default)
+        case thirdPerson
+        /// First-person view from inside the avatar's head. Head-skinned vertices
+        /// and `thirdPersonOnly` meshes are hidden; `firstPersonOnly` meshes are shown.
+        case firstPerson
+    }
+
+    /// The current camera perspective mode. Defaults to `.thirdPerson`.
+    ///
+    /// Changing this property invalidates the render item cache so the new visibility
+    /// rules take effect on the next frame.
+    public var cameraMode: VRMCameraMode = .thirdPerson {
+        didSet {
+            if cameraMode != oldValue {
+                cacheNeedsRebuild = true
+            }
         }
     }
 
@@ -709,6 +749,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if !model.skins.isEmpty {
             skinningSystem?.setupForSkins(model.skins)
         }
+
+        // Pre-compute per-vertex first-person hidden flags for auto-annotated skinned meshes.
+        processFirstPersonAutoFlags(model: model, device: device)
 
         // Load expressions if available
         if let expressions = model.expressions {
@@ -1422,6 +1465,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         uniforms.additiveDirectionalRimEnabled = additiveDirectionalRimEnabled ? 1.0 : 0.0
         uniforms.additiveDirectionalRimPower = additiveDirectionalRimPower
 
+        // Camera mode for first-person vertex culling (0 = third-person, 1 = first-person).
+        uniforms.cameraMode = cameraMode == .firstPerson ? 1 : 0
+
         // DEBUG: Log lighting values to verify 3-point lighting is configured
         #if DEBUG
         if frameCounter % 60 == 0 {  // Log every second at 60fps
@@ -1546,6 +1592,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let materialRenderQueue = primitive.materialIndex.flatMap { idx in
                     idx < model.materials.count ? model.materials[idx].renderQueue : 2000
                 } ?? 2000
+
+                // First-person annotation filter (VRMC_vrm-1.0 §firstPerson).
+                // Skip this primitive if its node annotation excludes it from the current camera mode.
+                let fpAnnotation = firstPersonAnnotation(for: nodeIndex, in: model)
+                if !shouldRenderPrimitive(annotation: fpAnnotation, cameraMode: cameraMode) {
+                    globalPrimitiveIndex += 1
+                    continue
+                }
 
                 // OPTIMIZATION: Single face/body detection pass (consolidates 3 separate checks)
                 // Include body, clothing, and transparentZWrite materials for proper categorization
@@ -2358,6 +2412,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if frameCounter % 60 == 0 && primitive === item.mesh.primitives.first {
                     vrmLog("[SKIN DEBUG] Node '\(item.node.name ?? "unnamed")' mesh \(item.meshIndex) has NO skin - using rigid transform")
                 }
+            }
+
+            // Bind per-vertex first-person hidden flags for the skinned vertex shader.
+            // Always bind something valid; the shader only reads it when cameraMode == 1.
+            if let fpBuffer = primitive.firstPersonHiddenFlagsBuffer {
+                encoderStateCache.setVertexBuffer(encoder, fpBuffer, offset: 0, index: ResourceIndices.firstPersonHiddenFlagsBuffer)
+            } else {
+                // No flags computed (non-auto annotation or non-skinned mesh): bind the
+                // empty dummy buffer so Metal validation does not complain about a missing binding.
+                if emptyFloat3Buffer == nil {
+                    emptyFloat3Buffer = device.makeBuffer(length: MemoryLayout<SIMD3<Float>>.stride, options: .storageModeShared)
+                }
+                encoderStateCache.setVertexBuffer(encoder, emptyFloat3Buffer, offset: 0, index: ResourceIndices.firstPersonHiddenFlagsBuffer)
             }
 
             // Morphed positions are already set at the primary vertex buffer slot above
