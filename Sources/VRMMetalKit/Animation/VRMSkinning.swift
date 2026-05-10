@@ -24,6 +24,11 @@ import simd
 public class VRMSkinningSystem {
     private let device: MTLDevice
     public var jointMatricesBuffer: MTLBuffer?  // Made public for debugging/validation
+    /// Dedicated read-only buffer of identity matrices. Bound at the joint
+    /// matrices slot when the skinned pipeline draws a primitive whose owning
+    /// node has `skin == nil` (issue #161). Distinct from `jointMatricesBuffer`
+    /// so live updates cannot corrupt the identities.
+    public private(set) var identityJointMatricesBuffer: MTLBuffer?
     private var totalMatrixCount = 0
     private var lastUpdatedSkinIndex: Int? = nil  // Cache to avoid redundant updates
     private var debugFrameCount = 0
@@ -75,6 +80,22 @@ public class VRMSkinningSystem {
                 pointer[i] = float4x4(1)  // Identity matrix
             }
         }
+
+        allocateIdentityJointMatricesBuffer(matrixCount: paddedMatrixCount, matrixSize: matrixSize)
+    }
+
+    /// Allocate (once) the dedicated identity-matrix buffer used as the
+    /// rigid-fallback joint binding. Sized to match the live joint buffer's
+    /// padded matrix count so the shader can clamp/read any joint index safely.
+    private func allocateIdentityJointMatricesBuffer(matrixCount: Int, matrixSize: Int) {
+        guard identityJointMatricesBuffer == nil else { return }
+        let length = matrixCount * matrixSize
+        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else { return }
+        let pointer = buffer.contents().bindMemory(to: float4x4.self, capacity: matrixCount)
+        for i in 0..<matrixCount {
+            pointer[i] = matrix_identity_float4x4
+        }
+        identityJointMatricesBuffer = buffer
     }
 
     public func updateJointMatrices(for skin: VRMSkin, skinIndex: Int) {

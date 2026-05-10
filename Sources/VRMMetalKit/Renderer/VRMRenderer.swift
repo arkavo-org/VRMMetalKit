@@ -2410,11 +2410,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLog("[SKIN ERROR] Node '\(item.node.name ?? "unnamed")' has invalid skin index \(skinIndex) (max: \(model.skins.count - 1))")
                 }
             } else if hasSkinning {
-                // This node doesn't have a skin but we're in skinned pipeline
-                // This means it's a rigid mesh that should use the regular (non-skinned) pipeline
-                // For now, just pass identity matrices
+                // Rigid mesh in the skinned pipeline (node.skin == nil and the mesh
+                // doesn't carry usable JOINTS_0/WEIGHTS_0). Bind a dedicated
+                // identity-matrix buffer at the joint slot so this draw does NOT
+                // inherit whichever skin's joint palette was bound by the previous
+                // skinned draw (issue #161).
+                if let identityJoints = skinningSystem?.identityJointMatricesBuffer {
+                    encoderStateCache.setVertexBuffer(encoder, identityJoints, offset: 0, index: ResourceIndices.jointMatricesBuffer)
+                }
                 if frameCounter % 60 == 0 && primitive === item.mesh.primitives.first {
-                    vrmLog("[SKIN DEBUG] Node '\(item.node.name ?? "unnamed")' mesh \(item.meshIndex) has NO skin - using rigid transform")
+                    vrmLog("[SKIN DEBUG] Node '\(item.node.name ?? "unnamed")' mesh \(item.meshIndex) has NO skin - bound identity joint matrices")
                 }
             }
 
