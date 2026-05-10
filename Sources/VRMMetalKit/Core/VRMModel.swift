@@ -173,13 +173,38 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - Bounding Box Calculation
 
-    /// Cached union of all primitive local-space AABBs. Populated lazily on first
-    /// access from already-computed `VRMPrimitive.localMin/localMax`. Used by
-    /// the renderer for whole-model frustum culling without touching GPU buffers.
+    /// Union of all primitive local-space AABBs, computed from
+    /// `VRMPrimitive.localMin/localMax`. Used by the renderer for whole-model
+    /// frustum culling without touching GPU buffers.
+    ///
+    /// Populated lazily on first access, or eagerly via
+    /// `finalizeModelLocalBounds()` which `VRMModel.load(...)` calls once all
+    /// primitives are populated. Access is guarded by `_boundsLock` so reads
+    /// from any thread are safe (the model is `@unchecked Sendable`).
     private var _cachedLocalBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
+    private let _boundsLock = NSLock()
 
     public var modelLocalBounds: (min: SIMD3<Float>, max: SIMD3<Float>) {
+        _boundsLock.lock()
+        defer { _boundsLock.unlock() }
         if let b = _cachedLocalBounds { return b }
+        let bounds = computeModelLocalBoundsLocked()
+        _cachedLocalBounds = bounds
+        return bounds
+    }
+
+    /// Eagerly computes and caches `modelLocalBounds`. Call this once after
+    /// the model's meshes are populated (e.g. at the end of `load(...)`) so
+    /// subsequent concurrent reads from any thread hit the cached value
+    /// without contending on the lazy-compute path.
+    public func finalizeModelLocalBounds() {
+        _boundsLock.lock()
+        defer { _boundsLock.unlock() }
+        _cachedLocalBounds = computeModelLocalBoundsLocked()
+    }
+
+    /// Caller must hold `_boundsLock`.
+    private func computeModelLocalBoundsLocked() -> (min: SIMD3<Float>, max: SIMD3<Float>) {
         var lo = SIMD3<Float>(repeating: Float.infinity)
         var hi = SIMD3<Float>(repeating: -Float.infinity)
         var found = false
@@ -194,9 +219,7 @@ public class VRMModel: @unchecked Sendable {
             lo = SIMD3<Float>(-0.5, 0, -0.5)
             hi = SIMD3<Float>(0.5, 1.8, 0.5)
         }
-        let bounds = (min: lo, max: hi)
-        _cachedLocalBounds = bounds
-        return bounds
+        return (min: lo, max: hi)
     }
 
     /// Whole-model frustum cull. Returns `true` when the model's bind-pose
@@ -494,7 +517,11 @@ public class VRMModel: @unchecked Sendable {
             try model.initializeSpringBoneGPUSystem(device: device)
             await context?.updatePhase(.initializingPhysics, progress: 1.0)
         }
-        
+
+        // All meshes/primitives are now populated; pre-compute the model AABB so
+        // subsequent reads from any thread hit the cached value (#153).
+        model.finalizeModelLocalBounds()
+
         await context?.updatePhase(.complete, progress: 1.0)
 
         return model
