@@ -239,7 +239,8 @@ final class ConstraintSolverTests: XCTestCase {
 
         if case .roll(let sourceNode, let axis, let weight) = leftTwistConstraint?.constraint {
             XCTAssertEqual(sourceNode, 10)
-            XCTAssertEqual(axis, SIMD3<Float>(1, 0, 0))
+            XCTAssertEqual(axis, SIMD3<Float>(-1, 0, 0),
+                           "VRM 0.0 arm twist X axis must be negated (N6: coordinate flip for 180° Y rotation)")
             XCTAssertEqual(weight, 0.5)
         } else {
             XCTFail("Expected roll constraint for left arm twist")

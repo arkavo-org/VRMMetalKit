@@ -72,6 +72,11 @@ public class VRMExtensionParser {
         let specVersion: VRMSpecVersion
         if let versionStr = versionStr {
             specVersion = VRMSpecVersion(rawValue: versionStr) ?? .v0_0
+            // Warn on unrecognized VRMC_vrm specVersion for forward-compatibility awareness.
+            // The VRM 0.0 "version" field is a different concept; only warn for VRMC_vrm specVersion.
+            if vrmDict["specVersion"] != nil, specVersion == .v0_0, versionStr != "0.0" {
+                vrmLog("[VRMExtensionParser] WARNING: Unrecognized VRMC_vrm specVersion '\(versionStr)'. Expected '1.0'. Proceeding with best-effort parsing.")
+            }
         } else {
             // If no version field but has VRM 0.0 structure, assume 0.0
             specVersion = .v0_0
@@ -87,7 +92,7 @@ public class VRMExtensionParser {
             )
         }
         vrmLog("[VRMExtensionParser] Found meta with keys: \(metaDict.keys)")
-        let meta = try parseMeta(metaDict)
+        let meta = try parseMeta(metaDict, specVersion: specVersion)
 
         // Parse humanoid (required)
         guard let humanoidDict = vrmDict["humanoid"] as? [String: Any] else {
@@ -227,11 +232,24 @@ public class VRMExtensionParser {
         return result
     }
 
-    private func parseMeta(_ dict: [String: Any]) throws -> VRMMeta {
+    private func parseMeta(_ dict: [String: Any], specVersion: VRMSpecVersion) throws -> VRMMeta {
         // VRM 1.0 uses "licenseUrl", VRM 0.0 uses "otherLicenseUrl"
-        let licenseUrl = (dict["licenseUrl"] as? String) ??
-                        (dict["otherLicenseUrl"] as? String) ??
-                        ""
+        let licenseUrlValue = dict["licenseUrl"] as? String
+        let otherLicenseUrlValue = dict["otherLicenseUrl"] as? String
+
+        let licenseUrl: String
+        if specVersion != .v0_0 {
+            // VRM 1.0+: licenseUrl is REQUIRED and must be non-empty
+            guard let url = licenseUrlValue, !url.isEmpty else {
+                throw VRMError.invalidMeta(
+                    "licenseUrl is required by the VRM 1.0 spec (VRMC_vrm §meta) but is missing or empty. Add a valid license URL to the model's meta block."
+                )
+            }
+            licenseUrl = url
+        } else {
+            // VRM 0.0: tolerant — fall back to otherLicenseUrl or empty string
+            licenseUrl = licenseUrlValue ?? otherLicenseUrlValue ?? ""
+        }
 
         var meta = VRMMeta(licenseUrl: licenseUrl)
 
@@ -271,6 +289,10 @@ public class VRMExtensionParser {
         }
 
         meta.otherLicenseUrl = dict["otherLicenseUrl"] as? String
+        meta.allowExcessivelyViolentUsage = dict["allowExcessivelyViolentUsage"] as? Bool
+        meta.allowExcessivelySexualUsage = dict["allowExcessivelySexualUsage"] as? Bool
+        meta.allowPoliticalOrReligiousUsage = dict["allowPoliticalOrReligiousUsage"] as? Bool
+        meta.allowAntisocialOrHateUsage = dict["allowAntisocialOrHateUsage"] as? Bool
 
         return meta
     }
@@ -836,8 +858,12 @@ public class VRMExtensionParser {
                             continue
                         }
 
-                        // VRM 0.0 collider format
-                        let offset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+                        // VRM 0.0 collider format.
+                        // VRM 0.0 (Unity) uses a right-handed -Z forward system; VRM 1.0 / glTF uses +Z forward.
+                        // The model root is rotated 180° around Y to compensate, so collider offsets that are
+                        // local to their node must have X and Z negated to match the VRM 1.0 convention.
+                        let rawOffset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+                        let offset = SIMD3<Float>(-rawOffset.x, rawOffset.y, -rawOffset.z)
                         let radius = parseFloatValue(colliderDict["radius"]) ?? 0.0
 
                         // VRM 0.0 only supports spheres in most implementations
@@ -1033,17 +1059,21 @@ public class VRMExtensionParser {
     private func synthesizeTwistConstraints(humanoid: VRMHumanoid) -> [VRMNodeConstraint] {
         var constraints: [VRMNodeConstraint] = []
 
+        // VRM 0.0 (Unity) uses a right-handed -Z forward system; VRM 1.0 / glTF uses +Z forward.
+        // The model root is rotated 180° around Y to compensate, which maps local +X → local -X.
+        // Arm twist axes that were +X in VRM 0.0 space become -X in VRM 1.0 space.
+        // Y-aligned axes (legs) are unaffected by a Y rotation and keep their sign.
         let twistPairs: [(parent: VRMHumanoidBone, twist: VRMHumanoidBone, axis: SIMD3<Float>)] = [
-            // Upper arm twist bones (X axis is along the arm)
-            (.leftUpperArm, .leftUpperArmTwist, SIMD3<Float>(1, 0, 0)),
-            (.rightUpperArm, .rightUpperArmTwist, SIMD3<Float>(1, 0, 0)),
-            // Lower arm twist bones
-            (.leftLowerArm, .leftLowerArmTwist, SIMD3<Float>(1, 0, 0)),
-            (.rightLowerArm, .rightLowerArmTwist, SIMD3<Float>(1, 0, 0)),
-            // Upper leg twist bones (Y axis is along the leg in T-pose)
+            // Upper arm twist bones: VRM 0.0 +X → VRM 1.0 -X
+            (.leftUpperArm, .leftUpperArmTwist, SIMD3<Float>(-1, 0, 0)),
+            (.rightUpperArm, .rightUpperArmTwist, SIMD3<Float>(-1, 0, 0)),
+            // Lower arm twist bones: VRM 0.0 +X → VRM 1.0 -X
+            (.leftLowerArm, .leftLowerArmTwist, SIMD3<Float>(-1, 0, 0)),
+            (.rightLowerArm, .rightLowerArmTwist, SIMD3<Float>(-1, 0, 0)),
+            // Upper leg twist bones: Y axis is unchanged by 180° Y rotation
             (.leftUpperLeg, .leftUpperLegTwist, SIMD3<Float>(0, 1, 0)),
             (.rightUpperLeg, .rightUpperLegTwist, SIMD3<Float>(0, 1, 0)),
-            // Lower leg twist bones
+            // Lower leg twist bones: Y axis is unchanged by 180° Y rotation
             (.leftLowerLeg, .leftLowerLegTwist, SIMD3<Float>(0, 1, 0)),
             (.rightLowerLeg, .rightLowerLegTwist, SIMD3<Float>(0, 1, 0)),
         ]
