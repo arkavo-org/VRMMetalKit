@@ -235,7 +235,8 @@ VRM 0.0 stores spring bone data in `secondaryAnimation` instead of the `VRMC_spr
 | Spec Property | Default | Implementation | Status |
 |---------------|---------|----------------|--------|
 | `transparentWithZWrite` | false | ✅ `MToonMaterialUniforms` | **PASS** |
-| `renderQueueOffsetNumber` | 0 | ⚠️ Not yet implemented | **PENDING** |
+| `renderQueueOffsetNumber` | 0 | ✅ `VRMGeometry.swift:1218-1221` parses, base queue (OPAQUE=2000, MASK=2450, BLEND=3000) + offset stored in `renderQueueOffset`, used by `VRMRenderItemBuilder` for sorting | **PASS** |
+| `giEqualizationFactor` | 0.9 | ⚠️ Parsed; current shader is a non-spec lit/shade albedo mix instead of the spec's `lerp(rawGi(n), uniformedGi, factor)`. See `docs/MTOON_GI_SPEC.md` for the verbatim spec excerpt and the deviation rationale (no IBL/SH plumbing yet) | **NON-SPEC (DOCUMENTED)** |
 
 ### 5.3 Lighting Properties
 
@@ -377,9 +378,11 @@ VRM 0.0 stores spring bone data in `secondaryAnimation` instead of the `VRMC_spr
 
 | Feature | Specification | Priority | Notes |
 |---------|---------------|----------|-------|
-| `renderQueueOffsetNumber` | MToon | Low | Render ordering offset |
-| `lookAt` in VRMA | VRMC_vrm_animation | Medium | Eye gaze animation |
-| `VRMC_node_constraint` | VRM 1.0 | Low | Constraint system |
+| `lookAt` in VRMA (animation channels) | VRMC_vrm_animation | Medium | `VRMLookAtController` exists for runtime gaze targeting, but `VRMAnimationLoader` does not parse the lookAt channel. Tracking issue filed. |
+| `VRMC_node_constraint` aim + rotation | VRM 1.0 | Low | `roll` constraint (twist bones) is fully implemented; `aim` and `rotation` constraints are parsed but `solve()` no-ops both. Tracking issue filed. |
+| MToon `giEqualizationFactor` spec compliance | MToon 1.0 | Low (artistic mix proxy in place) | See `docs/MTOON_GI_SPEC.md`. Current shader is a non-spec lit/shade mix; spec implementation requires IBL/SH plumbing. |
+
+`renderQueueOffsetNumber` and the `custom` expression preset enum, formerly listed here, are implemented (see §5.2 / §3 respectively).
 
 ### 8.3 Conclusion
 

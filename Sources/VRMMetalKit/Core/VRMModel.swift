@@ -1003,8 +1003,11 @@ public class VRMModel: @unchecked Sendable {
             settlingFrames: 120
         )
 
-        // TODO: Populate bone parameters, rest lengths, and colliders
-        // This will be implemented in the compute system
+        // Bone parameters, rest lengths, and collider data are populated
+        // separately by `SpringBoneComputeSystem.populateSpringBoneData(model:)`,
+        // which is called by the renderer (see `VRMRenderer.swift` ~770) after
+        // the renderer's compute system is created. This function only
+        // allocates the GPU buffers and seeds the global params.
     }
 
     // MARK: - Floor Plane Colliders
