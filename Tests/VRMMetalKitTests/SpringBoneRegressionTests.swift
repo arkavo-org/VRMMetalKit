@@ -15,9 +15,10 @@ import simd
 
 /// Local regression gate for the SpringBone equilibrium described in #162.
 ///
-/// `VRMExtensionParser.swift:666` (parser quirk: `gravityPower=0 → 1.0`) and
-/// `SpringBonePredict.metal:107-142` (inertia compensation re-enabled in
-/// PR #143) form a load-bearing combination. Touching either in isolation
+/// The parser quirk in `VRMExtensionParser.parseSecondaryAnimation`
+/// (forcing `gravityPower=0 → 1.0` for VRM 0.x) and the upward-only
+/// inertia compensation block in the `springBonePredict` Metal kernel
+/// (re-enabled in PR #143) form a load-bearing combination. Touching either in isolation
 /// has historically broken hair behavior on AvatarSample_A. This test
 /// freezes a *summary characterization* of currently shipping behavior so
 /// any future spring-bone change must either preserve it or knowingly
@@ -272,13 +273,15 @@ final class SpringBoneRegressionTests: XCTestCase {
     private func compare(observed: [BoneSummary], baseline: [BoneSummary]) throws {
         XCTAssertGreaterThan(baseline.count, 0, "Baseline parsed empty")
         let baselineByBone = Dictionary(uniqueKeysWithValues: baseline.map { ($0.bone, $0) })
+        let observedByBone = Dictionary(uniqueKeysWithValues: observed.map { ($0.bone, $0) })
 
-        var missing: [String] = []
+        var addedInObserved: [String] = []
+        var droppedFromBaseline: [String] = []
         var worst: (bone: String, axis: String, delta: Float)? = nil
 
         for o in observed {
             guard let b = baselineByBone[o.bone] else {
-                missing.append(o.bone)
+                addedInObserved.append(o.bone)
                 continue
             }
             let deltas: [(String, Float)] = [
@@ -293,8 +296,14 @@ final class SpringBoneRegressionTests: XCTestCase {
             }
         }
 
-        XCTAssertEqual(missing.count, 0,
-                       "Bones present in observed but not baseline: \(missing.prefix(5))")
+        for b in baseline where observedByBone[b.bone] == nil {
+            droppedFromBaseline.append(b.bone)
+        }
+
+        XCTAssertEqual(addedInObserved.count, 0,
+                       "Spring bones added since baseline: \(addedInObserved.prefix(5))")
+        XCTAssertEqual(droppedFromBaseline.count, 0,
+                       "Spring bones dropped vs baseline: \(droppedFromBaseline.prefix(5))")
 
         if let w = worst {
             XCTFail("""
