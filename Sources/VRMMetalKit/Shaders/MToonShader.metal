@@ -121,8 +121,20 @@ struct MToonMaterial {
  // Block 12: 16 bytes - Version flag and UV offset
  uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
  float uvOffsetX;                           // 4 bytes - UV offset for texture remapping
- float uvOffsetY;                           // 4 bytes - UV offset for texture remapping  
+ float uvOffsetY;                           // 4 bytes - UV offset for texture remapping
  float uvScale;                             // 4 bytes - UV scale for texture remapping
+
+ // Block 13: 16 bytes - KHR_texture_transform (offset, rotation, scale X)
+ float textureTransformOffsetX;             // 4 bytes
+ float textureTransformOffsetY;             // 4 bytes
+ float textureTransformRotation;            // 4 bytes
+ float textureTransformScaleX;             // 4 bytes
+
+ // Block 14: 16 bytes - KHR_texture_transform scale Y + padding
+ float textureTransformScaleY;             // 4 bytes
+ float _ttPad0;                             // 4 bytes padding
+ float _ttPad1;                             // 4 bytes padding
+ float _ttPad2;                             // 4 bytes padding
 };
 
 struct VertexIn {
@@ -142,6 +154,16 @@ struct VertexOut {
  float3 viewDirection;
  float3 viewNormal; // For MatCap sampling
 };
+
+// KHR_texture_transform: apply static scale, rotation and offset to UV
+// Must be applied BEFORE animateUV (transform is static; UV animation is dynamic on top)
+static inline float2 applyTextureTransform(float2 uv, constant MToonMaterial& material) {
+ float c = cos(material.textureTransformRotation);
+ float s = sin(material.textureTransformRotation);
+ float2 scaled = uv * float2(material.textureTransformScaleX, material.textureTransformScaleY);
+ float2 rotated = float2(c * scaled.x - s * scaled.y, s * scaled.x + c * scaled.y);
+ return rotated + float2(material.textureTransformOffsetX, material.textureTransformOffsetY);
+}
 
 // UV Animation utility function (rotation first, then scroll)
 static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
@@ -237,7 +259,7 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  out.worldNormal = normalize((uniforms.normalMatrix * float4(morphedNormal, 0.0)).xyz);
 
  out.texCoord = in.texCoord;
- out.animatedTexCoord = animateUV(in.texCoord, material);
+ out.animatedTexCoord = animateUV(applyTextureTransform(in.texCoord, material), material);
  out.color = in.color;
 
  if (needsViewNormal(material, uniforms)) {
@@ -805,7 +827,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.worldNormal = worldNormal;
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
  out.texCoord = in.texCoord;
- out.animatedTexCoord = animateUV(in.texCoord, material);
+ out.animatedTexCoord = animateUV(applyTextureTransform(in.texCoord, material), material);
  out.color = in.color;
 
  // View direction already calculated above for edge attenuation

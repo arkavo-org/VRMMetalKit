@@ -118,11 +118,23 @@ struct MToonMaterial {
  uint32_t alphaMode;                        // 4 bytes
  float alphaCutoff;                         // 4 bytes
 
- // Block 12: 16 bytes - Version flag and padding
+ // Block 12: 16 bytes - Version flag and UV offset
  uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
- float _padding3;                           // 4 bytes
- float _padding4;                           // 4 bytes
- float _padding5;                           // 4 bytes
+ float uvOffsetX;                           // 4 bytes
+ float uvOffsetY;                           // 4 bytes
+ float uvScale;                             // 4 bytes
+
+ // Block 13: 16 bytes - KHR_texture_transform (offset, rotation, scale X)
+ float textureTransformOffsetX;             // 4 bytes
+ float textureTransformOffsetY;             // 4 bytes
+ float textureTransformRotation;            // 4 bytes
+ float textureTransformScaleX;             // 4 bytes
+
+ // Block 14: 16 bytes - KHR_texture_transform scale Y + padding
+ float textureTransformScaleY;             // 4 bytes
+ float _ttPad0;                             // 4 bytes padding
+ float _ttPad1;                             // 4 bytes padding
+ float _ttPad2;                             // 4 bytes padding
 };
 
 struct VertexIn {
