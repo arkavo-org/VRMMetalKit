@@ -225,10 +225,12 @@ final class MToonLightingIntegrationTests: XCTestCase {
         let size = MemoryLayout<MToonMaterialUniforms>.size
         let stride = MemoryLayout<MToonMaterialUniforms>.stride
 
-        // Should be 208 bytes (13 blocks of 16 bytes each)
+        // Should be 240 bytes (15 blocks of 16 bytes each)
         // Block 0-11: Standard material properties (192 bytes)
-        // Block 12: Version flag + UV offset fields (16 bytes) - added for mouth UV fix
-        XCTAssertEqual(stride, 208, "MToonMaterialUniforms should be 208 bytes for Metal alignment (13 blocks)")
+        // Block 12: Version flag + UV offset fields (16 bytes)
+        // Block 13: KHR_texture_transform offset + rotation + scaleX (16 bytes)
+        // Block 14: KHR_texture_transform scaleY + padding (16 bytes)
+        XCTAssertEqual(stride, 240, "MToonMaterialUniforms should be 240 bytes for Metal alignment (15 blocks)")
         XCTAssertLessThanOrEqual(size, stride)
     }
 }
