@@ -156,13 +156,23 @@ final class ZFightingRegressionTests: XCTestCase {
 
     // MARK: - Neck/Collar Tests
 
-    /// Regression test: Collar/Neck area Z-fighting
+    /// Regression test: Collar/Neck area Z-fighting (issue #109).
+    ///
+    /// At issue-filing the collar/neck region exhibited 13.45% flicker — the
+    /// worst region in the cluster. PR #113 (depth-bias mitigation) and
+    /// subsequent renderer work brought it under the issue's 3% target;
+    /// AvatarSample_A_1.0 currently produces a deterministic 2.69% (verified
+    /// byte-identical across 5 back-to-back runs).
+    ///
+    /// Threshold is set to the issue's stated 3% target — any future regression
+    /// above that will fail the test, signaling that something has reintroduced
+    /// the pre-#113 behavior on this region.
     func testCollarNeckZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
 
-        // Use higher threshold for collar/neck (known high-artifact region: ~17%)
-        let threshold: Float = 20.0
+        // Issue #109 target: ≤ 3.0% flicker rate.
+        let threshold: Float = 3.0
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0, 1.35, 0.4),
@@ -182,7 +192,7 @@ final class ZFightingRegressionTests: XCTestCase {
         XCTAssertLessThan(
             result.flickerRate,
             threshold,
-            "REGRESSION: Collar/Neck Z-fighting (\(result.flickerRate)%) exceeds model-specific threshold (\(threshold)%)"
+            "REGRESSION: Collar/Neck Z-fighting (\(result.flickerRate)%) exceeds the #109 target (\(threshold)%). Pre-#113 behavior was 13.45%."
         )
     }
 
