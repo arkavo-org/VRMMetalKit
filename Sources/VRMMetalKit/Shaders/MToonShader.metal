@@ -524,9 +524,27 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  }
 
  if (material.hasNormalTexture > 0) {
-     float3 normalMapSample = normalTexture.sample(textureSampler, uv).xyz;
-     normalMapSample = normalMapSample * 2.0 - 1.0;
-     normal = normalize(normal + normalMapSample * 0.8);
+     // Tangent-space normal map. Models without baked TANGENT vertex attributes
+     // (which is most VRM 1.0 content — see validator
+     // MESH_PRIMITIVE_GENERATED_TANGENT_SPACE) require synthesizing a TBN basis.
+     // Christian Schüler's screen-space-derivative TBN (2010) builds the basis
+     // per-fragment from worldPos and uv derivatives — no per-vertex tangents.
+     float3 nMap = normalTexture.sample(textureSampler, uv).xyz * 2.0 - 1.0;
+
+     float3 dp1 = dfdx(in.worldPosition);
+     float3 dp2 = dfdy(in.worldPosition);
+     float2 duv1 = dfdx(uv);
+     float2 duv2 = dfdy(uv);
+
+     float3 dp2perp = cross(dp2, normal);
+     float3 dp1perp = cross(normal, dp1);
+     float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+     float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+
+     float invmax = rsqrt(max(dot(T, T), dot(B, B)));
+     float3x3 TBN = float3x3(T * invmax, B * invmax, normal);
+
+     normal = normalize(TBN * nMap);
  }
 
  // DEBUG: Show magenta where normal was flipped (enable with debugUVs=11)

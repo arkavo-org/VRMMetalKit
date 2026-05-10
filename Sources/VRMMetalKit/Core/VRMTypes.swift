@@ -447,7 +447,7 @@ public struct VRMMToonMaterial {
     public var shadingShiftFactor: Float = 0.0
     public var shadingShiftTexture: VRMShadingShiftTexture?
     public var shadingToonyFactor: Float = 0.9
-    public var giIntensityFactor: Float = 0.05
+    public var giIntensityFactor: Float = 0.1
     public var matcapFactor: SIMD3<Float> = [1.0, 1.0, 1.0]  // White default for texture multiplication
     public var matcapTexture: Int?
     public var parametricRimColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]  // Rim should start disabled

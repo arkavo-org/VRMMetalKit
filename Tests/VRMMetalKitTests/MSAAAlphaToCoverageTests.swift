@@ -126,7 +126,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
             throw XCTSkip("Could not create test helper")
         }
         
-        let modelPath = "\(modelsDirectory)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(modelsDirectory)/AvatarSample_A_1.0.vrm.glb"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
                       "Test model not found")
         
@@ -273,7 +273,7 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
     // MARK: - Helper Methods
     
     private var modelsDirectory: String {
-        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? ""
+        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? getProjectRoot()
     }
     
     private func isValidSampleCount(_ count: Int) -> Bool {

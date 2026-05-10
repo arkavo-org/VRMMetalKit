@@ -78,29 +78,16 @@ final class ZFightingRegressionTests: XCTestCase {
     }
 
     private var museResourcesPath: String? {
-        let fileManager = FileManager.default
-
-        if let envPath = ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"] {
-            if fileManager.fileExists(atPath: "\(envPath)/AvatarSample_A.vrm.glb") {
-                return envPath
-            }
-        }
-
-        let relativePath = "\(projectRoot)/../Muse/Resources/VRM"
-        if fileManager.fileExists(atPath: "\(relativePath)/AvatarSample_A.vrm.glb") {
-            return relativePath
-        }
-
-        return nil
+        FileManager.default.fileExists(atPath: "\(projectRoot)/AvatarSample_A_1.0.vrm.glb") ? projectRoot : nil
     }
 
     private func loadAvatarSampleA() async throws -> VRMModel {
         guard let resourcesPath = museResourcesPath else {
             throw XCTSkip("Muse resources not found")
         }
-        let modelPath = "\(resourcesPath)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(resourcesPath)/AvatarSample_A_1.0.vrm.glb"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
-                      "AvatarSample_A.vrm.glb not found")
+                      "AvatarSample_A_1.0.vrm.glb not found")
         return try await VRMModel.load(from: URL(fileURLWithPath: modelPath), device: device)
     }
 

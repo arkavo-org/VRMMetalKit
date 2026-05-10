@@ -77,24 +77,9 @@ final class SkinningTests: XCTestCase {
         return fileManager.currentDirectoryPath
     }
 
-    /// Find Muse project resources directory (use MUSE_RESOURCES_PATH env var)
+    /// Directory containing the bundled VRM 1.0 fixture (project root).
     private var museResourcesPath: String? {
-        let fileManager = FileManager.default
-
-        // Check environment variable first
-        if let envPath = ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"] {
-            if fileManager.fileExists(atPath: "\(envPath)/AvatarSample_A.vrm.glb") {
-                return envPath
-            }
-        }
-
-        // Try relative to project root
-        let relativePath = "\(projectRoot)/../Muse/Resources/VRM"
-        if fileManager.fileExists(atPath: "\(relativePath)/AvatarSample_A.vrm.glb") {
-            return relativePath
-        }
-
-        return nil
+        FileManager.default.fileExists(atPath: "\(projectRoot)/AvatarSample_A_1.0.vrm.glb") ? projectRoot : nil
     }
 
     // MARK: - Helper Methods
@@ -820,9 +805,9 @@ final class SkinningTests: XCTestCase {
         guard let resourcesPath = museResourcesPath else {
             throw XCTSkip("Muse resources not found")
         }
-        let modelPath = "\(resourcesPath)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(resourcesPath)/AvatarSample_A_1.0.vrm.glb"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
-                      "AvatarSample_A.vrm.glb not found at \(modelPath)")
+                      "AvatarSample_A_1.0.vrm.glb not found at \(modelPath)")
 
         let modelURL = URL(fileURLWithPath: modelPath)
         return try await VRMModel.load(from: modelURL, device: device)

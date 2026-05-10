@@ -101,6 +101,16 @@ func printUsage() {
         --dump-bones <path>     Write per-frame bone trajectory CSV alongside the .mov
         --dump-bones-filter <regex>
                                 Regex on bone name to limit dump output (default: all)
+        --outline-scale <float> Multiply every material's outlineWidthFactor by this
+                                value. Default 1.0. Try 0.5 to soften toon outlines.
+                                Use 0.0 for hero/portrait stills — the toon outline
+                                pass renders dark silhouette edges on Face_SKIN that
+                                read as "drawn-on decals" at 3/4 head profiles. Off
+                                produces a cleaner profile at the cost of the cel
+                                outline aesthetic.
+        --hero-lighting         Use a softer 3-point lighting + lifted ambient for
+                                hero/portrait shots instead of the cel-shading default.
+                                Pair with `--outline-scale 0.0` for a clean stillshot.
         --help                  Show this help message
 
     EXAMPLES:
@@ -108,6 +118,10 @@ func printUsage() {
         swift run VRMVideoRenderer model.vrm anim.vrma output.mov --orbit --orbit-target face
         swift run VRMVideoRenderer model.vrm anim.vrma output.mov --orbit --orbit-target hips
         swift run VRMVideoRenderer model.vrm anim.vrma output.mov -w 1280 -h 720 -f 60
+        # Hero/portrait still extracted from a video render:
+        swift run VRMVideoRenderer model.vrm anim.vrma /tmp/hero.mov \\
+            -w 2048 -h 2048 -f 30 -d 4 --hero-lighting --outline-scale 0.0
+        ffmpeg -y -i /tmp/hero.mov -ss 2.5 -frames:v 1 -update 1 hero.png
     """)
 }
 
@@ -150,6 +164,8 @@ struct RenderOptions {
     var containerRotation: Bool = true  // Enable by default to fix "lying down" issue
     var dumpBonesPath: String? = nil
     var dumpBonesFilter: String? = nil
+    var outlineScale: Float = 1.0
+    var heroLighting: Bool = false
 }
 
 func parseArguments() -> RenderOptions? {
@@ -217,6 +233,13 @@ func parseArguments() -> RenderOptions? {
         case "--dump-bones-filter":
             i += 1
             if i < args.count { options.dumpBonesFilter = args[i] }
+        case "--outline-scale":
+            i += 1
+            if i < args.count, let val = Float(args[i]) {
+                options.outlineScale = max(0, val)
+            }
+        case "--hero-lighting":
+            options.heroLighting = true
         default:
             break
         }
@@ -313,6 +336,18 @@ struct VRMVideoRendererCLI {
         let modelURL = URL(fileURLWithPath: options.vrmPath)
         let model = try await VRMModel.load(from: modelURL, device: device)
         print("   ✅ Loaded: \(model.meta.name ?? "Unnamed")")
+
+        // Optionally scale every MToon material's outline width
+        if options.outlineScale != 1.0 {
+            var scaled = 0
+            for material in model.materials {
+                guard var mtoon = material.mtoon else { continue }
+                mtoon.outlineWidthFactor *= options.outlineScale
+                material.mtoon = mtoon
+                scaled += 1
+            }
+            print("   ✏️  outlineWidthFactor scaled by \(options.outlineScale) on \(scaled) MToon materials")
+        }
         
         // Load VRMA animation
         print("🎞️  Loading VRMA animation...")
@@ -342,12 +377,28 @@ struct VRMVideoRendererCLI {
         renderer.enableSpringBone = true
 
         // Set up lighting
-        renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                          color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
-        renderer.disableLight(1)
-        renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
-                          color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
-        renderer.setAmbientColor(SIMD3<Float>(0.03, 0.03, 0.05))
+        if options.heroLighting {
+            // Hero/portrait setup: 3-point with soft fill and lifted ambient.
+            // Key: front-right, slightly warm.
+            renderer.setLight(0, direction: SIMD3<Float>(0.3, -0.3, -0.85),
+                              color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 1.0)
+            // Fill: front-left, cool, half-strength.
+            renderer.setLight(1, direction: SIMD3<Float>(-0.5, -0.1, -0.85),
+                              color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.55)
+            // Rim: behind, slightly warm, edge highlight.
+            renderer.setLight(2, direction: SIMD3<Float>(0.0, -0.4, 0.85),
+                              color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.4)
+            renderer.setAmbientColor(SIMD3<Float>(0.18, 0.18, 0.2))
+            print("   💡 Lighting: hero (3-point, lifted ambient)")
+        } else {
+            // Default cel-shading: hard step shadows, dark ambient.
+            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
+            renderer.disableLight(1)
+            renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
+                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
+            renderer.setAmbientColor(SIMD3<Float>(0.03, 0.03, 0.05))
+        }
 
         // Create resolve texture (final output, non-multisampled)
         // Use BGRA format to match AVFoundation's pixel buffer format (kCVPixelFormatType_32BGRA)

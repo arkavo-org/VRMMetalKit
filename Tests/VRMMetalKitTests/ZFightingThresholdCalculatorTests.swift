@@ -38,12 +38,10 @@ final class ZFightingThresholdCalculatorTests: XCTestCase {
     /// Uses AvatarSample_A as the MASK material reference model
     func testMaskMaterialsGetHigherThreshold() async throws {
         // Arrange: Use AvatarSample_A which has MASK face materials
-        guard let modelPath = ProcessInfo.processInfo.environment["VRM_MODELS_PATH"].map({ "\($0)/AvatarSample_A.vrm.glb" }) else {
-            throw XCTSkip("VRM_MODELS_PATH not set")
-        }
+        let modelPath = getTestVRM10ModelPath()
         try XCTSkipIf(
             !FileManager.default.fileExists(atPath: modelPath),
-            "AvatarSample_A not found"
+            "AvatarSample_A_1.0.vrm.glb not found at \(modelPath)"
         )
 
         let maskModel = try await VRMModel.load(
@@ -108,12 +106,10 @@ final class ZFightingThresholdCalculatorTests: XCTestCase {
 
     /// Test threshold calculation with real AvatarSample_A model
     func testAvatarSampleA_GetsMaskThreshold() async throws {
-        guard let modelPath = ProcessInfo.processInfo.environment["VRM_MODELS_PATH"].map({ "\($0)/AvatarSample_A.vrm.glb" }) else {
-            throw XCTSkip("VRM_MODELS_PATH not set")
-        }
+        let modelPath = getTestVRM10ModelPath()
         try XCTSkipIf(
             !FileManager.default.fileExists(atPath: modelPath),
-            "AvatarSample_A not found"
+            "AvatarSample_A_1.0.vrm.glb not found at \(modelPath)"
         )
 
         let model = try await VRMModel.load(

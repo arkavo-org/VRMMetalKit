@@ -32,16 +32,14 @@ final class MaterialDiagnosticTests: XCTestCase {
     }
     
     private var modelPath: String? {
-        ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"].flatMap { 
-            let path = "\($0)/AvatarSample_A.vrm.glb"
-            return FileManager.default.fileExists(atPath: path) ? path : nil
-        }
+        let candidate = getTestVRM10ModelPath()
+        return FileManager.default.fileExists(atPath: candidate) ? candidate : nil
     }
     
     /// Test: Print all material shade colors from AvatarSample_A
     func testAvatarSampleAShadeColors() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -90,7 +88,7 @@ final class MaterialDiagnosticTests: XCTestCase {
     /// Test: Verify material uniforms are correctly created
     func testMaterialUniformsCreation() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -112,7 +110,7 @@ final class MaterialDiagnosticTests: XCTestCase {
     /// Test: Analyze shade multiply textures
     func testShadeMultiplyTextureAnalysis() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -146,7 +144,7 @@ final class MaterialDiagnosticTests: XCTestCase {
     /// Test: Analyze base color textures (for face detail verification)
     func testBaseColorTextureAnalysis() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -175,7 +173,7 @@ final class MaterialDiagnosticTests: XCTestCase {
     /// Test: Check render order and mesh assignments for face materials
     func testFaceMaterialRenderOrder() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -209,7 +207,7 @@ final class MaterialDiagnosticTests: XCTestCase {
     /// Test: Verify renderer correctly classifies face materials by name
     func testRendererFaceMaterialClassification() async throws {
         guard let path = modelPath else {
-            throw XCTSkip("AvatarSample_A.vrm.glb not found")
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
         }
         
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)

@@ -27,7 +27,7 @@ final class ZFightingMaterialTypeTests: XCTestCase {
     var helper: ZFightingTestHelper!
 
     private var modelsDirectory: String {
-        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? ""
+        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? getProjectRoot()
     }
 
     override func setUp() async throws {
@@ -50,7 +50,7 @@ final class ZFightingMaterialTypeTests: XCTestCase {
         let opaqueModels = ["Seed-san.vrm", "VRM1_Constraint_Twist_Sample.vrm"]
 
         // Models with MASK face materials
-        let maskModels = ["AvatarSample_A.vrm.glb"]
+        let maskModels = ["AvatarSample_A_1.0.vrm.glb"]
 
         var opaqueResults: [Float] = []
         var maskResults: [Float] = []
@@ -107,7 +107,7 @@ final class ZFightingMaterialTypeTests: XCTestCase {
         print(String(repeating: "=", count: 70))
 
         // Test AvatarSample_A at mouth/eye boundaries
-        let modelPath = "\(modelsDirectory)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(modelsDirectory)/AvatarSample_A_1.0.vrm.glb"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath), "Model not found")
 
         // Close-up of mouth area
@@ -147,7 +147,7 @@ final class ZFightingMaterialTypeTests: XCTestCase {
         print("TEST: Forced OPAQUE Mode Effect on Z-Fighting")
         print(String(repeating: "=", count: 70))
 
-        let modelPath = "\(modelsDirectory)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(modelsDirectory)/AvatarSample_A_1.0.vrm.glb"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath), "Model not found")
 
         _ = try await VRMModel.load(
@@ -187,7 +187,7 @@ final class ZFightingMaterialTypeTests: XCTestCase {
         print("CORRELATION: Material Count vs Z-Fighting")
         print(String(repeating: "=", count: 70))
 
-        let models = ["AvatarSample_A.vrm.glb", "Seed-san.vrm", "VRM1_Constraint_Twist_Sample.vrm"]
+        let models = ["AvatarSample_A_1.0.vrm.glb", "Seed-san.vrm", "VRM1_Constraint_Twist_Sample.vrm"]
         var results: [(name: String, faceMaterials: Int, flickerRate: Float)] = []
 
         for modelName in models {

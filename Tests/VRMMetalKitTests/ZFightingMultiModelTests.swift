@@ -31,13 +31,13 @@ final class ZFightingMultiModelTests: XCTestCase {
 
     /// Directory containing test VRM models
     private var modelsDirectory: String {
-        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? ""
+        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? getProjectRoot()
     }
 
     /// Available test models
     private var availableModels: [String] {
         let models = [
-            "AvatarSample_A.vrm.glb",
+            "AvatarSample_A_1.0.vrm.glb",
             "Seed-san.vrm",
             "VRM1_Constraint_Twist_Sample.vrm"
         ]
@@ -77,7 +77,7 @@ final class ZFightingMultiModelTests: XCTestCase {
 
     /// Test Z-fighting on AvatarSample_A model (known problematic)
     func testAvatarSampleA_FaceZFighting() async throws {
-        let modelPath = "\(modelsDirectory)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(modelsDirectory)/AvatarSample_A_1.0.vrm.glb"
         try await validateModelZFighting(
             modelPath: modelPath,
             modelName: "AvatarSample_A",
@@ -217,7 +217,7 @@ final class ZFightingMultiModelTests: XCTestCase {
     /// Validate that different face categories get different depth handling
     func testFaceCategoryDepthHandling() async throws {
         // This test validates the depth bias values are different per category
-        let modelPath = "\(modelsDirectory)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(modelsDirectory)/AvatarSample_A_1.0.vrm.glb"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath), "Model not found")
 
         let model = try await VRMModel.load(
@@ -303,7 +303,7 @@ final class ZFightingMultiModelTests: XCTestCase {
 /*
  KNOWN MODEL-SPECIFIC ISSUES:
 
- 1. AvatarSample_A.vrm.glb
+ 1. AvatarSample_A_1.0.vrm.glb
     - Face front: 9.29% flicker
     - Face side: 9.41% flicker
     - Collar/Neck: 13.45% flicker

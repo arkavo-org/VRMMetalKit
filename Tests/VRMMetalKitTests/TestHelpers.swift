@@ -242,9 +242,45 @@ func getTestModelPath(_ filename: String) -> String {
             return envFilePath
         }
     }
-    
+
     // Fall back to project root
     return "\(getProjectRoot())/\(filename)"
+}
+
+/// Filename of the bundled VRM 1.0 fixture in the project root.
+let testVRM10Filename = "AvatarSample_A_1.0.vrm.glb"
+
+/// Filename of the bundled VRM 0.0 fixture in the project root.
+let testVRM00Filename = "AvatarSample_A_0.0.vrm.glb"
+
+/// Path to the bundled VRM 1.0 fixture.
+/// Resolution order: VRM_TEST_VRM1_PATH (full path) > VRM_TEST_MODELS_PATH/<file> > project root.
+func getTestVRM10ModelPath() -> String {
+    if let direct = ProcessInfo.processInfo.environment["VRM_TEST_VRM1_PATH"], !direct.isEmpty {
+        return direct
+    }
+    return getTestModelPath(testVRM10Filename)
+}
+
+/// Path to the bundled VRM 0.0 fixture.
+/// Resolution order: VRM_TEST_VRM0_PATH (full path) > VRM_TEST_MODELS_PATH/<file> > project root.
+func getTestVRM00ModelPath() -> String {
+    if let direct = ProcessInfo.processInfo.environment["VRM_TEST_VRM0_PATH"], !direct.isEmpty {
+        return direct
+    }
+    return getTestModelPath(testVRM00Filename)
+}
+
+/// Throw `XCTSkip` if the file at `path` is missing, with a hint that names the expected fixture.
+func requireFixture(
+    _ path: String,
+    hint: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    if !FileManager.default.fileExists(atPath: path) {
+        throw XCTSkip("Fixture missing: \(hint) (looked at \(path))", file: file, line: line)
+    }
 }
 
 // MARK: - Float Comparison Helpers

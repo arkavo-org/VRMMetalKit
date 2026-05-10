@@ -135,7 +135,7 @@ final class HipSkirtTests: XCTestCase {
     /// Note: MASK material edge aliasing requires alpha-to-coverage, not depth bias.
     func testHipSkirtDepthBiasSeparation() async throws {
         // Arrange
-        let modelPath = "\(modelsDirectory)/AvatarSample_A.vrm.glb"
+        let modelPath = "\(modelsDirectory)/AvatarSample_A_1.0.vrm.glb"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
                       "Test model not found at \(modelPath)")
         
@@ -182,6 +182,6 @@ final class HipSkirtTests: XCTestCase {
     // MARK: - Helper Methods
     
     private var modelsDirectory: String {
-        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? ""
+        ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? getProjectRoot()
     }
 }
