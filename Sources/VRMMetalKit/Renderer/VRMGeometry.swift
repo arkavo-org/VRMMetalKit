@@ -1132,6 +1132,9 @@ public class VRMMaterial {
     // Blend mode from VRM 0.x (0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite)
     public var blendMode: Int = 0
 
+    // KHR_texture_transform parsed from baseColorTexture's textureInfo extensions
+    public var khrTextureTransform: GLTFKHRTextureTransform?
+
     /// Computed property: Is this material transparent but should write to depth?
     /// Used for proper layering of overlapping transparent materials (e.g., eyebrows over face skin)
     public var isTransparentWithZWrite: Bool {
@@ -1146,6 +1149,21 @@ public class VRMMaterial {
         // VRM 0.x: Infer from properties - transparent material with zWrite enabled
         let isTransparent = alphaMode == "BLEND" || blendMode == 2
         return isTransparent && zWriteEnabled
+    }
+
+    public enum PipelineCategory: Equatable {
+        case opaque
+        case blend
+        case blendZWrite
+    }
+
+    public static func pipelineCategory(alphaMode: String, transparentWithZWrite: Bool) -> PipelineCategory {
+        switch alphaMode.uppercased() {
+        case "BLEND":
+            return transparentWithZWrite ? .blendZWrite : .blend
+        default:
+            return .opaque
+        }
     }
 
     public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil, vrmVersion: VRMSpecVersion = .v1_0) {
@@ -1180,8 +1198,13 @@ public class VRMMaterial {
             metallicFactor = pbr.metallicFactor ?? 0.0
             roughnessFactor = pbr.roughnessFactor ?? 1.0
 
-            if let textureIndex = pbr.baseColorTexture?.index, textureIndex < textures.count {
-                baseColorTexture = textures[textureIndex]
+            if let baseColorTextureInfo = pbr.baseColorTexture {
+                if baseColorTextureInfo.index < textures.count {
+                    baseColorTexture = textures[baseColorTextureInfo.index]
+                }
+                if let transform = baseColorTextureInfo.khrTextureTransform {
+                    khrTextureTransform = transform
+                }
             }
         }
 
@@ -1218,9 +1241,32 @@ public class VRMMaterial {
             // VRM 1.0: renderQueueOffsetNumber for sorting within category
             // Compute final renderQueue from base + offset per VRM 1.0 spec
             if let rqOffset = mtoonExt["renderQueueOffsetNumber"] as? Int {
-                renderQueueOffset = rqOffset
+                // Clamp offset to spec-defined ranges per alphaMode / transparentWithZWrite
+                let clampedOffset: Int
+                switch alphaMode.uppercased() {
+                case "OPAQUE", "MASK":
+                    if rqOffset != 0 {
+                        vrmLog("[VRMMaterial] renderQueueOffsetNumber \(rqOffset) ignored for \(alphaMode) (spec requires 0)")
+                    }
+                    clampedOffset = 0
+                case "BLEND":
+                    if transparentWithZWrite {
+                        if rqOffset < 0 || rqOffset > 9 {
+                            vrmLog("[VRMMaterial] renderQueueOffsetNumber \(rqOffset) clamped to [0,9] for BLEND+zWrite=true")
+                        }
+                        clampedOffset = max(0, min(9, rqOffset))
+                    } else {
+                        if rqOffset < -9 || rqOffset > 9 {
+                            vrmLog("[VRMMaterial] renderQueueOffsetNumber \(rqOffset) clamped to [-9,9] for BLEND+zWrite=false")
+                        }
+                        clampedOffset = max(-9, min(9, rqOffset))
+                    }
+                default:
+                    clampedOffset = 0
+                }
+                renderQueueOffset = clampedOffset
 
-                // VRM 1.0 base render queue values per alpha mode
+                // VRM 1.0 base render queue values per alpha mode + transparentWithZWrite
                 let base: Int
                 switch alphaMode.uppercased() {
                 case "OPAQUE":
@@ -1228,11 +1274,15 @@ public class VRMMaterial {
                 case "MASK":
                     base = 2450
                 case "BLEND":
-                    base = 3000
+                    base = transparentWithZWrite ? 2510 : 3000
                 default:
                     base = 2000
                 }
-                renderQueue = base + rqOffset
+                renderQueue = base + clampedOffset
+            }
+            // Wire KHR_texture_transform from baseColorTexture into mtoon
+            if let transform = khrTextureTransform {
+                mtoon?.textureTransform = transform
             }
         }
         // VRM 0.x: material properties from document-level VRM extension
