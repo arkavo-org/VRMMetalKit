@@ -788,15 +788,18 @@ public class VRMExtensionParser {
                         // behavior that defaulted to gravity-on. Forcing 0→1.0 preserves that
                         // real-world behavior for VRM 0.x only; VRM 1.0 respects explicit 0.0.
                         //
-                        // ⚠️ LOAD-BEARING: This 0→1.0 substitution is paired with the
-                        // upward-only inertia compensation in SpringBonePredict.metal:107-142.
-                        // AvatarSample_A's hair tuning (`stiffness=0.85, gravityPower=0,
-                        // dragForce=0.4`) is calibrated against THIS combination; touching one
-                        // in isolation visibly breaks the model (see #162). The local
-                        // characterization gate `SpringBoneRegressionTests` freezes the
-                        // resulting trajectory — any change here will trip it. If that's
-                        // intentional (e.g. matching three-vrm post-conformance), regenerate
-                        // the baseline alongside the change.
+                        // ⚠️ LOAD-BEARING: this 0→1.0 substitution is paired with the
+                        // INERTIA COMPENSATION block inside the `springBonePredict`
+                        // Metal kernel. AvatarSample_A's hair tuning
+                        // (`stiffness=0.85, gravityPower=0, dragForce=0.4`) is
+                        // calibrated against THIS combination; touching either side
+                        // in isolation visibly breaks the model. Intent is the
+                        // VRM 0.x author tuning — not the test — but the local
+                        // characterization gate `SpringBoneRegressionTests` freezes
+                        // the resulting trajectory and will trip on any drift. If a
+                        // change here is intentional (e.g. matching three-vrm
+                        // post-conformance), regenerate the baseline alongside it.
+                        // See #162 for the equilibrium analysis.
                         let rawGravityPower: Float
                         if let gpFloat = groupDict["gravityPower"] as? Float {
                             rawGravityPower = gpFloat

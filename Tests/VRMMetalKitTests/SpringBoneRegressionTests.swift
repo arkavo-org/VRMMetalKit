@@ -33,11 +33,14 @@ import simd
 /// substep count and timing are deterministic and trajectories are
 /// reproducible across runs.
 ///
-/// Even with that, GPU threadgroup-reduction order and other low-level
-/// non-determinism contribute small noise (~1 mm). The gate uses
-/// per-bone **mean world position** averaged over the full 4-second
-/// simulation, with a 5 mm tolerance — large enough to absorb GPU
-/// noise, small enough to flag any real equilibrium shift.
+/// In practice, with dt pinned, two back-to-back regenerations produce
+/// byte-identical CSVs to 6-decimal precision (sub-µm), so any GPU
+/// threadgroup-order noise is well below the format's resolution. The
+/// gate uses per-bone **mean world position** averaged over the full
+/// 4-second simulation, with a 1 mm tolerance — generous against any
+/// future hardware that's noisier than current Apple Silicon, but
+/// tight enough to flag the multi-cm equilibrium shifts that
+/// real spring-bone changes produce.
 ///
 /// The test is **not** a correctness assertion against any other VRM
 /// implementation — that's QA's vrm-conformance suite. This is a
@@ -59,11 +62,12 @@ final class SpringBoneRegressionTests: XCTestCase {
     }
 
     /// Per-axis tolerance for mean-position comparison. With deltaTime
-    /// pinned to the renderer's 1/30 s clamp, GPU non-determinism is
-    /// the only remaining noise source (~1 mm); 5 mm gives comfortable
-    /// margin while still flagging the multi-cm drift real spring-bone
-    /// changes produce.
-    private static let meanTolerance: Float = 0.005
+    /// pinned to the renderer's 1/30 s clamp, back-to-back runs are
+    /// byte-identical to 6-decimal precision (sub-µm) on Apple Silicon.
+    /// 1 mm is loose enough to absorb plausibly noisier hardware while
+    /// still flagging the multi-cm shifts real spring-bone changes
+    /// produce.
+    private static let meanTolerance: Float = 0.001
 
     /// Minimum wall-clock between frames to force the renderer's
     /// `deltaTime` clamp to engage. 1/30 s + a few ms slack.
