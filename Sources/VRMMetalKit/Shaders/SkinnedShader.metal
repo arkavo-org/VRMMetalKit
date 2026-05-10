@@ -18,21 +18,23 @@
 #include <metal_stdlib>
 using namespace metal;
 
+constant float WEIGHT_THRESHOLD = 0.001;
+
 struct Uniforms {
  float4x4 modelMatrix;
  float4x4 viewMatrix;
  float4x4 projectionMatrix;
  float4x4 normalMatrix;
  // Light 0 (key light) - using float4 for Swift SIMD4 alignment
- float4 lightDirection;        // xyz = direction, w = padding
- float4 lightColor;            // xyz = color, w = padding
- float4 ambientColor;          // xyz = color, w = padding
+ float4 lightDirection;        // xyz = direction, w = unused
+ float4 lightColor;            // xyz = color, w = pre-calculated intensity
+ float4 ambientColor;          // xyz = color, w = unused
  // Light 1 (fill light)
- float4 light1Direction;       // xyz = direction, w = padding
- float4 light1Color;           // xyz = color, w = padding
+ float4 light1Direction;       // xyz = direction, w = unused
+ float4 light1Color;           // xyz = color, w = pre-calculated intensity
  // Light 2 (rim/back light)
- float4 light2Direction;       // xyz = direction, w = padding
- float4 light2Color;           // xyz = color, w = padding
+ float4 light2Direction;       // xyz = direction, w = unused
+ float4 light2Color;           // xyz = color, w = pre-calculated intensity
  // Other fields - packed into float4 for alignment
  float4 viewportSize;          // xy = size, zw = padding
  float4 nearFarPlane;          // x = near, y = far, zw = padding
@@ -210,7 +212,7 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  // Apply skeletal skinning with normalized weights
  // CRITICAL: Use RAW weights for threshold check to avoid accessing garbage joint indices
  float4x4 skinMatrix = float4x4(0.0);
- float threshold = 0.001;
+ float threshold = WEIGHT_THRESHOLD;
 
  // Safe buffer limit: clamp to 255 to prevent reading garbage memory
  // This allows valid indices (0-90+) while blocking garbage indices (65535, etc.)
@@ -298,7 +300,7 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
 vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
                          constant Uniforms& uniforms [[buffer(1)]],
                          constant float4x4* jointMatrices [[buffer(25)]],
-                         uint vertexID [[vertex_id]]) {
+                         [[maybe_unused]] uint vertexID [[vertex_id]]) {
  VertexOut out;
 
  // Store RAW weights for threshold check
@@ -315,7 +317,7 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
 
  // Apply skeletal skinning - use RAW weights for threshold check
  float4x4 skinMatrix = float4x4(0.0);
- float threshold = 0.001;
+ float threshold = WEIGHT_THRESHOLD;
 
  // Safe buffer limit: clamp to 255 to prevent reading garbage memory
  uint maxJoint = 255;
@@ -403,7 +405,7 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  // Apply skeletal skinning - use RAW weights for threshold check
  float4x4 skinMatrix = float4x4(0.0);
- float threshold = 0.001;
+ float threshold = WEIGHT_THRESHOLD;
 
  // Safe buffer limit: clamp to 255 to prevent reading garbage memory
  uint maxJoint = 255;

@@ -55,6 +55,7 @@ public class BufferLoader: @unchecked Sendable {
                 filePath: filePath
             )
         }
+        try validateAccessor(accessor, accessorIndex: accessorIndex, context: "loadAccessor<\(T.self)>")
 
         let components = componentCount(for: accessor.type)
         let componentSize = bytesPerComponent(accessor.componentType)
@@ -103,6 +104,7 @@ public class BufferLoader: @unchecked Sendable {
                 filePath: filePath
             )
         }
+        try validateAccessor(accessor, accessorIndex: accessorIndex, context: "loadAccessorAsFloat")
 
         let components = componentCount(for: accessor.type)
         let componentSize = bytesPerComponent(accessor.componentType)
@@ -149,6 +151,7 @@ public class BufferLoader: @unchecked Sendable {
                 filePath: filePath
             )
         }
+        try validateAccessor(accessor, accessorIndex: accessorIndex, context: "loadAccessorAsUInt32")
 
         let components = componentCount(for: accessor.type)
         let componentSize = bytesPerComponent(accessor.componentType)
@@ -445,9 +448,11 @@ public class BufferLoader: @unchecked Sendable {
             fileURL = baseURL.appendingPathComponent(uri)
         }
 
-        // Security check: Ensure the resolved path is within the base directory
-        let basePath = baseURL.standardized.path
-        let resolvedFilePath = fileURL.standardized.path
+        // Security check: Ensure the resolved path is within the base directory.
+        // `resolvingSymlinksInPath()` follows symlinks so a link inside the base
+        // directory cannot redirect reads to an arbitrary file outside it.
+        let basePath = baseURL.standardized.resolvingSymlinksInPath().path
+        let resolvedFilePath = fileURL.standardized.resolvingSymlinksInPath().path
         guard resolvedFilePath.hasPrefix(basePath) else {
             vrmLog("[BufferLoader] Security: Refusing to load file outside base directory: \(uri)")
             throw VRMError.invalidPath(
@@ -599,6 +604,35 @@ public class BufferLoader: @unchecked Sendable {
 
     private func bytesPerElement(componentType: Int, accessorType: String) -> Int {
         return bytesPerComponent(componentType) * componentCount(for: accessorType)
+    }
+
+    /// Validates that the accessor's componentType and type are known glTF values.
+    /// Rejects with `VRMError.invalidAccessor` rather than silently misreading bytes
+    /// (which previously caused either zeroed garbage data or a forced-cast crash in
+    /// `extractComponent` when `T` was not `Float`).
+    private func validateAccessor(_ accessor: GLTFAccessor, accessorIndex: Int, context: String) throws {
+        switch accessor.componentType {
+        case 5120, 5121, 5122, 5123, 5125, 5126:
+            break
+        default:
+            throw VRMError.invalidAccessor(
+                accessorIndex: accessorIndex,
+                reason: "Unknown componentType \(accessor.componentType); expected 5120 (BYTE), 5121 (UBYTE), 5122 (SHORT), 5123 (USHORT), 5125 (UINT), or 5126 (FLOAT)",
+                context: context,
+                filePath: filePath
+            )
+        }
+        switch accessor.type {
+        case "SCALAR", "VEC2", "VEC3", "VEC4", "MAT2", "MAT3", "MAT4":
+            break
+        default:
+            throw VRMError.invalidAccessor(
+                accessorIndex: accessorIndex,
+                reason: "Unknown accessor type '\(accessor.type)'; expected SCALAR, VEC2, VEC3, VEC4, MAT2, MAT3, or MAT4",
+                context: context,
+                filePath: filePath
+            )
+        }
     }
 }
 

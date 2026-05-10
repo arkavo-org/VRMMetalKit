@@ -670,10 +670,18 @@ public class VRMExpressionController: @unchecked Sendable {
     }
 
     private func applyExpressionToMeshWeights(_ expression: VRMExpression, weight: Float) {
-        // Apply morph target binds per mesh
+        // Apply morph target binds per mesh. Reject binds whose morphIndex is
+        // negative or beyond the per-mesh cap so a malicious VRM cannot grow
+        // meshMorphWeights to an arbitrary size (DoS via unbounded allocation)
+        // or crash the loader by indexing with a negative value.
         for bind in expression.morphTargetBinds {
             let meshIndex = bind.node  // 'node' is actually mesh index in VRM 0.0
             let morphIndex = bind.index
+
+            guard morphIndex >= 0, morphIndex < maxMorphTargets else {
+                vrmLog("[VRMExpressionController] Skipping out-of-range morphIndex \(morphIndex) (cap \(maxMorphTargets))")
+                continue
+            }
 
             // Grow weights array to accommodate morphIndex
             var arr = meshMorphWeights[meshIndex] ?? []
@@ -695,7 +703,7 @@ public class VRMExpressionController: @unchecked Sendable {
 
 
 
-    private let maxMorphTargets = 64
+    private let maxMorphTargets = VRMConstants.Rendering.maxMorphTargets
 }
 
 // MARK: - Morph Target Shader
