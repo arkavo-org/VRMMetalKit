@@ -131,7 +131,7 @@ extension VRMRenderer {
     ///     - `baseColorFactor.rgb` and `shadeColorFactor` collapse to black.
     /// - For all other materials:
     ///     - `baseColorFactor.rgb` = 0, `shadeColorFactor` = 0,
-    ///       `emissiveFactor` = 0, `matcapFactor` = 0, `giIntensityFactor` = 0
+    ///       `emissiveFactor` = 0, `matcapFactor` = 0, `giEqualizationFactor` = 0
     ///     - MToon's parametric rim disabled (the additive directional rim
     ///       takes over via the shader path).
     public func applySilhouetteMode(model: VRMModel,
@@ -191,7 +191,7 @@ extension VRMRenderer {
         material.baseColorFactor = SIMD4<Float>(0, 0, 0, material.baseColorFactor.w)
         if var mtoon = material.mtoon {
             mtoon.shadeColorFactor = SIMD3<Float>(0, 0, 0)
-            mtoon.giIntensityFactor = 0
+            mtoon.giEqualizationFactor = 0
             mtoon.parametricRimColorFactor = SIMD3<Float>(0, 0, 0)
             mtoon.parametricRimLiftFactor = 0
             mtoon.matcapFactor = SIMD3<Float>(0, 0, 0)
@@ -207,7 +207,7 @@ extension VRMRenderer {
         material.emissiveFactor = SIMD3<Float>(0, 0, 0)
         if var mtoon = material.mtoon {
             mtoon.shadeColorFactor = SIMD3<Float>(0, 0, 0)
-            mtoon.giIntensityFactor = 0
+            mtoon.giEqualizationFactor = 0
             mtoon.parametricRimColorFactor = SIMD3<Float>(0, 0, 0)
             mtoon.parametricRimLiftFactor = 0
             mtoon.matcapFactor = SIMD3<Float>(0, 0, 0)
