@@ -32,9 +32,9 @@ public struct MToonMaterialUniforms {
     public var baseColorFactor: SIMD4<Float> = [1, 1, 1, 1]        // 16 bytes
 
     // Block 1: 16 bytes - Shade and basic factors (packed float3 + float)
-    public var shadeColorR: Float = 0.9
-    public var shadeColorG: Float = 0.9
-    public var shadeColorB: Float = 0.9
+    public var shadeColorR: Float = 0.0
+    public var shadeColorG: Float = 0.0
+    public var shadeColorB: Float = 0.0
     public var shadingToonyFactor: Float = 0.9
 
     // Block 2: 16 bytes - Material factors (float + packed float3)
@@ -63,15 +63,15 @@ public struct MToonMaterialUniforms {
 
     // Block 6: 16 bytes - Rim lighting part 2
     public var parametricRimLiftFactor: Float = 0.0
-    public var rimLightingMixFactor: Float = 0.0
+    public var rimLightingMixFactor: Float = 1.0
     public var hasRimMultiplyTexture: Int32 = 0
     private var _padding1: Float = 0.0
 
     // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
     public var outlineWidthFactor: Float = 0.0
-    public var outlineColorR: Float = 1.0
-    public var outlineColorG: Float = 1.0
-    public var outlineColorB: Float = 1.0
+    public var outlineColorR: Float = 0.0
+    public var outlineColorG: Float = 0.0
+    public var outlineColorB: Float = 0.0
 
     // Block 8: 16 bytes - Outline properties part 2
     public var outlineLightingMixFactor: Float = 1.0
@@ -102,6 +102,18 @@ public struct MToonMaterialUniforms {
     public var uvOffsetX: Float = 0.0  // UV offset for texture remapping (e.g., face overlays)
     public var uvOffsetY: Float = 0.0  // UV offset for texture remapping
     public var uvScale: Float = 1.0    // UV scale for texture remapping
+
+    // Block 13: 16 bytes - KHR_texture_transform (offset, rotation, scale)
+    public var textureTransformOffsetX: Float = 0.0
+    public var textureTransformOffsetY: Float = 0.0
+    public var textureTransformRotation: Float = 0.0
+    public var textureTransformScaleX: Float = 1.0
+
+    // Block 14: 16 bytes - KHR_texture_transform scale Y + padding
+    public var textureTransformScaleY: Float = 1.0
+    private var _ttPad0: Float = 0.0
+    private var _ttPad1: Float = 0.0
+    private var _ttPad2: Float = 0.0
 
     public init() {}
 
@@ -169,6 +181,14 @@ public struct MToonMaterialUniforms {
 
         self.hasShadeMultiplyTexture = mtoon.shadeMultiplyTexture != nil ? 1 : 0
         self.hasShadingShiftTexture = mtoon.shadingShiftTexture != nil ? 1 : 0
+
+        if let transform = mtoon.textureTransform {
+            self.textureTransformOffsetX = transform.offset.x
+            self.textureTransformOffsetY = transform.offset.y
+            self.textureTransformRotation = transform.rotation
+            self.textureTransformScaleX = transform.scale.x
+            self.textureTransformScaleY = transform.scale.y
+        }
     }
 
     // Validation function to check for correctness
