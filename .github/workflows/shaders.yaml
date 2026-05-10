@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   metal:
-    name: Compile + freshness check
+    name: Compile
     runs-on: macos-latest
     timeout-minutes: 15
 
@@ -42,20 +42,12 @@ jobs:
         # `make shaders` compiles each .metal file with `xcrun metal -c`
         # and packs them into the metallib. Any compile error fails this
         # step (warnings are not errors today; see #171 follow-up).
+        #
+        # Freshness note: Metal compilation is byte-deterministic only
+        # for identical Xcode/Metal compiler versions. A byte-equality
+        # check against the committed metallib false-positives whenever
+        # local vs. CI Xcode differ (observed: 240164 vs 240196 bytes
+        # for the same sources). Real freshness needs a content-
+        # equivalence check via `xcrun metal-objdump` function-list
+        # comparison — tracked separately as a #171 follow-up.
         run: make shaders
-
-      - name: Verify committed metallib is fresh
-        # Metal compilation is byte-deterministic on identical Xcode
-        # versions, so a non-empty diff means the committed metallib
-        # is out-of-date relative to the .metal sources. Fail with a
-        # clear remediation hint.
-        run: |
-          if ! git diff --quiet Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib; then
-            echo "::error::Committed VRMMetalKitShaders.metallib is stale relative to .metal sources."
-            echo ""
-            echo "Run 'make shaders' locally and commit the updated metallib."
-            echo "Diff summary:"
-            git diff --stat Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
-            exit 1
-          fi
-          echo "Committed metallib matches a fresh compile."
