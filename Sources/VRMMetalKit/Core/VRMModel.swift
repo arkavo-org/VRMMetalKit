@@ -451,6 +451,23 @@ public class VRMModel: @unchecked Sendable {
             vrmLog("[VRMModel] Parsed GLTF document")
         }
 
+        // Validate extensionsRequired against the set of extensions this runtime supports.
+        // Per glTF spec §3.2: if any required extension is unsupported, loading MUST fail.
+        let supportedExtensions: Set<String> = [
+            "VRMC_vrm",
+            "VRMC_springBone",
+            "VRMC_node_constraint",
+            "VRMC_materials_mtoon",
+            "KHR_texture_transform",
+            "KHR_materials_unlit",
+        ]
+        if let required = document.extensionsRequired {
+            let unsupported = Set(required).subtracting(supportedExtensions)
+            if !unsupported.isEmpty {
+                throw VRMError.unsupportedRequiredExtension(unsupported.sorted())
+            }
+        }
+
         // Check for VRM 1.0 (VRMC_vrm) or VRM 0.0 (VRM)
         let vrmExtension = document.extensions?["VRMC_vrm"] ?? document.extensions?["VRM"]
         guard let vrmExtension = vrmExtension else {
@@ -1410,6 +1427,12 @@ public enum VRMError: Error {
     // Material Errors
     case invalidMaterial(materialIndex: Int, reason: String, filePath: String?)
     
+    // Meta Errors
+    case invalidMeta(String)
+
+    // Extension Validation Errors
+    case unsupportedRequiredExtension([String])
+
     // Loading Errors
     case loadingCancelled
 }
@@ -1614,12 +1637,35 @@ extension VRMError: LocalizedError {
             VRM MToon Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md
             """
             
+        case .invalidMeta(let reason):
+            return """
+            ❌ Invalid VRM Meta
+
+            Reason: \(reason)
+
+            Suggestion: Ensure the VRM model's meta block includes all required fields. For VRM 1.0, 'licenseUrl' is required by the VRMC_vrm spec.
+
+            VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/meta.md
+            """
+
+        case .unsupportedRequiredExtension(let extensions):
+            let list = extensions.joined(separator: ", ")
+            return """
+            ❌ Unsupported Required Extension(s)
+
+            Required extensions not supported by this runtime: \(list)
+
+            Suggestion: This glTF/VRM file requires extensions that VRMMetalKit does not implement. Check whether a newer version of VRMMetalKit supports these extensions, or export the model without requiring them.
+
+            glTF Spec: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#specifying-extensions
+            """
+
         case .loadingCancelled:
             return """
             ⚠️ Loading Cancelled
-            
+
             The VRM model loading was cancelled by the user.
-            
+
             Suggestion: If this was unexpected, check that:
             • The loading task wasn't explicitly cancelled
             • The parent Task wasn't cancelled

@@ -708,7 +708,7 @@ public struct SkeletonDefinition {
 
 extension VRMMeta {
     static func `default`() -> VRMMeta {
-        var meta = VRMMeta(licenseUrl: "")
+        var meta = VRMMeta(licenseUrl: "https://vrm.dev/licenses/1.0/")
         meta.name = "VRMBuilder Character"
         meta.version = "1.0"
         meta.authors = ["VRMBuilder"]

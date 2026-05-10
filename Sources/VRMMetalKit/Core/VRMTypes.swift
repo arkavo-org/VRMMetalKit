@@ -264,6 +264,15 @@ public struct VRMMeta {
     public var allowRedistribution: Bool?
     public var modify: VRMModifyPermission?
     public var otherLicenseUrl: String?
+    public var allowExcessivelyViolentUsage: Bool?
+    public var allowExcessivelySexualUsage: Bool?
+    public var allowPoliticalOrReligiousUsage: Bool?
+    public var allowAntisocialOrHateUsage: Bool?
+
+    public var allowExcessivelyViolentUsageOrDefault: Bool { allowExcessivelyViolentUsage ?? false }
+    public var allowExcessivelySexualUsageOrDefault: Bool { allowExcessivelySexualUsage ?? false }
+    public var allowPoliticalOrReligiousUsageOrDefault: Bool { allowPoliticalOrReligiousUsage ?? false }
+    public var allowAntisocialOrHateUsageOrDefault: Bool { allowAntisocialOrHateUsage ?? false }
 
     public init(licenseUrl: String) {
         self.licenseUrl = licenseUrl

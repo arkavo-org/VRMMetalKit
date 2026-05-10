@@ -164,7 +164,7 @@ final class VRM1_0MaterialExtensionTests: XCTestCase {
         var vrmcVrm: [String: Any] = ["specVersion": "1.0"]
         vrmcVrm["meta"] = [
             "name": "MToon Test Model",
-            "licenseUrl": "",
+            "licenseUrl": "https://vrm.dev/licenses/1.0/",
             "authors": ["VRMBuilder"],
         ]
         if let humanoid = vrm.humanoid {

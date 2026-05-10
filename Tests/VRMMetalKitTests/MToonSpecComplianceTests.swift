@@ -375,7 +375,7 @@ final class MToonSpecComplianceTests: XCTestCase {
 
         var extensions = gltfDict["extensions"] as? [String: Any] ?? [:]
         var vrmcVrm: [String: Any] = ["specVersion": "1.0"]
-        vrmcVrm["meta"] = ["name": "Test", "licenseUrl": ""]
+        vrmcVrm["meta"] = ["name": "Test", "licenseUrl": "https://vrm.dev/licenses/1.0/"]
         if let humanoid = vrm.humanoid {
             var humanBonesDict: [String: Any] = [:]
             for (bone, humanBone) in humanoid.humanBones {
