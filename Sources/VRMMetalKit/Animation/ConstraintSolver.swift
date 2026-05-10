@@ -24,8 +24,8 @@ import simd
 ///
 /// ## Supported Constraint Types
 /// - **Roll**: Transfers rotation around a specific axis (for twist bones)
-/// - **Aim**: Orients target to point at source (not yet implemented)
-/// - **Rotation**: Copies full rotation from source (not yet implemented)
+/// - **Aim**: Orients target to point at source
+/// - **Rotation**: Copies full rotation from source
 ///
 /// ## Usage
 /// ```swift
@@ -38,13 +38,17 @@ public final class ConstraintSolver: @unchecked Sendable {
 
     /// Solve all constraints for the given nodes.
     ///
-    /// Call this after animation updates but before world transform propagation.
+    /// Constraints are solved in topological dependency order so that a source node's
+    /// rotation is finalised before any target that reads from it. Cycles are detected
+    /// and skipped (with a compile-flag-gated warning).
     ///
     /// - Parameters:
     ///   - constraints: The constraints to solve
     ///   - nodes: The model's nodes (will be modified)
     public func solve(constraints: [VRMNodeConstraint], nodes: [VRMNode]) {
-        for constraint in constraints {
+        let sorted = topologicalSort(constraints: constraints, nodeCount: nodes.count)
+
+        for constraint in sorted {
             guard constraint.targetNode < nodes.count else { continue }
 
             switch constraint.constraint {
@@ -57,14 +61,104 @@ public final class ConstraintSolver: @unchecked Sendable {
                     weight: weight
                 )
 
-            case .aim(_, _, _):
-                break
+            case .aim(let sourceNode, let aimAxis, let weight):
+                guard sourceNode < nodes.count else { continue }
+                solveAimConstraint(
+                    source: nodes[sourceNode],
+                    target: nodes[constraint.targetNode],
+                    aimAxis: aimAxis,
+                    weight: weight
+                )
 
-            case .rotation(_, _):
-                break
+            case .rotation(let sourceNode, let weight):
+                guard sourceNode < nodes.count else { continue }
+                solveRotationConstraint(
+                    source: nodes[sourceNode],
+                    target: nodes[constraint.targetNode],
+                    weight: weight
+                )
             }
         }
     }
+
+    // MARK: - Topological Sort
+
+    /// Sort constraints so each target is solved after all its direct sources.
+    ///
+    /// Uses Kahn's algorithm. Constraints that form part of a cycle are omitted
+    /// from the result (their targets keep their current rotation for this frame).
+    private func topologicalSort(constraints: [VRMNodeConstraint], nodeCount: Int) -> [VRMNodeConstraint] {
+        guard constraints.count > 1 else { return constraints }
+
+        // Build a map from constraintIndex → sourceNodeIndex for dependency tracking.
+        // A constraint at index i has an edge: sourceNode → targetNode
+        // We want to process constraints whose source has no pending constraint targeting it first.
+
+        let n = constraints.count
+        var inDegree = [Int](repeating: 0, count: n)
+        // adjacency: when constraint[i]'s target is the source of constraint[j], j depends on i
+        var adj = [[Int]](repeating: [], count: n)
+
+        // VRMC_node_constraint-1.0: at most one constraint per target node.
+        // If two constraints share a target, the later one wins (the dictionary overwrites).
+        var nodeToConstraintIndex = [Int: Int]()
+        for (i, c) in constraints.enumerated() {
+            #if VRM_METALKIT_ENABLE_LOGS
+            if let existing = nodeToConstraintIndex[c.targetNode] {
+                vrmLog("[ConstraintSolver] Warning: duplicate constraint target node \(c.targetNode); constraint #\(existing) shadowed by #\(i)")
+            }
+            #endif
+            nodeToConstraintIndex[c.targetNode] = i
+        }
+
+        for (j, c) in constraints.enumerated() {
+            let srcNode = sourceNodeIndex(of: c)
+            if let i = nodeToConstraintIndex[srcNode] {
+                adj[i].append(j)
+                inDegree[j] += 1
+            }
+        }
+
+        var queue = [Int]()
+        for i in 0..<n where inDegree[i] == 0 {
+            queue.append(i)
+        }
+
+        var result = [VRMNodeConstraint]()
+        result.reserveCapacity(n)
+        var head = 0
+
+        while head < queue.count {
+            let i = queue[head]; head += 1
+            result.append(constraints[i])
+            for j in adj[i] {
+                inDegree[j] -= 1
+                if inDegree[j] == 0 {
+                    queue.append(j)
+                }
+            }
+        }
+
+        if result.count < n {
+            #if VRM_METALKIT_ENABLE_LOGS
+            let skipped = n - result.count
+            vrmLog("[ConstraintSolver] Warning: \(skipped) constraint(s) skipped due to dependency cycle")
+            #endif
+        }
+
+        return result
+    }
+
+    /// Extract the source node index from any constraint type.
+    private func sourceNodeIndex(of constraint: VRMNodeConstraint) -> Int {
+        switch constraint.constraint {
+        case .roll(let s, _, _): return s
+        case .aim(let s, _, _): return s
+        case .rotation(let s, _): return s
+        }
+    }
+
+    // MARK: - Roll Constraint
 
     /// Solve a roll constraint by transferring rotation around an axis.
     ///
@@ -81,6 +175,68 @@ public final class ConstraintSolver: @unchecked Sendable {
         let twist = extractTwist(rotation: source.rotation, axis: axis)
         let weightedTwist = simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), twist, weight)
         target.rotation = weightedTwist
+        target.updateLocalMatrix()
+    }
+
+    // MARK: - Aim Constraint
+
+    /// Solve an aim constraint: rotate the target so its aimAxis points toward the source.
+    ///
+    /// Per the VRMC_node_constraint-1.0 spec, the aimAxis is expressed in target-local space.
+    /// The constraint rotates the target (in its parent's frame) so that the aimAxis direction
+    /// in world space aligns with the vector from target's world position to source's world position.
+    ///
+    /// - Parameters:
+    ///   - source: The source node whose world position is the aim target
+    ///   - target: The target node to rotate
+    ///   - aimAxis: Unit vector in target-local space indicating the aim direction
+    ///   - weight: Blend factor (0 = no effect, 1 = full aim)
+    private func solveAimConstraint(source: VRMNode, target: VRMNode, aimAxis: SIMD3<Float>, weight: Float) {
+        let targetWorldPos = target.worldPosition
+        let sourceWorldPos = source.worldPosition
+
+        let delta = sourceWorldPos - targetWorldPos
+        let deltaLength = simd_length(delta)
+        guard deltaLength > 1e-6 else { return }
+        let aimVecWorld = delta / deltaLength
+
+        // Convert the world-space aim vector into the target's parent frame.
+        // If target has no parent, parent frame == world frame.
+        let parentWorldRot: simd_quatf
+        if let parent = target.parent {
+            parentWorldRot = simd_quatf(parent.worldMatrix)
+        } else {
+            parentWorldRot = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        }
+
+        let invParentRot = parentWorldRot.inverse
+        let aimVecInParent = invParentRot.act(aimVecWorld)
+
+        // Compute the rotation that maps aimAxis → aimVecInParent.
+        let aimRotation = simd_quatf(from: aimAxis, to: aimVecInParent)
+
+        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        let weighted = simd_slerp(identity, aimRotation, weight)
+
+        target.rotation = weighted
+        target.updateLocalMatrix()
+    }
+
+    // MARK: - Rotation Constraint
+
+    /// Solve a rotation constraint: copy source's local rotation to target.
+    ///
+    /// Per the VRMC_node_constraint-1.0 spec, the source's local rotation is copied
+    /// directly (not a delta from rest), blended by weight using slerp from identity.
+    ///
+    /// - Parameters:
+    ///   - source: The source node to read rotation from
+    ///   - target: The target node to write rotation to
+    ///   - weight: Blend factor (0 = identity, 1 = full source rotation)
+    private func solveRotationConstraint(source: VRMNode, target: VRMNode, weight: Float) {
+        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        let weighted = simd_slerp(identity, source.rotation, weight)
+        target.rotation = weighted
         target.updateLocalMatrix()
     }
 
@@ -120,5 +276,27 @@ public final class ConstraintSolver: @unchecked Sendable {
         }
 
         return twist
+    }
+}
+
+// MARK: - simd_quatf helpers
+
+private extension simd_quatf {
+    /// Extract a quaternion from the rotation part of a 4×4 column-major matrix.
+    ///
+    /// Each basis column is normalized first so that any non-uniform scale baked into
+    /// the matrix (common on intermediate VRM nodes, especially after VRM 0.0 → 1.0
+    /// conversion) does not contaminate the resulting rotation.
+    init(_ m: float4x4) {
+        let c0v = SIMD3<Float>(m.columns.0.x, m.columns.0.y, m.columns.0.z)
+        let c1v = SIMD3<Float>(m.columns.1.x, m.columns.1.y, m.columns.1.z)
+        let c2v = SIMD3<Float>(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+        let l0 = simd_length(c0v), l1 = simd_length(c1v), l2 = simd_length(c2v)
+        guard l0 > 1e-8, l1 > 1e-8, l2 > 1e-8 else {
+            self.init(ix: 0, iy: 0, iz: 0, r: 1)
+            return
+        }
+        let r = float3x3(c0v / l0, c1v / l1, c2v / l2)
+        self = simd_quatf(r)
     }
 }

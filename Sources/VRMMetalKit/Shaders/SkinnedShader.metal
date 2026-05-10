@@ -43,7 +43,7 @@ struct Uniforms {
  int toonBands;
  float additiveDirectionalRimEnabled;
  float additiveDirectionalRimPower;
- float _padding7;
+ uint cameraMode;
 };
 
 // Use packed floats to match Swift struct layout (192 bytes total)
@@ -118,11 +118,23 @@ struct MToonMaterial {
  uint32_t alphaMode;                        // 4 bytes
  float alphaCutoff;                         // 4 bytes
 
- // Block 12: 16 bytes - Version flag and padding
+ // Block 12: 16 bytes - Version flag and UV offset
  uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
- float _padding3;                           // 4 bytes
- float _padding4;                           // 4 bytes
- float _padding5;                           // 4 bytes
+ float uvOffsetX;                           // 4 bytes
+ float uvOffsetY;                           // 4 bytes
+ float uvScale;                             // 4 bytes
+
+ // Block 13: 16 bytes - KHR_texture_transform (offset, rotation, scale X)
+ float textureTransformOffsetX;             // 4 bytes
+ float textureTransformOffsetY;             // 4 bytes
+ float textureTransformRotation;            // 4 bytes
+ float textureTransformScaleX;             // 4 bytes
+
+ // Block 14: 16 bytes - KHR_texture_transform scale Y + padding
+ float textureTransformScaleY;             // 4 bytes
+ float _ttPad0;                             // 4 bytes padding
+ float _ttPad1;                             // 4 bytes padding
+ float _ttPad2;                             // 4 bytes padding
 };
 
 struct VertexIn {
@@ -195,6 +207,7 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                constant float4x4* jointMatrices [[buffer(25)]],
                                device float3* morphedPositions [[buffer(20)]],
                                constant uint& hasMorphed [[buffer(22)]],
+                               device const uint8_t* firstPersonHiddenFlags [[buffer(26)]],
                                uint vertexID [[vertex_id]]) {
  VertexOut out;
 
@@ -299,6 +312,11 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  out.texCoord = in.texCoord;
  out.animatedTexCoord = in.texCoord;  // Will be animated in fragment shader if needed
  out.color = in.color;
+
+ // First-person head-bone culling: degenerate the position so the triangle is clipped.
+ if (uniforms.cameraMode == 1u && firstPersonHiddenFlags[vertexID] != 0u) {
+     out.position = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped by homogeneous divide
+ }
 
  return out;
 }

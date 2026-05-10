@@ -56,31 +56,38 @@ public class BufferLoader: @unchecked Sendable {
             )
         }
 
-        guard let bufferViewIndex = accessor.bufferView else {
-            // Sparse accessor or zero-filled
-            return Array(repeating: 0 as! T, count: accessor.count * componentCount(for: accessor.type))
+        let components = componentCount(for: accessor.type)
+        let componentSize = bytesPerComponent(accessor.componentType)
+        var result: [T]
+
+        if let bufferViewIndex = accessor.bufferView {
+            let (data, bufferView) = try loadBufferView(bufferViewIndex)
+
+            // CRITICAL FIX: Apply BOTH the bufferView offset AND accessor offset
+            let bufferViewOffset = bufferView.byteOffset ?? 0
+            let accessorOffset = accessor.byteOffset ?? 0
+            let combinedOffset = bufferViewOffset + accessorOffset
+
+            let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
+
+            result = []
+            for i in 0..<accessor.count {
+                let elementOffset = combinedOffset + (i * stride)
+                for j in 0..<components {
+                    let componentOffset = elementOffset + (j * componentSize)
+                    let value = extractComponent(from: data, at: componentOffset, componentType: accessor.componentType, as: T.self)
+                    result.append(value)
+                }
+            }
+        } else {
+            // Zero-filled base (sparse or truly empty accessor)
+            result = Array(repeating: T.zero, count: accessor.count * components)
         }
 
-        let (data, bufferView) = try loadBufferView(bufferViewIndex)
-
-        // CRITICAL FIX: Apply BOTH the bufferView offset AND accessor offset
-        let bufferViewOffset = bufferView.byteOffset ?? 0
-        let accessorOffset = accessor.byteOffset ?? 0
-        let combinedOffset = bufferViewOffset + accessorOffset
-
-        let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
-
-        var result: [T] = []
-        let componentSize = bytesPerComponent(accessor.componentType)
-        let components = componentCount(for: accessor.type)
-
-        for i in 0..<accessor.count {
-            let elementOffset = combinedOffset + (i * stride)
-
-            for j in 0..<components {
-                let componentOffset = elementOffset + (j * componentSize)
-                let value = extractComponent(from: data, at: componentOffset, componentType: accessor.componentType, as: T.self)
-                result.append(value)
+        // Apply sparse overrides if present
+        if let sparse = accessor.sparse {
+            try applySparseOverrides(sparse: sparse, into: &result, componentType: accessor.componentType, components: components, componentSize: componentSize) { data, offset, ct in
+                self.extractComponent(from: data, at: offset, componentType: ct, as: T.self)
             }
         }
 
@@ -97,30 +104,36 @@ public class BufferLoader: @unchecked Sendable {
             )
         }
 
-        guard let bufferViewIndex = accessor.bufferView else {
-            return Array(repeating: 0, count: accessor.count * componentCount(for: accessor.type))
+        let components = componentCount(for: accessor.type)
+        let componentSize = bytesPerComponent(accessor.componentType)
+        var result: [Float]
+
+        if let bufferViewIndex = accessor.bufferView {
+            let (data, bufferView) = try loadBufferView(bufferViewIndex)
+
+            // CRITICAL FIX: Apply BOTH the bufferView offset AND accessor offset
+            let bufferViewOffset = bufferView.byteOffset ?? 0
+            let accessorOffset = accessor.byteOffset ?? 0
+            let combinedOffset = bufferViewOffset + accessorOffset
+
+            let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
+
+            result = []
+            for i in 0..<accessor.count {
+                let elementOffset = combinedOffset + (i * stride)
+                for j in 0..<components {
+                    let componentOffset = elementOffset + (j * componentSize)
+                    let value = extractFloatComponent(from: data, at: componentOffset, componentType: accessor.componentType)
+                    result.append(value)
+                }
+            }
+        } else {
+            result = Array(repeating: 0, count: accessor.count * components)
         }
 
-        let (data, bufferView) = try loadBufferView(bufferViewIndex)
-
-        // CRITICAL FIX: Apply BOTH the bufferView offset AND accessor offset
-        let bufferViewOffset = bufferView.byteOffset ?? 0
-        let accessorOffset = accessor.byteOffset ?? 0
-        let combinedOffset = bufferViewOffset + accessorOffset
-
-        let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
-
-        var result: [Float] = []
-        let componentSize = bytesPerComponent(accessor.componentType)
-        let components = componentCount(for: accessor.type)
-
-        for i in 0..<accessor.count {
-            let elementOffset = combinedOffset + (i * stride)
-
-            for j in 0..<components {
-                let componentOffset = elementOffset + (j * componentSize)
-                let value = extractFloatComponent(from: data, at: componentOffset, componentType: accessor.componentType)
-                result.append(value)
+        if let sparse = accessor.sparse {
+            try applySparseOverrides(sparse: sparse, into: &result, componentType: accessor.componentType, components: components, componentSize: componentSize) { data, offset, ct in
+                self.extractFloatComponent(from: data, at: offset, componentType: ct)
             }
         }
 
@@ -137,31 +150,37 @@ public class BufferLoader: @unchecked Sendable {
             )
         }
 
-        guard let bufferViewIndex = accessor.bufferView else {
-            return Array(repeating: 0, count: accessor.count * componentCount(for: accessor.type))
+        let components = componentCount(for: accessor.type)
+        let componentSize = bytesPerComponent(accessor.componentType)
+        var result: [UInt32]
+
+        if let bufferViewIndex = accessor.bufferView {
+            let (data, bufferView) = try loadBufferView(bufferViewIndex)
+
+            // CRITICAL FIX: Apply BOTH the bufferView offset AND accessor offset
+            let bufferViewOffset = bufferView.byteOffset ?? 0
+            let accessorOffset = accessor.byteOffset ?? 0
+            let combinedOffset = bufferViewOffset + accessorOffset
+
+            // CRITICAL FIX: Use the bufferView's byteStride for interleaved vertex attributes.
+            let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
+
+            result = []
+            for i in 0..<accessor.count {
+                let elementOffset = combinedOffset + (i * stride)
+                for j in 0..<components {
+                    let componentOffset = elementOffset + (j * componentSize)
+                    let value = extractUIntComponent(from: data, at: componentOffset, componentType: accessor.componentType)
+                    result.append(value)
+                }
+            }
+        } else {
+            result = Array(repeating: 0, count: accessor.count * components)
         }
 
-        let (data, bufferView) = try loadBufferView(bufferViewIndex)
-
-        // CRITICAL FIX: Apply BOTH the bufferView offset AND accessor offset
-        let bufferViewOffset = bufferView.byteOffset ?? 0
-        let accessorOffset = accessor.byteOffset ?? 0
-        let combinedOffset = bufferViewOffset + accessorOffset
-
-        // CRITICAL FIX: Use the bufferView's byteStride for interleaved vertex attributes.
-        let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
-
-        var result: [UInt32] = []
-        let componentSize = bytesPerComponent(accessor.componentType)
-        let components = componentCount(for: accessor.type)
-
-        for i in 0..<accessor.count {
-            let elementOffset = combinedOffset + (i * stride)
-
-            for j in 0..<components {
-                let componentOffset = elementOffset + (j * componentSize)
-                let value = extractUIntComponent(from: data, at: componentOffset, componentType: accessor.componentType)
-                result.append(value)
+        if let sparse = accessor.sparse {
+            try applySparseOverrides(sparse: sparse, into: &result, componentType: accessor.componentType, components: components, componentSize: componentSize) { data, offset, ct in
+                self.extractUIntComponent(from: data, at: offset, componentType: ct)
             }
         }
 
@@ -207,6 +226,72 @@ public class BufferLoader: @unchecked Sendable {
         }
 
         return matrices
+    }
+
+    // MARK: - Sparse Accessor Support
+
+    /// Apply glTF sparse accessor overrides onto a pre-filled base buffer.
+    ///
+    /// Spec (glTF 2.0 §5.1.7): The sparse object describes a subset of the accessor elements
+    /// that differ from their initialization value. Each override consists of:
+    /// - An index (read from `sparse.indices`) identifying which element to override.
+    /// - A value (read from `sparse.values`) that replaces the element in the base data.
+    ///
+    /// - Parameters:
+    ///   - sparse: The `GLTFSparse` descriptor from the accessor.
+    ///   - result: The base buffer to mutate in place (zero-filled or bufferView-backed).
+    ///   - componentType: The accessor's componentType (determines value byte width).
+    ///   - components: Number of scalar components per element (1 for SCALAR, 3 for VEC3, etc.).
+    ///   - componentSize: Bytes per scalar component.
+    ///   - extractor: Closure that reads a single scalar component from raw data at a given byte offset.
+    private func applySparseOverrides<T>(
+        sparse: GLTFSparse,
+        into result: inout [T],
+        componentType: Int,
+        components: Int,
+        componentSize: Int,
+        extractor: (Data, Int, Int) -> T
+    ) throws {
+        // Read sparse indices
+        let (indicesData, indicesBV) = try loadBufferView(sparse.indices.bufferView)
+        let indicesBVOffset = indicesBV.byteOffset ?? 0
+        let indicesByteOffset = (sparse.indices.byteOffset ?? 0) + indicesBVOffset
+        let indicesComponentType = sparse.indices.componentType
+        let indexSize = bytesPerComponent(indicesComponentType)
+
+        // Read sparse values
+        let (valuesData, valuesBV) = try loadBufferView(sparse.values.bufferView)
+        let valuesBVOffset = valuesBV.byteOffset ?? 0
+        let valuesByteOffset = (sparse.values.byteOffset ?? 0) + valuesBVOffset
+        let elementSize = componentSize * components
+
+        for i in 0..<sparse.count {
+            // Read the destination index
+            let indexByteOffset = indicesByteOffset + i * indexSize
+            let destIndex: Int
+            switch indicesComponentType {
+            case 5121: // UNSIGNED_BYTE
+                guard indexByteOffset + 1 <= indicesData.count else { continue }
+                destIndex = Int(indicesData.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: indexByteOffset, as: UInt8.self) })
+            case 5123: // UNSIGNED_SHORT
+                guard indexByteOffset + 2 <= indicesData.count else { continue }
+                destIndex = Int(indicesData.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: indexByteOffset, as: UInt16.self) })
+            case 5125: // UNSIGNED_INT
+                guard indexByteOffset + 4 <= indicesData.count else { continue }
+                destIndex = Int(indicesData.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: indexByteOffset, as: UInt32.self) })
+            default:
+                continue
+            }
+
+            // Write the override value into the base buffer
+            let valueByteOffset = valuesByteOffset + i * elementSize
+            let resultBase = destIndex * components
+            guard resultBase + components <= result.count else { continue }
+            for j in 0..<components {
+                let componentByteOffset = valueByteOffset + j * componentSize
+                result[resultBase + j] = extractor(valuesData, componentByteOffset, componentType)
+            }
+        }
     }
 
     // MARK: - Buffer Data Access

@@ -57,7 +57,8 @@ struct Uniforms {
     var additiveDirectionalRimEnabled: Float = 0                  // 4 bytes, offset 420
     /// Fresnel exponent for the additive rim. Higher = narrower rim. Typical 4..12.
     var additiveDirectionalRimPower: Float = 5                    // 4 bytes, offset 424
-    var _padding7: Float = 0                                      // 4 bytes padding to align to 16 bytes
+    /// 0 = third-person (default), 1 = first-person. Controls per-vertex head-bone culling.
+    var cameraMode: UInt32 = 0                                    // 4 bytes, offset 428
     // Total: 432 bytes (27 x 16-byte blocks)
 
     // Computed properties for easy access

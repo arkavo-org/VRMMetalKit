@@ -150,6 +150,12 @@ public class VRMModel: @unchecked Sendable {
     /// Global parameters for spring bone physics (gravity, wind, substeps).
     public var springBoneGlobalParams: SpringBoneGlobalParams?
 
+    /// Texture indices used as outline-width mask (linear R8, not sRGB).
+    public var outlineWidthMaskTextureIndices: Set<Int> = []
+
+    /// Texture indices used as UV animation mask (linear R8, not sRGB).
+    public var uvAnimationMaskTextureIndices: Set<Int> = []
+
     // PERFORMANCE: Pre-computed node lookup table (normalized names)
     private var nodeLookupTable: [String: VRMNode] = [:]
 
@@ -445,6 +451,23 @@ public class VRMModel: @unchecked Sendable {
             vrmLog("[VRMModel] Parsed GLTF document")
         }
 
+        // Validate extensionsRequired against the set of extensions this runtime supports.
+        // Per glTF spec §3.2: if any required extension is unsupported, loading MUST fail.
+        let supportedExtensions: Set<String> = [
+            "VRMC_vrm",
+            "VRMC_springBone",
+            "VRMC_node_constraint",
+            "VRMC_materials_mtoon",
+            "KHR_texture_transform",
+            "KHR_materials_unlit",
+        ]
+        if let required = document.extensionsRequired {
+            let unsupported = Set(required).subtracting(supportedExtensions)
+            if !unsupported.isEmpty {
+                throw VRMError.unsupportedRequiredExtension(unsupported.sorted())
+            }
+        }
+
         // Check for VRM 1.0 (VRMC_vrm) or VRM 0.0 (VRM)
         let vrmExtension = document.extensions?["VRMC_vrm"] ?? document.extensions?["VRM"]
         guard let vrmExtension = vrmExtension else {
@@ -514,10 +537,15 @@ public class VRMModel: @unchecked Sendable {
             preloadedData: preloadedBuffers
         )
 
-        // Identify which textures are used as normal maps (need linear format, not sRGB)
+        // Identify which textures need linear format (not sRGB):
+        // - Normal maps (geometrical data, not color)
+        // - outlineWidthMultiplyTexture (linear R8 per MToon spec)
+        // - uvAnimationMaskTexture (linear R8 per MToon spec)
         var normalMapTextureIndices = Set<Int>()
+        var outlineWidthMaskTextureIndicesLocal = Set<Int>()
+        var uvAnimationMaskTextureIndicesLocal = Set<Int>()
         if !skipLogging {
-            vrmLog("[VRMModel] 🔍 Scanning \(gltf.materials?.count ?? 0) materials for normal map textures...")
+            vrmLog("[VRMModel] 🔍 Scanning \(gltf.materials?.count ?? 0) materials for linear textures...")
         }
         for (matIdx, material) in (gltf.materials ?? []).enumerated() {
             let matName = material.name ?? "material_\(matIdx)"
@@ -532,10 +560,27 @@ public class VRMModel: @unchecked Sendable {
                     vrmLog("[VRMModel] ✅ Material '\(matName)' uses texture \(baseColorTex.index) as BASE COLOR (will use sRGB)")
                 }
             }
+            if let extensions = material.extensions,
+               let mtoonExt = extensions["VRMC_materials_mtoon"] as? [String: Any] {
+                if let outlineTex = mtoonExt["outlineWidthMultiplyTexture"] as? [String: Any],
+                   let idx = outlineTex["index"] as? Int {
+                    outlineWidthMaskTextureIndicesLocal.insert(idx)
+                }
+                if let uvAnimTex = mtoonExt["uvAnimationMaskTexture"] as? [String: Any],
+                   let idx = uvAnimTex["index"] as? Int {
+                    uvAnimationMaskTextureIndicesLocal.insert(idx)
+                }
+            }
         }
         if !skipLogging {
             vrmLog("[VRMModel] 📊 Normal map texture indices: \(normalMapTextureIndices.sorted())")
         }
+        let allLinearTextureIndices = normalMapTextureIndices
+            .union(outlineWidthMaskTextureIndicesLocal)
+            .union(uvAnimationMaskTextureIndicesLocal)
+
+        outlineWidthMaskTextureIndices = outlineWidthMaskTextureIndicesLocal
+        uvAnimationMaskTextureIndices = uvAnimationMaskTextureIndicesLocal
 
         // === Loading Phase: Textures ===
         let textureCount = gltf.textures?.count ?? 0
@@ -565,7 +610,7 @@ public class VRMModel: @unchecked Sendable {
                 let indices = Array(0..<textureCount)
                 let loadedTextures = await parallelLoader.loadTexturesParallel(
                     indices: indices,
-                    normalMapIndices: normalMapTextureIndices
+                    normalMapIndices: allLinearTextureIndices
                 ) { completed, total in
                     Task {
                         await context?.updateProgress(
@@ -602,8 +647,8 @@ public class VRMModel: @unchecked Sendable {
                         totalItems: textureCount
                     )
                     
-                    let isNormalMap = normalMapTextureIndices.contains(textureIndex)
-                    let useSRGB = !isNormalMap
+                    let isLinear = allLinearTextureIndices.contains(textureIndex)
+                    let useSRGB = !isLinear
                     let textureName = gltf.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
                     
                     if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
@@ -1382,6 +1427,12 @@ public enum VRMError: Error {
     // Material Errors
     case invalidMaterial(materialIndex: Int, reason: String, filePath: String?)
     
+    // Meta Errors
+    case invalidMeta(String)
+
+    // Extension Validation Errors
+    case unsupportedRequiredExtension([String])
+
     // Loading Errors
     case loadingCancelled
 }
@@ -1586,12 +1637,35 @@ extension VRMError: LocalizedError {
             VRM MToon Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md
             """
             
+        case .invalidMeta(let reason):
+            return """
+            ❌ Invalid VRM Meta
+
+            Reason: \(reason)
+
+            Suggestion: Ensure the VRM model's meta block includes all required fields. For VRM 1.0, 'licenseUrl' is required by the VRMC_vrm spec.
+
+            VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/meta.md
+            """
+
+        case .unsupportedRequiredExtension(let extensions):
+            let list = extensions.joined(separator: ", ")
+            return """
+            ❌ Unsupported Required Extension(s)
+
+            Required extensions not supported by this runtime: \(list)
+
+            Suggestion: This glTF/VRM file requires extensions that VRMMetalKit does not implement. Check whether a newer version of VRMMetalKit supports these extensions, or export the model without requiring them.
+
+            glTF Spec: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#specifying-extensions
+            """
+
         case .loadingCancelled:
             return """
             ⚠️ Loading Cancelled
-            
+
             The VRM model loading was cancelled by the user.
-            
+
             Suggestion: If this was unexpected, check that:
             • The loading task wasn't explicitly cancelled
             • The parent Task wasn't cancelled

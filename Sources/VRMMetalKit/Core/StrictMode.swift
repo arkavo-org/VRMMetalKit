@@ -231,6 +231,8 @@ public struct ResourceIndices {
     public static let hasMorphedPositionsFlag = 22
     // Joint matrices - moved to high index to avoid argument table collision
     public static let jointMatricesBuffer = 25
+    // Per-vertex first-person hidden flags (uint8 per vertex; 0=visible, 1=hidden)
+    public static let firstPersonHiddenFlagsBuffer = 26
 
     // Fragment shader buffer indices
     public static let materialUniforms = 0
@@ -439,7 +441,7 @@ public struct MetalSizeConstants {
     public static let uniformsSize = 432  // sizeof(Uniforms) in Metal (4x 64-byte matrices + 3 lights + normalization + aligned fields)
 
     // Must match shader MToonMaterial struct
-    public static let mtoonMaterialSize = 192  // sizeof(MToonMaterial) in Metal (12 blocks × 16 bytes)
+    public static let mtoonMaterialSize = 240  // sizeof(MToonMaterial) in Metal (15 blocks × 16 bytes)
 
     // Vertex struct sizes
     public static let vertexSize = 44  // sizeof(Vertex) in Metal

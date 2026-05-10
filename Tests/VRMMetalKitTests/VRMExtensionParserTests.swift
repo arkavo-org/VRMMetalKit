@@ -755,6 +755,212 @@ final class VRMExtensionParserTests: XCTestCase {
         XCTAssertEqual(model.vrm0MaterialProperties.first?.floatProperties["_ShadeToony"], 0.9)
     }
 
+    // MARK: - N5: VRM 0.0 Collider Offset Coordinate Flip Tests
+
+    func testVRM0SphereColliderOffsetXZNegated() throws {
+        let vrmDict: [String: Any] = [
+            "version": "0.0",
+            "meta": ["title": "Test", "author": "Test"],
+            "humanoid": ["humanBones": [
+                ["bone": "hips", "node": 0],
+                ["bone": "leftUpperLeg", "node": 1],
+                ["bone": "rightUpperLeg", "node": 2],
+                ["bone": "leftLowerLeg", "node": 3],
+                ["bone": "rightLowerLeg", "node": 4],
+                ["bone": "leftFoot", "node": 5],
+                ["bone": "rightFoot", "node": 6],
+                ["bone": "spine", "node": 7],
+                ["bone": "chest", "node": 8],
+                ["bone": "neck", "node": 9],
+                ["bone": "head", "node": 10],
+                ["bone": "leftShoulder", "node": 11],
+                ["bone": "rightShoulder", "node": 12],
+                ["bone": "leftUpperArm", "node": 13],
+                ["bone": "rightUpperArm", "node": 14],
+                ["bone": "leftLowerArm", "node": 15],
+                ["bone": "rightLowerArm", "node": 16],
+                ["bone": "leftHand", "node": 17],
+                ["bone": "rightHand", "node": 18]
+            ]],
+            "secondaryAnimation": [
+                "boneGroups": [],
+                "colliderGroups": [
+                    [
+                        "node": 0,
+                        "colliders": [
+                            ["offset": ["x": Float(1.0), "y": Float(0.0), "z": Float(1.0)], "radius": Float(0.1)]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+
+        let document = createMinimalGLTFDocument()
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+
+        XCTAssertNotNil(model.springBone)
+        let collider = model.springBone?.colliders.first
+        XCTAssertNotNil(collider)
+        if case let .sphere(offset, _) = collider?.shape {
+            XCTAssertEqual(offset.x, -1.0, accuracy: 0.0001)
+            XCTAssertEqual(offset.y, 0.0, accuracy: 0.0001)
+            XCTAssertEqual(offset.z, -1.0, accuracy: 0.0001)
+        } else {
+            XCTFail("Expected sphere collider shape")
+        }
+    }
+
+    func testVRM0SphereColliderYPreserved() throws {
+        let vrmDict: [String: Any] = [
+            "version": "0.0",
+            "meta": ["title": "Test", "author": "Test"],
+            "humanoid": ["humanBones": [
+                ["bone": "hips", "node": 0],
+                ["bone": "leftUpperLeg", "node": 1],
+                ["bone": "rightUpperLeg", "node": 2],
+                ["bone": "leftLowerLeg", "node": 3],
+                ["bone": "rightLowerLeg", "node": 4],
+                ["bone": "leftFoot", "node": 5],
+                ["bone": "rightFoot", "node": 6],
+                ["bone": "spine", "node": 7],
+                ["bone": "chest", "node": 8],
+                ["bone": "neck", "node": 9],
+                ["bone": "head", "node": 10],
+                ["bone": "leftShoulder", "node": 11],
+                ["bone": "rightShoulder", "node": 12],
+                ["bone": "leftUpperArm", "node": 13],
+                ["bone": "rightUpperArm", "node": 14],
+                ["bone": "leftLowerArm", "node": 15],
+                ["bone": "rightLowerArm", "node": 16],
+                ["bone": "leftHand", "node": 17],
+                ["bone": "rightHand", "node": 18]
+            ]],
+            "secondaryAnimation": [
+                "boneGroups": [],
+                "colliderGroups": [
+                    [
+                        "node": 0,
+                        "colliders": [
+                            ["offset": ["x": Float(0.5), "y": Float(2.0), "z": Float(-0.3)], "radius": Float(0.05)]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+
+        let document = createMinimalGLTFDocument()
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+
+        let collider = model.springBone?.colliders.first
+        if case let .sphere(offset, _) = collider?.shape {
+            XCTAssertEqual(offset.x, -0.5, accuracy: 0.0001)
+            XCTAssertEqual(offset.y, 2.0, accuracy: 0.0001)
+            XCTAssertEqual(offset.z, 0.3, accuracy: 0.0001)
+        } else {
+            XCTFail("Expected sphere collider shape")
+        }
+    }
+
+    // MARK: - N6: VRM 0.0 Synthesized Constraint Axis Flip Tests
+
+    func testVRM0SynthesizedArmConstraintAxisNegatedX() throws {
+        let vrmDict: [String: Any] = [
+            "version": "0.0",
+            "meta": ["title": "Test", "author": "Test"],
+            "humanoid": ["humanBones": [
+                ["bone": "hips", "node": 0],
+                ["bone": "leftUpperLeg", "node": 1],
+                ["bone": "rightUpperLeg", "node": 2],
+                ["bone": "leftLowerLeg", "node": 3],
+                ["bone": "rightLowerLeg", "node": 4],
+                ["bone": "leftFoot", "node": 5],
+                ["bone": "rightFoot", "node": 6],
+                ["bone": "spine", "node": 7],
+                ["bone": "chest", "node": 8],
+                ["bone": "neck", "node": 9],
+                ["bone": "head", "node": 10],
+                ["bone": "leftShoulder", "node": 11],
+                ["bone": "rightShoulder", "node": 12],
+                ["bone": "leftUpperArm", "node": 13],
+                ["bone": "rightUpperArm", "node": 14],
+                ["bone": "leftLowerArm", "node": 15],
+                ["bone": "rightLowerArm", "node": 16],
+                ["bone": "leftHand", "node": 17],
+                ["bone": "rightHand", "node": 18],
+                ["bone": "leftUpperArmTwist", "node": 19],
+                ["bone": "rightUpperArmTwist", "node": 20],
+                ["bone": "leftLowerArmTwist", "node": 21],
+                ["bone": "rightLowerArmTwist", "node": 22]
+            ]]
+        ]
+
+        let document = createMinimalGLTFDocument(nodes: 23)
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+
+        let armConstraints = model.nodeConstraints.filter { constraint in
+            if case let .roll(_, axis, _) = constraint.constraint {
+                return abs(axis.x) > 0.5
+            }
+            return false
+        }
+        XCTAssertFalse(armConstraints.isEmpty, "Should have arm twist constraints")
+        for constraint in armConstraints {
+            if case let .roll(_, axis, _) = constraint.constraint {
+                XCTAssertEqual(axis.x, -1.0, accuracy: 0.0001, "VRM 0.0 arm twist axis X must be negated")
+                XCTAssertEqual(axis.y, 0.0, accuracy: 0.0001)
+                XCTAssertEqual(axis.z, 0.0, accuracy: 0.0001)
+            }
+        }
+    }
+
+    func testVRM0SynthesizedLegConstraintAxisYUnchanged() throws {
+        let vrmDict: [String: Any] = [
+            "version": "0.0",
+            "meta": ["title": "Test", "author": "Test"],
+            "humanoid": ["humanBones": [
+                ["bone": "hips", "node": 0],
+                ["bone": "leftUpperLeg", "node": 1],
+                ["bone": "rightUpperLeg", "node": 2],
+                ["bone": "leftLowerLeg", "node": 3],
+                ["bone": "rightLowerLeg", "node": 4],
+                ["bone": "leftFoot", "node": 5],
+                ["bone": "rightFoot", "node": 6],
+                ["bone": "spine", "node": 7],
+                ["bone": "chest", "node": 8],
+                ["bone": "neck", "node": 9],
+                ["bone": "head", "node": 10],
+                ["bone": "leftShoulder", "node": 11],
+                ["bone": "rightShoulder", "node": 12],
+                ["bone": "leftUpperArm", "node": 13],
+                ["bone": "rightUpperArm", "node": 14],
+                ["bone": "leftLowerArm", "node": 15],
+                ["bone": "rightLowerArm", "node": 16],
+                ["bone": "leftHand", "node": 17],
+                ["bone": "rightHand", "node": 18],
+                ["bone": "leftUpperLegTwist", "node": 19],
+                ["bone": "rightUpperLegTwist", "node": 20]
+            ]]
+        ]
+
+        let document = createMinimalGLTFDocument(nodes: 21)
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+
+        let legConstraints = model.nodeConstraints.filter { constraint in
+            if case let .roll(_, axis, _) = constraint.constraint {
+                return abs(axis.y) > 0.5
+            }
+            return false
+        }
+        XCTAssertFalse(legConstraints.isEmpty, "Should have leg twist constraints")
+        for constraint in legConstraints {
+            if case let .roll(_, axis, _) = constraint.constraint {
+                XCTAssertEqual(axis.x, 0.0, accuracy: 0.0001)
+                XCTAssertEqual(axis.y, 1.0, accuracy: 0.0001, "VRM 0.0 leg twist Y axis must remain positive")
+                XCTAssertEqual(axis.z, 0.0, accuracy: 0.0001)
+            }
+        }
+    }
+
     // MARK: - Helper Methods
 
     private func createMinimalGLTFDocument(nodes: Int = 1, extensions: [String: Any]? = nil) -> GLTFDocument {

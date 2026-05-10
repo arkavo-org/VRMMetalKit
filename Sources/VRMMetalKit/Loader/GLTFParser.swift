@@ -16,6 +16,7 @@
 
 
 import Foundation
+import simd
 
 // MARK: - GLTF Document Structure
 
@@ -284,9 +285,66 @@ public struct GLTFPBRMetallicRoughness: Codable {
     public let metallicRoughnessTexture: GLTFTextureInfo?
 }
 
+public struct GLTFKHRTextureTransform {
+    public var offset: SIMD2<Float>
+    public var rotation: Float
+    public var scale: SIMD2<Float>
+
+    public init(offset: SIMD2<Float> = .zero, rotation: Float = 0.0, scale: SIMD2<Float> = [1, 1]) {
+        self.offset = offset
+        self.rotation = rotation
+        self.scale = scale
+    }
+
+    static func parse(from dict: [String: Any]) -> GLTFKHRTextureTransform {
+        var transform = GLTFKHRTextureTransform()
+        if let off = dict["offset"] as? [Any], off.count >= 2 {
+            transform.offset = SIMD2<Float>(toFloat(off[0]), toFloat(off[1]))
+        }
+        if let rot = dict["rotation"] {
+            transform.rotation = toFloat(rot)
+        }
+        if let sc = dict["scale"] as? [Any], sc.count >= 2 {
+            transform.scale = SIMD2<Float>(toFloat(sc[0], default: 1.0), toFloat(sc[1], default: 1.0))
+        }
+        return transform
+    }
+
+    private static func toFloat(_ value: Any, default defaultValue: Float = 0.0) -> Float {
+        if let d = value as? Double { return Float(d) }
+        if let i = value as? Int { return Float(i) }
+        if let f = value as? Float { return f }
+        return defaultValue
+    }
+}
+
 public struct GLTFTextureInfo: Codable {
     public let index: Int
     public let texCoord: Int?
+    public let khrTextureTransform: GLTFKHRTextureTransform?
+
+    enum CodingKeys: String, CodingKey {
+        case index, texCoord, extensions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        index = try container.decode(Int.self, forKey: .index)
+        texCoord = try container.decodeIfPresent(Int.self, forKey: .texCoord)
+        if container.contains(.extensions),
+           let extWrapper = try? container.decode([String: AnyCodable].self, forKey: .extensions),
+           let khrDict = extWrapper["KHR_texture_transform"]?.value as? [String: Any] {
+            khrTextureTransform = GLTFKHRTextureTransform.parse(from: khrDict)
+        } else {
+            khrTextureTransform = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(index, forKey: .index)
+        try container.encodeIfPresent(texCoord, forKey: .texCoord)
+    }
 }
 
 public struct GLTFNormalTextureInfo: Codable {

@@ -359,6 +359,7 @@ public class VRMExpressionController: @unchecked Sendable {
     private var expressions: [VRMExpressionPreset: VRMExpression] = [:]
     private var customExpressions: [String: VRMExpression] = [:]
     private var currentWeights: [VRMExpressionPreset: Float] = [:]
+    private var customCurrentWeights: [String: Float] = [:]
     private var morphTargetSystem: VRMMorphTargetSystem?
     private var animationTimer: Timer?
 
@@ -420,10 +421,9 @@ public class VRMExpressionController: @unchecked Sendable {
     }
 
     public func setCustomExpressionWeight(_ name: String, weight: Float) {
-        // Handle custom expressions
-        if let expression = customExpressions[name] {
-            applyExpression(expression, weight: clamp(weight, min: 0, max: 1))
-        }
+        guard customExpressions[name] != nil else { return }
+        customCurrentWeights[name] = clamp(weight, min: 0, max: 1)
+        updateMorphTargets()
     }
 
     /// Set multiple custom expression weights at once (more efficient for Perfect Sync).
@@ -434,11 +434,10 @@ public class VRMExpressionController: @unchecked Sendable {
     ///
     /// - Parameter weights: Dictionary mapping custom expression names to weights [0-1]
     public func setCustomExpressionWeights(_ weights: [String: Float]) {
-        for (name, weight) in weights {
-            if let expression = customExpressions[name] {
-                applyExpressionToMeshWeights(expression, weight: clamp(weight, min: 0, max: 1))
-            }
+        for (name, weight) in weights where customExpressions[name] != nil {
+            customCurrentWeights[name] = clamp(weight, min: 0, max: 1)
         }
+        updateMorphTargets()
     }
 
     // MARK: - Preset Animations
@@ -510,11 +509,33 @@ public class VRMExpressionController: @unchecked Sendable {
         // Clear material color overrides for fresh blending
         materialColorOverrides.removeAll()
 
+        // Build effective weight map after isBinary quantization and group overrides.
+        // Collect all registered expressions (preset + custom) for override scanning.
+        var allExpressions: [VRMExpression] = []
+        allExpressions.reserveCapacity(expressions.count + customExpressions.count)
+        for (_, expr) in expressions { allExpressions.append(expr) }
+        for (_, expr) in customExpressions { allExpressions.append(expr) }
+
+        var effectiveWeights = currentWeights
+        applyOverridesAndBinary(weights: &effectiveWeights, expressions: allExpressions, customWeights: customCurrentWeights)
+
         var activeCount = 0
-        for (preset, weight) in currentWeights where weight > 0 {
+        for (preset, weight) in effectiveWeights where weight > 0 {
             if let expression = expressions[preset] {
                 applyExpressionToMeshWeights(expression, weight: weight)
                 applyExpressionToMaterialColors(expression, weight: weight)
+                activeCount += 1
+            }
+        }
+
+        // Apply custom expressions with override-adjusted weights.
+        for (name, expression) in customExpressions {
+            let rawWeight = customCurrentWeights[name] ?? 0.0
+            guard rawWeight > 0 else { continue }
+            let effectiveWeight = computeCustomEffectiveWeight(name: name, rawWeight: rawWeight)
+            if effectiveWeight > 0 {
+                applyExpressionToMeshWeights(expression, weight: effectiveWeight)
+                applyExpressionToMaterialColors(expression, weight: effectiveWeight)
                 activeCount += 1
             }
         }
@@ -523,6 +544,101 @@ public class VRMExpressionController: @unchecked Sendable {
             vrmLog("[VRMExpressionController] Updated morph weights for \(activeCount) active expressions across \(meshMorphWeights.keys.count) meshes")
         }
         // Note: Renderer will push per-primitive weights; no global push here
+    }
+
+    /// Applies isBinary quantization and expression-group override semantics in-place.
+    ///
+    /// Step 1 — isBinary: quantize each preset expression with isBinary=true.
+    /// Step 2 — compute per-group suppression factors from all expressions (preset + custom).
+    /// Step 3 — apply suppression to blink / lookAt / mouth groups.
+    private func applyOverridesAndBinary(
+        weights: inout [VRMExpressionPreset: Float],
+        expressions: [VRMExpression],
+        customWeights: [String: Float]
+    ) {
+        // Step 1: isBinary quantization for preset expressions.
+        for expr in expressions {
+            guard expr.isBinary, let preset = expr.preset else { continue }
+            if let w = weights[preset] {
+                weights[preset] = w < 0.5 ? 0.0 : 1.0
+            }
+        }
+        // isBinary for custom expressions is handled inside computeCustomEffectiveWeight.
+
+        // Step 2: Compute group suppression factors using all expression weights.
+        var blockBlink = false
+        var blockLookAt = false
+        var blockMouth = false
+        var blendBlink: Float = 1.0
+        var blendLookAt: Float = 1.0
+        var blendMouth: Float = 1.0
+
+        for expr in expressions {
+            // Resolve effective weight for this expression.
+            let w: Float
+            if let preset = expr.preset {
+                let raw = weights[preset] ?? 0.0
+                w = expr.isBinary ? (raw < 0.5 ? 0.0 : 1.0) : raw
+            } else if let name = expr.name {
+                let raw = customWeights[name] ?? 0.0
+                w = expr.isBinary ? (raw < 0.5 ? 0.0 : 1.0) : raw
+            } else {
+                continue
+            }
+            guard w > 0 else { continue }
+
+            switch expr.overrideBlink {
+            case .block: blockBlink = true
+            case .blend: blendBlink *= (1.0 - w)
+            case .none: break
+            }
+            switch expr.overrideLookAt {
+            case .block: blockLookAt = true
+            case .blend: blendLookAt *= (1.0 - w)
+            case .none: break
+            }
+            switch expr.overrideMouth {
+            case .block: blockMouth = true
+            case .blend: blendMouth *= (1.0 - w)
+            case .none: break
+            }
+        }
+
+        // Step 3: Apply suppression to each group. block dominates blend.
+        let blinkGroup: [VRMExpressionPreset] = [.blink, .blinkLeft, .blinkRight]
+        let lookAtGroup: [VRMExpressionPreset] = [.lookUp, .lookDown, .lookLeft, .lookRight]
+        let mouthGroup: [VRMExpressionPreset] = [.aa, .ih, .ou, .ee, .oh]
+
+        for preset in blinkGroup {
+            if blockBlink {
+                weights[preset] = 0.0
+            } else if let w = weights[preset] {
+                weights[preset] = w * blendBlink
+            }
+        }
+        for preset in lookAtGroup {
+            if blockLookAt {
+                weights[preset] = 0.0
+            } else if let w = weights[preset] {
+                weights[preset] = w * blendLookAt
+            }
+        }
+        for preset in mouthGroup {
+            if blockMouth {
+                weights[preset] = 0.0
+            } else if let w = weights[preset] {
+                weights[preset] = w * blendMouth
+            }
+        }
+    }
+
+    /// Returns the override-adjusted effective weight for a custom expression.
+    /// Overrides applied to custom expressions affect preset groups the same way.
+    /// Custom expressions themselves are not in any group so they are never suppressed
+    /// by other expressions' overrides — only their own override field matters for groups.
+    private func computeCustomEffectiveWeight(name: String, rawWeight: Float) -> Float {
+        guard let expr = customExpressions[name] else { return rawWeight }
+        return expr.isBinary ? (rawWeight < 0.5 ? 0.0 : 1.0) : rawWeight
     }
 
     /// Applies material color binds from an expression, blending with base colors.
@@ -567,12 +683,6 @@ public class VRMExpressionController: @unchecked Sendable {
             arr[morphIndex] += bind.weight * weight
             meshMorphWeights[meshIndex] = arr
         }
-    }
-
-    private func applyExpression(_ expression: VRMExpression, weight: Float) {
-        // Clear and apply single expression
-        meshMorphWeights.removeAll()
-        applyExpressionToMeshWeights(expression, weight: weight)
     }
 
     // Expose per-mesh weights for renderer; pads/truncates to morphCount

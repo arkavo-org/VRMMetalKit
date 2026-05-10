@@ -172,13 +172,16 @@ public final class AnimationPlayer: @unchecked Sendable {
                 }
             }
 
-            // 4. Solve node constraints (twist bones, etc.)
+            // 4. Propagate world transforms once so aim/rotation constraints see this
+            //    frame's animated source-node poses, not last frame's stale world matrices.
+            model.updateNodeTransforms()
+
+            // 5. Solve node constraints (twist bones, aim, rotation).
             if !model.nodeConstraints.isEmpty {
                 constraintSolver.solve(constraints: model.nodeConstraints, nodes: model.nodes)
+                // Re-propagate so descendants of constrained nodes see the constraint output.
+                model.updateNodeTransforms()
             }
-
-            // 5. Propagate World Transforms
-            model.updateNodeTransforms()
 
             if debugFirstFrame {
                 vrmLogAnimation("[AnimationPlayer] Updated \(updatedCount) node matrices")

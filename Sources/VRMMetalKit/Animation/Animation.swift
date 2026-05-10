@@ -24,6 +24,9 @@ public struct AnimationClip {
     public var morphTracks: [MorphTrack] = []
     public var nodeTracks: [NodeTrack] = []  // For non-humanoid nodes (hair, bust, accessories)
     public var expressionTracks: [ExpressionTrack] = []  // VRM expression animation tracks
+    /// Returns the head-bone-local look-at target position at the given time, or nil when the
+    /// VRMA file did not contain a lookAt block.  (B1 spec compliance)
+    public var lookAtTargetSampler: ((Float) -> SIMD3<Float>)?
 
     public init(duration: Float) {
         self.duration = duration

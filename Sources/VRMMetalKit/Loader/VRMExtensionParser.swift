@@ -72,6 +72,11 @@ public class VRMExtensionParser {
         let specVersion: VRMSpecVersion
         if let versionStr = versionStr {
             specVersion = VRMSpecVersion(rawValue: versionStr) ?? .v0_0
+            // Warn on unrecognized VRMC_vrm specVersion for forward-compatibility awareness.
+            // The VRM 0.0 "version" field is a different concept; only warn for VRMC_vrm specVersion.
+            if vrmDict["specVersion"] != nil, specVersion == .v0_0, versionStr != "0.0" {
+                vrmLog("[VRMExtensionParser] WARNING: Unrecognized VRMC_vrm specVersion '\(versionStr)'. Expected '1.0'. Proceeding with best-effort parsing.")
+            }
         } else {
             // If no version field but has VRM 0.0 structure, assume 0.0
             specVersion = .v0_0
@@ -87,7 +92,7 @@ public class VRMExtensionParser {
             )
         }
         vrmLog("[VRMExtensionParser] Found meta with keys: \(metaDict.keys)")
-        let meta = try parseMeta(metaDict)
+        let meta = try parseMeta(metaDict, specVersion: specVersion)
 
         // Parse humanoid (required)
         guard let humanoidDict = vrmDict["humanoid"] as? [String: Any] else {
@@ -227,11 +232,24 @@ public class VRMExtensionParser {
         return result
     }
 
-    private func parseMeta(_ dict: [String: Any]) throws -> VRMMeta {
+    private func parseMeta(_ dict: [String: Any], specVersion: VRMSpecVersion) throws -> VRMMeta {
         // VRM 1.0 uses "licenseUrl", VRM 0.0 uses "otherLicenseUrl"
-        let licenseUrl = (dict["licenseUrl"] as? String) ??
-                        (dict["otherLicenseUrl"] as? String) ??
-                        ""
+        let licenseUrlValue = dict["licenseUrl"] as? String
+        let otherLicenseUrlValue = dict["otherLicenseUrl"] as? String
+
+        let licenseUrl: String
+        if specVersion != .v0_0 {
+            // VRM 1.0+: licenseUrl is REQUIRED and must be non-empty
+            guard let url = licenseUrlValue, !url.isEmpty else {
+                throw VRMError.invalidMeta(
+                    "licenseUrl is required by the VRM 1.0 spec (VRMC_vrm §meta) but is missing or empty. Add a valid license URL to the model's meta block."
+                )
+            }
+            licenseUrl = url
+        } else {
+            // VRM 0.0: tolerant — fall back to otherLicenseUrl or empty string
+            licenseUrl = licenseUrlValue ?? otherLicenseUrlValue ?? ""
+        }
 
         var meta = VRMMeta(licenseUrl: licenseUrl)
 
@@ -271,6 +289,10 @@ public class VRMExtensionParser {
         }
 
         meta.otherLicenseUrl = dict["otherLicenseUrl"] as? String
+        meta.allowExcessivelyViolentUsage = dict["allowExcessivelyViolentUsage"] as? Bool
+        meta.allowExcessivelySexualUsage = dict["allowExcessivelySexualUsage"] as? Bool
+        meta.allowPoliticalOrReligiousUsage = dict["allowPoliticalOrReligiousUsage"] as? Bool
+        meta.allowAntisocialOrHateUsage = dict["allowAntisocialOrHateUsage"] as? Bool
 
         return meta
     }
@@ -659,15 +681,16 @@ public class VRMExtensionParser {
                         guard let node = jointDict["node"] as? Int else { continue }
 
                         var joint = VRMSpringJoint(node: node)
-                        joint.hitRadius = jointDict["hitRadius"] as? Float ?? 0.0
-                        joint.stiffness = jointDict["stiffness"] as? Float ?? 1.0
-                        // Apply minimum gravityPower of 1.0 when model specifies 0
-                        let rawGravityPower = jointDict["gravityPower"] as? Float ?? 0.0
-                        joint.gravityPower = rawGravityPower > 0 ? rawGravityPower : 1.0
-                        joint.dragForce = jointDict["dragForce"] as? Float ?? 0.4
+                        joint.hitRadius = parseFloatValue(jointDict["hitRadius"]) ?? 0.0
+                        joint.stiffness = parseFloatValue(jointDict["stiffness"]) ?? 1.0
+                        joint.gravityPower = parseFloatValue(jointDict["gravityPower"]) ?? 0.0
+                        joint.dragForce = parseFloatValue(jointDict["dragForce"]) ?? 0.4
 
-                        if let gravityDir = jointDict["gravityDir"] as? [Float], gravityDir.count == 3 {
-                            joint.gravityDir = SIMD3<Float>(gravityDir[0], gravityDir[1], gravityDir[2])
+                        if let gravityDir = jointDict["gravityDir"] as? [Any] {
+                            let floats = gravityDir.compactMap { parseFloatValue($0) }
+                            if floats.count == 3 {
+                                joint.gravityDir = SIMD3<Float>(floats[0], floats[1], floats[2])
+                            }
                         }
 
                         spring.joints.append(joint)
@@ -678,6 +701,7 @@ public class VRMExtensionParser {
             }
         }
 
+        validateSpringJointUniqueness(&springBone)
         return springBone
     }
 
@@ -691,6 +715,13 @@ public class VRMExtensionParser {
             let radius = parseFloatValue(capsuleDict["radius"]) ?? 0.0
             let tail = parseVector3(capsuleDict["tail"]) ?? SIMD3<Float>(0, 0, 0)
             return .capsule(offset: offset, radius: radius, tail: tail)
+        } else if let planeDict = dict["plane"] as? [String: Any] {
+            #if VRM_METALKIT_ENABLE_LOGS
+            print("[VRMMetalKit] WARNING: VRMMetalKit-specific 'plane' collider in use. This is non-spec and not portable.")
+            #endif
+            let offset = parseVector3(planeDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+            let normal = parseVector3(planeDict["normal"]) ?? SIMD3<Float>(0, 1, 0)
+            return .plane(offset: offset, normal: normal)
         }
 
         return nil
@@ -751,8 +782,11 @@ public class VRMExtensionParser {
                             joint.stiffness = 1.0  // Default only if not found at all
                         }
 
-                        // Apply minimum gravityPower of 1.0 when model specifies 0
-                        // Many VRM 0.x models have gravityPower=0 but expect gravity to work
+                        // VRM 0.x quirk: many real-world models export gravityPower=0 (or omit it)
+                        // but clearly expect gravity to work (hair falls, skirts swing). The VRM 0.x
+                        // spec did not define a meaningful default, so authors relied on runtime
+                        // behavior that defaulted to gravity-on. Forcing 0→1.0 preserves that
+                        // real-world behavior for VRM 0.x only; VRM 1.0 respects explicit 0.0.
                         let rawGravityPower: Float
                         if let gpFloat = groupDict["gravityPower"] as? Float {
                             rawGravityPower = gpFloat
@@ -824,8 +858,12 @@ public class VRMExtensionParser {
                             continue
                         }
 
-                        // VRM 0.0 collider format
-                        let offset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+                        // VRM 0.0 collider format.
+                        // VRM 0.0 (Unity) uses a right-handed -Z forward system; VRM 1.0 / glTF uses +Z forward.
+                        // The model root is rotated 180° around Y to compensate, so collider offsets that are
+                        // local to their node must have X and Z negated to match the VRM 1.0 convention.
+                        let rawOffset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+                        let offset = SIMD3<Float>(-rawOffset.x, rawOffset.y, -rawOffset.z)
                         let radius = parseFloatValue(colliderDict["radius"]) ?? 0.0
 
                         // VRM 0.0 only supports spheres in most implementations
@@ -843,7 +881,58 @@ public class VRMExtensionParser {
             }
         }
 
+        validateSpringJointUniqueness(&springBone)
         return springBone
+    }
+
+    /// VRMC_springBone-1.0 spec: the same node MUST NOT appear in multiple springs or
+    /// twice within one spring. Duplicate joints produce undefined simulation behaviour.
+    /// Within-spring duplicates are removed first (more dangerous — degenerate edges).
+    /// Cross-spring duplicates are removed from later springs.
+    /// Violations are logged under VRM_METALKIT_ENABLE_LOGS.
+    private func validateSpringJointUniqueness(_ springBone: inout VRMSpringBone) {
+        var seenNodesGlobal = Set<Int>()
+        var springWasModified = [Bool](repeating: false, count: springBone.springs.count)
+
+        for springIndex in springBone.springs.indices {
+            let originalCount = springBone.springs[springIndex].joints.count
+            var seenNodesInSpring = Set<Int>()
+            var dedupedJoints: [VRMSpringJoint] = []
+
+            for joint in springBone.springs[springIndex].joints {
+                if seenNodesInSpring.contains(joint.node) {
+                    #if VRM_METALKIT_ENABLE_LOGS
+                    print("[VRMMetalKit] WARNING: Spring '\(springBone.springs[springIndex].name ?? "\(springIndex)")' contains duplicate node \(joint.node) within the same spring chain — dropping duplicate joint.")
+                    #endif
+                    continue
+                }
+                seenNodesInSpring.insert(joint.node)
+
+                if seenNodesGlobal.contains(joint.node) {
+                    #if VRM_METALKIT_ENABLE_LOGS
+                    print("[VRMMetalKit] WARNING: Node \(joint.node) appears in multiple springs — dropping from spring '\(springBone.springs[springIndex].name ?? "\(springIndex)")'. VRMC_springBone-1.0 §4.1 requires unique node membership.")
+                    #endif
+                    continue
+                }
+                seenNodesGlobal.insert(joint.node)
+                dedupedJoints.append(joint)
+            }
+
+            if dedupedJoints.count != originalCount {
+                springWasModified[springIndex] = true
+            }
+            springBone.springs[springIndex].joints = dedupedJoints
+        }
+
+        // Drop springs that were modified by deduplication and ended up with fewer than 2 joints.
+        // Springs that originally had fewer than 2 joints are left as-is (not our validation concern).
+        for i in springBone.springs.indices.reversed()
+        where springWasModified[i] && springBone.springs[i].joints.count < 2 {
+            #if VRM_METALKIT_ENABLE_LOGS
+            print("[VRMMetalKit] WARNING: Spring '\(springBone.springs[i].name ?? "unnamed")' has fewer than 2 unique joints after deduplication — dropping spring.")
+            #endif
+            springBone.springs.remove(at: i)
+        }
     }
 
     private func parseVRM0Vector3(_ value: Any?) -> SIMD3<Float>? {
@@ -899,7 +988,7 @@ public class VRMExtensionParser {
             if let rollDict = constraintDict["roll"] as? [String: Any],
                let sourceNode = rollDict["source"] as? Int {
                 let rollAxis = parseRollAxis(rollDict["rollAxis"] as? String)
-                let weight = parseFloatValue(rollDict["weight"]) ?? 0.5
+                let weight = parseFloatValue(rollDict["weight"]) ?? 1.0
 
                 let constraint = VRMNodeConstraint(
                     targetNode: nodeIndex,
@@ -970,17 +1059,21 @@ public class VRMExtensionParser {
     private func synthesizeTwistConstraints(humanoid: VRMHumanoid) -> [VRMNodeConstraint] {
         var constraints: [VRMNodeConstraint] = []
 
+        // VRM 0.0 (Unity) uses a right-handed -Z forward system; VRM 1.0 / glTF uses +Z forward.
+        // The model root is rotated 180° around Y to compensate, which maps local +X → local -X.
+        // Arm twist axes that were +X in VRM 0.0 space become -X in VRM 1.0 space.
+        // Y-aligned axes (legs) are unaffected by a Y rotation and keep their sign.
         let twistPairs: [(parent: VRMHumanoidBone, twist: VRMHumanoidBone, axis: SIMD3<Float>)] = [
-            // Upper arm twist bones (X axis is along the arm)
-            (.leftUpperArm, .leftUpperArmTwist, SIMD3<Float>(1, 0, 0)),
-            (.rightUpperArm, .rightUpperArmTwist, SIMD3<Float>(1, 0, 0)),
-            // Lower arm twist bones
-            (.leftLowerArm, .leftLowerArmTwist, SIMD3<Float>(1, 0, 0)),
-            (.rightLowerArm, .rightLowerArmTwist, SIMD3<Float>(1, 0, 0)),
-            // Upper leg twist bones (Y axis is along the leg in T-pose)
+            // Upper arm twist bones: VRM 0.0 +X → VRM 1.0 -X
+            (.leftUpperArm, .leftUpperArmTwist, SIMD3<Float>(-1, 0, 0)),
+            (.rightUpperArm, .rightUpperArmTwist, SIMD3<Float>(-1, 0, 0)),
+            // Lower arm twist bones: VRM 0.0 +X → VRM 1.0 -X
+            (.leftLowerArm, .leftLowerArmTwist, SIMD3<Float>(-1, 0, 0)),
+            (.rightLowerArm, .rightLowerArmTwist, SIMD3<Float>(-1, 0, 0)),
+            // Upper leg twist bones: Y axis is unchanged by 180° Y rotation
             (.leftUpperLeg, .leftUpperLegTwist, SIMD3<Float>(0, 1, 0)),
             (.rightUpperLeg, .rightUpperLegTwist, SIMD3<Float>(0, 1, 0)),
-            // Lower leg twist bones
+            // Lower leg twist bones: Y axis is unchanged by 180° Y rotation
             (.leftLowerLeg, .leftLowerLegTwist, SIMD3<Float>(0, 1, 0)),
             (.rightLowerLeg, .rightLowerLegTwist, SIMD3<Float>(0, 1, 0)),
         ]

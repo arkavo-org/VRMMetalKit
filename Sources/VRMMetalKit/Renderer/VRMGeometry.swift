@@ -90,6 +90,11 @@ public class VRMPrimitive {
     public var localMin: SIMD3<Float> = SIMD3<Float>(repeating: 0)
     public var localMax: SIMD3<Float> = SIMD3<Float>(repeating: 0)
 
+    // First-person visibility: per-vertex flags (1 = hidden in first-person, 0 = visible).
+    // Populated by VRMFirstPersonProcessor for meshes with `auto` annotation.
+    public var firstPersonHiddenFlags: [UInt8] = []
+    public var firstPersonHiddenFlagsBuffer: MTLBuffer?
+
     public init() {}
 
     public static func load(from gltfPrimitive: GLTFPrimitive,
@@ -710,6 +715,56 @@ public class VRMPrimitive {
 
         return sanitizedCount
     }
+
+    // MARK: - First-Person Hidden Flags
+
+    /// Computes per-vertex first-person hidden flags for `auto`-annotated meshes.
+    ///
+    /// A vertex is marked hidden (1) when any of its four skin joint slots references the
+    /// head joint with a weight above `weightThreshold`. Vertices with no influence from
+    /// the head joint are marked visible (0).
+    ///
+    /// - Parameters:
+    ///   - joints: Per-vertex joint index quads (parallel to `weights`).
+    ///   - weights: Per-vertex weight quads (parallel to `joints`).
+    ///   - headJointIndex: The skin-local joint index that corresponds to the head bone.
+    ///   - weightThreshold: Minimum weight to consider a joint influential (default 0.001).
+    /// - Returns: One byte per vertex: 0 = visible in first-person, 1 = hidden.
+    public static func computeFirstPersonHiddenFlags(
+        joints: [SIMD4<UInt32>],
+        weights: [SIMD4<Float>],
+        headJointIndex: UInt32,
+        weightThreshold: Float = 0.001
+    ) -> [UInt8] {
+        let count = min(joints.count, weights.count)
+        var flags = [UInt8](repeating: 0, count: count)
+        for i in 0..<count {
+            let j = joints[i]
+            let w = weights[i]
+            if (j.x == headJointIndex && w.x > weightThreshold) ||
+               (j.y == headJointIndex && w.y > weightThreshold) ||
+               (j.z == headJointIndex && w.z > weightThreshold) ||
+               (j.w == headJointIndex && w.w > weightThreshold) {
+                flags[i] = 1
+            }
+        }
+        return flags
+    }
+
+    /// Uploads `firstPersonHiddenFlags` to a Metal buffer on the given device.
+    ///
+    /// Call after populating `firstPersonHiddenFlags`. The buffer is stored in
+    /// `firstPersonHiddenFlagsBuffer` and bound to the vertex shader at draw time
+    /// when the camera mode is `.firstPerson`.
+    public func uploadFirstPersonHiddenFlagsBuffer(device: MTLDevice) {
+        guard !firstPersonHiddenFlags.isEmpty else { return }
+        let length = firstPersonHiddenFlags.count * MemoryLayout<UInt8>.stride
+        firstPersonHiddenFlagsBuffer = device.makeBuffer(
+            bytes: firstPersonHiddenFlags,
+            length: length,
+            options: .storageModeShared
+        )
+    }
 }
 
 // MARK: - Vertex Data
@@ -1132,6 +1187,9 @@ public class VRMMaterial {
     // Blend mode from VRM 0.x (0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite)
     public var blendMode: Int = 0
 
+    // KHR_texture_transform parsed from baseColorTexture's textureInfo extensions
+    public var khrTextureTransform: GLTFKHRTextureTransform?
+
     /// Computed property: Is this material transparent but should write to depth?
     /// Used for proper layering of overlapping transparent materials (e.g., eyebrows over face skin)
     public var isTransparentWithZWrite: Bool {
@@ -1146,6 +1204,21 @@ public class VRMMaterial {
         // VRM 0.x: Infer from properties - transparent material with zWrite enabled
         let isTransparent = alphaMode == "BLEND" || blendMode == 2
         return isTransparent && zWriteEnabled
+    }
+
+    public enum PipelineCategory: Equatable {
+        case opaque
+        case blend
+        case blendZWrite
+    }
+
+    public static func pipelineCategory(alphaMode: String, transparentWithZWrite: Bool) -> PipelineCategory {
+        switch alphaMode.uppercased() {
+        case "BLEND":
+            return transparentWithZWrite ? .blendZWrite : .blend
+        default:
+            return .opaque
+        }
     }
 
     public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil, vrmVersion: VRMSpecVersion = .v1_0) {
@@ -1180,8 +1253,13 @@ public class VRMMaterial {
             metallicFactor = pbr.metallicFactor ?? 0.0
             roughnessFactor = pbr.roughnessFactor ?? 1.0
 
-            if let textureIndex = pbr.baseColorTexture?.index, textureIndex < textures.count {
-                baseColorTexture = textures[textureIndex]
+            if let baseColorTextureInfo = pbr.baseColorTexture {
+                if baseColorTextureInfo.index < textures.count {
+                    baseColorTexture = textures[baseColorTextureInfo.index]
+                }
+                if let transform = baseColorTextureInfo.khrTextureTransform {
+                    khrTextureTransform = transform
+                }
             }
         }
 
@@ -1218,9 +1296,32 @@ public class VRMMaterial {
             // VRM 1.0: renderQueueOffsetNumber for sorting within category
             // Compute final renderQueue from base + offset per VRM 1.0 spec
             if let rqOffset = mtoonExt["renderQueueOffsetNumber"] as? Int {
-                renderQueueOffset = rqOffset
+                // Clamp offset to spec-defined ranges per alphaMode / transparentWithZWrite
+                let clampedOffset: Int
+                switch alphaMode.uppercased() {
+                case "OPAQUE", "MASK":
+                    if rqOffset != 0 {
+                        vrmLog("[VRMMaterial] renderQueueOffsetNumber \(rqOffset) ignored for \(alphaMode) (spec requires 0)")
+                    }
+                    clampedOffset = 0
+                case "BLEND":
+                    if transparentWithZWrite {
+                        if rqOffset < 0 || rqOffset > 9 {
+                            vrmLog("[VRMMaterial] renderQueueOffsetNumber \(rqOffset) clamped to [0,9] for BLEND+zWrite=true")
+                        }
+                        clampedOffset = max(0, min(9, rqOffset))
+                    } else {
+                        if rqOffset < -9 || rqOffset > 9 {
+                            vrmLog("[VRMMaterial] renderQueueOffsetNumber \(rqOffset) clamped to [-9,9] for BLEND+zWrite=false")
+                        }
+                        clampedOffset = max(-9, min(9, rqOffset))
+                    }
+                default:
+                    clampedOffset = 0
+                }
+                renderQueueOffset = clampedOffset
 
-                // VRM 1.0 base render queue values per alpha mode
+                // VRM 1.0 base render queue values per alpha mode + transparentWithZWrite
                 let base: Int
                 switch alphaMode.uppercased() {
                 case "OPAQUE":
@@ -1228,11 +1329,15 @@ public class VRMMaterial {
                 case "MASK":
                     base = 2450
                 case "BLEND":
-                    base = 3000
+                    base = transparentWithZWrite ? 2510 : 3000
                 default:
                     base = 2000
                 }
-                renderQueue = base + rqOffset
+                renderQueue = base + clampedOffset
+            }
+            // Wire KHR_texture_transform from baseColorTexture into mtoon
+            if let transform = khrTextureTransform {
+                mtoon?.textureTransform = transform
             }
         }
         // VRM 0.x: material properties from document-level VRM extension
