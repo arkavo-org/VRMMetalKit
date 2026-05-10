@@ -150,6 +150,12 @@ public class VRMModel: @unchecked Sendable {
     /// Global parameters for spring bone physics (gravity, wind, substeps).
     public var springBoneGlobalParams: SpringBoneGlobalParams?
 
+    /// Texture indices used as outline-width mask (linear R8, not sRGB).
+    public var outlineWidthMaskTextureIndices: Set<Int> = []
+
+    /// Texture indices used as UV animation mask (linear R8, not sRGB).
+    public var uvAnimationMaskTextureIndices: Set<Int> = []
+
     // PERFORMANCE: Pre-computed node lookup table (normalized names)
     private var nodeLookupTable: [String: VRMNode] = [:]
 
@@ -514,10 +520,15 @@ public class VRMModel: @unchecked Sendable {
             preloadedData: preloadedBuffers
         )
 
-        // Identify which textures are used as normal maps (need linear format, not sRGB)
+        // Identify which textures need linear format (not sRGB):
+        // - Normal maps (geometrical data, not color)
+        // - outlineWidthMultiplyTexture (linear R8 per MToon spec)
+        // - uvAnimationMaskTexture (linear R8 per MToon spec)
         var normalMapTextureIndices = Set<Int>()
+        var outlineWidthMaskTextureIndicesLocal = Set<Int>()
+        var uvAnimationMaskTextureIndicesLocal = Set<Int>()
         if !skipLogging {
-            vrmLog("[VRMModel] 🔍 Scanning \(gltf.materials?.count ?? 0) materials for normal map textures...")
+            vrmLog("[VRMModel] 🔍 Scanning \(gltf.materials?.count ?? 0) materials for linear textures...")
         }
         for (matIdx, material) in (gltf.materials ?? []).enumerated() {
             let matName = material.name ?? "material_\(matIdx)"
@@ -532,10 +543,27 @@ public class VRMModel: @unchecked Sendable {
                     vrmLog("[VRMModel] ✅ Material '\(matName)' uses texture \(baseColorTex.index) as BASE COLOR (will use sRGB)")
                 }
             }
+            if let extensions = material.extensions,
+               let mtoonExt = extensions["VRMC_materials_mtoon"] as? [String: Any] {
+                if let outlineTex = mtoonExt["outlineWidthMultiplyTexture"] as? [String: Any],
+                   let idx = outlineTex["index"] as? Int {
+                    outlineWidthMaskTextureIndicesLocal.insert(idx)
+                }
+                if let uvAnimTex = mtoonExt["uvAnimationMaskTexture"] as? [String: Any],
+                   let idx = uvAnimTex["index"] as? Int {
+                    uvAnimationMaskTextureIndicesLocal.insert(idx)
+                }
+            }
         }
         if !skipLogging {
             vrmLog("[VRMModel] 📊 Normal map texture indices: \(normalMapTextureIndices.sorted())")
         }
+        let allLinearTextureIndices = normalMapTextureIndices
+            .union(outlineWidthMaskTextureIndicesLocal)
+            .union(uvAnimationMaskTextureIndicesLocal)
+
+        outlineWidthMaskTextureIndices = outlineWidthMaskTextureIndicesLocal
+        uvAnimationMaskTextureIndices = uvAnimationMaskTextureIndicesLocal
 
         // === Loading Phase: Textures ===
         let textureCount = gltf.textures?.count ?? 0
@@ -565,7 +593,7 @@ public class VRMModel: @unchecked Sendable {
                 let indices = Array(0..<textureCount)
                 let loadedTextures = await parallelLoader.loadTexturesParallel(
                     indices: indices,
-                    normalMapIndices: normalMapTextureIndices
+                    normalMapIndices: allLinearTextureIndices
                 ) { completed, total in
                     Task {
                         await context?.updateProgress(
@@ -602,8 +630,8 @@ public class VRMModel: @unchecked Sendable {
                         totalItems: textureCount
                     )
                     
-                    let isNormalMap = normalMapTextureIndices.contains(textureIndex)
-                    let useSRGB = !isNormalMap
+                    let isLinear = allLinearTextureIndices.contains(textureIndex)
+                    let useSRGB = !isLinear
                     let textureName = gltf.textures?[safe: textureIndex]?.name ?? "texture_\(textureIndex)"
                     
                     if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
