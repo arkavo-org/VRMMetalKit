@@ -278,6 +278,243 @@ final class ConstraintSolverTests: XCTestCase {
         XCTAssertNotNil(model.nodeConstraints)
     }
 
+    // MARK: - D4: Roll Weight Default
+
+    func testRollConstraintDefaultWeightIsOne() throws {
+        let parser = VRMExtensionParser()
+
+        let constraintJSON = """
+        {
+            "asset": {"version": "2.0", "generator": "Test"},
+            "nodes": [
+                {
+                    "name": "source"
+                },
+                {
+                    "name": "target",
+                    "extensions": {
+                        "VRMC_node_constraint": {
+                            "specVersion": "1.0",
+                            "constraint": {
+                                "roll": {
+                                    "source": 0,
+                                    "rollAxis": "X"
+                                }
+                            }
+                        }
+                    }
+                }
+            ]
+        }
+        """
+        let data = constraintJSON.data(using: .utf8)!
+        let gltf = try JSONDecoder().decode(GLTFDocument.self, from: data)
+
+        let constraints = parser.parseOrSynthesizeConstraints(gltf: gltf, humanoid: nil, isVRM0: false)
+        XCTAssertEqual(constraints.count, 1, "Should parse one roll constraint")
+
+        if case .roll(_, _, let weight) = constraints.first?.constraint {
+            XCTAssertEqual(weight, 1.0, accuracy: 0.0001,
+                           "Roll constraint weight default must be 1.0 per VRMC_node_constraint-1.0 spec")
+        } else {
+            XCTFail("Expected a roll constraint")
+        }
+    }
+
+    // MARK: - D1: Aim Constraint
+
+    func testAimConstraintAlreadyAligned() throws {
+        let solver = ConstraintSolver()
+
+        let sourceNode = try createTestNode(index: 0, name: "source")
+        let targetNode = try createTestNode(index: 1, name: "target")
+
+        // source at +X from target
+        sourceNode.translation = SIMD3<Float>(1, 0, 0)
+        sourceNode.updateLocalMatrix()
+        sourceNode.updateWorldTransform()
+        targetNode.updateLocalMatrix()
+        targetNode.updateWorldTransform()
+
+        // aimAxis = +X, source is at +X: already aligned → rotation should be identity
+        let constraint = VRMNodeConstraint(
+            targetNode: 1,
+            constraint: .aim(sourceNode: 0, aimAxis: SIMD3<Float>(1, 0, 0), weight: 1.0)
+        )
+
+        solver.solve(constraints: [constraint], nodes: [sourceNode, targetNode])
+
+        XCTAssertEqual(targetNode.rotation.real, 1.0, accuracy: 0.01,
+                       "Aim constraint: already aligned → identity rotation")
+        XCTAssertEqual(simd_length(targetNode.rotation.imag), 0.0, accuracy: 0.01,
+                       "Aim constraint: already aligned → zero imaginary part")
+    }
+
+    func testAimConstraintRotatesXtowardY() throws {
+        let solver = ConstraintSolver()
+
+        let sourceNode = try createTestNode(index: 0, name: "source")
+        let targetNode = try createTestNode(index: 1, name: "target")
+
+        // target at origin, source at +Y
+        sourceNode.translation = SIMD3<Float>(0, 1, 0)
+        sourceNode.updateLocalMatrix()
+        sourceNode.updateWorldTransform()
+        targetNode.updateLocalMatrix()
+        targetNode.updateWorldTransform()
+
+        // aimAxis = +X; source is at +Y → must rotate X toward Y (90° around +Z)
+        let constraint = VRMNodeConstraint(
+            targetNode: 1,
+            constraint: .aim(sourceNode: 0, aimAxis: SIMD3<Float>(1, 0, 0), weight: 1.0)
+        )
+
+        solver.solve(constraints: [constraint], nodes: [sourceNode, targetNode])
+
+        // Expected: ~90° rotation around Z axis
+        let angle = 2 * acos(min(abs(targetNode.rotation.real), 1.0))
+        XCTAssertEqual(angle, Float.pi / 2, accuracy: 0.05,
+                       "Aim constraint: aimAxis +X toward source at +Y should be ~90 degrees")
+
+        // The rotation axis should be approximately +Z (or -Z with negative quaternion)
+        let normalizedImag = simd_normalize(targetNode.rotation.imag)
+        let zComponent = abs(normalizedImag.z)
+        XCTAssertGreaterThan(zComponent, 0.95,
+                             "Aim constraint: rotation axis should be approximately ±Z")
+    }
+
+    func testAimConstraintWeightBlend() throws {
+        let solver = ConstraintSolver()
+
+        let sourceNode = try createTestNode(index: 0, name: "source")
+        let targetNode = try createTestNode(index: 1, name: "target")
+
+        sourceNode.translation = SIMD3<Float>(0, 1, 0)
+        sourceNode.updateLocalMatrix()
+        sourceNode.updateWorldTransform()
+        targetNode.updateLocalMatrix()
+        targetNode.updateWorldTransform()
+
+        let constraint = VRMNodeConstraint(
+            targetNode: 1,
+            constraint: .aim(sourceNode: 0, aimAxis: SIMD3<Float>(1, 0, 0), weight: 0.5)
+        )
+
+        solver.solve(constraints: [constraint], nodes: [sourceNode, targetNode])
+
+        let angle = 2 * acos(min(abs(targetNode.rotation.real), 1.0))
+        XCTAssertEqual(angle, Float.pi / 4, accuracy: 0.05,
+                       "Aim constraint with weight=0.5 should produce ~45 degrees")
+    }
+
+    // MARK: - D2: Rotation Constraint
+
+    func testRotationConstraintCopiesSourceRotation() throws {
+        let solver = ConstraintSolver()
+
+        let sourceNode = try createTestNode(index: 0, name: "source")
+        let targetNode = try createTestNode(index: 1, name: "target")
+
+        let sourceRot = simd_quatf(angle: Float.pi / 3, axis: SIMD3<Float>(0, 1, 0))
+        sourceNode.rotation = sourceRot
+
+        let constraint = VRMNodeConstraint(
+            targetNode: 1,
+            constraint: .rotation(sourceNode: 0, weight: 1.0)
+        )
+
+        solver.solve(constraints: [constraint], nodes: [sourceNode, targetNode])
+
+        XCTAssertEqual(targetNode.rotation.real, sourceRot.real, accuracy: 0.001,
+                       "Rotation constraint with weight=1 must copy source rotation exactly (real)")
+        XCTAssertEqual(targetNode.rotation.imag.x, sourceRot.imag.x, accuracy: 0.001,
+                       "Rotation constraint: imag.x must match")
+        XCTAssertEqual(targetNode.rotation.imag.y, sourceRot.imag.y, accuracy: 0.001,
+                       "Rotation constraint: imag.y must match")
+        XCTAssertEqual(targetNode.rotation.imag.z, sourceRot.imag.z, accuracy: 0.001,
+                       "Rotation constraint: imag.z must match")
+    }
+
+    func testRotationConstraintWeightBlend() throws {
+        let solver = ConstraintSolver()
+
+        let sourceNode = try createTestNode(index: 0, name: "source")
+        let targetNode = try createTestNode(index: 1, name: "target")
+
+        sourceNode.rotation = simd_quatf(angle: Float.pi / 2, axis: SIMD3<Float>(0, 1, 0))
+
+        let constraint = VRMNodeConstraint(
+            targetNode: 1,
+            constraint: .rotation(sourceNode: 0, weight: 0.5)
+        )
+
+        solver.solve(constraints: [constraint], nodes: [sourceNode, targetNode])
+
+        let angle = 2 * acos(min(abs(targetNode.rotation.real), 1.0))
+        XCTAssertEqual(angle, Float.pi / 4, accuracy: 0.05,
+                       "Rotation constraint with weight=0.5 should produce ~45 degrees")
+    }
+
+    // MARK: - D3: Topological Sort + Cycle Detection
+
+    func testConstraintTopologicalOrderReverseDeclaration() throws {
+        let solver = ConstraintSolver()
+
+        // Three nodes: 0 (root, no constraint), 1 (constrained to 0), 2 (constrained to 1)
+        let node0 = try createTestNode(index: 0, name: "root")
+        let node1 = try createTestNode(index: 1, name: "mid")
+        let node2 = try createTestNode(index: 2, name: "leaf")
+
+        // Give node0 a rotation, which should propagate through constraints
+        node0.rotation = simd_quatf(angle: Float.pi / 2, axis: SIMD3<Float>(0, 1, 0))
+
+        // Declare constraints in reverse dependency order: leaf first, then mid
+        // Correct order to solve: constrain node1 from node0 first, then node2 from node1
+        let constraintLeaf = VRMNodeConstraint(
+            targetNode: 2,
+            constraint: .rotation(sourceNode: 1, weight: 1.0)
+        )
+        let constraintMid = VRMNodeConstraint(
+            targetNode: 1,
+            constraint: .rotation(sourceNode: 0, weight: 1.0)
+        )
+
+        // Declared in wrong order (leaf before mid)
+        solver.solve(constraints: [constraintLeaf, constraintMid], nodes: [node0, node1, node2])
+
+        // After topo sort: mid must be solved before leaf
+        // node1 should have node0's rotation
+        XCTAssertEqual(node1.rotation.real, node0.rotation.real, accuracy: 0.001,
+                       "Topo sort: node1 must be solved after node0, copying node0's rotation")
+        // node2 should have node1's (now updated) rotation = node0's rotation
+        XCTAssertEqual(node2.rotation.real, node0.rotation.real, accuracy: 0.001,
+                       "Topo sort: node2 must be solved after node1, propagating node0's rotation")
+    }
+
+    func testConstraintCycleDoesNotCrash() throws {
+        let solver = ConstraintSolver()
+
+        let node0 = try createTestNode(index: 0, name: "A")
+        let node1 = try createTestNode(index: 1, name: "B")
+
+        // Cycle: node0 constrained by node1, node1 constrained by node0
+        let constraint0 = VRMNodeConstraint(
+            targetNode: 0,
+            constraint: .rotation(sourceNode: 1, weight: 1.0)
+        )
+        let constraint1 = VRMNodeConstraint(
+            targetNode: 1,
+            constraint: .rotation(sourceNode: 0, weight: 1.0)
+        )
+
+        // Must not crash or loop infinitely
+        solver.solve(constraints: [constraint0, constraint1], nodes: [node0, node1])
+
+        // Both nodes should have finite, valid quaternions
+        XCTAssertFalse(node0.rotation.real.isNaN, "Cycle: node0 rotation must not be NaN")
+        XCTAssertFalse(node1.rotation.real.isNaN, "Cycle: node1 rotation must not be NaN")
+    }
+
     // MARK: - Helper Methods
 
     private func createTestNode(index: Int, name: String) throws -> VRMNode {
