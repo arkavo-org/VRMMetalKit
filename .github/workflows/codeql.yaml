@@ -39,6 +39,13 @@ jobs:
 
   swift:
     name: Analyze (swift)
+    # CodeQL Swift extraction takes ~20 min and has produced 0 findings against
+    # this codebase (a Metal rendering library — outside the query pack's
+    # web/mobile threat model). Run only on push to `main` and the weekly cron
+    # so security-event archaeology is preserved without blocking PR merges
+    # for 20 min after every push. Anything CodeQL would have caught at PR
+    # review surfaces at merge — within the same human's session.
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 60
     permissions:
