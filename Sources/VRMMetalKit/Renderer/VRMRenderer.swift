@@ -2415,16 +2415,20 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
 
             // Bind per-vertex first-person hidden flags for the skinned vertex shader.
-            // Always bind something valid; the shader only reads it when cameraMode == 1.
+            // The shader unconditionally reads firstPersonHiddenFlags[vertexID] when
+            // cameraMode == 1, so the buffer MUST be at least vertexCount bytes long.
+            // processFirstPersonAutoFlags allocates this for every skinned primitive at load;
+            // the lazy allocation here is a defensive fallback for the rare case where it
+            // wasn't run (e.g. no Metal device at load time).
+            if primitive.firstPersonHiddenFlagsBuffer == nil && primitive.vertexCount > 0 {
+                let length = primitive.vertexCount * MemoryLayout<UInt8>.stride
+                if let buffer = device.makeBuffer(length: length, options: .storageModeShared) {
+                    memset(buffer.contents(), 0, length)
+                    primitive.firstPersonHiddenFlagsBuffer = buffer
+                }
+            }
             if let fpBuffer = primitive.firstPersonHiddenFlagsBuffer {
                 encoderStateCache.setVertexBuffer(encoder, fpBuffer, offset: 0, index: ResourceIndices.firstPersonHiddenFlagsBuffer)
-            } else {
-                // No flags computed (non-auto annotation or non-skinned mesh): bind the
-                // empty dummy buffer so Metal validation does not complain about a missing binding.
-                if emptyFloat3Buffer == nil {
-                    emptyFloat3Buffer = device.makeBuffer(length: MemoryLayout<SIMD3<Float>>.stride, options: .storageModeShared)
-                }
-                encoderStateCache.setVertexBuffer(encoder, emptyFloat3Buffer, offset: 0, index: ResourceIndices.firstPersonHiddenFlagsBuffer)
             }
 
             // Morphed positions are already set at the primary vertex buffer slot above

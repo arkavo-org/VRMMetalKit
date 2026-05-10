@@ -64,55 +64,64 @@ public func shouldRenderPrimitive(
 
 // MARK: - Auto-Mode Flag Computation
 
-/// Processes all skinned meshes in a model with `auto` (or missing) first-person annotation,
-/// computing per-vertex head-bone hidden flags and uploading them as Metal buffers.
+/// Processes all skinned meshes in a model, populating per-vertex first-person hidden flags
+/// and uploading them as Metal buffers.
 ///
-/// Call this once after loading the model (and after the Metal device is available) to prepare
-/// the first-person hidden flags for all eligible primitives.
+/// For nodes annotated `.auto` (or missing — spec defaults to `.auto`), per-vertex flags are
+/// computed from head-bone weights. For nodes annotated `.both`, `.firstPersonOnly`, or
+/// `.thirdPersonOnly`, an all-zero buffer of the correct size is allocated so the skinned
+/// vertex shader can safely read `firstPersonHiddenFlags[vertexID]` regardless of camera mode
+/// (annotation-level filtering is enforced by `shouldRenderPrimitive` at draw time).
+///
+/// Call this once after loading the model (and after the Metal device is available).
 ///
 /// - Parameters:
 ///   - model: The VRM model whose skinned primitives should be processed.
 ///   - device: The Metal device to use for buffer allocation.
 public func processFirstPersonAutoFlags(model: VRMModel, device: MTLDevice) {
-    guard let headNodeIndex = model.humanoid?.getBoneNode(.head) else { return }
+    let headNodeIndex = model.humanoid?.getBoneNode(.head)
 
     for (nodeIndex, node) in model.nodes.enumerated() {
         guard let meshIndex = node.mesh, meshIndex < model.meshes.count else { continue }
-
-        let annotation = firstPersonAnnotation(for: nodeIndex, in: model)
-        guard annotation == .auto else { continue }
-
         guard let skinIndex = node.skin, skinIndex < model.skins.count else { continue }
+
         let skin = model.skins[skinIndex]
-
-        guard let headJointIndex = skin.joints.firstIndex(where: { $0.index == headNodeIndex }) else {
-            continue
-        }
-
-        let headJointUInt = UInt32(headJointIndex)
+        let annotation = firstPersonAnnotation(for: nodeIndex, in: model)
         let mesh = model.meshes[meshIndex]
+
+        let headJointUInt: UInt32?
+        if annotation == .auto,
+           let headIndex = headNodeIndex,
+           let headJointIndex = skin.joints.firstIndex(where: { $0.index == headIndex }) {
+            headJointUInt = UInt32(headJointIndex)
+        } else {
+            headJointUInt = nil
+        }
 
         for primitive in mesh.primitives {
             guard primitive.hasJoints && primitive.hasWeights,
                   let vertexBuffer = primitive.vertexBuffer,
                   primitive.vertexCount > 0 else { continue }
 
-            let vertices = vertexBuffer.contents().bindMemory(
-                to: VRMVertex.self,
-                capacity: primitive.vertexCount
-            )
-            var joints = [SIMD4<UInt32>](repeating: .zero, count: primitive.vertexCount)
-            var weights = [SIMD4<Float>](repeating: .zero, count: primitive.vertexCount)
-            for i in 0..<primitive.vertexCount {
-                joints[i] = vertices[i].joints
-                weights[i] = vertices[i].weights
+            if let headJoint = headJointUInt {
+                let vertices = vertexBuffer.contents().bindMemory(
+                    to: VRMVertex.self,
+                    capacity: primitive.vertexCount
+                )
+                var joints = [SIMD4<UInt32>](repeating: .zero, count: primitive.vertexCount)
+                var weights = [SIMD4<Float>](repeating: .zero, count: primitive.vertexCount)
+                for i in 0..<primitive.vertexCount {
+                    joints[i] = vertices[i].joints
+                    weights[i] = vertices[i].weights
+                }
+                primitive.firstPersonHiddenFlags = VRMPrimitive.computeFirstPersonHiddenFlags(
+                    joints: joints,
+                    weights: weights,
+                    headJointIndex: headJoint
+                )
+            } else {
+                primitive.firstPersonHiddenFlags = [UInt8](repeating: 0, count: primitive.vertexCount)
             }
-
-            primitive.firstPersonHiddenFlags = VRMPrimitive.computeFirstPersonHiddenFlags(
-                joints: joints,
-                weights: weights,
-                headJointIndex: headJointUInt
-            )
             primitive.uploadFirstPersonHiddenFlagsBuffer(device: device)
         }
     }

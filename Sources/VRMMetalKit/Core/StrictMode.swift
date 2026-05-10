@@ -441,7 +441,7 @@ public struct MetalSizeConstants {
     public static let uniformsSize = 432  // sizeof(Uniforms) in Metal (4x 64-byte matrices + 3 lights + normalization + aligned fields)
 
     // Must match shader MToonMaterial struct
-    public static let mtoonMaterialSize = 192  // sizeof(MToonMaterial) in Metal (12 blocks × 16 bytes)
+    public static let mtoonMaterialSize = 240  // sizeof(MToonMaterial) in Metal (15 blocks × 16 bytes)
 
     // Vertex struct sizes
     public static let vertexSize = 44  // sizeof(Vertex) in Metal

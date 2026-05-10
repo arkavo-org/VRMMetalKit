@@ -26,21 +26,10 @@ extension VRMRenderer {
         let swiftSize = MemoryLayout<MToonMaterialUniforms>.size
         let swiftStride = MemoryLayout<MToonMaterialUniforms>.stride
 
-        // Expected Metal struct size (11 blocks * 16 bytes = 176 bytes)
-        // The Metal struct is laid out as:
-        // - Block 0: baseColorFactor (16 bytes)
-        // - Block 1: shadeColorFactor + shadingToonyFactor (16 bytes)
-        // - Block 2: shadingShiftFactor + emissiveFactor (16 bytes)
-        // - Block 3: metallicFactor + roughnessFactor + giEqualizationFactor + shadingShiftTextureScale (16 bytes)
-        // - Block 4: matcapFactor + hasMatcapTexture (16 bytes)
-        // - Block 5: parametricRimColorFactor + parametricRimFresnelPowerFactor (16 bytes)
-        // - Block 6: parametricRimLiftFactor + rimLightingMixFactor + hasRimMultiplyTexture + padding (16 bytes)
-        // - Block 7: outlineWidthFactor + outlineColorFactor (16 bytes)
-        // - Block 8: outlineLightingMixFactor + outlineMode + hasOutlineWidthMultiplyTexture + padding (16 bytes)
-        // - Block 9: uvAnimation (4 floats) (16 bytes)
-        // - Block 10: texture flags (4 int32s) (16 bytes)
-        // - Block 11: more flags + alphaMode + alphaCutoff (16 bytes)
-        let expectedMetalSize = 176  // 11 * 16
+        // Expected Metal struct size (15 blocks * 16 bytes = 240 bytes)
+        // Blocks 0-11 are the original MToon material fields; blocks 12-14 cover
+        // the time uniform and the KHR_texture_transform offset/rotation/scale.
+        let expectedMetalSize = 240  // 15 * 16
 
         if config.strict != .off {
             vrmLog("[VRMRenderer] MToonMaterialUniforms alignment check:")
