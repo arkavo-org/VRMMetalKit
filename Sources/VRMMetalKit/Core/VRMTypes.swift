@@ -359,9 +359,14 @@ public struct VRM0MaterialProperty {
             mtoon.shadeMultiplyTexture = shadeTexIndex
         }
 
-        // Global illumination: giEqualizationFactor = 1.0 - giIntensityFactor
-        if let giIntensity = floatProperties["_IndirectLightIntensity"] {
-            mtoon.giIntensityFactor = giIntensity
+        // VRM 0.x's `_IndirectLightIntensity` is an intensity scalar, semantically
+        // different from MToon 1.0's `giEqualizationFactor` (a directional-mix
+        // factor; see docs/MTOON_GI_SPEC.md). We intentionally do not auto-convert;
+        // VRM 0.x models inherit the spec default (0.9) on load. Authored 0.x intent
+        // can be re-applied at the application layer if needed. Logging here so
+        // developers can detect when authored values are being dropped.
+        if let dropped = floatProperties["_IndirectLightIntensity"] {
+            vrmLog("[VRMMToonMaterial] Dropping VRM 0.x `_IndirectLightIntensity = \(dropped)` — semantics differ from MToon 1.0 `giEqualizationFactor`; field inherits spec default 0.9. Re-apply at app layer if needed.")
         }
 
         // Matcap/Sphere Add texture
@@ -447,7 +452,7 @@ public struct VRMMToonMaterial {
     public var shadingShiftFactor: Float = 0.0
     public var shadingShiftTexture: VRMShadingShiftTexture?
     public var shadingToonyFactor: Float = 0.9
-    public var giIntensityFactor: Float = 0.1
+    public var giEqualizationFactor: Float = 0.9
     public var matcapFactor: SIMD3<Float> = [1.0, 1.0, 1.0]  // White default for texture multiplication
     public var matcapTexture: Int?
     public var parametricRimColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]  // Rim should start disabled

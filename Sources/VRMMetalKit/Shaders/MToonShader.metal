@@ -67,7 +67,7 @@ struct MToonMaterial {
  // Block 3: 16 bytes - PBR factors
  float metallicFactor;                      // 4 bytes
  float roughnessFactor;                     // 4 bytes
- float giIntensityFactor;                   // 4 bytes
+ float giEqualizationFactor;                   // 4 bytes
  float shadingShiftTextureScale;            // 4 bytes
 
  // Block 4: 16 bytes - MatCap properties (packed float3 + int)
@@ -611,9 +611,22 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // Accumulate weighted contributions (manual normalization factor allows artistic control)
  float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
 
- // Indirect diffuse: ambient contributes at base color, scaled by giIntensityFactor.
- // giEqualizationFactor would apply here once hemisphere irradiance / IBL is added.
- float3 indirectDiffuse = uniforms.ambientColor.xyz * baseColor.rgb * material.giIntensityFactor;
+ // Indirect diffuse — KNOWN DEVIATION FROM MToon 1.0 SPEC.
+ //
+ // The spec defines giEqualizationFactor as a lerp between rawGi(normal)
+ // and uniformedGi (the directional vs uniform indirect-illumination mix);
+ // see docs/MTOON_GI_SPEC.md for the verbatim spec excerpt. A spec-correct
+ // implementation requires IBL/SH infrastructure that this renderer does
+ // not yet have.
+ //
+ // Without IBL, the spec lerp degenerates to a no-op (rawGi(n) ≡ uniformedGi
+ // ≡ ambient). Rather than ship the no-op, we reinterpret the factor as a
+ // lit-side / shade-side mix on the indirect *albedo*: at 1.0 indirect uses
+ // baseColor, at 0.0 it uses shadeColor. This gives authors a visually
+ // meaningful artistic knob today. When IBL lands, replace this block with
+ // the spec lerp and remove this comment.
+ float3 giAlbedo = mix(shadeColor, baseColor.rgb, material.giEqualizationFactor);
+ float3 indirectDiffuse = uniforms.ambientColor.xyz * giAlbedo;
  litColor += indirectDiffuse;
 
  // Emissive

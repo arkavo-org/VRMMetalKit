@@ -1290,8 +1290,8 @@ public class VRMMaterial {
         }
 
         // Global illumination
-        if let giIntensityFactor = mtoonExt["giIntensityFactor"] as? Double {
-            mtoon.giIntensityFactor = Float(giIntensityFactor)
+        if let giEqualizationFactor = mtoonExt["giEqualizationFactor"] as? Double {
+            mtoon.giEqualizationFactor = Float(giEqualizationFactor)
         }
 
         // MatCap properties

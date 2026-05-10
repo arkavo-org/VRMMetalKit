@@ -196,8 +196,8 @@ final class SilhouetteRenderConfigTests: XCTestCase {
                                "Body '\(material.name ?? "?")' matcapFactor should be zero")
                 XCTAssertEqual(mtoon.parametricRimColorFactor, SIMD3<Float>(0, 0, 0),
                                "Body '\(material.name ?? "?")' parametric rim should be zero")
-                XCTAssertEqual(mtoon.giIntensityFactor, 0,
-                               "Body '\(material.name ?? "?")' giIntensityFactor should be zero")
+                XCTAssertEqual(mtoon.giEqualizationFactor, 0,
+                               "Body '\(material.name ?? "?")' giEqualizationFactor should be zero")
             }
         }
     }

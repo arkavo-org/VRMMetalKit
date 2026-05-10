@@ -603,7 +603,7 @@ final class MToonTestRenderer {
         material.shadeColorFactor = SIMD3<Float>(0.3, 0.3, 0.3)  // Dark gray shade
         material.shadingToonyFactor = toonyFactor
         material.shadingShiftFactor = shadingShift
-        material.giIntensityFactor = 0.0
+        material.giEqualizationFactor = 0.0
 
         encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
         encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)

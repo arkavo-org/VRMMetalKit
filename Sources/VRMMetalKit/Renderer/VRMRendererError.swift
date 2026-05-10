@@ -443,7 +443,7 @@ public enum VRMMaterialValidationError: LocalizedError {
     case rimFresnelPowerNegative(Float)
     case rimLightingMixOutOfRange(Float)
     case outlineLightingMixOutOfRange(Float)
-    case giIntensityOutOfRange(Float)
+    case giEqualizationOutOfRange(Float)
     case shadingToonyOutOfRange(Float)
     case shadingShiftOutOfRange(Float)
 
@@ -499,14 +499,17 @@ public enum VRMMaterialValidationError: LocalizedError {
             The outline lighting mix factor must be between 0 and 1.
             """
 
-        case .giIntensityOutOfRange(let intensity):
+        case .giEqualizationOutOfRange(let value):
             return """
-            ❌ MToon Material Validation: GI Intensity Out of Range
+            ❌ MToon Material Validation: giEqualizationFactor Out of Range
 
-            GI intensity: \(intensity)
+            giEqualizationFactor: \(value)
             Valid range: [0.0, 1.0]
 
-            The GI intensity factor must be between 0 and 1.
+            MToon 1.0 spec defines giEqualizationFactor as the lerp parameter
+            between directional indirect (rawGi(n)) and uniform indirect
+            (uniformedGi). Default is 0.9. See docs/MTOON_GI_SPEC.md for the
+            verbatim spec excerpt and notes on this renderer's deviation.
             """
 
         case .shadingToonyOutOfRange(let toony):

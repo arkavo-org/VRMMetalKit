@@ -67,7 +67,7 @@ struct MToonMaterial {
  // Block 3: 16 bytes - PBR factors
  float metallicFactor;                      // 4 bytes
  float roughnessFactor;                     // 4 bytes
- float giIntensityFactor;                   // 4 bytes
+ float giEqualizationFactor;                   // 4 bytes
  float shadingShiftTextureScale;            // 4 bytes
 
  // Block 4: 16 bytes - MatCap properties (packed float3 + int)
