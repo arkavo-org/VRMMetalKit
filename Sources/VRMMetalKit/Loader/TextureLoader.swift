@@ -151,9 +151,11 @@ public class TextureLoader {
             fileURL = baseURL.appendingPathComponent(uri)
         }
 
-        // Security check: Ensure the resolved path is within the base directory
-        let basePath = baseURL.standardized.path
-        let filePath = fileURL.standardized.path
+        // Security check: Ensure the resolved path is within the base directory.
+        // `resolvingSymlinksInPath()` follows symlinks so a link inside the base
+        // directory cannot redirect reads to an arbitrary file outside it.
+        let basePath = baseURL.standardized.resolvingSymlinksInPath().path
+        let filePath = fileURL.standardized.resolvingSymlinksInPath().path
         guard filePath.hasPrefix(basePath) else {
             vrmLog("[TextureLoader] Security: Refusing to load file outside base directory: \(uri)")
             throw VRMError.invalidPath(
