@@ -113,6 +113,20 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // across frames so springs don't each allocate their own tuple array.
     private var chainNodePositions: [(VRMNode, SIMD3<Float>, Int)] = []
 
+    // MARK: - Center-space simulation (VRMC_springBone-1.0 §5.1)
+    // Each entry records the center node index, the contiguous bone-buffer range occupied
+    // by that spring's joints, and the center's world matrix from the previous frame.
+    // Each substep, we apply the rigid delta (prevCenter⁻¹ · currCenter) to bonePosCurr
+    // and bonePosPrev for those bone indices so that joint positions "follow" the center
+    // node rather than accumulating inertia from the avatar's locomotion.
+    struct CenterSpringRecord {
+        var centerNodeIndex: Int
+        var boneStart: Int
+        var boneCount: Int
+    }
+    var centerSpringRecords: [CenterSpringRecord] = []
+    private var previousCenterWorldMatrices: [Int: float4x4] = [:]
+
     /// Flag to request physics state reset on next update (e.g., when returning to idle)
     var requestPhysicsReset = false
 
@@ -269,6 +283,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             prev.contents().copyMemory(from: curr.contents(), byteCount: curr.length)
         }
 
+        // Center-space simulation (VRMC_springBone-1.0 §5.1): carry joint positions
+        // along with their center node's rigid-body motion this frame.  Each spring
+        // with a center node has its joints' bonePosCurr/bonePosPrev transformed by
+        // the center's world-space frame delta so that locomotion of the avatar does
+        // not produce phantom inertial drag on the spring chain.
+        if frameSubstepCount > 0 {
+            applyCenterFrameDeltas(model: model, buffers: buffers)
+        }
+
         var stepsThisFrame = 0
 
         // Process fixed steps (clamped to avoid spiral-of-death)
@@ -364,6 +387,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Commit all target transforms as previous for next frame's interpolation
         if VRMConstants.Physics.enableRootInterpolation && stepsThisFrame > 0 {
             commitAllTransforms()
+        }
+
+        // Update center world matrices for the next frame's delta computation
+        if stepsThisFrame > 0 {
+            commitCenterWorldMatrices(model: model)
         }
 
         lastUpdateTime = CACurrentMediaTime()
@@ -831,6 +859,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             numRootBonesBuffer = device.makeBuffer(bytes: &numRootBonesUInt,
                                                   length: MemoryLayout<UInt32>.stride,
                                                   options: [.storageModeShared])
+        }
+
+        // Build center-spring records so update() can apply center-frame deltas.
+        centerSpringRecords.removeAll(keepingCapacity: true)
+        previousCenterWorldMatrices.removeAll(keepingCapacity: true)
+        var centerBoneIdx = 0
+        for spring in springBone.springs {
+            let count = spring.joints.count
+            if let centerIndex = spring.center {
+                centerSpringRecords.append(CenterSpringRecord(
+                    centerNodeIndex: centerIndex,
+                    boneStart: centerBoneIdx,
+                    boneCount: count
+                ))
+                if let centerNode = model.nodes[safe: centerIndex] {
+                    previousCenterWorldMatrices[centerIndex] = centerNode.worldMatrix
+                }
+            }
+            centerBoneIdx += count
         }
 
         snapshotLock.lock()
@@ -1567,6 +1614,49 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         swap(&previousSphereColliders, &targetSphereColliders)
         swap(&previousCapsuleColliders, &targetCapsuleColliders)
         swap(&previousPlaneColliders, &targetPlaneColliders)
+    }
+
+    // MARK: - Center-space Simulation Helpers
+
+    /// Applies the rigid-body delta of each spring's center node to the joint positions
+    /// in `bonePosCurr` and `bonePosPrev`. This makes joint positions "follow" the center
+    /// node between frames so that avatar locomotion does not induce phantom inertia on
+    /// the spring chains (VRMC_springBone-1.0 §5.1 center node semantics).
+    private func applyCenterFrameDeltas(model: VRMModel, buffers: SpringBoneBuffers) {
+        guard !centerSpringRecords.isEmpty,
+              let currBuf = buffers.bonePosCurr,
+              let prevBuf = buffers.bonePosPrev else { return }
+
+        let numBones = buffers.numBones
+        let currPtr = currBuf.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+        let prevPtr = prevBuf.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+
+        for record in centerSpringRecords {
+            guard let centerNode = model.nodes[safe: record.centerNodeIndex] else { continue }
+            guard let prevMatrix = previousCenterWorldMatrices[record.centerNodeIndex] else { continue }
+
+            let currMatrix = centerNode.worldMatrix
+            // delta = currCenter * prevCenter⁻¹ maps points from where the center
+            // was last frame to where it is this frame.
+            let delta = currMatrix * prevMatrix.inverse
+
+            let end = min(record.boneStart + record.boneCount, numBones)
+            for i in record.boneStart..<end {
+                let tc = delta * SIMD4<Float>(currPtr[i].x, currPtr[i].y, currPtr[i].z, 1)
+                currPtr[i] = SIMD3<Float>(tc.x, tc.y, tc.z)
+                let tp = delta * SIMD4<Float>(prevPtr[i].x, prevPtr[i].y, prevPtr[i].z, 1)
+                prevPtr[i] = SIMD3<Float>(tp.x, tp.y, tp.z)
+            }
+        }
+    }
+
+    /// Records the current frame's center node world matrices for use next frame.
+    private func commitCenterWorldMatrices(model: VRMModel) {
+        for record in centerSpringRecords {
+            if let centerNode = model.nodes[safe: record.centerNodeIndex] {
+                previousCenterWorldMatrices[record.centerNodeIndex] = centerNode.worldMatrix
+            }
+        }
     }
 
     // MARK: - Teleportation Detection

@@ -459,7 +459,7 @@ public struct VRMMToonMaterial {
     public var parametricRimFresnelPowerFactor: Float = 5.0  // Higher = narrower rim edge
     public var parametricRimLiftFactor: Float = 0.0
     public var rimMultiplyTexture: Int?
-    public var rimLightingMixFactor: Float = 0.0
+    public var rimLightingMixFactor: Float = 1.0
     public var outlineWidthMode: VRMOutlineWidthMode = .none
     public var outlineWidthFactor: Float = 0.0
     public var outlineWidthMultiplyTexture: Int?
@@ -469,6 +469,7 @@ public struct VRMMToonMaterial {
     public var uvAnimationScrollXSpeedFactor: Float = 0.0
     public var uvAnimationScrollYSpeedFactor: Float = 0.0
     public var uvAnimationRotationSpeedFactor: Float = 0.0
+    public var textureTransform: GLTFKHRTextureTransform?
 
     public init() {}
 }
@@ -515,6 +516,7 @@ public struct VRMCollider {
 public enum VRMColliderShape {
     case sphere(offset: SIMD3<Float>, radius: Float)
     case capsule(offset: SIMD3<Float>, radius: Float, tail: SIMD3<Float>)
+    /// Non-spec VRMMetalKit extension. Not part of VRMC_springBone-1.0.
     case plane(offset: SIMD3<Float>, normal: SIMD3<Float>)
 }
 

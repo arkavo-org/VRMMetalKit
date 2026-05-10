@@ -866,8 +866,10 @@ public class VRMExtensionParser {
     /// Violations are logged under VRM_METALKIT_ENABLE_LOGS.
     private func validateSpringJointUniqueness(_ springBone: inout VRMSpringBone) {
         var seenNodesGlobal = Set<Int>()
+        var springWasModified = [Bool](repeating: false, count: springBone.springs.count)
 
         for springIndex in springBone.springs.indices {
+            let originalCount = springBone.springs[springIndex].joints.count
             var seenNodesInSpring = Set<Int>()
             var dedupedJoints: [VRMSpringJoint] = []
 
@@ -890,20 +892,21 @@ public class VRMExtensionParser {
                 dedupedJoints.append(joint)
             }
 
+            if dedupedJoints.count != originalCount {
+                springWasModified[springIndex] = true
+            }
             springBone.springs[springIndex].joints = dedupedJoints
         }
 
-        springBone.springs = springBone.springs.filter { spring in
-            if spring.joints.count < 2 {
-                #if VRM_METALKIT_ENABLE_LOGS
-                if !spring.joints.isEmpty {
-                    print("[VRMMetalKit] WARNING: Spring '\(spring.name ?? "unnamed")' has fewer than 2 unique joints after deduplication — dropping spring.")
-                }
-                #endif
-                return false
-            }
-            return true
-        }
+        // Drop springs that were modified by deduplication and ended up with fewer than 2 joints.
+        // Springs that originally had fewer than 2 joints are left as-is (not our validation concern).
+        springBone.springs = springBone.springs.enumerated().filter { (springIndex, spring) in
+            guard springWasModified[springIndex] && spring.joints.count < 2 else { return true }
+            #if VRM_METALKIT_ENABLE_LOGS
+            print("[VRMMetalKit] WARNING: Spring '\(spring.name ?? "unnamed")' has fewer than 2 unique joints after deduplication — dropping spring.")
+            #endif
+            return false
+        }.map { $0.element }
     }
 
     private func parseVRM0Vector3(_ value: Any?) -> SIMD3<Float>? {
