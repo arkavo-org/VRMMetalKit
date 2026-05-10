@@ -173,39 +173,12 @@ static inline bool needsViewDirection(constant MToonMaterial& material, constant
  return hasParametricRim(material) || uniforms.debugUVs == 10;
 }
 
-// UV Animation utility function (rotation first, then scroll)
-static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
- float2 result = uv;
-
- // UV rotation animation around center (0.5, 0.5) - FIRST
- if (material.uvAnimationRotationSpeedFactor != 0.0) {
- float angle = material.uvAnimationRotationSpeedFactor * material.time;
- float2 center = float2(0.5, 0.5);
- float2 translated = result - center;
-
- float cosAngle = cos(angle);
- float sinAngle = sin(angle);
- float2x2 rotationMatrix = float2x2(
-     float2(cosAngle, -sinAngle),
-     float2(sinAngle, cosAngle)
- );
-
- result = rotationMatrix * translated + center;
- }
-
- // UV scroll animation - SECOND
- result.x += material.uvAnimationScrollXSpeedFactor * material.time;
- result.y += material.uvAnimationScrollYSpeedFactor * material.time;
-
- return result;
-}
-
 // Skinned vertex shader with MToon support
 vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                constant Uniforms& uniforms [[buffer(1)]],
                                constant MToonMaterial& material [[buffer(8)]],
                                constant float4x4* jointMatrices [[buffer(25)]],
-                               device float3* morphedPositions [[buffer(20)]],
+                               device const float3* morphedPositions [[buffer(20)]],
                                constant uint& hasMorphed [[buffer(22)]],
                                device const uint8_t* firstPersonHiddenFlags [[buffer(26)]],
                                uint vertexID [[vertex_id]]) {

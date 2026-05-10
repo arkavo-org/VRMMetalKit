@@ -230,7 +230,7 @@ static inline float linearstep(float a, float b, float t) {
 vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
                        constant Uniforms& uniforms [[buffer(1)]],
                        constant MToonMaterial& material [[buffer(8)]],
-                       device float3* morphedPositions [[buffer(20)]],
+                       device const float3* morphedPositions [[buffer(20)]],
                        constant uint& hasMorphed [[buffer(22)]],
                        uint vertexID [[vertex_id]]) {
  VertexOut out;
