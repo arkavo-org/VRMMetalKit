@@ -123,11 +123,12 @@ public enum VRMExpressionPreset: String, CaseIterable, Sendable {
     case blink, blinkLeft, blinkRight           // Blink (3)
     case lookUp, lookDown, lookLeft, lookRight  // Gaze (4)
     case neutral                                 // Neutral (1)
+    case custom                                  // User-defined (1)
 }
-// Total: 18 presets (no custom enum)
+// Total: 19 presets
 ```
 
-**⚠️ ISSUE IDENTIFIED:**
+**Analysis:**
 
 | Feature | UniVRM | VRMMetalKit | Status |
 |---------|--------|-------------|--------|
@@ -136,13 +137,11 @@ public enum VRMExpressionPreset: String, CaseIterable, Sendable {
 | **Blink Expressions** | 3 | 3 | ✅ Match |
 | **Gaze Expressions** | 4 | 4 | ✅ Match |
 | **Neutral Expression** | ✅ | ✅ | ✅ Match |
-| **Custom Expression Enum** | ✅ | ❌ | ⚠️ **Missing** |
+| **Custom Expression Enum** | ✅ | ✅ | ✅ Match |
 
-**Analysis:**
-- ✅ All 18 standard VRM 1.0 expressions are present
-- ⚠️ **VRMMetalKit missing `custom` enum case** (though custom expressions are supported via name-based lookup)
-- ✅ Both support custom expressions through string-based names
-- ✅ Expression structure matches VRM 1.0 specification
+- All 19 VRM 1.0 expression presets (including `custom`) are represented in `VRMExpressionPreset`.
+- Both UniVRM and VRMMetalKit also support custom expressions via string-based names.
+- Expression structure matches VRM 1.0 specification.
 
 **Recommendation:**
 ```swift
@@ -567,7 +566,7 @@ case .missingRequiredBone(let bone, let available):
 |----------|--------|-------------|---------|
 | **VRM 1.0 Core** | ✅ 100% | ✅ 100% | ✅ Both correct |
 | **Humanoid Bones** | ✅ 55/55 | ✅ 55/55 | ✅ Both correct |
-| **Expressions** | ✅ 19/19 | ⚠️ 18/19 (missing custom enum) | ⚠️ Minor issue |
+| **Expressions** | ✅ 19/19 | ✅ 19/19 | ✅ Both correct |
 | **MToon Shader** | ✅ Full | ✅ Full | ✅ Both correct |
 | **SpringBone** | ✅ Spec-compliant | ✅ Spec-compliant (XPBD variant) | ✅ Both correct |
 | **First-Person** | ✅ Full | ✅ Core features | ✅ Both correct |
@@ -590,16 +589,7 @@ case .missingRequiredBone(let bone, let available):
 
 ### 7.1 Critical Issues (Must Fix)
 
-1. **Add `custom` to VRMExpressionPreset enum**
-   ```swift
-   public enum VRMExpressionPreset: String, CaseIterable, Sendable {
-       case custom  // Add this
-       case happy, angry, sad, relaxed, surprised
-       // ... rest
-   }
-   ```
-   **Impact:** Specification compliance
-   **Effort:** Low
+_(none currently — see §7.2 for nice-to-have improvements)_
 
 ### 7.2 High Priority (Should Fix)
 
@@ -655,7 +645,6 @@ case .missingRequiredBone(let bone, let available):
 - Robust validation system (StrictMode)
 
 ⚠️ **Minor Issues:**
-- Missing `custom` expression preset enum (easy fix)
 - No runtime export (feature gap)
 - Less comprehensive VRM 0.x migration than UniVRM
 
