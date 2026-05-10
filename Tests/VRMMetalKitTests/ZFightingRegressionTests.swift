@@ -93,14 +93,21 @@ final class ZFightingRegressionTests: XCTestCase {
 
     // MARK: - Face Region Tests
 
-    /// Regression test: Face front view Z-fighting
-    /// Uses model-specific threshold based on material composition
+    /// Regression test: Face front view Z-fighting (issue #108).
+    ///
+    /// Pre-#113 mitigation: 9.29% flicker. Current after depth-bias work:
+    /// 6.69%, deterministic across runs. The face region's primary source
+    /// is coplanar `Face_SKIN` and `FaceMouth` material overlap — a model-
+    /// data limitation rather than a renderer bug. The 2% target from
+    /// #107 is not achievable with the current depth-bias approach.
+    /// 7.5% locks in current quality with small margin against build/HW
+    /// variance.
     func testFaceFrontZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
 
-        // Calculate model-specific threshold
-        let threshold = self.threshold(for: model, region: .face)
+        // Locked-in quality post-depth-bias (#113); see issue #108.
+        let threshold: Float = 7.5
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0, 1.5, 1.0),
@@ -120,17 +127,21 @@ final class ZFightingRegressionTests: XCTestCase {
         XCTAssertLessThan(
             result.flickerRate,
             threshold,
-            "REGRESSION: Face front Z-fighting (\(result.flickerRate)%) exceeds model-specific threshold (\(threshold)%)"
+            "REGRESSION: Face front Z-fighting (\(result.flickerRate)%) exceeds the post-#113 locked-in quality (\(threshold)%). See issue #108."
         )
     }
 
-    /// Regression test: Face side view Z-fighting
+    /// Regression test: Face side view Z-fighting (issue #108).
+    ///
+    /// Pre-#113 mitigation: 9.41% flicker. Current: 6.64%. Same coplanar-
+    /// geometry constraint as the front view; locked-in quality is 7.5%
+    /// with a small margin.
     func testFaceSideZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
 
-        // Use higher threshold for face side (measured: ~10.8%, was 10.5%)
-        let threshold: Float = 12.0
+        // Locked-in quality post-depth-bias (#113); see issue #108.
+        let threshold: Float = 7.5
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(-0.5, 1.5, 0.5),
@@ -260,14 +271,19 @@ final class ZFightingRegressionTests: XCTestCase {
         )
     }
 
-    /// Regression test: Hip/Skirt area Z-fighting
-    /// Note: VRM 0.0 models now correctly face the camera (front view)
+    /// Regression test: Hip/Skirt area Z-fighting (issue #110).
+    ///
+    /// Pre-#113 mitigation: 9.48% flicker. Current: 7.81%, deterministic
+    /// across runs. The body/clothing boundary at the hip line has the
+    /// same coplanar-geometry constraint as the face region — depth-bias
+    /// mitigation has reached its practical limit. Locked-in quality is
+    /// 9.0% with a small margin.
     func testHipSkirtZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
 
-        // Front view threshold (VRM 0.0 models now face camera correctly)
-        let threshold: Float = 19.0
+        // Locked-in quality post-depth-bias (#113); see issue #110.
+        let threshold: Float = 9.0
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0.3, 0.85, 0.5),
@@ -293,12 +309,18 @@ final class ZFightingRegressionTests: XCTestCase {
 
     // MARK: - Eye Detail Tests
 
-    /// Regression test: Eye area Z-fighting
+    /// Regression test: Eye area Z-fighting (issue #108 sub-region).
+    ///
+    /// Pre-#113 mitigation: 5.30% flicker. Current: 0.33% — comfortably
+    /// under the 2% target the original cluster issue (#107) called for.
+    /// Threshold set to 1.0% (3× absolute headroom for a tiny rate) so any
+    /// future regression in the eye region trips immediately.
     func testEyeDetailZFighting() async throws {
         let model = try await loadAvatarSampleA()
         helper.loadModel(model)
 
-        let threshold = self.threshold(for: model, region: .face)
+        // Meets the original 2% target; gate at 1.0% to lock in quality.
+        let threshold: Float = 1.0
 
         helper.setViewMatrix(makeLookAt(
             eye: SIMD3<Float>(0, 1.57, 0.2),
