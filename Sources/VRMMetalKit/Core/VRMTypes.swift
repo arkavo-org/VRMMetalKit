@@ -360,11 +360,14 @@ public struct VRM0MaterialProperty {
         }
 
         // VRM 0.x's `_IndirectLightIntensity` is an intensity scalar, semantically
-        // different from MToon 1.0's `giEqualizationFactor` (a lit/shade mix). We
-        // intentionally do not auto-convert; VRM 0.x models inherit the spec
-        // default (0.9) on load. Authored 0.x intent can be re-applied at the
-        // application layer if needed.
-        _ = floatProperties["_IndirectLightIntensity"]
+        // different from MToon 1.0's `giEqualizationFactor` (a directional-mix
+        // factor; see docs/MTOON_GI_SPEC.md). We intentionally do not auto-convert;
+        // VRM 0.x models inherit the spec default (0.9) on load. Authored 0.x intent
+        // can be re-applied at the application layer if needed. Logging here so
+        // developers can detect when authored values are being dropped.
+        if let dropped = floatProperties["_IndirectLightIntensity"] {
+            vrmLog("[VRMMToonMaterial] Dropping VRM 0.x `_IndirectLightIntensity = \(dropped)` — semantics differ from MToon 1.0 `giEqualizationFactor`; field inherits spec default 0.9. Re-apply at app layer if needed.")
+        }
 
         // Matcap/Sphere Add texture
         if let matcapIndex = textureProperties["_SphereAdd"] {

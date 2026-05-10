@@ -501,13 +501,15 @@ public enum VRMMaterialValidationError: LocalizedError {
 
         case .giEqualizationOutOfRange(let value):
             return """
-            ❌ MToon Material Validation: GI Equalization Factor Out of Range
+            ❌ MToon Material Validation: giEqualizationFactor Out of Range
 
             giEqualizationFactor: \(value)
             Valid range: [0.0, 1.0]
 
-            Per MToon 1.0 spec, giEqualizationFactor mixes lit-side (1.0) and
-            shade-side (0.0) in indirect diffuse. The default is 0.9.
+            MToon 1.0 spec defines giEqualizationFactor as the lerp parameter
+            between directional indirect (rawGi(n)) and uniform indirect
+            (uniformedGi). Default is 0.9. See docs/MTOON_GI_SPEC.md for the
+            verbatim spec excerpt and notes on this renderer's deviation.
             """
 
         case .shadingToonyOutOfRange(let toony):

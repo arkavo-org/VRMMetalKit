@@ -251,7 +251,8 @@ final class RendererLightingCorrectnessTests: XCTestCase {
         )
         let centerRGB = sampleRGB(frameData, x: 64, y: 64, width: 128)
 
-        // mix(red, cyan, 0.5) = (0.5, 0.5, 0.5) before ambient. Both R and G/B
+        // mix(red, cyan, 0.5) = (0.5, 0.5, 0.5). With ambientColor=(1,1,1),
+        // indirect ≈ (0.5, 0.5, 0.5). Both R (from shade) and G/B (from base)
         // should land in the mid-band — not red-dominant, not cyan-dominant.
         XCTAssertGreaterThan(centerRGB.x, 0.3, "Red channel from shade should bleed in. Got \(centerRGB)")
         XCTAssertGreaterThan(centerRGB.y, 0.3, "Green channel from base should bleed in. Got \(centerRGB)")
