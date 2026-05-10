@@ -77,6 +77,16 @@ public struct SilhouetteRenderConfig: Sendable {
     /// English tokens: `eye / iris / sclera / pupil / highlight / eyeball`.
     /// Japanese tokens: `瞳 (pupil) / 白目 (sclera) / ハイライト (highlight)`.
     /// English match is case-insensitive; Japanese match is exact.
+    ///
+    /// Exclusion runs first: `lash / brow / line` always returns `false`.
+    /// This catches eyebrows, eyelashes, eyeliner, and any name containing
+    /// "outline" — they need to be part of the body crush.
+    ///
+    /// Note on `highlight`: included by design so VRoid exporters that name
+    /// the iris-highlight decal as bare `Highlight` (no `Eye` prefix) still
+    /// self-illuminate. If a model uses the literal name `Highlight` for a
+    /// non-eye material, override `SilhouetteRenderConfig.isEyeMaterial`
+    /// with a custom predicate. See `SilhouetteRenderConfigTests`.
     public static let defaultIsEyeMaterial: @Sendable (String?) -> Bool = { name in
         guard let raw = name else { return false }
         let lower = raw.lowercased()
