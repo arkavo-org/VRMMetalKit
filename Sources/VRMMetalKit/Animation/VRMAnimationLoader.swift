@@ -119,6 +119,13 @@ public enum VRMAnimationLoader {
             var map: [Int: VRMHumanoidBone] = [:]
             for (boneName, value) in humanBones {
                 guard let bone = VRMHumanoidBone(rawValue: boneName) else { continue }
+                // Spec (VRMC_vrm_animation-1.0): leftEye and rightEye must not have animation data.
+                if bone == .leftEye || bone == .rightEye {
+                    #if VRM_METALKIT_ENABLE_LOGS
+                    vrmLogLoader("[VRMAnimationLoader] Skipping eye bone '\(boneName)' per VRMC_vrm_animation spec")
+                    #endif
+                    continue
+                }
 
                 if let boneDict = value as? [String: Any],
                    let nodeAny = boneDict["node"],
@@ -140,9 +147,18 @@ public enum VRMAnimationLoader {
 
             var map: [String: Int] = [:]
 
+            // Spec (VRMC_vrm_animation-1.0): gaze presets must not have animation data.
+            let gazePresets: Set<String> = ["lookUp", "lookDown", "lookLeft", "lookRight"]
+
             // Parse preset expressions
             if let preset = expressions["preset"] as? [String: Any] {
                 for (expressionName, value) in preset {
+                    if gazePresets.contains(expressionName) {
+                        #if VRM_METALKIT_ENABLE_LOGS
+                        vrmLogLoader("[VRMAnimationLoader] Skipping gaze preset '\(expressionName)' per VRMC_vrm_animation spec")
+                        #endif
+                        continue
+                    }
                     if let expressionDict = value as? [String: Any],
                        let nodeAny = expressionDict["node"],
                        let nodeIndex = intValue(from: nodeAny) {
@@ -170,6 +186,8 @@ public enum VRMAnimationLoader {
             guard let model, let humanoid = model.humanoid else { return [:] }
             var map: [String: VRMHumanoidBone] = [:]
             for bone in VRMHumanoidBone.allCases {
+                // Spec (VRMC_vrm_animation-1.0): leftEye and rightEye must not have animation data.
+                if bone == .leftEye || bone == .rightEye { continue }
                 if let nodeIndex = humanoid.getBoneNode(bone),
                    nodeIndex < model.nodes.count,
                    let nodeName = model.nodes[nodeIndex].name {
@@ -296,6 +314,20 @@ public enum VRMAnimationLoader {
             #endif
         }
 
+        // B1: Parse lookAt block from VRMC_vrm_animation extension.
+        // Spec: the referenced node's translation track drives the head-local look-at target.
+        if let extensionDict = document.extensions?["VRMC_vrm_animation"] as? [String: Any],
+           let lookAtBlock = extensionDict["lookAt"] as? [String: Any],
+           let lookAtNodeAny = lookAtBlock["node"],
+           let lookAtNodeIndex = intValue(from: lookAtNodeAny),
+           let lookAtTracks = nodeTracks[lookAtNodeIndex],
+           let translationTrack = lookAtTracks["translation"] {
+            clip.lookAtTargetSampler = { t in sampleVector3(translationTrack, at: t) }
+            #if VRM_METALKIT_ENABLE_LOGS
+            vrmLogLoader("[VRMAnimationLoader] Parsed lookAt block -> node \(lookAtNodeIndex)")
+            #endif
+        }
+
         return clip
     }
 
@@ -337,7 +369,6 @@ public enum VRMAnimationLoader {
         // - tracks: the actual animation data (rotations relative to bind pose)
         let rotationRest = animationRest.rotation
         let translationRest = animationRest.translation
-        let scaleRest = animationRest.scale
 
         // Validate rest pose mismatch for debugging
         if let modelRest = modelRest {
@@ -363,17 +394,25 @@ public enum VRMAnimationLoader {
 
         var translationSampler: ((Float) -> simd_float3)? = nil
         if let trans = tracks["translation"] {
-            translationSampler = makeTranslationSampler(track: trans,
-                                                        animationRestTranslation: translationRest,
-                                                        modelRestTranslation: modelRest?.translation,
-                                                        convertForVRM0: convertForVRM0)
+            if bone == .hips {
+                translationSampler = makeTranslationSampler(track: trans,
+                                                            animationRestTranslation: translationRest,
+                                                            modelRestTranslation: modelRest?.translation,
+                                                            convertForVRM0: convertForVRM0)
+            } else {
+                // Spec (VRMC_vrm_animation-1.0): only Hips may carry a translation track.
+                #if VRM_METALKIT_ENABLE_LOGS
+                vrmLogLoader("[VRMAnimationLoader] Ignoring translation track on non-hips bone '\(bone)' per VRMC_vrm_animation spec")
+                #endif
+            }
         }
 
-        var scaleSampler: ((Float) -> simd_float3)? = nil
-        if let scl = tracks["scale"] {
-            scaleSampler = makeScaleSampler(track: scl,
-                                            animationRestScale: scaleRest,
-                                            modelRestScale: modelRest?.scale)
+        let scaleSampler: ((Float) -> simd_float3)? = nil
+        if tracks["scale"] != nil {
+            // Spec (VRMC_vrm_animation-1.0): humanoid bones must not include scale animation.
+            #if VRM_METALKIT_ENABLE_LOGS
+            vrmLogLoader("[VRMAnimationLoader] Ignoring scale track on humanoid bone '\(bone)' per VRMC_vrm_animation spec")
+            #endif
         }
 
         #if DEBUG
@@ -641,10 +680,11 @@ private func makeScaleSampler(track: KeyTrack,
 // Expression Weight Sampler
 // Extracts the X component of a translation track as the expression weight.
 // VRMA expression tracks encode weight as translation.x (0.0 to 1.0).
+// Spec (VRMC_vrm_animation-1.0): "The implementation must clamp the value to [0, 1]."
 private func makeExpressionWeightSampler(track: KeyTrack) -> (Float) -> Float {
     return { t in
         let translation = sampleVector3(track, at: t)
-        return translation.x
+        return simd_clamp(translation.x, 0, 1)
     }
 }
 
