@@ -515,8 +515,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         simulationFrameCounter &+= 1
         let frameID = simulationFrameCounter
 
-        commandBuffer.addCompletedHandler { [weak self, weak buffers = buffers] buffer in
-            guard let self = self, let buffers = buffers else { return }
+        let capturedBonePosCurr = buffers.bonePosCurr
+        let capturedNumBones = buffers.numBones
+
+        commandBuffer.addCompletedHandler { [weak self] buffer in
+            guard let self = self else { return }
 
             // Check for GPU errors before reading back data
             if buffer.status == .error {
@@ -526,7 +529,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 return
             }
 
-            self.captureCompletedPositions(from: buffers, frameID: frameID)
+            self.captureCompletedPositions(bonePosCurr: capturedBonePosCurr, numBones: capturedNumBones, frameID: frameID)
         }
 
         // Only commit when we own the buffer. Caller commits the shared buffer.
@@ -1053,28 +1056,27 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         previousPlaneColliders = targetPlaneColliders
     }
 
-    private func captureCompletedPositions(from buffers: SpringBoneBuffers, frameID: UInt64) {
-        guard let bonePosCurr = buffers.bonePosCurr,
-              buffers.numBones > 0 else {
+    private func captureCompletedPositions(bonePosCurr: MTLBuffer?, numBones: Int, frameID: UInt64) {
+        guard let bonePosCurr = bonePosCurr, numBones > 0 else {
             return
         }
 
-        let sourcePointer = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+        let sourcePointer = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
 
         snapshotLock.lock()
-        if latestPositionsSnapshot.count != buffers.numBones {
-            latestPositionsSnapshot = Array(repeating: SIMD3<Float>(repeating: 0), count: buffers.numBones)
+        if latestPositionsSnapshot.count != numBones {
+            latestPositionsSnapshot = Array(repeating: SIMD3<Float>(repeating: 0), count: numBones)
         }
 
         latestPositionsSnapshot.withUnsafeMutableBufferPointer { destination in
             guard let dst = destination.baseAddress else { return }
-            dst.update(from: sourcePointer, count: buffers.numBones)
+            dst.update(from: sourcePointer, count: numBones)
         }
 
         // NaN safety: filter out corrupted positions and replace with safe fallback
         // This prevents NaN from propagating to writeBonesToNodes
         var nanCount = 0
-        for i in 0..<buffers.numBones {
+        for i in 0..<numBones {
             let pos = latestPositionsSnapshot[i]
             if pos.x.isNaN || pos.y.isNaN || pos.z.isNaN ||
                pos.x.isInfinite || pos.y.isInfinite || pos.z.isInfinite {
