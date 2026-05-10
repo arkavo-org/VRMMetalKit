@@ -9,13 +9,16 @@ help:
 	@echo "  make clean    - Remove temporary build files"
 	@echo "  make test     - Run Swift tests"
 
-# Compile all Metal shaders into a single metallib
+# Compile all Metal shaders into a single metallib.
+# -Werror promotes warnings to errors so the CI Shaders job (and local
+# `make shaders`) catches issues like unused functions and writable-buffer
+# aliasing before they become harder to fix later.
 shaders:
 	@echo "🔨 Compiling Metal shaders..."
 	@mkdir -p /tmp/vrm-shaders
 	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
 		echo "  Compiling $$file..."; \
-		xcrun metal -c $$file -o /tmp/vrm-shaders/$$(basename $$file .metal).air; \
+		xcrun metal -Werror -c $$file -o /tmp/vrm-shaders/$$(basename $$file .metal).air; \
 	done
 	@xcrun metallib /tmp/vrm-shaders/*.air -o Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
 	@echo "✅ Shaders compiled successfully"
