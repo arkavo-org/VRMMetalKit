@@ -1,0 +1,61 @@
+name: Shaders
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  metal:
+    name: Compile + freshness check
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Probe runner toolchains
+        run: |
+          echo "::group::Installed Xcode versions"
+          ls /Applications | grep -i Xcode || true
+          echo "::endgroup::"
+          xcrun metal --version || true
+
+      - name: Select Xcode with Metal compiler
+        run: |
+          # Metal compiler ships with every Xcode; pick the same one the
+          # rest of the build uses (Xcode 26+ for Swift 6.2).
+          XCODE=$(ls -d /Applications/Xcode_26* /Applications/Xcode_27* 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 26 (or newer) found"
+            ls /Applications | grep -i Xcode || true
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+
+      - name: Compile Metal shaders
+        # `make shaders` compiles each .metal file with `xcrun metal -c`
+        # and packs them into the metallib. Any compile error fails this
+        # step (warnings are not errors today; see #171 follow-up).
+        run: make shaders
+
+      - name: Verify committed metallib is fresh
+        # Metal compilation is byte-deterministic on identical Xcode
+        # versions, so a non-empty diff means the committed metallib
+        # is out-of-date relative to the .metal sources. Fail with a
+        # clear remediation hint.
+        run: |
+          if ! git diff --quiet Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib; then
+            echo "::error::Committed VRMMetalKitShaders.metallib is stale relative to .metal sources."
+            echo ""
+            echo "Run 'make shaders' locally and commit the updated metallib."
+            echo "Diff summary:"
+            git diff --stat Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
+            exit 1
+          fi
+          echo "Committed metallib matches a fresh compile."
