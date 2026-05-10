@@ -111,6 +111,12 @@ kernel void springBonePredict(
     // constraint pulls child up, and that becomes upward velocity that pumps the chain
     // into sustained oscillation (the flutter signature).
     //
+    // ⚠️ LOAD-BEARING: This compensation block is paired with the VRM 0.x parser quirk
+    // at VRMExtensionParser.swift:800 (forcing gravityPower=0 to 1.0). AvatarSample_A's
+    // tuning is calibrated against the combination; changing either in isolation breaks
+    // the model. See #162 for the equilibrium analysis. Local regression gate:
+    // `SpringBoneRegressionTests` will trip on any drift.
+    //
     // SETTLING PERIOD: Skip compensation during initial frames to let bones settle naturally
     // with gravity. Otherwise compensation fights the settling and bones stay in bind pose.
     //
