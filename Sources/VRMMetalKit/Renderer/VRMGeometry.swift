@@ -90,6 +90,11 @@ public class VRMPrimitive {
     public var localMin: SIMD3<Float> = SIMD3<Float>(repeating: 0)
     public var localMax: SIMD3<Float> = SIMD3<Float>(repeating: 0)
 
+    // First-person visibility: per-vertex flags (1 = hidden in first-person, 0 = visible).
+    // Populated by VRMFirstPersonProcessor for meshes with `auto` annotation.
+    public var firstPersonHiddenFlags: [UInt8] = []
+    public var firstPersonHiddenFlagsBuffer: MTLBuffer?
+
     public init() {}
 
     public static func load(from gltfPrimitive: GLTFPrimitive,
@@ -709,6 +714,56 @@ public class VRMPrimitive {
         }
 
         return sanitizedCount
+    }
+
+    // MARK: - First-Person Hidden Flags
+
+    /// Computes per-vertex first-person hidden flags for `auto`-annotated meshes.
+    ///
+    /// A vertex is marked hidden (1) when any of its four skin joint slots references the
+    /// head joint with a weight above `weightThreshold`. Vertices with no influence from
+    /// the head joint are marked visible (0).
+    ///
+    /// - Parameters:
+    ///   - joints: Per-vertex joint index quads (parallel to `weights`).
+    ///   - weights: Per-vertex weight quads (parallel to `joints`).
+    ///   - headJointIndex: The skin-local joint index that corresponds to the head bone.
+    ///   - weightThreshold: Minimum weight to consider a joint influential (default 0.001).
+    /// - Returns: One byte per vertex: 0 = visible in first-person, 1 = hidden.
+    public static func computeFirstPersonHiddenFlags(
+        joints: [SIMD4<UInt32>],
+        weights: [SIMD4<Float>],
+        headJointIndex: UInt32,
+        weightThreshold: Float = 0.001
+    ) -> [UInt8] {
+        let count = min(joints.count, weights.count)
+        var flags = [UInt8](repeating: 0, count: count)
+        for i in 0..<count {
+            let j = joints[i]
+            let w = weights[i]
+            if (j.x == headJointIndex && w.x > weightThreshold) ||
+               (j.y == headJointIndex && w.y > weightThreshold) ||
+               (j.z == headJointIndex && w.z > weightThreshold) ||
+               (j.w == headJointIndex && w.w > weightThreshold) {
+                flags[i] = 1
+            }
+        }
+        return flags
+    }
+
+    /// Uploads `firstPersonHiddenFlags` to a Metal buffer on the given device.
+    ///
+    /// Call after populating `firstPersonHiddenFlags`. The buffer is stored in
+    /// `firstPersonHiddenFlagsBuffer` and bound to the vertex shader at draw time
+    /// when the camera mode is `.firstPerson`.
+    public func uploadFirstPersonHiddenFlagsBuffer(device: MTLDevice) {
+        guard !firstPersonHiddenFlags.isEmpty else { return }
+        let length = firstPersonHiddenFlags.count * MemoryLayout<UInt8>.stride
+        firstPersonHiddenFlagsBuffer = device.makeBuffer(
+            bytes: firstPersonHiddenFlags,
+            length: length,
+            options: .storageModeShared
+        )
     }
 }
 

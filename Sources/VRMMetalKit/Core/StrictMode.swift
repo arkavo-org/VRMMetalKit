@@ -231,6 +231,8 @@ public struct ResourceIndices {
     public static let hasMorphedPositionsFlag = 22
     // Joint matrices - moved to high index to avoid argument table collision
     public static let jointMatricesBuffer = 25
+    // Per-vertex first-person hidden flags (uint8 per vertex; 0=visible, 1=hidden)
+    public static let firstPersonHiddenFlagsBuffer = 26
 
     // Fragment shader buffer indices
     public static let materialUniforms = 0

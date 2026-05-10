@@ -43,7 +43,7 @@ struct Uniforms {
  int toonBands;                // Number of cel-shading bands
  float additiveDirectionalRimEnabled;  // 0 = off (legacy), >0.5 = enable additive directional rim
  float additiveDirectionalRimPower;    // Fresnel exponent for the additive rim (typical 4..12)
- float _padding7;
+ uint cameraMode;             // 0 = third-person, 1 = first-person
 };
 
 // Use packed_float3 to match Swift's Float component layout (no 16-byte alignment)

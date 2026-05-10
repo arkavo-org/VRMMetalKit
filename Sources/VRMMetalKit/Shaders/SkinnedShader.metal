@@ -43,7 +43,7 @@ struct Uniforms {
  int toonBands;
  float additiveDirectionalRimEnabled;
  float additiveDirectionalRimPower;
- float _padding7;
+ uint cameraMode;
 };
 
 // Use packed floats to match Swift struct layout (192 bytes total)
@@ -207,6 +207,7 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                constant float4x4* jointMatrices [[buffer(25)]],
                                device float3* morphedPositions [[buffer(20)]],
                                constant uint& hasMorphed [[buffer(22)]],
+                               device const uint8_t* firstPersonHiddenFlags [[buffer(26)]],
                                uint vertexID [[vertex_id]]) {
  VertexOut out;
 
@@ -311,6 +312,11 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  out.texCoord = in.texCoord;
  out.animatedTexCoord = in.texCoord;  // Will be animated in fragment shader if needed
  out.color = in.color;
+
+ // First-person head-bone culling: degenerate the position so the triangle is clipped.
+ if (uniforms.cameraMode == 1u && firstPersonHiddenFlags[vertexID] != 0u) {
+     out.position = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped by homogeneous divide
+ }
 
  return out;
 }
