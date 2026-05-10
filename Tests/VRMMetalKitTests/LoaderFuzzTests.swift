@@ -37,7 +37,6 @@ final class LoaderFuzzTests: XCTestCase {
     /// negative counts. Must not crash the decoder.
     func testFuzzGLTFDocumentDecoding_RandomShapes() {
         var generator = SeededRandomGenerator(seed: 1729)
-        var crashes = 0
         var decodedOK = 0
         var threwError = 0
 
@@ -56,8 +55,9 @@ final class LoaderFuzzTests: XCTestCase {
             // Reaching here without crashing is the pass.
         }
 
-        print("[Fuzz/JSON] 200 docs: decoded=\(decodedOK), threwError=\(threwError), crashes=\(crashes)")
-        XCTAssertEqual(crashes, 0, "No process-level crash should be reached")
+        // No process-level crash reached → pass. (A real crash would
+        // terminate the test process before this line is hit.)
+        print("[Fuzz/JSON] 200 docs: decoded=\(decodedOK), threwError=\(threwError)")
     }
 
     /// Documents that elide the required `asset` field, set required arrays to
@@ -123,7 +123,6 @@ final class LoaderFuzzTests: XCTestCase {
     func testFuzzGLBParser_GarbageChunks() throws {
         var generator = SeededRandomGenerator(seed: 9999)
         let parser = GLTFParser()
-        var crashes = 0
 
         for _ in 0..<50 {
             let chunkLen = Int(generator.next() % 4096)
@@ -147,8 +146,6 @@ final class LoaderFuzzTests: XCTestCase {
             }
             // Reaching here means no crash.
         }
-
-        XCTAssertEqual(crashes, 0)
     }
 
     // MARK: - 2. Malformed image data
