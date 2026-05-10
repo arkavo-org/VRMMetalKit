@@ -39,9 +39,11 @@ jobs:
           sudo xcode-select -s "$XCODE/Contents/Developer"
 
       - name: Compile Metal shaders
-        # `make shaders` compiles each .metal file with `xcrun metal -c`
-        # and packs them into the metallib. Any compile error fails this
-        # step (warnings are not errors today; see #171 follow-up).
+        # `make shaders` compiles each .metal file with
+        # `xcrun metal -Wall -Wextra -Werror -c` and packs them into the
+        # metallib. Warnings are hard errors so unused functions,
+        # writable-buffer aliasing, sign-compare bugs, and similar
+        # classes fail the build instead of silently shipping.
         #
         # Freshness note: Metal compilation is byte-deterministic only
         # for identical Xcode/Metal compiler versions. A byte-equality

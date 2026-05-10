@@ -837,7 +837,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 }
 
 // Advanced outline fragment shader
-fragment float4 mtoon_outline_fragment(VertexOut in [[stage_in]],
+fragment float4 mtoon_outline_fragment([[maybe_unused]] VertexOut in [[stage_in]],
                                 constant MToonMaterial& material [[buffer(8)]],
                                 constant Uniforms& uniforms [[buffer(1)]]) {
  float3 outlineColor = float3(material.outlineColorR, material.outlineColorG, material.outlineColorB);
@@ -853,7 +853,7 @@ fragment float4 mtoon_outline_fragment(VertexOut in [[stage_in]],
 
 // Debug fragment shaders for visualizing individual MToon components
 fragment float4 mtoon_debug_nl(VertexOut in [[stage_in]],
-                        constant MToonMaterial& material [[buffer(8)]],
+                        [[maybe_unused]] constant MToonMaterial& material [[buffer(8)]],
                         constant Uniforms& uniforms [[buffer(1)]]) {
  float3 normal = normalize(in.worldNormal);
  float nl = saturate(dot(normal, -uniforms.lightDirection.xyz));  // Negate for correct convention
@@ -902,7 +902,7 @@ fragment float4 mtoon_debug_matcap_uv(VertexOut in [[stage_in]]) {
  return float4(matcapUV.x, matcapUV.y, 0.0, 1.0);
 }
 
-fragment float4 mtoon_debug_outline_width(VertexOut in [[stage_in]],
+fragment float4 mtoon_debug_outline_width([[maybe_unused]] VertexOut in [[stage_in]],
                                    constant MToonMaterial& material [[buffer(8)]]) {
  float width = material.outlineWidthFactor * 10.0; // Scale for visibility
  return float4(width, width, width, 1.0);

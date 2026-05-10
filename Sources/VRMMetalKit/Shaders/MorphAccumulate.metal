@@ -30,7 +30,7 @@ kernel void morph_accumulate_positions(
     device const float3* deltaPos [[buffer(1)]],        // SoA flattened morph deltas [T][V]
     device const ActiveMorph* activeSet [[buffer(2)]],  // Active morphs with weights
     constant uint& vertexCount [[buffer(3)]],           // Total vertex count
-    constant uint& morphCount [[buffer(4)]],            // Total morph targets (for addressing)
+    [[maybe_unused]] constant uint& morphCount [[buffer(4)]],            // Total morph targets (for addressing)
     constant uint& activeCount [[buffer(5)]],           // Number of active morphs
     device float3* outPos [[buffer(6)]],                // Output morphed positions
     uint vid [[thread_position_in_grid]]
@@ -60,7 +60,7 @@ kernel void morph_accumulate_normals(
     device const float3* deltaNrm [[buffer(1)]],        // SoA flattened normal deltas [T][V]
     device const ActiveMorph* activeSet [[buffer(2)]],  // Active morphs with weights
     constant uint& vertexCount [[buffer(3)]],           // Total vertex count
-    constant uint& morphCount [[buffer(4)]],            // Total morph targets
+    [[maybe_unused]] constant uint& morphCount [[buffer(4)]],            // Total morph targets
     constant uint& activeCount [[buffer(5)]],           // Number of active morphs
     device float3* outNrm [[buffer(6)]],                // Output morphed normals
     uint vid [[thread_position_in_grid]]
@@ -92,7 +92,7 @@ kernel void morph_accumulate_combined(
     device const float3* deltaNrm [[buffer(3)]],        // SoA normal deltas
     device const ActiveMorph* activeSet [[buffer(4)]],
     constant uint& vertexCount [[buffer(5)]],
-    constant uint& morphCount [[buffer(6)]],
+    [[maybe_unused]] constant uint& morphCount [[buffer(6)]],
     constant uint& activeCount [[buffer(7)]],
     device float3* outPos [[buffer(8)]],
     device float3* outNrm [[buffer(9)]],

@@ -64,7 +64,7 @@ vertex DebugVertexOut debug_unlit_vertex(DebugVertexIn in [[stage_in]],
 }
 
 // PHASE 1: Minimal unlit fragment shader - solid magenta
-fragment float4 debug_unlit_fragment(DebugVertexOut in [[stage_in]]) {
+fragment float4 debug_unlit_fragment([[maybe_unused]] DebugVertexOut in [[stage_in]]) {
     return float4(1.0, 0.0, 1.0, 1.0); // Magenta
 }
 
