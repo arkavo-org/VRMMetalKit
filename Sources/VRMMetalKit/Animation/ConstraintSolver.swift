@@ -99,9 +99,15 @@ public final class ConstraintSolver: @unchecked Sendable {
         // adjacency: when constraint[i]'s target is the source of constraint[j], j depends on i
         var adj = [[Int]](repeating: [], count: n)
 
-        // Map from nodeIndex → list of constraint indices that target that node
+        // VRMC_node_constraint-1.0: at most one constraint per target node.
+        // If two constraints share a target, the later one wins (the dictionary overwrites).
         var nodeToConstraintIndex = [Int: Int]()
         for (i, c) in constraints.enumerated() {
+            #if VRM_METALKIT_ENABLE_LOGS
+            if let existing = nodeToConstraintIndex[c.targetNode] {
+                vrmLog("[ConstraintSolver] Warning: duplicate constraint target node \(c.targetNode); constraint #\(existing) shadowed by #\(i)")
+            }
+            #endif
             nodeToConstraintIndex[c.targetNode] = i
         }
 
@@ -277,32 +283,20 @@ public final class ConstraintSolver: @unchecked Sendable {
 
 private extension simd_quatf {
     /// Extract a quaternion from the rotation part of a 4×4 column-major matrix.
+    ///
+    /// Each basis column is normalized first so that any non-uniform scale baked into
+    /// the matrix (common on intermediate VRM nodes, especially after VRM 0.0 → 1.0
+    /// conversion) does not contaminate the resulting rotation.
     init(_ m: float4x4) {
-        let trace = m[0][0] + m[1][1] + m[2][2]
-        if trace > 0 {
-            let s = 0.5 / sqrt(trace + 1.0)
-            self.init(ix: (m[1][2] - m[2][1]) * s,
-                      iy: (m[2][0] - m[0][2]) * s,
-                      iz: (m[0][1] - m[1][0]) * s,
-                      r:  0.25 / s)
-        } else if m[0][0] > m[1][1] && m[0][0] > m[2][2] {
-            let s = 2.0 * sqrt(1.0 + m[0][0] - m[1][1] - m[2][2])
-            self.init(ix: 0.25 * s,
-                      iy: (m[0][1] + m[1][0]) / s,
-                      iz: (m[2][0] + m[0][2]) / s,
-                      r:  (m[1][2] - m[2][1]) / s)
-        } else if m[1][1] > m[2][2] {
-            let s = 2.0 * sqrt(1.0 + m[1][1] - m[0][0] - m[2][2])
-            self.init(ix: (m[0][1] + m[1][0]) / s,
-                      iy: 0.25 * s,
-                      iz: (m[1][2] + m[2][1]) / s,
-                      r:  (m[2][0] - m[0][2]) / s)
-        } else {
-            let s = 2.0 * sqrt(1.0 + m[2][2] - m[0][0] - m[1][1])
-            self.init(ix: (m[2][0] + m[0][2]) / s,
-                      iy: (m[1][2] + m[2][1]) / s,
-                      iz: 0.25 * s,
-                      r:  (m[0][1] - m[1][0]) / s)
+        let c0v = SIMD3<Float>(m.columns.0.x, m.columns.0.y, m.columns.0.z)
+        let c1v = SIMD3<Float>(m.columns.1.x, m.columns.1.y, m.columns.1.z)
+        let c2v = SIMD3<Float>(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+        let l0 = simd_length(c0v), l1 = simd_length(c1v), l2 = simd_length(c2v)
+        guard l0 > 1e-8, l1 > 1e-8, l2 > 1e-8 else {
+            self.init(ix: 0, iy: 0, iz: 0, r: 1)
+            return
         }
+        let r = float3x3(c0v / l0, c1v / l1, c2v / l2)
+        self = simd_quatf(r)
     }
 }

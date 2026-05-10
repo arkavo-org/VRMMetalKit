@@ -1505,6 +1505,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             allItems = []
             allItems.reserveCapacity(estimatedPrimitiveCount)
 
+            // O(1) firstPerson annotation lookup, built once per draw rather than scanned
+            // per primitive (VRMC_vrm-1.0 §firstPerson — missing nodes default to .auto).
+            let firstPersonLookup = firstPersonAnnotationLookup(in: model)
+
             // Keep counters for logging (no longer need separate arrays)
             var opaqueCount = 0
             var maskCount = 0
@@ -1595,7 +1599,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                 // First-person annotation filter (VRMC_vrm-1.0 §firstPerson).
                 // Skip this primitive if its node annotation excludes it from the current camera mode.
-                let fpAnnotation = firstPersonAnnotation(for: nodeIndex, in: model)
+                let fpAnnotation = firstPersonLookup[nodeIndex] ?? .auto
                 if !shouldRenderPrimitive(annotation: fpAnnotation, cameraMode: cameraMode) {
                     globalPrimitiveIndex += 1
                     continue

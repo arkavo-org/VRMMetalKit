@@ -33,6 +33,20 @@ public func firstPersonAnnotation(for nodeIndex: Int, in model: VRMModel) -> VRM
     return fp.meshAnnotations.first(where: { $0.node == nodeIndex })?.type ?? .auto
 }
 
+/// Builds an O(1) `nodeIndex → VRMFirstPersonFlag` lookup table from the model's
+/// firstPerson mesh annotations. Use this when you need to query annotations for
+/// many nodes per frame (e.g. inside the renderer's draw loop) instead of repeatedly
+/// scanning `meshAnnotations` linearly with `firstPersonAnnotation(for:in:)`.
+///
+/// Nodes not present in the dictionary should be treated as `.auto` per spec.
+public func firstPersonAnnotationLookup(in model: VRMModel) -> [Int: VRMFirstPersonFlag] {
+    guard let fp = model.firstPerson else { return [:] }
+    var dict: [Int: VRMFirstPersonFlag] = [:]
+    dict.reserveCapacity(fp.meshAnnotations.count)
+    for ann in fp.meshAnnotations { dict[ann.node] = ann.type }
+    return dict
+}
+
 /// Determines whether a primitive should be rendered given its annotation and the current camera mode.
 ///
 /// | annotation       | thirdPerson | firstPerson |

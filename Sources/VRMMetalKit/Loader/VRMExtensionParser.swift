@@ -926,13 +926,13 @@ public class VRMExtensionParser {
 
         // Drop springs that were modified by deduplication and ended up with fewer than 2 joints.
         // Springs that originally had fewer than 2 joints are left as-is (not our validation concern).
-        springBone.springs = springBone.springs.enumerated().filter { (springIndex, spring) in
-            guard springWasModified[springIndex] && spring.joints.count < 2 else { return true }
+        for i in springBone.springs.indices.reversed()
+        where springWasModified[i] && springBone.springs[i].joints.count < 2 {
             #if VRM_METALKIT_ENABLE_LOGS
-            print("[VRMMetalKit] WARNING: Spring '\(spring.name ?? "unnamed")' has fewer than 2 unique joints after deduplication — dropping spring.")
+            print("[VRMMetalKit] WARNING: Spring '\(springBone.springs[i].name ?? "unnamed")' has fewer than 2 unique joints after deduplication — dropping spring.")
             #endif
-            return false
-        }.map { $0.element }
+            springBone.springs.remove(at: i)
+        }
     }
 
     private func parseVRM0Vector3(_ value: Any?) -> SIMD3<Float>? {

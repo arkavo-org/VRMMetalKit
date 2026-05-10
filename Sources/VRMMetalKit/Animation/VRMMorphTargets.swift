@@ -532,7 +532,7 @@ public class VRMExpressionController: @unchecked Sendable {
         for (name, expression) in customExpressions {
             let rawWeight = customCurrentWeights[name] ?? 0.0
             guard rawWeight > 0 else { continue }
-            let effectiveWeight = computeCustomEffectiveWeight(name: name, rawWeight: rawWeight, expressions: allExpressions, customWeights: customCurrentWeights)
+            let effectiveWeight = computeCustomEffectiveWeight(name: name, rawWeight: rawWeight)
             if effectiveWeight > 0 {
                 applyExpressionToMeshWeights(expression, weight: effectiveWeight)
                 applyExpressionToMaterialColors(expression, weight: effectiveWeight)
@@ -636,12 +636,7 @@ public class VRMExpressionController: @unchecked Sendable {
     /// Overrides applied to custom expressions affect preset groups the same way.
     /// Custom expressions themselves are not in any group so they are never suppressed
     /// by other expressions' overrides — only their own override field matters for groups.
-    private func computeCustomEffectiveWeight(
-        name: String,
-        rawWeight: Float,
-        expressions: [VRMExpression],
-        customWeights: [String: Float]
-    ) -> Float {
+    private func computeCustomEffectiveWeight(name: String, rawWeight: Float) -> Float {
         guard let expr = customExpressions[name] else { return rawWeight }
         return expr.isBinary ? (rawWeight < 0.5 ? 0.0 : 1.0) : rawWeight
     }
