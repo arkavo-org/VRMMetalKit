@@ -659,15 +659,16 @@ public class VRMExtensionParser {
                         guard let node = jointDict["node"] as? Int else { continue }
 
                         var joint = VRMSpringJoint(node: node)
-                        joint.hitRadius = jointDict["hitRadius"] as? Float ?? 0.0
-                        joint.stiffness = jointDict["stiffness"] as? Float ?? 1.0
-                        // Apply minimum gravityPower of 1.0 when model specifies 0
-                        let rawGravityPower = jointDict["gravityPower"] as? Float ?? 0.0
-                        joint.gravityPower = rawGravityPower > 0 ? rawGravityPower : 1.0
-                        joint.dragForce = jointDict["dragForce"] as? Float ?? 0.4
+                        joint.hitRadius = parseFloatValue(jointDict["hitRadius"]) ?? 0.0
+                        joint.stiffness = parseFloatValue(jointDict["stiffness"]) ?? 1.0
+                        joint.gravityPower = parseFloatValue(jointDict["gravityPower"]) ?? 0.0
+                        joint.dragForce = parseFloatValue(jointDict["dragForce"]) ?? 0.4
 
-                        if let gravityDir = jointDict["gravityDir"] as? [Float], gravityDir.count == 3 {
-                            joint.gravityDir = SIMD3<Float>(gravityDir[0], gravityDir[1], gravityDir[2])
+                        if let gravityDir = jointDict["gravityDir"] as? [Any] {
+                            let floats = gravityDir.compactMap { parseFloatValue($0) }
+                            if floats.count == 3 {
+                                joint.gravityDir = SIMD3<Float>(floats[0], floats[1], floats[2])
+                            }
                         }
 
                         spring.joints.append(joint)
@@ -678,6 +679,7 @@ public class VRMExtensionParser {
             }
         }
 
+        validateSpringJointUniqueness(&springBone)
         return springBone
     }
 
@@ -691,6 +693,13 @@ public class VRMExtensionParser {
             let radius = parseFloatValue(capsuleDict["radius"]) ?? 0.0
             let tail = parseVector3(capsuleDict["tail"]) ?? SIMD3<Float>(0, 0, 0)
             return .capsule(offset: offset, radius: radius, tail: tail)
+        } else if let planeDict = dict["plane"] as? [String: Any] {
+            #if VRM_METALKIT_ENABLE_LOGS
+            print("[VRMMetalKit] WARNING: VRMMetalKit-specific 'plane' collider in use. This is non-spec and not portable.")
+            #endif
+            let offset = parseVector3(planeDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+            let normal = parseVector3(planeDict["normal"]) ?? SIMD3<Float>(0, 1, 0)
+            return .plane(offset: offset, normal: normal)
         }
 
         return nil
@@ -751,8 +760,11 @@ public class VRMExtensionParser {
                             joint.stiffness = 1.0  // Default only if not found at all
                         }
 
-                        // Apply minimum gravityPower of 1.0 when model specifies 0
-                        // Many VRM 0.x models have gravityPower=0 but expect gravity to work
+                        // VRM 0.x quirk: many real-world models export gravityPower=0 (or omit it)
+                        // but clearly expect gravity to work (hair falls, skirts swing). The VRM 0.x
+                        // spec did not define a meaningful default, so authors relied on runtime
+                        // behavior that defaulted to gravity-on. Forcing 0→1.0 preserves that
+                        // real-world behavior for VRM 0.x only; VRM 1.0 respects explicit 0.0.
                         let rawGravityPower: Float
                         if let gpFloat = groupDict["gravityPower"] as? Float {
                             rawGravityPower = gpFloat
@@ -843,7 +855,55 @@ public class VRMExtensionParser {
             }
         }
 
+        validateSpringJointUniqueness(&springBone)
         return springBone
+    }
+
+    /// VRMC_springBone-1.0 spec: the same node MUST NOT appear in multiple springs or
+    /// twice within one spring. Duplicate joints produce undefined simulation behaviour.
+    /// Within-spring duplicates are removed first (more dangerous — degenerate edges).
+    /// Cross-spring duplicates are removed from later springs.
+    /// Violations are logged under VRM_METALKIT_ENABLE_LOGS.
+    private func validateSpringJointUniqueness(_ springBone: inout VRMSpringBone) {
+        var seenNodesGlobal = Set<Int>()
+
+        for springIndex in springBone.springs.indices {
+            var seenNodesInSpring = Set<Int>()
+            var dedupedJoints: [VRMSpringJoint] = []
+
+            for joint in springBone.springs[springIndex].joints {
+                if seenNodesInSpring.contains(joint.node) {
+                    #if VRM_METALKIT_ENABLE_LOGS
+                    print("[VRMMetalKit] WARNING: Spring '\(springBone.springs[springIndex].name ?? "\(springIndex)")' contains duplicate node \(joint.node) within the same spring chain — dropping duplicate joint.")
+                    #endif
+                    continue
+                }
+                seenNodesInSpring.insert(joint.node)
+
+                if seenNodesGlobal.contains(joint.node) {
+                    #if VRM_METALKIT_ENABLE_LOGS
+                    print("[VRMMetalKit] WARNING: Node \(joint.node) appears in multiple springs — dropping from spring '\(springBone.springs[springIndex].name ?? "\(springIndex)")'. VRMC_springBone-1.0 §4.1 requires unique node membership.")
+                    #endif
+                    continue
+                }
+                seenNodesGlobal.insert(joint.node)
+                dedupedJoints.append(joint)
+            }
+
+            springBone.springs[springIndex].joints = dedupedJoints
+        }
+
+        springBone.springs = springBone.springs.filter { spring in
+            if spring.joints.count < 2 {
+                #if VRM_METALKIT_ENABLE_LOGS
+                if !spring.joints.isEmpty {
+                    print("[VRMMetalKit] WARNING: Spring '\(spring.name ?? "unnamed")' has fewer than 2 unique joints after deduplication — dropping spring.")
+                }
+                #endif
+                return false
+            }
+            return true
+        }
     }
 
     private func parseVRM0Vector3(_ value: Any?) -> SIMD3<Float>? {
@@ -899,7 +959,7 @@ public class VRMExtensionParser {
             if let rollDict = constraintDict["roll"] as? [String: Any],
                let sourceNode = rollDict["source"] as? Int {
                 let rollAxis = parseRollAxis(rollDict["rollAxis"] as? String)
-                let weight = parseFloatValue(rollDict["weight"]) ?? 0.5
+                let weight = parseFloatValue(rollDict["weight"]) ?? 1.0
 
                 let constraint = VRMNodeConstraint(
                     targetNode: nodeIndex,
