@@ -48,6 +48,13 @@ public final class AnimationPlayer: @unchecked Sendable {
     public var isLooping = true
     public var applyRootMotion = false
 
+    /// Optional controller driven by the loaded clip's `lookAtTargetSampler`.
+    /// When both are non-nil, each `update(deltaTime:model:)` call sets
+    /// `controller.target = .point(sampler(currentTime))` so VRMA-authored
+    /// look-at data drives the eyes end-to-end. Held weakly to avoid a
+    /// retain cycle if the controller's owner also holds the player.
+    public weak var lookAtController: VRMLookAtController?
+
     private var currentTime: Float = 0
     private var clip: AnimationClip?
     private var isPlaying = false
@@ -172,7 +179,16 @@ public final class AnimationPlayer: @unchecked Sendable {
                 }
             }
 
-            // 4. Propagate world transforms once so aim/rotation constraints see this
+            // 4. VRMA-driven lookAt: if a controller is attached and the clip
+            //    has a lookAtTargetSampler (VRMC_vrm_animation §lookAt), set
+            //    the controller's target to the sampled world position.
+            //    Skipped when sampler is nil so user-set targets (.camera /
+            //    .user / .forward) are preserved.
+            if let controller = lookAtController, let sampler = clip.lookAtTargetSampler {
+                controller.target = .point(sampler(localTime))
+            }
+
+            // 5. Propagate world transforms once so aim/rotation constraints see this
             //    frame's animated source-node poses, not last frame's stale world matrices.
             model.updateNodeTransforms()
 
@@ -202,6 +218,14 @@ public final class AnimationPlayer: @unchecked Sendable {
                 controller.setCustomExpressionWeight(key, weight: weight)
             }
         }
+    }
+
+    /// Current playback time in seconds. Reflects accumulated `deltaTime` from
+    /// `update(deltaTime:model:)` and is reset by `seek(to:)` / `stop()` /
+    /// `load(_:)`. Useful when consumers want to drive their own samplers
+    /// alongside the player.
+    public var time: Float {
+        playerLock.withLock { currentTime }
     }
 
     public var progress: Float {
