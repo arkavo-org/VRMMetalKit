@@ -98,6 +98,8 @@ struct RenderOptions {
     var bgColorBottom: SIMD3<Float> = SIMD3<Float>(0.08, 0.08, 0.12)
     var expression: String? = nil
     var expressionWeight: Float = 1.0
+    var silhouette: Bool = false
+    var rimPower: Float = 5.0
 }
 
 // MARK: - Errors
@@ -150,6 +152,10 @@ func printUsage() {
         --expression <name>        Apply VRM expression (happy, angry, sad, relaxed,
                                    surprised, aa, ih, ou, ee, oh, blink, etc.)
         --expression-weight <0-1>  Expression weight (default: 1.0)
+        --silhouette               Render avatar as a pure-black silhouette
+                                   with an additive directional rim
+        --rim-power <float>        Fresnel exponent for silhouette rim
+                                   (typical 4..12, default: 5)
         --list-debug               List all debug modes
         --help                     Show this help message
     
@@ -244,6 +250,13 @@ func parseArguments() -> RenderOptions? {
             i += 1
             if i < args.count, let val = Float(args[i]) {
                 options.expressionWeight = max(0, min(1, val))
+            }
+        case "--silhouette":
+            options.silhouette = true
+        case "--rim-power":
+            i += 1
+            if i < args.count, let val = Float(args[i]) {
+                options.rimPower = max(0, val)
             }
         default:
             if !arg.hasPrefix("-") {
@@ -348,21 +361,28 @@ struct VRMRenderCLI {
             let renderer = VRMRenderer(device: device, config: config)
             renderer.debugUVs = Int32(options.debugMode)
             renderer.loadModel(model)
-            
-            // Pure anime/cel-shading: Single key light for hard step shadows
-            // No fill light = hard edges between light and shadow (traditional anime look)
-            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85), 
-                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
-            
-            // Fill light disabled - crucial for cel-shading
-            renderer.disableLight(1)
-            
-            // Subtle rim light for edge definition only
-            renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0), 
-                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
-            
-            // Very low ambient for high contrast (anime style)
-            renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))  // Neutral gray, no blue tint
+
+            if options.silhouette {
+                var sil = SilhouetteRenderConfig()
+                sil.rimFresnelPower = options.rimPower
+                renderer.applySilhouetteMode(model: model, config: sil)
+                print("  ✓ Silhouette mode (rim power \(options.rimPower))")
+            } else {
+                // Pure anime/cel-shading: Single key light for hard step shadows
+                // No fill light = hard edges between light and shadow (traditional anime look)
+                renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                                  color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
+
+                // Fill light disabled - crucial for cel-shading
+                renderer.disableLight(1)
+
+                // Subtle rim light for edge definition only
+                renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
+                                  color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
+
+                // Very low ambient for high contrast (anime style)
+                renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))  // Neutral gray, no blue tint
+            }
             
             // Calculate bounding box for auto-framing
             let (minBounds, maxBounds) = model.calculateBoundingBox()

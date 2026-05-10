@@ -518,6 +518,30 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Renders only the first mesh for debugging.
     public var debugSingleMesh = false
 
+    /// Disables the renderer's automatic material overrides — namely:
+    ///   • forcing `baseColorFactor` to white for face/eye/body/skin materials
+    ///   • forcing `emissiveFactor` to zero on every material
+    ///   • clobbering `shadeColorFactor` / `shadingToonyFactor` /
+    ///     `shadingShiftFactor` on face materials
+    /// Default `false` retains legacy gameplay rendering. Set `true` for
+    /// stylized / silhouette use cases (e.g. menu hosts) that need full
+    /// CPU-side control of material values.
+    public var disableAutoMaterialOverrides = false
+
+    /// Enables an additive directional rim term in the MToon fragment shader.
+    /// For every enabled scene light, the shader adds
+    ///   `pow(1 - N·V, additiveDirectionalRimPower) * max(0, N·L) * lightColor * intensity`
+    /// on top of the lit pass — independently of base albedo. Designed for
+    /// pure-black silhouette setups where the standard rim (which multiplies
+    /// against base) cannot survive. Default `false`; legacy gameplay paths
+    /// see no behaviour change.
+    public var additiveDirectionalRimEnabled = false
+
+    /// Fresnel exponent for the additive directional rim. Higher = narrower
+    /// edge. Typical 4..12. Only applies when `additiveDirectionalRimEnabled`
+    /// is true.
+    public var additiveDirectionalRimPower: Float = 5.0
+
     // Frame counter for debug logging
     var frameCounter = 0
 
@@ -1392,6 +1416,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         case .manual(let factor):
             uniforms.lightNormalizationFactor = max(0.0, factor)  // Clamp to non-negative
         }
+
+        // Pipe the additive directional rim toggle + power through to the
+        // shader. The shader gates on `> 0.5`.
+        uniforms.additiveDirectionalRimEnabled = additiveDirectionalRimEnabled ? 1.0 : 0.0
+        uniforms.additiveDirectionalRimPower = additiveDirectionalRimPower
 
         // DEBUG: Log lighting values to verify 3-point lighting is configured
         #if DEBUG
@@ -2415,8 +2444,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     #endif
 
-                    // PHASE 4 FIX: Force face materials to render with full brightness
-                    if isFaceMaterial {
+                    // PHASE 4 FIX: Force face materials to render with full brightness.
+                    // Skipped under disableAutoMaterialOverrides so silhouette /
+                    // stylized renderers retain authored baseColor / shadeColor.
+                    if isFaceMaterial && !self.disableAutoMaterialOverrides {
                         // AGGRESSIVE FIX: Always force white baseColorFactor for face materials
                         // This ensures the texture shows at full brightness
                         if frameCounter <= 2 {
@@ -2478,6 +2509,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                 vrmLog("🔧 [MOUTH UV FIX] Applied UV offset for \(item.materialName)")
                             }
                         }
+
+                        // Restore authored emissive after MToonMaterialUniforms.init(from:)
+                        // resets it. Required for silhouette/stylized renderers that route
+                        // iris glow / accent colors through emissiveFactor.
+                        mtoonUniforms.emissiveFactor = material.emissiveFactor
 
                         // ALPHA FIX: Restore effectiveAlphaMode AFTER MToon init
                         // MToon extension may have wrong alphaMode; use our detected/fixed value
