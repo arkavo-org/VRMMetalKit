@@ -46,16 +46,61 @@ public struct VRMNodeConstraint: Sendable {
     /// The type and parameters of the constraint
     public let constraint: ConstraintType
 
+    /// Creates a constraint affecting `targetNode` with the given configured `constraint` type.
     public init(targetNode: Int, constraint: ConstraintType) {
         self.targetNode = targetNode
         self.constraint = constraint
     }
 }
 
+/// Parses the `VRMC_vrm` (1.0) and `VRM` (0.x) glTF extensions into a ``VRMModel``.
+///
+/// ## Discussion
+/// This is the point in the pipeline that picks a VRM spec version and
+/// fans out parsing across the VRM subsystems — humanoid, meta,
+/// expressions, first-person, look-at, MToon, spring bones, and node
+/// constraints. The picked spec drives downstream coordinate-system
+/// handling and material conversion.
+///
+/// ### Version disambiguation
+/// `parseVRMExtension(...)` inspects the extension dictionary's `specVersion`
+/// (VRM 1.0) and `version` (VRM 0.x) keys:
+///
+/// - If `specVersion` exists and parses to a known ``VRMSpecVersion``, that
+///   wins.
+/// - If `specVersion` exists but is unknown, parsing proceeds as VRM 0.0
+///   best-effort with a warning logged.
+/// - If only `version` exists, the model is treated as VRM 0.0.
+/// - If neither is present, the model is treated as VRM 0.0.
+///
+/// Beyond version detection, the parser is tolerant of missing optional
+/// blocks (`firstPerson`, `lookAt`, `expressions`, `secondaryAnimation`,
+/// `materialProperties`) and throws only when the *required* `meta` or
+/// `humanoid` block is missing or malformed.
+///
+/// See <doc:MigratingFromVRM0> for an overview of the 0.x → 1.0 differences
+/// this type bridges.
 public class VRMExtensionParser {
 
+    /// Creates an empty parser. Reuse across multiple models is safe; the parser holds no per-load state.
     public init() {}
 
+    /// Parses a VRM extension payload (`VRMC_vrm` or legacy `VRM`) into a populated ``VRMModel``.
+    ///
+    /// The returned model has `humanoid`, `meta`, and any optional blocks
+    /// present in the source filled in. Geometry, materials, textures, and
+    /// GPU resources are populated later by the rest of the load pipeline.
+    ///
+    /// - Parameters:
+    ///   - extension: The raw extension value pulled from
+    ///     ``GLTFDocument/extensions`` under the `VRMC_vrm` or `VRM` key.
+    ///     Must decode to a `[String: Any]` dictionary.
+    ///   - document: The parsed ``GLTFDocument``, used to resolve node and mesh references.
+    ///   - filePath: Optional source path used to enrich error messages.
+    /// - Returns: A ``VRMModel`` with spec version, meta, humanoid, and all parseable VRM subsystems populated.
+    /// - Throws:
+    ///   - ``VRMError/missingVRMExtension(filePath:suggestion:)`` if the extension is not a dictionary.
+    ///   - ``VRMError/invalidJSON(context:underlyingError:filePath:)`` if `meta` or `humanoid` is missing or malformed.
     public func parseVRMExtension(_ extension: Any, document: GLTFDocument, filePath: String? = nil) throws -> VRMModel {
         guard let vrmDict = `extension` as? [String: Any] else {
             throw VRMError.missingVRMExtension(
@@ -960,13 +1005,21 @@ public class VRMExtensionParser {
 
     // MARK: - Node Constraint Parsing
 
-    /// Parse or synthesize node constraints for twist bones.
+    /// Returns node constraints for the model, parsing `VRMC_node_constraint` on VRM 1.0 and synthesizing twist constraints from humanoid bones otherwise.
+    ///
+    /// VRM 1.0 explicitly stores per-node constraints in
+    /// `VRMC_node_constraint`. VRM 0.x does not — twist distribution there
+    /// is handled implicitly by the runtime, so this method synthesizes
+    /// matching constraints from the humanoid bone definitions (upper-arm
+    /// → lower-arm, upper-leg → lower-leg, …) whenever no explicit
+    /// constraints are present.
     ///
     /// - Parameters:
-    ///   - gltf: The glTF document
-    ///   - humanoid: The humanoid bone mapping
-    ///   - isVRM0: Whether this is a VRM 0.0 model
-    /// - Returns: Array of node constraints
+    ///   - gltf: Parsed glTF document whose node `extensions` are inspected.
+    ///   - humanoid: Resolved humanoid bone mapping. When `nil`, no
+    ///     synthesis happens.
+    ///   - isVRM0: Whether to skip the VRM 1.0 explicit-parse step.
+    /// - Returns: Concatenation of explicit (VRM 1.0) and synthesized (VRM 0.x) constraints.
     public func parseOrSynthesizeConstraints(gltf: GLTFDocument, humanoid: VRMHumanoid?, isVRM0: Bool) -> [VRMNodeConstraint] {
         var constraints: [VRMNodeConstraint] = []
 

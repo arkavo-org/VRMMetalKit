@@ -21,6 +21,24 @@ import MetalKit
 import CoreGraphics
 import ImageIO
 
+/// Sequential single-texture loader: decodes a glTF texture and uploads it to an `MTLTexture`.
+///
+/// ## Discussion
+/// `TextureLoader` is the per-texture sibling of ``ParallelTextureLoader``.
+/// Use it when you only need one texture at a time (lazy re-loads,
+/// substituting a single asset, test fixtures); use ``ParallelTextureLoader``
+/// when loading an entire VRM.
+///
+/// Supported encodings are whatever `CGImageSource` accepts — in practice
+/// PNG, JPEG, HEIC, and other formats registered by ImageIO. Images are
+/// decoded into 8-bit-per-channel RGBA and uploaded with
+/// `.storageModeShared`; alpha is preserved via `CGContext.setBlendMode(.copy)`.
+///
+/// Image data is resolved in the same order as ``BufferLoader``: embedded
+/// buffer view first, then `data:` URI, then external file (subject to
+/// path-traversal checks against `baseURL`). The companion
+/// ``createSampler(from:)`` method maps a ``GLTFSampler`` to an
+/// `MTLSamplerState`.
 public class TextureLoader {
     private let device: MTLDevice
     private let textureLoader: MTKTextureLoader
@@ -28,6 +46,13 @@ public class TextureLoader {
     private let document: GLTFDocument
     private let baseURL: URL?
 
+    /// Creates a loader bound to a Metal device, parsed document, and an existing ``BufferLoader``.
+    ///
+    /// - Parameters:
+    ///   - device: Metal device for `MTLTexture` allocation.
+    ///   - bufferLoader: ``BufferLoader`` used to resolve embedded image bytes.
+    ///   - document: The decoded ``GLTFDocument``.
+    ///   - baseURL: Directory used to resolve relative image URIs. External-file reads outside this directory are rejected.
     public init(device: MTLDevice, bufferLoader: BufferLoader, document: GLTFDocument, baseURL: URL? = nil) {
         self.device = device
         self.textureLoader = MTKTextureLoader(device: device)
@@ -36,10 +61,13 @@ public class TextureLoader {
         self.baseURL = baseURL
     }
 
-    /// Load a texture at the given index
+    /// Decodes a single glTF texture and uploads it to an `MTLTexture`.
+    ///
     /// - Parameters:
-    ///   - index: The texture index in the glTF document
-    ///   - sRGB: If true, texture is treated as sRGB color data (default). If false, treated as linear data (normal maps, etc.)
+    ///   - index: Texture index in ``GLTFDocument/textures``.
+    ///   - sRGB: Treat the texture as sRGB color (default). Pass `false` for linear data such as normal, AO, metallic-roughness, or mask textures.
+    /// - Returns: The decoded `MTLTexture`, or `nil` if the texture or its source image cannot be resolved.
+    /// - Throws: ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)``, ``VRMError/missingTexture(textureIndex:materialName:uri:filePath:)``, ``VRMError/invalidImageData(textureIndex:reason:filePath:)``, or ``VRMError/invalidPath(path:reason:filePath:)`` per the failure mode.
     public func loadTexture(at index: Int, sRGB: Bool = true) async throws -> MTLTexture? {
         guard let gltfTexture = document.textures?[safe: index] else {
             vrmLog("[TextureLoader] Warning: No texture at index \(index)")
@@ -323,6 +351,16 @@ public class TextureLoader {
         return texture
     }
 
+    /// Builds an `MTLSamplerState` from an optional ``GLTFSampler``, falling back to a sensible default when `nil`.
+    ///
+    /// Maps glTF magFilter/minFilter constants (`9728` NEAREST, `9729`
+    /// LINEAR, plus mipmap variants) and wrap modes (`33071` CLAMP_TO_EDGE,
+    /// `33648` MIRRORED_REPEAT, `10497` REPEAT) onto their Metal
+    /// equivalents. Default sampling is bilinear with mipmaps and repeat
+    /// wrap on both axes. Max anisotropy is always 16.
+    ///
+    /// - Parameter gltfSampler: Source sampler, or `nil` to request defaults.
+    /// - Returns: The configured `MTLSamplerState`, or `nil` if Metal allocation fails.
     public func createSampler(from gltfSampler: GLTFSampler?) -> MTLSamplerState? {
         let descriptor = MTLSamplerDescriptor()
 

@@ -23,14 +23,36 @@
 
 @preconcurrency import Foundation
 
-/// High-performance parallel material loader.
-/// Processes multiple materials concurrently for faster loading.
+/// Materializes ``VRMMaterial`` values for many glTF materials concurrently.
+///
+/// ## Discussion
+/// Material construction is CPU-bound (parameter copying, VRM-0/1 extension
+/// disambiguation, texture-binding wiring) and scales linearly with material
+/// count. `ParallelMaterialLoader` fans out one `Task` per requested
+/// material index via `withTaskGroup`, so wall-clock time approaches
+/// `(max material time) / availableCores`.
+///
+/// No Metal device is required — materials hold *references* to already-loaded
+/// ``VRMTexture`` values rather than constructing GPU resources. Run
+/// ``ParallelTextureLoader/loadTexturesParallel(indices:normalMapIndices:progressCallback:)``
+/// first.
+///
+/// The class is `@unchecked Sendable`; result aggregation uses an internal
+/// `NSLock`. Tasks are dispatched in input order, but completion order is
+/// indeterminate. The returned `[Int: VRMMaterial]` is keyed by source index.
 public final class ParallelMaterialLoader: @unchecked Sendable {
     private let document: GLTFDocument
     private let textures: [VRMTexture]
     private let vrm0MaterialProperties: [VRM0MaterialProperty]
     private let vrmVersion: VRMSpecVersion
-    
+
+    /// Creates a loader bound to a parsed document and its already-loaded textures.
+    ///
+    /// - Parameters:
+    ///   - document: The decoded ``GLTFDocument``.
+    ///   - textures: Loaded textures, indexed parallel to `document.textures`.
+    ///   - vrm0MaterialProperties: VRM 0.x per-material override block. Empty for VRM 1.0.
+    ///   - vrmVersion: Source VRM specification version; controls MToon disambiguation.
     public init(
         document: GLTFDocument,
         textures: [VRMTexture],
@@ -42,15 +64,13 @@ public final class ParallelMaterialLoader: @unchecked Sendable {
         self.vrm0MaterialProperties = vrm0MaterialProperties
         self.vrmVersion = vrmVersion
     }
-    
-    /// Process all materials in parallel.
+
+    /// Builds ``VRMMaterial`` values for the requested glTF material indices in parallel.
     ///
-    /// Material creation is CPU-bound and benefits from parallelization
-    /// when there are many materials.
     /// - Parameters:
-    ///   - indices: Material indices to process
-    ///   - progressCallback: Called periodically with progress updates
-    /// - Returns: Dictionary of processed materials
+    ///   - indices: Material indices to process. Out-of-range indices are skipped silently.
+    ///   - progressCallback: Invoked on the main actor as each material completes. Receives `(loaded, total)`.
+    /// - Returns: Map from glTF material index to constructed ``VRMMaterial``.
     public func loadMaterialsParallel(
         indices: [Int],
         progressCallback: (@Sendable (Int, Int) -> Void)? = nil

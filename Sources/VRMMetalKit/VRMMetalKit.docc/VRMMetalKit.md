@@ -30,7 +30,48 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMLoadingOptimization``
 - ``VRMLoadingProgress``
 - ``VRMLoadingPhase``
+- ``GLTFParser``
+- ``VRMExtensionParser``
+- ``VRMNodeConstraint``
+- ``BufferLoader``
+- ``BufferPreloader``
+- ``TextureLoader``
+- ``ParallelMeshLoader``
+- ``ParallelTextureLoader``
+- ``ParallelMaterialLoader``
 - <doc:LoadingVRMModels>
+
+### glTF Internals
+
+- ``GLTFDocument``
+- ``GLTFAsset``
+- ``GLTFScene``
+- ``GLTFNode``
+- ``GLTFMesh``
+- ``GLTFMeshExtras``
+- ``GLTFPrimitive``
+- ``GLTFMorphTarget``
+- ``GLTFMaterial``
+- ``GLTFPBRMetallicRoughness``
+- ``GLTFTextureInfo``
+- ``GLTFNormalTextureInfo``
+- ``GLTFOcclusionTextureInfo``
+- ``GLTFKHRTextureTransform``
+- ``GLTFTexture``
+- ``GLTFImage``
+- ``GLTFSampler``
+- ``GLTFBuffer``
+- ``GLTFBufferView``
+- ``GLTFAccessor``
+- ``GLTFSparse``
+- ``GLTFSparseIndices``
+- ``GLTFSparseValues``
+- ``GLTFSkin``
+- ``GLTFAnimation``
+- ``GLTFAnimationChannel``
+- ``GLTFAnimationTarget``
+- ``GLTFAnimationSampler``
+- ``AnyCodable``
 
 ### Rendering
 

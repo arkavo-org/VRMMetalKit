@@ -19,11 +19,38 @@ import Foundation
 import Metal
 import simd
 
+/// Reads typed arrays out of a glTF document's accessors, buffer views, and binary chunk.
+///
+/// ## Discussion
+/// A `BufferLoader` is the low-level adapter between the parsed
+/// ``GLTFDocument`` and Swift-native typed arrays (``loadAccessor(_:type:)``,
+/// ``loadAccessorAsFloat(_:)``, ``loadAccessorAsUInt32(_:)``,
+/// ``loadAccessorAsMatrix4x4(_:)``). It resolves three buffer storage
+/// locations transparently:
+///
+/// - The GLB binary chunk supplied at construction.
+/// - `data:` URIs embedded in the glTF JSON.
+/// - External files relative to the model's `baseURL` (with symlink-resolved
+///   path-traversal protection — files outside `baseURL` are rejected).
+///
+/// The accessor decoders honour every facet of the [glTF 2.0
+/// Accessor](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessors)
+/// spec needed by VRM avatars: signed and unsigned component types, the
+/// `bufferView.byteStride` for interleaved attributes, the combined
+/// `bufferView.byteOffset + accessor.byteOffset`, and
+/// [sparse-accessor overrides](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#sparse-accessors).
+/// Unknown component types or accessor types throw
+/// ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)``
+/// rather than silently misreading bytes.
+///
+/// `BufferLoader` is `@unchecked Sendable`; the cached preloaded-data map is
+/// installed once via ``setPreloadedData(_:)`` from the load pipeline and is
+/// not mutated thereafter.
 public class BufferLoader: @unchecked Sendable {
     private let document: GLTFDocument
     private let binaryData: Data?
     private let baseURL: URL?
-    
+
     /// Preloaded buffer data (optional optimization)
     private var preloadedData: [Int: Data]?
 
@@ -32,20 +59,41 @@ public class BufferLoader: @unchecked Sendable {
         return baseURL?.path
     }
 
+    /// Creates a loader bound to a parsed glTF document and its optional GLB binary chunk.
+    ///
+    /// - Parameters:
+    ///   - document: The decoded ``GLTFDocument``.
+    ///   - binaryData: The raw `BIN` chunk from a GLB file, or `nil` for `.gltf` JSON files whose buffers live in external `.bin` files or `data:` URIs.
+    ///   - baseURL: Directory used to resolve relative buffer URIs. External buffer reads are rejected if they would resolve outside this directory.
+    ///   - preloadedData: Optional map of buffer index to in-memory `Data`, typically supplied by ``BufferPreloader`` to skip filesystem I/O.
     public init(document: GLTFDocument, binaryData: Data?, baseURL: URL? = nil, preloadedData: [Int: Data]? = nil) {
         self.document = document
         self.binaryData = binaryData
         self.baseURL = baseURL
         self.preloadedData = preloadedData
     }
-    
-    /// Set preloaded buffer data (for use with BufferPreloader)
+
+    /// Installs a preloaded buffer index map, bypassing on-demand `data:` URI decoding and file reads.
+    ///
+    /// Used by the loading pipeline after ``BufferPreloader/preloadAllBuffers(binaryData:progressCallback:)`` resolves every buffer in parallel.
     public func setPreloadedData(_ data: [Int: Data]) {
         self.preloadedData = data
     }
 
     // MARK: - Accessor Loading
 
+    /// Decodes a glTF accessor into a flat array of `T` scalars, applying any sparse overrides.
+    ///
+    /// Component conversion is best-effort: out-of-range or non-representable
+    /// values fall back to `0`. For floats specifically, prefer
+    /// ``loadAccessorAsFloat(_:)`` which handles normalized integer
+    /// conversion explicitly.
+    ///
+    /// - Parameters:
+    ///   - accessorIndex: Zero-based index into `GLTFDocument.accessors`.
+    ///   - type: Numeric type to decode into (typically `Float.self` or `UInt32.self`).
+    /// - Returns: `count * componentsPerElement` scalars, in element-major order.
+    /// - Throws: ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)`` when the accessor index, componentType, or accessor type is unrecognised; ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` when the backing buffer cannot be resolved.
     public func loadAccessor<T>(_ accessorIndex: Int, type: T.Type) throws -> [T] where T: Numeric {
         guard let accessor = document.accessors?[safe: accessorIndex] else {
             throw VRMError.invalidAccessor(
@@ -95,6 +143,16 @@ public class BufferLoader: @unchecked Sendable {
         return result
     }
 
+    /// Decodes a glTF accessor into a flat `Float` array, normalising integer component types per the spec.
+    ///
+    /// `UNSIGNED_BYTE` is mapped to `[0, 1]`, `BYTE` to `[-1, 1]`,
+    /// `UNSIGNED_SHORT` to `[0, 1]`, `SHORT` to `[-1, 1]`, and `FLOAT` is
+    /// passed through unchanged. This matches the
+    /// [glTF accessor normalization](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessor-data-types)
+    /// rules.
+    ///
+    /// - Parameter accessorIndex: Zero-based index into `GLTFDocument.accessors`.
+    /// - Throws: ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)`` for unknown component/accessor types; ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the buffer cannot be resolved.
     public func loadAccessorAsFloat(_ accessorIndex: Int) throws -> [Float] {
         guard let accessor = document.accessors?[safe: accessorIndex] else {
             throw VRMError.invalidAccessor(
@@ -142,6 +200,12 @@ public class BufferLoader: @unchecked Sendable {
         return result
     }
 
+    /// Decodes a glTF accessor into a flat `UInt32` array. Use for index buffers and joint indices.
+    ///
+    /// Accepts `UNSIGNED_BYTE`, `UNSIGNED_SHORT`, `UNSIGNED_INT`, and `FLOAT` component types.
+    ///
+    /// - Parameter accessorIndex: Zero-based index into `GLTFDocument.accessors`.
+    /// - Throws: ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)`` for unknown component/accessor types; ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the buffer cannot be resolved.
     public func loadAccessorAsUInt32(_ accessorIndex: Int) throws -> [UInt32] {
         guard let accessor = document.accessors?[safe: accessorIndex] else {
             throw VRMError.invalidAccessor(
@@ -190,6 +254,13 @@ public class BufferLoader: @unchecked Sendable {
         return result
     }
 
+    /// Decodes a `MAT4` accessor into an array of `simd_float4x4`, preserving glTF column-major order.
+    ///
+    /// Used by ``VRMSkin`` to load inverse bind matrices. The accessor's
+    /// `type` field must be `"MAT4"`; any other type raises
+    /// ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)``.
+    ///
+    /// - Parameter accessorIndex: Zero-based index into `GLTFDocument.accessors`.
     public func loadAccessorAsMatrix4x4(_ accessorIndex: Int) throws -> [float4x4] {
         guard let accessor = document.accessors?[safe: accessorIndex] else {
             throw VRMError.invalidAccessor(
@@ -299,6 +370,10 @@ public class BufferLoader: @unchecked Sendable {
 
     // MARK: - Buffer Data Access
 
+    /// Returns the raw bytes for a glTF buffer, consulting preloaded data, the GLB binary chunk, `data:` URIs, and external files in that order.
+    ///
+    /// - Parameter bufferIndex: Zero-based index into `GLTFDocument.buffers`.
+    /// - Throws: ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the buffer cannot be resolved; ``VRMError/invalidPath(path:reason:filePath:)`` for path-traversal attempts or missing external files.
     public func getBufferData(bufferIndex: Int) throws -> Data {
         // Check preloaded data first (optimization)
         if let preloaded = preloadedData?[bufferIndex] {
@@ -337,6 +412,17 @@ public class BufferLoader: @unchecked Sendable {
 
     // MARK: - Buffer View Loading
 
+    /// Creates an `MTLBuffer` containing the byte slice referenced by a glTF buffer view.
+    ///
+    /// The buffer is allocated with `.storageModeShared`. The bufferView's
+    /// `byteOffset` is applied to the source data; the returned buffer's own
+    /// offset is zero.
+    ///
+    /// - Parameters:
+    ///   - bufferViewIndex: Zero-based index into `GLTFDocument.bufferViews`.
+    ///   - device: Metal device used for allocation.
+    /// - Returns: An `MTLBuffer` sized to `bufferView.byteLength`, or `nil` if `device.makeBuffer(...)` fails.
+    /// - Throws: ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)`` if the bufferView is missing; ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the underlying buffer cannot be resolved.
     public func createMTLBuffer(for bufferViewIndex: Int, device: MTLDevice) throws -> MTLBuffer? {
         let (fullData, bufferView) = try loadBufferView(bufferViewIndex)
 

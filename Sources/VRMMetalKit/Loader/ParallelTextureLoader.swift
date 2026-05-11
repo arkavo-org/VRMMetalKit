@@ -25,16 +25,40 @@
 @preconcurrency import Metal
 @preconcurrency import MetalKit
 
-/// High-performance parallel texture loader with optimization support.
+/// Decodes and uploads many glTF textures to `MTLTexture` concurrently.
+///
+/// ## Discussion
+/// Texture loading combines `CGImageSource` decode (PNG/JPEG/EXR/HEIC),
+/// premultiplied-alpha-aware CPU-side blit, and a single
+/// `MTLTexture.replace(...)` upload per image. The image-decode step is the
+/// dominant cost; running it across a `TaskGroup` reduces wall-clock time
+/// roughly linearly with core count.
+///
+/// `normalMapIndices` tells the loader which textures must be uploaded as
+/// linear (`.rgba8Unorm`) rather than sRGB (`.rgba8Unorm_srgb`). Failure to
+/// flag a normal map as linear produces visibly wrong shading after a gamma
+/// curve is applied twice.
+///
+/// The loader is `@unchecked Sendable`; result aggregation uses an internal
+/// `NSLock`. Completion order is indeterminate; the returned map is keyed
+/// by source texture index. A Metal device is required.
 public final class ParallelTextureLoader: @unchecked Sendable {
     private let device: MTLDevice
     private let textureLoader: MTKTextureLoader
     private let bufferLoader: BufferLoader
     private let document: GLTFDocument
     private let baseURL: URL?
-    
+
     private let maxConcurrentLoads: Int
-    
+
+    /// Creates a loader bound to a Metal device, parsed document, and buffer loader.
+    ///
+    /// - Parameters:
+    ///   - device: Metal device for `MTLTexture` allocation.
+    ///   - bufferLoader: ``BufferLoader`` used to resolve embedded image bytes.
+    ///   - document: The decoded ``GLTFDocument``.
+    ///   - baseURL: Directory used to resolve relative image URIs. External-file reads outside this directory are rejected.
+    ///   - maxConcurrentLoads: Reserved for future use; currently advisory only.
     public init(
         device: MTLDevice,
         bufferLoader: BufferLoader,
@@ -49,8 +73,14 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         self.baseURL = baseURL
         self.maxConcurrentLoads = maxConcurrentLoads
     }
-    
-    /// Load all textures in parallel using TaskGroup.
+
+    /// Decodes and uploads the requested glTF textures in parallel.
+    ///
+    /// - Parameters:
+    ///   - indices: Texture indices to load. Out-of-range indices are skipped silently.
+    ///   - normalMapIndices: Indices that must be uploaded as linear (not sRGB). All indices not in this set default to sRGB.
+    ///   - progressCallback: Invoked on the main actor as each texture completes. Receives `(loaded, total)`.
+    /// - Returns: Map from glTF texture index to allocated `MTLTexture`. Failed loads are omitted.
     public func loadTexturesParallel(
         indices: [Int],
         normalMapIndices: Set<Int>,

@@ -23,28 +23,51 @@
 
 @preconcurrency import Foundation
 
-/// Preloads all buffer data in parallel at the start of loading.
-/// This eliminates I/O bottlenecks during mesh and texture decoding.
+/// Reads every glTF buffer into memory up front, in parallel, to eliminate I/O stalls during mesh and texture decoding.
+///
+/// ## Discussion
+/// The default ``BufferLoader`` resolves buffers lazily on first reference,
+/// which serializes filesystem I/O behind the mesh/texture decode path. For
+/// avatars with several external `.bin` files and dozens of image files, that
+/// becomes the dominant cost.
+///
+/// `BufferPreloader` fans out one `Task` per `GLTFDocument.buffers` entry,
+/// resolves `data:` URIs and external files concurrently, and returns the
+/// `[bufferIndex: Data]` map that
+/// ``BufferLoader/setPreloadedData(_:)`` consumes. The first buffer in a GLB
+/// is mapped directly to the provided binary chunk; subsequent buffers come
+/// from URIs.
+///
+/// External-file reads are path-traversal-checked against the supplied
+/// `baseURL`; absolute paths or `..` escapes throw
+/// ``VRMError/invalidPath(path:reason:filePath:)``.
 public final class BufferPreloader: @unchecked Sendable {
     private let document: GLTFDocument
     private let baseURL: URL?
-    
+
     /// Preloaded buffer data indexed by buffer index
     private var preloadedData: [Int: Data] = [:]
-    
+
+    /// Creates a preloader bound to a parsed glTF document.
+    ///
+    /// - Parameters:
+    ///   - document: The decoded ``GLTFDocument``.
+    ///   - baseURL: Directory used to resolve relative buffer URIs. External buffer reads are rejected if they would resolve outside this directory.
     public init(document: GLTFDocument, baseURL: URL?) {
         self.document = document
         self.baseURL = baseURL
     }
-    
-    /// Preload all buffers in parallel.
+
+    /// Loads every buffer in `document.buffers` concurrently and returns the resulting `[bufferIndex: Data]` map.
     ///
-    /// This should be called at the start of model loading to ensure all
-    /// buffer data is in memory before mesh/texture decoding begins.
+    /// Failures for individual buffers are logged but do not abort the
+    /// preload — missing entries simply fall back to lazy loading in
+    /// ``BufferLoader``.
+    ///
     /// - Parameters:
-    ///   - binaryData: The GLB binary chunk data (if loading from GLB)
-    ///   - progressCallback: Called periodically with progress updates
-    /// - Returns: Dictionary of preloaded buffer data
+    ///   - binaryData: GLB binary chunk, used for buffer 0 when present.
+    ///   - progressCallback: Invoked on the main actor as each buffer completes. Receives `(loaded, total)`.
+    /// - Returns: Map from buffer index to resolved bytes. Missing entries indicate per-buffer load failures.
     public func preloadAllBuffers(
         binaryData: Data?,
         progressCallback: (@Sendable (Int, Int) -> Void)? = nil
@@ -91,7 +114,7 @@ public final class BufferPreloader: @unchecked Sendable {
         return preloadedData
     }
     
-    /// Get preloaded buffer data.
+    /// Returns the previously-resolved bytes for the given buffer index, or `nil` if preloading failed or hasn't run.
     public func getBufferData(index: Int) -> Data? {
         return preloadedData[index]
     }
