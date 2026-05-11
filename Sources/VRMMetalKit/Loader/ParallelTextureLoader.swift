@@ -28,7 +28,8 @@
 /// Decodes and uploads many glTF textures to `MTLTexture` concurrently.
 ///
 /// ## Discussion
-/// Texture loading combines `CGImageSource` decode (PNG/JPEG/EXR/HEIC),
+/// Texture loading combines `CGImageSource` decode (PNG, JPEG, HEIC, and
+/// other formats registered by ImageIO),
 /// premultiplied-alpha-aware CPU-side blit, and a single
 /// `MTLTexture.replace(...)` upload per image. The image-decode step is the
 /// dominant cost; running it across a `TaskGroup` reduces wall-clock time

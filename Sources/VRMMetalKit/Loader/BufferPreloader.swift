@@ -38,9 +38,11 @@
 /// is mapped directly to the provided binary chunk; subsequent buffers come
 /// from URIs.
 ///
-/// External-file reads are path-traversal-checked against the supplied
-/// `baseURL`; absolute paths or `..` escapes throw
-/// ``VRMError/invalidPath(path:reason:filePath:)``.
+/// External-file reads are checked against the supplied `baseURL`: any URI
+/// that resolves outside the base directory (whether via `..` segments or an
+/// absolute path) throws ``VRMError/invalidPath(path:reason:filePath:)``.
+/// Absolute paths whose resolved location is still under `baseURL` are
+/// allowed, though relative paths are recommended for portability.
 public final class BufferPreloader: @unchecked Sendable {
     private let document: GLTFDocument
     private let baseURL: URL?

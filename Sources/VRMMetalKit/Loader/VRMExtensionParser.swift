@@ -70,7 +70,8 @@ public struct VRMNodeConstraint: Sendable {
 ///   wins.
 /// - If `specVersion` exists but is unknown, parsing proceeds as VRM 0.0
 ///   best-effort with a warning logged.
-/// - If only `version` exists, the model is treated as VRM 0.0.
+/// - If only `version` exists, its raw value is parsed through
+///   ``VRMSpecVersion``; unrecognised strings fall back to VRM 0.0.
 /// - If neither is present, the model is treated as VRM 0.0.
 ///
 /// Beyond version detection, the parser is tolerant of missing optional

@@ -237,8 +237,9 @@ public struct GLTFMorphTarget: Codable {
 ///
 /// Used to preserve unknown extension payloads (`VRMC_*`, `KHR_*`) on
 /// ``GLTFDocument/extensions``, ``GLTFNode/extensions``, and similar fields.
-/// Decoding tries `Bool`, `Int`, `Double`, `Float`, `String`, dictionary, and
-/// array in that order; unrecognised types decode as `NSNull`.
+/// Decoding checks for `null` first, then tries `Bool`, `Int`, `Double`,
+/// `Float`, `String`, dictionary, and array; JSON `null` and unrecognised
+/// types both decode as `NSNull`.
 public struct AnyCodable: Codable {
     /// Decoded JSON value. Concrete types are `Bool`, `Int`, `Double`, `Float`, `String`, `[String: Any]`, `[Any]`, or `NSNull`.
     public let value: Any
@@ -652,14 +653,14 @@ public struct GLTFAnimationSampler: Codable {
 /// `GLTFParser` is the entry point for every VRM load. It accepts the raw
 /// GLB bytes, validates the
 /// [GLB header](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#binary-gltf-layout)
-/// (`glTF` magic, version 2), walks chunks until the first JSON and BIN
-/// chunks are located, and JSON-decodes the document via Swift's standard
-/// `JSONDecoder`.
+/// (`glTF` magic, version 2), and walks every chunk, decoding the JSON
+/// chunk via Swift's standard `JSONDecoder` and retaining the BIN chunk in
+/// ``binaryChunk``. If duplicate JSON or BIN chunks appear (non-conformant
+/// but observed in the wild), the last occurrence wins.
 ///
 /// The parser is tolerant of trailing chunks beyond the data length (they
-/// are logged and skipped) and of duplicate BIN chunks (the last wins). It
-/// is strict about the magic number and version, raising
-/// ``VRMError/invalidGLBFormat(reason:filePath:)`` or
+/// are logged and skipped). It is strict about the magic number and
+/// version, raising ``VRMError/invalidGLBFormat(reason:filePath:)`` or
 /// ``VRMError/unsupportedVersion(version:supported:filePath:)`` on
 /// mismatch.
 ///
@@ -670,7 +671,11 @@ public class GLTFParser {
     /// The `BIN` chunk extracted from the most recent ``parse(data:filePath:)`` call, or `nil` if absent.
     public private(set) var binaryChunk: Data?
 
-    /// Creates an empty parser. Reuse a single instance across multiple files at your option; state is reset by each ``parse(data:filePath:)``.
+    /// Creates an empty parser.
+    ///
+    /// Reuse with care: ``binaryChunk`` is not reset between calls, so always
+    /// use the binary data returned from the current call rather than reading
+    /// the property afterward.
     public init() {}
 
     /// Parses a GLB byte stream and returns the decoded document plus the optional binary chunk.
