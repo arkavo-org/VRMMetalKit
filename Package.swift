@@ -29,6 +29,9 @@ let package = Package(
             targets: ["VRMMetalKit"]
         )
     ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.4.0")
+    ],
     targets: [
         .target(
             name: "VRMMetalKit",
