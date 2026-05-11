@@ -454,6 +454,103 @@ final class SpringBoneSpecComplianceTests: XCTestCase {
             XCTFail("Expected .plane shape, got \(shape)")
         }
     }
+
+    // MARK: - #182: expandVRM0SpringBoneChains must not run on VRM 1.0
+
+    /// VRMC_springBone-1.0 already encodes the full chain in `springs[].joints`.
+    /// Calling `expandVRM0SpringBoneChains()` on a VRM 1.0 model must be a no-op;
+    /// otherwise each joint is treated as a chain root and the joint count inflates
+    /// (e.g. 4 → 9 across 3 phantom sub-chains).
+    func testVRM1SpringBoneChainExpansionIsNoOp() throws {
+        let model = try VRMBuilder().setSkeleton(.defaultHumanoid).build()
+        XCTAssertFalse(model.isVRM0, "VRMBuilder produces VRM 1.0 by default.")
+
+        let gltfJSON = """
+        {"name":"n","translation":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]}
+        """
+        func makeNode(_ index: Int) -> VRMNode {
+            let data = gltfJSON.data(using: .utf8)!
+            let gltf = try! JSONDecoder().decode(GLTFNode.self, from: data)
+            return VRMNode(index: index, gltfNode: gltf)
+        }
+
+        // Linear chain 19→20→21→22 (matches the vrm-conformance emit-springbone repro).
+        model.nodes.removeAll()
+        var chainNodes: [VRMNode] = []
+        for i in 0...22 {
+            chainNodes.append(makeNode(i))
+        }
+        for i in 19..<22 {
+            chainNodes[i + 1].parent = chainNodes[i]
+            chainNodes[i].children.append(chainNodes[i + 1])
+        }
+        model.nodes = chainNodes
+        for n in model.nodes { n.updateWorldTransform() }
+
+        var springBone = VRMSpringBone()
+        var spring = VRMSpring(name: "repro_chain")
+        spring.joints = (19...22).map { idx in
+            var j = VRMSpringJoint(node: idx)
+            j.stiffness = 0.5
+            return j
+        }
+        springBone.springs = [spring]
+        model.springBone = springBone
+
+        model.expandVRM0SpringBoneChains()
+
+        XCTAssertEqual(model.springBone?.springs.count, 1,
+            "VRM 1.0 chain must not be expanded into multiple springs.")
+        XCTAssertEqual(model.springBone?.springs.first?.joints.count, 4,
+            "VRM 1.0 chain joint count must remain 4 (asset's declared joints), not 9.")
+        XCTAssertEqual(model.springBone?.springs.first?.joints.map { $0.node }, [19, 20, 21, 22],
+            "Joint node indices must match the asset's declared order.")
+    }
+
+    /// VRM 0.x still relies on `expandVRM0SpringBoneChains()` to derive the full chain
+    /// from a single root index per joint entry. Guard from #182 must not break this.
+    func testVRM0SpringBoneChainExpansionStillRuns() throws {
+        let (vrmDict, document) = makeMinimalVRM0Dict(secondaryAnimation: [
+            "boneGroups": [[
+                "comment": "Hair",
+                "bones": [19],
+                "stiffness": Double(1.0),
+                "gravityPower": Double(0.5),
+                "dragForce": Double(0.4)
+            ]]
+        ])
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+        XCTAssertTrue(model.isVRM0)
+
+        let gltfJSON = """
+        {"name":"n","translation":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]}
+        """
+        func makeNode(_ index: Int) -> VRMNode {
+            let data = gltfJSON.data(using: .utf8)!
+            let gltf = try! JSONDecoder().decode(GLTFNode.self, from: data)
+            return VRMNode(index: index, gltfNode: gltf)
+        }
+
+        model.nodes.removeAll()
+        var chainNodes: [VRMNode] = []
+        for i in 0...22 { chainNodes.append(makeNode(i)) }
+        // 19 is a root; expand should walk into 20→21→22 via children.
+        for i in 19..<22 {
+            chainNodes[i + 1].parent = chainNodes[i]
+            chainNodes[i].children.append(chainNodes[i + 1])
+        }
+        model.nodes = chainNodes
+        for n in model.nodes { n.updateWorldTransform() }
+
+        let originalJointCount = model.springBone?.springs.reduce(0) { $0 + $1.joints.count } ?? 0
+        XCTAssertEqual(originalJointCount, 1, "VRM 0.x parser stores roots only.")
+
+        model.expandVRM0SpringBoneChains()
+
+        let expandedJointCount = model.springBone?.springs.reduce(0) { $0 + $1.joints.count } ?? 0
+        XCTAssertGreaterThan(expandedJointCount, originalJointCount,
+            "VRM 0.x expansion must still traverse descendants and grow the joint list.")
+    }
 }
 
 // MARK: - Test-only SpringBoneComputeSystem accessor

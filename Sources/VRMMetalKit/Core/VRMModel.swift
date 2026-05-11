@@ -968,6 +968,10 @@ public class VRMModel: @unchecked Sendable {
     /// This mimics three-vrm's root.traverse() behavior
     /// IMPORTANT: Uses DFS to maintain parent-child ordering within each chain
     public func expandVRM0SpringBoneChains() {
+        // VRMC_springBone-1.0 already encodes the full chain in springs[].joints.
+        // Re-expanding would treat every joint as a chain root and inflate the
+        // joint count (see issue #182).
+        guard isVRM0 else { return }
         guard var springBone = springBone else { return }
 
         var expandedSprings: [VRMSpring] = []

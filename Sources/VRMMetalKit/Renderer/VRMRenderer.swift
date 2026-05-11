@@ -2281,7 +2281,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=false, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation * WORLD matrix")
                 }
             }
-            uniformsBuffer.contents().copyMemory(from: &uniforms, byteCount: MemoryLayout<Uniforms>.size)
+            // Per-draw Uniforms are passed via setVertexBytes (issue #181).
+            // Writing into the shared uniformsBuffer here would race between
+            // draws — every primitive in the encoder reads buffer-slot 1 at
+            // GPU execution time, so the *last* draw's modelMatrix would
+            // clobber every earlier non-skinned draw. setVertexBytes makes
+            // each draw's vertex shader see its own snapshot. The shared
+            // uniformsBuffer is still used by the fragment shader for the
+            // frame-level state (view/proj/lights) and is written once
+            // before the draw loop.
 
             // Always use the unified vertex buffer
             guard let vertexBuffer = primitive.vertexBuffer else {
@@ -2335,7 +2343,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 encoder.setVertexBytes(&hasMorphedFlag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
             }
 
-            encoderStateCache.setVertexBuffer(encoder, uniformsBuffer, offset: 0, index: ResourceIndices.uniformsBuffer)
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
 
             // Update and set joint matrices for skinned meshes
             // meshUsesSkinning was already defined above
