@@ -3609,8 +3609,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Set vertex buffer
             encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
 
-            // Set uniforms
-            encoder.setVertexBuffer(uniformsBuffers[currentUniformBufferIndex], offset: 0, index: 1)
+            // Per-draw modelMatrix: skinned outlines bake transforms into the
+            // joint palette (so modelMatrix is just vrmVersionRotation); rigid
+            // outlines need the node's world transform multiplied in. Mirrors
+            // the main pass (#181 fix) — without this the outline pass reads
+            // whatever modelMatrix happened to be in the shared uniformsBuffer
+            // (frame-level identity after the #181 fix), which puts rigid
+            // outlines at the origin (regression #185).
+            let outlineRotation = vrmVersionRotation
+            if isSkinned {
+                uniforms.modelMatrix = outlineRotation
+                uniforms.normalMatrix = outlineRotation
+            } else {
+                uniforms.modelMatrix = simd_mul(outlineRotation, item.node.worldMatrix)
+                uniforms.normalMatrix = uniforms.modelMatrix.inverse.transpose
+            }
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
 
             // Set MToon material uniforms
             var mtoonUniforms = MToonMaterialUniforms(from: mtoon)
