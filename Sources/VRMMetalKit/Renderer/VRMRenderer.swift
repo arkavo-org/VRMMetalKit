@@ -3526,8 +3526,18 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         let hasSkinning = !model.skins.isEmpty
 
-        // Cull front faces for inverted hull technique
-        encoderStateCache.setCullMode(encoder,.front)
+        // Inverted hull technique: render the extruded shell with reversed
+        // culling so only the back of the shell (between the original mesh
+        // and the extruded surface, viewed past the silhouette edge) is
+        // visible.
+        //
+        // Historically this used `.cullMode(.front)` to match the case where
+        // the asset's primary geometry is CW-from-outside. After the
+        // load-time winding normalization (vrm-conformance #183), assets are
+        // always presented CCW-from-outside; the outline pass therefore
+        // needs `.cullMode(.back)` so its draw still produces the visible
+        // outline band on the far side of the silhouette.
+        encoderStateCache.setCullMode(encoder,.back)
         encoderStateCache.setFrontFacing(encoder,.counterClockwise)
 
         // Set depth state for outlines (test depth but don't write)

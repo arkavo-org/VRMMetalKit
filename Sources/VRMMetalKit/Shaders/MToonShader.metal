@@ -594,14 +594,16 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // Calculate weighted light contributions with version-aware shading formula
  // VRM 0.0: smoothstep formula (converted params were designed for this)
  // VRM 1.0: linearstep formula for sharp cel-shading per spec
+ // VRMC_materials_mtoon-1.0 § Shading: shading = NdotL + shadingShift, where
+ // NdotL = dot(N, L) is the raw [-1,1] Lambert term. The following linearstep
+ // saturates negative shading values to 0 (full shadow). Prior versions
+ // applied a Half-Lambert remap (NdotL * 0.5 + 0.5) for "softer anime-style
+ // shadows"; that deviation made shadingToonyFactor=0.9 + typical scene
+ // lighting saturate to fully-lit across the entire visible hemisphere
+ // (vrm-conformance #183).
  float3 lit0 = float3(0.0);
  if (intensity0 > 0.0) {
- // Light direction convention: negate because uniforms stores direction FROM light,
- // but NdotL calculation needs direction TO light
- // Half-Lambert: remap from [-1,1] to [0,1] for softer anime-style shadows
- float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
- float NdotL = rawNdotL * 0.5 + 0.5;
- // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
+ float NdotL = dot(normal, -uniforms.lightDirection.xyz);
  float shading0 = NdotL + shadingShift;
  float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading0);
  float weight = intensity0 / totalIntensity;
@@ -610,9 +612,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
 
  float3 lit1 = float3(0.0);
  if (intensity1 > 0.0) {
- // Half-Lambert for fill light
- float rawNdotL1 = dot(normal, -uniforms.light1Direction.xyz);
- float NdotL1 = rawNdotL1 * 0.5 + 0.5;
+ float NdotL1 = dot(normal, -uniforms.light1Direction.xyz);
  float shading1 = NdotL1 + shadingShift;
  float shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
  float weight1 = intensity1 / totalIntensity;
@@ -621,9 +621,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
 
  float3 lit2 = float3(0.0);
  if (intensity2 > 0.0) {
- // Half-Lambert for rim light
- float rawNdotL2 = dot(normal, -uniforms.light2Direction.xyz);
- float NdotL2 = rawNdotL2 * 0.5 + 0.5;
+ float NdotL2 = dot(normal, -uniforms.light2Direction.xyz);
  float shading2 = NdotL2 + shadingShift;
  float shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
  float weight2 = intensity2 / totalIntensity;
