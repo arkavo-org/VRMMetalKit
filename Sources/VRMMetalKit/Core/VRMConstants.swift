@@ -17,46 +17,57 @@
 import Foundation
 import simd
 
-/// Centralized constants for VRMMetalKit configuration and default values.
-/// This provides a single source of truth for magic numbers used throughout the codebase.
+/// Centralized configuration constants for VRMMetalKit subsystems.
+///
+/// Each nested namespace (``Rendering``, ``Physics``, ``Animation``,
+/// ``BufferLimits``, ``Performance``, ``Debug``) groups defaults that are
+/// referenced from across the package. Values are spec-driven where
+/// applicable (e.g. ``Physics/substepRateHz`` matches the VRM 1.0
+/// `VRMC_springBone` recommendation).
 public enum VRMConstants {
 
     // MARK: - Rendering
 
+    /// Default rendering pipeline parameters (triple-buffering, FOV, clip planes, morph limits).
     public enum Rendering {
-        /// Number of frames to triple-buffer uniforms to avoid CPU-GPU sync stalls
+        /// Number of in-flight frames for triple-buffered uniforms; prevents CPU-GPU sync stalls.
         public static let maxBufferedFrames: Int = 3
 
-        /// Default field of view in radians (60 degrees)
+        /// Default field of view in radians (60 degrees).
         public static let defaultFOV: Float = .pi / 3.0
 
-        /// Default near clipping plane distance
+        /// Default near-clip plane distance in meters.
         public static let defaultNearPlane: Float = 0.1
 
-        /// Default far clipping plane distance
+        /// Default far-clip plane distance in meters.
         public static let defaultFarPlane: Float = 100.0
 
-        /// Maximum number of active morph targets that can be processed simultaneously
+        /// Maximum number of morph targets simultaneously active during vertex shading.
         public static let maxActiveMorphs: Int = 8
 
-        /// Maximum total morph targets supported per mesh
+        /// Maximum number of morph targets supported per mesh.
         public static let maxMorphTargets: Int = 64
 
-        /// Threshold for switching from CPU to GPU morph computation
+        /// Active-morph count at which the renderer switches from CPU to GPU morph evaluation.
         public static let morphComputeThreshold: Int = 8
     }
 
     // MARK: - Physics
 
-    /// Quality levels for spring bone physics simulation
+    /// Quality presets for the spring-bone XPBD simulation, mapping substep rate, iteration count, and frame budget.
     public enum SpringBoneQuality: Int, Sendable {
-        case ultra = 0   // 120Hz, 4 iterations - highest quality
-        case high = 1    // 90Hz, 3 iterations
-        case medium = 2  // 60Hz, 2 iterations
-        case low = 3     // 30Hz, 1 iteration - battery saver
-        case off = 4     // Physics disabled
+        /// 120Hz substeps, 4 iterations — highest fidelity, recommended on desktop.
+        case ultra = 0
+        /// 90Hz substeps, 3 iterations — high fidelity, suitable for ProMotion devices.
+        case high = 1
+        /// 60Hz substeps, 2 iterations — balanced quality and performance.
+        case medium = 2
+        /// 30Hz substeps, 1 iteration — battery-saver preset for mobile.
+        case low = 3
+        /// Spring-bone simulation disabled.
+        case off = 4
 
-        /// Substep rate in Hz for this quality level
+        /// Substep rate in Hz for this quality level.
         public var substepRateHz: Double {
             switch self {
             case .ultra: return 120.0
@@ -67,7 +78,7 @@ public enum VRMConstants {
             }
         }
 
-        /// Number of constraint iterations per substep
+        /// Number of XPBD constraint iterations per substep.
         public var constraintIterations: Int {
             switch self {
             case .ultra: return 4
@@ -78,7 +89,7 @@ public enum VRMConstants {
             }
         }
 
-        /// Maximum substeps per frame
+        /// Maximum substeps allowed per frame before the simulation drops steps to avoid the spiral of death.
         public var maxSubstepsPerFrame: Int {
             switch self {
             case .ultra: return 10
@@ -90,8 +101,9 @@ public enum VRMConstants {
         }
     }
 
+    /// Spring-bone simulation defaults (substep rate, iteration budget, gravity, settling parameters).
     public enum Physics {
-        /// SpringBone simulation substep rate in Hz for stable physics
+        /// Spring-bone fixed-substep rate in Hz; the VRM 1.0 `VRMC_springBone` reference rate.
         public static let substepRateHz: Double = 120.0
 
         /// Maximum number of substeps to process per frame to avoid spiral of death
@@ -136,44 +148,48 @@ public enum VRMConstants {
 
     // MARK: - Animation
 
+    /// Animation defaults (joint capacity, playback speed).
     public enum Animation {
-        /// Maximum number of joints supported for skeletal animation
+        /// Maximum number of joints supported per skinned mesh.
         public static let maxJointCount: Int = 256
 
-        /// Default animation playback speed multiplier
+        /// Default animation playback rate multiplier (1.0 = real-time).
         public static let defaultPlaybackSpeed: Float = 1.0
     }
 
     // MARK: - Buffer Limits
 
+    /// GPU resource budget defaults (texture size, draw-call thresholds).
     public enum BufferLimits {
-        /// Maximum texture size in pixels
+        /// Maximum texture size in pixels per dimension (Metal hard cap on most devices).
         public static let maxTextureSize: Int = 8192
 
-        /// Preferred texture size for performance
+        /// Preferred texture size that balances visual quality and VRAM footprint.
         public static let preferredTextureSize: Int = 2048
 
-        /// Maximum number of draw calls per frame before performance warning
+        /// Draw-call count above which a performance warning is logged.
         public static let maxDrawCallsWarningThreshold: Int = 1000
     }
 
     // MARK: - Performance
 
+    /// Performance-monitoring and timeout defaults.
     public enum Performance {
-        /// Frequency for periodic status logging (every N frames)
+        /// Frame interval between periodic status log messages.
         public static let statusLogInterval: Int = 120
 
-        /// Command buffer timeout in milliseconds
+        /// Command-buffer completion timeout in milliseconds (2 minutes).
         public static let commandBufferTimeout: Int = 120000  // 2 minutes
     }
 
     // MARK: - Debug
 
+    /// Diagnostic-logging cadence used by the renderer and physics systems.
     public enum Debug {
-        /// Number of initial frames to log for debugging
+        /// Number of leading frames to log verbose diagnostics for.
         public static let initialFrameLogCount: Int = 3
 
-        /// Interval for periodic logging (every N frames)
+        /// Frame interval between periodic debug log messages once the warmup window has elapsed.
         public static let periodicLogInterval: Int = 60
     }
 }

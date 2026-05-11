@@ -14,11 +14,21 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 
 - ``VRMMetalKit/VRMMetalKit``
 - ``VRMModel``
+- ``VRMSpecVersion``
+- ``VRMConstants``
+- ``VRMHumanoid``
+- ``VRMHumanoidBone``
+- ``VRMFirstPerson``
+- ``VRMLookAt``
+- ``VRMExpressions``
 - <doc:GettingStarted>
 
 ### Loading
 
 - ``VRMLoadingOptions``
+- ``VRMLoadingOptimization``
+- ``VRMLoadingProgress``
+- ``VRMLoadingPhase``
 - <doc:LoadingVRMModels>
 
 ### Rendering
@@ -35,6 +45,9 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMMToonMaterial``
 - ``VRMOutlineWidthMode``
 - ``VRMShadingShiftTexture``
+- ``VRMMaterialColorBind``
+- ``VRMMaterialColorType``
+- ``VRMTextureTransformBind``
 - ``MaterialReport``
 - ``VRM0MaterialProperty``
 
@@ -57,6 +70,10 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMLookAtController``
 - ``VRMExpression``
 - ``VRMExpressionPreset``
+- ``VRMExpressionOverrideType``
+- ``VRMMorphTargetBind``
+- ``VRMLookAtType``
+- ``VRMLookAtRangeMap``
 
 ### Physics
 
@@ -89,11 +106,25 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 
 - ``StrictLevel``
 - ``RenderFilter``
+- ``StrictValidator``
+- ``ResourceIndices``
+- ``MetalSizeConstants``
 - <doc:StrictMode>
 
 ### Errors
 
+- ``VRMError``
+- ``StrictModeError``
 - ``VRMRendererError``
+
+### Metadata
+
+- ``VRMMeta``
+- ``VRMAvatarPermission``
+- ``VRMCommercialUsage``
+- ``VRMCreditNotation``
+- ``VRMModifyPermission``
+- ``VRMFirstPersonFlag``
 
 ### Migration
 

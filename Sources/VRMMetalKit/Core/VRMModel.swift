@@ -19,41 +19,44 @@ import Foundation
 import simd
 import Metal
 
-/// VRMModel represents a loaded VRM avatar with all its data, nodes, meshes, and materials.
+/// A loaded VRM avatar with GPU-resident geometry, materials, and runtime state.
+///
+/// `VRMModel` is the central type produced by ``load(from:device:options:)``
+/// and consumed by ``VRMRenderer``. It owns the scene graph (``nodes``),
+/// mesh and material arrays, textures, skinning data, optional spring-bone
+/// physics state, and the VRM-specific subsystems exposed via ``humanoid``,
+/// ``firstPerson``, ``lookAt``, and ``expressions``.
+///
+/// ## Lifecycle
+/// 1. **Load** with ``VRMModel/load(from:device:options:)`` or
+///    ``VRMModel/load(from:filePath:device:)``. Pass a Metal device to make
+///    the model immediately ready for rendering; omit it to keep the model
+///    CPU-only (for headless inspection or offline transforms).
+/// 2. **Use** the model with ``VRMRenderer`` and the animation/expression
+///    subsystems. Mutations to nodes or expression weights should be
+///    coordinated via ``withLock(_:)`` when accessed from multiple threads.
+/// 3. **Release** by letting the model deallocate; all Metal resources are
+///    owned and freed automatically.
 ///
 /// ## Thread Safety
-/// **Thread-safe (with locking).** VRMModel is marked `@unchecked Sendable` and uses internal locking
-/// to allow concurrent access from animation and rendering threads.
+/// `VRMModel` is declared `@unchecked Sendable` and protects mutable state
+/// with an internal `NSLock`. Both ``AnimationPlayer`` and ``VRMRenderer``
+/// acquire this lock around their update / encode passes. Application code
+/// that mutates nodes from background threads must do so inside
+/// ``withLock(_:)``.
 ///
-/// ### Concurrency Model:
-/// - **Coarse-Grained Locking**: The entire model is protected by a single `NSLock`.
-/// - **Animation**: `AnimationPlayer` automatically acquires the lock during updates.
-/// - **Rendering**: `VRMRenderer` automatically acquires the lock during draw command encoding.
-/// - **Manual Access**: If you need to read/write model data from multiple threads manually,
-///   use the `withLock { ... }` method to ensure safety.
-///
-/// ### Usage Example:
 /// ```swift
-/// // ✅ SAFE: Animation on background thread
-/// DispatchQueue.global().async {
-///     animationPlayer.update(deltaTime: dt, model: model) // Internally locks
-/// }
-///
-/// // ✅ SAFE: Rendering on main thread
-/// draw(in: view) {
-///     renderer.render(model: model, ...) // Internally locks
-/// }
-///
-/// // ✅ SAFE: Manual thread-safe access
 /// model.withLock {
-///     model.nodes[0].translation = SIMD3<Float>(0, 1, 0)
+///     model.nodes[headIndex].rotation = simd_quatf(angle: 0.1, axis: [0, 1, 0])
 /// }
 /// ```
+///
+/// - SeeAlso: ``VRMRenderer``, ``VRMLoadingOptions``, ``VRMError``.
 public class VRMModel: @unchecked Sendable {
     // MARK: - Thread Safety
     let lock = NSLock()
 
-    /// Execute a closure while holding the model's lock
+    /// Runs `body` while holding the model's internal lock, serializing access with the renderer and animation player.
     public func withLock<T>(_ body: () throws -> T) rethrows -> T {
         lock.lock()
         defer { lock.unlock() }
@@ -161,6 +164,11 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - Initialization
 
+    /// Creates a VRM model from already-parsed VRM extension data and a glTF document.
+    ///
+    /// Application code rarely calls this directly — prefer
+    /// ``load(from:device:options:)`` which parses the file, populates GPU
+    /// resources, and wires up physics in one call.
     public init(specVersion: VRMSpecVersion,
                 meta: VRMMeta,
                 humanoid: VRMHumanoid?,
@@ -184,6 +192,7 @@ public class VRMModel: @unchecked Sendable {
     private var _cachedLocalBounds: (min: SIMD3<Float>, max: SIMD3<Float>)?
     private let _boundsLock = NSLock()
 
+    /// Bind-pose model-space AABB across every primitive's `localMin`/`localMax`. Computed lazily and cached.
     public var modelLocalBounds: (min: SIMD3<Float>, max: SIMD3<Float>) {
         _boundsLock.lock()
         defer { _boundsLock.unlock() }
@@ -242,9 +251,15 @@ public class VRMModel: @unchecked Sendable {
         return frustum.cullsAABB(min: world.min, max: world.max)
     }
 
-    /// Calculate axis-aligned bounding box from all mesh vertices in model space
-    /// - Parameter includeAnimated: If true, considers current world transforms; if false, uses bind pose
-    /// - Returns: Min and max corners of the bounding box
+    /// Calculates an axis-aligned bounding box from every mesh vertex.
+    ///
+    /// Unlike ``modelLocalBounds``, this method walks the actual GPU vertex
+    /// buffers and is exact (and considerably slower). Prefer
+    /// ``modelLocalBounds`` for per-frame culling.
+    ///
+    /// - Parameter includeAnimated: When `true`, transforms vertices by their
+    ///   owning node's current world matrix; when `false`, uses bind-pose positions.
+    /// - Returns: Min/max corners of the resulting AABB in model space.
     public func calculateBoundingBox(includeAnimated: Bool = false) -> (min: SIMD3<Float>, max: SIMD3<Float>) {
         var minBounds = SIMD3<Float>(Float.infinity, Float.infinity, Float.infinity)
         var maxBounds = SIMD3<Float>(-Float.infinity, -Float.infinity, -Float.infinity)
@@ -305,6 +320,11 @@ public class VRMModel: @unchecked Sendable {
         return (minBounds, maxBounds)
     }
 
+    /// Estimates a skinned bounding box from the current skeleton pose plus humanoid anchor bones.
+    ///
+    /// Cheaper than ``calculateBoundingBox(includeAnimated:)`` because it only
+    /// touches node world positions. Returns the AABB along with its center
+    /// and size for camera framing.
     public func calculateSkinnedBoundingBox() -> (min: SIMD3<Float>, max: SIMD3<Float>, center: SIMD3<Float>, size: SIMD3<Float>) {
         // For skinned models, estimate from the skeleton
         var minBounds = SIMD3<Float>(Float.infinity, Float.infinity, Float.infinity)
@@ -963,10 +983,12 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - SpringBone GPU System
 
-    /// Expand VRM 0.0 spring bone chains by traversing node hierarchy
-    /// In VRM 0.0, the bones array contains ROOT bone indices, and all descendants should become joints
-    /// This mimics three-vrm's root.traverse() behavior
-    /// IMPORTANT: Uses DFS to maintain parent-child ordering within each chain
+    /// Expands VRM 0.0 spring-bone chains by traversing the node hierarchy from each root joint.
+    ///
+    /// VRM 0.0 stores only root joints; all descendant nodes are implicit
+    /// chain members. This method matches three-vrm's `root.traverse()`
+    /// behavior using a DFS walk that preserves parent-to-child ordering.
+    /// No-op on VRM 1.0 models, which already encode the full joint list.
     public func expandVRM0SpringBoneChains() {
         // VRMC_springBone-1.0 already encodes the full chain in springs[].joints.
         // Re-expanding would treat every joint as a chain root and inflate the
@@ -1027,6 +1049,16 @@ public class VRMModel: @unchecked Sendable {
         }
     }
 
+    /// Allocates GPU buffers and seeds global parameters for the spring-bone simulation.
+    ///
+    /// Called automatically by ``load(from:device:options:)`` when both a
+    /// Metal device and spring-bone data are present. Per-bone parameters,
+    /// rest lengths, and collider data are populated separately by
+    /// `SpringBoneComputeSystem.populateSpringBoneData(model:)` once the
+    /// renderer's compute system has been created.
+    ///
+    /// - Parameter device: Metal device used to allocate spring-bone buffers.
+    /// - Throws: An error if buffer allocation fails.
     public func initializeSpringBoneGPUSystem(device: MTLDevice) throws {
         guard springBone != nil else {
             return // No SpringBone data in this model
@@ -1140,6 +1172,10 @@ public class VRMModel: @unchecked Sendable {
 
     // MARK: - Index/Accessor Audit
 
+    /// Walks every mesh primitive and logs any index/accessor inconsistencies.
+    ///
+    /// Diagnostic tool used while debugging malformed glTF buffers; safe but
+    /// noisy in production. Output goes through the package's `vrmLog` helper.
     public func runIndexAccessorAudit() {
         vrmLog("\n" + String(repeating: "=", count: 80))
         vrmLog("INDEX/ACCESSOR CONSISTENCY AUDIT")
@@ -1313,11 +1349,13 @@ public class VRMHumanoid {
         /// The index into `VRMModel.nodes` for this bone.
         public let node: Int
 
+        /// Creates a humanoid bone reference pointing at the given node index.
         public init(node: Int) {
             self.node = node
         }
     }
 
+    /// Creates an empty humanoid configuration. Populate ``humanBones`` to map bones to nodes.
     public init() {}
 
     /// Returns the node index for a humanoid bone.
@@ -1362,12 +1400,14 @@ public class VRMFirstPerson {
         /// The visibility flag for this mesh.
         public let type: VRMFirstPersonFlag
 
+        /// Creates a mesh annotation associating a node with a first-person visibility flag.
         public init(node: Int, type: VRMFirstPersonFlag) {
             self.node = node
             self.type = type
         }
     }
 
+    /// Creates an empty first-person configuration. Populate ``meshAnnotations`` per mesh.
     public init() {}
 }
 
@@ -1394,6 +1434,7 @@ public class VRMLookAt {
     /// Range map for upward vertical eye movement.
     public var rangeMapVerticalUp: VRMLookAtRangeMap = VRMLookAtRangeMap()
 
+    /// Creates a look-at configuration with default range maps and zero head offset.
     public init() {}
 }
 
@@ -1421,54 +1462,66 @@ public class VRMExpressions {
     /// Model-specific custom expressions keyed by name.
     public var custom: [String: VRMExpression] = [:]
 
+    /// Creates an empty expressions container. Populate ``preset`` and ``custom`` during loading.
     public init() {}
 }
 
 // MARK: - Errors
 
-/// Comprehensive VRM loading and validation errors with LLM-friendly contextual information
+/// Errors raised by VRM loading, validation, and runtime resource setup.
+///
+/// All cases conform to `LocalizedError` with messages that describe what
+/// went wrong, where it happened, a suggested fix, and a link to the relevant
+/// VRM/glTF spec section. See ``errorDescription`` for the rendered output.
 public enum VRMError: Error {
-    // VRM Extension Errors
+    /// The file does not contain a `VRMC_vrm` (1.0) or `VRM` (0.0) extension.
     case missingVRMExtension(filePath: String?, suggestion: String)
 
-    // Humanoid Bone Errors
+    /// A humanoid bone required by the VRM spec is absent from the humanoid mapping.
     case missingRequiredBone(bone: VRMHumanoidBone, availableBones: [String], filePath: String?)
 
-    // File Format Errors
+    /// The GLB container does not conform to the glTF 2.0 binary format.
     case invalidGLBFormat(reason: String, filePath: String?)
+    /// JSON parsing of a glTF chunk failed.
     case invalidJSON(context: String, underlyingError: String?, filePath: String?)
+    /// The VRM specification version found in the file is not supported by this runtime.
     case unsupportedVersion(version: String, supported: [String], filePath: String?)
 
-    // Buffer and Accessor Errors
+    /// A required buffer is missing or shorter than the declared byte length.
     case missingBuffer(bufferIndex: Int, requiredBy: String, expectedSize: Int?, filePath: String?)
+    /// An accessor references invalid buffer-view ranges, component types, or counts.
     case invalidAccessor(accessorIndex: Int, reason: String, context: String, filePath: String?)
 
-    // Texture Errors
+    /// A texture referenced by a material could not be loaded.
     case missingTexture(textureIndex: Int, materialName: String?, uri: String?, filePath: String?)
+    /// A texture's image data is corrupted or in an unsupported format.
     case invalidImageData(textureIndex: Int, reason: String, filePath: String?)
 
-    // Mesh and Geometry Errors
+    /// A mesh or primitive is structurally invalid (missing attributes, bad indices, etc.).
     case invalidMesh(meshIndex: Int, primitiveIndex: Int?, reason: String, filePath: String?)
+    /// A required vertex attribute (e.g. `POSITION`) is absent on the mesh.
     case missingVertexAttribute(meshIndex: Int, attributeName: String, filePath: String?)
 
-    // Resource Errors
+    /// A GPU operation was requested but no Metal device has been assigned.
     case deviceNotSet(context: String)
+    /// A file path could not be resolved or read.
     case invalidPath(path: String, reason: String, filePath: String?)
 
-    // Material Errors
+    /// A material has parameters outside valid ranges or references missing resources.
     case invalidMaterial(materialIndex: Int, reason: String, filePath: String?)
-    
-    // Meta Errors
+
+    /// The VRM meta block fails validation (e.g. missing required `licenseUrl` on 1.0).
     case invalidMeta(String)
 
-    // Extension Validation Errors
+    /// The glTF document declares `extensionsRequired` entries that this runtime does not implement.
     case unsupportedRequiredExtension([String])
 
-    // Loading Errors
+    /// Loading was cancelled via Swift Concurrency task cancellation.
     case loadingCancelled
 }
 
 extension VRMError: LocalizedError {
+    /// Returns a multi-line, LLM-friendly description: what went wrong, where, a suggested fix, and a spec URL.
     public var errorDescription: String? {
         switch self {
         case .missingVRMExtension(let filePath, let suggestion):
