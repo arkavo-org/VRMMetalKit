@@ -496,7 +496,8 @@ public class StrictValidator {
 /// Any change to a corresponding Metal struct must be mirrored here or the
 /// validator will raise ``StrictModeError/uniformLayoutMismatch(swift:metal:type:)``.
 public struct MetalSizeConstants {
-    /// Byte size of the Metal `Uniforms` struct (4× 64-byte matrices + 3 lights + normalization + aligned fields).
+    /// Byte size of the Metal `Uniforms` struct; kept in sync with `Shaders/VRMShared.h`.
+    /// Validated at runtime by the strict-mode `uniformLayoutMismatch` check.
     public static let uniformsSize = 432
 
     /// Byte size of the Metal `MToonMaterial` struct (15 blocks × 16 bytes).

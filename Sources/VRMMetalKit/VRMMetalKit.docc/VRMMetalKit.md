@@ -19,6 +19,7 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMHumanoid``
 - ``VRMHumanoidBone``
 - ``VRMFirstPerson``
+- ``VRMFirstPersonFlag``
 - ``VRMLookAt``
 - ``VRMExpressions``
 - <doc:GettingStarted>
@@ -124,7 +125,6 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMCommercialUsage``
 - ``VRMCreditNotation``
 - ``VRMModifyPermission``
-- ``VRMFirstPersonFlag``
 
 ### Migration
 

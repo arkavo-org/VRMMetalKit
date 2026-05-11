@@ -39,11 +39,11 @@ import Metal
 ///    owned and freed automatically.
 ///
 /// ## Thread Safety
-/// `VRMModel` is declared `@unchecked Sendable` and protects mutable state
-/// with an internal `NSLock`. Both ``AnimationPlayer`` and ``VRMRenderer``
-/// acquire this lock around their update / encode passes. Application code
-/// that mutates nodes from background threads must do so inside
-/// ``withLock(_:)``.
+/// `VRMModel` is declared `@unchecked Sendable` and coordinates concurrent
+/// access via an internal `NSLock` that ``AnimationPlayer`` and ``VRMRenderer``
+/// acquire automatically. Application code that mutates the model's public
+/// collections (``nodes``, ``meshes``, ``materials``) from background threads
+/// must do so inside ``withLock(_:)``.
 ///
 /// ```swift
 /// model.withLock {
