@@ -107,8 +107,9 @@ final class MToonFlatWhiteLightingTests: XCTestCase {
         try ensureDevice()
         let path = "/tmp/repro183/mtoon_default.vrm"
         guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("QA repro asset not at \(path). Build with: " +
-                "cd /Users/arkavo/Projects/vrm-conformance && cargo run --release -p vrm-asset-generator -- emit-default --id mtoon_default --output-dir /tmp/repro183")
+            throw XCTSkip("QA repro asset not at \(path). Regenerate from a checkout of " +
+                "github.com/arkavo-org/vrm-conformance with: cargo run --release -p " +
+                "vrm-asset-generator -- emit-default --id mtoon_default --output-dir /tmp/repro183")
         }
 
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
