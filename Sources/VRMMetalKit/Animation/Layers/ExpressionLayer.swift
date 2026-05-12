@@ -17,13 +17,22 @@
 import Foundation
 import simd
 
-/// Expression layer managing facial expressions and automatic blinking
+/// Procedural layer that drives sentiment expressions plus automatic blinking, idle smiles, and flirty winks via morph weights.
+///
+/// Holds a target expression at peak intensity for ``holdDuration``, then
+/// schedules a return-to-neutral after ``returnToNeutralDelay``. Random
+/// blinks are scheduled between ``blinkMinInterval`` and ``blinkMaxInterval``;
+/// idle smiles are scheduled between ``smileMinInterval`` and
+/// ``smileMaxInterval`` and only fire when the layer is otherwise idle.
 public class ExpressionLayer: AnimationLayer {
+    /// Layer identifier used by ``AnimationLayerCompositor`` for lookup.
     public let identifier = "expression"
+    /// Layer evaluation priority. Above ``IdleBreathingLayer`` (0), below ``ARLookAtLayer`` (2) and ``IKLayer`` (4).
     public let priority = 1
+    /// Whether the layer participates in composition this frame.
     public var isEnabled = true
 
-    // Expressions use morph targets only, no bones
+    /// Always empty — expressions are morph-only, no bone writes.
     public var affectedBones: Set<VRMHumanoidBone> { [] }
 
     // MARK: - Blink Parameters
@@ -104,6 +113,7 @@ public class ExpressionLayer: AnimationLayer {
 
     // MARK: - Initialization
 
+    /// Creates a layer with auto-blink and playful idle pre-scheduled to fire on first eligible frame.
     public init() {
         scheduleNextBlink()
         scheduleNextSmile()
@@ -144,6 +154,14 @@ public class ExpressionLayer: AnimationLayer {
 
     // MARK: - AnimationLayer Protocol
 
+    /// Advances expression state by one frame.
+    ///
+    /// When `context.sentimentPreset` differs from the previously processed
+    /// sentiment, kicks off a transition toward that preset at
+    /// `context.sentimentIntensity`. The transition cycle is:
+    /// rise → hold → return-to-neutral delay → decay. Independently
+    /// advances the blink, idle-smile, and wink state machines and
+    /// triggers a wink when `context.isFlirty` is `true`.
     public func update(deltaTime: Float, context: AnimationContext) {
         // Update expression from context sentiment if provided
         if let preset = context.sentimentPreset {
@@ -239,6 +257,7 @@ public class ExpressionLayer: AnimationLayer {
         }
     }
 
+    /// Returns this frame's morph weights: current sentiment, optional bell-curve idle smile, asymmetric wink, and bell-curve blink.
     public func evaluate() -> LayerOutput {
         // Clear previous morphs - ensures clean slate each frame
         cachedOutput.morphWeights.removeAll(keepingCapacity: true)

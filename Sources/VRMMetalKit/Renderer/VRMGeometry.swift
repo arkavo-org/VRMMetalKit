@@ -21,14 +21,35 @@ import simd
 
 // MARK: - VRM Mesh
 
+/// A renderable mesh: a named container of ``VRMPrimitive`` draw calls.
+///
+/// VRM meshes are loaded from glTF `meshes` entries. A node references one
+/// mesh; rendering iterates each primitive (one draw call per primitive) and
+/// applies the per-primitive material.
 public class VRMMesh {
+    /// Original glTF mesh name, when present.
     public let name: String?
+    /// Per-primitive draw calls owned by this mesh (one draw call per primitive).
     public var primitives: [VRMPrimitive] = []
 
+    /// Creates an empty mesh with the given name. Primitives are appended by ``load(from:document:device:bufferLoader:)``.
     public init(name: String? = nil) {
         self.name = name
     }
 
+    /// Loads a mesh and all of its primitives from a glTF mesh entry.
+    ///
+    /// Asynchronous because each primitive may load buffer data and create
+    /// Metal vertex/index buffers in parallel.
+    ///
+    /// - Parameters:
+    ///   - gltfMesh: Source glTF mesh.
+    ///   - document: Parent glTF document used to resolve accessor indices.
+    ///   - device: `MTLDevice` for GPU buffer allocation; `nil` is permitted for tests that only need CPU data.
+    ///   - bufferLoader: Buffer/accessor loader for the source document.
+    /// - Returns: A populated ``VRMMesh``.
+    /// - Throws: Any ``VRMError`` raised by primitive loading (missing
+    ///   attributes, malformed accessors, allocation failure).
     public static func load(from gltfMesh: GLTFMesh,
                            document: GLTFDocument,
                            device: MTLDevice?,
@@ -53,50 +74,101 @@ public class VRMMesh {
 
 // MARK: - VRM Primitive
 
+/// A single draw call within a ``VRMMesh``: one vertex buffer, one optional index buffer, one material.
+///
+/// ## Discussion
+/// `VRMPrimitive` owns all of the per-draw-call GPU resources for a slice of
+/// a mesh — interleaved vertices in ``vertexBuffer``, indices (when present)
+/// in ``indexBuffer``, morph-target deltas (both per-target AoS buffers and
+/// SoA flattened buffers used by the GPU compute path), and first-person
+/// per-vertex visibility flags. Attribute presence is exposed through the
+/// `has*` Booleans so the renderer can route to the correct pipeline (skinned
+/// vs non-skinned, with/without UVs).
+///
+/// Primitives are loaded from glTF by ``load(from:document:device:bufferLoader:)``.
+/// During load, joint indices are sanitised to remove sentinel values
+/// (see ``sanitizeJoints(maxJointIndex:)``), and the local-space AABB is
+/// captured into ``localMin``/``localMax`` for frustum culling.
 public class VRMPrimitive {
+    /// Interleaved vertex buffer in ``VRMVertex`` layout.
     public var vertexBuffer: MTLBuffer?
+    /// Index buffer; `nil` for non-indexed primitives.
     public var indexBuffer: MTLBuffer?
+    /// Number of vertices in ``vertexBuffer``.
     public var vertexCount: Int = 0
+    /// Number of indices in ``indexBuffer`` (or vertices, for non-indexed primitives).
     public var indexCount: Int = 0
+    /// Index element type (`.uint16` or `.uint32`).
     public var indexType: MTLIndexType = .uint16
-    public var indexBufferOffset: Int = 0  // Byte offset for index buffer from accessor
+    /// Byte offset into ``indexBuffer`` where this primitive's indices begin (from the source accessor).
+    public var indexBufferOffset: Int = 0
+    /// `MTLPrimitiveType` produced from the glTF `mode` field (`triangle`, `triangleStrip`, etc.).
     public var primitiveType: MTLPrimitiveType = .triangle
+    /// Index into the model's `materials` array, or `nil` for the default material.
     public var materialIndex: Int?
 
-    // Vertex attributes
+    /// Whether the source defined per-vertex normals.
     public var hasNormals = false
+    /// Whether the source defined `TEXCOORD_0` UVs.
     public var hasTexCoords = false
+    /// Whether the source defined per-vertex tangents.
     public var hasTangents = false
+    /// Whether the source defined per-vertex colors.
     public var hasColors = false
+    /// Whether the source defined `JOINTS_0` data (skinning).
     public var hasJoints = false
+    /// Whether the source defined `WEIGHTS_0` data (skinning).
     public var hasWeights = false
 
-    // Skinning requirements
-    public var requiredPaletteSize: Int = 0  // Minimum joints needed (maxJoint + 1 from JOINTS_0 data)
+    /// Minimum joint palette size needed to skin this primitive (`maxJoint + 1` of the `JOINTS_0` data).
+    public var requiredPaletteSize: Int = 0
 
-    // Morph targets
+    /// Morph-target CPU data parsed from glTF `primitive.targets`.
     public var morphTargets: [VRMMorphTarget] = []
+    /// Per-morph-target position-delta buffers (Array-of-Structures layout, one buffer per target).
     public var morphPositionBuffers: [MTLBuffer] = []
+    /// Per-morph-target normal-delta buffers.
     public var morphNormalBuffers: [MTLBuffer] = []
+    /// Per-morph-target tangent-delta buffers.
     public var morphTangentBuffers: [MTLBuffer] = []
 
-    // SoA morph buffers for compute path
-    public var morphPositionsSoA: MTLBuffer?  // Layout: [morph0[v0..vN], morph1[v0..vN], ...]
-    public var morphNormalsSoA: MTLBuffer?    // Same layout for normals
-    public var basePositionsBuffer: MTLBuffer? // Base positions for compute
-    public var baseNormalsBuffer: MTLBuffer?   // Base normals for compute
+    /// Structure-of-Arrays position deltas for the GPU compute morph pass.
+    /// Layout: `[morph0[v0..vN], morph1[v0..vN], ...]`.
+    public var morphPositionsSoA: MTLBuffer?
+    /// SoA normal deltas matching ``morphPositionsSoA``.
+    public var morphNormalsSoA: MTLBuffer?
+    /// Base (rest-pose) positions copied from ``vertexBuffer`` for the compute morph pass.
+    public var basePositionsBuffer: MTLBuffer?
+    /// Base (rest-pose) normals for the compute morph pass.
+    public var baseNormalsBuffer: MTLBuffer?
 
-    /// Local-space AABB of base positions (pre-skinning, pre-morph). Set by `load`.
+    /// Local-space AABB minimum corner of base positions (pre-skinning, pre-morph). Set by ``load(from:document:device:bufferLoader:)``.
     public var localMin: SIMD3<Float> = SIMD3<Float>(repeating: 0)
+    /// Local-space AABB maximum corner. See ``localMin``.
     public var localMax: SIMD3<Float> = SIMD3<Float>(repeating: 0)
 
-    // First-person visibility: per-vertex flags (1 = hidden in first-person, 0 = visible).
-    // Populated by VRMFirstPersonProcessor for meshes with `auto` annotation.
+    /// Per-vertex first-person hidden flags. `1` = hidden when ``VRMRenderer/cameraMode`` is `.firstPerson`, `0` = visible.
+    /// Populated by `VRMFirstPersonProcessor` for meshes whose annotation resolves to `.auto`.
     public var firstPersonHiddenFlags: [UInt8] = []
+    /// GPU buffer mirroring ``firstPersonHiddenFlags``; bound to the vertex shader in first-person mode.
     public var firstPersonHiddenFlagsBuffer: MTLBuffer?
 
+    /// Creates an empty primitive. Use ``load(from:document:device:bufferLoader:)`` to populate from glTF.
     public init() {}
 
+    /// Loads a primitive from a glTF primitive descriptor: vertices, indices, morph targets, and material reference.
+    ///
+    /// During load, joint indices are sanitised (sentinel values clamped, see
+    /// ``sanitizeJoints(maxJointIndex:)``) and the local-space AABB is captured.
+    ///
+    /// - Parameters:
+    ///   - gltfPrimitive: Source primitive entry.
+    ///   - document: Parent glTF document used to resolve accessor indices.
+    ///   - device: `MTLDevice` for GPU buffer allocation; `nil` skips GPU upload (useful for unit tests).
+    ///   - bufferLoader: Buffer/accessor loader bound to the source document.
+    /// - Returns: A populated ``VRMPrimitive`` with buffers ready for rendering.
+    /// - Throws: ``VRMError`` if required attributes (e.g. `POSITION`) are
+    ///   missing or accessor data is malformed.
     public static func load(from gltfPrimitive: GLTFPrimitive,
                            document: GLTFDocument,
                            device: MTLDevice?,
@@ -362,6 +434,17 @@ public class VRMPrimitive {
 
     // MARK: - Index/Accessor Consistency Audit
 
+    /// Walks the index buffer checking for out-of-bounds indices, misaligned offsets, and degenerate triangles.
+    ///
+    /// Heavy diagnostic intended for debug builds: scans every index, logs
+    /// findings, and applies extra heuristics for face materials (suspected
+    /// UV anomalies, large index spreads).
+    ///
+    /// - Parameters:
+    ///   - meshIndex: Source mesh index, used only for log output.
+    ///   - primitiveIndex: Source primitive index, used only for log output.
+    ///   - materialName: Optional material name; if it contains `"face"`, extra face-mesh diagnostics run.
+    /// - Returns: `true` if no problems were found, `false` if any error was logged.
     public func auditIndexConsistency(meshIndex: Int, primitiveIndex: Int, materialName: String? = nil) -> Bool {
         let isFaceMaterial = materialName?.lowercased().contains("face") ?? false
 
@@ -550,7 +633,13 @@ public class VRMPrimitive {
         return !hasErrors
     }
 
-    // Create GPU buffers for morph targets
+    /// Allocates GPU buffers (AoS and SoA layouts) for every morph target in ``morphTargets``.
+    ///
+    /// Call after ``morphTargets`` has been populated and before the first
+    /// frame. The renderer requires both the per-target AoS buffers
+    /// (``morphPositionBuffers``, ``morphNormalBuffers``, ``morphTangentBuffers``)
+    /// and the flattened SoA buffers (``morphPositionsSoA``, ``morphNormalsSoA``)
+    /// used by the compute morph kernel.
     public func createMorphTargetBuffers(device: MTLDevice) {
         morphPositionBuffers.removeAll()
         morphNormalBuffers.removeAll()
@@ -872,12 +961,23 @@ struct VertexData {
 
 // MARK: - Vertex Structure
 
+/// Interleaved per-vertex layout used by every ``VRMPrimitive`` vertex buffer.
+///
+/// Must stay byte-compatible with the Metal `Vertex` struct in
+/// `Shaders/VRMShared.h`. The strict-mode validator checks the byte size at
+/// runtime via ``MetalSizeConstants/vertexSize``.
 public struct VRMVertex {
+    /// Object-space position.
     public var position: SIMD3<Float> = [0, 0, 0]
+    /// Object-space normal; defaults to `(0, 1, 0)` for meshes without supplied normals.
     public var normal: SIMD3<Float> = [0, 1, 0]
+    /// Primary UV channel (`TEXCOORD_0`).
     public var texCoord: SIMD2<Float> = [0, 0]
+    /// Per-vertex color from `COLOR_0`; defaults to opaque white when absent.
     public var color: SIMD4<Float> = [1, 1, 1, 1]
-    public var joints: SIMD4<UInt32> = [0, 0, 0, 0]  // Changed to UInt32 to match shader uint4
+    /// Skin joint indices into the joint palette. `UInt32` matches the shader's `uint4`.
+    public var joints: SIMD4<UInt32> = [0, 0, 0, 0]
+    /// Skin weights summing to 1.0; default `(1, 0, 0, 0)` is identity-rigged to joint 0.
     public var weights: SIMD4<Float> = [1, 0, 0, 0]
 }
 
@@ -1002,31 +1102,53 @@ extension VRMPrimitive {
 
 // MARK: - VRM Node
 
+/// A node in the VRM scene graph. Owns transform, parent/child links, and optional mesh/skin references.
+///
+/// ## Discussion
+/// `VRMNode` corresponds one-to-one with a glTF `node`. Animation, look-at,
+/// constraint solving, and spring-bone simulation all read and write
+/// ``translation`` / ``rotation`` / ``scale``; the renderer then composes
+/// these into ``localMatrix`` and ``worldMatrix`` via
+/// ``updateLocalMatrix()`` and ``updateWorldTransform()``.
+///
+/// The bind pose is captured immutably in ``initialTranslation``,
+/// ``initialRotation``, and ``initialScale``. Procedural systems compute
+/// deltas against this rest pose, and ``resetToBindPose()`` restores it.
 public class VRMNode {
+    /// Source glTF node index; stable across loads.
     public let index: Int
+    /// Source node name (often the humanoid bone name like `J_Bip_C_Head`).
     public let name: String?
+    /// Parent node (weak to avoid retain cycles in the scene graph).
     public weak var parent: VRMNode?
+    /// Child nodes; rendering walks this hierarchy.
     public var children: [VRMNode] = []
 
-    // Transform components
+    /// Local-space translation. Mutated by animation, constraints, and physics.
     public var translation: SIMD3<Float> = [0, 0, 0]
+    /// Local-space rotation. Mutated by animation, look-at, constraints, and physics.
     public var rotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    /// Local-space scale.
     public var scale: SIMD3<Float> = [1, 1, 1]
 
-    // Initial Bind Pose (for resetting or procedural animation reference)
+    /// Bind-pose translation captured at load time. Used by ``resetToBindPose()`` and retargeting.
     public let initialTranslation: SIMD3<Float>
+    /// Bind-pose rotation captured at load time.
     public let initialRotation: simd_quatf
+    /// Bind-pose scale captured at load time.
     public let initialScale: SIMD3<Float>
 
-    // Computed transforms
+    /// `translation * rotation * scale`, recomputed by ``updateLocalMatrix()`` whenever the components change.
     public var localMatrix: float4x4 = matrix_identity_float4x4
+    /// `parent.worldMatrix * localMatrix`, recomputed by ``updateWorldTransform()``.
     public var worldMatrix: float4x4 = matrix_identity_float4x4
 
-    // Computed properties for SpringBone
+    /// World-space position of this node's origin, extracted from ``worldMatrix``. Used by spring-bone colliders.
     public var worldPosition: SIMD3<Float> {
         return SIMD3<Float>(worldMatrix[3][0], worldMatrix[3][1], worldMatrix[3][2])
     }
 
+    /// Alias for ``rotation`` that automatically refreshes ``localMatrix`` on assignment.
     public var localRotation: simd_quatf {
         get { return rotation }
         set {
@@ -1035,10 +1157,12 @@ public class VRMNode {
         }
     }
 
-    // References
+    /// Index into the model's `meshes` array if this node draws a mesh; `nil` otherwise.
     public var mesh: Int?
+    /// Index into the model's `skins` array if this node is a skinned-mesh instance; `nil` otherwise.
     public var skin: Int?
 
+    /// Creates a node from a parsed glTF node. Decomposes a supplied 4x4 matrix into T/R/S when present.
     public init(index: Int, gltfNode: GLTFNode) {
         self.index = index
         self.name = gltfNode.name
@@ -1092,6 +1216,8 @@ public class VRMNode {
         updateLocalMatrix()
     }
 
+    /// Recomputes ``localMatrix`` as `translate(translation) * rotate(rotation) * scale(scale)`.
+    /// Call after mutating ``translation``, ``rotation``, or ``scale`` directly.
     public func updateLocalMatrix() {
         let t = float4x4(translation: translation)
 
@@ -1122,6 +1248,8 @@ public class VRMNode {
         localMatrix = t * r * s
     }
 
+    /// Recomputes ``worldMatrix`` (and recurses through ``children``) by composing with the parent's world matrix.
+    /// Call from each scene-graph root once per frame after animation has mutated local transforms.
     public func updateWorldTransform() {
         #if DEBUG
         // Check for NaNs before using localMatrix
@@ -1149,16 +1277,29 @@ public class VRMNode {
 
 // MARK: - VRM Skin
 
+/// A skeletal skin: ordered joint array plus inverse bind matrices used to compute the per-frame joint palette.
+///
+/// The renderer's ``VRMSkinningSystem`` packs every model skin's joint matrices
+/// into a single shared GPU buffer; ``bufferByteOffset`` and ``matrixOffset``
+/// record where this skin's slice begins.
 public class VRMSkin {
+    /// Source skin name from glTF.
     public let name: String?
+    /// Ordered joint nodes; vertex `JOINTS_0` indices reference positions in this array.
     public var joints: [VRMNode] = []
+    /// Inverse bind matrices, one per joint (identity if the source did not supply an accessor).
     public var inverseBindMatrices: [float4x4] = []
+    /// Optional skeleton root node, used by debug tools.
     public var skeleton: VRMNode?
 
-    // Buffer offset management for efficient multi-skin rendering
-    public var bufferByteOffset: Int = 0  // Byte offset in the large joint buffer
-    public var matrixOffset: Int = 0      // Matrix count offset (bufferByteOffset / sizeof(float4x4))
+    /// Byte offset of this skin's joint matrices within the shared palette buffer.
+    public var bufferByteOffset: Int = 0
+    /// Matrix-count offset of this skin's palette slice (`bufferByteOffset / sizeof(float4x4)`).
+    public var matrixOffset: Int = 0
 
+    /// Loads a skin from glTF: resolves joint node references and reads inverse bind matrices.
+    ///
+    /// - Throws: Any ``VRMError`` raised by `bufferLoader` when loading the inverse-bind-matrix accessor.
     public init(from gltfSkin: GLTFSkin, nodes: [VRMNode], document: GLTFDocument, bufferLoader: BufferLoader) throws {
         self.name = gltfSkin.name
 
@@ -1194,11 +1335,20 @@ public class VRMSkin {
 
 // MARK: - VRM Texture
 
+/// A Metal texture handle plus optional sampler, named per the source glTF texture.
+///
+/// Used by ``VRMMaterial`` to reference base color, normal, emissive,
+/// shade, matcap, rim, and outline-width-mask textures.
 public class VRMTexture {
+    /// Decoded GPU texture; `nil` if loading failed or was deferred.
     public var mtlTexture: MTLTexture?
+    /// Optional sampler override; renderer uses a default linear-wrap sampler when nil.
     public var sampler: MTLSamplerState?
+    /// Source texture name from glTF, when available.
     public let name: String?
 
+    /// Creates a texture wrapper. Both parameters are optional so the type can be constructed
+    /// before GPU resources are ready.
     public init(name: String? = nil, mtlTexture: MTLTexture? = nil) {
         self.name = name
         self.mtlTexture = mtlTexture
@@ -1207,48 +1357,70 @@ public class VRMTexture {
 
 // MARK: - VRM Material
 
+/// A material: glTF PBR parameters plus optional MToon (VRM) parameters, alpha handling, and render-queue sorting.
+///
+/// ## Discussion
+/// `VRMMaterial` carries both the standard glTF PBR-metallic-roughness fields
+/// (base color, normal, emissive, metallic/roughness factors) and a separate
+/// ``mtoon`` block holding the VRM-specific toon-shading parameters. The
+/// renderer picks an appropriate pipeline based on ``alphaMode``,
+/// ``transparentWithZWrite``, and whether ``mtoon`` is present.
+///
+/// Sorting between transparent primitives is driven by ``renderQueue`` and
+/// ``renderQueueOffset`` (see the VRM 1.0 spec for the base values: 2000 for
+/// OPAQUE, 2450 for MASK, 2510 for transparent-with-zwrite, 3000 for BLEND).
 public class VRMMaterial {
+    /// Source material name from glTF.
     public let name: String?
+    /// Base color (albedo) tint applied to ``baseColorTexture``. Clamped to `[0, 1]` per the glTF 2.0 spec.
     public var baseColorFactor: SIMD4<Float> = [1, 1, 1, 1]
+    /// Base color texture (sRGB).
     public var baseColorTexture: VRMTexture?
-    public var normalTexture: VRMTexture?  // Normal map for surface detail
-    public var emissiveTexture: VRMTexture?  // Emissive (glow) texture
+    /// Tangent-space normal map used for surface detail.
+    public var normalTexture: VRMTexture?
+    /// Emissive (self-illuminating) texture.
+    public var emissiveTexture: VRMTexture?
+    /// glTF metallic factor. Unused by the MToon path; retained for non-MToon fallback shading.
     public var metallicFactor: Float = 0.0
+    /// glTF roughness factor. Unused by the MToon path.
     public var roughnessFactor: Float = 1.0
+    /// Emissive tint multiplied into ``emissiveTexture``.
     public var emissiveFactor: SIMD3<Float> = [0, 0, 0]
+    /// Disables back-face culling when true.
     public var doubleSided: Bool = false
+    /// Alpha mode: `"OPAQUE"`, `"MASK"`, or `"BLEND"` (case-sensitive per the glTF spec, though parsing is tolerant).
     public var alphaMode: String = "OPAQUE"
+    /// Alpha-cutoff threshold for ``alphaMode`` == `"MASK"`.
     public var alphaCutoff: Float = 0.5
 
-    // MToon properties
+    /// Optional MToon shading parameters; non-nil for materials with the `VRMC_materials_mtoon` extension.
     public var mtoon: VRMMToonMaterial?
 
-    // VRM spec version for version-aware shader behavior
-    // VRM 0.0 uses smoothstep shading, VRM 1.0 uses linearstep
+    /// Spec version the material was authored against. Drives 0.x-vs-1.0 shader differences (smoothstep vs linearstep).
     public var vrmVersion: VRMSpecVersion = .v1_0
 
-    // Render queue for sorting (VRM 0.x: Unity render queue values, higher = render later)
-    // Default is 2000 (geometry), transparent materials typically 3000+
+    /// Render-queue value for transparency sorting (VRM 0.x uses Unity render-queue numbers; higher = drawn later).
+    /// Default 2000 is the geometry queue; transparent materials typically sit at 3000+.
     public var renderQueue: Int = 2000
 
-    // VRM transparent with depth write - transparent materials that still write to depth buffer
-    // This is critical for proper layering of face materials (eyebrows, eyelashes over skin)
+    /// Transparent material that still writes to the depth buffer.
+    /// Critical for correctly layering face details (eyebrows/eyelashes over face skin).
     public var transparentWithZWrite: Bool = false
 
-    // Render queue offset from VRM extension (relative to category base)
+    /// Offset applied on top of the VRM-1.0 base render queue for the material's alpha mode.
     public var renderQueueOffset: Int = 0
 
-    // Z-write enabled (for VRM 0.x compatibility)
+    /// VRM 0.x `_ZWrite` flag mapped to a Bool.
     public var zWriteEnabled: Bool = true
 
-    // Blend mode from VRM 0.x (0=Opaque, 1=Cutout, 2=Transparent, 3=TransparentWithZWrite)
+    /// VRM 0.x `_BlendMode`: `0` Opaque, `1` Cutout, `2` Transparent, `3` TransparentWithZWrite.
     public var blendMode: Int = 0
 
-    // KHR_texture_transform parsed from baseColorTexture's textureInfo extensions
+    /// `KHR_texture_transform` UV transform parsed from ``baseColorTexture``'s `textureInfo` extensions.
     public var khrTextureTransform: GLTFKHRTextureTransform?
 
-    /// Computed property: Is this material transparent but should write to depth?
-    /// Used for proper layering of overlapping transparent materials (e.g., eyebrows over face skin)
+    /// `true` when this material is transparent and writes to depth (combination of VRM 1.0 flag and VRM 0.x heuristics).
+    /// Used by the render-item sorter to place these materials between OPAQUE and BLEND queues.
     public var isTransparentWithZWrite: Bool {
         // Explicit flag from VRM 1.0 extension
         if transparentWithZWrite {
@@ -1263,12 +1435,17 @@ public class VRMMaterial {
         return isTransparent && zWriteEnabled
     }
 
+    /// Coarse pipeline bucket used to pick between opaque and blended render-pass pipeline states.
     public enum PipelineCategory: Equatable {
+        /// `OPAQUE` (and `MASK`, which the renderer also treats as opaque): no color blending.
         case opaque
+        /// `BLEND` without depth writes: standard alpha-blend.
         case blend
+        /// `BLEND` with depth writes enabled (transparent-with-zwrite layering).
         case blendZWrite
     }
 
+    /// Picks a ``PipelineCategory`` from the alpha mode and the depth-write flag.
     public static func pipelineCategory(alphaMode: String, transparentWithZWrite: Bool) -> PipelineCategory {
         switch alphaMode.uppercased() {
         case "BLEND":
@@ -1278,6 +1455,18 @@ public class VRMMaterial {
         }
     }
 
+    /// Builds a material from glTF + optional VRM 0.x material property block.
+    ///
+    /// Parses the standard PBR fields, the `VRMC_materials_mtoon` extension
+    /// (VRM 1.0), and — when supplied — the legacy `VRM.materialProperties`
+    /// dictionary (VRM 0.x). Computes the final ``renderQueue`` from the
+    /// alpha-mode base plus the spec-clamped offset.
+    ///
+    /// - Parameters:
+    ///   - gltfMaterial: Source glTF material.
+    ///   - textures: Texture array used to resolve texture indices.
+    ///   - vrm0MaterialProperty: Optional VRM 0.x material property; pass `nil` for VRM 1.0 sources.
+    ///   - vrmVersion: Spec version that drives shader behavior differences.
     public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil, vrmVersion: VRMSpecVersion = .v1_0) {
         self.name = gltfMaterial.name
         self.vrmVersion = vrmVersion

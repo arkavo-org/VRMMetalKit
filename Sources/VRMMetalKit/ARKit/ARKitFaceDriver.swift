@@ -18,38 +18,55 @@ import Foundation
 
 // MARK: - Source Priority Strategy
 
-/// Strategy for handling multiple simultaneous face tracking sources
+/// Strategy used by ``ARKitFaceDriver/update(sources:controller:priority:)`` to pick or merge among
+/// multiple active face sources.
 public enum SourcePriorityStrategy: Sendable {
-    /// Use the most recently updated active source
+    /// Selects the source with the most recent ``ARFaceSource/lastUpdate``.
     case latestActive
 
-    /// Use a specific primary source, fall back to others if unavailable
+    /// Selects the source matching the given identifier, falling back to ``latestActive`` if unavailable.
     case primary(UUID)
 
-    /// Merge multiple sources with weighted average
+    /// Merges sources by weighted average using the supplied per-`sourceID` weights.
     case weighted([UUID: Float])
 
-    /// Use the source with highest confidence (if available)
+    /// Selects the source with the highest tracking confidence; currently falls back to ``latestActive``
+    /// because per-source confidence is not yet plumbed through.
     case highestConfidence
 }
 
 // MARK: - Face Driver
 
-/// Drives VRM facial expressions from ARKit face tracking data
+/// Drives a ``VRMExpressionController`` from `ARFaceAnchor`-shaped blend shape data.
 ///
-/// ARKitFaceDriver is the primary API for integrating ARKit face tracking with VRM avatars.
-/// It handles mapping, smoothing, multi-source management, and QoS.
+/// The driver is the entry point for face tracking. Per frame, the caller hands it a fresh
+/// ``ARKitFaceBlendShapes`` snapshot (typically built from `ARFaceAnchor.blendShapes` in an
+/// `ARSessionDelegate` callback). The driver:
 ///
-/// ## Features
-/// - Maps 52 ARKit blend shapes to VRM expression presets
-/// - Configurable smoothing (EMA, Kalman, Windowed)
-/// - Multi-source support with priority strategies
-/// - Staleness detection and auto-pause
-/// - Per-expression smoothing overrides
+/// 1. Drops stale snapshots based on the `maxAge` parameter.
+/// 2. Routes weights through Perfect Sync direct-mapping when available (see ``initializeForModel(_:)``),
+///    or composite mapping via ``ARKitToVRMMapper`` otherwise.
+/// 3. Applies per-expression smoothing through a ``FilterManager`` configured by ``SmoothingConfig``.
+/// 4. Pushes the smoothed weights to the supplied ``VRMExpressionController``.
+///
+/// ## Mapping coverage
+///
+/// ARKit defines 52 blend shapes (see ``ARKitFaceBlendShapes/allKeys``). The standard composite mapper
+/// (``ARKitToVRMMapper/default``) reduces them to 18 VRM expression keys: the five emotion presets
+/// (happy/angry/sad/relaxed/surprised), the five visemes (aa/ih/ou/ee/oh), blink/blinkLeft/blinkRight,
+/// the four eye-gaze presets (lookUp/lookDown/lookLeft/lookRight), and neutral. No ARKit shape is
+/// dropped — every shape is read by at least one mapping formula in the default mapper.
+///
+/// Override the mapping by mutating the supplied ``ARKitToVRMMapper/mappings`` dictionary before passing
+/// it to the initializer, or by replacing it with one of ``ARKitToVRMMapper/simplified`` or
+/// ``ARKitToVRMMapper/aggressive``. Override smoothing per expression via ``SmoothingConfig/perExpression``.
 ///
 /// ## Thread Safety
-/// **NOT thread-safe.** All methods must be called from the same thread (typically main thread).
-/// Marked `@unchecked Sendable` to work with `@MainActor` contexts in ArkavoCreator.
+///
+/// **Not thread-safe.** No internal lock guards the mutating state (statistics, filter manager,
+/// `lastSourceID`, `perfectSyncCapability`). Call all methods from a single context — typically the
+/// main thread or the ARKit delegate's serial queue. Marked `@unchecked Sendable` to participate in
+/// `@MainActor` actors.
 ///
 /// ## Usage
 ///
@@ -90,10 +107,15 @@ public enum SourcePriorityStrategy: Sendable {
 /// ```
 public final class ARKitFaceDriver: @unchecked Sendable {
     // Configuration
+    /// Composite mapper used when Perfect Sync is unavailable or for the preset side of partial Perfect Sync.
     public let mapper: ARKitToVRMMapper
+    /// Smoothing configuration consulted when allocating per-key filters; mutate then call
+    /// ``updateSmoothingConfig(_:)`` to apply.
     public var smoothingConfig: SmoothingConfig
 
     // Perfect Sync support
+    /// The Perfect Sync capability detected for the bound model, set by ``initializeForModel(_:)``.
+    /// Defaults to `.none` until a model is bound.
     public private(set) var perfectSyncCapability: PerfectSyncCapability = .none
     private var perfectSyncMapper: PerfectSyncMapper?
 
@@ -105,9 +127,15 @@ public final class ARKitFaceDriver: @unchecked Sendable {
     private var lastUpdateTime: TimeInterval = 0
 
     // Statistics
+    /// Total ``update(blendShapes:controller:maxAge:)`` calls observed (incremented before staleness check).
     public private(set) var updateCount: Int = 0
+    /// Subset of ``updateCount`` that was dropped because the snapshot exceeded the supplied `maxAge`.
     public private(set) var skippedUpdates: Int = 0  // Due to stale data
 
+    /// Creates a face driver with the given composite mapper and smoothing configuration.
+    ///
+    /// Defaults to ``ARKitToVRMMapper/default`` and ``SmoothingConfig/default`` for balanced behavior.
+    /// Call ``initializeForModel(_:)`` once the VRM model is loaded to enable Perfect Sync detection.
     public init(
         mapper: ARKitToVRMMapper = .default,
         smoothing: SmoothingConfig = .default
@@ -405,7 +433,7 @@ public final class ARKitFaceDriver: @unchecked Sendable {
 
 // MARK: - Driver Statistics
 
-/// Statistics about driver performance and updates
+/// Snapshot of ``ARKitFaceDriver`` activity counters returned by ``ARKitFaceDriver/getStatistics()``.
 public struct DriverStatistics: Sendable {
     /// Total number of updates processed
     public let totalUpdates: Int

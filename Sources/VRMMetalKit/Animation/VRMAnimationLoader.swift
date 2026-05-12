@@ -42,8 +42,89 @@ private struct KeyTrack {
     let componentCount: Int
 }
 
+/// Loads VRMC_vrm_animation-1.0 (`.vrma`) clips and retargets their tracks onto a target ``VRMModel``.
+///
+/// ## Discussion
+/// `VRMAnimationLoader` is the retargeting nerve centre. VRMA files store
+/// animation in their own skeleton's rest pose, which is typically *not* the
+/// rest pose of the avatar the animation is being applied to. The loader
+/// resolves this by producing per-frame closures that bake the retargeting
+/// math at load time, so playback (via ``AnimationPlayer``) only has to
+/// sample and write.
+///
+/// ### Rest-pose retargeting formula
+/// Animation rest pose and model rest pose are treated as two independent,
+/// immutable sources of truth — neither is inferred from the other. For
+/// every humanoid bone, the loader emits a rotation closure of the form:
+///
+/// ```text
+/// delta  = inverse(animationRestRotation) * animationRotation
+/// result = modelRestRotation * delta
+/// ```
+///
+/// This works whether the two rest poses are identical (delta collapses to
+/// `animationRotation` and `result = modelRest * animationRotation`) or
+/// different (T-pose model receiving an A-pose animation, etc.). When the
+/// model rest is unavailable (non-humanoid nodes, model-less load), the
+/// closure passes the animation rotation through directly.
+///
+/// Translation deltas use the additive form
+/// `result = modelRest + (animTranslation - animRest)` and are emitted only
+/// for the `Hips` bone per the VRMC_vrm_animation spec.
+///
+/// ### Bone mapping precedence
+/// Humanoid node-to-bone mapping is resolved in this order:
+/// 1. The VRMC_vrm_animation extension's `humanoid.humanBones` table on the
+///    animation file (per-spec source of truth).
+/// 2. The model's `humanoid.getBoneNode` table matched by normalised name
+///    (lowercased, alphanumeric-only).
+/// 3. A relaxed substring match against the model's normalised name table.
+/// 4. A heuristic that recognises both VRM 1.0 (`leftUpperArm`) and Unity /
+///    VRM 0.0 (`J_Bip_L_UpperArm`) naming.
+///
+/// Nodes that resolve to no humanoid bone are emitted as ``NodeTrack``
+/// entries (hair, bust, accessories).
+///
+/// ### VRM 0.0 coordinate conversion
+/// VRMA files use VRM 1.0 (glTF right-handed) coordinates. When the target
+/// model is VRM 0.0 (Unity left-handed), every sampled rotation and
+/// translation has its X and Z components negated before retargeting. This
+/// matches the conversion done by `three-vrm`'s `createVRMAnimationClip.ts`.
+///
+/// ### Spec-mandated skips
+/// The loader silently drops tracks that the spec forbids:
+/// - Rotation/translation/scale on `leftEye` / `rightEye` (gaze is driven
+///   by ``VRMLookAtController`` or the lookAt block).
+/// - The `lookUp` / `lookDown` / `lookLeft` / `lookRight` expression
+///   presets.
+/// - Translation tracks on humanoid bones other than `Hips`.
+/// - Scale tracks on any humanoid bone.
+///
+/// ### See Also
+/// - <doc:AnimationAndRetargeting>
+/// - <doc:MigratingFromVRM0>
 public enum VRMAnimationLoader {
-    // Load a VRMC_vrm_animation-1.0 (.vrma) clip from a GLB file
+    /// Loads a `.vrma` GLB file from `url` and returns an ``AnimationClip`` retargeted to `model`.
+    ///
+    /// Uses the first animation in the file. Duration is the max input time
+    /// across all samplers, falling back to `1.0` when no samplers carry
+    /// time data. The resulting clip's closures embed coordinate conversion
+    /// and rest-pose retargeting per the formulas described in the
+    /// type-level Discussion.
+    ///
+    /// When `model` is `nil`, only the animation's own rest pose is used
+    /// (no model-side retargeting); bone resolution falls back to the
+    /// animation's VRMC_vrm_animation humanoid mapping if present.
+    ///
+    /// - Parameters:
+    ///   - url: Local file URL to the `.vrma` GLB.
+    ///   - model: Optional target ``VRMModel`` whose rest pose drives
+    ///     retargeting. When non-`nil`, also enables VRM 0.0 coordinate
+    ///     conversion via `model.isVRM0`.
+    /// - Returns: An ``AnimationClip`` with retargeted samplers populated.
+    /// - Throws: An `NSError` (domain `"VRMAnimationLoader"`) when the file
+    ///   contains no animations, or any error thrown by ``GLTFParser`` /
+    ///   ``BufferLoader`` during parsing.
     public static func loadVRMA(from url: URL, model: VRMModel? = nil) throws -> AnimationClip {
         let data = try Data(contentsOf: url)
 

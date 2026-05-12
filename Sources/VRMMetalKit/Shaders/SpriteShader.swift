@@ -19,9 +19,19 @@ import Foundation
 import Metal
 import simd
 
-/// Sprite batch rendering shader for cached character poses
-/// Optimized for rendering multiple 2D sprite quads efficiently
+/// Sprite batch rendering shader for cached character poses.
+///
+/// Optimized for rendering multiple 2D sprite quads efficiently. This Swift
+/// type is a namespace that exposes the Metal Shading Language source as a
+/// string constant for callers that build their own pipelines at runtime
+/// (the cached-pose path in ``SpriteCacheSystem``). The matching CPU-side
+/// instance and uniform structs are ``SpriteInstanceCPU`` and ``SpriteUniformsCPU``.
 public class SpriteShader {
+    /// MSL source for the sprite vertex and fragment shaders.
+    ///
+    /// Exposes three entry points: `sprite_vertex` (non-instanced),
+    /// `sprite_instanced_vertex` (instanced), and `sprite_fragment` /
+    /// `sprite_premultiplied_fragment` (alpha vs. premultiplied blending).
     public static let shaderSource = """
     #include <metal_stdlib>
     using namespace metal;
@@ -152,13 +162,20 @@ public class SpriteShader {
 
 // MARK: - CPU-Side Structures
 
-/// Sprite instance data (CPU-side)
+/// CPU-side per-instance data uploaded to the sprite vertex shader.
+///
+/// Layout matches the `SpriteInstance` MSL struct in ``SpriteShader/shaderSource``.
 public struct SpriteInstanceCPU {
+    /// Per-instance model matrix (position, rotation, scale).
     public var modelMatrix: simd_float4x4
+    /// Per-instance tint colour applied multiplicatively to the sampled texture.
     public var tintColor: SIMD4<Float>
+    /// Texture-atlas UV offset (sprite sheets).
     public var texOffset: SIMD2<Float>
+    /// Texture-atlas UV scale (sprite sheets).
     public var texScale: SIMD2<Float>
 
+    /// Creates a sprite instance with optional matrix, tint, and atlas-region overrides.
     public init(
         modelMatrix: simd_float4x4 = matrix_identity_float4x4,
         tintColor: SIMD4<Float> = SIMD4<Float>(1, 1, 1, 1),
@@ -209,13 +226,20 @@ public struct SpriteInstanceCPU {
     }
 }
 
-/// Sprite uniforms (CPU-side)
+/// CPU-side per-pass uniforms uploaded to the sprite shaders.
+///
+/// Layout matches the `SpriteUniforms` MSL struct in ``SpriteShader/shaderSource``.
 public struct SpriteUniformsCPU {
+    /// Combined view-projection matrix used to transform sprite quads into clip space.
     public var viewProjectionMatrix: simd_float4x4
+    /// Viewport size in pixels; available to MSL for screen-space effects.
     public var viewportSize: SIMD2<Float>
+    /// Reserved padding to satisfy 16-byte alignment requirements.
     public var _padding1: Float = 0
+    /// Reserved padding to satisfy 16-byte alignment requirements.
     public var _padding2: Float = 0
 
+    /// Creates a uniform payload for a sprite draw with the given camera and viewport.
     public init(
         viewProjectionMatrix: simd_float4x4,
         viewportSize: SIMD2<Float>

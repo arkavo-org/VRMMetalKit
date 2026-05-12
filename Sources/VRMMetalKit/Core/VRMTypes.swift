@@ -20,14 +20,28 @@ import simd
 
 // MARK: - VRM 1.0 Core Types
 
+/// VRM specification version detected for a loaded model.
+///
+/// VRM 0.0 (Unity left-handed) and VRM 1.0 (glTF right-handed) are both
+/// loadable; ``VRMModel`` converts 0.0 content on the fly. 1.1 is reserved
+/// for future spec additions.
 public enum VRMSpecVersion: String {
+    /// VRM 0.0 — Unity-era left-handed format. Loaded with on-the-fly conversion to 1.0 semantics.
     case v0_0 = "0.0"
+    /// VRM 1.0 — current glTF-based specification. Default target format.
     case v1_0 = "1.0"
+    /// VRM 1.1 — reserved for forward-compatible spec extensions.
     case v1_1 = "1.1"
 }
 
 // MARK: - Humanoid Bones
 
+/// Standard humanoid bones defined by the VRM 1.0 humanoid spec.
+///
+/// The case set mirrors the VRM 1.0 humanoid bone vocabulary plus the
+/// VRM 0.0 twist-bone names that VRMMetalKit synthesizes during loading.
+/// ``isRequired`` indicates which bones VRM mandates for a valid avatar.
+/// Spec: <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/humanoid.md>
 public enum VRMHumanoidBone: String, CaseIterable, Sendable {
     // Required Torso
     case hips
@@ -111,6 +125,7 @@ public enum VRMHumanoidBone: String, CaseIterable, Sendable {
     case rightLittleIntermediate
     case rightLittleDistal
 
+    /// Returns `true` when this bone is required by the VRM humanoid spec for a valid avatar.
     public var isRequired: Bool {
         switch self {
         case .hips, .spine, .head,
@@ -127,53 +142,100 @@ public enum VRMHumanoidBone: String, CaseIterable, Sendable {
 
 // MARK: - Expression Types
 
+/// Standard VRM 1.0 expression preset identifiers.
+///
+/// The case set mirrors the VRM 1.0 expression preset vocabulary, organized
+/// into emotion (happy/angry/…), viseme (aa/ih/…), blink and look-direction
+/// presets. ``custom`` denotes any non-preset expression defined by the
+/// model creator and stored under ``VRMExpressions/custom``.
+/// Spec: <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/expressions.md>
 public enum VRMExpressionPreset: String, CaseIterable, Sendable {
+    /// Emotion preset — happy.
     case happy
+    /// Emotion preset — angry.
     case angry
+    /// Emotion preset — sad.
     case sad
+    /// Emotion preset — relaxed.
     case relaxed
+    /// Emotion preset — surprised.
     case surprised
 
+    /// Viseme preset — "aa" mouth shape.
     case aa
+    /// Viseme preset — "ih" mouth shape.
     case ih
+    /// Viseme preset — "ou" mouth shape.
     case ou
+    /// Viseme preset — "ee" mouth shape.
     case ee
+    /// Viseme preset — "oh" mouth shape.
     case oh
 
+    /// Both eyes blink simultaneously.
     case blink
+    /// Left eye blinks only.
     case blinkLeft
+    /// Right eye blinks only.
     case blinkRight
+    /// Look-direction preset — upward gaze.
     case lookUp
+    /// Look-direction preset — downward gaze.
     case lookDown
+    /// Look-direction preset — leftward gaze.
     case lookLeft
+    /// Look-direction preset — rightward gaze.
     case lookRight
 
+    /// Neutral baseline expression with all morphs at rest.
     case neutral
-    case custom  // VRM 1.0 spec: User-defined expressions not covered by standard presets
+    /// User-defined expression that is not covered by any preset above.
+    case custom
 }
 
+/// A single VRM expression definition combining morph, material-color, and texture-transform bindings.
+///
+/// Maps the VRM 1.0 `expressions.preset` and `expressions.custom` entries
+/// — see <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/expressions.md>.
+/// `overrideBlink`, `overrideLookAt`, and `overrideMouth` control how this
+/// expression interacts with auto-blink, look-at, and lip-sync drivers.
 public struct VRMExpression {
+    /// Custom expression name; `nil` for preset-only expressions.
     public var name: String?
+    /// Preset identifier, or `nil` for pure custom expressions.
     public var preset: VRMExpressionPreset?
+    /// Morph-target weights this expression applies.
     public var morphTargetBinds: [VRMMorphTargetBind] = []
+    /// Material-color overrides this expression applies.
     public var materialColorBinds: [VRMMaterialColorBind] = []
+    /// Texture-transform overrides this expression applies.
     public var textureTransformBinds: [VRMTextureTransformBind] = []
+    /// When `true`, the expression weight is treated as a binary on/off rather than a continuous blend.
     public var isBinary: Bool = false
+    /// How this expression interacts with the auto-blink driver.
     public var overrideBlink: VRMExpressionOverrideType = .none
+    /// How this expression interacts with the look-at driver.
     public var overrideLookAt: VRMExpressionOverrideType = .none
+    /// How this expression interacts with mouth (viseme) drivers.
     public var overrideMouth: VRMExpressionOverrideType = .none
 
+    /// Creates an expression with an optional custom name and preset identifier.
     public init(name: String? = nil, preset: VRMExpressionPreset? = nil) {
         self.name = name
         self.preset = preset
     }
 }
 
+/// A morph-target weight bound to a node/mesh by an expression. Mirrors VRM 1.0 `expression.morphTargetBinds`.
 public struct VRMMorphTargetBind {
+    /// Node index whose mesh owns the morph target.
     public var node: Int
+    /// Morph-target index within the mesh.
     public var index: Int
+    /// Weight applied when this expression is fully active (typically `0.0...1.0`).
     public var weight: Float
 
+    /// Creates a morph-target binding.
     public init(node: Int, index: Int, weight: Float) {
         self.node = node
         self.index = index
@@ -181,11 +243,16 @@ public struct VRMMorphTargetBind {
     }
 }
 
+/// A material-color override bound to a material by an expression. Mirrors VRM 1.0 `expression.materialColorBinds`.
 public struct VRMMaterialColorBind {
+    /// Material index in the glTF document.
     public var material: Int
+    /// Which color channel of the material this bind targets.
     public var type: VRMMaterialColorType
+    /// Linear-space RGBA target value reached at full expression weight.
     public var targetValue: SIMD4<Float>
 
+    /// Creates a material-color override binding.
     public init(material: Int, type: VRMMaterialColorType, targetValue: SIMD4<Float>) {
         self.material = material
         self.type = type
@@ -193,20 +260,32 @@ public struct VRMMaterialColorBind {
     }
 }
 
+/// Material color channels addressable by ``VRMMaterialColorBind``. Maps to VRM 1.0 expression color targets.
 public enum VRMMaterialColorType: String {
+    /// PBR base color / albedo.
     case color
+    /// Emission color.
     case emissionColor
+    /// MToon shade (shadow-side) color.
     case shadeColor
+    /// MToon matcap color factor.
     case matcapColor
+    /// MToon parametric rim color.
     case rimColor
+    /// MToon outline color.
     case outlineColor
 }
 
+/// A UV transform override bound to a material by an expression. Mirrors VRM 1.0 `expression.textureTransformBinds`.
 public struct VRMTextureTransformBind {
+    /// Material index in the glTF document.
     public var material: Int
+    /// UV scale override at full expression weight, or `nil` to leave unchanged.
     public var scale: SIMD2<Float>?
+    /// UV offset override at full expression weight, or `nil` to leave unchanged.
     public var offset: SIMD2<Float>?
 
+    /// Creates a UV transform binding.
     public init(material: Int, scale: SIMD2<Float>? = nil, offset: SIMD2<Float>? = nil) {
         self.material = material
         self.scale = scale
@@ -214,23 +293,38 @@ public struct VRMTextureTransformBind {
     }
 }
 
+/// How an expression interacts with automatic blink, look-at, and mouth drivers. Mirrors VRM 1.0 `override*` fields.
 public enum VRMExpressionOverrideType: String {
+    /// No interaction — the auto-driver continues to apply.
     case none
+    /// Suppress the auto-driver while this expression is active.
     case block
+    /// Blend the expression with the auto-driver value (driver scaled down by expression weight).
     case blend
 }
 
 // MARK: - LookAt Types
 
+/// Method used to drive an avatar's eye gaze. Mirrors VRM 1.0 `lookAt.type`.
 public enum VRMLookAtType: String {
+    /// Eye gaze is driven by rotating the eye bones.
     case bone
+    /// Eye gaze is driven by blending the ``VRMExpressionPreset/lookUp``, ``VRMExpressionPreset/lookDown``, ``VRMExpressionPreset/lookLeft``, and ``VRMExpressionPreset/lookRight`` expressions.
     case expression
 }
 
+/// Piecewise-linear mapping from a yaw/pitch angle (degrees) to an eye-bone rotation or expression weight.
+///
+/// Defined by the VRM 1.0 look-at spec: input in `0...inputMaxValue` maps
+/// linearly to output in `0...outputScale`. Values above `inputMaxValue`
+/// are clamped to `outputScale`.
 public struct VRMLookAtRangeMap {
+    /// Maximum input angle in degrees beyond which the output is clamped.
     public var inputMaxValue: Float
+    /// Output value reached when the input equals ``inputMaxValue``.
     public var outputScale: Float
 
+    /// Creates a range map. Defaults match the VRM 1.0 reference: 90° input fully drives the gaze.
     public init(inputMaxValue: Float = 90.0, outputScale: Float = 1.0) {
         self.inputMaxValue = inputMaxValue
         self.outputScale = outputScale
@@ -239,90 +333,149 @@ public struct VRMLookAtRangeMap {
 
 // MARK: - First Person
 
+/// First-person visibility flag for a mesh annotation. Mirrors VRM 1.0 `firstPerson.meshAnnotations[].type`.
 public enum VRMFirstPersonFlag: String {
+    /// Automatically hide if the mesh is parented to the head, otherwise show.
     case auto
+    /// Visible in both first-person and third-person views.
     case both
+    /// Visible only in first-person view (e.g. eyelashes).
     case firstPersonOnly
+    /// Visible only in third-person view (e.g. head mesh occluding the first-person camera).
     case thirdPersonOnly
 }
 
 // MARK: - Meta Information
 
+/// VRM 1.0 metadata: author identity, distribution rights, and usage permissions.
+///
+/// Applications that publish, share, or transform VRM models are expected
+/// to honor these fields. Spec:
+/// <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/meta.md>
 public struct VRMMeta {
+    /// Display title of the avatar.
     public var name: String?
+    /// Avatar version string supplied by the creator.
     public var version: String?
+    /// Authors / creator credits.
     public var authors: [String] = []
+    /// Copyright statement.
     public var copyrightInformation: String?
+    /// Contact information for the creator.
     public var contactInformation: String?
+    /// External reference URLs (portfolios, project pages).
     public var references: [String] = []
+    /// Acknowledgment of third-party assets bundled with this avatar.
     public var thirdPartyLicenses: String?
+    /// Index into ``VRMModel/textures`` for the thumbnail image, if present.
     public var thumbnailImage: Int?
+    /// Required license URL — points to the canonical license document.
     public var licenseUrl: String
+    /// Who may impersonate / wear this avatar.
     public var avatarPermission: VRMAvatarPermission?
+    /// Allowed commercial usage tier.
     public var commercialUsage: VRMCommercialUsage?
+    /// Whether end users must visibly credit the creator.
     public var creditNotation: VRMCreditNotation?
+    /// Whether redistribution of the unmodified asset is allowed.
     public var allowRedistribution: Bool?
+    /// Whether and how the asset may be modified.
     public var modify: VRMModifyPermission?
+    /// Additional license URL for asset-specific terms.
     public var otherLicenseUrl: String?
+    /// Author opt-in for excessively violent usage.
     public var allowExcessivelyViolentUsage: Bool?
+    /// Author opt-in for excessively sexual usage.
     public var allowExcessivelySexualUsage: Bool?
+    /// Author opt-in for political or religious usage.
     public var allowPoliticalOrReligiousUsage: Bool?
+    /// Author opt-in for antisocial or hate-related usage.
     public var allowAntisocialOrHateUsage: Bool?
 
+    /// Returns ``allowExcessivelyViolentUsage`` defaulting to `false` when the author left it unset.
     public var allowExcessivelyViolentUsageOrDefault: Bool { allowExcessivelyViolentUsage ?? false }
+    /// Returns ``allowExcessivelySexualUsage`` defaulting to `false` when the author left it unset.
     public var allowExcessivelySexualUsageOrDefault: Bool { allowExcessivelySexualUsage ?? false }
+    /// Returns ``allowPoliticalOrReligiousUsage`` defaulting to `false` when the author left it unset.
     public var allowPoliticalOrReligiousUsageOrDefault: Bool { allowPoliticalOrReligiousUsage ?? false }
+    /// Returns ``allowAntisocialOrHateUsage`` defaulting to `false` when the author left it unset.
     public var allowAntisocialOrHateUsageOrDefault: Bool { allowAntisocialOrHateUsage ?? false }
 
+    /// Creates a `VRMMeta` with the spec-required ``licenseUrl``.
     public init(licenseUrl: String) {
         self.licenseUrl = licenseUrl
     }
 }
 
+/// Who is permitted to wear / impersonate this avatar. Mirrors VRM 1.0 `meta.avatarPermission`.
 public enum VRMAvatarPermission: String {
+    /// Only the original author may use the avatar.
     case onlyAuthor
+    /// Only persons separately licensed by the author may use the avatar.
     case onlySeparatelyLicensedPerson
+    /// Anyone may use the avatar.
     case everyone
 }
 
+/// Allowed commercial-usage tier for an avatar. Mirrors VRM 1.0 `meta.commercialUsage`.
 public enum VRMCommercialUsage: String {
+    /// Personal, non-profit use only.
     case personalNonProfit
+    /// Personal use including profit-making activity.
     case personalProfit
+    /// Use by corporate / legal entities permitted.
     case corporation
 }
 
+/// Whether the avatar requires visible creator credit. Mirrors VRM 1.0 `meta.creditNotation`.
 public enum VRMCreditNotation: String {
+    /// Users must visibly credit the creator.
     case required
+    /// Crediting the creator is optional.
     case unnecessary
 }
 
+/// Whether and how the asset may be modified. Mirrors VRM 1.0 `meta.modify`.
 public enum VRMModifyPermission: String {
+    /// Modification is forbidden.
     case prohibited
+    /// Modification is allowed but redistribution of the modified asset is not.
     case allowModification
+    /// Both modification and redistribution of the modified asset are allowed.
     case allowModificationRedistribution
 }
 
 // MARK: - VRM 0.x Material Properties
 
-/// VRM 0.x stores MToon properties in materialProperties array at document level
+/// VRM 0.x MToon material property bag, indexed by Unity shader property names.
+///
+/// VRM 0.x stores MToon parameters in a document-level `materialProperties`
+/// array keyed by Unity property names (`_MainTex`, `_ShadeColor`, …). Use
+/// ``toMToonMaterial()`` to convert to the VRM 1.0 ``VRMMToonMaterial``
+/// structure that the renderer consumes.
 public struct VRM0MaterialProperty {
+    /// Material display name.
     public var name: String?
+    /// Unity shader identifier (e.g. `"VRM/MToon"`).
     public var shader: String?
+    /// Unity render-queue override.
     public var renderQueue: Int?
 
-    // Float properties (Unity shader property names)
+    /// Float-valued material parameters keyed by Unity property name.
     public var floatProperties: [String: Float] = [:]
 
-    // Vector properties (Unity shader property names)
+    /// Vector-valued material parameters keyed by Unity property name.
     public var vectorProperties: [String: [Float]] = [:]
 
-    // Texture properties (Unity shader property names -> texture index)
+    /// Texture indices keyed by Unity property name.
     public var textureProperties: [String: Int] = [:]
 
-    // Keyword flags
+    /// Unity shader keyword flags.
     public var keywordMap: [String: Bool] = [:]
+    /// Unity shader tag values.
     public var tagMap: [String: String] = [:]
 
+    /// Creates an empty VRM 0.x material property bag.
     public init() {}
 
     /// Helper to convert sRGB color value to linear (gamma decoding)
@@ -331,8 +484,13 @@ public struct VRM0MaterialProperty {
         return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
     }
 
-    /// Convert VRM 0.x material properties to VRM 1.0 MToon structure
-    /// Based on three-vrm VRMMaterialsV0CompatPlugin transformations
+    /// Converts these VRM 0.x material properties into a VRM 1.0 ``VRMMToonMaterial``.
+    ///
+    /// Mirrors the three-vrm `VRMMaterialsV0CompatPlugin` transformations:
+    /// applies sRGB→linear conversion for colors, the toony/shift interdependent
+    /// remap, outline-width cm→normalized scaling, and the Y-axis flip for
+    /// UV-animation scroll. `_IndirectLightIntensity` is deliberately dropped
+    /// (semantics differ from MToon 1.0 `giEqualizationFactor`).
     public func toMToonMaterial() -> VRMMToonMaterial {
         var mtoon = VRMMToonMaterial()
 
@@ -455,39 +613,74 @@ public struct VRM0MaterialProperty {
 
 // MARK: - Material Types
 
+/// MToon 1.0 non-photorealistic material parameters as defined by the `VRMC_materials_mtoon` extension.
+///
+/// Linear-space color factors, normalized outline width, and texture indices
+/// into ``VRMModel/textures``. Defaults match the three-vrm reference
+/// implementation. Spec:
+/// <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md>
 public struct VRMMToonMaterial {
+    /// Linear-space shade (shadow-side) color factor.
     public var shadeColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
+    /// Optional texture index multiplying ``shadeColorFactor`` per-pixel.
     public var shadeMultiplyTexture: Int?
+    /// Toon shading shift along the NdotL axis; negative values widen the lit area.
     public var shadingShiftFactor: Float = 0.0
+    /// Optional texture providing a per-pixel shading-shift override.
     public var shadingShiftTexture: VRMShadingShiftTexture?
+    /// Toon shading hardness in `0...1`; higher values produce sharper toon edges.
     public var shadingToonyFactor: Float = 0.9
+    /// Global-illumination equalization factor.
     public var giEqualizationFactor: Float = 0.9
-    public var matcapFactor: SIMD3<Float> = [1.0, 1.0, 1.0]  // White default for texture multiplication
+    /// Linear-space matcap factor; white by default so a matcap texture multiplies cleanly.
+    public var matcapFactor: SIMD3<Float> = [1.0, 1.0, 1.0]
+    /// Optional matcap texture index (additive).
     public var matcapTexture: Int?
-    public var parametricRimColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]  // Rim should start disabled
-    public var parametricRimFresnelPowerFactor: Float = 5.0  // Higher = narrower rim edge
+    /// Linear-space parametric rim color; black disables rim lighting.
+    public var parametricRimColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
+    /// Fresnel exponent for parametric rim; higher values produce narrower rim edges.
+    public var parametricRimFresnelPowerFactor: Float = 5.0
+    /// Constant lift added to the rim term, brightening it uniformly.
     public var parametricRimLiftFactor: Float = 0.0
+    /// Optional texture index multiplying the rim term.
     public var rimMultiplyTexture: Int?
+    /// Mix factor between unlit rim and lit-scene contribution.
     public var rimLightingMixFactor: Float = 1.0
+    /// Outline width interpretation (world or screen space). See ``VRMOutlineWidthMode``.
     public var outlineWidthMode: VRMOutlineWidthMode = .none
+    /// Outline width in normalized units (mode-dependent).
     public var outlineWidthFactor: Float = 0.0
+    /// Optional linear R8 mask texture modulating outline width per-pixel.
     public var outlineWidthMultiplyTexture: Int?
-    public var outlineColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]  // Black default (matches three-vrm)
+    /// Linear-space outline color factor.
+    public var outlineColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
+    /// Mix factor between flat outline color and scene-lit outline color.
     public var outlineLightingMixFactor: Float = 1.0
+    /// Optional linear R8 mask texture gating UV animation per-pixel.
     public var uvAnimationMaskTexture: Int?
+    /// UV scroll speed along the X axis.
     public var uvAnimationScrollXSpeedFactor: Float = 0.0
+    /// UV scroll speed along the Y axis.
     public var uvAnimationScrollYSpeedFactor: Float = 0.0
+    /// UV rotation speed in revolutions per second.
     public var uvAnimationRotationSpeedFactor: Float = 0.0
+    /// Optional `KHR_texture_transform` applied to all texture lookups.
     public var textureTransform: GLTFKHRTextureTransform?
 
+    /// Creates an MToon material with spec-default values.
     public init() {}
 }
 
+/// MToon shading-shift texture reference. Provides a per-pixel override on top of ``VRMMToonMaterial/shadingShiftFactor``.
 public struct VRMShadingShiftTexture {
+    /// Index into ``VRMModel/textures``.
     public var index: Int
+    /// Optional UV channel selector (`TEXCOORD_n`).
     public var texCoord: Int?
+    /// Optional per-texel scale factor applied to the sampled shift.
     public var scale: Float?
 
+    /// Creates a shading-shift texture reference.
     public init(index: Int, texCoord: Int? = nil, scale: Float? = nil) {
         self.index = index
         self.texCoord = texCoord
@@ -495,69 +688,108 @@ public struct VRMShadingShiftTexture {
     }
 }
 
+/// MToon outline width interpretation. Mirrors VRM 1.0 `mtoon.outlineWidthMode`.
 public enum VRMOutlineWidthMode: String {
+    /// Outline rendering disabled.
     case none
+    /// Outline width is measured in world-space units (meters).
     case worldCoordinates
+    /// Outline width is measured in screen-space units (pixels), scaled by ``VRMMToonMaterial/outlineWidthFactor``.
     case screenCoordinates
 }
 
 // MARK: - SpringBone Types
 
+/// Top-level spring-bone configuration for an avatar.
+///
+/// Aggregates colliders, collider groups, and spring chains. Mirrors the
+/// VRM 1.0 `VRMC_springBone` extension. Simulation is executed on the GPU
+/// at fixed substeps; see ``VRMConstants/Physics``.
 public struct VRMSpringBone {
+    /// Source spec version string (e.g. `"1.0"`).
     public var specVersion: String = "1.0"
+    /// All colliders referenced by this avatar.
     public var colliders: [VRMCollider] = []
+    /// Named collections of colliders, referenced by ``VRMSpring/colliderGroups``.
     public var colliderGroups: [VRMColliderGroup] = []
+    /// Spring chains driving hair, clothing, and accessories.
     public var springs: [VRMSpring] = []
 
+    /// Creates an empty spring-bone configuration.
     public init() {}
 }
 
+/// A collider attached to a node, used to prevent spring chains from penetrating geometry.
 public struct VRMCollider {
+    /// Node index the collider is parented to.
     public var node: Int
+    /// Local-space shape and dimensions.
     public var shape: VRMColliderShape
 
+    /// Creates a node-anchored collider.
     public init(node: Int, shape: VRMColliderShape) {
         self.node = node
         self.shape = shape
     }
 }
 
+/// Geometric shape of a spring-bone collider in the parent node's local frame.
 public enum VRMColliderShape {
+    /// Sphere collider centered at `offset` with `radius`.
     case sphere(offset: SIMD3<Float>, radius: Float)
+    /// Capsule from `offset` to `tail` with hemispherical caps of `radius`.
     case capsule(offset: SIMD3<Float>, radius: Float, tail: SIMD3<Float>)
-    /// Non-spec VRMMetalKit extension. Not part of VRMC_springBone-1.0.
+    /// Infinite plane at `offset` with surface normal `normal`. Non-spec VRMMetalKit extension; not part of `VRMC_springBone-1.0`.
     case plane(offset: SIMD3<Float>, normal: SIMD3<Float>)
 }
 
+/// Named collection of colliders referenced by index from one or more springs.
 public struct VRMColliderGroup {
+    /// Optional display name for debugging.
     public var name: String?
+    /// Indices into ``VRMSpringBone/colliders``.
     public var colliders: [Int] = []
 
+    /// Creates a collider group.
     public init(name: String? = nil, colliders: [Int] = []) {
         self.name = name
         self.colliders = colliders
     }
 }
 
+/// A single spring chain: an ordered list of joints with optional collider groups and a center node.
 public struct VRMSpring {
+    /// Optional display name for debugging.
     public var name: String?
+    /// Joints in parent-to-child order.
     public var joints: [VRMSpringJoint] = []
+    /// Indices into ``VRMSpringBone/colliderGroups`` evaluated against this chain.
     public var colliderGroups: [Int] = []
+    /// Optional node whose transform serves as the inertia-compensation reference (typically the hips).
     public var center: Int?
 
+    /// Creates a spring chain.
     public init(name: String? = nil) {
         self.name = name
     }
 }
 
+/// Per-joint parameters of a spring chain. Mirrors VRM 1.0 `VRMC_springBone.joints`.
 public struct VRMSpringJoint {
+    /// Node index this joint drives.
     public var node: Int
+    /// Collision radius for this joint.
     public var hitRadius: Float = 0.0
+    /// Restoring-force stiffness in `0...1`; higher values keep the joint near its rest pose.
     public var stiffness: Float = 1.0
+    /// Strength of the per-joint gravity term.
     public var gravityPower: Float = 0.0
+    /// Direction of the per-joint gravity term in world space.
     public var gravityDir: SIMD3<Float> = [0, -1, 0]
+    /// Linear damping in `0...1`; higher values dampen joint motion more aggressively.
     public var dragForce: Float = 0.4
 
+    /// Creates a spring-bone joint bound to the given node.
     public init(node: Int) {
         self.node = node
     }

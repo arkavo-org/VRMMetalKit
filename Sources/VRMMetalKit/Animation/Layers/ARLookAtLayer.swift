@@ -17,12 +17,21 @@
 import Foundation
 import simd
 
-/// AR look-at layer that tracks the camera position with head, neck, and eyes
+/// Procedural look-at layer that distributes a camera-tracking rotation across head, neck, and eyes with smoothing and saccades.
+///
+/// Suitable for AR-style "talking head" scenes where ``AnimationContext/cameraPosition``
+/// reflects the live camera. The contributions ``headContribution``,
+/// ``neckContribution``, and ``eyeContribution`` typically sum to `1.0` so
+/// the apparent gaze direction matches the camera vector.
 public class ARLookAtLayer: AnimationLayer {
+    /// Layer identifier used by ``AnimationLayerCompositor`` for lookup.
     public let identifier = "ar.lookat"
+    /// Layer evaluation priority. Sits above expression (1) and below IK (4).
     public let priority = 2
+    /// Whether the layer participates in composition this frame.
     public var isEnabled = true
 
+    /// Bones this layer may rewrite: head, neck, and both eyes.
     public var affectedBones: Set<VRMHumanoidBone> {
         [.head, .neck, .leftEye, .rightEye]
     }
@@ -77,6 +86,7 @@ public class ARLookAtLayer: AnimationLayer {
 
     // MARK: - Initialization
 
+    /// Creates a layer with default contributions, constraints, and smoothing.
     public init() {
         // Pre-populate affected bones
         for bone in affectedBones {
@@ -86,6 +96,7 @@ public class ARLookAtLayer: AnimationLayer {
 
     // MARK: - AnimationLayer Protocol
 
+    /// Recomputes target yaw/pitch toward the camera (skipping when the camera is within 0.1 m to avoid singularities) and advances smoothing and saccades.
     public func update(deltaTime: Float, context: AnimationContext) {
         // Calculate head world position
         let headPosition = context.avatarPosition + headOffset
@@ -117,6 +128,7 @@ public class ARLookAtLayer: AnimationLayer {
         }
     }
 
+    /// Returns this frame's gaze distribution: head and neck pitch/yaw scaled by their contributions, and eye rotation augmented with the current saccade offset.
     public func evaluate() -> LayerOutput {
         // Head rotation (primary contribution)
         let headYaw = currentYaw * headContribution

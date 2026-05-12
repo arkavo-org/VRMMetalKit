@@ -24,13 +24,33 @@
 @preconcurrency import Foundation
 @preconcurrency import Metal
 
-/// High-performance parallel mesh loader.
-/// Loads multiple meshes concurrently using TaskGroup for significant speedup.
+/// Decodes ``VRMMesh`` values for many glTF meshes concurrently.
+///
+/// ## Discussion
+/// Mesh decoding includes per-primitive accessor reads (positions, normals,
+/// UVs, joints, weights, indices), optional `MTLBuffer` uploads, and morph
+/// target unpacking. With a real `MTLDevice` the uploads dominate, so
+/// `ParallelMeshLoader` fans the work out across a `TaskGroup` to overlap
+/// I/O with the next mesh's CPU-side decode.
+///
+/// `device` is optional: pass `nil` for CPU-only loading (offline analysis
+/// or test fixtures), in which case the resulting ``VRMMesh`` values omit
+/// `MTLBuffer`s.
+///
+/// The loader is `@unchecked Sendable`; result aggregation uses an internal
+/// `NSLock`. Completion order is indeterminate; the returned map is keyed
+/// by source mesh index.
 public final class ParallelMeshLoader: @unchecked Sendable {
     private let device: MTLDevice?
     private let document: GLTFDocument
     private let bufferLoader: BufferLoader
-    
+
+    /// Creates a loader bound to a parsed document and an existing ``BufferLoader``.
+    ///
+    /// - Parameters:
+    ///   - device: Metal device for `MTLBuffer` allocation, or `nil` to skip GPU upload.
+    ///   - document: The decoded ``GLTFDocument``.
+    ///   - bufferLoader: ``BufferLoader`` used to resolve vertex and index accessors.
     public init(
         device: MTLDevice?,
         document: GLTFDocument,
@@ -40,14 +60,16 @@ public final class ParallelMeshLoader: @unchecked Sendable {
         self.document = document
         self.bufferLoader = bufferLoader
     }
-    
-    /// Load all meshes in parallel using TaskGroup.
+
+    /// Decodes the requested glTF meshes in parallel and returns the resulting ``VRMMesh`` map.
     ///
-    /// This is significantly faster than sequential loading for models with many meshes.
+    /// Per-mesh failures are logged but do not abort the batch — failed
+    /// entries simply do not appear in the result map.
+    ///
     /// - Parameters:
-    ///   - indices: Mesh indices to load
-    ///   - progressCallback: Called periodically with progress updates
-    /// - Returns: Array of loaded meshes (nil for failed loads)
+    ///   - indices: Mesh indices to load. Out-of-range indices are skipped silently.
+    ///   - progressCallback: Invoked on the main actor as each mesh completes. Receives `(loaded, total)`.
+    /// - Returns: Map from glTF mesh index to constructed ``VRMMesh``.
     public func loadMeshesParallel(
         indices: [Int],
         progressCallback: (@Sendable (Int, Int) -> Void)? = nil

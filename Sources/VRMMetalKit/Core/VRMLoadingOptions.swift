@@ -25,21 +25,35 @@ import Foundation
 
 // MARK: - VRMLoadingPhase
 
-/// Represents a specific phase of the VRM loading process.
+/// Distinct stages reported by ``VRMLoadingOptions/progressCallback`` while loading a VRM model.
+///
+/// Each phase carries a relative ``weight`` used to convert per-phase
+/// progress into a single overall percentage in ``VRMLoadingProgress``.
 public enum VRMLoadingPhase: String, CaseIterable, Sendable {
+    /// Parsing the GLB / glTF JSON header.
     case parsingGLTF = "Parsing GLTF"
+    /// Parsing the `VRMC_vrm` (or VRM 0.0) extension block.
     case parsingVRMExtension = "Parsing VRM Extension"
+    /// Preloading all binary buffers in parallel.
     case preloadingBuffers = "Preloading Buffers"
+    /// Decoding and uploading textures to Metal.
     case loadingTextures = "Loading Textures"
+    /// Converting glTF and VRM 0.x material properties into ``VRMMaterial`` instances.
     case loadingMaterials = "Loading Materials"
+    /// Building vertex buffers, index buffers, and morph targets.
     case loadingMeshes = "Loading Meshes"
+    /// Wiring up the parent/child node hierarchy and precomputing world transforms.
     case buildingHierarchy = "Building Hierarchy"
+    /// Loading skin inverse-bind matrices and joint lists.
     case loadingSkins = "Loading Skins"
+    /// Clamping out-of-range joint indices ("iron dome" pass).
     case sanitizingJoints = "Sanitizing Joints"
+    /// Allocating GPU buffers for spring-bone simulation.
     case initializingPhysics = "Initializing Physics"
+    /// Loading finished; final progress report.
     case complete = "Complete"
-    
-    /// The relative weight/importance of this phase in overall progress (0.0-1.0).
+
+    /// Relative contribution of this phase to overall load progress, in `0.0...1.0`.
     public var weight: Double {
         switch self {
         case .parsingGLTF: return 0.05
@@ -59,7 +73,10 @@ public enum VRMLoadingPhase: String, CaseIterable, Sendable {
 
 // MARK: - VRMLoadingProgress
 
-/// Represents the current loading progress with detailed information.
+/// Snapshot of VRM loading progress passed to ``VRMLoadingOptions/progressCallback``.
+///
+/// Combines the current ``currentPhase``, the per-phase progress, and an
+/// aggregated ``overallProgress`` weighted by ``VRMLoadingPhase/weight``.
 public struct VRMLoadingProgress: Sendable {
     /// The current phase of loading.
     public let currentPhase: VRMLoadingPhase
@@ -85,11 +102,12 @@ public struct VRMLoadingProgress: Sendable {
     /// Human-readable description of current operation.
     public let operationDescription: String
     
-    /// Progress as a percentage (0-100).
+    /// Convenience accessor for ``overallProgress`` expressed as `0...100`.
     public var percentage: Int {
         Int((overallProgress * 100).rounded())
     }
-    
+
+    /// Creates a progress snapshot. Used internally by ``VRMModel`` during loading.
     public init(
         currentPhase: VRMLoadingPhase,
         phaseProgress: Double,
@@ -113,45 +131,51 @@ public struct VRMLoadingProgress: Sendable {
 
 // MARK: - VRMLoadingOptimization
 
-/// Performance optimization options for VRM loading.
+/// Option-set of performance toggles applied during VRM loading.
+///
+/// Use ``default`` for typical production loads or ``maximumPerformance``
+/// when load latency matters more than image quality (e.g. avatar previews,
+/// batch processing).
 public struct VRMLoadingOptimization: OptionSet, Sendable {
+    /// The raw bit pattern backing this option set.
     public let rawValue: Int
-    
+
+    /// Creates an optimization set from a raw bitfield.
     public init(rawValue: Int) {
         self.rawValue = rawValue
     }
-    
-    /// Skip verbose logging during loading for better performance.
+
+    /// Suppresses non-error log output during loading.
     public static let skipVerboseLogging = VRMLoadingOptimization(rawValue: 1 << 0)
-    
-    /// Use aggressive texture compression (may reduce quality slightly).
+
+    /// Enables aggressive texture compression; may slightly reduce visual quality.
     public static let aggressiveTextureCompression = VRMLoadingOptimization(rawValue: 1 << 1)
-    
-    /// Skip loading secondary UV channels if present.
+
+    /// Skips secondary UV channels (`TEXCOORD_1` and above) when present.
     public static let skipSecondaryUVs = VRMLoadingOptimization(rawValue: 1 << 2)
-    
-    /// Use parallel texture decoding where available.
+
+    /// Decodes textures concurrently where supported.
     public static let parallelTextureDecoding = VRMLoadingOptimization(rawValue: 1 << 3)
-    
-    /// Load textures in parallel using TaskGroup (significantly faster for models with many textures).
+
+    /// Loads textures in parallel using a `TaskGroup`; large win for models with many textures.
     public static let parallelTextureLoading = VRMLoadingOptimization(rawValue: 1 << 4)
-    
-    /// Enable lazy texture loading (load textures on first use rather than at startup).
+
+    /// Defers texture loading until first use rather than loading every texture at startup.
     public static let lazyTextureLoading = VRMLoadingOptimization(rawValue: 1 << 5)
-    
-    /// Load meshes in parallel using TaskGroup (faster for models with many meshes).
+
+    /// Loads meshes in parallel using a `TaskGroup`.
     public static let parallelMeshLoading = VRMLoadingOptimization(rawValue: 1 << 6)
-    
-    /// Preload all buffers in parallel at start (eliminates I/O during mesh/texture loading).
+
+    /// Preloads all binary buffers at the start of loading; eliminates I/O stalls during mesh and texture passes.
     public static let preloadBuffers = VRMLoadingOptimization(rawValue: 1 << 7)
-    
-    /// Process materials in parallel (faster for models with many materials).
+
+    /// Builds ``VRMMaterial`` instances in parallel.
     public static let parallelMaterialLoading = VRMLoadingOptimization(rawValue: 1 << 8)
-    
-    /// Default optimizations for production use.
+
+    /// Default optimization set: skip verbose logging and use parallel texture decoding.
     public static let `default`: VRMLoadingOptimization = [.skipVerboseLogging, .parallelTextureDecoding]
-    
-    /// Maximum performance optimizations (may reduce quality).
+
+    /// Most aggressive optimization preset. Trades some image quality for shortest load time.
     public static let maximumPerformance: VRMLoadingOptimization = [
         .skipVerboseLogging,
         .aggressiveTextureCompression,
@@ -166,19 +190,45 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
 
 // MARK: - VRMLoadingOptions
 
-/// Configuration options for VRM model loading with progress and cancellation support.
+/// Configuration passed to ``VRMModel/load(from:device:options:)`` to control progress reporting, cancellation, and load-time optimizations.
+///
+/// `VRMLoadingOptions` is `Sendable` and safe to share across actors. Use
+/// ``default`` for the typical fast-path production load. For UI scenarios,
+/// supply a ``progressCallback`` to drive a progress bar; the callback fires
+/// on the `MainActor` no more often than ``progressUpdateInterval``.
+///
+/// ```swift
+/// // Minimal: load with default optimizations and no progress.
+/// let model = try await VRMModel.load(from: url, device: device)
+///
+/// // Progress + cancellation: pass options.
+/// let options = VRMLoadingOptions(progressCallback: { progress in
+///     hud.update(percentage: progress.percentage,
+///                phase: progress.currentPhase.rawValue)
+/// })
+/// let model = try await VRMModel.load(from: url, device: device, options: options)
+///
+/// // Maximum performance for batch previews.
+/// let fast = VRMLoadingOptions(optimizations: .maximumPerformance)
+/// let preview = try await VRMModel.load(from: url, device: device, options: fast)
+/// ```
+///
+/// ## Cancellation
+/// When ``enableCancellation`` is `true` (the default), the loader checks
+/// `Task.isCancelled` at each phase boundary and throws
+/// ``VRMError/loadingCancelled`` if cancellation has been requested.
 public struct VRMLoadingOptions: Sendable {
-    
-    /// Callback for progress updates during loading.
+
+    /// Optional progress callback invoked on the `MainActor` during loading.
     public let progressCallback: (@Sendable (VRMLoadingProgress) -> Void)?
-    
-    /// Minimum interval between progress callback invocations.
+
+    /// Minimum interval in seconds between progress-callback invocations; throttles UI updates.
     public let progressUpdateInterval: TimeInterval
-    
-    /// Whether to enable cancellation support.
+
+    /// When `true`, the loader honors Swift Concurrency task cancellation.
     public let enableCancellation: Bool
-    
-    /// Performance optimizations to apply.
+
+    /// Performance optimizations to apply during this load.
     public let optimizations: VRMLoadingOptimization
     
     /// Creates loading options.
@@ -200,7 +250,7 @@ public struct VRMLoadingOptions: Sendable {
         self.optimizations = optimizations
     }
     
-    /// Default options with no progress callback.
+    /// Default options: no progress callback, cancellation enabled, ``VRMLoadingOptimization/default`` optimizations.
     public static let `default` = VRMLoadingOptions()
 }
 

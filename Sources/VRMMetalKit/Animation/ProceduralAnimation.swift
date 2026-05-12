@@ -19,40 +19,49 @@ import simd
 
 // MARK: - Blend Modes
 
-/// How animation layers combine their transforms with lower priority layers
+/// How an ``AnimationLayer``'s output combines with the running composite produced by lower-priority layers.
 public enum AnimationBlendMode: Sendable {
-    /// Completely override transforms from lower layers
+    /// Overwrite any existing composite for the bones this layer writes.
     case replace
-    /// Add transforms to existing values (rotation = multiply quaternions, translation = add)
+    /// Multiply rotation quaternions and add translation/scale to the running composite.
     case additive
-    /// Weighted blend with lower layers using SLERP for rotations
+    /// SLERP rotation and lerp translation and scale toward this layer's output by the associated weight in [0, 1].
     case blend(Float)
 }
 
 // MARK: - Conversation State
 
-/// Current state of avatar conversation for animation context
+/// Coarse conversational state hint forwarded through ``AnimationContext`` so layers can adapt behaviour.
 public enum ProceduralConversationState: Sendable {
+    /// No active interaction.
     case idle
+    /// Listening to a user; layers may soften tracking.
     case listening
+    /// Composing a response; layers may add look-away or hesitation cues.
     case thinking
+    /// Currently speaking; layers may dampen blinks or boost mouth motion.
     case speaking
 }
 
 // MARK: - Bone Transform
 
-/// Represents a bone's local transform for animation
+/// Local TRS triplet describing a procedural bone delta applied on top of the base pose by ``AnimationLayerCompositor``.
 public struct ProceduralBoneTransform: Sendable {
+    /// Local rotation delta. Identity means "no change".
     public var rotation: simd_quatf
+    /// Local translation delta added to the base pose.
     public var translation: SIMD3<Float>
+    /// Local scale multiplier applied to the base pose (unit scale = no change).
     public var scale: SIMD3<Float>
 
+    /// Identity transform: no rotation, zero translation, unit scale.
     public static let identity = ProceduralBoneTransform(
         rotation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
         translation: .zero,
         scale: SIMD3<Float>(1, 1, 1)
     )
 
+    /// Creates a transform from optional rotation, translation, and scale components.
     public init(
         rotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
         translation: SIMD3<Float> = .zero,
@@ -66,17 +75,26 @@ public struct ProceduralBoneTransform: Sendable {
 
 // MARK: - Animation Context
 
-/// Shared context passed to all animation layers each frame
+/// Per-frame inputs forwarded to every ``AnimationLayer`` so layers can read shared scene state without coupling to a host renderer.
 public struct AnimationContext: Sendable {
+    /// Current accumulated time in seconds (used by time-driven layers like breathing).
     public var time: Float
+    /// Time since the previous frame in seconds.
     public var deltaTime: Float
+    /// World-space camera position; used by gaze layers to compute look direction.
     public var cameraPosition: SIMD3<Float>
+    /// World-space avatar root position; layers use this to derive head/eye positions.
     public var avatarPosition: SIMD3<Float>
+    /// Current conversational state (idle / listening / thinking / speaking).
     public var conversationState: ProceduralConversationState
+    /// Optional sentiment preset that ``ExpressionLayer`` should drive toward this frame.
     public var sentimentPreset: VRMExpressionPreset?
+    /// Target intensity for the sentiment preset, in [0, 1].
     public var sentimentIntensity: Float
+    /// When `true`, ``ExpressionLayer`` may trigger flirty wink behaviours.
     public var isFlirty: Bool
 
+    /// Creates a context with the given inputs. All parameters have neutral defaults so layers can be unit-tested without scene state.
     public init(
         time: Float = 0,
         deltaTime: Float = 0,
@@ -100,12 +118,16 @@ public struct AnimationContext: Sendable {
 
 // MARK: - Layer Output
 
-/// Output from an animation layer containing sparse bone transforms and morph weights
+/// Sparse per-frame output from an ``AnimationLayer``: bone deltas, morph weights, and a blend mode for composition.
 public struct LayerOutput: Sendable {
+    /// Per-bone procedural deltas. Bones not present are not written by this layer.
     public var bones: [VRMHumanoidBone: ProceduralBoneTransform]
+    /// Morph-weight contributions keyed by expression name. Always accumulated additively across layers.
     public var morphWeights: [String: Float]
+    /// How this output combines with the running composite (see ``AnimationBlendMode``).
     public var blendMode: AnimationBlendMode
 
+    /// Creates an output. Defaults produce an empty additive blend (no effect).
     public init(
         bones: [VRMHumanoidBone: ProceduralBoneTransform] = [:],
         morphWeights: [String: Float] = [:],
@@ -142,7 +164,25 @@ public protocol AnimationLayer: AnyObject {
 
 // MARK: - Animation Layer Compositor
 
-/// Manages and composites multiple animation layers
+/// Composites multiple ``AnimationLayer`` outputs onto a captured base pose and applies the result to the model each frame.
+///
+/// ## Discussion
+/// `AnimationLayerCompositor` runs layers in ascending ``AnimationLayer/priority``
+/// order. Each layer's ``LayerOutput`` is folded into a running composite
+/// according to its ``LayerOutput/blendMode``:
+/// - ``AnimationBlendMode/replace`` overwrites the existing bone delta.
+/// - ``AnimationBlendMode/additive`` multiplies rotation quaternions and
+///   adds translation / scale.
+/// - ``AnimationBlendMode/blend(_:)`` slerps rotation and lerps translation
+///   and scale toward the new delta with the given weight; when no
+///   composite exists yet the blend is performed against identity.
+///
+/// Morph weights are *always* accumulated additively across layers.
+///
+/// After all layers are composited, the result is composed onto the
+/// captured base pose as `node.rotation = baseRotation * delta`,
+/// `node.translation = baseTranslation + delta`, `node.scale = baseScale * delta`,
+/// and world transforms are propagated from each root.
 public class AnimationLayerCompositor {
     private var layers: [AnimationLayer] = []
     private weak var model: VRMModel?
@@ -156,9 +196,14 @@ public class AnimationLayerCompositor {
     private var basePoseTranslations: [VRMHumanoidBone: SIMD3<Float>] = [:]
     private var basePoseScales: [VRMHumanoidBone: SIMD3<Float>] = [:]
 
+    /// Creates an empty compositor. Call ``setup(model:)`` before ``update(deltaTime:context:)``.
     public init() {}
 
-    /// Setup with VRM model reference and capture base pose
+    /// Binds the compositor to `model` and captures the model's current rotation, translation, and scale per humanoid bone as the base pose.
+    ///
+    /// Layer outputs are composited as deltas on top of this base pose, so
+    /// disabling all layers returns the model to the pose it had at the
+    /// moment of setup.
     public func setup(model: VRMModel) {
         self.model = model
 

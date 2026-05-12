@@ -214,15 +214,29 @@ public final class SpringBoneBuffers: @unchecked Sendable {
 }
 
 // Data structures matching Metal shaders
-public struct BoneParams {
-    public var stiffness: Float
-    public var drag: Float
-    public var radius: Float
-    public var parentIndex: UInt32
-    public var gravityPower: Float      // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
-    public var colliderGroupMask: UInt32 // Bitmask of collision groups this bone collides with (0xFFFFFFFF = all)
-    public var gravityDir: SIMD3<Float> // Direction vector (normalized, typically [0, -1, 0])
 
+/// Per-bone XPBD parameters uploaded to the SpringBone compute kernels.
+///
+/// Layout must match the `BoneParams` struct in the Metal shader source. One entry
+/// per joint in the flattened bone array; see <doc:SpringBonePhysics> for the
+/// pipeline that consumes these values.
+public struct BoneParams {
+    /// Spring stiffness (0…1). Higher values return the bone to its bind direction more strongly.
+    public var stiffness: Float
+    /// Damping coefficient (0…1) applied to per-substep velocity. Higher values settle faster.
+    public var drag: Float
+    /// Bone radius in metres used for collider response.
+    public var radius: Float
+    /// Index of this bone's parent in the flattened spring-bone array. Roots use `UInt32.max`.
+    public var parentIndex: UInt32
+    /// Multiplier for global gravity (0.0 = no gravity, 1.0 = full).
+    public var gravityPower: Float
+    /// Bitmask of collision groups this bone collides with (`0xFFFFFFFF` = all).
+    public var colliderGroupMask: UInt32
+    /// Per-bone gravity direction (normalized; typically `[0, -1, 0]`).
+    public var gravityDir: SIMD3<Float>
+
+    /// Creates per-bone XPBD parameters with optional gravity and collider-mask overrides.
     public init(stiffness: Float, drag: Float, radius: Float, parentIndex: UInt32,
                 gravityPower: Float = 1.0, colliderGroupMask: UInt32 = 0xFFFFFFFF,
                 gravityDir: SIMD3<Float> = SIMD3<Float>(0, -1, 0)) {
@@ -236,11 +250,18 @@ public struct BoneParams {
     }
 }
 
+/// Sphere collider used by the SpringBone compute kernel.
+///
+/// Layout must match the `SphereCollider` struct in the Metal shader source.
 public struct SphereCollider {
+    /// Sphere centre in world space (metres).
     public var center: SIMD3<Float>
+    /// Sphere radius in world space (metres).
     public var radius: Float
-    public var groupIndex: UInt32  // Index of the collision group this collider belongs to
+    /// Index of the collision group this collider belongs to.
+    public var groupIndex: UInt32
 
+    /// Creates a sphere collider at the given centre and radius.
     public init(center: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
         self.center = center
         self.radius = radius
@@ -248,12 +269,21 @@ public struct SphereCollider {
     }
 }
 
+/// Capsule collider used by the SpringBone compute kernel.
+///
+/// A capsule is a swept sphere along the segment `p0`-`p1`. Layout must match
+/// the `CapsuleCollider` struct in the Metal shader source.
 public struct CapsuleCollider {
+    /// First endpoint of the capsule's centre segment.
     public var p0: SIMD3<Float>
+    /// Second endpoint of the capsule's centre segment.
     public var p1: SIMD3<Float>
+    /// Sweep radius (metres).
     public var radius: Float
-    public var groupIndex: UInt32  // Index of the collision group this collider belongs to
+    /// Index of the collision group this collider belongs to.
+    public var groupIndex: UInt32
 
+    /// Creates a capsule collider between two points with the given sweep radius.
     public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
         self.p0 = p0
         self.p1 = p1
@@ -262,11 +292,19 @@ public struct CapsuleCollider {
     }
 }
 
+/// Infinite plane collider used by the SpringBone compute kernel.
+///
+/// Useful for floor planes detected by ARKit or a fixed ground constraint.
+/// Layout must match the `PlaneCollider` struct in the Metal shader source.
 public struct PlaneCollider {
-    public var point: SIMD3<Float>   // Point on the plane
-    public var normal: SIMD3<Float>  // Plane normal (normalized)
-    public var groupIndex: UInt32    // Index of the collision group this collider belongs to
+    /// Point on the plane in world space.
+    public var point: SIMD3<Float>
+    /// Plane normal (normalized).
+    public var normal: SIMD3<Float>
+    /// Index of the collision group this collider belongs to.
+    public var groupIndex: UInt32
 
+    /// Creates a plane collider from a point on the plane and its normal.
     public init(point: SIMD3<Float>, normal: SIMD3<Float>, groupIndex: UInt32 = 0) {
         self.point = point
         self.normal = normal
@@ -328,23 +366,43 @@ public struct PlaneCollider {
     }
 }
 
+/// Per-frame global parameters uploaded once per simulation step to the SpringBone kernel.
+///
+/// Field layout, alignment, and padding must match the `SpringBoneGlobalParams` struct in
+/// the Metal shader source — comments record the byte offset of each field. See
+/// <doc:SpringBonePhysics> for the simulation pipeline that consumes these values.
 public struct SpringBoneGlobalParams {
-    public var gravity: SIMD3<Float>      // offset 0, aligned to 16 bytes
-    public var dtSub: Float               // offset 16
-    public var windAmplitude: Float       // offset 20
-    public var windFrequency: Float       // offset 24
-    public var windPhase: Float           // offset 28
-    public var windDirection: SIMD3<Float>// offset 32, aligned to 16 bytes
-    public var substeps: UInt32           // offset 48
-    public var numBones: UInt32           // offset 52
-    public var numSpheres: UInt32         // offset 56
-    public var numCapsules: UInt32        // offset 60
-    public var numPlanes: UInt32          // offset 64
-    public var settlingFrames: UInt32     // offset 68 - Frames remaining in settling period
-    public var dragMultiplier: Float      // offset 72 - Global drag multiplier (1.0 = normal, >1.0 = braking)
+    /// World-space gravity vector in m/s² (typically `[0, -9.8, 0]`). Byte offset 0.
+    public var gravity: SIMD3<Float>
+    /// Substep dt in seconds (typically `1.0 / (60 * substeps)`). Byte offset 16.
+    public var dtSub: Float
+    /// Wind amplitude in m/s. Byte offset 20.
+    public var windAmplitude: Float
+    /// Wind frequency in Hz. Byte offset 24.
+    public var windFrequency: Float
+    /// Wind phase in radians, advanced per frame on the CPU. Byte offset 28.
+    public var windPhase: Float
+    /// Wind direction (normalized). Byte offset 32.
+    public var windDirection: SIMD3<Float>
+    /// Number of XPBD substeps per simulation tick. Byte offset 48.
+    public var substeps: UInt32
+    /// Total flattened bone count. Byte offset 52.
+    public var numBones: UInt32
+    /// Sphere-collider count. Byte offset 56.
+    public var numSpheres: UInt32
+    /// Capsule-collider count. Byte offset 60.
+    public var numCapsules: UInt32
+    /// Plane-collider count. Byte offset 64.
+    public var numPlanes: UInt32
+    /// Frames remaining in the settling period; non-zero means the simulation is in startup damping. Byte offset 68.
+    public var settlingFrames: UInt32
+    /// Global drag multiplier (1.0 = normal, >1.0 = braking). Byte offset 72.
+    public var dragMultiplier: Float
     private var _padding1: UInt32 = 0     // offset 76 - padding for float3 alignment
-    public var externalVelocity: SIMD3<Float>  // offset 80 - Character root velocity for inertia
+    /// Character root velocity in m/s, used to inject inertia into the simulation. Byte offset 80.
+    public var externalVelocity: SIMD3<Float>
 
+    /// Creates a global-params buffer payload for the SpringBone compute kernel.
     public init(gravity: SIMD3<Float>, dtSub: Float, windAmplitude: Float, windFrequency: Float,
          windPhase: Float, windDirection: SIMD3<Float>, substeps: UInt32,
          numBones: UInt32, numSpheres: UInt32, numCapsules: UInt32, numPlanes: UInt32 = 0,

@@ -15,30 +15,53 @@
 
 import Foundation
 
-/// Report containing material information for debugging and diagnostics.
+/// Diagnostic snapshot of a model's materials: per-material details plus a coarse summary.
+///
+/// Produced by ``VRMRenderer/generateMaterialReport()``. Codable so it can be
+/// dumped to JSON for offline inspection (e.g. by the VRMRender CLI tool).
 public struct MaterialReport: Codable {
+    /// Human-readable model name (currently a placeholder string).
     public let modelName: String
+    /// One entry per material in the loaded model.
     public let materials: [MaterialInfo]
+    /// Aggregate counts across all materials.
     public let summary: Summary
 
+    /// Per-material diagnostic record.
     public struct MaterialInfo: Codable {
+        /// Material index in the loaded model.
         public let index: Int
+        /// Material name (or `"Material_<index>"` when unnamed).
         public let name: String
+        /// Alpha mode string as carried by ``VRMMaterial/alphaMode``.
         public let alphaMode: String
+        /// Alpha cutoff threshold for `MASK` materials.
         public let alphaCutoff: Float
+        /// Base color factor as `[r, g, b, a]`.
         public let baseColorFactor: [Float]
+        /// Whether the material binds a base color texture.
         public let hasBaseTexture: Bool
+        /// Base color texture size as `[width, height]`; `nil` when absent.
         public let textureSize: [Int]?
+        /// Whether back-face culling is disabled.
         public let doubleSided: Bool
+        /// MToon shade color as `[r, g, b]`, when MToon is configured.
         public let mtoonShadeColor: [Float]?
+        /// Heuristic: `true` when alpha looks suspicious (alpha near 0, or OPAQUE with alpha < 1).
         public let hasAlphaIssue: Bool
     }
 
+    /// Aggregate counts across the report.
     public struct Summary: Codable {
+        /// Total materials in the model.
         public let totalMaterials: Int
+        /// Number of `OPAQUE` materials.
         public let opaqueCount: Int
+        /// Number of `MASK` materials.
         public let maskCount: Int
+        /// Number of `BLEND` materials.
         public let blendCount: Int
+        /// Number of materials flagged with ``MaterialInfo/hasAlphaIssue``.
         public let suspiciousAlphaCount: Int
     }
 }
@@ -46,7 +69,10 @@ public struct MaterialReport: Codable {
 // MARK: - VRMRenderer Material Report Generation
 
 extension VRMRenderer {
-    /// Generates a diagnostic report of all materials in the loaded model.
+    /// Builds a ``MaterialReport`` for the currently loaded model.
+    ///
+    /// Returns `nil` if no model is loaded. Used by tooling and tests to spot
+    /// authoring problems (suspicious alpha values, missing textures).
     public func generateMaterialReport() -> MaterialReport? {
         guard let model = model else {
             vrmLog("[VRMRenderer] No model loaded for material report")

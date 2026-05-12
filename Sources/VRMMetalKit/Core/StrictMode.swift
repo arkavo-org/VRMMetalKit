@@ -20,63 +20,74 @@ import Metal
 
 // MARK: - Strict Mode Configuration
 
-/// Level of strictness for renderer validation
+/// Renderer validation severity. Configured via ``RendererConfig/strict`` and reported through ``StrictModeError``.
+///
+/// - ``off`` is the production default: validators silently fall back and only log.
+/// - ``warn`` keeps frames rendering but flags every violation and surfaces a
+///   per-frame summary. Use in CI smoke tests and integration runs.
+/// - ``fail`` aborts the encoder on the first violation. Use in unit tests
+///   and during local debugging to catch regressions immediately.
 public enum StrictLevel: String, CaseIterable, Sendable {
-    /// Default behavior - soft fallbacks, logs only
+    /// Validation is disabled; the renderer logs violations but continues with soft fallbacks.
     case off
-    /// No fallbacks - log errors and mark frame invalid
+    /// Validation logs violations and tags the frame as invalid, without throwing.
     case warn
-    /// Fail fast - throw/abort on first violation
+    /// Validation throws ``StrictModeError`` on the first violation, aborting the frame.
     case fail
 }
 
-/// Render filter for debugging specific primitives
+/// Single-primitive selector used during renderer debugging to isolate a draw call.
+///
+/// Set on ``RendererConfig/renderFilter`` to instruct ``VRMRenderer`` to skip
+/// every draw call except the one matching this filter.
 public enum RenderFilter: Sendable {
+    /// Render only primitives belonging to the named mesh.
     case mesh(String)
+    /// Render only primitives using the named material.
     case material(String)
+    /// Render only the primitive at the given sorted-draw-list index.
     case primitive(Int)
 }
 
-/// Renderer configuration including strict mode settings
+/// Configuration for ``VRMRenderer`` covering pixel format, validation level, MSAA, depth bias, and debug filters.
 public struct RendererConfig {
-    /// Strict mode level for validation
+    /// Strict-mode validation level applied to every draw call.
     public var strict: StrictLevel = .off
 
-    /// Color attachment pixel format for render pipelines (defaults to match MTKView default)
+    /// Color-attachment pixel format. Defaults to `MTKView`'s standard `.bgra8Unorm`.
     public var colorPixelFormat: MTLPixelFormat = .bgra8Unorm
 
-    /// Enable Metal validation layers (debug builds only)
+    /// Enables Metal API validation in debug builds.
     public var enableMetalValidation: Bool = true
 
-    /// Enable command buffer error checking
+    /// Enables command-buffer error checking at frame end.
     public var checkCommandBufferErrors: Bool = true
 
-    /// Minimum draw calls per frame (0 = disabled)
+    /// Minimum number of draw calls expected per frame; `0` disables the check.
     public var minDrawCallsPerFrame: Int = 0
 
-    /// Maximum average luma for frame validation (1.0 = white)
+    /// Maximum average luma allowed by ``StrictModeError/frameAllWhite(luma:)`` validation (1.0 = pure white).
     public var maxFrameLuma: Float = 0.95
 
-    /// Filter to render only specific mesh/material/primitive (for debugging)
+    /// Optional debug filter that restricts rendering to a single mesh, material, or primitive.
     public var renderFilter: RenderFilter? = nil
 
-    /// Render only draw calls [0..N] from sorted draw list (for debugging)
+    /// Debug: render only draw calls `0...N` from the sorted draw list.
     public var drawUntil: Int? = nil
 
-    /// Render only draw call K from sorted draw list (for debugging)
+    /// Debug: render only the single draw call `K` from the sorted draw list.
     public var drawOnlyIndex: Int? = nil
 
-    /// Use identity matrices for specified skin index (A/B test for palette corruption)
+    /// Debug: replace the palette of skin index `i` with identity matrices (A/B testing for palette corruption).
     public var testIdentityPalette: Int? = nil
-    
-    /// MSAA sample count for multisample anti-aliasing (1 = disabled, 4 = 4x MSAA)
-    /// Alpha-to-coverage for MASK materials requires sampleCount > 1
+
+    /// MSAA sample count (`1` = disabled, `4` = 4x MSAA). Alpha-to-coverage for `MASK` materials requires `> 1`.
     public var sampleCount: Int = 1
-    
-    /// Global scale factor for depth bias values (1.0 = default)
-    /// Higher values push coplanar surfaces further apart in depth buffer
+
+    /// Global multiplier for per-material depth bias. Increase to push coplanar surfaces further apart.
     public var depthBiasScale: Float = 1.0
 
+    /// Creates a renderer configuration. Defaults match the production baseline.
     public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
@@ -91,54 +102,83 @@ public struct RendererConfig {
 
 // MARK: - Strict Mode Errors
 
-/// Errors that can occur during strict mode validation
+/// Validation failures detected by ``StrictValidator``.
+///
+/// Cases are grouped by validation surface: pipeline creation, uniform/buffer
+/// binding, vertex layout, draw-call shape, frame-level sanity checks, and
+/// skinning/morph index ranges. Each case provides enough context for a
+/// log-level read (which buffer, which index) without dumping full stack
+/// state.
 public enum StrictModeError: LocalizedError {
-    // Pipeline errors
+    /// A vertex function with the given name is missing from the shader library.
     case missingVertexFunction(name: String)
+    /// A fragment function with the given name is missing from the shader library.
     case missingFragmentFunction(name: String)
+    /// A compute function with the given name is missing from the shader library.
     case missingComputeFunction(name: String)
+    /// Pipeline-state creation failed for the named pipeline.
     case pipelineCreationFailed(String)
+    /// Depth-stencil state creation failed.
     case depthStencilCreationFailed
 
-    // Uniform errors
+    /// A uniform struct size differs between Swift and Metal declarations.
     case uniformLayoutMismatch(swift: Int, metal: Int, type: String)
+    /// A uniform buffer is smaller than the encoder expects.
     case uniformBufferTooSmall(required: Int, actual: Int)
+    /// Two distinct uniforms try to bind to the same buffer index.
     case uniformIndexConflict(index: Int, usage: String)
 
-    // Resource errors
+    /// A resource index falls outside the valid range for its argument table.
     case resourceIndexOutOfBounds(index: Int, max: Int)
+    /// A buffer index conflict: an existing binding collides with a new one.
     case bufferIndexConflict(index: Int, existing: String, new: String)
+    /// A texture index is already bound and cannot be reused.
     case textureIndexConflict(index: Int)
+    /// A sampler index is already bound and cannot be reused.
     case samplerIndexConflict(index: Int)
 
-    // Vertex format errors
+    /// A vertex attribute has an unexpected Metal format.
     case invalidVertexFormat(attribute: String, expected: String, actual: String)
+    /// A vertex buffer is smaller than `vertexCount * stride`.
     case vertexBufferTooSmall(required: Int, actual: Int)
+    /// A vertex stride differs from the expected value.
     case vertexStrideInvalid(expected: Int, actual: Int)
+    /// A required vertex attribute (e.g. `POSITION`, `NORMAL`) is missing.
     case missingVertexAttribute(name: String)
 
-    // Draw call errors
+    /// The frame contained fewer draw calls than ``RendererConfig/minDrawCallsPerFrame`` requires.
     case noDrawCalls(expected: Int)
+    /// A primitive's vertex count is zero.
     case zeroVertices(primitive: Int)
+    /// A primitive's index count is zero.
     case zeroIndices(primitive: Int)
+    /// An index value exceeds the vertex count.
     case invalidIndexRange(max: Int, vertexCount: Int)
 
-    // Frame validation errors
+    /// The captured frame is uniformly white above the configured luma threshold.
     case frameAllWhite(luma: Float)
+    /// The captured frame is uniformly black.
     case frameAllBlack
+    /// The command buffer ended in the `.error` state.
     case commandBufferFailed(error: Error?)
+    /// Creating a command encoder of the named type failed.
     case encoderCreationFailed(type: String)
 
-    // Skinning errors
+    /// A primitive declares skinning but lacks the required `JOINTS_0`/`WEIGHTS_0` data.
     case missingSkinningData
+    /// A joint index references a joint outside the skin's joint array.
     case jointIndexOutOfBounds(joint: Int, max: Int)
+    /// A skin's joint count differs from the expected value.
     case invalidJointCount(expected: Int, actual: Int)
 
-    // Morph target errors
+    /// A morph target index references a target outside the mesh's morph array.
     case morphIndexOutOfBounds(index: Int, max: Int)
+    /// A morph buffer's byte length differs from the expected value.
     case morphBufferSizeMismatch(expected: Int, actual: Int)
+    /// A morph weight is `NaN`, infinite, or outside `0...1`.
     case morphWeightInvalid(index: Int, weight: Float)
 
+    /// Human-readable description with subsystem prefix and concrete numeric context.
     public var errorDescription: String? {
         switch self {
         case .missingVertexFunction(let name):
@@ -214,85 +254,101 @@ public enum StrictModeError: LocalizedError {
 
 // MARK: - Resource Index Contract
 
-/// Single source of truth for buffer/texture indices
+/// Canonical buffer, texture, and sampler indices shared by Swift and Metal code.
+///
+/// These constants are the single source of truth for argument-table layout.
+/// Vertex/fragment indices, spring-bone compute kernel indices, and texture
+/// slots are namespaced by comment groups below. Changes here must be
+/// mirrored in the corresponding `.metal` shaders.
 public struct ResourceIndices {
-    // Vertex shader buffer indices
+    /// Vertex shader: vertex buffer (positions, normals, UVs, joints, weights).
     public static let vertexBuffer = 0
+    /// Vertex shader: per-frame uniform buffer.
     public static let uniformsBuffer = 1
-    public static let skinDataBuffer = 2      // Joint indices/weights (legacy, unused)
+    /// Vertex shader: legacy skin-data buffer; retained for backward compatibility, currently unused.
+    public static let skinDataBuffer = 2
+    /// Vertex shader: morph-target weights buffer.
     public static let morphWeightsBuffer = 4
-    public static let morphPositionDeltas = 5...12  // 8 slots
-    public static let morphNormalDeltas = 13...19   // 7 slots (avoid collision with morphedPositions)
-    // Runtime morphed positions from compute pass
+    /// Vertex shader: morph-position delta buffers (8 slots).
+    public static let morphPositionDeltas = 5...12
+    /// Vertex shader: morph-normal delta buffers (7 slots; avoids collision with `morphedPositionsBuffer`).
+    public static let morphNormalDeltas = 13...19
+    /// Vertex shader: morphed-position output from the compute pass.
     public static let morphedPositionsBuffer = 20
-    // Per-draw vertex offset (uint32)
+    /// Vertex shader: per-draw vertex offset (`uint32`).
     public static let vertexOffsetBuffer = 21
-    // Flag: 1 if morphedPositions is valid, 0 otherwise (uint32)
+    /// Vertex shader: flag indicating whether `morphedPositionsBuffer` holds valid data.
     public static let hasMorphedPositionsFlag = 22
-    // Joint matrices - moved to high index to avoid argument table collision
+    /// Vertex shader: joint matrices for skinning, placed high to avoid argument-table collisions.
     public static let jointMatricesBuffer = 25
-    // Per-vertex first-person hidden flags (uint8 per vertex; 0=visible, 1=hidden)
+    /// Vertex shader: per-vertex first-person visibility flags (`uint8`, 0 = visible, 1 = hidden).
     public static let firstPersonHiddenFlagsBuffer = 26
 
-    // Fragment shader buffer indices
+    /// Fragment shader: material uniform buffer.
     public static let materialUniforms = 0
 
-    // Fragment shader texture indices
+    /// Fragment shader: base color (albedo) texture.
     public static let baseColorTexture = 0
+    /// Fragment shader: MToon shade texture.
     public static let shadeTexture = 1
+    /// Fragment shader: tangent-space normal map.
     public static let normalTexture = 2
+    /// Fragment shader: emissive texture.
     public static let emissiveTexture = 3
+    /// Fragment shader: MToon matcap texture.
     public static let matcapTexture = 4
+    /// Fragment shader: MToon rim multiply texture.
     public static let rimMultiplyTexture = 5
+    /// Fragment shader: MToon outline-width mask (linear R8).
     public static let outlineWidthMultiplyTexture = 6
+    /// Fragment shader: MToon UV-animation mask (linear R8).
     public static let uvAnimationMaskTexture = 7
 
-    // Sampler indices
+    /// Fragment shader: default sampler slot.
     public static let defaultSampler = 0
 
     // MARK: - SpringBone Compute Shader Buffer Indices
-    // These indices are used by the SpringBone GPU compute kernels
-    // and are separate from the vertex/fragment shader indices above.
 
-    /// SpringBone: Previous frame bone positions (read/write)
+    /// Spring-bone compute: previous-frame bone positions (read/write).
     public static let springBonePosPrev = 0
-    /// SpringBone: Current frame bone positions (read/write)
+    /// Spring-bone compute: current-frame bone positions (read/write).
     public static let springBonePosCurr = 1
-    /// SpringBone: Per-bone parameters (stiffness, drag, etc.)
+    /// Spring-bone compute: per-bone parameters (stiffness, drag, etc.).
     public static let springBoneParams = 2
-    /// SpringBone: Global simulation parameters (gravity, wind, etc.)
+    /// Spring-bone compute: global simulation parameters (gravity, wind, etc.).
     public static let springBoneGlobalParams = 3
-    /// SpringBone: Rest length constraints between bones
+    /// Spring-bone compute: rest-length constraints between bones.
     public static let springBoneRestLengths = 4
-    /// SpringBone: Sphere colliders array
+    /// Spring-bone compute: sphere colliders array.
     public static let springBoneSphereColliders = 5
-    /// SpringBone: Capsule colliders array
+    /// Spring-bone compute: capsule colliders array.
     public static let springBoneCapsuleColliders = 6
-    /// SpringBone: Plane colliders array
+    /// Spring-bone compute: plane colliders array.
     public static let springBonePlaneColliders = 7
-    /// SpringBone: Animated root positions (kinematic kernel)
+    /// Spring-bone compute: animated root positions (kinematic kernel).
     public static let springBoneAnimatedRootPositions = 8
-    /// SpringBone: Root bone indices (kinematic kernel)
+    /// Spring-bone compute: root-bone indices (kinematic kernel).
     public static let springBoneRootIndices = 9
-    /// SpringBone: Number of root bones (kinematic kernel)
+    /// Spring-bone compute: number of root bones (kinematic kernel).
     public static let springBoneNumRootBones = 10
 }
 
 // MARK: - Strict Mode Validator
 
-/// Validates renderer state according to strict mode settings
+/// Validates renderer state across a frame, dispatching ``StrictModeError`` according to ``RendererConfig/strict``.
 public class StrictValidator {
     private let config: RendererConfig
     private var drawCallCount = 0
     private var frameErrors: [StrictModeError] = []
 
+    /// Creates a validator bound to the supplied renderer configuration.
     public init(config: RendererConfig) {
         self.config = config
     }
 
     // MARK: - Error Handling
 
-    /// Handle an error according to the strict level
+    /// Routes a validation failure through the configured ``StrictLevel`` (log, warn-and-collect, or throw).
     public func handle(_ error: StrictModeError) throws {
         switch config.strict {
         case .off:
@@ -308,13 +364,13 @@ public class StrictValidator {
         }
     }
 
-    /// Reset frame tracking
+    /// Resets per-frame counters and the collected-error list. Call at the start of each frame.
     public func beginFrame() {
         drawCallCount = 0
         frameErrors = []
     }
 
-    /// Validate frame completion
+    /// Performs end-of-frame validation (minimum draw-call count, summary logging in `.warn` mode).
     public func endFrame() throws {
         // Check minimum draw calls
         if config.minDrawCallsPerFrame > 0 && drawCallCount < config.minDrawCallsPerFrame {
@@ -329,7 +385,7 @@ public class StrictValidator {
 
     // MARK: - Pipeline Validation
 
-    /// Validate shader function exists
+    /// Verifies that a shader function was loaded; raises ``StrictModeError/missingVertexFunction(name:)`` and friends otherwise.
     public func validateFunction(_ function: MTLFunction?, name: String, type: String) throws {
         guard function != nil else {
             switch type {
@@ -346,7 +402,7 @@ public class StrictValidator {
         }
     }
 
-    /// Validate pipeline state creation
+    /// Verifies that a render pipeline state was created; raises ``StrictModeError/pipelineCreationFailed(_:)`` otherwise.
     public func validatePipelineState(_ state: MTLRenderPipelineState?, name: String) throws {
         guard state != nil else {
             try handle(.pipelineCreationFailed(name))
@@ -356,7 +412,7 @@ public class StrictValidator {
 
     // MARK: - Uniform Validation
 
-    /// Validate uniform struct size matches between Swift and Metal
+    /// Verifies that a Swift uniform struct matches its Metal counterpart in size.
     public func validateUniformSize(swift: Int, metal: Int, type: String) throws {
         guard swift == metal else {
             try handle(.uniformLayoutMismatch(swift: swift, metal: metal, type: type))
@@ -364,7 +420,7 @@ public class StrictValidator {
         }
     }
 
-    /// Validate buffer size for uniforms
+    /// Verifies that a uniform buffer is non-nil and at least `requiredSize` bytes.
     public func validateUniformBuffer(_ buffer: MTLBuffer?, requiredSize: Int) throws {
         guard let buffer = buffer else {
             try handle(.uniformBufferTooSmall(required: requiredSize, actual: 0))
@@ -379,7 +435,7 @@ public class StrictValidator {
 
     // MARK: - Draw Call Validation
 
-    /// Track a draw call
+    /// Records a draw call and raises validation errors for zero-vertex or zero-index primitives.
     public func recordDrawCall(vertexCount: Int, indexCount: Int, primitiveIndex: Int) throws {
         drawCallCount += 1
 
@@ -394,7 +450,7 @@ public class StrictValidator {
 
     // MARK: - Command Buffer Validation
 
-    /// Validate command buffer completed successfully
+    /// Checks that a completed command buffer is not in the `.error` state.
     public func validateCommandBuffer(_ buffer: MTLCommandBuffer) throws {
         guard config.checkCommandBufferErrors else { return }
 
@@ -405,7 +461,7 @@ public class StrictValidator {
 
     // MARK: - Vertex Format Validation
 
-    /// Validate vertex attribute format
+    /// Verifies a vertex attribute's Metal format matches the expected value.
     public func validateVertexFormat(attribute: String, expected: MTLVertexFormat, actual: MTLVertexFormat) throws {
         guard expected == actual else {
             try handle(.invalidVertexFormat(
@@ -417,7 +473,7 @@ public class StrictValidator {
         }
     }
 
-    /// Validate vertex buffer size
+    /// Verifies that a vertex buffer is non-nil and at least `vertexCount * stride` bytes.
     public func validateVertexBuffer(_ buffer: MTLBuffer?, vertexCount: Int, stride: Int) throws {
         let requiredSize = vertexCount * stride
 
@@ -435,15 +491,21 @@ public class StrictValidator {
 
 // MARK: - Metal Size Constants
 
-/// Size constants that must match Metal shader structs
+/// Byte sizes of key Metal shader structs, used by ``StrictValidator`` to detect layout drift.
+///
+/// Any change to a corresponding Metal struct must be mirrored here or the
+/// validator will raise ``StrictModeError/uniformLayoutMismatch(swift:metal:type:)``.
 public struct MetalSizeConstants {
-    // Must match shader Uniforms struct
-    public static let uniformsSize = 432  // sizeof(Uniforms) in Metal (4x 64-byte matrices + 3 lights + normalization + aligned fields)
+    /// Byte size of the Metal `Uniforms` struct; kept in sync with `Shaders/VRMShared.h`.
+    /// Validated at runtime by the strict-mode `uniformLayoutMismatch` check.
+    public static let uniformsSize = 432
 
-    // Must match shader MToonMaterial struct
-    public static let mtoonMaterialSize = 240  // sizeof(MToonMaterial) in Metal (15 blocks × 16 bytes)
+    /// Byte size of the Metal `MToonMaterial` struct (15 blocks × 16 bytes).
+    public static let mtoonMaterialSize = 240
 
-    // Vertex struct sizes
-    public static let vertexSize = 44  // sizeof(Vertex) in Metal
-    public static let skinnedVertexSize = 60  // sizeof(SkinnedVertex) in Metal
+    /// Byte size of the Metal `Vertex` struct.
+    public static let vertexSize = 44
+
+    /// Byte size of the Metal `SkinnedVertex` struct.
+    public static let skinnedVertexSize = 60
 }

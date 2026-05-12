@@ -61,6 +61,7 @@ public struct CharacterRecipe: Codable {
 
     // MARK: - Initialization
 
+    /// Creates a recipe with optional skeleton, morph, material, expression, and accessory overrides.
     public init(
         skeleton: String = "default_humanoid",
         morphs: [String: Float] = [:],
@@ -125,6 +126,7 @@ public struct CharacterRecipe: Codable {
 
 // MARK: - Material Configuration
 
+/// Recipe material overrides — hair colour, eye colour, and skin tone.
 public struct MaterialConfig: Codable {
     /// Hair color (RGB 0-1)
     public var hairColor: [Float]
@@ -135,6 +137,7 @@ public struct MaterialConfig: Codable {
     /// Skin tone (0 = lightest, 1 = darkest)
     public var skinTone: Float
 
+    /// Creates a material configuration with optional hair, eye, and skin-tone overrides.
     public init(
         hairColor: [Float] = [0.35, 0.25, 0.15], // Default brown
         eyeColor: [Float] = [0.4, 0.3, 0.2],     // Default brown
@@ -168,10 +171,14 @@ public struct MaterialConfig: Codable {
 
 // MARK: - Accessory Configuration
 
+/// Optional cosmetic accessories applied on top of a recipe's base mesh.
 public struct AccessoryConfig: Codable {
+    /// When true, the builder adds glasses to the character.
     public var glasses: Bool
+    /// When true, the builder adds a beard to the character.
     public var beard: Bool
 
+    /// Creates an accessory configuration.
     public init(glasses: Bool = false, beard: Bool = false) {
         self.glasses = glasses
         self.beard = beard
@@ -180,13 +187,20 @@ public struct AccessoryConfig: Codable {
 
 // MARK: - Recipe Errors
 
+/// Errors thrown by ``CharacterRecipe/validate()`` and ``MaterialConfig`` validation.
 public enum RecipeError: Error, LocalizedError {
+    /// Skeleton name is not one of the values accepted by ``SkeletonPresetMapper``.
     case invalidSkeleton(String)
+    /// Morph value fell outside the recipe-defined range for the given morph name.
     case morphOutOfRange(String, Float, ClosedRange<Float>)
+    /// Colour array did not contain exactly three RGB components in `[0, 1]`.
     case invalidColor(String, [Float])
+    /// Skin-tone value fell outside `[0, 1]`.
     case invalidSkinTone(Float)
+    /// Expression name is not one of the values accepted by ``ExpressionMapper``.
     case invalidExpression(String)
 
+    /// Human-readable description of the validation failure.
     public var errorDescription: String? {
         switch self {
         case .invalidSkeleton(let name):
@@ -207,6 +221,7 @@ public enum RecipeError: Error, LocalizedError {
 
 /// Maps recipe skeleton names to valid presets
 public enum SkeletonPresetMapper {
+    /// Returns true if `name` (case-insensitive) is an accepted skeleton-preset alias.
     public static func isValid(_ name: String) -> Bool {
         let validSkeletons = ["default_humanoid", "default", "normal", "tall", "short", "stocky", "wide"]
         return validSkeletons.contains(name.lowercased())
@@ -215,6 +230,7 @@ public enum SkeletonPresetMapper {
 
 /// Maps recipe expression names to valid VRM expression presets
 public enum ExpressionMapper {
+    /// Returns true if `name` (case-insensitive) is one of the accepted VRM expression preset aliases.
     public static func isValid(_ name: String) -> Bool {
         let validExpressions = [
             "happy", "joy", "angry", "sad", "sorrow", "relaxed", "fun",
@@ -229,6 +245,7 @@ public enum ExpressionMapper {
 
 // MARK: - Convenience Initializers
 
+/// JSON convenience helpers for ``CharacterRecipe``.
 public extension CharacterRecipe {
 
     /// Create a recipe from JSON string
@@ -248,6 +265,7 @@ public extension CharacterRecipe {
 
 // MARK: - Common Presets
 
+/// Bundled ``CharacterRecipe`` presets used by tests and examples.
 public extension CharacterRecipe {
 
     /// Tall athletic warrior

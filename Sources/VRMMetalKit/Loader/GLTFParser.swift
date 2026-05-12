@@ -20,26 +20,57 @@ import simd
 
 // MARK: - GLTF Document Structure
 
+/// Root of a parsed glTF 2.0 document.
+///
+/// ## Discussion
+/// Mirrors the top-level object defined by the
+/// [glTF 2.0 spec](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-gltf).
+/// Each array is optional and indexed by the integer references that appear
+/// throughout the rest of the document (for example, a primitive's
+/// `material` index refers into ``materials``).
+///
+/// VRMMetalKit produces `GLTFDocument` values from
+/// ``GLTFParser/parse(data:filePath:)`` and consumes them via
+/// ``BufferLoader``, ``TextureLoader``, and ``VRMExtensionParser``. Application
+/// code rarely interacts with this type directly; ``VRMModel/gltf`` exposes
+/// it for advanced inspection.
 public struct GLTFDocument: Codable {
+    /// glTF version metadata. Mandatory per the spec.
     public let asset: GLTFAsset
+    /// Index of the default scene in ``scenes``, or `nil` to leave the choice to the consumer.
     public let scene: Int?
+    /// All scenes in the document.
     public let scenes: [GLTFScene]?
+    /// All nodes; reference each other by index via `GLTFNode.children`.
     public let nodes: [GLTFNode]?
+    /// All meshes, each a bag of one or more ``GLTFPrimitive``.
     public let meshes: [GLTFMesh]?
+    /// All materials.
     public let materials: [GLTFMaterial]?
+    /// Texture entries pairing a sampler with an image source.
     public let textures: [GLTFTexture]?
+    /// Images, either embedded in a buffer view or referenced by URI.
     public let images: [GLTFImage]?
+    /// Sampler configurations referenced by ``textures``.
     public let samplers: [GLTFSampler]?
+    /// Top-level buffers (GLB chunks, external `.bin` files, or `data:` URIs).
     public let buffers: [GLTFBuffer]?
+    /// Sub-ranges of buffers used by accessors and images.
     public let bufferViews: [GLTFBufferView]?
+    /// Accessors describing typed views of buffer views.
     public let accessors: [GLTFAccessor]?
+    /// Skins for skeletal animation, each holding joint indices and an optional inverse-bind-matrix accessor.
     public let skins: [GLTFSkin]?
+    /// Channel-and-sampler animation tracks.
     public let animations: [GLTFAnimation]?
+    /// Raw extension dictionary (used for `VRMC_*` and other glTF extensions). Values are heterogeneous JSON.
     public let extensions: [String: Any]?
+    /// Names of extensions referenced anywhere in the document.
     public let extensionsUsed: [String]?
+    /// Names of extensions a consumer must support to load this document.
     public let extensionsRequired: [String]?
 
-    // Binary buffer data (not part of JSON, used for GLB serialization)
+    /// In-memory binary chunk (GLB only). Populated for GLB-sourced documents; ignored by JSON encoding.
     public var binaryBufferData: Data?
 
     enum CodingKeys: String, CodingKey {
@@ -49,6 +80,7 @@ public struct GLTFDocument: Codable {
         case extensionsUsed, extensionsRequired
     }
 
+    /// Decodes a glTF document from JSON, treating `extensions` as a heterogeneous dictionary.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         asset = try container.decode(GLTFAsset.self, forKey: .asset)
@@ -78,6 +110,7 @@ public struct GLTFDocument: Codable {
         }
     }
 
+    /// Encodes the document to JSON. The `extensions` dictionary is currently elided on encode.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(asset, forKey: .asset)
@@ -101,54 +134,95 @@ public struct GLTFDocument: Codable {
 
 // MARK: - GLTF Components
 
+/// A glTF 2.0 [asset](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#asset) header.
 public struct GLTFAsset: Codable {
+    /// glTF version string (must be `"2.0"` for files this package loads).
     public let version: String
+    /// Free-form exporter identifier (e.g. `"VRoid Studio v1.x"`).
     public let generator: String?
+    /// Copyright notice supplied by the exporter.
     public let copyright: String?
+    /// Minimum glTF version a consumer must support to load this file.
     public let minVersion: String?
 }
 
+/// A glTF 2.0 [scene](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#scenes): an ordered list of root node indices.
 public struct GLTFScene: Codable {
+    /// Optional scene name.
     public let name: String?
+    /// Root nodes for this scene (indices into ``GLTFDocument/nodes``).
     public let nodes: [Int]?
 }
 
+/// A glTF 2.0 [node](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#nodes): a transform plus optional mesh, skin, and children.
+///
+/// Transform is given as either a single 16-float `matrix`, or a TRS triple
+/// (`translation`, `rotation`, `scale`). VRM models always use TRS so that
+/// animation can mutate components independently.
 public struct GLTFNode: Codable {
+    /// Optional node name. VRM relies on these for humanoid bone matching when no `VRMC_vrm.humanoid` entry maps the bone explicitly.
     public let name: String?
+    /// Indices of child nodes.
     public let children: [Int]?
+    /// 4x4 transform in column-major order, mutually exclusive with TRS.
     public let matrix: [Float]?
+    /// TRS translation `[x, y, z]`.
     public let translation: [Float]?
+    /// TRS rotation quaternion `[x, y, z, w]`.
     public let rotation: [Float]?
+    /// TRS scale `[x, y, z]`.
     public let scale: [Float]?
+    /// Mesh index attached to this node, if any.
     public let mesh: Int?
+    /// Skin index attached to this node, if any.
     public let skin: Int?
+    /// Per-node morph-target weight overrides.
     public let weights: [Float]?
+    /// Raw node-level extensions (used by `VRMC_node_constraint`).
     public let extensions: [String: AnyCodable]?
 }
 
+/// A glTF 2.0 [mesh](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#meshes): a bag of one or more renderable primitives.
 public struct GLTFMesh: Codable {
+    /// Optional mesh name.
     public let name: String?
+    /// Renderable primitives; each becomes one VRMMetalKit ``VRMPrimitive``.
     public let primitives: [GLTFPrimitive]
+    /// Default morph-target weights for this mesh.
     public let weights: [Float]?
+    /// Vendor-specific extras, used here to surface morph-target names.
     public let extras: GLTFMeshExtras?
 }
 
+/// Mesh `extras` block carrying morph-target names exported by VRoid and similar tools.
 public struct GLTFMeshExtras: Codable {
+    /// Display names for each morph target, in target-array order.
     public let targetNames: [String]?
 }
 
+/// A glTF 2.0 [mesh primitive](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#meshes-overview). See the spec for attribute and index semantics.
 public struct GLTFPrimitive: Codable {
+    /// Vertex attribute accessors keyed by semantic (`"POSITION"`, `"NORMAL"`, `"TEXCOORD_0"`, `"JOINTS_0"`, `"WEIGHTS_0"`, …).
     public let attributes: [String: Int]
+    /// Optional index accessor. When `nil`, vertices are drawn in attribute order.
     public let indices: Int?
+    /// Material index applied to this primitive.
     public let material: Int?
+    /// Drawing mode (glTF constant; `4` = triangles).
     public let mode: Int?
+    /// Morph target deltas, parallel to the parent mesh's target weights.
     public let targets: [GLTFMorphTarget]?
 }
 
+/// A glTF 2.0 [morph target](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#morph-targets) referencing delta accessors.
 public struct GLTFMorphTarget: Codable {
+    /// Accessor of `POSITION` deltas.
     public let position: Int?
+    /// Accessor of `NORMAL` deltas.
     public let normal: Int?
+    /// Accessor of `TANGENT` deltas.
     public let tangent: Int?
+    /// Per-target extras (e.g. names attached by some exporters).
     public let extra: [String: AnyCodable]?
 
     enum CodingKeys: String, CodingKey {
@@ -159,13 +233,23 @@ public struct GLTFMorphTarget: Codable {
     }
 }
 
+/// Type-erased wrapper that decodes arbitrary JSON values from `Codable` containers.
+///
+/// Used to preserve unknown extension payloads (`VRMC_*`, `KHR_*`) on
+/// ``GLTFDocument/extensions``, ``GLTFNode/extensions``, and similar fields.
+/// Decoding checks for `null` first, then tries `Bool`, `Int`, `Double`,
+/// `Float`, `String`, dictionary, and array; JSON `null` and unrecognised
+/// types both decode as `NSNull`.
 public struct AnyCodable: Codable {
+    /// Decoded JSON value. Concrete types are `Bool`, `Int`, `Double`, `Float`, `String`, `[String: Any]`, `[Any]`, or `NSNull`.
     public let value: Any
 
+    /// Wraps an existing value without decoding.
     public init(_ value: Any) {
         self.value = value
     }
 
+    /// Decodes any JSON scalar, array, or object into the underlying ``value``.
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
 
@@ -192,6 +276,7 @@ public struct AnyCodable: Codable {
         }
     }
 
+    /// Re-encodes the underlying value into a `Codable` container, mirroring the decode-time type detection.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
 
@@ -221,16 +306,30 @@ public struct AnyCodable: Codable {
     }
 }
 
+/// A glTF 2.0 [material](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#materials), parsed with VRM extension support.
+///
+/// `extensions` preserves `VRMC_materials_mtoon` and `KHR_materials_unlit`
+/// payloads so ``VRMMToonMaterial`` and ``VRMMaterial`` can interpret them.
 public struct GLTFMaterial: Codable {
+    /// Material name (matched against VRM 0.x material property entries).
     public let name: String?
+    /// PBR base-color and metallic-roughness inputs.
     public let pbrMetallicRoughness: GLTFPBRMetallicRoughness?
+    /// Normal map texture and scale.
     public let normalTexture: GLTFNormalTextureInfo?
+    /// Occlusion texture and strength.
     public let occlusionTexture: GLTFOcclusionTextureInfo?
+    /// Emissive map.
     public let emissiveTexture: GLTFTextureInfo?
+    /// Emissive RGB multiplier `[r, g, b]`.
     public let emissiveFactor: [Float]?
+    /// One of `"OPAQUE"`, `"MASK"`, `"BLEND"`.
     public let alphaMode: String?
+    /// Alpha threshold for `"MASK"` mode (defaults to 0.5 per spec).
     public let alphaCutoff: Float?
+    /// Whether to render back-faces.
     public let doubleSided: Bool?
+    /// Material-level extensions (used for VRM MToon).
     public let extensions: [String: Any]?
 
     enum CodingKeys: String, CodingKey {
@@ -239,6 +338,7 @@ public struct GLTFMaterial: Codable {
         case alphaMode, alphaCutoff, doubleSided, extensions
     }
 
+    /// Decodes the material, preserving the raw `extensions` dictionary for VRM MToon parsing.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decodeIfPresent(String.self, forKey: .name)
@@ -263,6 +363,7 @@ public struct GLTFMaterial: Codable {
         }
     }
 
+    /// Encodes the material's standard fields. Extensions are not re-emitted.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(name, forKey: .name)
@@ -277,19 +378,30 @@ public struct GLTFMaterial: Codable {
     }
 }
 
+/// PBR metallic-roughness material inputs per the glTF 2.0 [Materials](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-pbrmetallicroughness) reference.
 public struct GLTFPBRMetallicRoughness: Codable {
+    /// Linear RGBA base-color multiplier.
     public let baseColorFactor: [Float]?
+    /// Base color (albedo) texture.
     public let baseColorTexture: GLTFTextureInfo?
+    /// Scalar multiplier for the metallic channel.
     public let metallicFactor: Float?
+    /// Scalar multiplier for the roughness channel.
     public let roughnessFactor: Float?
+    /// Combined metallic (B) + roughness (G) texture.
     public let metallicRoughnessTexture: GLTFTextureInfo?
 }
 
+/// Parsed [`KHR_texture_transform`](https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_texture_transform/README.md) payload: UV offset, rotation, and scale.
 public struct GLTFKHRTextureTransform {
+    /// UV offset in texture space.
     public var offset: SIMD2<Float>
+    /// UV rotation in radians, counter-clockwise around the origin.
     public var rotation: Float
+    /// UV scale.
     public var scale: SIMD2<Float>
 
+    /// Creates a transform with identity defaults for any omitted fields.
     public init(offset: SIMD2<Float> = .zero, rotation: Float = 0.0, scale: SIMD2<Float> = [1, 1]) {
         self.offset = offset
         self.rotation = rotation
@@ -318,15 +430,20 @@ public struct GLTFKHRTextureTransform {
     }
 }
 
+/// A texture reference on a material slot. See the [glTF 2.0 textureInfo schema](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#reference-textureinfo).
 public struct GLTFTextureInfo: Codable {
+    /// Index into ``GLTFDocument/textures``.
     public let index: Int
+    /// UV channel index (`TEXCOORD_<n>`). Defaults to 0.
     public let texCoord: Int?
+    /// Parsed `KHR_texture_transform` payload, if present on this slot.
     public let khrTextureTransform: GLTFKHRTextureTransform?
 
     enum CodingKeys: String, CodingKey {
         case index, texCoord, extensions
     }
 
+    /// Decodes the texture reference and, if present, the `KHR_texture_transform` extension.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         index = try container.decode(Int.self, forKey: .index)
@@ -340,6 +457,7 @@ public struct GLTFTextureInfo: Codable {
         }
     }
 
+    /// Encodes the texture reference. The `KHR_texture_transform` payload is not re-emitted.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(index, forKey: .index)
@@ -347,119 +465,229 @@ public struct GLTFTextureInfo: Codable {
     }
 }
 
+/// Normal map texture reference with the per-spec `scale` parameter.
 public struct GLTFNormalTextureInfo: Codable {
+    /// Index into ``GLTFDocument/textures``.
     public let index: Int
+    /// UV channel index. Defaults to 0.
     public let texCoord: Int?
+    /// Tangent-space normal scale; sampled XY are multiplied by this factor.
     public let scale: Float?
 }
 
+/// Occlusion (AO) texture reference with the per-spec `strength` parameter.
 public struct GLTFOcclusionTextureInfo: Codable {
+    /// Index into ``GLTFDocument/textures``.
     public let index: Int
+    /// UV channel index. Defaults to 0.
     public let texCoord: Int?
+    /// Linearly interpolates between full occlusion (0) and no occlusion (1).
     public let strength: Float?
 }
 
+/// A glTF 2.0 [texture](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#textures): a pairing of a sampler with an image source.
 public struct GLTFTexture: Codable {
+    /// Index into ``GLTFDocument/samplers``, or `nil` for default sampling.
     public let sampler: Int?
+    /// Index into ``GLTFDocument/images``.
     public let source: Int?
+    /// Optional texture name.
     public let name: String?
 }
 
+/// A glTF 2.0 [image](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#images), either embedded in a buffer view or referenced by URI.
 public struct GLTFImage: Codable {
+    /// External file path or `data:` URI. Mutually exclusive with ``bufferView``.
     public let uri: String?
+    /// MIME type (`"image/png"`, `"image/jpeg"`, …) when referencing a buffer view.
     public let mimeType: String?
+    /// BufferView index containing the encoded image bytes. Mutually exclusive with ``uri``.
     public let bufferView: Int?
+    /// Optional image name.
     public let name: String?
 }
 
+/// A glTF 2.0 [sampler](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#samplers): filter and wrap modes encoded as OpenGL constants.
 public struct GLTFSampler: Codable {
+    /// Magnification filter (`9728` NEAREST, `9729` LINEAR).
     public let magFilter: Int?
+    /// Minification filter (NEAREST/LINEAR plus mipmap variants).
     public let minFilter: Int?
+    /// S-axis wrap mode (`33071` CLAMP_TO_EDGE, `33648` MIRRORED_REPEAT, `10497` REPEAT).
     public let wrapS: Int?
+    /// T-axis wrap mode (same constants as ``wrapS``).
     public let wrapT: Int?
 }
 
+/// A glTF 2.0 [buffer](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#buffers): a contiguous binary blob.
 public struct GLTFBuffer: Codable {
+    /// Total length in bytes.
     public let byteLength: Int
+    /// External `.bin` path or `data:` URI. `nil` for the GLB binary chunk (buffer 0).
     public let uri: String?
+    /// Optional buffer name.
     public let name: String?
 }
 
+/// A glTF 2.0 [bufferView](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#buffer-views): a sub-range of a buffer.
 public struct GLTFBufferView: Codable {
+    /// Index into ``GLTFDocument/buffers``.
     public let buffer: Int
+    /// Offset into the parent buffer in bytes.
     public let byteOffset: Int?
+    /// Length of this view in bytes.
     public let byteLength: Int
+    /// Stride between consecutive elements; non-`nil` indicates an interleaved vertex buffer.
     public let byteStride: Int?
+    /// Optional buffer target hint (`34962` ARRAY_BUFFER, `34963` ELEMENT_ARRAY_BUFFER).
     public let target: Int?
+    /// Optional bufferView name.
     public let name: String?
 }
 
+/// A glTF 2.0 [accessor](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessors): a typed view into a buffer view.
 public struct GLTFAccessor: Codable {
+    /// Index into ``GLTFDocument/bufferViews``, or `nil` for sparse-only accessors.
     public let bufferView: Int?
+    /// Offset into the bufferView in bytes.
     public let byteOffset: Int?
+    /// glTF component type constant (`5120` BYTE … `5126` FLOAT).
     public let componentType: Int
+    /// Number of elements.
     public let count: Int
+    /// Element shape (`"SCALAR"`, `"VEC2"`, `"VEC3"`, `"VEC4"`, `"MAT2"`, `"MAT3"`, `"MAT4"`).
     public let type: String
+    /// Per-component maxima (for `POSITION`, used by viewers to skip a CPU scan).
     public let max: [Float]?
+    /// Per-component minima (mirrors ``max``).
     public let min: [Float]?
+    /// Whether integer components should be normalised on read.
     public let normalized: Bool?
+    /// Sparse-override descriptor, if any.
     public let sparse: GLTFSparse?
+    /// Optional accessor name.
     public let name: String?
 }
 
+/// Sparse-accessor descriptor. See [glTF 2.0 §5.1.7](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#sparse-accessors).
 public struct GLTFSparse: Codable {
+    /// Number of overridden elements.
     public let count: Int
+    /// Override indices descriptor.
     public let indices: GLTFSparseIndices
+    /// Override values descriptor.
     public let values: GLTFSparseValues
 }
 
+/// Indices half of a sparse accessor: where each override goes.
 public struct GLTFSparseIndices: Codable {
+    /// BufferView holding the index array.
     public let bufferView: Int
+    /// Offset into the bufferView in bytes.
     public let byteOffset: Int?
+    /// Component type (must be one of `UNSIGNED_BYTE`/`UNSIGNED_SHORT`/`UNSIGNED_INT`).
     public let componentType: Int
 }
 
+/// Values half of a sparse accessor: replacement element data, matching the parent accessor's `componentType`.
 public struct GLTFSparseValues: Codable {
+    /// BufferView holding the replacement values.
     public let bufferView: Int
+    /// Offset into the bufferView in bytes.
     public let byteOffset: Int?
 }
 
+/// A glTF 2.0 [skin](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#skins): the joint hierarchy used for skinning.
 public struct GLTFSkin: Codable {
+    /// Accessor index for the joint inverse-bind matrices (`MAT4` × `joints.count`). Identity is assumed when omitted.
     public let inverseBindMatrices: Int?
+    /// Optional skeleton root node.
     public let skeleton: Int?
+    /// Joint node indices, in the order matching the `JOINTS_0` vertex attribute.
     public let joints: [Int]
+    /// Optional skin name.
     public let name: String?
 }
 
+/// A glTF 2.0 [animation](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#animations) container.
 public struct GLTFAnimation: Codable {
+    /// Channels binding samplers to node targets.
     public let channels: [GLTFAnimationChannel]
+    /// Samplers providing input (time) and output (value) curves.
     public let samplers: [GLTFAnimationSampler]
+    /// Optional animation name.
     public let name: String?
 }
 
+/// Binding of an animation sampler to a target property on a node.
 public struct GLTFAnimationChannel: Codable {
+    /// Index into the parent animation's samplers array.
     public let sampler: Int
+    /// Target node and path.
     public let target: GLTFAnimationTarget
 }
 
+/// Animation channel target: which property on which node.
 public struct GLTFAnimationTarget: Codable {
+    /// Target node index.
     public let node: Int?
+    /// Animated property (`"translation"`, `"rotation"`, `"scale"`, or `"weights"` for morphs).
     public let path: String
 }
 
+/// Animation sampler: input keyframe times and output values with an interpolation mode.
 public struct GLTFAnimationSampler: Codable {
+    /// Accessor of keyframe times (`SCALAR` `FLOAT`, monotonically increasing).
     public let input: Int
+    /// Interpolation mode (`"LINEAR"`, `"STEP"`, `"CUBICSPLINE"`). Defaults to `"LINEAR"`.
     public let interpolation: String?
+    /// Accessor of keyframe values; shape depends on the channel target path.
     public let output: Int
 }
 
 // MARK: - GLB Parser
 
+/// Parses glTF 2.0 GLB (binary) containers into a ``GLTFDocument`` and the optional `BIN` chunk.
+///
+/// ## Discussion
+/// `GLTFParser` is the entry point for every VRM load. It accepts the raw
+/// GLB bytes, validates the
+/// [GLB header](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#binary-gltf-layout)
+/// (`glTF` magic, version 2), and walks every chunk, decoding the JSON
+/// chunk via Swift's standard `JSONDecoder` and retaining the BIN chunk in
+/// ``binaryChunk``. If duplicate JSON or BIN chunks appear (non-conformant
+/// but observed in the wild), the last occurrence wins.
+///
+/// The parser is tolerant of trailing chunks beyond the data length (they
+/// are logged and skipped). It is strict about the magic number and
+/// version, raising ``VRMError/invalidGLBFormat(reason:filePath:)`` or
+/// ``VRMError/unsupportedVersion(version:supported:filePath:)`` on
+/// mismatch.
+///
+/// Plain `.gltf` JSON files are not parsed by this type directly; consumers
+/// that need pure-JSON loading should `JSONDecoder.decode(GLTFDocument.self, from:)`
+/// against ``GLTFDocument``.
 public class GLTFParser {
+    /// The `BIN` chunk extracted from the most recent ``parse(data:filePath:)`` call, or `nil` if absent.
     public private(set) var binaryChunk: Data?
 
+    /// Creates an empty parser.
+    ///
+    /// Reuse with care: ``binaryChunk`` is not reset between calls, so always
+    /// use the binary data returned from the current call rather than reading
+    /// the property afterward.
     public init() {}
 
+    /// Parses a GLB byte stream and returns the decoded document plus the optional binary chunk.
+    ///
+    /// - Parameters:
+    ///   - data: Raw GLB bytes.
+    ///   - filePath: Optional source file path used to enrich error messages.
+    /// - Returns: A tuple of the decoded ``GLTFDocument`` and the optional `BIN` chunk bytes.
+    /// - Throws:
+    ///   - ``VRMError/invalidGLBFormat(reason:filePath:)`` if the magic number is wrong or the file is shorter than a GLB header.
+    ///   - ``VRMError/unsupportedVersion(version:supported:filePath:)`` if the GLB container version is not `2`.
+    ///   - ``VRMError/invalidJSON(context:underlyingError:filePath:)`` if the JSON chunk is missing or fails to decode against ``GLTFDocument``.
     public func parse(data: Data, filePath: String? = nil) throws -> (document: GLTFDocument, binaryData: Data?) {
         // GLB Header - ensure we have at least 12 bytes for header
         guard data.count >= 12 else {

@@ -34,6 +34,7 @@ import simd
 /// ```
 public final class ConstraintSolver: @unchecked Sendable {
 
+    /// Creates a constraint solver. The solver is stateless and safe to reuse across frames and models.
     public init() {}
 
     /// Solve all constraints for the given nodes.

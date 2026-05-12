@@ -1,13 +1,15 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders clean test
+.PHONY: help shaders clean test docs docs-static
 
 help:
 	@echo "VRMMetalKit Build Targets:"
-	@echo "  make shaders  - Compile all .metal files into metallib"
-	@echo "  make clean    - Remove temporary build files"
-	@echo "  make test     - Run Swift tests"
+	@echo "  make shaders     - Compile all .metal files into metallib"
+	@echo "  make clean       - Remove temporary build files"
+	@echo "  make test        - Run Swift tests"
+	@echo "  make docs        - Preview documentation locally"
+	@echo "  make docs-static - Generate a static documentation site under .build/docs"
 
 # Compile all Metal shaders into a single metallib.
 # -Wall -Wextra enables the common clang warning classes; -Werror promotes
@@ -50,3 +52,20 @@ build:
 # Build and run tests
 all: shaders build test
 	@echo "✅ All tasks complete"
+
+# Build and preview docs locally (opens a local web server)
+docs:
+	@echo "📖 Previewing documentation locally..."
+	@swift package --disable-sandbox preview-documentation --target VRMMetalKit
+
+# Generate a static documentation site under .build/docs
+docs-static:
+	@echo "📖 Generating static documentation site..."
+	@swift package --disable-sandbox \
+		--allow-writing-to-directory .build/docs \
+		generate-documentation --target VRMMetalKit \
+		--disable-indexing \
+		--transform-for-static-hosting \
+		--hosting-base-path VRMMetalKit \
+		--output-path .build/docs
+	@echo "✅ Static site written to .build/docs"

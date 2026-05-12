@@ -16,22 +16,29 @@
 
 import simd
 
-/// Six clip-space planes extracted from a view-projection matrix.
-/// Each plane is stored as `(normal.x, normal.y, normal.z, d)` with the
-/// inward-facing convention: a point `p` is INSIDE the plane when
-/// `dot(plane.xyz, p) + plane.w >= 0`. The AABB is fully outside the
-/// frustum when any single plane rejects all 8 corners.
+/// Six view-frustum planes extracted from a view-projection matrix, used by ``cullsAABB(min:max:)`` for trivial reject tests.
+///
+/// ## Discussion
+/// Planes are stored as `(nx, ny, nz, d)` with the inward-facing convention:
+/// a point `p` is inside when `dot(plane.xyz, p) + plane.w >= 0`. Built from a
+/// `simd_float4x4` view-projection matrix using the standard Gribb/Hartmann
+/// extraction. The near plane assumes Metal NDC z in `[0, 1]`.
 public struct Frustum {
+    /// Left clip plane.
     public var left: SIMD4<Float>
+    /// Right clip plane.
     public var right: SIMD4<Float>
+    /// Bottom clip plane.
     public var bottom: SIMD4<Float>
+    /// Top clip plane.
     public var top: SIMD4<Float>
+    /// Near clip plane (Metal NDC z = 0).
     public var near: SIMD4<Float>
+    /// Far clip plane (Metal NDC z = 1).
     public var far: SIMD4<Float>
 
-    /// Build planes from a row-major or column-major view-projection matrix.
-    /// `simd_float4x4` in Swift uses column-major; rows are accessed via
-    /// transpose. We extract using the standard Gribb/Hartmann method.
+    /// Extracts the six planes from a view-projection matrix using the Gribb/Hartmann method.
+    /// - Parameter vp: Column-major view-projection matrix.
     public init(viewProjection vp: matrix_float4x4) {
         // simd_float4x4 columns: vp.columns.0 = column 0, etc.
         // Row i = (col0[i], col1[i], col2[i], col3[i]).
@@ -55,10 +62,15 @@ public struct Frustum {
         return len > 0 ? p / len : p
     }
 
-    /// Returns true if the world-space AABB is entirely outside the frustum.
-    /// Uses the n-vertex (positive vertex) optimization: for each plane, test
-    /// only the AABB corner farthest in the plane's outward direction. If that
-    /// corner is on the negative side, the whole box is outside.
+    /// Returns `true` if the world-space AABB is entirely outside the frustum (trivial-reject test).
+    ///
+    /// Uses the positive-vertex optimisation: for each plane, only the corner
+    /// farthest in the inward-normal direction is tested. If that corner is
+    /// on the negative side of any plane, the whole box is outside.
+    ///
+    /// - Parameters:
+    ///   - lo: World-space AABB minimum corner.
+    ///   - hi: World-space AABB maximum corner.
     public func cullsAABB(min lo: SIMD3<Float>, max hi: SIMD3<Float>) -> Bool {
         let planes = [left, right, bottom, top, near, far]
         for plane in planes {
@@ -75,10 +87,19 @@ public struct Frustum {
     }
 }
 
+/// Helpers for transforming axis-aligned bounding boxes between coordinate spaces.
 public enum AABBTransform {
-    /// Transform a local-space AABB by a model matrix into world space.
-    /// Uses the standard Arvo (1990) abs-extent expansion: O(1) regardless
-    /// of vertex count.
+    /// Transforms a local-space AABB by a model matrix into a (conservative) world-space AABB.
+    ///
+    /// Uses the Arvo (1990) abs-extent expansion: O(1) regardless of vertex
+    /// count, but yields the smallest axis-aligned box that contains the
+    /// transformed (potentially oriented) box.
+    ///
+    /// - Parameters:
+    ///   - lo: Local-space AABB minimum corner.
+    ///   - hi: Local-space AABB maximum corner.
+    ///   - m: Model-to-world transform.
+    /// - Returns: Tuple `(min, max)` of the world-space AABB.
     public static func worldAABB(
         localMin lo: SIMD3<Float>,
         localMax hi: SIMD3<Float>,

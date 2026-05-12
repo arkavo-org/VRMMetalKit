@@ -103,6 +103,7 @@ public struct SilhouetteRenderConfig: Sendable {
         return false
     }
 
+    /// Creates a configuration with the default warm side-rim lighting and VRoid eye-material heuristic.
     public init() {}
 }
 

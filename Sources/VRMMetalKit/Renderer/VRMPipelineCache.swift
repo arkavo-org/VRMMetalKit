@@ -19,28 +19,38 @@ import Foundation
 import Metal
 import QuartzCore
 
-/// Global pipeline state cache to avoid recompiling shaders and recreating pipeline states
-/// Shared across all VRMRenderer instances for optimal performance
+/// Process-wide cache for compiled Metal shader libraries and pipeline states shared by every ``VRMRenderer``.
 ///
-/// ## Thread Safety (@unchecked Sendable)
+/// ## Discussion
+/// Pipeline state creation is one of the slower operations in Metal (tens of
+/// milliseconds for a complex MToon variant). The renderer relies on this
+/// cache to make repeat avatar loads, swapping between renderers in the same
+/// process, and re-creating ``VRMRenderer`` instances after a Metal device
+/// reset essentially free for the second-and-subsequent occurrences.
 ///
-/// This class is marked `@unchecked Sendable` because:
-/// 1. **Metal types are not Sendable**: `MTLDevice`, `MTLLibrary`, and `MTLRenderPipelineState`
-///    do not conform to `Sendable`, but Metal's thread-safety guarantees allow concurrent access:
-///    - Libraries are immutable after creation
-///    - Pipeline states are immutable after creation
-///    - Device is thread-safe for resource creation
+/// Most callers never interact with this type directly — ``VRMRenderer``
+/// already routes its library and pipeline-state lookups through the
+/// ``shared`` singleton. The public API exists for:
 ///
-/// 2. **NSLock protection**: All mutable state (`libraries`, `pipelineStates`) is protected
-///    by `lock` using the `withLock { }` helper for scoped access.
+/// - **Testing**: ``clearCache()`` lets unit tests start from a clean cache.
+/// - **Memory pressure**: hosts handling `UIApplication.didReceiveMemoryWarningNotification`
+///   can call ``clearCache()`` to drop cached pipeline states.
+/// - **Diagnostics**: ``getStatistics()`` reports current cache occupancy.
 ///
-/// 3. **Immutable after creation**: Once a library or pipeline state is created and cached,
-///    it is never modified, only read by multiple threads.
+/// The cache is keyed by:
+/// - Shader library: a single bundled `VRMMetalKitShaders.metallib`.
+/// - Pipeline state: caller-supplied `key` string that must encode shader
+///   function names, pixel format, alpha mode, MSAA sample count, and any
+///   other discriminator that would change the compiled pipeline.
 ///
-/// **Safety contract**: Callers may invoke methods from any thread. Internal synchronization
-/// ensures correctness. All Metal objects are created once and reused safely.
+/// ## Thread Safety
+/// `@unchecked Sendable`. Backed by an `NSLock` that protects the internal
+/// `libraries` and `pipelineStates` dictionaries. The Metal objects stored in
+/// those dictionaries (`MTLLibrary`, `MTLRenderPipelineState`) are immutable
+/// after creation, so concurrent reads of returned values are safe. Callers
+/// may invoke any method from any thread.
 public final class VRMPipelineCache: @unchecked Sendable {
-    /// Shared singleton instance
+    /// Process-wide shared instance. ``VRMRenderer`` routes all pipeline lookups through this singleton.
     public static let shared = VRMPipelineCache()
 
     private let lock = NSLock()
@@ -51,16 +61,18 @@ public final class VRMPipelineCache: @unchecked Sendable {
         lock.name = "com.arkavo.VRMMetalKit.PipelineCache"
     }
 
-    /// Load or retrieve cached shader library
+    /// Returns the bundled MToon/SpringBone `MTLLibrary`, loading it from the package resources on first call.
     ///
-    /// This method attempts to load shaders in the following order:
-    /// 1. Return cached library if already loaded
-    /// 2. Try loading from default library (for development with Xcode)
-    /// 3. Load from packaged VRMMetalKitShaders.metallib
+    /// The library file (`VRMMetalKitShaders.metallib`) is compiled by `make
+    /// shaders` and ships inside the package bundle. The first call on a
+    /// given process pays the disk + Metal-validation cost; later calls
+    /// return the same cached library instance.
     ///
-    /// - Parameter device: Metal device to create library with
-    /// - Returns: Cached or newly loaded MTLLibrary
-    /// - Throws: VRMError if library cannot be loaded
+    /// - Parameter device: The `MTLDevice` to create the library against.
+    /// - Returns: The compiled shader library.
+    /// - Throws: ``PipelineCacheError/shaderLibraryNotFound`` if the bundled
+    ///   metallib is missing, or ``PipelineCacheError/shaderLibraryLoadFailed(_:)``
+    ///   wrapping the underlying Metal error.
     public func getLibrary(device: MTLDevice) throws -> MTLLibrary {
         return try lock.withLock {
             let key = "VRMMetalKitShaders"
@@ -89,18 +101,21 @@ public final class VRMPipelineCache: @unchecked Sendable {
         }
     }
 
-    /// Get or create cached pipeline state
+    /// Returns a cached `MTLRenderPipelineState` matching `key`, building it from `descriptor` on the first request.
     ///
-    /// Pipeline states are expensive to create, so we cache them by a unique key.
-    /// The key should include all relevant pipeline configuration (shader functions,
-    /// pixel format, alpha mode, etc.)
+    /// - Important: The cache key must include every input that would affect
+    ///   pipeline compilation (vertex/fragment function names, pixel format,
+    ///   alpha-to-coverage flag, MSAA sample count). Two callers that pass the
+    ///   same `key` will receive the same compiled pipeline; if their
+    ///   descriptors actually differ, only the first wins.
     ///
     /// - Parameters:
-    ///   - device: Metal device to create pipeline state with
-    ///   - descriptor: Pipeline descriptor defining the pipeline configuration
-    ///   - key: Unique key identifying this pipeline configuration
-    /// - Returns: Cached or newly created MTLRenderPipelineState
-    /// - Throws: Error if pipeline state creation fails
+    ///   - device: The `MTLDevice` used when the pipeline must be built.
+    ///   - descriptor: Pipeline configuration used on first request for `key`.
+    ///   - key: Stable identifier discriminating this pipeline variant from others.
+    /// - Returns: The cached or freshly created pipeline state.
+    /// - Throws: The underlying `MTLDevice.makeRenderPipelineState` error if
+    ///   pipeline compilation fails (`NSError` from the Metal driver).
     public func getPipelineState(
         device: MTLDevice,
         descriptor: MTLRenderPipelineDescriptor,
@@ -127,12 +142,11 @@ public final class VRMPipelineCache: @unchecked Sendable {
         }
     }
 
-    /// Clear all cached libraries and pipeline states
+    /// Drops every cached shader library and pipeline state.
     ///
-    /// This is useful for:
-    /// - Testing (reset state between tests)
-    /// - Memory pressure (free cached resources)
-    /// - Development (force reload of shaders)
+    /// The next call to ``getLibrary(device:)`` or ``getPipelineState(device:descriptor:key:)``
+    /// will rebuild from scratch. Useful for memory pressure response,
+    /// test isolation, and forcing a shader reload during development.
     public func clearCache() {
         lock.withLock {
             let libraryCount = libraries.count
@@ -145,7 +159,7 @@ public final class VRMPipelineCache: @unchecked Sendable {
         }
     }
 
-    /// Get cache statistics for monitoring
+    /// Returns a snapshot of current cache occupancy. Useful for diagnostics dashboards.
     public func getStatistics() -> CacheStatistics {
         return lock.withLock {
             CacheStatistics(
@@ -155,19 +169,27 @@ public final class VRMPipelineCache: @unchecked Sendable {
         }
     }
 
-    /// Cache statistics snapshot
+    /// Snapshot of cache occupancy returned by ``getStatistics()``.
     public struct CacheStatistics {
+        /// Number of cached `MTLLibrary` instances (currently always 0 or 1 — the bundled metallib).
         public let libraryCount: Int
+        /// Number of distinct compiled `MTLRenderPipelineState` instances retained by the cache.
         public let pipelineStateCount: Int
     }
 }
 
 // MARK: - Error Types
 
+/// Failures raised by ``VRMPipelineCache`` when locating or loading the bundled shader library.
 public enum PipelineCacheError: Error, LocalizedError {
+    /// `VRMMetalKitShaders.metallib` is missing from the package's resource bundle.
+    /// Usually means the package was built without first running `make shaders`.
     case shaderLibraryNotFound
+    /// `MTLDevice.makeLibrary(URL:)` rejected the bundled metallib. The associated error carries
+    /// the Metal-driver-level reason.
     case shaderLibraryLoadFailed(Error)
 
+    /// Localized message with the failing condition and the underlying error (when present).
     public var errorDescription: String? {
         switch self {
         case .shaderLibraryNotFound:

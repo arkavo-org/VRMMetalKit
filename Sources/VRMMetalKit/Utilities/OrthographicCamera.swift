@@ -26,10 +26,14 @@ public struct OrthographicCamera {
 
     /// Standard camera framing presets for VRM characters
     public enum Preset {
-        case bust       // Tight VTuber-style framing (shoulders and up)
-        case medium     // Upper body framing (waist and up)
-        case fullBody   // Full character visible
-        case custom(height: Float)  // Custom height in world units
+        /// Tight VTuber-style framing (shoulders and up).
+        case bust
+        /// Upper body framing (waist and up).
+        case medium
+        /// Full character visible.
+        case fullBody
+        /// Custom view-frustum height in world units.
+        case custom(height: Float)
 
         /// Height in world units (assuming standard 1.6-1.8m VRM)
         public var height: Float {
@@ -188,14 +192,22 @@ public struct OrthographicCamera {
 
     /// Complete camera configuration for 2.5D rendering
     public struct Configuration {
+        /// Framing preset that drives projection-matrix height.
         public var preset: Preset
+        /// Viewport aspect ratio (width / height).
         public var aspectRatio: Float
+        /// Near clipping plane in world units.
         public var nearPlane: Float
+        /// Far clipping plane in world units.
         public var farPlane: Float
+        /// World-space position of the character the camera frames.
         public var characterPosition: SIMD3<Float>
+        /// Camera distance along +Z from `characterPosition`.
         public var cameraDistance: Float
+        /// Additional camera offset applied on top of the character-relative position.
         public var offset: SIMD3<Float>
 
+        /// Creates a camera configuration with sensible defaults for 2.5D framing.
         public init(
             preset: Preset = .medium,
             aspectRatio: Float = 16.0 / 9.0,

@@ -19,14 +19,53 @@ import simd
 
 // MARK: - Body Tracking Driver
 
-/// Primary API for driving VRM skeleton from ARKit body tracking data
+/// Drives the rotation of VRM humanoid bones from `ARBodyAnchor`-shaped skeleton data.
 ///
-/// Handles retargeting ARKit skeleton joints to VRM humanoid bones with smoothing,
-/// transform decomposition, and multi-source support.
+/// Per frame, the caller hands the driver a fresh ``ARKitBodySkeleton`` snapshot (typically built from
+/// `ARBodyAnchor.skeleton`'s `jointModelTransforms` exposed by `ARSkeleton3D`). The driver:
+///
+/// 1. Skips the frame if `skeleton.isTracked` is false.
+/// 2. For each ARKit joint with a ``ARKitSkeletonMapper`` entry, resolves the target VRM node via the
+///    humanoid map (preferred) or by node name.
+/// 3. Computes the joint's local rotation by delegating to
+///    ``ARKitCoordinateConverter/computeVRMRotation(joint:childTransform:skeleton:)``, which handles the
+///    parent-relative local conversion, A-pose-to-T-pose rest-pose offset, left-side mirroring, and root
+///    coordinate-system correction. Joints with a parent in ``ARKitCoordinateConverter/arkitParentMap``
+///    whose parent transform is missing from the skeleton are skipped (the converter returns the
+///    identity quaternion, which the driver normalizes and applies as a safe rest pose).
+/// 4. Smooths each rotation via SLERP through ``SkeletonFilterManager`` if a ``SkeletonSmoothingConfig``
+///    is in use.
+/// 5. Normalizes the quaternion (and rejects NaN) before assigning ``VRMNode/rotation`` and updating
+///    the node's local and world transforms. Position and scale on the target nodes are left untouched
+///    so the model's rest pose is preserved.
+///
+/// ## Input contract
+///
+/// The driver consumes ``ARKitBodySkeleton``, a transport-agnostic snapshot. ARKit's `ARSkeleton3D`
+/// exposes joint transforms relative to the anchor (`jointModelTransforms`) or relative to each joint's
+/// parent (`jointLocalTransforms`); the driver expects world-space transforms, so callers typically
+/// compose `anchor.transform * jointModelTransform` before populating the `[ARKitJoint: simd_float4x4]`
+/// map. Only joints whose ``ARKitJoint`` value is present in the configured
+/// ``ARKitSkeletonMapper/jointMap`` and in the skeleton are retargeted.
+///
+/// ## Output contract
+///
+/// Drives whichever VRM humanoid bones are present in the configured mapper — by default the entire
+/// humanoid set (torso, both arms with shoulders, both legs, and fingers); see
+/// ``ARKitSkeletonMapper/default``. Restricted scenarios can use ``ARKitSkeletonMapper/upperBodyOnly`` or
+/// ``ARKitSkeletonMapper/coreOnly``.
+///
+/// ## Smoothing
+///
+/// Per-component smoothing is configured through ``SkeletonSmoothingConfig`` and applied by a lazily
+/// created ``SkeletonFilterManager``. Customize by passing a config whose
+/// ``SkeletonSmoothingConfig/rotationFilter`` is the ``SmoothingFilter`` of choice (EMA, Kalman, or
+/// windowed). The driver does not currently smooth positions or scales — only rotations.
 ///
 /// ## Thread Safety
-/// **Thread-safe for updates.** Can be called from AR tracking threads or main thread.
-/// Internal state is protected with locks where necessary.
+///
+/// **Thread-safe.** All mutating operations are guarded by an internal `NSLock`. Callers may push frames
+/// from any thread, including AR tracking callback queues.
 ///
 /// ## Usage
 ///
@@ -99,6 +138,8 @@ public final class ARKitBodyDriver: @unchecked Sendable {
 
     // Parent hierarchy is now in ARKitCoordinateConverter (consolidated)
 
+    /// Creates a body driver with the given skeleton mapper, smoothing configuration, multi-source
+    /// priority strategy, and staleness threshold (in seconds).
     public init(
         mapper: ARKitSkeletonMapper = .default,
         smoothing: SkeletonSmoothingConfig = .default,
@@ -344,9 +385,12 @@ public final class ARKitBodyDriver: @unchecked Sendable {
 
     // MARK: - Transform Decomposition
 
-    /// Decompose 4×4 transform matrix into position, rotation, and scale
+    /// Decompose 4×4 transform matrix into position, rotation, and scale by normalizing each basis vector.
     ///
-    /// Uses Gram-Schmidt orthogonalization for robust scale extraction.
+    /// Scale is taken as the column-vector magnitudes; rotation comes from the normalized basis vectors
+    /// converted to a quaternion. Unused by the live update path (see
+    /// ``ARKitCoordinateConverter/extractRotation(from:)``); retained for callers that need full TRS
+    /// decomposition.
     ///
     /// - Parameter transform: 4×4 transformation matrix
     /// - Returns: Tuple of (position, rotation, scale)
@@ -468,11 +512,17 @@ public final class ARKitBodyDriver: @unchecked Sendable {
 
     // MARK: - Statistics
 
+    /// Snapshot of ``ARKitBodyDriver`` activity counters returned by ``ARKitBodyDriver/getStatistics()``.
     public struct Statistics: Sendable {
+        /// Number of frames that were applied to the VRM skeleton.
         public let updateCount: Int
+        /// Number of frames that were dropped (untracked skeleton or no priority-selectable source).
         public let skipCount: Int
+        /// Timestamp of the most recent applied skeleton (`skeleton.timestamp`).
         public let lastUpdateTime: TimeInterval
 
+        /// Fraction of total frames that were dropped, in the range `[0, 1]`. Returns `0` if no frames
+        /// have been observed.
         public var skipRate: Float {
             let total = updateCount + skipCount
             return total > 0 ? Float(skipCount) / Float(total) : 0

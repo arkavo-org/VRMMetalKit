@@ -18,7 +18,13 @@
 import Foundation
 import simd
 
+/// Convenience factory for built-in ``AnimationClip`` presets and a `.vrma` loader entry point.
 public enum AnimationLibrary {
+    /// Returns a high-amplitude diagnostic dance clip that exaggerates joint motion across the spine, head, and arms.
+    ///
+    /// Intended for visual smoke-tests where small animation deltas would be
+    /// missed. The clip is intentionally loud; production avatars should use
+    /// authored VRMA content via ``loadClip(from:model:)`` instead.
     public static func builtinSwayDance() -> AnimationClip {
         var clip = AnimationClip(duration: 2.0)  // Faster cycle for testing
 
@@ -102,6 +108,10 @@ public enum AnimationLibrary {
         return clip
     }
 
+    /// Returns a 4-second subtle idle-breathing clip animating the chest and spine.
+    ///
+    /// Useful as a low-key fallback when no scripted animation is playing.
+    /// For richer procedural breathing, see ``IdleBreathingLayer``.
     public static func builtinIdleBreathing() -> AnimationClip {
         var clip = AnimationClip(duration: 4.0)
 
@@ -126,6 +136,15 @@ public enum AnimationLibrary {
         return clip
     }
 
+    /// Loads a `.vrma` (VRMC_vrm_animation) file from `url` and retargets it to `model`.
+    ///
+    /// Delegates to ``VRMAnimationLoader/loadVRMA(from:model:)``. Pass the
+    /// target model so rest-pose retargeting can produce closures suited to
+    /// its skeleton; passing `nil` falls back to a model-less identity
+    /// retarget.
+    ///
+    /// - Throws: Errors from ``VRMAnimationLoader/loadVRMA(from:model:)``
+    ///   (file read, glTF parse, missing animation block).
     public static func loadClip(from url: URL, model: VRMModel?) throws -> AnimationClip {
         // Load a .vrma (GLB) file into an AnimationClip using VRMAnimationLoader
         return try VRMAnimationLoader.loadVRMA(from: url, model: model)

@@ -19,57 +19,55 @@ import Foundation
 import Metal
 import simd
 
-/// Sprite cache system for optimizing multi-character 2.5D rendering
-/// Caches pre-rendered character poses as textures to achieve 60 FPS with 5+ characters
+/// Texture cache of pre-rendered avatar poses; targets 60 FPS with 5+ characters by reusing sprites for static or near-static poses.
 ///
-/// ## Thread Safety (@unchecked Sendable)
+/// ## Discussion
+/// Used together with ``CharacterPrioritySystem`` for hybrid rendering. The
+/// host computes a deterministic ``computePoseHash(characterID:expressionWeights:animationFrame:headRotation:bodyRotation:)``
+/// from the character's current pose, looks it up in the cache, and either
+/// reuses the cached texture or renders a fresh sprite via
+/// ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:completion:renderBlock:)``.
 ///
-/// This class is marked `@unchecked Sendable` because:
-/// 1. **Metal types are not Sendable**: `MTLDevice` and `MTLCommandQueue` do not conform to `Sendable`,
-///    but Metal documentation guarantees they are thread-safe for command buffer creation.
-/// 2. **NSLock protection**: All mutable state (`cache`, `pendingRenders`, statistics) is protected
-///    by `cacheLock` using the `locked { }` helper for scoped access.
-/// 3. **Async completion handlers**: GPU completion handlers use `[weak self]` capture and dispatch
-///    callbacks to `callbackQueue` (default `.main`) to avoid race conditions.
-/// 4. **Immutable after init**: `device`, `commandQueue`, and `callbackQueue` are immutable and
-///    thread-safe by design.
+/// Cache entries are evicted LRU once ``maxCacheSize`` or ``maxMemoryBytes``
+/// are exceeded. Rendering can be synchronous (block until GPU finishes) or
+/// asynchronous (completion handler on the configured callback queue).
 ///
-/// **Safety contract**: Callers may invoke methods from any thread. Internal synchronization ensures
-/// correctness. Completion callbacks are serialized on `callbackQueue`.
+/// ## Thread Safety
+/// `@unchecked Sendable`. Backed by an `NSLock` protecting the cache
+/// dictionary, the pending-renders set, and the hit/miss counters. Completion
+/// handlers always fire on the supplied callback queue (default `.main`).
 public class SpriteCacheSystem: @unchecked Sendable {
 
     // MARK: - Cache Entry
 
-    /// A cached sprite representing a specific character pose
+    /// A cached sprite representing a specific character pose.
     ///
-    /// ## Thread Safety (@unchecked Sendable)
-    ///
-    /// Marked `@unchecked Sendable` because:
-    /// - `MTLTexture` is not `Sendable` but is thread-safe for read-only access per Metal docs
-    /// - All fields except `timestamp` are immutable (`let`)
-    /// - `timestamp` is only mutated under `SpriteCacheSystem.cacheLock` protection
+    /// `@unchecked Sendable` because `MTLTexture` is not `Sendable` but is
+    /// thread-safe for read-only access; ``timestamp`` is mutated only under
+    /// ``SpriteCacheSystem``'s lock.
     public struct CachedPose: @unchecked Sendable {
-        /// Rendered sprite texture (RGBA8 or BGRA8)
+        /// Pre-rendered sprite texture (`BGRA8Unorm`).
         public let texture: MTLTexture
 
-        /// Deterministic hash of the pose state
+        /// Deterministic hash identifying the pose.
         public let poseHash: UInt64
 
-        /// Timestamp for LRU eviction
+        /// Wall-clock timestamp used by LRU eviction.
         public var timestamp: TimeInterval
 
-        /// Texture resolution
+        /// Texture resolution in pixels.
         public let resolution: CGSize
 
-        /// Character identifier (for multi-character scenes)
+        /// Character that owns this pose.
         public let characterID: String
 
-        /// Memory footprint in bytes
+        /// Approximate GPU memory footprint in bytes (`width * height * 4`).
         public var memoryBytes: Int {
             let bytesPerPixel = 4  // RGBA8
             return Int(resolution.width * resolution.height) * bytesPerPixel
         }
 
+        /// Creates a cached-pose record.
         public init(
             texture: MTLTexture,
             poseHash: UInt64,
@@ -87,18 +85,20 @@ public class SpriteCacheSystem: @unchecked Sendable {
 
     // MARK: - Configuration
 
-    /// Maximum number of cached poses
+    /// Maximum number of cached poses before LRU eviction kicks in.
     public var maxCacheSize: Int = 100
 
-    /// Maximum memory usage in bytes (default: 256MB)
+    /// Maximum aggregate GPU memory in bytes before LRU eviction kicks in. Default 256 MB.
     public var maxMemoryBytes: Int = 256 * 1024 * 1024
 
-    /// Default sprite resolution
+    /// Default sprite resolution used when ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:completion:renderBlock:)``
+    /// is called without an explicit `resolution`.
     public var defaultResolution: CGSize = CGSize(width: 512, height: 512)
 
-    /// Quantization precision for pose hashing
-    public var expressionQuantization: Float = 0.01  // 1% precision
-    public var rotationQuantization: Float = 5.0     // 5° buckets
+    /// Quantisation precision used when hashing expression weights. `0.01` = 1% precision.
+    public var expressionQuantization: Float = 0.01
+    /// Quantisation precision in degrees for head and body rotation hashing. `5.0` = 5° buckets.
+    public var rotationQuantization: Float = 5.0
 
     // MARK: - Cache State
 
@@ -115,6 +115,12 @@ public class SpriteCacheSystem: @unchecked Sendable {
 
     // MARK: - Initialization
 
+    /// Creates a sprite cache bound to the given Metal device and command queue.
+    ///
+    /// - Parameters:
+    ///   - device: `MTLDevice` used to allocate sprite textures.
+    ///   - commandQueue: `MTLCommandQueue` used when the caller does not supply an external command buffer.
+    ///   - callbackQueue: Dispatch queue completion handlers run on; defaults to `.main`.
     public init(device: MTLDevice, commandQueue: MTLCommandQueue, callbackQueue: DispatchQueue = .main) {
         self.device = device
         self.commandQueue = commandQueue
@@ -201,7 +207,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
 
     // MARK: - Cache Lookup
 
-    /// Check if a pose is cached
+    /// Returns `true` if a sprite for `poseHash` is in the cache.
     public func isCached(poseHash: UInt64) -> Bool {
         return locked {
             cache[poseHash] != nil
@@ -252,12 +258,13 @@ public class SpriteCacheSystem: @unchecked Sendable {
         }
     }
 
-    /// Add a rendered pose to the cache
+    /// Adds an externally rendered sprite to the cache (without going through ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:completion:renderBlock:)``).
+    ///
     /// - Parameters:
-    ///   - texture: Pre-rendered sprite texture
-    ///   - poseHash: Hash identifying this pose
-    ///   - characterID: Character identifier
-    /// - Returns: True if successfully cached
+    ///   - texture: Pre-rendered sprite texture; the cache reads its `width`/`height` for sizing.
+    ///   - poseHash: Hash identifying this pose (typically from ``computePoseHash(characterID:expressionWeights:animationFrame:headRotation:bodyRotation:)``).
+    ///   - characterID: Character identifier, used by ``clearCharacter(_:)``.
+    /// - Returns: `true` after the entry has been inserted (LRU eviction may have run to make room).
     @discardableResult
     public func cachePose(
         texture: MTLTexture,
@@ -579,7 +586,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
         vrmLog("[SpriteCacheSystem] Evicted LRU entry (hash: \(lruEntry.poseHash), age: \(Date().timeIntervalSince1970 - lruEntry.timestamp)s)")
     }
 
-    /// Clear entire cache
+    /// Drops every cached entry and resets hit/miss counters.
     public func clearCache() {
         locked {
             cache.removeAll()
@@ -590,7 +597,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
         vrmLog("[SpriteCacheSystem] Cache cleared")
     }
 
-    /// Clear cache entries for a specific character
+    /// Drops every cached entry belonging to `characterID` (e.g. when the character leaves the scene).
     public func clearCharacter(_ characterID: String) {
         let removedCount = locked {
             let removed = cache.filter { $0.value.characterID == characterID }
@@ -605,7 +612,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
 
     // MARK: - Statistics
 
-    /// Get cache statistics
+    /// Returns a snapshot of cache occupancy and hit/miss counters.
     public func getStatistics() -> CacheStatistics {
         return locked {
             let totalMemory = cache.values.reduce(0) { $0 + $1.memoryBytes }
@@ -625,7 +632,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
         }
     }
 
-    /// Reset statistics counters
+    /// Zeros the cumulative hit/miss counters without affecting cached entries.
     public func resetStatistics() {
         locked {
             cacheHits = 0
@@ -633,20 +640,29 @@ public class SpriteCacheSystem: @unchecked Sendable {
         }
     }
 
-    /// Cache statistics snapshot
+    /// Snapshot of cache occupancy, hit rate, and pending render count returned by ``getStatistics()``.
     public struct CacheStatistics {
+        /// Number of entries currently in the cache.
         public let entryCount: Int
+        /// Total GPU memory used by cached textures, in bytes.
         public let totalMemoryBytes: Int
+        /// Configured upper bound on cached memory.
         public let maxMemoryBytes: Int
+        /// Cumulative cache hits since the last reset.
         public let cacheHits: Int
+        /// Cumulative cache misses since the last reset.
         public let cacheMisses: Int
+        /// `cacheHits / (cacheHits + cacheMisses)`, clamped to `0` when both are zero.
         public let hitRate: Float
+        /// Number of async renders currently in flight.
         public let pendingRenders: Int
 
+        /// Memory usage as a percentage of ``maxMemoryBytes``.
         public var memoryUsagePercent: Float {
             return Float(totalMemoryBytes) / Float(maxMemoryBytes) * 100
         }
 
+        /// Multi-line human-readable summary.
         public var description: String {
             let mb = Float(totalMemoryBytes) / (1024 * 1024)
             let maxMb = Float(maxMemoryBytes) / (1024 * 1024)
@@ -665,13 +681,17 @@ public class SpriteCacheSystem: @unchecked Sendable {
 
 extension SpriteCacheSystem {
 
-    /// Render a sprite quad to the screen
+    /// Stub helper for blitting a cached sprite as a screen-space quad.
+    ///
+    /// - Important: This method is a placeholder — the production sprite-batch renderer is not wired in yet.
+    /// Calling it binds the pipeline and the texture but does not actually draw.
+    ///
     /// - Parameters:
-    ///   - encoder: Render command encoder
-    ///   - texture: Sprite texture
-    ///   - position: Screen position (center)
-    ///   - scale: Sprite scale
-    ///   - pipelineState: Pipeline state for sprite rendering
+    ///   - encoder: Active `MTLRenderCommandEncoder`.
+    ///   - texture: Sprite texture to display.
+    ///   - position: Screen-space center position.
+    ///   - scale: Uniform sprite scale.
+    ///   - pipelineState: Pipeline state configured for sprite rendering.
     public func renderSprite(
         encoder: MTLRenderCommandEncoder,
         texture: MTLTexture,
