@@ -1,0 +1,50 @@
+name: Docs
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # required to push to gh-pages
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and publish DocC site
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      REF_NAME: ${{ github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode with Swift 6.2
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26* /Applications/Xcode_27* 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 26 (or newer) found"
+            ls /Applications | grep -i Xcode || true
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Generate static site
+        run: make docs-static
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .build/docs
+          keep_files: false
+          commit_message: "docs: publish DocC site for ${{ env.REF_NAME }}"
