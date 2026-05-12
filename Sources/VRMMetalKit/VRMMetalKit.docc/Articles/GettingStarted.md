@@ -67,7 +67,7 @@ final class AvatarRenderer: NSObject, MTKViewDelegate {
 enum RenderSetupError: Error { case noDevice }
 ```
 
-Set `view.delegate = AvatarRenderer()` on an `MTKView` with a depth attachment and call `await renderer.load(modelURL:)` once you have a file URL. The renderer ships with a default 3-point lighting rig, so the avatar is visible without further configuration.
+Set the `MTKView`'s delegate to your `AvatarRenderer` instance (with a depth attachment on the view) and call `await avatarRenderer.load(modelURL:)` once you have a file URL. The renderer ships with a default 3-point lighting rig, so the avatar is visible without further configuration.
 
 ## Next steps
 
