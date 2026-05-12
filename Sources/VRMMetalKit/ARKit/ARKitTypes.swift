@@ -317,27 +317,87 @@ public enum ARKitJoint: String, CaseIterable, Sendable, Codable {
     case rightToes
 
     // Optional finger joints (if available)
-    /// Left thumb finger segments (proximal → distal → tip).
-    case leftHandThumb1, leftHandThumb2, leftHandThumb3, leftHandThumb4
-    /// Left index finger segments (proximal → distal → tip).
-    case leftHandIndex1, leftHandIndex2, leftHandIndex3, leftHandIndex4
-    /// Left middle finger segments (proximal → distal → tip).
-    case leftHandMiddle1, leftHandMiddle2, leftHandMiddle3, leftHandMiddle4
-    /// Left ring finger segments (proximal → distal → tip).
-    case leftHandRing1, leftHandRing2, leftHandRing3, leftHandRing4
-    /// Left pinky (little) finger segments (proximal → distal → tip).
-    case leftHandPinky1, leftHandPinky2, leftHandPinky3, leftHandPinky4
+    /// Left thumb proximal joint (closest to palm); maps to VRM `leftThumbProximal`.
+    case leftHandThumb1
+    /// Left thumb intermediate joint; maps to VRM `leftThumbIntermediate`.
+    case leftHandThumb2
+    /// Left thumb distal joint; maps to VRM `leftThumbDistal`.
+    case leftHandThumb3
+    /// Left thumb tip joint (no VRM humanoid bone mapping).
+    case leftHandThumb4
+    /// Left index proximal joint (closest to palm); maps to VRM `leftIndexProximal`.
+    case leftHandIndex1
+    /// Left index intermediate joint; maps to VRM `leftIndexIntermediate`.
+    case leftHandIndex2
+    /// Left index distal joint; maps to VRM `leftIndexDistal`.
+    case leftHandIndex3
+    /// Left index tip joint (no VRM humanoid bone mapping).
+    case leftHandIndex4
+    /// Left middle proximal joint (closest to palm); maps to VRM `leftMiddleProximal`.
+    case leftHandMiddle1
+    /// Left middle intermediate joint; maps to VRM `leftMiddleIntermediate`.
+    case leftHandMiddle2
+    /// Left middle distal joint; maps to VRM `leftMiddleDistal`.
+    case leftHandMiddle3
+    /// Left middle tip joint (no VRM humanoid bone mapping).
+    case leftHandMiddle4
+    /// Left ring proximal joint (closest to palm); maps to VRM `leftRingProximal`.
+    case leftHandRing1
+    /// Left ring intermediate joint; maps to VRM `leftRingIntermediate`.
+    case leftHandRing2
+    /// Left ring distal joint; maps to VRM `leftRingDistal`.
+    case leftHandRing3
+    /// Left ring tip joint (no VRM humanoid bone mapping).
+    case leftHandRing4
+    /// Left pinky (little) proximal joint (closest to palm); maps to VRM `leftLittleProximal`.
+    case leftHandPinky1
+    /// Left pinky (little) intermediate joint; maps to VRM `leftLittleIntermediate`.
+    case leftHandPinky2
+    /// Left pinky (little) distal joint; maps to VRM `leftLittleDistal`.
+    case leftHandPinky3
+    /// Left pinky (little) tip joint (no VRM humanoid bone mapping).
+    case leftHandPinky4
 
-    /// Right thumb finger segments (proximal → distal → tip).
-    case rightHandThumb1, rightHandThumb2, rightHandThumb3, rightHandThumb4
-    /// Right index finger segments (proximal → distal → tip).
-    case rightHandIndex1, rightHandIndex2, rightHandIndex3, rightHandIndex4
-    /// Right middle finger segments (proximal → distal → tip).
-    case rightHandMiddle1, rightHandMiddle2, rightHandMiddle3, rightHandMiddle4
-    /// Right ring finger segments (proximal → distal → tip).
-    case rightHandRing1, rightHandRing2, rightHandRing3, rightHandRing4
-    /// Right pinky (little) finger segments (proximal → distal → tip).
-    case rightHandPinky1, rightHandPinky2, rightHandPinky3, rightHandPinky4
+    /// Right thumb proximal joint (closest to palm); maps to VRM `rightThumbProximal`.
+    case rightHandThumb1
+    /// Right thumb intermediate joint; maps to VRM `rightThumbIntermediate`.
+    case rightHandThumb2
+    /// Right thumb distal joint; maps to VRM `rightThumbDistal`.
+    case rightHandThumb3
+    /// Right thumb tip joint (no VRM humanoid bone mapping).
+    case rightHandThumb4
+    /// Right index proximal joint (closest to palm); maps to VRM `rightIndexProximal`.
+    case rightHandIndex1
+    /// Right index intermediate joint; maps to VRM `rightIndexIntermediate`.
+    case rightHandIndex2
+    /// Right index distal joint; maps to VRM `rightIndexDistal`.
+    case rightHandIndex3
+    /// Right index tip joint (no VRM humanoid bone mapping).
+    case rightHandIndex4
+    /// Right middle proximal joint (closest to palm); maps to VRM `rightMiddleProximal`.
+    case rightHandMiddle1
+    /// Right middle intermediate joint; maps to VRM `rightMiddleIntermediate`.
+    case rightHandMiddle2
+    /// Right middle distal joint; maps to VRM `rightMiddleDistal`.
+    case rightHandMiddle3
+    /// Right middle tip joint (no VRM humanoid bone mapping).
+    case rightHandMiddle4
+    /// Right ring proximal joint (closest to palm); maps to VRM `rightRingProximal`.
+    case rightHandRing1
+    /// Right ring intermediate joint; maps to VRM `rightRingIntermediate`.
+    case rightHandRing2
+    /// Right ring distal joint; maps to VRM `rightRingDistal`.
+    case rightHandRing3
+    /// Right ring tip joint (no VRM humanoid bone mapping).
+    case rightHandRing4
+    /// Right pinky (little) proximal joint (closest to palm); maps to VRM `rightLittleProximal`.
+    case rightHandPinky1
+    /// Right pinky (little) intermediate joint; maps to VRM `rightLittleIntermediate`.
+    case rightHandPinky2
+    /// Right pinky (little) distal joint; maps to VRM `rightLittleDistal`.
+    case rightHandPinky3
+    /// Right pinky (little) tip joint (no VRM humanoid bone mapping).
+    case rightHandPinky4
 }
 
 /// Body skeleton data from ARKit

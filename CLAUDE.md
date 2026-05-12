@@ -80,7 +80,7 @@ let renderer = VRMRenderer(device: device, config: config)
   *   XPBD simulation running at fixed 120Hz substeps in Compute Shaders.
 *   **ARKit Integration:**
   *   **Face:** `ARKitFaceDriver` maps 52 ARKit shapes → 18 VRM expressions.
-  *   **Body:** `ARKitBodyDriver` retargets ARKit skeletons to VRM nodes using Graham-Schmidt orthogonalization.
+  *   **Body:** `ARKitBodyDriver` retargets ARKit skeletons to VRM humanoid bones via per-frame parent-relative local rotation, A-pose-to-T-pose offsets, and left-side mirroring through `ARKitCoordinateConverter`.
   *   **Smoothing:** Configurable filters (EMA, Kalman) in `SmoothingFilters.swift`.
 
 ### Directory Structure

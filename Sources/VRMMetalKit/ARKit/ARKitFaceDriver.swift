@@ -433,7 +433,7 @@ public final class ARKitFaceDriver: @unchecked Sendable {
 
 // MARK: - Driver Statistics
 
-/// Snapshot of ``ARKitFaceDriver`` activity counters returned by `ARKitFaceDriver.getStatistics()`.
+/// Snapshot of ``ARKitFaceDriver`` activity counters returned by ``ARKitFaceDriver/getStatistics()``.
 public struct DriverStatistics: Sendable {
     /// Total number of updates processed
     public let totalUpdates: Int

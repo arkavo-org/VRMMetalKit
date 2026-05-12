@@ -41,10 +41,12 @@ import simd
 ///
 /// ## Input contract
 ///
-/// The driver consumes ``ARKitBodySkeleton``, a transport-agnostic snapshot. ARKit's `ARBodyAnchor` only
-/// surfaces world-space joint transforms via `ARSkeleton3D`; callers must convert those into the
-/// `[ARKitJoint: simd_float4x4]` shape themselves. Only joints whose ``ARKitJoint`` value is present in
-/// the configured ``ARKitSkeletonMapper/jointMap`` and in the skeleton are retargeted.
+/// The driver consumes ``ARKitBodySkeleton``, a transport-agnostic snapshot. ARKit's `ARSkeleton3D`
+/// exposes joint transforms relative to the anchor (`jointModelTransforms`) or relative to each joint's
+/// parent (`jointLocalTransforms`); the driver expects world-space transforms, so callers typically
+/// compose `anchor.transform * jointModelTransform` before populating the `[ARKitJoint: simd_float4x4]`
+/// map. Only joints whose ``ARKitJoint`` value is present in the configured
+/// ``ARKitSkeletonMapper/jointMap`` and in the skeleton are retargeted.
 ///
 /// ## Output contract
 ///
