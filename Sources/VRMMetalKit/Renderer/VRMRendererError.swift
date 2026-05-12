@@ -20,45 +20,81 @@ import Metal
 
 // MARK: - Renderer Errors
 
-/// Errors that can occur during VRM rendering operations
+/// Failures raised by ``VRMRenderer`` during draw-call validation, encoder creation, or buffer binding.
+///
+/// ## Discussion
+/// These errors are produced by the renderer's own diagnostics (separate from the
+/// stricter ``StrictModeError`` validator). Cases group into six surfaces:
+///
+/// - **Draw validation** (``drawValidationFailed(_:)``, ``invalidDrawCall(reason:)``,
+///   ``zeroIndexCount(primitive:)``, ``zeroVertexCount(primitive:)``) — sanity checks before encoding.
+/// - **Encoder creation** (``renderEncoderCreationFailed(_:)``, ``computeEncoderCreationFailed(_:)``) —
+///   `MTLCommandBuffer` failed to vend an encoder.
+/// - **Buffer integrity** (``invalidIndexBuffer(mesh:primitive:reason:)`` and friends) — index/vertex buffer
+///   shape mismatches.
+/// - **Skinning** (``skinMismatch(node:mesh:primitive:requiredJoints:availableJoints:)`` and friends) —
+///   joint palette or weight inconsistencies.
+/// - **Pipeline state** (``pipelineStateNil(alphaMode:skinned:)``, ``uniformsBufferEmpty``,
+///   ``computePipelineStateNil``) — renderer not finished initialising.
+/// - **Frame / material** — final-frame validation and material lookup errors.
+///
+/// Each case implements `LocalizedError` with a multi-line message containing what
+/// went wrong, where, and a suggested fix. Use ``recoverySuggestion`` for a short caller-facing hint.
 public enum VRMRendererError: LocalizedError {
-    // Draw validation errors
+    /// Draw-call validation rejected a primitive for the supplied reason.
     case drawValidationFailed(String)
+    /// A draw call was rejected (free-form `reason`); thrown before encoding.
     case invalidDrawCall(reason: String)
+    /// The named primitive declares zero indices and cannot be drawn.
     case zeroIndexCount(primitive: String)
+    /// The named primitive declares zero vertices and cannot be drawn.
     case zeroVertexCount(primitive: String)
 
-    // Encoder errors
+    /// Metal failed to vend an `MTLRenderCommandEncoder` from the supplied descriptor.
     case renderEncoderCreationFailed(Error)
+    /// Metal failed to vend an `MTLComputeCommandEncoder`; `reason` carries the failing subsystem.
     case computeEncoderCreationFailed(String)
 
-    // Buffer errors
+    /// The index buffer for `mesh`/`primitive` is nil or unusable; `reason` carries the specific defect.
     case invalidIndexBuffer(mesh: String, primitive: Int, reason: String)
+    /// The vertex buffer for `mesh`/`primitive` is nil or unusable; `reason` carries the specific defect.
     case invalidVertexBuffer(mesh: String, primitive: Int, reason: String)
+    /// The index buffer is shorter than `required` bytes.
     case indexBufferTooSmall(mesh: String, primitive: Int, required: Int, actual: Int)
+    /// The vertex buffer is shorter than `required` bytes.
     case vertexBufferTooSmall(mesh: String, primitive: Int, required: Int, actual: Int)
+    /// An index value in the index buffer addresses past `vertexCount`.
     case indexOutOfBounds(mesh: String, primitive: Int, maxIndex: Int, vertexCount: Int)
+    /// `offset` is not a multiple of `alignment` for the index buffer's component type.
     case bufferOffsetMisaligned(mesh: String, primitive: Int, offset: Int, alignment: Int)
 
-    // Skinning errors
+    /// A primitive needs more joints than its skin provides (e.g. mesh exported against a different skeleton).
     case skinMismatch(node: String, mesh: String, primitive: Int, requiredJoints: Int, availableJoints: Int)
+    /// A vertex references `jointIndex`, but the skin's palette only contains `paletteCount` joints.
     case jointIndexOutOfBounds(node: String, mesh: String, primitive: Int, jointIndex: Int, paletteCount: Int)
+    /// A vertex's four skinning weights do not sum to ~1.0; the deformation will be incorrect.
     case invalidSkinningWeights(vertex: Int, weightSum: Float, joints: SIMD4<UInt16>, weights: SIMD4<Float>)
+    /// `offset + count` would read past the end of the joint-matrix buffer for `skinIndex`.
     case matrixSliceOutOfBounds(skinIndex: Int, offset: Int, count: Int, total: Int)
 
-    // Pipeline errors
+    /// The required render `MTLRenderPipelineState` is nil for the given alpha mode / skinning combination.
     case pipelineStateNil(alphaMode: String, skinned: Bool)
+    /// The renderer's triple-buffered uniforms array is empty — initialisation did not complete.
     case uniformsBufferEmpty
+    /// The morph-target compute `MTLComputePipelineState` is nil; expressions and blend shapes cannot run.
     case computePipelineStateNil
 
-    // Frame validation errors
+    /// End-of-frame validation reported a downstream error (typically wrapping a ``StrictModeError``).
     case frameValidationFailed(Error)
+    /// The submitted `MTLCommandBuffer` finished in `.error` state.
     case commandBufferFailed(String)
 
-    // Material errors
+    /// A material declared an alpha mode other than `opaque`, `mask`, or `blend`.
     case invalidAlphaMode(String)
+    /// A primitive references material `index`, but the model only has `available` materials.
     case invalidMaterialIndex(index: Int, available: Int)
 
+    /// Multi-line description with subsystem prefix, concrete context, and a recovery hint.
     public var errorDescription: String? {
         switch self {
         case .drawValidationFailed(let reason):
@@ -337,6 +373,7 @@ public enum VRMRendererError: LocalizedError {
         }
     }
 
+    /// One-line caller-facing hint for the most actionable cases (nil for self-explanatory cases).
     public var recoverySuggestion: String? {
         switch self {
         case .drawValidationFailed, .invalidDrawCall:
@@ -355,14 +392,27 @@ public enum VRMRendererError: LocalizedError {
 
 // MARK: - Skinning Errors
 
-/// Errors that can occur during skinning calculations
+/// Failures raised by the skinning palette pipeline (joint matrix computation, buffer allocation, lifecycle).
+///
+/// ## Discussion
+/// These errors describe palette-level problems: a per-joint matrix containing
+/// `NaN`/`Inf`, a palette that was never populated or has gone stale, or an
+/// outright Metal buffer allocation failure. They surface from
+/// ``VRMSkinningSystem`` paths and are independent of the per-frame
+/// ``VRMRendererError`` checks (which look at *bindings*, not the data inside).
 public enum VRMSkinningError: LocalizedError {
+    /// The computed skinning matrix for `jointIndex` is invalid (e.g. all zeros or `NaN` in any entry).
     case invalidSkinningMatrix(skinIndex: Int, jointIndex: Int, jointName: String?)
+    /// The palette for `skinIndex` was last updated on `lastFrame`, but the current frame is `currentFrame`.
     case stalePalette(skinIndex: Int, lastFrame: Int, currentFrame: Int)
+    /// No `updateSkinningData()` call has ever populated the palette for `skinIndex`.
     case neverUpdatedPalette(skinIndex: Int)
+    /// The skinning matrix at `jointIndex` contains `NaN` or `Inf` after multiplication with the inverse-bind matrix.
     case matrixContainsNaN(skinIndex: Int, jointIndex: Int, jointName: String?)
+    /// `MTLDevice.makeBuffer` returned nil when trying to allocate `size` bytes for joint matrices.
     case bufferAllocationFailed(size: Int)
 
+    /// Multi-line description with `[VRMSkinning]` prefix, indices, joint name (when known), and remediation.
     public var errorDescription: String? {
         switch self {
         case .invalidSkinningMatrix(let skinIndex, let jointIndex, let jointName):
@@ -436,17 +486,34 @@ public enum VRMSkinningError: LocalizedError {
 
 // MARK: - Material Validation Errors
 
-/// Errors that can occur during material validation
+/// MToon parameter validation failures, raised when a material's authored value falls outside
+/// the spec-mandated range.
+///
+/// ## Discussion
+/// These errors are typically logged at load time when verifying an authored
+/// ``VRMMToonMaterial`` against the
+/// [MToon 1.0 spec](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_materials_mtoon-1.0/README.md).
+/// The renderer continues by clamping to the valid range; the error exists so
+/// authors can fix the source file.
 public enum VRMMaterialValidationError: LocalizedError {
+    /// `outlineWidthMode` was not 0 (none), 1 (world), or 2 (screen).
     case invalidOutlineMode(Int)
+    /// One or more components of `matcapFactor` fall outside `0...4`.
     case matcapFactorOutOfRange(SIMD4<Float>)
+    /// `parametricRimFresnelPower` is negative.
     case rimFresnelPowerNegative(Float)
+    /// `rimLightingMixFactor` is outside `0...1`.
     case rimLightingMixOutOfRange(Float)
+    /// `outlineLightingMixFactor` is outside `0...1`.
     case outlineLightingMixOutOfRange(Float)
+    /// `giEqualizationFactor` is outside `0...1`.
     case giEqualizationOutOfRange(Float)
+    /// `shadingToonyFactor` is outside `0...1`.
     case shadingToonyOutOfRange(Float)
+    /// `shadingShiftFactor` is outside `-1...1`.
     case shadingShiftOutOfRange(Float)
 
+    /// Multi-line description with `[MToon Material Validation]` prefix, the offending value, and the valid range.
     public var errorDescription: String? {
         switch self {
         case .invalidOutlineMode(let mode):

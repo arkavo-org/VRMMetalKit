@@ -34,32 +34,71 @@ import QuartzCore  // For CACurrentMediaTime
 /// driven by LookAt, so running SpringBone before LookAt within `drawCore` does not violate
 /// the per-frame contract.
 
-/// VRMRenderer manages the rendering pipeline for VRM models using Metal.
+/// The Metal-backed avatar renderer: encodes a complete VRM frame (skinning, morphs, physics, MToon shading, outlines).
+///
+/// ## Discussion
+/// `VRMRenderer` owns the per-instance render state for one avatar (or one
+/// avatar slot): the pipeline-state handles vended by ``VRMPipelineCache``,
+/// the triple-buffered uniform ring, the morph-target compute system, the
+/// spring-bone compute system, and the cached render-item list.
+///
+/// ### Per-frame call sequence
+/// A typical host integration looks like:
+/// ```swift
+/// let renderer = VRMRenderer(device: device)             // construct once
+/// renderer.loadModel(model)                              // when the model changes
+/// renderer.enableSpringBone = true                       // optional physics
+///
+/// // Each frame, from MTKViewDelegate.draw(in:):
+/// renderer.viewMatrix = view
+/// renderer.projectionMatrix = renderer.makeProjectionMatrix(aspectRatio: aspect)
+/// renderer.draw(in: view, commandBuffer: cb, renderPassDescriptor: rpd)
+/// ```
+/// During ``draw(in:commandBuffer:renderPassDescriptor:)`` the renderer:
+/// 1. Acquires the model's internal lock and runs the morph-compute pass.
+/// 2. Runs the spring-bone GPU substeps (when ``enableSpringBone`` is on).
+/// 3. Applies look-at to eye bones.
+/// 4. Encodes the opaque, masked, and blended draw lists in render-queue order, then the MToon outline pass.
+///
+/// ### Triple-buffered uniforms
+/// The renderer keeps three `MTLBuffer` copies of its per-frame uniforms and
+/// cycles through them under a `DispatchSemaphore`, so CPU-side uniform
+/// updates never stall on the GPU finishing the previous frame.
+///
+/// ### Pipeline cache
+/// Every pipeline state is created via ``VRMPipelineCache/shared``. Re-creating
+/// a `VRMRenderer` in the same process after the first one has loaded is
+/// effectively free — the cache returns the same compiled pipelines.
+///
+/// ### Strict mode
+/// `RendererConfig(strict:)` controls how the renderer responds to invalid
+/// draw calls and resource bindings. ``StrictLevel/off`` (the production
+/// default) logs only; ``StrictLevel/warn`` annotates frames with a summary;
+/// ``StrictLevel/fail`` throws ``StrictModeError`` on the first violation.
+/// See ``RendererConfig`` and ``StrictValidator`` for the validator surface.
+///
+/// ### MSAA
+/// Set ``RendererConfig/sampleCount`` to `4` (or higher, device-permitting)
+/// to enable MSAA. Materials with `alphaMode == "MASK"` automatically pick up
+/// alpha-to-coverage when MSAA is active, smoothly fading cutout edges.
 ///
 /// ## Thread Safety
-/// **Thread-safe (with conditions).** The renderer itself is thread-safe for command encoding,
-/// and safe to use concurrently with `AnimationPlayer` updates on the same model because `VRMModel`
-/// is now protected by an internal lock.
+/// `@unchecked Sendable`. The renderer is safe to encode from any thread.
+/// Concurrent animation updates on the same ``VRMModel`` are also safe —
+/// `VRMModel` holds an internal lock, and ``draw(in:commandBuffer:renderPassDescriptor:)``
+/// acquires it for the duration of command encoding. During that window
+/// animation updates from other threads block, which keeps the scene graph
+/// consistent.
 ///
-/// ### Concurrency Model:
-/// - **Animation/Render Sync**: `VRMModel` uses an internal lock. `VRMRenderer` acquires this lock
-///   during the draw command encoding phase. `AnimationPlayer` acquires it during updates.
-///   This prevents data races on node transforms.
-/// - **Metal Context**: You can encode commands from any thread.
-///
-/// ### Safe Usage Patterns:
 /// ```swift
-/// // ✅ SAFE: Animation on background thread
+/// // SAFE: animation on a background thread
 /// DispatchQueue.global().async {
 ///     animationPlayer.update(deltaTime: dt, model: model)
 /// }
 ///
-/// // ✅ SAFE: Rendering on main thread (concurrently)
-/// renderer.render(in: view, commandBuffer: commandBuffer)
+/// // SAFE: rendering on the main thread concurrently
+/// renderer.draw(in: view, commandBuffer: cb, renderPassDescriptor: rpd)
 /// ```
-///
-/// - Note: Rendering blocks animation updates on the model for the duration of command encoding.
-///   This is necessary to ensure the scene graph is consistent during drawing.
 public final class VRMRenderer: NSObject, @unchecked Sendable {
     // OPTIMIZATION: Numeric key for morph buffer dictionary (avoids string interpolation)
     typealias MorphKey = UInt64
@@ -381,20 +420,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var mtoonOutlinePipelineState: MTLRenderPipelineState?
     var mtoonSkinnedOutlinePipelineState: MTLRenderPipelineState?
 
-    // Sprite Cache System for multi-character optimization
+    /// Optional sprite cache used by hybrid multi-character rendering. Auto-instantiated in ``init(device:config:)``.
+    /// See ``SpriteCacheSystem``.
     public var spriteCacheSystem: SpriteCacheSystem?
 
-    /// Detail level for rendering (controls sprite cache usage)
+    /// Controls how ``VRMRenderer`` cooperates with ``spriteCacheSystem`` and ``prioritySystem``.
     public enum DetailLevel {
-        case full3D        // Always render full 3D
-        case cachedSprite  // Use sprite cache when available
-        case hybrid        // Priority-based (main speaker = 3D, background = cached)
+        /// Always render the full 3D avatar; the sprite cache is never consulted.
+        case full3D
+        /// Use a cached sprite for this character when one exists, otherwise fall back to 3D.
+        case cachedSprite
+        /// Let ``prioritySystem`` decide per character (main speaker = 3D, background = cached sprite).
+        case hybrid
     }
 
-    /// Current detail level
+    /// Detail level used when drawing this renderer's avatar. Defaults to ``DetailLevel/full3D``.
     public var detailLevel: DetailLevel = .full3D
 
-    // Character priority system for hybrid rendering
+    /// Optional priority system that classifies characters as main speaker / listener / background for hybrid rendering.
     public var prioritySystem: CharacterPrioritySystem?
 
     // Sprite rendering pipeline
@@ -405,13 +448,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     // Skinning
     private var skinningSystem: VRMSkinningSystem?
+    /// Legacy per-frame animation state. Newer code should use ``AnimationPlayer``;
+    /// when ``disableLegacyAnimation`` is `true` (the default), the renderer ignores this property.
     public var animationState: VRMAnimationState?
 
-    // Morph Targets
+    /// Morph-target compute system used to evaluate blend shapes on the GPU. Auto-created in ``init(device:config:)``.
     public var morphTargetSystem: VRMMorphTargetSystem?
+    /// Expression controller responsible for aggregating per-expression weights into morph weights.
+    /// Auto-created in ``init(device:config:)``.
     public var expressionController: VRMExpressionController?
 
-    // LookAt
+    /// Look-at controller that drives eye-bone rotations to track a world-space target. Auto-created in ``init(device:config:)``.
     public var lookAtController: VRMLookAtController?
 
     // MARK: - Spring Bone Physics
@@ -517,7 +564,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private static let zeroMorphWeights = [Float](repeating: 0, count: 8)
     private var hasLoggedSpringBone = false
 
-    // Prefer modern AnimationPlayer; defensively ignore legacy animationState if set elsewhere
+    /// When `true` (the default), the renderer ignores ``animationState`` and clears it on the first frame.
+    /// Prefer ``AnimationPlayer`` for new code; set this to `false` only when restoring the legacy path.
     public var disableLegacyAnimation: Bool = true
 
     // Triple-buffered uniforms for avoiding CPU-GPU sync
@@ -638,7 +686,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         performanceTracker?.reset()
     }
 
-    // Performance tracking
+    /// Optional ``PerformanceTracker`` accumulating per-frame draw call, vertex, and timing stats.
+    /// Assign one to enable tracking; query via ``getPerformanceMetrics()``.
     public var performanceTracker: PerformanceTracker?
 
     // State caching to reduce allocations
@@ -3765,8 +3814,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Current drawable size for MSAA texture management
     private var currentDrawableSize: CGSize = .zero
     
-    /// Updates drawable size and creates/updates multisample textures if needed
-    /// Returns true if multisample texture was created/updated
+    /// Allocates or re-creates the MSAA color texture when the drawable size changes.
+    ///
+    /// Call when `MTKViewDelegate.mtkView(_:drawableSizeWillChange:)` fires
+    /// or whenever the host's offscreen framebuffer is resized. The renderer
+    /// only allocates a texture when ``RendererConfig/sampleCount`` is `> 1`.
+    ///
+    /// - Parameter size: New drawable size in pixels.
+    /// - Returns: `true` if a multisample texture is in place after the call (created, updated, or already valid).
     @discardableResult
     public func updateDrawableSize(_ size: CGSize) -> Bool {
         // Only recreate if size changed and MSAA is enabled
@@ -3810,8 +3865,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return multisampleTexture != nil
     }
     
-    /// Returns render pass descriptor for multisample rendering
-    /// This is used when MSAA is enabled to render to multisample texture
+    /// Returns an `MTLRenderPassDescriptor` configured to draw into the renderer's MSAA color texture.
+    ///
+    /// The descriptor sets `loadAction = .clear` and `storeAction = .multisampleResolve`,
+    /// so Metal automatically resolves to the drawable when the encoder ends.
+    ///
+    /// - Returns: A configured descriptor, or `nil` when MSAA is disabled or the multisample texture has not been allocated.
     public func getMultisampleRenderPassDescriptor() -> MTLRenderPassDescriptor? {
         guard usesMultisampling, let multisampleTexture = multisampleTexture else {
             return nil
@@ -3829,8 +3888,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return descriptor
     }
     
-    /// Returns render pass descriptor for resolve pass
-    /// Used to blit multisample result to final drawable
+    /// Returns a placeholder `MTLRenderPassDescriptor` for an explicit MSAA resolve pass.
+    ///
+    /// Most callers do not need this: when ``getMultisampleRenderPassDescriptor()``
+    /// is used, Metal resolves automatically on encoder end. This method exists
+    /// for hosts that perform a separate blit/resolve pass.
     public func getResolveRenderPassDescriptor() -> MTLRenderPassDescriptor? {
         // For now, return a basic descriptor - actual resolve happens automatically
         // when using .multisampleResolve store action
@@ -3838,7 +3900,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return descriptor
     }
     
-    /// Returns pipeline descriptor for MASK materials with alpha-to-coverage
+    /// Returns a fresh `MTLRenderPipelineDescriptor` preconfigured for alpha-to-coverage rendering of `MASK` materials.
+    ///
+    /// Used by hosts that want to build their own pipeline variant on top of
+    /// the renderer's MASK + MSAA path. Returns `nil` when the renderer's own
+    /// alpha-to-coverage pipeline has not been built (typically because MSAA
+    /// is disabled).
     public func getMASKPipelineDescriptor() -> MTLRenderPipelineDescriptor? {
         guard maskAlphaToCoveragePipelineState != nil else {
             return nil
@@ -3855,7 +3922,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     
     // MARK: - CLI Rendering Support
     
-    /// Sets the debug mode for rendering (used by CLI tool)
+    /// Sets the integer debug-mode selector consumed by the MToon fragment shader.
+    ///
+    /// `0` is normal rendering; values 1-16 select diagnostic visualisations
+    /// (UVs, normals, shading terms). Used by the VRMRender CLI tool's
+    /// `--debug` flag; rarely needed by application code.
     public func setDebugMode(_ mode: Int) {
         currentDebugMode = mode
     }

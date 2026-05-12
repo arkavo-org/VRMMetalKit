@@ -76,14 +76,29 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 ### Rendering
 
 - ``VRMRenderer``
+- ``VRMRenderer/VRMCameraMode``
+- ``VRMRenderer/LightNormalizationMode``
+- ``VRMRenderer/DetailLevel``
 - ``RendererConfig``
 - ``VRMPipelineCache``
+- ``PipelineCacheError``
 - ``VRMMesh``
 - ``VRMPrimitive``
+- ``VRMVertex``
+- ``VRMNode``
+- ``VRMSkin``
+- ``VRMTexture``
+- ``SilhouetteRenderConfig``
+- ``firstPersonAnnotation(for:in:)``
+- ``firstPersonAnnotationLookup(in:)``
+- ``shouldRenderPrimitive(annotation:cameraMode:)``
+- ``processFirstPersonAutoFlags(model:device:)``
 - <doc:RenderingAvatars>
 
 ### Materials
 
+- ``VRMMaterial``
+- ``VRMMaterial/PipelineCategory``
 - ``VRMMToonMaterial``
 - ``VRMOutlineWidthMode``
 - ``VRMShadingShiftTexture``
@@ -142,7 +157,16 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 
 - ``PerformanceMetrics``
 - ``CharacterPrioritySystem``
+- ``CharacterPrioritySystem/CharacterRole``
+- ``CharacterPrioritySystem/CharacterState``
+- ``CharacterPrioritySystem/RenderingDecision``
+- ``CharacterPrioritySystem/PerformanceBudget``
+- ``CharacterPrioritySystem/PriorityStatistics``
 - ``SpriteCacheSystem``
+- ``SpriteCacheSystem/CachedPose``
+- ``SpriteCacheSystem/CacheStatistics``
+- ``Frustum``
+- ``AABBTransform``
 
 ### Validation
 
@@ -158,6 +182,8 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMError``
 - ``StrictModeError``
 - ``VRMRendererError``
+- ``VRMSkinningError``
+- ``VRMMaterialValidationError``
 
 ### Metadata
 

@@ -19,48 +19,63 @@ import Foundation
 import Metal
 import simd
 
-/// Multi-character priority system for hybrid rendering
-/// Automatically determines which characters render as full 3D vs cached sprites
+/// Allocates a GPU budget across many on-screen avatars: main speaker stays 3D, background characters fall back to cached sprites.
+///
+/// ## Discussion
+/// Used together with ``SpriteCacheSystem`` for scenes with more avatars than
+/// the GPU can render at full 3D every frame. Hosts register characters,
+/// tag each one with a ``CharacterRole``, and call
+/// ``computeRenderingDecisions(cameraPosition:deltaTime:)`` once per frame.
+/// The result is a dictionary of `characterID -> RenderingDecision` the host
+/// uses to pick between full 3D rendering and sprite cache lookup.
+///
+/// Role transitions are guarded by ``roleChangeHysteresisMs`` to prevent
+/// flickering when a character oscillates between roles.
 public class CharacterPrioritySystem {
 
     // MARK: - Character Role
 
-    /// Character's role in the current scene
+    /// Role a character plays in the current scene; drives priority and rendering-mode allocation.
     public enum CharacterRole {
-        case mainSpeaker      // Primary character speaking
-        case listener         // Active listener (reacting)
-        case background       // Background/inactive character
-        case offscreen        // Not visible in current frame
+        /// Primary character that is speaking; always rendered as full 3D.
+        case mainSpeaker
+        /// Active listener reacting to dialogue; rendered as full 3D when the budget allows.
+        case listener
+        /// Inactive or background character; rendered as a cached sprite when possible.
+        case background
+        /// Not visible in the current frame; skipped entirely.
+        case offscreen
     }
 
     // MARK: - Character State
 
-    /// Information about a character in the scene
+    /// Per-character state used to compute a rendering decision (position, role, animation flag, hysteresis timer).
     public struct CharacterState {
-        /// Unique identifier
+        /// Stable identifier supplied by the host.
         public let characterID: String
 
-        /// Display name (for debugging)
+        /// Human-readable name for debugging.
         public let displayName: String
 
-        /// Current role in scene
+        /// Current scene role.
         public var role: CharacterRole
 
-        /// World position
+        /// World-space position; updated each frame via ``CharacterPrioritySystem/updateCharacterPosition(characterID:position:)``.
         public var position: SIMD3<Float>
 
-        /// Distance from camera
+        /// Distance from the camera, refreshed inside ``CharacterPrioritySystem/computeRenderingDecisions(cameraPosition:deltaTime:)``.
         public var distanceFromCamera: Float
 
-        /// Is character currently animated?
+        /// Whether the character is currently playing animation. Static characters can stay on cached sprites longer.
         public var isAnimating: Bool
 
-        /// Time since last role change (for hysteresis)
+        /// Seconds since the role last changed; used to enforce ``CharacterPrioritySystem/roleChangeHysteresisMs``.
         public var timeSinceRoleChange: TimeInterval
 
-        /// Preferred rendering mode (can be overridden by budget)
+        /// Most recent ``RenderingDecision`` emitted for this character.
         public var preferredMode: RenderingDecision
 
+        /// Creates a character state with the given identifier. The role defaults to ``CharacterRole/background``.
         public init(
             characterID: String,
             displayName: String,
@@ -82,35 +97,39 @@ public class CharacterPrioritySystem {
 
     // MARK: - Rendering Decision
 
-    /// Decision on how to render a character
+    /// What the host should do with a character this frame.
     public enum RenderingDecision {
-        case full3D           // Render full 3D model
-        case cached           // Use cached sprite
-        case skip             // Don't render (offscreen)
+        /// Render the full 3D avatar.
+        case full3D
+        /// Display a cached sprite from ``SpriteCacheSystem``.
+        case cached
+        /// Skip the character entirely (off-screen or below visibility threshold).
+        case skip
     }
 
     // MARK: - Performance Budget
 
-    /// GPU performance budget configuration
+    /// Per-frame GPU budget used to allocate render slots between full-3D and cached-sprite characters.
     public struct PerformanceBudget {
-        /// Target frame time in milliseconds (16.6ms = 60 FPS)
+        /// Target total frame time in milliseconds. `16.6` ms = 60 FPS, `33.3` ms = 30 FPS.
         public var targetFrameTimeMs: Float = 16.6
 
-        /// Maximum number of full 3D characters
+        /// Maximum number of characters allowed to render as full 3D before falling back to cached sprites.
         public var maxFull3DCharacters: Int = 3
 
-        /// Budget allocation for main speaker (ms)
+        /// GPU budget reserved for the main speaker, in milliseconds.
         public var mainSpeakerBudgetMs: Float = 8.0
 
-        /// Budget per listener (ms)
+        /// GPU budget per listener, in milliseconds.
         public var listenerBudgetMs: Float = 4.0
 
-        /// Budget for all sprites combined (ms)
+        /// Combined GPU budget for all sprite-cache draws, in milliseconds.
         public var spriteBudgetMs: Float = 4.0
 
-        /// Distance thresholds for LOD (near, medium, far)
+        /// Distance thresholds (near, medium, far) used by ``CharacterPrioritySystem/enableDistanceLOD``.
         public var lodDistances: [Float] = [5.0, 10.0, 20.0]
 
+        /// Creates a budget with default values matching a 60 FPS dialogue scene.
         public init() {}
     }
 
@@ -119,24 +138,25 @@ public class CharacterPrioritySystem {
     /// All characters in the scene
     private var characters: [String: CharacterState] = [:]
 
-    /// Performance budget
+    /// Active per-frame GPU budget.
     public var budget: PerformanceBudget
 
-    /// Role change hysteresis (prevent flickering between modes)
-    public var roleChangeHysteresisMs: TimeInterval = 200  // 200ms
+    /// Minimum time (in milliseconds) between role changes for the same character; prevents flickering decisions.
+    public var roleChangeHysteresisMs: TimeInterval = 200
 
-    /// Enable distance-based LOD
+    /// When `true`, background characters closer than the first ``PerformanceBudget/lodDistances`` threshold may be promoted to full 3D.
     public var enableDistanceLOD: Bool = true
 
     // MARK: - Initialization
 
+    /// Creates a priority system with the given budget. Defaults to a balanced multi-character configuration.
     public init(budget: PerformanceBudget = PerformanceBudget()) {
         self.budget = budget
     }
 
     // MARK: - Character Management
 
-    /// Register a character in the scene
+    /// Registers a character so subsequent calls to ``computeRenderingDecisions(cameraPosition:deltaTime:)`` consider it.
     public func registerCharacter(
         characterID: String,
         displayName: String,
@@ -150,13 +170,13 @@ public class CharacterPrioritySystem {
         vrmLog("[CharacterPriority] Registered character '\(displayName)' (ID: \(characterID))")
     }
 
-    /// Unregister a character
+    /// Removes a character from the priority system. Subsequent decisions ignore it.
     public func unregisterCharacter(characterID: String) {
         characters.removeValue(forKey: characterID)
         vrmLog("[CharacterPriority] Unregistered character (ID: \(characterID))")
     }
 
-    /// Update character role
+    /// Changes a character's ``CharacterRole``. Resets the hysteresis timer for the affected character.
     public func updateCharacterRole(characterID: String, role: CharacterRole) {
         guard var character = characters[characterID] else {
             vrmLog("[CharacterPriority] Warning: Character '\(characterID)' not registered")
@@ -171,14 +191,14 @@ public class CharacterPrioritySystem {
         }
     }
 
-    /// Update character position
+    /// Updates a character's world-space position. Called each frame so distance-based LOD is current.
     public func updateCharacterPosition(characterID: String, position: SIMD3<Float>) {
         guard var character = characters[characterID] else { return }
         character.position = position
         characters[characterID] = character
     }
 
-    /// Update character animation state
+    /// Marks whether a character is currently animating. Static characters can stay on cached sprites longer.
     public func updateCharacterAnimating(characterID: String, isAnimating: Bool) {
         guard var character = characters[characterID] else { return }
         character.isAnimating = isAnimating
@@ -318,7 +338,7 @@ public class CharacterPrioritySystem {
 
     // MARK: - Statistics
 
-    /// Get current priority statistics
+    /// Returns a snapshot of how many characters are currently full 3D, cached, or skipped.
     public func getStatistics() -> PriorityStatistics {
         let decisions = computeRenderingDecisions(
             cameraPosition: SIMD3<Float>(0, 0, 5),  // Dummy position
@@ -337,13 +357,18 @@ public class CharacterPrioritySystem {
         )
     }
 
-    /// Priority statistics snapshot
+    /// Snapshot of character-bucket counts returned by ``getStatistics()``.
     public struct PriorityStatistics {
+        /// Total characters registered with the priority system.
         public let totalCharacters: Int
+        /// Number of characters rendered as full 3D this frame.
         public let full3DCharacters: Int
+        /// Number of characters rendered as cached sprites this frame.
         public let cachedCharacters: Int
+        /// Number of characters skipped (off-screen).
         public let skippedCharacters: Int
 
+        /// Multi-line human-readable summary suitable for log output.
         public var description: String {
             return """
             Character Priority Statistics:
@@ -357,10 +382,11 @@ public class CharacterPrioritySystem {
 
     // MARK: - Scene Presets
 
-    /// Apply a dialogue scene preset
+    /// Configures a typical dialogue scene: one main speaker, a few listeners, the rest as background.
+    ///
     /// - Parameters:
-    ///   - mainSpeakerID: ID of main speaker
-    ///   - listenerIDs: IDs of active listeners
+    ///   - mainSpeakerID: Character to flag as ``CharacterRole/mainSpeaker``.
+    ///   - listenerIDs: Characters to flag as ``CharacterRole/listener``; everyone else becomes ``CharacterRole/background``.
     public func applyDialoguePreset(
         mainSpeakerID: String,
         listenerIDs: [String] = []
@@ -381,8 +407,8 @@ public class CharacterPrioritySystem {
         vrmLog("[CharacterPriority] Applied dialogue preset: speaker=\(mainSpeakerID), listeners=\(listenerIDs)")
     }
 
-    /// Apply a crowd scene preset (all cached except closest)
-    /// - Parameter cameraPosition: Camera position for distance sorting
+    /// Configures a crowd scene: closest character as speaker, next two as listeners, the rest as background.
+    /// - Parameter cameraPosition: World-space camera position used for distance sorting.
     public func applyCrowdPreset(cameraPosition: SIMD3<Float>) {
         updateDistancesFromCamera(cameraPosition)
 
