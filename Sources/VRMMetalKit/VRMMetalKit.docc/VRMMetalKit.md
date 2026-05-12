@@ -140,6 +140,8 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMCollider``
 - ``VRMColliderGroup``
 - ``VRMColliderShape``
+- ``VRMRenderer/resetSpringBone()``
+- ``VRMRenderer/applySpringBoneForce(gravity:wind:duration:)``
 - <doc:SpringBonePhysics>
 
 ### ARKit

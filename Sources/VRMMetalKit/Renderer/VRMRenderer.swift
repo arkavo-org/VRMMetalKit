@@ -83,12 +83,15 @@ import QuartzCore  // For CACurrentMediaTime
 /// alpha-to-coverage when MSAA is active, smoothly fading cutout edges.
 ///
 /// ## Thread Safety
-/// `@unchecked Sendable`. The renderer is safe to encode from any thread.
-/// Concurrent animation updates on the same ``VRMModel`` are also safe —
-/// `VRMModel` holds an internal lock, and ``draw(in:commandBuffer:renderPassDescriptor:)``
-/// acquires it for the duration of command encoding. During that window
-/// animation updates from other threads block, which keeps the scene graph
-/// consistent.
+/// Marked `@unchecked Sendable` so the renderer can be stored in `Sendable`
+/// contexts (e.g., captured by `Task`), but the encode-side methods are
+/// pinned to the main actor — ``draw(in:commandBuffer:renderPassDescriptor:)``
+/// and ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``
+/// are both `@MainActor`. Animation updates running concurrently on the same
+/// ``VRMModel`` from a background actor remain safe because the renderer
+/// cooperates with the model's internal `NSLock` (the same lock
+/// ``AnimationPlayer`` acquires), so the scene graph stays consistent during
+/// command encoding.
 ///
 /// ```swift
 /// // SAFE: animation on a background thread
