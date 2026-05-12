@@ -17,12 +17,20 @@
 import Foundation
 import simd
 
-/// Idle animation layer providing subtle breathing and weight shift movements
+/// Low-priority procedural layer that produces subtle breathing, weight shift, micro-movement, and a relaxed arms-down pose.
+///
+/// Designed to run at ``AnimationLayer/priority`` `0` so higher-priority
+/// layers (expressions, look-at, IK) override its writes. Driven by
+/// ``AnimationContext/time`` so the cycle is deterministic across runs.
 public class IdleBreathingLayer: AnimationLayer {
+    /// Layer identifier used by ``AnimationLayerCompositor`` for lookup.
     public let identifier = "idle.breathing"
+    /// Lowest priority so other layers always win on shared bones.
     public let priority = 0
+    /// Whether the layer participates in composition this frame.
     public var isEnabled = true
 
+    /// Bones this layer may rewrite (torso plus arms for the relaxed pose).
     public var affectedBones: Set<VRMHumanoidBone> {
         [.chest, .spine, .upperChest, .leftShoulder, .rightShoulder, .hips,
          .leftUpperArm, .rightUpperArm, .leftLowerArm, .rightLowerArm]
@@ -62,6 +70,7 @@ public class IdleBreathingLayer: AnimationLayer {
 
     // MARK: - Initialization
 
+    /// Creates a layer with default amplitudes and periods. The micro-movement noise offset is randomised at construction so multiple avatars de-phase naturally.
     public init() {
         noiseOffset = Float.random(in: 0...1000)
 
@@ -73,10 +82,12 @@ public class IdleBreathingLayer: AnimationLayer {
 
     // MARK: - AnimationLayer Protocol
 
+    /// Stores `context.time` for the upcoming ``evaluate()`` call. No per-frame state machine; the layer is purely time-driven.
     public func update(deltaTime: Float, context: AnimationContext) {
         time = context.time
     }
 
+    /// Returns this frame's breathing-and-sway pose: chest rotation, optional micro-movement, shoulder lift, hip sway, spine counter-rotation, and a static arms-down rig.
     public func evaluate() -> LayerOutput {
         // Calculate breathing phase (0 to 2π)
         let breathPhase = (time / breathingPeriod) * 2 * .pi

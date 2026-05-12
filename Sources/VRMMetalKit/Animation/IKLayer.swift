@@ -33,20 +33,30 @@ import simd
 /// ```
 public final class IKLayer: AnimationLayer {
 
+    /// Identifies which leg an IK operation targets.
     public enum Side {
+        /// Left leg (`leftUpperLeg` → `leftLowerLeg` → `leftFoot`).
         case left
+        /// Right leg (`rightUpperLeg` → `rightLowerLeg` → `rightFoot`).
         case right
     }
 
+    /// Foot-locking strategy used by the layer.
     public enum GroundingMode: Sendable {
-        case walkCycle       // Original: use FootContactDetector
-        case idleGrounding   // Pin both feet at rest positions
+        /// Use ``FootContactDetector`` to pin feet only during their contact phase. Suitable for walk and run cycles.
+        case walkCycle
+        /// Continuously pin both feet at their captured hip-relative rest offsets. Suitable for idle stances.
+        case idleGrounding
     }
 
+    /// Layer identifier used by ``AnimationLayerCompositor`` for lookup.
     public let identifier: String = "footIK"
+    /// Layer evaluation priority. Higher than expression/look-at layers so IK overrides their leg writes.
     public let priority: Int = 4
+    /// Whether the layer participates in composition this frame.
     public var isEnabled: Bool = true
 
+    /// Bones this layer may rewrite: both legs from upper through foot.
     public var affectedBones: Set<VRMHumanoidBone> {
         [.leftUpperLeg, .leftLowerLeg, .leftFoot,
          .rightUpperLeg, .rightLowerLeg, .rightFoot]
@@ -87,6 +97,7 @@ public final class IKLayer: AnimationLayer {
 
     private var pendingOutput: LayerOutput?
 
+    /// Creates an unconfigured IK layer. Call ``initialize(with:)`` (or use ``AnimationLayerCompositor/addIKLayer(_:for:)``) before evaluation.
     public init() {}
 
     /// Initialize the IK layer with a VRM model.
@@ -110,6 +121,13 @@ public final class IKLayer: AnimationLayer {
         }
     }
 
+    /// Computes foot-IK rotations for this frame, storing them for the next ``evaluate()`` call.
+    ///
+    /// In ``GroundingMode/idleGrounding`` mode both feet are pinned to their
+    /// captured hip-relative offsets. In ``GroundingMode/walkCycle`` mode
+    /// the internal ``FootContactDetector`` is updated and only planted
+    /// feet are pinned. Skipped entirely when ``ikBlendWeight`` is `0` or
+    /// the layer has not been initialised.
     public func update(deltaTime: Float, context: AnimationContext) {
         guard model != nil, ikBlendWeight > 0 else {
             pendingOutput = nil
@@ -175,6 +193,7 @@ public final class IKLayer: AnimationLayer {
         }
     }
 
+    /// Returns the leg-rotation overrides computed by the most recent ``update(deltaTime:context:)``, or an empty output when no foot was pinned.
     public func evaluate() -> LayerOutput {
         pendingOutput ?? LayerOutput()
     }

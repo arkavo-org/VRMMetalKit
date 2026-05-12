@@ -110,21 +110,64 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 
 ### Animation
 
+- <doc:AnimationAndRetargeting>
+
+#### Animation Clips
+
+- ``AnimationClip``
+- ``JointTrack``
+- ``MorphTrack``
+- ``ExpressionTrack``
+- ``NodeTrack``
+- ``EulerAxis``
+
+#### Animation Playback
+
 - ``AnimationPlayer``
 - ``VRMAnimationLoader``
 - ``AnimationLibrary``
 - ``VRMSkinningSystem``
+- ``SkinnedShader``
+- ``VRMAnimationState``
+- ``VRMAnimationState/BoneTransform``
+- ``VRMAnimationPresets``
 - ``VRMMorphTargetSystem``
+- ``VRMMorphTarget``
+- ``ActiveMorph``
+- ``MorphTargetShader``
+
+#### Animation Layers
+
+- ``AnimationLayer``
+- ``AnimationLayerCompositor``
+- ``AnimationBlendMode``
+- ``AnimationContext``
+- ``LayerOutput``
+- ``ProceduralBoneTransform``
+- ``ProceduralConversationState``
+- ``ARLookAtLayer``
+- ``ExpressionLayer``
+- ``IdleBreathingLayer``
+
+#### IK and Constraints
+
 - ``IKLayer``
+- ``IKLayer/Side``
+- ``IKLayer/GroundingMode``
 - ``TwoBoneIKSolver``
+- ``TwoBoneIKSolver/SolveResult``
 - ``ConstraintSolver``
 - ``FootContactDetector``
-- ``AnimationLayerCompositor``
-- <doc:AnimationAndRetargeting>
+- ``FootContactDetector/Config``
+- ``FootContactDetector/FootState``
 
 ### Expressions and Gaze
 
+- ``VRMExpressionController``
+- ``VRMExpressionMixer``
 - ``VRMLookAtController``
+- ``VRMLookAtController/State``
+- ``VRMLookAtTarget``
 - ``VRMExpression``
 - ``VRMExpressionPreset``
 - ``VRMExpressionOverrideType``
@@ -186,6 +229,7 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMRendererError``
 - ``VRMSkinningError``
 - ``VRMMaterialValidationError``
+- ``VRMMorphTargetError``
 
 ### Metadata
 

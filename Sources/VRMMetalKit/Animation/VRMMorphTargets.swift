@@ -22,12 +22,18 @@ import QuartzCore
 
 // MARK: - Morph Target Errors
 
+/// Errors raised by ``VRMMorphTargetSystem`` during initialisation or dispatch.
 public enum VRMMorphTargetError: Error, LocalizedError {
+    /// `MTLDevice.makeCommandQueue()` returned `nil` during system construction. Indicates a device-level allocation failure.
     case failedToCreateCommandQueue
+    /// `MTLDevice.makeComputePipelineState(function:)` failed; the associated string carries the underlying reason.
     case failedToCreateComputePipeline(String)
+    /// The Metal library is missing the named shader function (typically `"morph_accumulate_positions"`). The string carries the missing name and a remediation hint.
     case missingShaderFunction(String)
+    /// The active-set `MTLBuffer` was never allocated before a dispatch was attempted.
     case activeSetBufferNotInitialized
 
+    /// Human-readable, LLM-friendly description suitable for logging.
     public var errorDescription: String? {
         switch self {
         case .failedToCreateCommandQueue:
@@ -44,24 +50,58 @@ public enum VRMMorphTargetError: Error, LocalizedError {
 
 // MARK: - Morph Target System
 
-// Active morph structure for GPU
+/// One entry in the active-morph set: `(index, weight)` pair the compute shader reads to accumulate per-vertex deltas.
 public struct ActiveMorph {
+    /// Index of the morph target within the primitive's deltas.
     public var index: UInt32
+    /// Signed weight applied to this morph (negative values run the delta in reverse).
     public var weight: Float
 
+    /// Creates an active-morph entry.
     public init(index: UInt32, weight: Float) {
         self.index = index
         self.weight = weight
     }
 }
 
+/// GPU compute system that accumulates morph-target deltas into per-primitive position (and normal) buffers.
+///
+/// ## Discussion
+/// `VRMMorphTargetSystem` is the morph-side counterpart to
+/// ``VRMSkinningSystem``. It manages three buffer families:
+/// 1. A flat weights buffer of size ``VRMConstants/Rendering/maxMorphTargets``,
+///    written by ``updateMorphWeights(_:)`` for legacy single-pass paths.
+/// 2. An "active set" buffer of at most ``maxActiveMorphs`` (8) entries,
+///    rebuilt each frame by ``buildActiveSet(weights:)``: weights with
+///    absolute value above ``morphEpsilon`` are sorted by `|weight|`
+///    descending and the top entries kept.
+/// 3. Per-primitive private-storage output buffers, allocated lazily by
+///    ``getOrCreateMorphedPositionBuffer(primitiveID:vertexCount:)`` and
+///    ``getOrCreateMorphedNormalBuffer(primitiveID:vertexCount:)``.
+///
+/// ### Active set and dispatch policy
+/// Every dispatch reads the active set: when the set is empty,
+/// ``applyMorphsCompute(basePositions:deltaPositions:outputPositions:vertexCount:morphCount:commandBuffer:)``
+/// blit-copies base positions into the output (so the output is always
+/// well-defined). When the set is non-empty, the
+/// `morph_accumulate_positions` kernel reads the SoA delta buffer and
+/// accumulates `weight_i * delta_i` for each active morph. The active-set
+/// cap of ``maxActiveMorphs`` (8) keeps shader register pressure bounded
+/// — additional active morphs beyond the cap are silently dropped after
+/// sorting by absolute weight.
+///
+/// ### Threading
+/// All public methods are intended to be called on the same thread that
+/// owns the encoded command buffer. The system is not internally
+/// synchronised.
 public class VRMMorphTargetSystem {
     private let device: MTLDevice
     private var morphWeightsBuffer: MTLBuffer?
     private let maxMorphTargets = VRMConstants.Rendering.maxMorphTargets
 
-    // Active set management
+    /// Maximum number of morphs the compute kernel will accumulate in a single dispatch (sourced from ``VRMConstants/Rendering/maxActiveMorphs``).
     public static let maxActiveMorphs = VRMConstants.Rendering.maxActiveMorphs
+    /// Weights with absolute value below this threshold are filtered out by ``buildActiveSet(weights:)``.
     public static let morphEpsilon = VRMConstants.Physics.morphEpsilon
     private var activeSet: [ActiveMorph] = []
     private var activeSetBuffer: MTLBuffer?
@@ -70,10 +110,21 @@ public class VRMMorphTargetSystem {
     private var morphedPositionBuffers: [Int: MTLBuffer] = [:] // primitiveID -> buffer
     private var morphedNormalBuffers: [Int: MTLBuffer] = [:]   // Phase B
 
-    // Compute pipeline for GPU morphing
+    /// The precompiled `morph_accumulate_positions` compute pipeline state used by ``applyMorphsCompute(basePositions:deltaPositions:outputPositions:vertexCount:morphCount:commandBuffer:)``.
     public var morphAccumulatePipelineState: MTLComputePipelineState?
     private let commandQueue: MTLCommandQueue
 
+    /// Builds the morph system and compiles its compute pipeline.
+    ///
+    /// Looks up `VRMMetalKitShaders.metallib` in `Bundle.module` first,
+    /// falling back to the device's default library.
+    ///
+    /// - Throws: ``VRMMorphTargetError/failedToCreateCommandQueue`` when
+    ///   `device.makeCommandQueue()` returns `nil`;
+    ///   ``VRMMorphTargetError/failedToCreateComputePipeline(_:)`` when no
+    ///   Metal library is available or pipeline creation fails;
+    ///   ``VRMMorphTargetError/missingShaderFunction(_:)`` when the
+    ///   `morph_accumulate_positions` kernel is missing from the library.
     public init(device: MTLDevice) throws {
         self.device = device
         guard let queue = device.makeCommandQueue() else {
@@ -133,6 +184,11 @@ public class VRMMorphTargetSystem {
         }
     }
 
+    /// Copies up to ``VRMConstants/Rendering/maxMorphTargets`` values from `weights` into the dense weights buffer.
+    ///
+    /// Used by legacy single-pass shader paths; the compute path in
+    /// ``applyMorphsCompute(basePositions:deltaPositions:outputPositions:vertexCount:morphCount:commandBuffer:)``
+    /// reads ``getActiveSetBuffer()`` instead.
     public func updateMorphWeights(_ weights: [Float]) {
         guard let buffer = morphWeightsBuffer else { return }
 
@@ -143,12 +199,18 @@ public class VRMMorphTargetSystem {
         }
     }
 
+    /// Returns the dense weights buffer, or `nil` before allocation. Indexed by morph index.
     public func getMorphWeightsBuffer() -> MTLBuffer? {
         return morphWeightsBuffer
     }
 
     // MARK: - Active Set Management
 
+    /// Filters `weights` against ``morphEpsilon``, sorts the survivors by `|weight|` descending, and keeps up to ``maxActiveMorphs``.
+    ///
+    /// Updates the GPU active-set buffer and the cached ``getActiveSet()``
+    /// in place; returns the resulting array for callers that want to
+    /// inspect it.
     public func buildActiveSet(weights: [Float]) -> [ActiveMorph] {
         // Collect non-zero weights above epsilon
         var candidates: [ActiveMorph] = []
@@ -176,23 +238,27 @@ public class VRMMorphTargetSystem {
         return activeSet
     }
 
+    /// Returns the cached active-morph set from the most recent ``buildActiveSet(weights:)`` call.
     public func getActiveSet() -> [ActiveMorph] {
         return activeSet
     }
 
+    /// Returns the GPU active-set buffer, or `nil` before allocation.
     public func getActiveSetBuffer() -> MTLBuffer? {
         return activeSetBuffer
     }
 
+    /// Returns the number of entries currently in the active set.
     public func getActiveCount() -> Int {
         return activeSet.count
     }
 
-    // GPU compute is always used - no heuristics
+    /// Returns `true` when the active set is non-empty (used by the renderer to decide whether to dispatch the morph compute pass).
     public func hasMorphsToApply() -> Bool {
         return !activeSet.isEmpty
     }
 
+    /// Returns (allocating on first request) a private-storage `MTLBuffer` sized to hold `vertexCount` SIMD3<Float> positions for the given primitive.
     public func getOrCreateMorphedPositionBuffer(primitiveID: Int, vertexCount: Int) -> MTLBuffer? {
         if let buffer = morphedPositionBuffers[primitiveID] {
             return buffer
@@ -205,6 +271,7 @@ public class VRMMorphTargetSystem {
         return buffer
     }
 
+    /// Returns (allocating on first request) a private-storage `MTLBuffer` sized to hold `vertexCount` SIMD3<Float> normals for the given primitive.
     public func getOrCreateMorphedNormalBuffer(primitiveID: Int, vertexCount: Int) -> MTLBuffer? {
         if let buffer = morphedNormalBuffers[primitiveID] {
             return buffer
@@ -219,6 +286,27 @@ public class VRMMorphTargetSystem {
 
     // MARK: - SoA Morph Accumulation with Active Set
 
+    /// Encodes the morph-accumulation compute pass for one primitive into `commandBuffer`.
+    ///
+    /// When the active set is empty, encodes a blit that copies
+    /// `basePositions` into `outputPositions` so consumers can bind the
+    /// output buffer unconditionally. When the set is non-empty, dispatches
+    /// the `morph_accumulate_positions` kernel with 256-wide threadgroups.
+    ///
+    /// - Parameters:
+    ///   - basePositions: Per-vertex base positions (read).
+    ///   - deltaPositions: SoA delta buffer
+    ///     `[morph0[v0..vN], morph1[v0..vN], …]` sized at least
+    ///     `morphCount * vertexCount * sizeof(SIMD3<Float>)`.
+    ///   - outputPositions: Per-vertex output buffer (write).
+    ///   - vertexCount: Number of vertices in this primitive.
+    ///   - morphCount: Total morph targets in `deltaPositions` (not the
+    ///     active count).
+    ///   - commandBuffer: The command buffer that will own the encoded pass.
+    /// - Returns: `true` when the pass (or fallback blit copy) was
+    ///   encoded; `false` when encoder creation failed, the pipeline state
+    ///   is missing, or (DEBUG builds only) the delta buffer is smaller
+    ///   than `morphCount * vertexCount` requires.
     public func applyMorphsCompute(
         basePositions: MTLBuffer,
         deltaPositions: MTLBuffer,  // SoA layout: [morph0[v0..vN], morph1[v0..vN], ...]
@@ -306,12 +394,18 @@ public class VRMMorphTargetSystem {
 
 // MARK: - Morph Target Data
 
+/// CPU-side morph-target payload as parsed from glTF: optional per-vertex position, normal, and tangent deltas keyed by name.
 public struct VRMMorphTarget {
+    /// Display name from `mesh.extras.targetNames` (or generated fallback).
     public let name: String
+    /// Per-vertex position deltas, or `nil` when the morph target has none.
     public var positionDeltas: [SIMD3<Float>]?
+    /// Per-vertex normal deltas, or `nil` when the morph target has none.
     public var normalDeltas: [SIMD3<Float>]?
+    /// Per-vertex tangent deltas, or `nil` when the morph target has none.
     public var tangentDeltas: [SIMD3<Float>]?
 
+    /// Creates an empty morph target with the given name. Deltas are populated by the loader.
     public init(name: String) {
         self.name = name
     }
@@ -370,6 +464,7 @@ public class VRMExpressionController: @unchecked Sendable {
     private var materialColorOverrides: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
     private var baseMaterialColors: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
 
+    /// Creates an empty controller with all preset weights at `0`. Attach a morph-target system via ``setMorphTargetSystem(_:)`` before rendering.
     public init() {
         // Initialize all preset weights to 0
         for preset in VRMExpressionPreset.allCases {
@@ -382,14 +477,17 @@ public class VRMExpressionController: @unchecked Sendable {
         animationTimer = nil
     }
 
+    /// Attaches the GPU morph-target system that will receive accumulated per-mesh weights.
     public func setMorphTargetSystem(_ system: VRMMorphTargetSystem) {
         self.morphTargetSystem = system
     }
 
+    /// Registers a preset expression definition (morph binds, material colour binds, override flags).
     public func registerExpression(_ expression: VRMExpression, for preset: VRMExpressionPreset) {
         expressions[preset] = expression
     }
 
+    /// Registers a custom (non-preset) expression by name. Required before ``setCustomExpressionWeight(_:weight:)`` will apply non-zero weights.
     public func registerCustomExpression(_ expression: VRMExpression, name: String) {
         customExpressions[name] = expression
     }
@@ -414,12 +512,18 @@ public class VRMExpressionController: @unchecked Sendable {
 
     // MARK: - Expression Weight Control
 
+    /// Sets the weight of a preset expression and recomputes per-mesh morph weights.
+    ///
+    /// `weight` is clamped to [0, 1]. The full recomputation pass applies
+    /// `isBinary` quantisation, group overrides (block/blend on blink, look-at, and mouth groups),
+    /// and material colour blending.
     public func setExpressionWeight(_ preset: VRMExpressionPreset, weight: Float) {
         let clampedWeight = clamp(weight, min: 0, max: 1)
         currentWeights[preset] = clampedWeight
         updateMorphTargets()
     }
 
+    /// Sets the weight of a previously registered custom expression by name. No-op if `name` was not registered via ``registerCustomExpression(_:name:)``.
     public func setCustomExpressionWeight(_ name: String, weight: Float) {
         guard customExpressions[name] != nil else { return }
         customCurrentWeights[name] = clamp(weight, min: 0, max: 1)
@@ -442,12 +546,21 @@ public class VRMExpressionController: @unchecked Sendable {
 
     // MARK: - Preset Animations
 
+    /// Plays a one-shot blink that rises to full weight over `duration` and decays back to `0` over the same `duration`.
+    ///
+    /// `completion` runs on the main actor after the close-eyes leg
+    /// finishes. Subsequent calls cancel the prior animation timer.
     public func blink(duration: Float = 0.15, completion: (@Sendable () -> Void)? = nil) {
         animateExpression(.blink, to: 1.0, duration: duration) { [weak self] in
             self?.animateExpression(.blink, to: 0.0, duration: duration, completion: completion)
         }
     }
 
+    /// Snaps other mood presets to `0` and sets `mood` to `intensity` (clamped to [0, 1]).
+    ///
+    /// Mood presets are `happy`, `angry`, `sad`, `relaxed`, `surprised`.
+    /// Other expression categories (mouth, blink, look-at) are left
+    /// untouched.
     public func setMood(_ mood: VRMExpressionPreset, intensity: Float = 1.0) {
         // Reset other mood expressions
         let moodExpressions: [VRMExpressionPreset] = [.happy, .angry, .sad, .relaxed, .surprised]
@@ -459,6 +572,7 @@ public class VRMExpressionController: @unchecked Sendable {
         setExpressionWeight(mood, weight: intensity)
     }
 
+    /// Plays a placeholder lip-sync animation by ramping the `.aa` vowel up and back down over `duration` seconds.
     public func speak(duration: Float = 2.0) {
         // Simple lip sync animation - to be improved with proper async handling
         // For now, just animate one vowel
@@ -693,7 +807,10 @@ public class VRMExpressionController: @unchecked Sendable {
         }
     }
 
-    // Expose per-mesh weights for renderer; pads/truncates to morphCount
+    /// Returns the per-morph weight array for `meshIndex`, padded or truncated to exactly `morphCount` entries.
+    ///
+    /// The renderer uses this to bind a fixed-size weights buffer per
+    /// primitive without knowing the underlying mesh's morph layout.
     public func weightsForMesh(_ meshIndex: Int, morphCount: Int) -> [Float] {
         guard morphCount > 0 else { return [] }
         let arr = meshMorphWeights[meshIndex] ?? []
@@ -708,7 +825,9 @@ public class VRMExpressionController: @unchecked Sendable {
 
 // MARK: - Morph Target Shader
 
+/// Reference Metal source for a fixed 4-target morph vertex shader. Retained as a fallback when no precompiled `.metallib` is available.
 public class MorphTargetShader {
+    /// Concatenated Metal source for the morph vertex stage and a simple lit fragment stage.
     public static let source = """
     #include <metal_stdlib>
     using namespace metal;
@@ -835,10 +954,15 @@ public class VRMExpressionMixer: @unchecked Sendable {
     private var blinkTimer: Timer?
     private var lastBlinkTime: TimeInterval = 0
 
+    /// Wraps an existing ``VRMExpressionController``. Must be created on the main thread.
     public init(controller: VRMExpressionController) {
         self.controller = controller
     }
 
+    /// Toggles automatic random blinking. Starts a 0.1 s polling timer when enabled; tears it down when disabled.
+    ///
+    /// Must be called from the main thread; the timer callback dispatches
+    /// to `@MainActor` for the blink itself.
     public func setAutoBlinkEnabled(_ enabled: Bool) {
         autoBlinkEnabled = enabled
         if enabled {
@@ -878,6 +1002,12 @@ public class VRMExpressionMixer: @unchecked Sendable {
 
     // MARK: - Lip Sync
 
+    /// Drives mouth presets from raw audio amplitude as a placeholder lip-sync.
+    ///
+    /// Computes the mean absolute amplitude of `audioData` and routes it
+    /// to the `.aa`, `.oh`, `.ih`, or `.neutral` preset depending on
+    /// magnitude. Production integrations should use a proper phoneme
+    /// extractor and feed weights directly through ``VRMExpressionController``.
     public func performLipSync(with audioData: [Float], sampleRate: Int = 44100) {
         // Simple lip sync based on audio amplitude
         // In a real implementation, this would analyze phonemes

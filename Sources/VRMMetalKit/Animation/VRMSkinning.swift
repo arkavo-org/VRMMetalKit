@@ -21,9 +21,39 @@ import simd
 
 // MARK: - Skinning Implementation
 
+/// Builds and updates the shared GPU joint-matrices buffer that backs every skinned draw.
+///
+/// ## Discussion
+/// `VRMSkinningSystem` allocates one large `MTLBuffer` of `float4x4` joint
+/// matrices that covers every ``VRMSkin`` in the model. Each skin records
+/// its own offset (``VRMSkin/matrixOffset`` and
+/// ``VRMSkin/bufferByteOffset``) so per-skin draws bind a view onto the
+/// shared buffer rather than allocating per-skin buffers.
+///
+/// ### Joint cap and padding
+/// The buffer is padded to at least 256 matrices so the shader's clamp to
+/// `jointCount - 1` is always in-bounds when a malformed mesh references
+/// joints beyond the palette. Per-skin joint counts above 256 cap shader
+/// access at the cap; for that reason the skinning pipeline assumes no
+/// single skin exceeds 256 joints (see README's "Joint cap" note).
+///
+/// ### Rigid fallback
+/// ``identityJointMatricesBuffer`` is a separate read-only buffer of
+/// identity matrices, bound at the joint-matrices slot when the skinned
+/// pipeline draws a non-skinned primitive (issue #161). It is allocated
+/// once and never written, so live joint updates cannot corrupt it.
+///
+/// ### Freshness tracking
+/// To catch stale palettes, the system tracks per-skin update frame
+/// numbers. Callers must call ``beginFrame()`` and then either
+/// ``markAllSkinsUpdated(frameNumber:)`` or per-skin ``markSkinUpdated(skinIndex:)``
+/// each frame; ``verifySkinFreshness(skinIndex:frameNumber:)`` logs a
+/// warning if a draw references a palette that wasn't refreshed for the
+/// current frame.
 public class VRMSkinningSystem {
     private let device: MTLDevice
-    public var jointMatricesBuffer: MTLBuffer?  // Made public for debugging/validation
+    /// The shared joint-matrices buffer. Exposed for debugging and renderer-side validation; callers should bind via ``getJointMatricesBuffer()`` and offset by ``VRMSkin/bufferByteOffset``.
+    public var jointMatricesBuffer: MTLBuffer?
     /// Dedicated read-only buffer of identity matrices. Bound at the joint
     /// matrices slot when the skinned pipeline draws a primitive whose owning
     /// node has `skin == nil` (issue #161). Distinct from `jointMatricesBuffer`
@@ -37,14 +67,21 @@ public class VRMSkinningSystem {
     private var currentFrameNumber: Int = 0
     private var skinLastUpdatedFrame: [Int: Int] = [:]  // skinIndex -> frameNumber
 
-    // A/B Testing: Identity palette override
+    /// A/B test hook: when set to a skin index, ``updateJointMatrices(for:skinIndex:)`` writes identity matrices for that skin instead of the computed palette.
     public var testIdentityPalette: Int? = nil
 
+    /// Creates a skinning system bound to `device`. Call ``setupForSkins(_:)`` before issuing updates.
     public init(device: MTLDevice) {
         self.device = device
     }
 
-    // Initialize the buffer system with all skins to calculate offsets
+    /// Allocates the shared joint-matrices buffer covering all skins and computes per-skin offsets.
+    ///
+    /// Writes each skin's ``VRMSkin/matrixOffset`` and
+    /// ``VRMSkin/bufferByteOffset`` and pre-fills the entire buffer with
+    /// identity matrices so any uninitialised slot returns a safe value.
+    /// Also allocates ``identityJointMatricesBuffer`` to the same padded
+    /// size.
     public func setupForSkins(_ skins: [VRMSkin]) {
         // Calculate total matrix count and assign offsets
         var currentOffset = 0
@@ -98,6 +135,16 @@ public class VRMSkinningSystem {
         identityJointMatricesBuffer = buffer
     }
 
+    /// Recomputes and uploads the joint palette for `skin` from current node world matrices.
+    ///
+    /// Multiplies `joint.worldMatrix * inverseBindMatrix` for every joint
+    /// and writes the result into the shared buffer at `skin`'s byte
+    /// offset. Per-joint NaN/Inf checks on the diagonal substitute identity
+    /// for invalid matrices so a single bad bone cannot poison neighbouring
+    /// vertices.
+    ///
+    /// Marks the skin as updated for the current frame via
+    /// ``markSkinUpdated(skinIndex:)``.
     public func updateJointMatrices(for skin: VRMSkin, skinIndex: Int) {
         guard let buffer = jointMatricesBuffer else { return }
 
@@ -138,36 +185,43 @@ public class VRMSkinningSystem {
         }
     }
 
+    /// Returns the shared joint-matrices `MTLBuffer`, or `nil` if ``setupForSkins(_:)`` has not been called.
     public func getJointMatricesBuffer() -> MTLBuffer? {
         return jointMatricesBuffer
     }
 
+    /// Returns the byte offset within ``getJointMatricesBuffer()`` where `skin`'s palette begins.
     public func getBufferOffset(for skin: VRMSkin) -> Int {
         return skin.bufferByteOffset
     }
 
+    /// Returns the total joint count across all configured skins (unpadded).
     public func getTotalMatrixCount() -> Int {
         return totalMatrixCount
     }
 
-    // Reset cache at frame boundary
+    /// Clears the per-frame "last updated skin" cache. Call once per frame before issuing palette updates.
     public func beginFrame() {
         lastUpdatedSkinIndex = nil
     }
 
-    // Mark all skins as updated for the current frame
+    /// Stamps every skin as fresh for `frameNumber` (used when the caller updates all skins in one pass).
     public func markAllSkinsUpdated(frameNumber: Int) {
         currentFrameNumber = frameNumber
         // Clear the tracking dictionary and mark all as fresh
         skinLastUpdatedFrame.removeAll()
     }
 
-    // Mark a specific skin as updated
+    /// Stamps a single skin as fresh for the current frame.
     public func markSkinUpdated(skinIndex: Int) {
         skinLastUpdatedFrame[skinIndex] = currentFrameNumber
     }
 
-    // Verify that a skin is fresh for the current frame
+    /// Logs a warning if `skinIndex` was not updated for `frameNumber`.
+    ///
+    /// Does not throw; intended as a diagnostic gate before a draw call.
+    /// Continues with stale data rather than aborting so the renderer
+    /// degrades gracefully (typically falling back to bind pose).
     public func verifySkinFreshness(skinIndex: Int, frameNumber: Int) {
         // If we updated all skins this frame, they're all fresh
         if currentFrameNumber == frameNumber {
@@ -340,7 +394,9 @@ public class VRMSkinningSystem {
 
 // MARK: - Skinned Vertex Shader
 
+/// Reference Metal source for the skinned vertex/fragment pipeline. Used as a JIT fallback when no precompiled `.metallib` is available.
 public class SkinnedShader {
+    /// Concatenated Metal shader source covering the skinned vertex stage and two fragment variants (lit, debug).
     public static let source = """
     #include <metal_stdlib>
     using namespace metal;
@@ -447,28 +503,43 @@ public class SkinnedShader {
 
 // MARK: - Animation State
 
+/// Snapshot of humanoid bone transforms at a given time, used by simple in-memory animations and ``VRMLookAtController/applyToAnimationState(_:)``.
+///
+/// Unlike ``AnimationClip``, which lazily samples closures, `VRMAnimationState`
+/// is a flat dictionary of bone → transform applied wholesale via
+/// ``applyToModel(_:)``. Useful for hand-authored poses and test harnesses.
 public class VRMAnimationState {
+    /// Current time in seconds for this state (informational; not used by ``applyToModel(_:)``).
     public var time: Float = 0
+    /// Sparse bone-to-transform map. Bones not present are left at their current values when applied.
     public var bones: [VRMHumanoidBone: BoneTransform] = [:]
 
+    /// Local TRS triplet describing a single bone's pose.
     public struct BoneTransform {
+        /// Local rotation; identity quaternion by default.
         public var rotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        /// Local translation; zero by default.
         public var translation: SIMD3<Float> = [0, 0, 0]
+        /// Local scale; unit scale by default.
         public var scale: SIMD3<Float> = [1, 1, 1]
 
+        /// Creates an identity bone transform.
         public init() {}
     }
 
+    /// Creates an empty animation state pre-configured to T-pose.
     public init() {
         // Initialize default pose
         resetToTPose()
     }
 
+    /// Clears all per-bone overrides, returning to the model's T-pose bind values.
     public func resetToTPose() {
         bones.removeAll()
         // T-pose is the default bind pose for VRM
     }
 
+    /// Pre-fills the state with an A-pose (arms rotated ±45° about Z).
     public func setAPose() {
         // A-pose with arms at 45 degrees
         bones[.leftUpperArm] = BoneTransform()
@@ -478,6 +549,7 @@ public class VRMAnimationState {
         bones[.rightUpperArm]?.rotation = simd_quatf(angle: .pi/4, axis: [0, 0, 1])
     }
 
+    /// Writes the stored bone transforms onto `model.nodes` and propagates world transforms from each root.
     public func applyToModel(_ model: VRMModel) {
         guard let humanoid = model.humanoid else { return }
 
@@ -501,8 +573,14 @@ public class VRMAnimationState {
 
 // MARK: - Simple Animation Presets
 
+/// Procedural ``VRMAnimationState`` factories for simple time-driven motions (wave, idle, walk).
+///
+/// Each factory returns a closure mapping a time in seconds to a fresh
+/// ``VRMAnimationState`` snapshot, suitable for driving test scenes without
+/// loading an authored animation file.
 public class VRMAnimationPresets {
 
+    /// Returns a closure that builds a hand-waving pose over `duration` seconds.
     public static func createWaveAnimation(duration: Float = 2.0) -> (Float) -> VRMAnimationState {
         return { time in
             let state = VRMAnimationState()
@@ -524,6 +602,7 @@ public class VRMAnimationPresets {
         }
     }
 
+    /// Returns a closure that builds a gentle breathing-and-sway idle pose over `duration` seconds.
     public static func createIdleAnimation(duration: Float = 4.0) -> (Float) -> VRMAnimationState {
         return { time in
             let state = VRMAnimationState()
@@ -542,6 +621,7 @@ public class VRMAnimationPresets {
         }
     }
 
+    /// Returns a closure that builds a simple cyclic walk pose (legs swing, arms swing, hips bob) over `duration` seconds.
     public static func createWalkAnimation(duration: Float = 1.0) -> (Float) -> VRMAnimationState {
         return { time in
             let state = VRMAnimationState()

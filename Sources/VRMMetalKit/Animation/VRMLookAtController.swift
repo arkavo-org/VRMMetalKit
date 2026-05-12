@@ -20,19 +20,45 @@ import simd
 
 // MARK: - LookAt Target Types
 
+/// What the avatar's eyes should track each frame.
 public enum VRMLookAtTarget {
-    case camera                         // Look at the camera/viewer
-    case user                          // Look at predefined user position
-    case point(SIMD3<Float>)          // Look at specific world point
-    case forward                       // Look straight ahead (rest position)
+    /// Look at the camera position stored in ``VRMLookAtController/cameraPosition``.
+    case camera
+    /// Look at the user position stored in ``VRMLookAtController/userPosition``.
+    case user
+    /// Look at a specific world-space point.
+    case point(SIMD3<Float>)
+    /// Look straight ahead along the rest pose forward direction (no gaze deviation).
+    case forward
 }
 
 // MARK: - LookAt Controller
 
+/// Drives VRM 1.0 gaze: chooses bone vs. expression mode automatically, applies the spec's range maps, and produces frame-rate-independent smoothing and optional saccades.
+///
+/// ## Discussion
+/// `VRMLookAtController` is the runtime owner of the avatar's gaze. After
+/// ``setup(model:expressionController:)`` it inspects the model to pick a
+/// drive mode:
+/// - **Expression mode** when the model exposes working `LookLeft`,
+///   `LookRight`, `LookUp`, or `LookDown` custom expressions.
+/// - **Bone mode** when the eyes are skinned to dedicated eye bones.
+/// - **Bone mode (degraded)** when the eyes are rigid meshes — the
+///   controller still writes to the eye bones but bone motion may not
+///   affect the rendered eyeballs.
+///
+/// Each frame, ``update(deltaTime:)`` converts ``target`` into yaw/pitch
+/// at the head bone, smooths toward the target with a frame-rate-independent
+/// damping curve, applies the model's range-map constraints, and writes
+/// out via the chosen mode. The smoothing factor ``smoothing`` is the
+/// damping exponent: `0` is instant, `1` is fully damped (no motion).
 public class VRMLookAtController {
     // Configuration
+    /// Master enable. When `false`, ``update(deltaTime:)`` is a no-op and the eyes hold their last values.
     public var enabled: Bool = true
+    /// Drive mode selected automatically by ``setup(model:expressionController:)`` based on what the model exposes.
     public var mode: VRMLookAtType = .bone
+    /// What the eyes should track. Defaults to ``VRMLookAtTarget/forward``.
     public var target: VRMLookAtTarget = .forward
 
     // Model references
@@ -52,29 +78,43 @@ public class VRMLookAtController {
     private var targetPitch: Float = 0
 
     // Smoothing parameters
-    public var smoothing: Float = 0.1      // 0 = instant, 1 = very smooth
+    /// Frame-rate-independent damping factor in [0, 1]. `0` snaps to target each frame; values approaching `1` produce very slow tracking.
+    public var smoothing: Float = 0.1
+    /// Whether sub-degree micro-saccade jitter is added on top of smoothed yaw/pitch for liveliness.
     public var saccadeEnabled: Bool = true
     private var saccadeTimer: Float = 0
     private var nextSaccadeTime: Float = 2.0
     private var saccadeOffset = SIMD2<Float>(0, 0)
 
-    // State machine support
+    /// Conversational state hints that bias gaze behaviour (e.g. `thinking` adds an upward look-away bias).
     public enum State {
+        /// Default tracking with no behavioural bias.
         case idle
+        /// Softer tracking: yaw and pitch are scaled down to 70 %.
         case listening
+        /// Look-up-and-away bias: pitch +0.2 rad, yaw scaled to 50 %.
         case thinking
+        /// Focused tracking: yaw and pitch scaled down to 90 % to feel more locked-in.
         case speaking
     }
+    /// Current conversational state hint. See ``State`` for per-case bias.
     public var state: State = .idle
 
-    // Camera reference for .camera target
+    /// World-space camera position used when ``target`` is ``VRMLookAtTarget/camera``.
     public var cameraPosition: SIMD3<Float> = [0, 1.6, 2.5]
+    /// World-space user position used when ``target`` is ``VRMLookAtTarget/user``.
     public var userPosition: SIMD3<Float> = [0, 1.6, 2.0]
 
     // MARK: - Initialization
 
+    /// Creates an unconfigured controller. Call ``setup(model:expressionController:)`` before the first ``update(deltaTime:)``.
     public init() {}
 
+    /// Binds the controller to `model`, locates the head and eye bones, and auto-selects ``mode``.
+    ///
+    /// Picks expression mode when working `LookLeft`/`LookRight`/`LookUp`/`LookDown`
+    /// custom expressions exist on the model; falls back to bone mode otherwise.
+    /// `expressionController` is required when expression mode is selected.
     public func setup(model: VRMModel, expressionController: VRMExpressionController? = nil) {
         self.model = model
         self.lookAtData = model.lookAt
@@ -237,6 +277,7 @@ public class VRMLookAtController {
 
     private var debugFrameCount = 0
 
+    /// Advances gaze by one frame: recomputes target yaw/pitch from ``target``, applies smoothing and saccades, clamps via range maps, and writes through the active ``mode``.
     public func update(deltaTime: Float) {
         guard enabled, let _ = model else { return }
 
@@ -514,6 +555,12 @@ public class VRMLookAtController {
 
     // MARK: - Integration with Animation State
 
+    /// Writes the current gaze yaw/pitch into `animationState.bones` for `leftEye` and `rightEye` when ``mode`` is bone.
+    ///
+    /// Allows look-at to flow through an intermediate ``VRMAnimationState``
+    /// (e.g. when retargeting from a manually authored pose) instead of
+    /// being applied to the model directly. No-op in expression mode or
+    /// when the model's `lookAt` block is missing.
     public func applyToAnimationState(_ animationState: VRMAnimationState) {
         guard mode == .bone, let lookAt = lookAtData else { return }
 
@@ -544,11 +591,13 @@ public class VRMLookAtController {
 
     // MARK: - Public API
 
+    /// Sets ``target`` to `target`. The optional `duration` parameter is currently unused; tween behaviour is reserved for a future revision.
     public func lookAt(_ target: VRMLookAtTarget, duration: Float? = nil) {
         self.target = target
         // Duration support could be added with a timer
     }
 
+    /// Resets target to ``VRMLookAtTarget/forward`` and zeros current/target yaw, pitch, and saccade offsets.
     public func reset() {
         target = .forward
         currentYaw = 0

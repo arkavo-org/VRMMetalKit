@@ -34,6 +34,7 @@ public struct TwoBoneIKSolver {
         /// Local rotation for mid joint (knee)
         public let midRotation: simd_quatf
 
+        /// Creates a solve result with the given root and mid joint rotations.
         public init(rootRotation: simd_quatf, midRotation: simd_quatf) {
             self.rootRotation = rootRotation
             self.midRotation = midRotation

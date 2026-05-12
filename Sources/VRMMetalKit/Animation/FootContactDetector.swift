@@ -37,6 +37,7 @@ public final class FootContactDetector {
         /// Ground Y position in world space
         public var groundY: Float
 
+        /// Creates a configuration with sensible defaults: 0.05 m/s velocity, 0.02 m height, 3 hysteresis frames, ground plane at `y = 0`.
         public init(
             velocityThreshold: Float = 0.05,
             heightThreshold: Float = 0.02,
@@ -64,6 +65,7 @@ public final class FootContactDetector {
         /// Previous frame's position for velocity calculation
         fileprivate var previousPosition: SIMD3<Float>?
 
+        /// Creates an initial foot state in the "not planted" position with zero history.
         public init() {
             self.isPlanted = false
             self.plantedPosition = nil
@@ -86,10 +88,14 @@ public final class FootContactDetector {
         }
     }
 
+    /// Tunable thresholds and hysteresis used by ``update(leftFootPos:rightFootPos:deltaTime:)``.
     public var config: Config
+    /// Current state for the left foot, including planted position and hysteresis counter.
     public private(set) var leftFootState: FootState
+    /// Current state for the right foot.
     public private(set) var rightFootState: FootState
 
+    /// Creates a detector with the given configuration. Both feet start in the non-planted state.
     public init(config: Config = Config()) {
         self.config = config
         self.leftFootState = FootState()

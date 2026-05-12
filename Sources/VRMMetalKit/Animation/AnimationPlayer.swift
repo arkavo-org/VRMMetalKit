@@ -18,19 +18,62 @@
 import Foundation
 import simd
 
-/// AnimationPlayer controls playback of VRM animations and updates model state.
+/// Drives an ``AnimationClip`` against a ``VRMModel``, advancing time and writing bone, node, morph, and look-at state each frame.
 ///
-/// ## Thread Safety
-/// **Thread-safe.** The `update` method is thread-safe as it acquires the `VRMModel`'s internal lock.
-/// You can safely call `update` from a background thread while the model is being rendered on the main thread.
+/// ## Discussion
+/// `AnimationPlayer` is the per-frame entry point for clip playback. A
+/// typical integration constructs one player per avatar, loads a clip with
+/// ``load(_:)``, and calls ``update(deltaTime:model:)`` once per frame from
+/// the host's render loop:
 ///
-/// - Note: Playback control methods (`play`, `pause`, `seek`) modify internal state and are generally
-///   safe to call from any thread, but consistent ordering depends on caller synchronization if
-///   multiple threads control the *same* player instance.
+/// ```swift
+/// let player = AnimationPlayer()
+/// player.load(try AnimationLibrary.loadClip(from: url, model: model))
+/// // each frame
+/// player.update(deltaTime: dt, model: model)
+/// player.applyMorphWeights(to: expressionController)
+/// ```
+///
+/// ### What `update` writes
+/// `update(deltaTime:model:)` advances internal time by `deltaTime * speed`,
+/// then for the active clip:
+/// 1. Applies humanoid ``JointTrack`` samples to bones resolved via
+///    `model.humanoid.getBoneNode(...)`. Translation on `.hips` is applied
+///    only when ``applyRootMotion`` is `true`; on other humanoid bones it is
+///    always applied.
+/// 2. Applies ``NodeTrack`` samples to non-humanoid nodes resolved by name.
+/// 3. Caches morph weights for the next ``applyMorphWeights(to:)`` call.
+/// 4. When ``lookAtController`` is attached and the clip carries a
+///    `lookAtTargetSampler` (VRMC_vrm_animation §lookAt), sets
+///    `controller.target = .point(sampler(time))`.
+/// 5. Propagates world transforms, then runs the ``ConstraintSolver`` on any
+///    `VRMNodeConstraint`s the model carries and propagates again so
+///    descendants see constraint output.
+///
+/// Morph weights are not pushed to the ``VRMExpressionController`` from
+/// `update`; the caller must invoke ``applyMorphWeights(to:)`` (typically
+/// immediately after `update`) so that other controllers (look-at,
+/// expression mixers) can interleave their own writes.
+///
+/// ### Loop and finish semantics
+/// When ``isLooping`` is `true` (the default), `currentTime` is sampled at
+/// `fmodf(time, clip.duration)`. When it is `false`, `currentTime` is
+/// clamped to `clip.duration` and playback halts (``isFinished`` flips to
+/// `true`).
+///
+/// ### Thread safety
+/// **Thread-safe.** Player-local state (speed, time, clip, morph cache) is
+/// protected by an internal `NSLock`. ``update(deltaTime:model:)`` also
+/// acquires the model's lock via `model.withLock`, so it cooperates with the
+/// ``VRMRenderer`` even when called from a worker queue. Playback control
+/// methods (``play()``, ``pause()``, ``stop()``, ``seek(to:)``,
+/// ``load(_:)``) may be called from any thread; visible ordering between
+/// concurrent callers is the caller's responsibility.
 public final class AnimationPlayer: @unchecked Sendable {
     // Internal lock for player state (speed, time, clip)
     private let playerLock = NSLock()
 
+    /// Playback speed multiplier. `1.0` is real-time; negative, NaN, and infinite values are normalised to `1.0`.
     public var speed: Float {
         get { playerLock.withLock { _speed } }
         set {
@@ -45,7 +88,9 @@ public final class AnimationPlayer: @unchecked Sendable {
     }
     private var _speed: Float = 1.0
 
+    /// Whether playback loops at the end of the clip. When `false`, ``isFinished`` flips to `true` and `update` becomes a no-op.
     public var isLooping = true
+    /// When `true`, hips translation tracks are applied to the hips node; when `false` (default), hips translation is ignored so the avatar stays anchored.
     public var applyRootMotion = false
 
     /// Optional controller driven by the loaded clip's `lookAtTargetSampler`.
@@ -62,8 +107,14 @@ public final class AnimationPlayer: @unchecked Sendable {
     private var hasLoggedFirstFrame = false
     private let constraintSolver = ConstraintSolver()
 
+    /// Creates an idle player. No clip is loaded until ``load(_:)`` is called.
     public init() {}
 
+    /// Loads `clip` and starts playback from time `0`.
+    ///
+    /// Replaces any previously loaded clip. After this call ``isFinished`` is
+    /// `false` and the next ``update(deltaTime:model:)`` will begin sampling
+    /// at `time = 0`.
     public func load(_ clip: AnimationClip) {
         playerLock.withLock {
             self.clip = clip
@@ -72,14 +123,17 @@ public final class AnimationPlayer: @unchecked Sendable {
         }
     }
 
+    /// Resumes playback. Has no effect if no clip is loaded.
     public func play() {
         playerLock.withLock { isPlaying = true }
     }
 
+    /// Pauses playback without resetting time. ``play()`` resumes from the same `currentTime`.
     public func pause() {
         playerLock.withLock { isPlaying = false }
     }
 
+    /// Pauses playback and rewinds to time `0`.
     public func stop() {
         playerLock.withLock {
             isPlaying = false
@@ -87,10 +141,21 @@ public final class AnimationPlayer: @unchecked Sendable {
         }
     }
 
+    /// Seeks playback to `time` seconds. Does not toggle playing state.
     public func seek(to time: Float) {
         playerLock.withLock { currentTime = time }
     }
 
+    /// Advances internal time and writes bone, node, morph, and look-at state to `model`.
+    ///
+    /// See the type-level Discussion for the full per-frame contract.
+    /// Acquires both the player's internal lock and `model.withLock` so it
+    /// cooperates safely with concurrent rendering on the model's lock.
+    ///
+    /// - Parameters:
+    ///   - deltaTime: Frame delta in seconds. The clip's effective time
+    ///     advance is `deltaTime * speed`.
+    ///   - model: The avatar model whose nodes and constraints are updated.
     public func update(deltaTime: Float, model: VRMModel) {
         // 1. Capture player state (thread-safe)
         let (currentClip, currentSpeed, shouldUpdate) = playerLock.withLock {
@@ -206,6 +271,12 @@ public final class AnimationPlayer: @unchecked Sendable {
         }
     }
 
+    /// Pushes the morph weights cached by the most recent ``update(deltaTime:model:)`` to `expressionController`.
+    ///
+    /// Each cached `(key, weight)` is routed to ``VRMExpressionController/setExpressionWeight(_:weight:)``
+    /// when `key` matches a ``VRMExpressionPreset`` raw value, otherwise to
+    /// ``VRMExpressionController/setCustomExpressionWeight(_:weight:)``. A
+    /// `nil` controller is a no-op.
     public func applyMorphWeights(to expressionController: VRMExpressionController?) {
         guard let controller = expressionController else { return }
 
@@ -228,6 +299,7 @@ public final class AnimationPlayer: @unchecked Sendable {
         playerLock.withLock { currentTime }
     }
 
+    /// Normalised playback position in [0, 1]. Wraps when ``isLooping`` is `true`; clamps to `1.0` otherwise. Returns `0` when no clip is loaded.
     public var progress: Float {
         guard let clip = playerLock.withLock({ clip }), clip.duration > 0 else { return 0 }
         let time = playerLock.withLock { currentTime }
@@ -238,6 +310,7 @@ public final class AnimationPlayer: @unchecked Sendable {
         }
     }
 
+    /// `true` when a non-looping clip has reached its duration. Always `false` for looping playback and when no clip is loaded.
     public var isFinished: Bool {
         return playerLock.withLock {
             guard let clip = clip, !isLooping else { return false }
