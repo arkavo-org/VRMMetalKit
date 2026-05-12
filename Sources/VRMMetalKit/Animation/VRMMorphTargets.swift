@@ -30,7 +30,7 @@ public enum VRMMorphTargetError: Error, LocalizedError {
     case failedToCreateComputePipeline(String)
     /// The Metal library is missing the named shader function (typically `"morph_accumulate_positions"`). The string carries the missing name and a remediation hint.
     case missingShaderFunction(String)
-    /// The active-set `MTLBuffer` was never allocated before a dispatch was attempted.
+    /// Reserved for a future code path that will throw on dispatch with an uninitialised active-set buffer; not currently raised by any API.
     case activeSetBufferNotInitialized
 
     /// Human-readable, LLM-friendly description suitable for logging.

@@ -31,11 +31,12 @@ import simd
 /// shared buffer rather than allocating per-skin buffers.
 ///
 /// ### Joint cap and padding
-/// The buffer is padded to at least 256 matrices so the shader's clamp to
-/// `jointCount - 1` is always in-bounds when a malformed mesh references
-/// joints beyond the palette. Per-skin joint counts above 256 cap shader
-/// access at the cap; for that reason the skinning pipeline assumes no
-/// single skin exceeds 256 joints (see README's "Joint cap" note).
+/// The buffer is padded to at least 256 matrices so the shader's
+/// `min(jointIndex, jointCount - 1)` clamp is always in-bounds for
+/// malformed meshes referencing joints beyond their declared palette.
+/// The renderer assumes per-skin joint counts of at most 256 (see
+/// README), but larger skins are accepted by the buffer allocator
+/// without runtime validation.
 ///
 /// ### Rigid fallback
 /// ``identityJointMatricesBuffer`` is a separate read-only buffer of

@@ -39,13 +39,21 @@ import simd
 /// then for the active clip:
 /// 1. Applies humanoid ``JointTrack`` samples to bones resolved via
 ///    `model.humanoid.getBoneNode(...)`. Translation on `.hips` is applied
-///    only when ``applyRootMotion`` is `true`; on other humanoid bones it is
-///    always applied.
+///    only when ``applyRootMotion`` is `true`. VRMA-loaded clips only carry
+///    translation samplers on `.hips` per the spec (``VRMAnimationLoader``
+///    drops non-hips translation tracks). Hand-authored clips may include
+///    translation on any humanoid bone, in which case those tracks are
+///    applied unconditionally.
 /// 2. Applies ``NodeTrack`` samples to non-humanoid nodes resolved by name.
 /// 3. Caches morph weights for the next ``applyMorphWeights(to:)`` call.
 /// 4. When ``lookAtController`` is attached and the clip carries a
-///    `lookAtTargetSampler` (VRMC_vrm_animation §lookAt), sets
-///    `controller.target = .point(sampler(time))`.
+///    `lookAtTargetSampler` (VRMC_vrm_animation §lookAt), look-at target
+///    tracks are applied by setting `controller.target = .point(sampler(time))`.
+///    The sampler value is forwarded verbatim; per the VRMC_vrm_animation-1.0
+///    spec, this value is in head-bone-local coordinates. (Note: there is a
+///    possible latent inconsistency with ``VRMLookAtController``'s
+///    interpretation of `.point` as world-space — tracked separately for
+///    code-level audit.)
 /// 5. Propagates world transforms, then runs the ``ConstraintSolver`` on any
 ///    `VRMNodeConstraint`s the model carries and propagates again so
 ///    descendants see constraint output.

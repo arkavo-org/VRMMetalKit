@@ -53,6 +53,7 @@ public struct AnimationClip {
     public var expressionTracks: [ExpressionTrack] = []
     /// Returns the head-bone-local look-at target position at the given time, or `nil` when the
     /// source VRMA file did not contain a `lookAt` block (per VRMC_vrm_animation-1.0).
+    /// (internal: B1 spec compliance)
     public var lookAtTargetSampler: ((Float) -> SIMD3<Float>)?
 
     /// Creates an empty clip with the given duration in seconds.
