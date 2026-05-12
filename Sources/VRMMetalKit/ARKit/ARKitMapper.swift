@@ -139,6 +139,8 @@ public struct ARKitToVRMMapper: Sendable {
     /// Mapping from VRM expression preset to blend shape formula
     public var mappings: [String: BlendShapeFormula]
 
+    /// Creates a mapper with an explicit dictionary of VRM-expression-key to ``BlendShapeFormula``.
+    /// The default value `[:]` is useful when assembling mappings post-init via ``mappings``.
     public init(mappings: [String: BlendShapeFormula] = [:]) {
         self.mappings = mappings
     }
@@ -313,6 +315,8 @@ public struct ARKitSkeletonMapper: Sendable {
     /// Mapping from ARKit joint to VRM humanoid bone
     public var jointMap: [ARKitJoint: String]
 
+    /// Creates a mapper from an ARKit-joint to VRM-humanoid-bone-name dictionary.
+    /// Pass `[:]` when building incrementally via ``jointMap``.
     public init(jointMap: [ARKitJoint: String] = [:]) {
         self.jointMap = jointMap
     }

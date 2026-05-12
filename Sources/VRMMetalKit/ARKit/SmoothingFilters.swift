@@ -49,6 +49,8 @@ public struct SmoothingConfig: Sendable {
     /// Per-expression overrides
     public var perExpression: [String: SmoothingFilter]
 
+    /// Creates a configuration with a global filter and optional per-expression overrides
+    /// keyed by expression name (either an ARKit blend shape key or a VRM expression preset name).
     public init(
         global: SmoothingFilter,
         perExpression: [String: SmoothingFilter] = [:]
@@ -102,7 +104,29 @@ public struct SmoothingConfig: Sendable {
 
 // MARK: - Smoothing Filter Enum
 
-/// Type of smoothing filter to apply
+/// Selector for the smoothing strategy applied to a stream of scalar samples.
+///
+/// Used as the value of ``SmoothingConfig/global`` / ``SmoothingConfig/perExpression`` for face driving
+/// and as ``SkeletonSmoothingConfig/positionFilter`` / ``SkeletonSmoothingConfig/rotationFilter`` for
+/// body driving. ``FilterManager`` and ``SkeletonFilterManager`` consume the case and instantiate the
+/// matching internal filter on first use.
+///
+/// ## Choosing a case
+///
+/// - Use ``none`` to disable smoothing — best for binary or impulse-like signals (eye blinks).
+///   ``SmoothingConfig/default`` applies this to ``ARKitFaceBlendShapes/eyeBlinkLeft``,
+///   ``ARKitFaceBlendShapes/eyeBlinkRight``, and the `"blink"` VRM expression so they stay responsive.
+/// - Use ``ema(alpha:)`` (Exponential Moving Average) as the general default. `alpha = 1` is identity;
+///   `alpha ≈ 0.3` is the balanced ``SmoothingConfig/default``; `alpha ≈ 0.7` is the more responsive
+///   ``SmoothingConfig/lowLatency``; `alpha ≈ 0.1` is the heavier ``SmoothingConfig/smooth``.
+///   `alpha` is clamped to `[0, 1]` on construction.
+/// - Use ``kalman(processNoise:measurementNoise:)`` when the noise characteristics are roughly Gaussian
+///   and approximately known. Higher `processNoise` (Q) tracks fast-moving signals (mouth shapes);
+///   higher `measurementNoise` (R) trusts the model over the sensor and smooths harder. Implementation
+///   is a scalar Kalman filter (`O(1)` per update). ``SmoothingConfig/kalman`` provides a balanced preset
+///   with `Q = 0.01` and `R = 0.1`.
+/// - Use ``windowed(size:)`` for a simple moving average. Predictable latency of about `size/2` samples;
+///   minimum effective size is `1`. Use when SLERP/EMA artifacts on near-constant inputs are visible.
 public enum SmoothingFilter: Sendable {
     /// No smoothing (pass-through)
     case none
@@ -327,6 +351,7 @@ public final class FilterManager {
     private var filters: [String: any SmoothingFilterProtocol] = [:]
     private let config: SmoothingConfig
 
+    /// Creates a filter manager that lazily instantiates per-key filters from the supplied configuration.
     public init(config: SmoothingConfig) {
         self.config = config
     }
@@ -370,10 +395,14 @@ public final class FilterManager {
 /// - Rotation smoothing: Reduce angular jitter (quaternion space)
 /// - Scale smoothing: Usually not needed
 public struct SkeletonSmoothingConfig: Sendable {
+    /// Filter applied to each component of a joint position.
     public var positionFilter: SmoothingFilter
+    /// Filter applied to the SLERP interpolation parameter when smoothing joint rotations.
     public var rotationFilter: SmoothingFilter
+    /// Filter applied to each component of a joint scale.
     public var scaleFilter: SmoothingFilter
 
+    /// Creates a skeleton smoothing configuration with independent filters for position, rotation, and scale.
     public init(
         positionFilter: SmoothingFilter = .ema(alpha: 0.3),
         rotationFilter: SmoothingFilter = .ema(alpha: 0.2),
@@ -434,6 +463,8 @@ public final class SkeletonFilterManager {
 
     private let config: SkeletonSmoothingConfig
 
+    /// Creates a skeleton filter manager that lazily instantiates per-joint position and rotation filters
+    /// from the supplied configuration.
     public init(config: SkeletonSmoothingConfig) {
         self.config = config
     }

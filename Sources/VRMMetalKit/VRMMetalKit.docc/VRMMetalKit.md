@@ -189,13 +189,43 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 
 ### ARKit
 
+#### Face Driving
+
 - ``ARKitFaceDriver``
-- ``ARKitBodyDriver``
+- ``DriverStatistics``
+- ``SourcePriorityStrategy``
 - ``ARKitToVRMMapper``
+- ``BlendShapeFormula``
 - ``PerfectSyncMapper``
 - ``PerfectSyncCapability``
+- ``PerfectSyncCapability/DetectionResult``
+
+#### Body Driving
+
+- ``ARKitBodyDriver``
+- ``ARKitBodyDriver/Statistics``
+- ``ARKitBodyDriver/SourcePriority``
+- ``ARKitSkeletonMapper``
 - ``ARKitCoordinateConverter``
+
+#### Sources and Data Types
+
+- ``ARMetadataSource``
+- ``ARFaceSource``
+- ``ARBodySource``
+- ``ARCombinedSource``
+- ``ARKitFaceBlendShapes``
+- ``ARKitJoint``
+- ``ARKitBodySkeleton``
+
+#### Smoothing
+
 - ``SmoothingFilter``
+- ``SmoothingConfig``
+- ``SkeletonSmoothingConfig``
+- ``FilterManager``
+- ``SkeletonFilterManager``
+
 - <doc:ARKitIntegration>
 
 ### Performance
