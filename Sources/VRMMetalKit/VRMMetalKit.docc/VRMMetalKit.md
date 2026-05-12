@@ -41,6 +41,20 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``ParallelMaterialLoader``
 - <doc:LoadingVRMModels>
 
+### Building
+
+- ``VRMBuilder``
+- ``SkeletonPreset``
+- ``SkeletonDefinition``
+- ``BoneData``
+- ``GLTFDocumentBuilder``
+- ``CharacterRecipe``
+- ``MaterialConfig``
+- ``AccessoryConfig``
+- ``RecipeError``
+- ``SkeletonPresetMapper``
+- ``ExpressionMapper``
+
 ### glTF Internals
 
 - ``GLTFDocument``
@@ -107,6 +121,15 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMTextureTransformBind``
 - ``MaterialReport``
 - ``VRM0MaterialProperty``
+
+#### Shader Wrappers
+
+- ``MToonMaterialUniforms``
+- ``MToonOutlineWidthMode``
+- ``SpriteShader``
+- ``SpriteInstanceCPU``
+- ``SpriteUniformsCPU``
+- ``SpriteQuadMesh``
 
 ### Animation
 
@@ -187,6 +210,15 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMRenderer/applySpringBoneForce(gravity:wind:duration:)``
 - <doc:SpringBonePhysics>
 
+#### GPU Buffers
+
+- ``SpringBoneBuffers``
+- ``SpringBoneGlobalParams``
+- ``BoneParams``
+- ``SphereCollider``
+- ``CapsuleCollider``
+- ``PlaneCollider``
+
 ### ARKit
 
 #### Face Driving
@@ -231,6 +263,8 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 ### Performance
 
 - ``PerformanceMetrics``
+- ``PerformanceTracker``
+- ``PerformanceTracker/StateChangeType``
 - ``CharacterPrioritySystem``
 - ``CharacterPrioritySystem/CharacterRole``
 - ``CharacterPrioritySystem/CharacterState``
@@ -242,6 +276,21 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``SpriteCacheSystem/CacheStatistics``
 - ``Frustum``
 - ``AABBTransform``
+
+### Utilities
+
+- ``OrthographicCamera``
+- ``OrthographicCamera/Preset``
+- ``OrthographicCamera/Configuration``
+- ``ZFightingThresholdCalculator``
+- ``DepthBiasCalculator``
+
+### Debug
+
+- ``BoneTrajectoryDumper``
+- ``BoneTrajectoryDumper/Sample``
+- ``BoneTrajectoryDumper/Sink``
+- ``BoneTrajectoryDumper/DumperError``
 
 ### Validation
 

@@ -19,7 +19,15 @@ import Foundation
 import Metal
 import QuartzCore
 
-/// Performance metrics collected during rendering
+/// Snapshot of rendering performance metrics aggregated over recent frames.
+///
+/// Holds frame-timing percentiles, GPU-time percentiles, per-frame averages of draw-call
+/// and state-change counters, and basic memory stats. Produced by
+/// ``PerformanceTracker/generateMetrics()`` after the tracker has recorded a window of
+/// frames (the tracker keeps the last 600 frame samples — 10 s at 60 Hz).
+///
+/// Encoded as JSON with custom infinity handling: non-finite values are coerced to `0`
+/// on encode so the result is interchangeable with strict JSON consumers.
 public struct PerformanceMetrics: Codable {
 
     private enum CodingKeys: String, CodingKey {
@@ -46,9 +54,10 @@ public struct PerformanceMetrics: Codable {
         case peakMemoryMB
     }
 
+    /// Creates a zero-initialized metrics snapshot.
     public init() {}
 
-    // Custom encoding to handle infinity values
+    /// Encodes the snapshot, coercing any non-finite floating-point fields to `0`.
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
@@ -76,7 +85,7 @@ public struct PerformanceMetrics: Codable {
         try container.encode(peakMemoryMB.isFinite ? peakMemoryMB : 0, forKey: .peakMemoryMB)
     }
 
-    // Custom decoding to handle legacy formats
+    /// Decodes a snapshot, tolerating older payloads that lack the `culledDraws` field.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
 
@@ -103,30 +112,53 @@ public struct PerformanceMetrics: Codable {
         peakMemoryMB = try container.decode(Double.self, forKey: .peakMemoryMB)
     }
 
+    /// Average frames per second, derived from the recent frame-time window.
     public var fps: Double = 0
+    /// 95th-percentile GPU time per frame in milliseconds.
     public var gpuTimeP95Ms: Double = 0
+    /// CPU time per frame in milliseconds (reserved; not populated by the default tracker).
     public var cpuTimeMs: Double = 0
+    /// Average draw calls per frame across the recorded window.
     public var drawCalls: Int = 0
+    /// Average primitives skipped by frustum culling per frame.
     public var culledDraws: Int = 0
+    /// Average pipeline/texture/buffer state changes per frame.
     public var stateChanges: Int = 0
+    /// Average morph-target compute dispatches per frame.
     public var morphComputes: Int = 0
+    /// Average triangles submitted per frame.
     public var triangleCount: Int = 0
+    /// Average vertices submitted per frame.
     public var vertexCount: Int = 0
+    /// Average texture bindings per frame.
     public var textureBindings: Int = 0
+    /// Average buffer bindings per frame.
     public var bufferBindings: Int = 0
+    /// Average pipeline state changes per frame.
     public var pipelineChanges: Int = 0
+    /// ISO-8601 timestamp recorded when the snapshot was generated.
     public var timestamp: String = ""
 
     // Frame time statistics
+
+    /// Mean frame time in milliseconds across the recorded window.
     public var frameTimeAvgMs: Double = 0
+    /// Minimum frame time in milliseconds.
     public var frameTimeMinMs: Double = 0
+    /// Maximum frame time in milliseconds.
     public var frameTimeMaxMs: Double = 0
+    /// Median (50th percentile) frame time in milliseconds.
     public var frameTimeP50Ms: Double = 0
+    /// 95th-percentile frame time in milliseconds.
     public var frameTimeP95Ms: Double = 0
+    /// 99th-percentile frame time in milliseconds.
     public var frameTimeP99Ms: Double = 0
 
     // Memory stats
+
+    /// Currently allocated memory in megabytes (reserved; not populated by the default tracker).
     public var allocatedMemoryMB: Double = 0
+    /// Peak memory observed during the recorded window, in megabytes (reserved).
     public var peakMemoryMB: Double = 0
 }
 
@@ -165,6 +197,7 @@ public class PerformanceTracker {
         var pipelineChanges: Int = 0
     }
 
+    /// Creates a tracker with empty windows.
     public init() {}
 
     /// Start tracking a new frame
@@ -238,10 +271,15 @@ public class PerformanceTracker {
         currentFrameMetrics.morphComputes += 1
     }
 
+    /// Classification of state-change events recorded by ``PerformanceTracker/recordStateChange(type:)``.
     public enum StateChangeType {
+        /// A render-pipeline state change.
         case pipeline
+        /// A texture binding change.
         case texture
+        /// A buffer binding change.
         case buffer
+        /// Any other state mutation, counted toward `stateChanges` but not a sub-bucket.
         case other
     }
 

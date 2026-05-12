@@ -18,9 +18,28 @@
 import Foundation
 import simd
 
-/// Builder for creating VRM models from scratch
+/// Fluent builder that authors a ``VRMModel`` in-memory and pairs with
+/// `VRMModel.serialize(to:)` to write the model out as a `.vrm` file.
 ///
-/// Usage:
+/// `VRMBuilder` is the **inverse** of the Loader pipeline: it composes a
+/// `GLTFDocument`, fills in humanoid bone mappings from a ``SkeletonPreset``,
+/// emits a parametric mesh, and attaches a default MToon-style material —
+/// then hands the result back as a fully-formed ``VRMModel``.
+///
+/// ## Supported
+/// - Predefined humanoid skeletons (``SkeletonPreset``) with up to 20 bones.
+/// - Parametric height / shoulder / muscle morphs applied to skeleton and mesh.
+/// - Hair / eye / skin-tone material parameters.
+/// - VRM 1.0 expression presets registered as named ``VRMExpression`` entries
+///   (no morph-target bindings; placeholder only).
+///
+/// ## Not yet supported
+/// - SpringBone export.
+/// - Texture authoring (the generated material is colour-only).
+/// - Expression morph-target binding (presets are name-only placeholders).
+/// - Hand/finger and toe bones.
+///
+/// ## Usage
 /// ```swift
 /// let vrm = try VRMBuilder()
 ///     .setSkeleton(.defaultHumanoid)
@@ -43,6 +62,7 @@ public class VRMBuilder {
 
     // MARK: - Initialization
 
+    /// Creates a builder. If `meta` is omitted, `VRMMeta.default()` is used.
     public init(meta: VRMMeta? = nil) {
         self.meta = meta ?? VRMMeta.default()
     }
@@ -584,10 +604,15 @@ public class VRMBuilder {
 
 // MARK: - Skeleton Presets
 
+/// Built-in skeleton silhouettes selectable on ``VRMBuilder/setSkeleton(_:)``.
 public enum SkeletonPreset {
+    /// Reference 1.7m humanoid skeleton.
     case defaultHumanoid
+    /// Default skeleton with all Y translations scaled by 1.18 (≈2.0m).
     case tall
+    /// Default skeleton with all Y translations scaled by 0.82 (≈1.4m).
     case short
+    /// Default skeleton with shoulder and hip X translations scaled by 1.2 for wider proportions.
     case stocky
 
     func createSkeleton() -> SkeletonDefinition {
@@ -606,12 +631,15 @@ public enum SkeletonPreset {
 
 // MARK: - Skeleton Definition
 
+/// A single node row inside a ``SkeletonDefinition``: which humanoid bone the
+/// node represents, its local translation, and the indices of its children.
 public struct BoneData {
     let bone: VRMHumanoidBone
     let translation: [Float]
     let children: [Int]?
 }
 
+/// Flat skeleton description consumed by ``VRMBuilder`` when emitting glTF nodes.
 public struct SkeletonDefinition {
     var bones: [BoneData]
 

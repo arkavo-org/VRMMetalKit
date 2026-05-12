@@ -23,21 +23,32 @@ import simd
 /// without changing the schema.
 public final class BoneTrajectoryDumper {
 
+    /// Errors thrown by ``BoneTrajectoryDumper``.
     public enum DumperError: Error {
+        /// The CSV file path could not be opened for writing.
         case cannotOpenFile(String)
+        /// The supplied bone-name filter pattern is not a valid `NSRegularExpression`.
         case invalidRegex(String)
     }
 
     /// In-memory snapshot — what tests consume directly without round-tripping
     /// through CSV. Mirrors the CSV columns exactly.
     public struct Sample: Equatable {
+        /// Zero-based frame index recorded by the dumper.
         public let frame: Int
+        /// Frame time in seconds, as supplied to ``BoneTrajectoryDumper/recordFrame(model:frameIndex:timeSeconds:)``.
         public let time: Double
+        /// Bone (node) name with commas replaced by underscores for CSV safety.
         public let bone: String
+        /// Bone world position after spring-bone physics.
         public let world: SIMD3<Float>
+        /// Parent node world position (physics-influenced).
         public let parent: SIMD3<Float>
+        /// Rigid-follow world position — where the bone would be if every spring
+        /// joint in its ancestor chain stayed at bind rotation.
         public let rigid: SIMD3<Float>
 
+        /// Creates a sample with the given per-frame bone positions.
         public init(frame: Int, time: Double, bone: String,
                     world: SIMD3<Float>, parent: SIMD3<Float>, rigid: SIMD3<Float>) {
             self.frame = frame
@@ -67,6 +78,8 @@ public final class BoneTrajectoryDumper {
         return parseCSV(content: content)
     }
 
+    /// Parses an in-memory CSV string in the dumper's column format. Malformed
+    /// rows are skipped silently; the leading header row (if present) is ignored.
     public static func parseCSV(content: String) -> [Sample] {
         var samples: [Sample] = []
         let lines = content.split(separator: "\n", omittingEmptySubsequences: true)
