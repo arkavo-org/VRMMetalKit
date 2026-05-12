@@ -26,10 +26,14 @@ public struct OrthographicCamera {
 
     /// Standard camera framing presets for VRM characters
     public enum Preset {
-        case bust       // Tight VTuber-style framing (shoulders and up)
-        case medium     // Upper body framing (waist and up)
-        case fullBody   // Full character visible
-        case custom(height: Float)  // Custom height in world units
+        /// Tight VTuber-style framing (shoulders and up).
+        case bust
+        /// Upper body framing (waist and up).
+        case medium
+        /// Full character visible.
+        case fullBody
+        /// Custom view-frustum height in world units.
+        case custom(height: Float)
 
         /// Height in world units (assuming standard 1.6-1.8m VRM)
         public var height: Float {

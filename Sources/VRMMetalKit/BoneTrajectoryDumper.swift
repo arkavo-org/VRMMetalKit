@@ -63,8 +63,10 @@ public final class BoneTrajectoryDumper {
     /// Output sink — the dumper appends per-frame rows to whichever sink was
     /// supplied at init.
     public enum Sink {
+        /// CSV rows are appended to the given file handle.
         case file(FileHandle)
-        case memory  // samples land in `inMemorySamples`
+        /// Samples are kept in `inMemorySamples` and never touch disk.
+        case memory
     }
 
     /// Header line written to CSV outputs. Reuse this when constructing a
