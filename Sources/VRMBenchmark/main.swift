@@ -42,6 +42,10 @@ struct BenchmarkOptions {
     var cameraOffsetY: Float = 0  // Shift camera target/eye in Y to push avatar off-screen for cull tests
     var springBoneQuality: String = "ultra"  // off, low, medium, high, ultra
     var skipPreDrawTransform: Bool = false   // opt out of renderer's safety-net root transform pass
+    var jsonOutPath: String? = nil           // --json [PATH]; nil = no JSON, "-" = stdout
+    var baselinePath: String? = nil          // --baseline FILE
+    var thresholdMedianPct: Double = 10.0    // --threshold MEDIAN:P95
+    var thresholdP95Pct: Double = 15.0
 }
 
 func usage() {
@@ -73,6 +77,14 @@ func usage() {
       --lighting MODE  Lighting mode: standard, single, ambient (default standard)
       --debug-uvs N    Set renderer debugUVs mode for fragment isolation (default 0)
       --label NAME     Tag printed in the report header (default "baseline")
+      --json [PATH]    Emit a machine-readable JSON report. With a path, writes
+                       to that file; without (or "-"), writes to stdout after
+                       the human report.
+      --baseline FILE  Compare the current run against a previously-emitted
+                       JSON report. Prints a delta table; exits 1 if any gated
+                       metric regresses past --threshold.
+      --threshold M:P  Regression thresholds as "MEDIAN:P95" percent
+                       (default 10:15 → median +10 %, p95 +15 %).
 
     Recommended invocation:
       swift run -c release VRMBenchmark <vrm-path> --vrma <vrma-path> --frames 500
@@ -153,6 +165,28 @@ func parseArguments() -> BenchmarkOptions? {
         case "--loading":
             guard let v = nextValue(for: a) else { return nil }
             opts.loadingPreset = v.lowercased()
+        case "--json":
+            // Optional path argument: present and not another flag → file path.
+            // Absent or "-" → stdout.
+            if i + 1 < args.count, !args[i + 1].hasPrefix("--") {
+                i += 1
+                opts.jsonOutPath = args[i]
+            } else {
+                opts.jsonOutPath = "-"
+            }
+        case "--baseline":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.baselinePath = v
+        case "--threshold":
+            guard let v = nextValue(for: a) else { return nil }
+            let parts = v.split(separator: ":").map(String.init)
+            guard parts.count == 2,
+                  let m = Double(parts[0]), let p = Double(parts[1]) else {
+                FileHandle.standardError.write(Data("ERROR: --threshold expects MEDIAN:P95, got '\(v)'\n".utf8))
+                return nil
+            }
+            opts.thresholdMedianPct = m
+            opts.thresholdP95Pct = p
         default:
             if opts.inputPath.isEmpty && !a.hasPrefix("--") {
                 opts.inputPath = a
@@ -264,6 +298,103 @@ func printCompactStats(label: String, samples: [Double]) {
     print("  \(label.padding(toLength: 10, withPad: " ", startingAt: 0)): mean \(String(format: "%7.3f ms", stats.meanMs))  median \(String(format: "%7.3f ms", stats.medianMs))  p95 \(String(format: "%7.3f ms", stats.p95Ms))")
 }
 
+// MARK: - JSON report helpers
+
+private func snapshot(_ s: FrameStats) -> BenchmarkReport.FrameStatsSnapshot {
+    BenchmarkReport.FrameStatsSnapshot(
+        count: s.count,
+        minMs: s.minMs,
+        medianMs: s.medianMs,
+        meanMs: s.meanMs,
+        p95Ms: s.p95Ms,
+        p99Ms: s.p99Ms,
+        maxMs: s.maxMs,
+        stddevMs: s.stddevMs)
+}
+
+private func systemDescriptor() -> BenchmarkReport.System {
+    let osName: String
+    #if os(macOS)
+    osName = "macOS"
+    #elseif os(iOS)
+    osName = "iOS"
+    #else
+    osName = "unknown"
+    #endif
+    return BenchmarkReport.System(
+        os: osName,
+        host: ProcessInfo.processInfo.hostName)
+}
+
+private func makeReport(
+    opts: BenchmarkOptions,
+    stats: [String: BenchmarkReport.FrameStatsSnapshot]
+) -> BenchmarkReport {
+    BenchmarkReport(
+        timestamp: Date(),
+        label: opts.label,
+        input: .init(
+            vrm: opts.inputPath.isEmpty ? nil : opts.inputPath,
+            vrma: opts.vrmaPath,
+            frames: opts.frames,
+            warmup: opts.warmup),
+        config: .init(
+            mode: opts.mode,
+            width: opts.width,
+            height: opts.height,
+            sampleCount: opts.sampleCount,
+            loading: opts.loadingPreset,
+            springBoneQuality: opts.mode == "render" ? opts.springBoneQuality : nil,
+            lighting: opts.mode == "render" ? opts.lighting : nil),
+        system: systemDescriptor(),
+        stats: stats)
+}
+
+/// Writes the JSON report to `--json` destination (file path or stdout) and,
+/// if `--baseline` was supplied, loads the baseline and compares. Returns the
+/// process exit code (0 = pass, 1 = regression).
+private func finalizeReport(opts: BenchmarkOptions, report: BenchmarkReport) -> Int32 {
+    // 1. Emit JSON (file or stdout) if requested.
+    if let dest = opts.jsonOutPath {
+        do {
+            let data = try report.encodeJSON()
+            if dest == "-" {
+                FileHandle.standardOutput.write(data)
+                FileHandle.standardOutput.write(Data("\n".utf8))
+            } else {
+                try data.write(to: URL(fileURLWithPath: dest))
+            }
+        } catch {
+            FileHandle.standardError.write(Data("ERROR: failed to write JSON report: \(error)\n".utf8))
+            return 1
+        }
+    }
+
+    // 2. Compare against baseline if requested.
+    guard let basePath = opts.baselinePath else { return 0 }
+    do {
+        let baseData = try Data(contentsOf: URL(fileURLWithPath: basePath))
+        let baseline = try BenchmarkReport.decode(from: baseData)
+        let threshold = BenchmarkComparison.Threshold(
+            medianPercent: opts.thresholdMedianPct,
+            p95Percent: opts.thresholdP95Pct)
+        let comparison = BenchmarkComparison.compare(
+            baseline: baseline, current: report, threshold: threshold)
+        print("\nBaseline comparison (\(basePath))")
+        print(comparison.renderTable())
+        if comparison.passed {
+            print("\nResult: PASS — all gated metrics within threshold.")
+            return 0
+        } else {
+            print("\nResult: FAIL — one or more gated metrics regressed past threshold.")
+            return 1
+        }
+    } catch {
+        FileHandle.standardError.write(Data("ERROR: failed to load baseline '\(basePath)': \(error.localizedDescription)\n".utf8))
+        return 1
+    }
+}
+
 func loadingOptions(for preset: String) -> VRMLoadingOptions {
     switch preset {
     case "default":
@@ -331,13 +462,15 @@ struct VRMBenchmarkCLI {
                 }
             }
             let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
+            let stats = FrameStats.compute(samples)
             printStats(
                 title: "VRMMetalKit Load Benchmark",
                 label: opts.label,
                 unit: "VRMModel.load",
-                stats: FrameStats.compute(samples),
+                stats: stats,
                 wallMs: wallMs)
-            return
+            let report = makeReport(opts: opts, stats: ["load": snapshot(stats)])
+            exit(finalizeReport(opts: opts, report: report))
         }
 
         // Load model
@@ -395,13 +528,15 @@ struct VRMBenchmarkCLI {
                 samples.append((CACurrentMediaTime() - t0) * 1000.0)
             }
             let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
+            let stats = FrameStats.compute(samples)
             printStats(
                 title: "VRMMetalKit Animation Benchmark",
                 label: opts.label,
                 unit: "AnimationPlayer.update",
-                stats: FrameStats.compute(samples),
+                stats: stats,
                 wallMs: wallMs)
-            return
+            let report = makeReport(opts: opts, stats: ["animation": snapshot(stats)])
+            exit(finalizeReport(opts: opts, report: report))
         }
 
         if opts.mode == "transforms" {
@@ -417,13 +552,15 @@ struct VRMBenchmarkCLI {
                 samples.append((CACurrentMediaTime() - t0) * 1000.0)
             }
             let wallMs = (CACurrentMediaTime() - benchStart) * 1000.0
+            let stats = FrameStats.compute(samples)
             printStats(
                 title: "VRMMetalKit Transform Propagation Benchmark",
                 label: opts.label,
                 unit: "VRMModel.updateNodeTransforms",
-                stats: FrameStats.compute(samples),
+                stats: stats,
                 wallMs: wallMs)
-            return
+            let report = makeReport(opts: opts, stats: ["transforms": snapshot(stats)])
+            exit(finalizeReport(opts: opts, report: report))
         }
 
         guard opts.mode == "render" else {
@@ -656,6 +793,14 @@ struct VRMBenchmarkCLI {
             """)
         }
         print("======================================================================\n")
+
+        let report = makeReport(opts: opts, stats: [
+            "render":    snapshot(stats),
+            "animation": snapshot(FrameStats.compute(samples.map(\.animationMs))),
+            "encode":    snapshot(FrameStats.compute(samples.map(\.encodeMs))),
+            "wait":      snapshot(FrameStats.compute(samples.map(\.waitMs))),
+        ])
+        exit(finalizeReport(opts: opts, report: report))
     }
 }
 

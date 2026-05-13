@@ -1,0 +1,127 @@
+name: Bench
+
+# Manual-trigger only for now (issue #156, phase 1).
+# A follow-up PR will add a pull_request trigger + committed baseline +
+# perf-override label once we have a few real runs to set thresholds against.
+
+on:
+  workflow_dispatch:
+    inputs:
+      frames:
+        description: "Measured frame count"
+        required: false
+        default: "500"
+      warmup:
+        description: "Warm-up frame count"
+        required: false
+        default: "30"
+      mode:
+        description: "Benchmark mode (render, animation, transforms, load)"
+        required: false
+        default: "render"
+      vrm_url:
+        description: "Optional URL to a VRM/GLB sample. If omitted, the job exits early with a note."
+        required: false
+        default: ""
+      vrma_url:
+        description: "Optional URL to a VRMA animation file (recommended for render mode)."
+        required: false
+        default: ""
+      label:
+        description: "Tag printed in the report header and JSON envelope"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+# All workflow_dispatch inputs are user-supplied and reach shell commands via
+# env vars only — never via ${{ … }} interpolation inside run: scripts.
+# That keeps untrusted strings from being parsed by the shell.
+
+jobs:
+  bench:
+    name: Run VRMBenchmark
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode with Swift 6.2
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26* /Applications/Xcode_27* 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 26 (or newer) found"
+            ls /Applications | grep -i Xcode || true
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Compile shaders
+        run: make shaders
+
+      - name: Build VRMBenchmark (release)
+        run: swift build -c release --product VRMBenchmark
+
+      - name: Fetch sample VRM
+        id: fetch
+        env:
+          VRM_URL: ${{ github.event.inputs.vrm_url }}
+          VRMA_URL: ${{ github.event.inputs.vrma_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p .bench-assets
+          if [ -z "$VRM_URL" ]; then
+            echo "::warning::No vrm_url input — skipping the run. Re-trigger with a vrm_url to collect a sample."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # curl handles the URL itself; we do not interpolate it into shell.
+          curl -fsSL --max-time 120 "$VRM_URL" -o .bench-assets/sample.vrm
+          if [ -n "$VRMA_URL" ]; then
+            curl -fsSL --max-time 120 "$VRMA_URL" -o .bench-assets/sample.vrma
+          fi
+          ls -lh .bench-assets/
+
+      - name: Run benchmark
+        if: steps.fetch.outputs.skip != 'true'
+        env:
+          BENCH_FRAMES: ${{ github.event.inputs.frames }}
+          BENCH_WARMUP: ${{ github.event.inputs.warmup }}
+          BENCH_MODE: ${{ github.event.inputs.mode }}
+          BENCH_LABEL_INPUT: ${{ github.event.inputs.label }}
+          BENCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p .bench-out
+          # Derive label from input or fall back to "ci-<sha>". Quoting via
+          # env-var indirection avoids shell parsing of user input.
+          if [ -n "$BENCH_LABEL_INPUT" ]; then
+            LABEL="$BENCH_LABEL_INPUT"
+          else
+            LABEL="ci-$BENCH_SHA"
+          fi
+          ARGS=()
+          ARGS+=(--mode "$BENCH_MODE")
+          ARGS+=(--frames "$BENCH_FRAMES")
+          ARGS+=(--warmup "$BENCH_WARMUP")
+          ARGS+=(--label "$LABEL")
+          ARGS+=(--json .bench-out/benchmark.json)
+          if [ -f .bench-assets/sample.vrma ]; then
+            ARGS+=(--vrma .bench-assets/sample.vrma)
+          fi
+          .build/release/VRMBenchmark .bench-assets/sample.vrm "${ARGS[@]}"
+
+      - name: Upload benchmark report
+        if: steps.fetch.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ github.sha }}
+          path: .bench-out/benchmark.json
+          if-no-files-found: error
+          retention-days: 30
