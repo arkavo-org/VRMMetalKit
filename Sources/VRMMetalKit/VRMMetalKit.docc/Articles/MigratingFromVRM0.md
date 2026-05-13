@@ -18,6 +18,14 @@ VRM 0.x MToon parameters are converted into the VRM 1.0 parameter space, matchin
 
 A handful of conversions have observable side effects in edge cases. See "Known divergences" below, and the materials Topics group for the underlying surface — ``VRMMToonMaterial`` always exposes the post-conversion VRM 1.0 parameters.
 
+## Runtime cost
+
+Once the file is loaded, the in-memory model is shape-equivalent to a VRM 1.0 model with the same scene: same node graph, same material objects, same texture bindings, same draw-call schedule. The render path does not branch on version, so per-frame work is identical.
+
+Bench-confirmed on Apple Silicon (Mac Studio, 1024×1024, 500 frames, `AvatarSample_A` in both 0.x and 1.0 with `Walk.vrma`): the renderer reports identical counters across versions — 15 draw calls, 29 542 triangles, 94 016 vertices, 6 pipeline changes, 36 state changes, 15 texture bindings — and per-frame CPU deltas stay inside normal run-to-run noise (under +8 % on every gated metric at the default 10 % / 15 % `VRMBenchmark` thresholds). Cold-load time is also statistically indistinguishable across versions (under 1 % delta on median, mean, and p95): the 0.x → 1.0 conversion work is invisible behind texture decoding.
+
+The practical implication is that there is no *performance* reason to upgrade a working VRM 0.x file. Upgrade for the authorial reasons in "Upgrading source files" below — explicit alpha modes, shade textures, and outline parameters — not for speed.
+
 ## Known divergences
 
 - **MASK is demoted to OPAQUE for body/skin materials.** When a material's name matches "body" or "skin", its alpha mode is forced to OPAQUE. VRM 0.x skin textures frequently include alpha=0 padding regions; with MASK mode active those regions would punch holes through the avatar's skin. OPAQUE is the safer default.
