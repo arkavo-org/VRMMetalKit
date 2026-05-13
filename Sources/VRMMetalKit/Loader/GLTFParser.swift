@@ -675,7 +675,8 @@ public class GLTFParser {
     ///
     /// Parser instances are safe to reuse across multiple ``parse(data:filePath:)``
     /// invocations; ``binaryChunk`` is rewritten on every successful call (and is
-    /// `nil` when the input GLB has no BIN chunk).
+    /// `nil` when the input GLB has no BIN chunk). When a ``parse(data:filePath:)``
+    /// call throws, ``binaryChunk`` retains its previous value.
     public init() {}
 
     /// Parses a GLB byte stream and returns the decoded document plus the optional binary chunk.

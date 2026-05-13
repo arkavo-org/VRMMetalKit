@@ -101,6 +101,121 @@ final class VRMALookAtIntegrationTests: XCTestCase {
         player.update(deltaTime: 0.5, model: model)
     }
 
+    // MARK: - Head-local resolution (issue #190)
+
+    /// Builds a minimal `GLTFNode` via the JSON decoder so a `VRMNode` can be
+    /// constructed without a full glTF file. All transforms default to identity.
+    private func makeGLTFNode(name: String) throws -> GLTFNode {
+        let json: [String: Any] = ["name": name]
+        let data = try JSONSerialization.data(withJSONObject: json)
+        return try JSONDecoder().decode(GLTFNode.self, from: data)
+    }
+
+    /// Builds a tiny rig: head at the supplied world transform, with leftEye and
+    /// rightEye as parent-less siblings, all wired through `VRMHumanoid`. The
+    /// returned controller is set up with `smoothing = 0` and saccades disabled
+    /// so `update(deltaTime:)` is deterministic. The eye nodes are returned so
+    /// the caller can read `localRotation` after `update`.
+    private func makeRig(
+        headWorld: simd_float4x4
+    ) throws -> (model: VRMModel, controller: VRMLookAtController, leftEye: VRMNode, rightEye: VRMNode) {
+        let head = try VRMNode(index: 0, gltfNode: makeGLTFNode(name: "head"))
+        let leftEye = try VRMNode(index: 1, gltfNode: makeGLTFNode(name: "leftEye"))
+        let rightEye = try VRMNode(index: 2, gltfNode: makeGLTFNode(name: "rightEye"))
+        head.worldMatrix = headWorld
+        head.localMatrix = headWorld // parent-less, so updateWorldTransform() preserves the value
+
+        let humanoid = VRMHumanoid()
+        humanoid.humanBones[.head] = VRMHumanoid.VRMHumanBone(node: 0)
+        humanoid.humanBones[.leftEye] = VRMHumanoid.VRMHumanBone(node: 1)
+        humanoid.humanBones[.rightEye] = VRMHumanoid.VRMHumanBone(node: 2)
+
+        let model = VRMModel(
+            specVersion: .v1_0,
+            meta: VRMMeta(licenseUrl: ""),
+            humanoid: humanoid,
+            gltf: makeMinimalGLTF()
+        )
+        model.nodes = [head, leftEye, rightEye]
+        model.lookAt = VRMLookAt()
+        model.lookAt?.type = .bone
+
+        let controller = VRMLookAtController()
+        controller.smoothing = 0          // instant — no frame-rate-dependent lerp
+        controller.saccadeEnabled = false // remove jitter from the comparison
+        controller.setup(model: model)
+        controller.mode = .bone           // force bone path regardless of model detection
+
+        return (model, controller, leftEye, rightEye)
+    }
+
+    private func assertQuatEqual(
+        _ a: simd_quatf, _ b: simd_quatf,
+        accuracy tol: Float,
+        _ message: String,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        XCTAssertEqual(a.real,   b.real,   accuracy: tol, message, file: file, line: line)
+        XCTAssertEqual(a.imag.x, b.imag.x, accuracy: tol, message, file: file, line: line)
+        XCTAssertEqual(a.imag.y, b.imag.y, accuracy: tol, message, file: file, line: line)
+        XCTAssertEqual(a.imag.z, b.imag.z, accuracy: tol, message, file: file, line: line)
+    }
+
+    /// With the head at a known non-identity world transform, `.headLocalPoint(p)`
+    /// must produce the same eye rotations as `.point(head_world * p)`. This is
+    /// the core invariant from VRMC_vrm_animation-1.0 §lookAt; pre-#190 the
+    /// controller treated `.point` as world-space and silently dropped the head
+    /// transform, so VRMA-authored gaze pointed in the wrong direction whenever
+    /// the head was rotated or translated.
+    func testHeadLocalPointResolvesThroughHeadWorldMatrix() throws {
+        // Head translated up + rotated 90° around Y (head-local +Z → world +X).
+        let translation = float4x4(translation: SIMD3<Float>(0.3, 1.6, 0.0))
+        let rotation    = float4x4(simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(0, 1, 0)))
+        let headWorld   = translation * rotation
+
+        let localPoint  = SIMD3<Float>(0, 0, 1)              // 1 m forward in head-local
+        let world4      = headWorld * SIMD4<Float>(localPoint, 1)
+        let worldPoint  = SIMD3<Float>(world4.x, world4.y, world4.z)
+
+        // Path A: world-space target.
+        let rigA = try makeRig(headWorld: headWorld)
+        rigA.controller.target = .point(worldPoint)
+        rigA.controller.update(deltaTime: 1.0 / 60.0)
+
+        // Path B: head-local target. Equivalent if (and only if) the controller
+        // resolves through the head's world matrix.
+        let rigB = try makeRig(headWorld: headWorld)
+        rigB.controller.target = .headLocalPoint(localPoint)
+        rigB.controller.update(deltaTime: 1.0 / 60.0)
+
+        let tol: Float = 1e-5
+        assertQuatEqual(rigA.leftEye.rotation,  rigB.leftEye.rotation,  accuracy: tol,
+                        "left eye rotation must match between .point(head_world*p) and .headLocalPoint(p)")
+        assertQuatEqual(rigA.rightEye.rotation, rigB.rightEye.rotation, accuracy: tol,
+                        "right eye rotation must match between .point(head_world*p) and .headLocalPoint(p)")
+    }
+
+    /// Sanity check the fixture itself: with an identity head transform,
+    /// `.point(p)` and `.headLocalPoint(p)` are degenerate and must agree.
+    /// Catches setup errors that would otherwise let the non-identity test
+    /// pass for the wrong reason.
+    func testHeadLocalPointMatchesPointWhenHeadIsIdentity() throws {
+        let p = SIMD3<Float>(0.5, 1.4, 1.0)
+
+        let rigA = try makeRig(headWorld: matrix_identity_float4x4)
+        rigA.controller.target = .point(p)
+        rigA.controller.update(deltaTime: 1.0 / 60.0)
+
+        let rigB = try makeRig(headWorld: matrix_identity_float4x4)
+        rigB.controller.target = .headLocalPoint(p)
+        rigB.controller.update(deltaTime: 1.0 / 60.0)
+
+        assertQuatEqual(rigA.leftEye.rotation,  rigB.leftEye.rotation,  accuracy: 1e-5,
+                        "identity-head fixture: left eye paths must agree")
+        assertQuatEqual(rigA.rightEye.rotation, rigB.rightEye.rotation, accuracy: 1e-5,
+                        "identity-head fixture: right eye paths must agree")
+    }
+
     /// `AnimationPlayer.time` must expose the internal `currentTime` so consumers
     /// who want to drive the controller manually (e.g. via a different sampler)
     /// can read where playback currently sits.

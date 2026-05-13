@@ -361,7 +361,9 @@ public class VRMLookAtController {
                 let world = m * SIMD4<Float>(localPos, 1)
                 targetPos = SIMD3<Float>(world.x, world.y, world.z)
             } else {
-                // No head bone available — treat as model-space fallback.
+                // No head bone wired up — last-resort path: treat the payload
+                // as world-space so gaze still has a defined direction (though
+                // it will not track head motion).
                 targetPos = localPos
             }
         case .forward:
