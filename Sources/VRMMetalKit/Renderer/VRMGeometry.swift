@@ -1139,6 +1139,14 @@ public class VRMNode {
     public let initialScale: SIMD3<Float>
 
     /// `translation * rotation * scale`, recomputed by ``updateLocalMatrix()`` whenever the components change.
+    ///
+    /// As of #206, this property is **owned by** ``translation`` / ``rotation``
+    /// / ``scale``: ``updateWorldTransform()`` re-derives it from T/R/S at the
+    /// top of every call. Direct assignment (`node.localMatrix = …`) is
+    /// supported only as a transient injection point — the value will be
+    /// overwritten the next time the node, or any of its ancestors, runs
+    /// through ``updateWorldTransform()``. To set a stable local pose, mutate
+    /// T/R/S instead.
     public var localMatrix: float4x4 = matrix_identity_float4x4
     /// `parent.worldMatrix * localMatrix`, recomputed by ``updateWorldTransform()``.
     public var worldMatrix: float4x4 = matrix_identity_float4x4

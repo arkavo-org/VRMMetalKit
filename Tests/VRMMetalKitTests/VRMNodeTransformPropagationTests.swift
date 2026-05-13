@@ -75,6 +75,54 @@ final class VRMNodeTransformPropagationTests: XCTestCase {
             "localMatrix and worldMatrix stayed identity.")
     }
 
+    /// Same bug class as ``testTranslationMutationPropagatesToWorldMatrix``,
+    /// but covers the scale axis. Identity scale → uniform 2x produces a
+    /// `worldMatrix` whose top-left 3x3 has 2.0 on the diagonal; if `localMatrix`
+    /// were stale the test would observe identity instead.
+    func testScaleMutationPropagatesToWorldMatrix() throws {
+        let node = try makeNode()
+        node.scale = SIMD3<Float>(2, 2, 2)
+        node.updateWorldTransform()
+
+        XCTAssertEqual(node.worldMatrix.columns.0.x, 2.0, accuracy: 1e-6,
+            "Scale mutation must reach worldMatrix the same way translation/rotation do.")
+        XCTAssertEqual(node.worldMatrix.columns.1.y, 2.0, accuracy: 1e-6)
+        XCTAssertEqual(node.worldMatrix.columns.2.z, 2.0, accuracy: 1e-6)
+    }
+
+    /// Locks in the post-#206 ownership policy documented on
+    /// ``VRMNode/localMatrix``: direct assignment to `node.localMatrix` is a
+    /// transient injection point — the next ``updateWorldTransform()`` re-derives
+    /// `localMatrix` from T/R/S and clobbers the assignment. Production code
+    /// that needs a stable local pose must mutate T/R/S, not `localMatrix`.
+    ///
+    /// This test is the failure-mode counterpart to the others: it asserts a
+    /// *deliberately broken* pattern is overwritten, so future readers can't
+    /// inadvertently revive it without first re-reading the docstring.
+    func testDirectLocalMatrixAssignmentIsOverwrittenOnUpdateWorldTransform() throws {
+        let node = try makeNode()
+
+        // Inject a non-trivial matrix that would NEVER be produced by the
+        // node's identity T/R/S, so the test detects whether the matrix
+        // survives the next world-transform walk.
+        let injected = float4x4(
+            SIMD4<Float>(7, 0, 0, 0),
+            SIMD4<Float>(0, 7, 0, 0),
+            SIMD4<Float>(0, 0, 7, 0),
+            SIMD4<Float>(0, 0, 0, 1)
+        )
+        node.localMatrix = injected
+
+        node.updateWorldTransform()
+
+        XCTAssertEqual(node.localMatrix.columns.0.x, 1.0, accuracy: 1e-6,
+            "Direct localMatrix assignment must be overwritten by T/R/S on the " +
+            "next updateWorldTransform() — see VRMNode.localMatrix docstring and #206. " +
+            "Got localMatrix.columns.0.x=\(node.localMatrix.columns.0.x), expected 1.0 (identity scale).")
+        XCTAssertEqual(node.worldMatrix.columns.0.x, 1.0, accuracy: 1e-6,
+            "Likewise worldMatrix must be derived from T/R/S, not the injected localMatrix.")
+    }
+
     /// End-to-end repro of vrm-conformance #206: a parent root + a child node
     /// (the spring-bone chain in the actual failure). After mutating root.translation
     /// and calling updateWorldTransform on the root, the CHILD's worldMatrix
