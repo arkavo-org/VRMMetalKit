@@ -673,9 +673,10 @@ public class GLTFParser {
 
     /// Creates an empty parser.
     ///
-    /// Reuse with care: ``binaryChunk`` is not reset between calls, so always
-    /// use the binary data returned from the current call rather than reading
-    /// the property afterward.
+    /// Parser instances are safe to reuse across multiple ``parse(data:filePath:)``
+    /// invocations; ``binaryChunk`` is rewritten on every successful call (and is
+    /// `nil` when the input GLB has no BIN chunk). When a ``parse(data:filePath:)``
+    /// call throws, ``binaryChunk`` retains its previous value.
     public init() {}
 
     /// Parses a GLB byte stream and returns the decoded document plus the optional binary chunk.
@@ -719,6 +720,7 @@ public class GLTFParser {
         // Parse chunks
         var offset = 12
         var jsonChunk: Data?
+        var parsedBinaryChunk: Data?
 
         while offset < data.count {
             // Ensure we have at least 8 bytes for chunk header
@@ -742,7 +744,7 @@ public class GLTFParser {
             if chunkType == 0x4E4F534A { // "JSON"
                 jsonChunk = chunkData
             } else if chunkType == 0x004E4942 { // "BIN\0"
-                binaryChunk = chunkData
+                parsedBinaryChunk = chunkData
             }
 
             offset += 8 + Int(chunkLength)
@@ -760,7 +762,8 @@ public class GLTFParser {
         let decoder = JSONDecoder()
         do {
             let document = try decoder.decode(GLTFDocument.self, from: jsonData)
-            return (document, self.binaryChunk)
+            self.binaryChunk = parsedBinaryChunk
+            return (document, parsedBinaryChunk)
         } catch {
             throw VRMError.invalidJSON(
                 context: "Failed to decode glTF JSON structure",
