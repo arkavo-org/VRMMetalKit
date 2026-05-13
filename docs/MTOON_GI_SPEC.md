@@ -79,6 +79,35 @@ shader should be updated to compute `gi(n)` per the spec.
 - Our deviation produces a meaningful visual difference at non-default
   values; three-vrm's no-op behavior produces no difference.
 
+### Direct-vs-indirect magnitude ratio (post-#205)
+
+After [#205](https://github.com/arkavo-org/VRMMetalKit/issues/205), direct
+lighting is multiplied by `BRDF_LAMBERT_NORM = 1/π` at the accumulation
+site (matching three-vrm's `BRDF_Lambert` and UniVRM Built-in RP). Indirect
+is **not** scaled by `1/π` — both because the no-IBL approximation
+treats `irradiance = ambientColor` directly (no implicit `π`-scaling at
+the source the way three.js does for some chunks) and because the spec
+itself doesn't apply a Lambert BRDF to the indirect path.
+
+The visible consequence: pre-#205 the brightest direct contribution
+reached unit albedo (`1.0`) while ambient typically sat at `0.15–0.30`,
+so direct dominated. Post-#205 the brightest direct contribution sits at
+`albedo/π ≈ 0.318`, which is **comparable in magnitude to typical ambient**
+(`0.15–0.30 × giAlbedo ≈ 0.15–0.28`). This is the intended steady state
+for spec-aligned brightness — three-vrm shows the same direct/indirect
+balance once both terms route through its `BRDF_Lambert(diffuseColor)`.
+
+Practical implication for authors:
+
+- A previously-tuned `ambientColor = 0.3` scene is now closer to a 50/50
+  direct/indirect mix on the lit hemisphere instead of the prior ~25/75
+  direct-dominant mix. Outputs land in the reference cluster but
+  *individual scenes will look different from pre-#205 captures*.
+- `setLightNormalizationMode(.manual(factor))` multiplies on top of the
+  `/π` — `factor = 1.0` is now ~`1/π × pre-#205 brightness`. Pre-#205
+  scenes that hardcoded `.manual(…)` may want to multiply their factor
+  by `π` to recover the prior overall magnitude.
+
 ## Testing
 
 `Tests/VRMMetalKitTests/RendererLightingCorrectnessTests.swift` tests

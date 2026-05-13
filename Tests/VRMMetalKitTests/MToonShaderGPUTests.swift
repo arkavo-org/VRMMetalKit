@@ -51,8 +51,10 @@ final class MToonShaderGPUTests: XCTestCase {
     /// Update this hash when intentionally changing the shader.
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
-    /// Updated: Apply 1/π BRDF Lambert normalization to direct lighting (#205).
-    static let knownGoodShaderHash = "57078bb5beaa09419c2254a581470cefe368caaeec6a6e9dd8bc6d0dbae91a7c"
+    /// Updated: Apply 1/π BRDF Lambert normalization to direct lighting (#205) +
+    /// #207 review follow-up — extract `BRDF_LAMBERT_NORM` constant and add
+    /// inline notes; no behaviour change vs the original #205 commit.
+    static let knownGoodShaderHash = "0ca3e6f62f58013afb5a31224e42352e31a55c42bb9ab524d2f5aad6832419ae"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.

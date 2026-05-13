@@ -241,6 +241,59 @@ final class MToonFlatWhiteLightingTests: XCTestCase {
             "collapses the soft Lambert gradient that distinguishes toony=0.25 from toony=1.0.")
     }
 
+    /// Symmetric coverage to ``testShadingToonyLowProducesNonSaturatedSoftGradient``:
+    /// at the sharp end of the sweep (toony=0.95) the lit hemisphere must land at
+    /// `baseColor/π ≈ 0.318` and the shadow hemisphere at `shadeColor/π ≈ 0.159`,
+    /// with the gap near the theoretical maximum `(baseColor-shadeColor)/π ≈ 0.159`.
+    ///
+    /// The two-triangle harness probes `NdotL=±1` only, so it cannot distinguish
+    /// toony=0.0 from toony=0.95 by transition-band shape; what it CAN catch is
+    /// a regression that softens the saturated endpoints — e.g. an accidental
+    /// re-introduction of Half-Lambert, a missed `/π`, or a `mix(shade, base, …)`
+    /// inversion. The reviewer of vrm-conformance #205 flagged the existing
+    /// ``testMToonShadingProducesContrastWithDefaultToon`` as too weak
+    /// (`litLuma > shadowLuma` passes at 0.999 > 0.998); this test asserts the
+    /// quantitative floor it's missing.
+    func testShadingToonyHighStillSharp() throws {
+        try ensureDevice()
+        let model = try makeTwoNormalTrianglesModel(toony: 0.95)
+
+        var config = RendererConfig()
+        config.sampleCount = 1
+        config.strict = .off
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.performanceTracker = PerformanceTracker()
+        renderer.loadModel(model)
+        renderer.viewMatrix = matrix_identity_float4x4
+        renderer.projectionMatrix = matrix_identity_float4x4
+
+        renderer.setLight(0, direction: SIMD3<Float>(0, 1, 0), color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+        renderer.disableLight(1)
+        renderer.disableLight(2)
+        renderer.setAmbientColor(SIMD3<Float>(0, 0, 0))
+
+        let pixels = try renderOneOffscreenFrame(renderer: renderer)
+        let litLuma = sampleLuma(pixels, quadrant: .bottomLeft)
+        let shadowLuma = sampleLuma(pixels, quadrant: .topRight)
+
+        print("[#205 toony=0.95] litLuma=\(litLuma) shadowLuma=\(shadowLuma) gap=\(litLuma - shadowLuma)")
+
+        // baseColor=1 / π ≈ 0.318; allow ±0.04 for rasterization edge averaging
+        // and the minLight = baseColor*0.08 floor (which is below 0.318 so it
+        // shouldn't bind, but stays here as documentation).
+        XCTAssertGreaterThan(litLuma, 0.28,
+            "Lit triangle at toony=0.95 must reach baseColor/π ≈ 0.318. Got \(litLuma). " +
+            "Falling short here means the lit hemisphere is no longer fully saturated to " +
+            "the lit colour at NdotL=1 — a softening regression at the sharp end of the sweep.")
+        XCTAssertLessThan(shadowLuma, 0.20,
+            "Shadow triangle at toony=0.95 must stay near shadeColor/π ≈ 0.159. Got \(shadowLuma). " +
+            "Rising above 0.20 means the shadow hemisphere is no longer fully saturated to " +
+            "the shade colour at NdotL=-1 — a softening regression at the sharp end of the sweep.")
+        XCTAssertGreaterThan(litLuma - shadowLuma, 0.13,
+            "Lit/shadow gap at toony=0.95 must be near the theoretical max " +
+            "(baseColor-shadeColor)/π ≈ 0.159. Got \(litLuma - shadowLuma).")
+    }
+
     /// Same scaffolding, but `shadingToonyFactor=0.9` (the QA reporter's default).
     /// At 0.9 the toon ramp's transition window is narrow (`[-0.1, 0.1]`) so most
     /// of the visible hemisphere saturates to `shadowStep=1.0` even when MToon is
