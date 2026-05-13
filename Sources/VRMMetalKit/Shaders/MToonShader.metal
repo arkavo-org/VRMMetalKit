@@ -628,8 +628,14 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
  }
 
- // Accumulate weighted contributions (manual normalization factor allows artistic control)
- float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
+ // Accumulate weighted contributions (manual normalization factor allows artistic control).
+ // BRDF Lambert (1/π) normalization on direct lighting matches three-vrm's
+ // `BRDF_Lambert` + UniVRM's Built-in RP convention. Without it,
+ // `mix(shade, base, shadowStep) * lightColor` reaches unit albedo at the
+ // brightest point and ambient stacks on top, clamping to 1.0 across the
+ // visible hemisphere and collapsing the soft Lambert gradient at low
+ // `shadingToonyFactor` (vrm-conformance #205).
+ float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor * (1.0 / M_PI_F);
 
  // Indirect diffuse — KNOWN DEVIATION FROM MToon 1.0 SPEC.
  //

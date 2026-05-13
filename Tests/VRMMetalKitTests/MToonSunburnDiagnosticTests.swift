@@ -232,12 +232,18 @@ final class MToonSunburnDiagnosticTests: XCTestCase {
             "SUNBURN DETECTED: Shade color bleeding into lit area. Warmth=\(warmth), expected <0.25"
         )
 
-        // Also verify the center is bright (not dark due to incorrect shadow)
+        // Also verify the center is bright (not dark due to incorrect shadow).
+        // After #205 (1/π BRDF Lambert on direct lighting) the lit center is
+        // `1/π + ambient*shade ≈ 0.36` per channel — sat-clamped pre-fix to
+        // 1.0, now firmly mid-range. The original >0.7 floor was tied to the
+        // saturated regime and would mask the bug we just fixed; the new
+        // floor still rejects an incorrect-shadow regression (sphere goes
+        // dark when lit straight on).
         let brightness = (center.r + center.g + center.b) / 3.0
         XCTAssertGreaterThan(
             brightness,
-            0.7,
-            "Lit center should be bright (>0.7), got \(brightness)"
+            0.3,
+            "Lit center should be bright (>0.3), got \(brightness)"
         )
     }
 
@@ -321,12 +327,15 @@ final class MToonSunburnDiagnosticTests: XCTestCase {
         print("Output RGB (normalized): (\(center.r), \(center.g), \(center.b))")
         print("Output raw values: (\(rawCenter.r), \(rawCenter.g), \(rawCenter.b))")
 
-        // For linear output, 50% = 0.5 * 255 = ~127-128
-        // For sRGB output, 50% = ~186 (gamma 2.2)
-        // We expect linear output (shader does lighting in linear space)
-
-        let expectedRaw: UInt8 = 127  // Linear 50%
-        let tolerance: UInt8 = 30     // Allow some variance from lighting
+        // After #205 (1/π BRDF Lambert on direct lighting), `mix(0.5, 0.5, *) * lightColor / π`
+        // collapses to `0.5/π ≈ 0.159` and the giFactor=0 indirect adds
+        // `ambient * shade = 0.1 * 0.5 = 0.05`, giving a linear-space
+        // output ≈ 0.209 → ~53 in 8-bit linear. If the framebuffer had
+        // accidentally been encoded as sRGB instead, the same linear value
+        // would land near 128 — well outside the ±15 tolerance, so the
+        // assertion still detects an unintentional sRGB encoding.
+        let expectedRaw: UInt8 = 53   // Linear 0.5/π + 0.05
+        let tolerance: UInt8 = 15
 
         // Check that we're in the right ballpark for linear output
         XCTAssertGreaterThan(

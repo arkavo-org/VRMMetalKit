@@ -196,6 +196,51 @@ final class MToonFlatWhiteLightingTests: XCTestCase {
         return (lo, hi, count)
     }
 
+    /// vrm-conformance issue #205: `shadingToonyFactor=0.25` (soft Lambert end of
+    /// the sweep) produces a nearly-flat-lit hemisphere instead of the gradient
+    /// the spec implies. Pre-fix: `mix(shade, base, shadowStep) * lightColor + ambient`
+    /// at the brightest point (NdotL=1) equals `1.0 + 0.1425 ≈ 1.14` which clamps
+    /// to `1.0` — the entire lit hemisphere saturates to white and the soft
+    /// gradient collapses. Post-fix: direct lighting is divided by π (BRDF Lambert
+    /// normalization, matching three-vrm and UniVRM) so the brightest output sits
+    /// around `1/π + ambient ≈ 0.46` and the gradient stays visible.
+    ///
+    /// The lighting matches `mtoon_shadingToony_*.test.yaml` from the conformance
+    /// corpus: single directional light, intensity 1.0, ambient (0.5,0.5,0.5)·0.3.
+    func testShadingToonyLowProducesNonSaturatedSoftGradient() throws {
+        try ensureDevice()
+        let model = try makeTwoNormalTrianglesModel(toony: 0.25)
+
+        var config = RendererConfig()
+        config.sampleCount = 1
+        config.strict = .off
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.performanceTracker = PerformanceTracker()
+        renderer.loadModel(model)
+        renderer.viewMatrix = matrix_identity_float4x4
+        renderer.projectionMatrix = matrix_identity_float4x4
+
+        renderer.setLight(0, direction: SIMD3<Float>(0, 1, 0), color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+        renderer.disableLight(1)
+        renderer.disableLight(2)
+        renderer.setAmbientColor(SIMD3<Float>(0.5, 0.5, 0.5) * 0.3)
+
+        let pixels = try renderOneOffscreenFrame(renderer: renderer)
+        let litLuma = sampleLuma(pixels, quadrant: .bottomLeft)
+        let shadowLuma = sampleLuma(pixels, quadrant: .topRight)
+
+        print("[#205 toony=0.25] litLuma=\(litLuma) shadowLuma=\(shadowLuma)")
+
+        XCTAssertLessThan(litLuma, 0.85,
+            "Lit triangle (NdotL=1, toony=0.25) saturated near 1.0 — direct lighting + " +
+            "ambient overshoots [0,1] and clamps. Reference renderers (UniVRM, three-vrm) " +
+            "apply BRDF Lambert (/π) so the brightest output stays well below 1.0 and " +
+            "the soft Lambert gradient between toony=0 and toony=1 remains visible. #205.")
+        XCTAssertGreaterThan(litLuma - shadowLuma, 0.05,
+            "Lit/shadow contrast for toony=0.25 must be > 0.05 — a flat lit hemisphere " +
+            "collapses the soft Lambert gradient that distinguishes toony=0.25 from toony=1.0.")
+    }
+
     /// Same scaffolding, but `shadingToonyFactor=0.9` (the QA reporter's default).
     /// At 0.9 the toon ramp's transition window is narrow (`[-0.1, 0.1]`) so most
     /// of the visible hemisphere saturates to `shadowStep=1.0` even when MToon is
