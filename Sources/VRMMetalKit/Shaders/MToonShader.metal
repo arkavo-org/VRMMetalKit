@@ -18,6 +18,13 @@
 #include <metal_stdlib>
 using namespace metal;
 
+// BRDF Lambert normalization constant: a perfectly diffuse surface
+// reflects `albedo/π` per steradian under unit irradiance. Applied to
+// MToon direct lighting only — matches three-vrm's `BRDF_Lambert` and
+// UniVRM Built-in RP's implicit `/π`. Indirect/rim/matcap/emissive are
+// stylistic additive terms (not Lambert BRDFs) and intentionally skip it.
+constant float BRDF_LAMBERT_NORM = 1.0 / M_PI_F;
+
 struct Uniforms {
  float4x4 modelMatrix;
  float4x4 viewMatrix;
@@ -628,8 +635,15 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
  }
 
- // Accumulate weighted contributions (manual normalization factor allows artistic control)
- float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor;
+ // Accumulate weighted contributions (manual normalization factor allows artistic control).
+ // Direct lighting uses BRDF_LAMBERT_NORM (1/π) to match three-vrm's
+ // `BRDF_Lambert` + UniVRM's Built-in RP convention. Without it,
+ // `mix(shade, base, shadowStep) * lightColor` reaches unit albedo at the
+ // brightest point and ambient stacks on top, clamping to 1.0 across the
+ // visible hemisphere and collapsing the soft Lambert gradient at low
+ // `shadingToonyFactor` (vrm-conformance #205). `setLightNormalizationMode(.manual(f))`
+ // multiplies on top — `.manual(1.0)` is now ~1/π × the pre-#205 brightness.
+ float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor * BRDF_LAMBERT_NORM;
 
  // Indirect diffuse — KNOWN DEVIATION FROM MToon 1.0 SPEC.
  //
@@ -645,6 +659,12 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // baseColor, at 0.0 it uses shadeColor. This gives authors a visually
  // meaningful artistic knob today. When IBL lands, replace this block with
  // the spec lerp and remove this comment.
+ // Indirect / emissive / matcap / rim are NOT scaled by BRDF_LAMBERT_NORM.
+ // The /π normalization above applies only to the direct Lambert BRDF term;
+ // these are additive stylistic contributions in MToon (and in the reference
+ // three-vrm + UniVRM paths). Note: post-#205, indirect (≈ambient*giAlbedo)
+ // is now comparable in magnitude to direct (≈albedo/π) on the lit side —
+ // see docs/MTOON_GI_SPEC.md for the rationale.
  float3 giAlbedo = mix(shadeColor, baseColor.rgb, material.giEqualizationFactor);
  float3 indirectDiffuse = uniforms.ambientColor.xyz * giAlbedo;
  litColor += indirectDiffuse;

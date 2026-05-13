@@ -51,8 +51,10 @@ final class MToonShaderGPUTests: XCTestCase {
     /// Update this hash when intentionally changing the shader.
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
-    /// Updated: Fixed NdotL inversion - negated lightDirection in shader for correct convention
-    static let knownGoodShaderHash = "edfe763f39189b7ef7f5dcfd344b4f01361013b900df78f3bdd21f5682adea51"
+    /// Updated: Apply 1/π BRDF Lambert normalization to direct lighting (#205) +
+    /// #207 review follow-up — extract `BRDF_LAMBERT_NORM` constant and add
+    /// inline notes; no behaviour change vs the original #205 commit.
+    static let knownGoodShaderHash = "0ca3e6f62f58013afb5a31224e42352e31a55c42bb9ab524d2f5aad6832419ae"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.
@@ -236,9 +238,9 @@ final class MToonShaderGPUTests: XCTestCase {
         let histogram = analyzeGrayscaleHistogram(frameData: frameData, width: 128, height: 128)
 
         print("=== Toon Shading Histogram (toony=0.9) ===")
-        print("Dark pixels (0-64): \(histogram.darkCount)")
-        print("Mid pixels (65-190): \(histogram.midCount)")
-        print("Light pixels (191-255): \(histogram.lightCount)")
+        print("Dark pixels (0-60): \(histogram.darkCount)")
+        print("Mid pixels (61-77): \(histogram.midCount)")
+        print("Light pixels (78-255): \(histogram.lightCount)")
         print("Mid ratio: \(histogram.midRatio)")
 
         // With linearstep (CORRECT): Few mid-tone pixels (sharp transition)
@@ -383,9 +385,15 @@ final class MToonShaderGPUTests: XCTestCase {
     }
 
     struct GrayscaleHistogram {
-        let darkCount: Int      // 0-64
-        let midCount: Int       // 65-190
-        let lightCount: Int     // 191-255
+        // After #205 (1/π BRDF Lambert on direct lighting) the test rig's lit
+        // hemisphere lands near 0.348 linear (~89 in 8-bit linear), the shadow
+        // hemisphere near 0.126 (~32), and the clear background at 0.2 (~51).
+        // Pick bucket boundaries that put lit pixels in `light`, shadow pixels
+        // in `dark`, and ONLY the toon-ramp transition band in `mid` — that
+        // keeps the sharpness signal the bucketed-histogram test depends on.
+        let darkCount: Int      // 0-60   (background + shadow side)
+        let midCount: Int       // 61-77  (transition band)
+        let lightCount: Int     // 78-255 (lit hemisphere)
         let totalPixels: Int
 
         var midRatio: Float {
@@ -412,9 +420,9 @@ final class MToonShaderGPUTests: XCTestCase {
             let r = Float(bytes[offset + 2])
             let gray = UInt8((r * 0.299 + g * 0.587 + b * 0.114))
 
-            if gray <= 64 {
+            if gray <= 60 {
                 darkCount += 1
-            } else if gray >= 191 {
+            } else if gray >= 78 {
                 lightCount += 1
             } else {
                 midCount += 1
