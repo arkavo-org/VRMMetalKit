@@ -65,11 +65,11 @@ final class MToonRimFresnelTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal not available")
         }
-        let path = "/Users/arkavo/Projects/vrm-conformance/goldens-cache/_univrm_stage/mtoon_rimLightingMix_1.vrm"
+        let path = "/tmp/repro226/mtoon_rimLightingMix_1.vrm"
         guard FileManager.default.fileExists(atPath: path) else {
             throw XCTSkip("vrm-conformance rim asset not at \(path). " +
-                "Regenerate with `cargo run --release -p vrm-asset-generator -- emit-sweep --output-dir …` " +
-                "and place mtoon_rimLightingMix_1.vrm at the expected path.")
+                "Regenerate from a checkout of github.com/arkavo-org/vrm-conformance with: " +
+                "`cargo run --release -p vrm-asset-generator -- emit-sweep --output-dir /tmp/repro226`")
         }
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
 
@@ -134,9 +134,10 @@ final class MToonRimFresnelTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal not available")
         }
-        let path = "/Users/arkavo/Projects/vrm-conformance/goldens-cache/_univrm_stage/mtoon_rimLightingMix_1.vrm"
+        let path = "/tmp/repro226/mtoon_rimLightingMix_1.vrm"
         guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("vrm-conformance rim asset not at \(path)")
+            throw XCTSkip("vrm-conformance rim asset not at \(path). " +
+                "Regenerate as in `testRimVisibleAtLeftSilhouetteOfConformanceAsset`'s skip note.")
         }
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
 
