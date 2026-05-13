@@ -212,8 +212,10 @@ static inline bool hasParametricRim(constant MToonMaterial& material) {
 }
 
 static inline bool needsViewNormal(constant MToonMaterial& material, constant Uniforms& uniforms) {
- return material.hasMatcapTexture > 0 || hasParametricRim(material) ||
-        uniforms.debugUVs == 32;
+ // Parametric rim no longer needs view-space normal (#226 — moved the
+ // fresnel into world space to avoid the compound-matrix w-leak). MatCap
+ // still samples in view space.
+ return material.hasMatcapTexture > 0 || uniforms.debugUVs == 32;
 }
 
 static inline bool needsViewDirection(constant MToonMaterial& material, constant Uniforms& uniforms) {
@@ -684,17 +686,28 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  litColor += matcapColor * float3(material.matcapR, material.matcapG, material.matcapB);
  }
 
- // Parametric rim lighting - using view-space normal for consistent calculation
+ // Parametric rim lighting — fresnel computed in world space per MToon-1.0
+ // spec (matches three-vrm + UniVRM Built-in RP). The previous view-space
+ // implementation went through `viewMatrix * normalMatrix * float4(N, 0)`,
+ // which carries a w-component leak: `normalMatrix = inverse(modelMatrix).transpose`
+ // for a translated model has non-zero w entries in its rotation columns, so
+ // the intermediate `normalMatrix * float4(N, 0)` returns a vec4 with non-zero
+ // w, and `viewMatrix * …` then multiplies that w against viewMatrix's
+ // translation column — corrupting xyz. The bug bit any realistic camera +
+ // model translation combination; it was asymptomatic for tests at the origin
+ // with identity view matrix, which is why VMK's own tests passed while the
+ // conformance corpus rendered rim only at one specific normal direction
+ // (vrm-conformance #226). `worldNormal` is the correctly-computed normal
+ // from the vertex shader (single matrix multiply with explicit `.xyz`
+ // extraction); `viewDirection` is already world-space. This block mirrors
+ // the `additiveDirectionalRim` path's coordinate-space handling below.
  float3 rimColor = float3(0.0);
  float3 parametricRimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
  if (any(parametricRimColorFactor > 0.0)) {
- // Use view-space normal and CORRECT view direction for proper fresnel
- float3 Nv = viewNormal;  // Use flipped viewNormal for back faces
- float3 Vv = normalize(in.viewDirection);  // Correct: use vertex shader's viewDirection
-
- // Transform view direction to view space for dot product with view-space normal
- float3 viewDirViewSpace = normalize((uniforms.viewMatrix * float4(Vv, 0.0)).xyz);
- float NdotV = saturate(dot(Nv, viewDirViewSpace));
+ float3 Nrim = normalize(in.worldNormal);
+ if (!isFrontFace) Nrim = -Nrim;
+ float3 Vrim = normalize(in.viewDirection);
+ float NdotV = saturate(dot(Nrim, Vrim));
  float vf = 1.0 - NdotV;
  float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
                   material.parametricRimFresnelPowerFactor);
