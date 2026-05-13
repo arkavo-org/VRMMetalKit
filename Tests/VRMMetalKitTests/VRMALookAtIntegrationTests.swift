@@ -123,7 +123,15 @@ final class VRMALookAtIntegrationTests: XCTestCase {
         let leftEye = try VRMNode(index: 1, gltfNode: makeGLTFNode(name: "leftEye"))
         let rightEye = try VRMNode(index: 2, gltfNode: makeGLTFNode(name: "rightEye"))
         head.worldMatrix = headWorld
-        head.localMatrix = headWorld // parent-less, so updateWorldTransform() preserves the value
+        // Note: setting `head.localMatrix` directly was load-bearing before
+        // #206; post-fix `updateWorldTransform()` re-derives `localMatrix`
+        // from T/R/S (here the default identity) and would clobber `headWorld`.
+        // `VRMLookAtController.update(…)` reads `head.worldMatrix` before any
+        // hierarchy walk, so the eye-rotation assertions still observe the
+        // value assigned on the line above; this is an intentional
+        // pre-`updateWorldTransform` injection point, not a stable pattern
+        // for production code. See #206 / VRMNode.localMatrix docstring.
+        head.localMatrix = headWorld
 
         let humanoid = VRMHumanoid()
         humanoid.humanBones[.head] = VRMHumanoid.VRMHumanBone(node: 0)

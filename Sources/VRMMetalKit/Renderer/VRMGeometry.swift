@@ -1139,6 +1139,14 @@ public class VRMNode {
     public let initialScale: SIMD3<Float>
 
     /// `translation * rotation * scale`, recomputed by ``updateLocalMatrix()`` whenever the components change.
+    ///
+    /// As of #206, this property is **owned by** ``translation`` / ``rotation``
+    /// / ``scale``: ``updateWorldTransform()`` re-derives it from T/R/S at the
+    /// top of every call. Direct assignment (`node.localMatrix = …`) is
+    /// supported only as a transient injection point — the value will be
+    /// overwritten the next time the node, or any of its ancestors, runs
+    /// through ``updateWorldTransform()``. To set a stable local pose, mutate
+    /// T/R/S instead.
     public var localMatrix: float4x4 = matrix_identity_float4x4
     /// `parent.worldMatrix * localMatrix`, recomputed by ``updateWorldTransform()``.
     public var worldMatrix: float4x4 = matrix_identity_float4x4
@@ -1250,7 +1258,18 @@ public class VRMNode {
 
     /// Recomputes ``worldMatrix`` (and recurses through ``children``) by composing with the parent's world matrix.
     /// Call from each scene-graph root once per frame after animation has mutated local transforms.
+    ///
+    /// Refreshes ``localMatrix`` from the current ``translation`` / ``rotation``
+    /// / ``scale`` first, so external callers that mutate those properties
+    /// directly (without remembering to invoke ``updateLocalMatrix()``) still
+    /// see the change reach ``worldMatrix``. This closed vrm-conformance #206,
+    /// where the adapter's `root.translation = …; updateWorldTransform()`
+    /// pattern left every spring-bone swing test SHA-identical to its
+    /// no-animation settle pair because the cached `localMatrix` never
+    /// picked up the displacement.
     public func updateWorldTransform() {
+        updateLocalMatrix()
+
         #if DEBUG
         // Check for NaNs before using localMatrix
         if localMatrix[0][0].isNaN || localMatrix[0][1].isNaN || localMatrix[0][2].isNaN || localMatrix[0][3].isNaN ||

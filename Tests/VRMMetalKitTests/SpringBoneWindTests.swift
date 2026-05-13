@@ -282,8 +282,15 @@ final class SpringBoneWindTests: XCTestCase {
     }
 
     private func resetSpringBoneState(model: VRMModel) {
-        // Reset node transforms to identity
+        // Reset node transforms to identity. Post-#206, `updateWorldTransform()`
+        // re-derives `localMatrix` from T/R/S, so the `localMatrix = identity`
+        // assignment alone would be silently overwritten by whatever T/R/S
+        // happen to hold from prior simulation steps. Clear T/R/S first so the
+        // reset actually produces an identity local matrix on the next walk.
         for node in model.nodes {
+            node.translation = .zero
+            node.rotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+            node.scale = SIMD3<Float>(1, 1, 1)
             node.localMatrix = matrix_identity_float4x4
             node.updateWorldTransform()
         }
