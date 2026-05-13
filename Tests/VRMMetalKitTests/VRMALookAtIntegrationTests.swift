@@ -36,8 +36,9 @@ final class VRMALookAtIntegrationTests: XCTestCase {
         return model
     }
 
-    /// Player attached to a controller drives `target = .point(sampler(t))` when
-    /// the clip carries a `lookAtTargetSampler`.
+    /// Player attached to a controller drives `target = .headLocalPoint(sampler(t))` when
+    /// the clip carries a `lookAtTargetSampler` (VRMC_vrm_animation-1.0 specifies the
+    /// sampled value is in head-bone-local space; see issue #190).
     func testPlayerDrivesLookAtControllerFromVRMASampler() {
         let model = makeFixtureModel()
         let controller = VRMLookAtController()
@@ -55,8 +56,8 @@ final class VRMALookAtIntegrationTests: XCTestCase {
 
         player.update(deltaTime: 0.25, model: model)
 
-        guard case .point(let pos) = controller.target else {
-            return XCTFail("Expected controller.target to be .point after VRMA-driven update; got \(controller.target)")
+        guard case .headLocalPoint(let pos) = controller.target else {
+            return XCTFail("Expected controller.target to be .headLocalPoint after VRMA-driven update; got \(controller.target)")
         }
         XCTAssertEqual(pos.x, 2.5, accuracy: 1e-5)
         XCTAssertEqual(pos.y, 1.25, accuracy: 1e-5)

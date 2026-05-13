@@ -48,12 +48,11 @@ import simd
 /// 3. Caches morph weights for the next ``applyMorphWeights(to:)`` call.
 /// 4. When ``lookAtController`` is attached and the clip carries a
 ///    `lookAtTargetSampler` (VRMC_vrm_animation §lookAt), look-at target
-///    tracks are applied by setting `controller.target = .point(sampler(time))`.
-///    The sampler value is forwarded verbatim; per the VRMC_vrm_animation-1.0
-///    spec, this value is in head-bone-local coordinates. (Note: there is a
-///    possible latent inconsistency with ``VRMLookAtController``'s
-///    interpretation of `.point` as world-space — tracked separately for
-///    code-level audit.)
+///    tracks are applied by setting
+///    `controller.target = .headLocalPoint(sampler(time))`. The sampler value
+///    is in head-bone-local coordinates per the VRMC_vrm_animation-1.0 spec;
+///    ``VRMLookAtController`` resolves the value through the head bone's
+///    world transform at update time.
 /// 5. Propagates world transforms, then runs the ``ConstraintSolver`` on any
 ///    `VRMNodeConstraint`s the model carries and propagates again so
 ///    descendants see constraint output.
@@ -103,8 +102,9 @@ public final class AnimationPlayer: @unchecked Sendable {
 
     /// Optional controller driven by the loaded clip's `lookAtTargetSampler`.
     /// When both are non-nil, each `update(deltaTime:model:)` call sets
-    /// `controller.target = .point(sampler(currentTime))` so VRMA-authored
-    /// look-at data drives the eyes end-to-end. Held weakly to avoid a
+    /// `controller.target = .headLocalPoint(sampler(currentTime))` so VRMA-authored
+    /// look-at data drives the eyes end-to-end (sampler values are in head-bone
+    /// local space per the VRMC_vrm_animation-1.0 spec). Held weakly to avoid a
     /// retain cycle if the controller's owner also holds the player.
     public weak var lookAtController: VRMLookAtController?
 
@@ -254,11 +254,13 @@ public final class AnimationPlayer: @unchecked Sendable {
 
             // 4. VRMA-driven lookAt: if a controller is attached and the clip
             //    has a lookAtTargetSampler (VRMC_vrm_animation §lookAt), set
-            //    the controller's target to the sampled world position.
+            //    the controller's target. The sampler value is head-bone-local
+            //    per the spec, so route through .headLocalPoint and let the
+            //    controller compose with the head world transform at apply time.
             //    Skipped when sampler is nil so user-set targets (.camera /
             //    .user / .forward) are preserved.
             if let controller = lookAtController, let sampler = clip.lookAtTargetSampler {
-                controller.target = .point(sampler(localTime))
+                controller.target = .headLocalPoint(sampler(localTime))
             }
 
             // 5. Propagate world transforms once so aim/rotation constraints see this

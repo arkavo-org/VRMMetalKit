@@ -28,6 +28,14 @@ public enum VRMLookAtTarget {
     case user
     /// Look at a specific world-space point.
     case point(SIMD3<Float>)
+    /// Look at a point expressed in the head bone's local space.
+    ///
+    /// This matches the coordinate space defined by the
+    /// [VRMC_vrm_animation-1.0 spec](https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/README.md)
+    /// for `lookAt` tracks. The controller resolves it through the head bone's
+    /// world transform at each ``update(deltaTime:)`` call, so callers do not
+    /// need to recompose the value when the head moves.
+    case headLocalPoint(SIMD3<Float>)
     /// Look straight ahead along the rest pose forward direction (no gaze deviation).
     case forward
 }
@@ -318,26 +326,15 @@ public class VRMLookAtController {
     private func updateTargetAngles() {
         guard let model = model else { return }
 
-        // Get target position based on target type
-        let targetPos: SIMD3<Float>
-        switch target {
-        case .camera:
-            targetPos = cameraPosition
-        case .user:
-            targetPos = userPosition
-        case .point(let pos):
-            targetPos = pos
-        case .forward:
-            targetYaw = 0
-            targetPitch = 0
-            return
-        }
-
-        // Get eye position (approximate from head bone or model center)
+        // Resolve head-bone world transform once (used for both eye position and
+        // for head-local targets). Falls back to a default eye height when the
+        // model has no head bone wired up.
         var eyePosition = SIMD3<Float>(0, 1.5, 0) // Default eye height
+        var headWorldMatrix: simd_float4x4?
 
         if let headIndex = headBoneIndex, headIndex < model.nodes.count {
             let headNode = model.nodes[headIndex]
+            headWorldMatrix = headNode.worldMatrix
             eyePosition = SIMD3<Float>(
                 headNode.worldMatrix[3][0],
                 headNode.worldMatrix[3][1],
@@ -348,6 +345,29 @@ public class VRMLookAtController {
             if let lookAt = lookAtData {
                 eyePosition += lookAt.offsetFromHeadBone
             }
+        }
+
+        // Get target position based on target type
+        let targetPos: SIMD3<Float>
+        switch target {
+        case .camera:
+            targetPos = cameraPosition
+        case .user:
+            targetPos = userPosition
+        case .point(let pos):
+            targetPos = pos
+        case .headLocalPoint(let localPos):
+            if let m = headWorldMatrix {
+                let world = m * SIMD4<Float>(localPos, 1)
+                targetPos = SIMD3<Float>(world.x, world.y, world.z)
+            } else {
+                // No head bone available — treat as model-space fallback.
+                targetPos = localPos
+            }
+        case .forward:
+            targetYaw = 0
+            targetPitch = 0
+            return
         }
 
         // Calculate direction vector
