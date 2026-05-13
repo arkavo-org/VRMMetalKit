@@ -21,6 +21,24 @@ import MetalKit
 import simd
 
 extension VRMRenderer {
+    /// Build a ``VRMPipelineCache`` key that captures every property of the
+    /// pipeline descriptor that affects compilation.
+    ///
+    /// The static `name` pins the shader-function pair, blend state,
+    /// alpha-to-coverage flag, and vertex layout (which are constant per
+    /// call site). `config.colorPixelFormat` and `config.sampleCount` vary
+    /// per renderer, so they must be part of the cache key — otherwise a
+    /// second renderer asking for the "same" pipeline at a different format
+    /// or sample count receives the first renderer's pipeline back and the
+    /// GPU silently writes the wrong attachment layout. That latent collision
+    /// is what surfaced as the framebuffer-format mismatch behind
+    /// vrm-conformance #213 (linear bytes where sRGB-encoded bytes were
+    /// expected, because the cache returned a `.bgra8Unorm` pipeline for a
+    /// `.rgba8Unorm_srgb` render target).
+    func pipelineKey(_ name: String) -> String {
+        return "\(name)|fmt=\(config.colorPixelFormat.rawValue)|samples=\(config.sampleCount)"
+    }
+
     func validateMaterialUniformAlignment() {
         // Calculate Swift struct size and stride
         let swiftSize = MemoryLayout<MToonMaterialUniforms>.size
@@ -209,7 +227,7 @@ extension VRMRenderer {
             let opaqueState = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: opaqueDescriptor,
-                key: "mtoon_opaque"
+                key: pipelineKey("mtoon_opaque")
             )
             try strictValidator?.validatePipelineState(opaqueState, name: "mtoon_opaque_pipeline")
             opaquePipelineState = opaqueState
@@ -234,7 +252,7 @@ extension VRMRenderer {
             let blendState = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: blendDescriptor,
-                key: "mtoon_blend"
+                key: pipelineKey("mtoon_blend")
             )
             try strictValidator?.validatePipelineState(blendState, name: "mtoon_blend_pipeline")
             blendPipelineState = blendState
@@ -250,7 +268,7 @@ extension VRMRenderer {
             let wireframeState = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: wireframeDescriptor,
-                key: "mtoon_wireframe"
+                key: pipelineKey("mtoon_wireframe")
             )
             try strictValidator?.validatePipelineState(wireframeState, name: "mtoon_wireframe_pipeline")
             wireframePipelineState = wireframeState
@@ -267,7 +285,7 @@ extension VRMRenderer {
             let maskA2CState = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: maskA2CDescriptor,
-                key: "mtoon_mask_a2c"
+                key: pipelineKey("mtoon_mask_a2c")
             )
             try strictValidator?.validatePipelineState(maskA2CState, name: "mtoon_mask_a2c_pipeline")
             maskAlphaToCoveragePipelineState = maskA2CState
@@ -293,7 +311,7 @@ extension VRMRenderer {
                 let outlineState = try VRMPipelineCache.shared.getPipelineState(
                     device: device,
                     descriptor: outlineDescriptor,
-                    key: "mtoon_outline"
+                    key: pipelineKey("mtoon_outline")
                 )
                 mtoonOutlinePipelineState = outlineState
                 vrmLog("[VRMRenderer] Created MToon outline pipeline successfully")
@@ -426,7 +444,7 @@ extension VRMRenderer {
             let skinnedOpaqueState = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: skinnedOpaqueDescriptor,
-                key: "mtoon_skinned_opaque"
+                key: pipelineKey("mtoon_skinned_opaque")
             )
             try strictValidator?.validatePipelineState(skinnedOpaqueState, name: "skinned_opaque_pipeline")
             skinnedOpaquePipelineState = skinnedOpaqueState
@@ -449,7 +467,7 @@ extension VRMRenderer {
             let skinnedBlendState = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: skinnedBlendDescriptor,
-                key: "mtoon_skinned_blend"
+                key: pipelineKey("mtoon_skinned_blend")
             )
             try strictValidator?.validatePipelineState(skinnedBlendState, name: "skinned_blend_pipeline")
             skinnedBlendPipelineState = skinnedBlendState
@@ -466,7 +484,7 @@ extension VRMRenderer {
             let skinnedMaskA2CState = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: skinnedMaskA2CDescriptor,
-                key: "mtoon_skinned_mask_a2c"
+                key: pipelineKey("mtoon_skinned_mask_a2c")
             )
             try strictValidator?.validatePipelineState(skinnedMaskA2CState, name: "skinned_mask_a2c_pipeline")
             skinnedMaskAlphaToCoveragePipelineState = skinnedMaskA2CState
@@ -492,7 +510,7 @@ extension VRMRenderer {
                 let skinnedOutlineState = try VRMPipelineCache.shared.getPipelineState(
                     device: device,
                     descriptor: skinnedOutlineDescriptor,
-                    key: "mtoon_skinned_outline"
+                    key: pipelineKey("mtoon_skinned_outline")
                 )
                 mtoonSkinnedOutlinePipelineState = skinnedOutlineState
                 vrmLog("[SKINNED PSO] Created skinned MToon outline pipeline successfully")
@@ -571,7 +589,7 @@ extension VRMRenderer {
             spritePipelineState = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: pipelineDescriptor,
-                key: "sprite"
+                key: pipelineKey("sprite")
             )
             vrmLog("[VRMRenderer] Created sprite pipeline successfully")
 
