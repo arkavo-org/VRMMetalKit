@@ -859,6 +859,40 @@ public class VRMModel: @unchecked Sendable {
         await context?.updatePhase(.sanitizingJoints, progress: 0.5)
         sanitizeAllMeshJoints()
         await context?.updatePhase(.sanitizingJoints, progress: 1.0)
+
+        // VRM 0.0 → 1.0: companion pass to the per-node TRS conjugation in
+        // `buildNodeHierarchy()`. Must run after skins load their IBMs from
+        // the glTF accessor.
+        applyVRM0InverseBindMatrixConjugation()
+    }
+
+    /// VRM 0.0 → 1.0: rotate every skin's `inverseBindMatrix` by `Ry180` (left-multiply).
+    ///
+    /// `buildNodeHierarchy()` conjugates each node's local TRS so joint world
+    /// matrices end up as `Ry180 · M_old · Ry180⁻¹`. `inverseBindMatrices` are
+    /// loaded later from the glTF accessor in the original VRM 0.x frame, so
+    /// `jointMatrix = joint.worldMatrix · IBM` would expand to
+    /// `Ry180 · M_old · Ry180⁻¹ · M_old⁻¹` — a non-trivial per-joint translation
+    /// (`Ry180·p − p` for a joint at position `p` with identity rotation) rather
+    /// than the intended `Ry180`.  Left-multiplying every IBM by `Ry180` cancels
+    /// the stray `Ry180⁻¹` so the skinning result is `Ry180 · vertex_world_old`
+    /// at every pose, matching what render-time `vrmVersionRotation` used to do.
+    private func applyVRM0InverseBindMatrixConjugation() {
+        guard isVRM0 else { return }
+        // 180° rotation about Y as a 4x4: negate the X and Z components of every
+        // column. Cheap to write inline so the math is auditable next to the
+        // node-side conjugation in `buildNodeHierarchy()`.
+        let ry180 = float4x4(
+            SIMD4<Float>(-1, 0,  0, 0),
+            SIMD4<Float>( 0, 1,  0, 0),
+            SIMD4<Float>( 0, 0, -1, 0),
+            SIMD4<Float>( 0, 0,  0, 1)
+        )
+        for skin in skins {
+            for i in 0..<skin.inverseBindMatrices.count {
+                skin.inverseBindMatrices[i] = ry180 * skin.inverseBindMatrices[i]
+            }
+        }
     }
 
     /// "Iron Dome" joint sanitization - ensures all mesh joint indices are within valid bounds.
@@ -947,8 +981,10 @@ public class VRMModel: @unchecked Sendable {
         // A 180° rotation around Y aligns facing direction AND makes node.worldPosition
         // consistent with VRM 1.0 (left limbs positive X).  Applied once at load time
         // so physics, animation, and culling all see the same coordinate space.
+        // The matching `inverseBindMatrices` pass runs after skins are loaded — see
+        // `applyVRM0InverseBindMatrixConjugation()`; without it skinning at rest
+        // would displace vertices by `Ry180·p − p` for each joint.
         if isVRM0 {
-            let ry180 = simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0))
             for node in nodes {
                 // Conjugate local rotation by 180° Y: (x, y, z, w) → (-x, y, -z, w)
                 node.rotation = simd_normalize(

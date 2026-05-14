@@ -119,8 +119,9 @@ public enum VRMAnimationLoader {
     /// - Parameters:
     ///   - url: Local file URL to the `.vrma` GLB.
     ///   - model: Optional target ``VRMModel`` whose rest pose drives
-    ///     retargeting. When non-`nil`, also enables VRM 0.0 coordinate
-    ///     conversion via `model.isVRM0`.
+    ///     retargeting. VRM 0.0 → 1.0 coordinate conversion is applied at
+    ///     model load time (see ``VRMModel/buildNodeHierarchy()``), so VRMA
+    ///     samplers can apply directly without per-format conversion.
     /// - Returns: An ``AnimationClip`` with retargeted samplers populated.
     /// - Throws: An `NSError` (domain `"VRMAnimationLoader"`) when the file
     ///   contains no animations, or any error thrown by ``GLTFParser`` /
