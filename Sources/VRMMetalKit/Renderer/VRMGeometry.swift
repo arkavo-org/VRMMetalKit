@@ -352,63 +352,6 @@ public class VRMPrimitive {
                 }
             }
 
-            // Winding-convention normalization (vrm-conformance #183). The glTF
-            // 2.0 spec mandates triangles wound CCW when viewed from the front
-            // (the side whose vertex normals point at the viewer). Some asset
-            // generators ship CW-from-outside instead, which Metal's
-            // `.counterClockwise = front` + `.back` cull renders inside-out.
-            // Detect by comparing the cross-product geometric normal of each
-            // triangle against its averaged vertex normal. If a clear majority
-            // of triangles have a NEGATIVE dot (geometric normal points
-            // opposite to vertex normal), reverse winding so downstream culling
-            // and back-face logic in the shader works the same as for the
-            // dominant Unity-exported-VRM convention.
-            if primitive.primitiveType == .triangle,
-               primitive.hasNormals,
-               !vertexData.positions.isEmpty,
-               !vertexData.normals.isEmpty,
-               indices.count >= 3 {
-                let triCount = indices.count / 3
-                let sample = min(triCount, 64)  // bounded — sphere has thousands, but 64 is plenty
-                var inwardCount = 0
-                var outwardCount = 0
-                for t in 0..<sample {
-                    let i0 = Int(indices[t * 3])
-                    let i1 = Int(indices[t * 3 + 1])
-                    let i2 = Int(indices[t * 3 + 2])
-                    guard i0 < vertexData.positions.count,
-                          i1 < vertexData.positions.count,
-                          i2 < vertexData.positions.count,
-                          i0 < vertexData.normals.count,
-                          i1 < vertexData.normals.count,
-                          i2 < vertexData.normals.count else { continue }
-                    let p0 = vertexData.positions[i0]
-                    let p1 = vertexData.positions[i1]
-                    let p2 = vertexData.positions[i2]
-                    let geomNormal = simd_cross(p1 - p0, p2 - p0)
-                    let vertNormalAvg = (vertexData.normals[i0] + vertexData.normals[i1] + vertexData.normals[i2])
-                    let d = simd_dot(geomNormal, vertNormalAvg)
-                    if d < -1e-6 {
-                        inwardCount += 1
-                    } else if d > 1e-6 {
-                        outwardCount += 1
-                    }
-                }
-                // Clear-majority threshold — degenerate triangles or flat
-                // meshes with zero normals shouldn't flip winding.
-                if inwardCount > outwardCount * 4, inwardCount >= 8 {
-                    vrmLog("[VRMPrimitive] Winding normalization: \(inwardCount)/\(sample) triangles wound CW-from-outside; reversing index order to match glTF CCW-from-front spec.")
-                    var reversed: [UInt32] = []
-                    reversed.reserveCapacity(indices.count)
-                    for t in 0..<triCount {
-                        reversed.append(indices[t * 3])
-                        reversed.append(indices[t * 3 + 2])  // swap 2nd and 3rd
-                        reversed.append(indices[t * 3 + 1])
-                    }
-                    indices = reversed
-                }
-            }
-
             if let device = device {
                 if accessor?.componentType == 5125 { // UNSIGNED_INT
                     primitive.indexType = .uint32

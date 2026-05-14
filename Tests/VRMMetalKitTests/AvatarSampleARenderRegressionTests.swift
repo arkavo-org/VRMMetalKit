@@ -6,30 +6,26 @@ import Metal
 import simd
 @testable import VRMMetalKit
 
-/// Regression coverage for the "dim AvatarSample_A render" introduced by
-/// commit `83c9da1` (#183: MToon flat-white output on factor-only spheres).
+/// Regression coverage for the "dim AvatarSample_A render" that commit
+/// `83c9da1` (#183: MToon flat-white output on factor-only spheres)
+/// introduced — and that this branch reverts.
 ///
-/// The #183 fix removed the Half-Lambert remap (`NdotL * 0.5 + 0.5`) from
-/// `MToonShader.metal`'s direct-lighting blocks to make a synthetic
-/// factor-only sphere stop flat-whiting in the conformance corpus. Real
-/// Unity-exported VRM assets like `AvatarSample_A` had their `shadingShiftFactor`
-/// authored against the pre-#183 Half-Lambert input range, so removing the
-/// remap shifted their entire shading curve by -0.5 — pushing the visible
-/// body into shadow with default scene lighting and producing a near-black
-/// silhouette where the avatar used to render in full color.
+/// #183 removed the Half-Lambert remap (`NdotL * 0.5 + 0.5`) from
+/// `MToonShader.metal` to fix a synthetic factor-only sphere flat-whiting
+/// in the conformance corpus. Real Unity-exported VRM assets like
+/// `AvatarSample_A` had their `shadingShiftFactor` authored against the
+/// Half-Lambert input range [0, 1]; removing the remap shifted their shading
+/// curve by -0.5 and pushed the visible body into shadow under default
+/// lighting — the avatar rendered as a near-black silhouette where it had
+/// previously shown a cream cardigan, dark shorts, and visible face.
 ///
-/// #183's regression test (`MToonFlatWhiteLightingTests`) only validated the
-/// synthetic sphere it was tuned for. This test exercises the *bundled* real
-/// asset (`AvatarSample_A_1.0.vrm.glb`) with the *same default lighting* that
-/// `VRMRender` ships, so a future #183-style over-correction can't slip
-/// through unit tests again.
-///
-/// Currently fails (the dim regression is still live on `main`). Wrapped in
-/// `XCTExpectFailure` until the underlying #183 over-correction is addressed
-/// — restoring Half-Lambert behind a flag, re-tuning the asset's shadingShift
-/// on load for VRM 0.x → 1.0 conversions, or boosting `VRMRender`'s default
-/// scene lighting to compensate. Once any of those land, delete the
-/// `XCTExpectFailure` block so the assertion enforces correctness.
+/// #183's own regression test (`MToonFlatWhiteLightingTests`) only validated
+/// the synthetic sphere it was tuned for, so the bigger real-asset regression
+/// slipped through. The reverting commit on this branch
+/// (`Revert "fix: MToon flat-white output on factor-only spheres (#183)"`)
+/// restores Half-Lambert and the original brightness; this test exercises
+/// the bundled real asset with the same default lighting `VRMRender` ships
+/// so a future #183-style over-correction is caught at PR time.
 @MainActor
 final class AvatarSampleARenderRegressionTests: XCTestCase {
 
@@ -37,12 +33,13 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
     /// assert the avatar's chest region is visibly lit (not a near-black
     /// silhouette). Empirical magnitudes:
     ///
-    ///   - Pre-#183 mean body brightness: ~0.78 (cream-colored cardigan)
-    ///   - Post-#183 mean body brightness: ~0.06 (darker than the navy bg)
+    ///   - With Half-Lambert (post-revert): chest mean ~0.50 (cream cardigan)
+    ///   - Without Half-Lambert (#183-era):  chest mean ~0.06 (darker than bg)
     ///   - Background clear color: ~0.13
     ///
-    /// Threshold 0.30 catches the dim regression with margin both above the
-    /// background and well below the spec-correct lit brightness.
+    /// Threshold 0.30 sits between the two regimes — guarantees the avatar
+    /// is recognizably lit with margin both above the background and below
+    /// the lit brightness.
     func testAvatarRendersWithDefaultLightingIsNotDimSilhouette() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal not available")
@@ -89,23 +86,13 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
         let meanLuma = (meanR + meanG + meanB) / 3.0
         print("[#183] AvatarSample_A chest mean R/G/B = (\(meanR), \(meanG), \(meanB)) luma=\(meanLuma)")
 
-        XCTExpectFailure(
-            "Dim AvatarSample_A render — pending #183 over-correction fix. " +
-            "When restored, delete this XCTExpectFailure wrapper.",
-            options: {
-                let o = XCTExpectedFailure.Options()
-                o.isStrict = true  // fail if it unexpectedly passes (i.e. someone fixed it)
-                return o
-            }()
-        ) {
-            XCTAssertGreaterThan(meanLuma, 0.30,
-                "Chest region renders near-black (luma=\(meanLuma)). " +
-                "Pre-#183 the cardigan rendered at luma ~0.78 with the same " +
-                "default lighting; removing the Half-Lambert remap from " +
-                "MToonShader.metal pushed the avatar's authored shadingShift " +
-                "into shadow across the whole visible body. Fix #183's " +
-                "over-correction, then drop the XCTExpectFailure wrapper.")
-        }
+        XCTAssertGreaterThan(meanLuma, 0.30,
+            "Chest region renders too dim (luma=\(meanLuma)). The Half-Lambert " +
+            "remap in MToonShader.metal (restored by the #183 revert on this " +
+            "branch) is what keeps AvatarSample_A's authored shadingShiftFactor " +
+            "from pushing the visible body into shadow under default lighting. " +
+            "A failure here likely means a #183-style shading-curve change was " +
+            "reintroduced.")
     }
 
     // MARK: - Helpers (mirrors `MToonRimFresnelTests`)
