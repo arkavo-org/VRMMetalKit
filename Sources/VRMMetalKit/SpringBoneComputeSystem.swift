@@ -1710,25 +1710,37 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         // Process bones in order (parents before children due to chain structure).
-        // Seed each child along its **authored bind direction** rather than a
-        // hardcoded world `-Y`. The previous behavior teleported every chain
-        // joint to "hang straight down from parent," which on assets that
-        // author `gravityPower = 0` (e.g. AvatarSample_A_1.0's `Bust`, `Hair`,
-        // `Hood`) leaves the chains stuck in the world-down-gravity seed pose
-        // rather than the asset's intended rest pose. The integrator already
-        // respects `gravityPower = 0`; the kinematic seed had to be brought
-        // in line with it (vrm-conformance VMK#233).
+        // Seed each child along its **authored bind direction in world space**
+        // rather than a hardcoded world `-Y`. The previous behavior teleported
+        // every chain joint to "hang straight down from parent," which on
+        // assets that author `gravityPower = 0` (e.g. AvatarSample_A_1.0's
+        // `Bust`, `Hair`, `Hood`) leaves the chains stuck in the world-down
+        // seed pose rather than the asset's intended rest pose. The integrator
+        // respects `gravityPower = 0`; the kinematic seed has to match it
+        // (vrm-conformance VMK#233).
         //
-        // Indexing matches the shader's usage at `SpringBonePredict.metal:185`:
-        // `boneBindDirections[N]` stores the direction from bone N to bone N+1
-        // (current→child), so the direction from parent to current bone lives
-        // at `boneBindDirections[parentIdx]`, NOT `[i]`. The issue body's
-        // shorthand `[i]` had an off-by-one — the semantically correct
-        // substitution is `[parentIdx]`.
+        // Use `targetWorldBindDirections` (the same buffer the GPU stiffness
+        // target reads — see `SpringBonePredict.metal:185-201` and
+        // `captureTargetWorldBindDirections` above), NOT the raw CPU-side
+        // `boneBindDirections`. The CPU array holds *parent-local* directions;
+        // using it as if it were world space introduces a rotation error equal
+        // to the parent's bind-time world rotation, which leaves the seed in a
+        // wrong world position. The stiffness target then pulls back to the
+        // *correct* world position, producing visibly erratic settling on any
+        // chain whose parent rotation isn't identity at bind (every real
+        // humanoid asset). The world-transformed slot matches the stiffness
+        // target so seed and target converge to the same position.
+        //
+        // Indexing: `targetWorldBindDirections[N]` follows the same convention
+        // as `boneBindDirections[N]` — direction from bone N to bone N+1
+        // (current→child) — so the direction from parent to current bone is at
+        // `targetWorldBindDirections[parentIdx]`. The issue body's `[i]` is
+        // off-by-one; the semantically correct substitution is `[parentIdx]`,
+        // matching the shader's existing usage.
         //
         // For procedural spring-bone test corpora (vertical chains with
-        // authored bind = (0, -1, 0)) this is a no-op against the previous
-        // hardcoded gravity seed.
+        // authored bind = (0, -1, 0) and identity parent rotations) this is
+        // a no-op against the previous hardcoded gravity seed.
         for i in 0..<buffers.numBones {
             let parentIdx = cpuParentIndices[i]
 
@@ -1739,12 +1751,22 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let parentPos = kinematicPositions[parentIdx]
                 let restLength = cpuRestLengths[i]
 
-                // Use the parent slot's bind direction (parent → me).  Fall
-                // back to world-down if the captured direction degenerated to
-                // zero length so we never produce NaN positions.
-                let bindDir = (parentIdx < boneBindDirections.count) ? boneBindDirections[parentIdx] : SIMD3<Float>(0, -1, 0)
-                let bindLen = simd_length(bindDir)
-                let seedDir = bindLen > 0.001 ? bindDir / bindLen : SIMD3<Float>(0, -1, 0)
+                // Pull the world-space bind direction from the same buffer the
+                // GPU stiffness target reads. Fall back through previousWorld
+                // (last frame's value, also world-space) and finally world `-Y`
+                // so a setup race never produces NaN seed positions.
+                let seedDir: SIMD3<Float>
+                if parentIdx < targetWorldBindDirections.count {
+                    let d = targetWorldBindDirections[parentIdx]
+                    let len = simd_length(d)
+                    seedDir = len > 0.001 ? d / len : SIMD3<Float>(0, -1, 0)
+                } else if parentIdx < previousWorldBindDirections.count {
+                    let d = previousWorldBindDirections[parentIdx]
+                    let len = simd_length(d)
+                    seedDir = len > 0.001 ? d / len : SIMD3<Float>(0, -1, 0)
+                } else {
+                    seedDir = SIMD3<Float>(0, -1, 0)
+                }
                 kinematicPositions[i] = parentPos + seedDir * restLength
             }
         }
