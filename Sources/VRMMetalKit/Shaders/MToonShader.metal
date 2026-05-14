@@ -617,12 +617,8 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float3 lit0 = float3(0.0);
  float3 lighting0 = float3(0.0);
  if (intensity0 > 0.0) {
- // Light direction convention: negate because uniforms stores direction FROM light,
- // but NdotL calculation needs direction TO light
- // Half-Lambert: remap from [-1,1] to [0,1] for softer anime-style shadows
  float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
  float NdotL = rawNdotL * 0.5 + 0.5;
- // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
  float shading0 = NdotL + shadingShift;
  float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading0);
  float weight = intensity0 / totalIntensity;
@@ -633,7 +629,6 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float3 lit1 = float3(0.0);
  float3 lighting1 = float3(0.0);
  if (intensity1 > 0.0) {
- // Half-Lambert for fill light
  float rawNdotL1 = dot(normal, -uniforms.light1Direction.xyz);
  float NdotL1 = rawNdotL1 * 0.5 + 0.5;
  float shading1 = NdotL1 + shadingShift;
@@ -646,7 +641,6 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float3 lit2 = float3(0.0);
  float3 lighting2 = float3(0.0);
  if (intensity2 > 0.0) {
- // Half-Lambert for rim light
  float rawNdotL2 = dot(normal, -uniforms.light2Direction.xyz);
  float NdotL2 = rawNdotL2 * 0.5 + 0.5;
  float shading2 = NdotL2 + shadingShift;

@@ -65,7 +65,8 @@ public struct MToonMaterialUniforms {
 
     // Block 2: 16 bytes - Material factors (float + packed float3)
 
-    /// MToon shading shift (-1…1). Offsets the lit/shade transition along NdotL.
+    /// MToon shading shift (-1…1). Offsets the lit/shade transition along
+    /// the shader's restored Half-Lambert NdotL input; see `MToonShader.metal`.
     public var shadingShiftFactor: Float = 0.0
     /// Emissive colour, red channel. Use ``MToonMaterialUniforms/emissiveFactor`` for a `SIMD3` view.
     public var emissiveR: Float = 0.0
@@ -111,7 +112,9 @@ public struct MToonMaterialUniforms {
 
     /// Parametric rim lift (typically 0…1). Lifts the rim term off zero.
     public var parametricRimLiftFactor: Float = 0.0
-    /// Mix between unlit rim and lit-coloured rim (0…1).
+    /// Mix between unlit rim and scene-radiance-modulated rim (0…1).
+    /// Validation rejects out-of-range CPU values; the shader also clamps this
+    /// defensively for fuzzed or unchecked uniform buffers.
     public var rimLightingMixFactor: Float = 1.0
     /// Non-zero if a rim-multiply texture is bound for this material.
     public var hasRimMultiplyTexture: Int32 = 0
@@ -376,4 +379,3 @@ public enum MToonOutlineWidthMode: String {
     /// Outline width is measured in screen units.
     case screenCoordinates = "screenCoordinates"
 }
-
