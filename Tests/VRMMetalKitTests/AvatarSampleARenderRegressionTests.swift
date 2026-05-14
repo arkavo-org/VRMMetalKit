@@ -33,7 +33,7 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
     /// assert the avatar's chest region is visibly lit (not a near-black
     /// silhouette). Empirical magnitudes:
     ///
-    ///   - Bright VRMRender default: chest luma ~0.43 (cream cardigan)
+    ///   - Bright VRMRender default: chest luma ~0.52 (cream cardigan)
     ///   - Pre-brightening default:   chest luma ~0.36
     ///   - Background clear color: ~0.13
     ///
@@ -67,12 +67,13 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
             up:     SIMD3<Float>(0, 1, 0)
         )
         renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 1.25)
-        renderer.disableLight(1)
+                          color: SIMD3<Float>(1, 1, 1), intensity: 1.8)
+        renderer.setLight(1, direction: SIMD3<Float>(0.35, 0.05, -0.9),
+                          color: SIMD3<Float>(0.95, 0.96, 1.0), intensity: 0.35)
         renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 0.35)
-        renderer.setAmbientColor(SIMD3<Float>(0.08, 0.08, 0.08))
-        renderer.setLightNormalizationMode(.manual(1.1))
+                          color: SIMD3<Float>(1, 1, 1), intensity: 0.45)
+        renderer.setAmbientColor(SIMD3<Float>(0.14, 0.14, 0.14))
+        renderer.setLightNormalizationMode(.manual(1.25))
 
         let pixels = try RenderTestSupport.renderFrame(
             renderer: renderer,
