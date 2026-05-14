@@ -861,6 +861,53 @@ final class VRMExtensionParserTests: XCTestCase {
         }
     }
 
+    // MARK: - VRM 1.0 Collider Offset JSON-Deserialization Regression
+
+    /// Regression for the silent `[NSNumber]`/`[Double]` vs `[Float]` cast
+    /// failure in `parseVector3`. `JSONSerialization` decodes JSON number
+    /// arrays as `[Double]` on Apple platforms, but the parser previously only
+    /// matched `[Float]`. Result: every VRM 1.0 collider offset, capsule tail,
+    /// and plane normal silently collapsed to `(0, 0, 0)`, parking colliders
+    /// at the owning joint origin. For VRoid bust sub-colliders (authored at
+    /// non-zero chest-bone-local offsets) this let hair/clothes pass through
+    /// the bust mass during animation.
+    ///
+    /// Loads the bundled `AvatarSample_A_1.0.vrm.glb` and asserts the bust
+    /// sub-colliders (indices 2 and 3, both anchored to `J_Bip_C_UpperChest`)
+    /// have the authored non-zero offsets — a hard regression signal that the
+    /// JSON-array cast handles `[Double]`.
+    func testVRM1ColliderOffsets_RoundTripFromJSON_NonZero() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal not available") }
+        let path = "AvatarSample_A_1.0.vrm.glb"
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb fixture not at \(path)")
+        }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
+        guard let sb = model.springBone, sb.colliders.count > 3 else {
+            XCTFail("Expected springBone with ≥4 colliders in fixture")
+            return
+        }
+
+        let leftBust = sb.colliders[2]
+        let rightBust = sb.colliders[3]
+        guard case let .sphere(leftOffset, _) = leftBust.shape,
+              case let .sphere(rightOffset, _) = rightBust.shape else {
+            XCTFail("Expected sphere colliders at indices 2 and 3")
+            return
+        }
+
+        XCTAssertGreaterThan(abs(leftOffset.x), 0.001,
+            "Left bust sub-collider X offset must be non-zero; got \(leftOffset). " +
+            "If this is (0,0,0), `parseVector3` is back to silently dropping JSON [Double] arrays.")
+        XCTAssertGreaterThan(abs(rightOffset.x), 0.001,
+            "Right bust sub-collider X offset must be non-zero; got \(rightOffset).")
+        // Left and right bust offsets should mirror across X.
+        XCTAssertEqual(leftOffset.x, -rightOffset.x, accuracy: 0.0001,
+            "Left/right bust offsets should mirror across X (asset authoring convention).")
+        XCTAssertEqual(leftOffset.y, rightOffset.y, accuracy: 0.0001)
+        XCTAssertEqual(leftOffset.z, rightOffset.z, accuracy: 0.0001)
+    }
+
     // MARK: - N5b: VRM 0.0 Spring-bone gravityDir Coordinate Flip Tests
 
     /// Stylized assets author non-default `gravityDir` (e.g. `(0.3, -0.95, 0)`

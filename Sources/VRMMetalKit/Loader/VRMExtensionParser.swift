@@ -654,10 +654,22 @@ public class VRMExtensionParser {
 
         if let materialColorBinds = dict["materialColorBinds"] as? [[String: Any]] {
             for bind in materialColorBinds {
+                // `JSONSerialization` decodes JSON number arrays as `[Double]`;
+                // test fixtures sometimes pass `[Float]`. Accept both — the
+                // `[Float]`-only cast silently dropped every JSON-parsed
+                // materialColorBind in production assets.
+                let targetFloats: [Float]?
+                if let arr = bind["targetValue"] as? [Double] {
+                    targetFloats = arr.map(Float.init)
+                } else if let arr = bind["targetValue"] as? [Float] {
+                    targetFloats = arr
+                } else {
+                    targetFloats = nil
+                }
                 guard let material = bind["material"] as? Int,
                       let typeStr = bind["type"] as? String,
                       let type = VRMMaterialColorType(rawValue: typeStr),
-                      let targetValue = bind["targetValue"] as? [Float],
+                      let targetValue = targetFloats,
                       targetValue.count == 4 else {
                     continue
                 }
@@ -785,10 +797,19 @@ public class VRMExtensionParser {
     }
 
     private func parseVector3(_ value: Any?) -> SIMD3<Float>? {
-        guard let array = value as? [Float], array.count == 3 else {
-            return nil
+        // `JSONSerialization` decodes JSON number arrays as `[Double]` on
+        // Apple platforms; test harnesses sometimes construct `[Float]` arrays
+        // directly. Accept both forms — without this, every collider offset,
+        // capsule tail, and plane normal in a VRM 1.0 asset silently parsed
+        // as `(0, 0, 0)`, which collapsed all spring-bone colliders to their
+        // owning joint origin and let hair clip through the head/face.
+        if let array = value as? [Double], array.count == 3 {
+            return SIMD3<Float>(Float(array[0]), Float(array[1]), Float(array[2]))
         }
-        return SIMD3<Float>(array[0], array[1], array[2])
+        if let array = value as? [Float], array.count == 3 {
+            return SIMD3<Float>(array[0], array[1], array[2])
+        }
+        return nil
     }
 
     // MARK: - VRM 0.0 Secondary Animation Support
