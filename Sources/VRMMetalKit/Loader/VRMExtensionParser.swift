@@ -918,11 +918,10 @@ public class VRMExtensionParser {
                         }
 
                         // VRM 0.0 collider format.
-                        // VRM 0.0 (Unity) uses a right-handed -Z forward system; VRM 1.0 / glTF uses +Z forward.
-                        // The model root is rotated 180° around Y to compensate, so collider offsets that are
-                        // local to their node must have X and Z negated to match the VRM 1.0 convention.
-                        let rawOffset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-                        let offset = SIMD3<Float>(-rawOffset.x, rawOffset.y, -rawOffset.z)
+                        // VRM 0.0 → 1.0 coordinate conversion is applied at model load time
+                        // (see VRMModel.buildNodeHierarchy), so collider offsets are used
+                        // directly without additional negation.
+                        let offset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
                         let radius = parseFloatValue(colliderDict["radius"]) ?? 0.0
 
                         // VRM 0.0 only supports spheres in most implementations

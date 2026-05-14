@@ -29,7 +29,7 @@ import simd
 @MainActor
 final class AvatarSampleARenderRegressionTests: XCTestCase {
 
-    /// Render `AvatarSample_A_1.0.vrm.glb` with `VRMRender` CLI defaults and
+    /// Render `AvatarSample_A_0.0.vrm.glb` with `VRMRender` CLI defaults and
     /// assert the avatar's chest region is visibly lit (not a near-black
     /// silhouette). Empirical magnitudes:
     ///
@@ -44,8 +44,8 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal not available")
         }
-        let path = getTestVRM10ModelPath()
-        try requireFixture(path, hint: testVRM10Filename)
+        let path = getTestVRM00ModelPath()
+        try requireFixture(path, hint: testVRM00Filename)
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
 
         var config = RendererConfig()

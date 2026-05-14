@@ -757,7 +757,7 @@ final class VRMExtensionParserTests: XCTestCase {
 
     // MARK: - N5: VRM 0.0 Collider Offset Coordinate Flip Tests
 
-    func testVRM0SphereColliderOffsetXZNegated() throws {
+    func testVRM0SphereColliderOffsetPreserved() throws {
         let vrmDict: [String: Any] = [
             "version": "0.0",
             "meta": ["title": "Test", "author": "Test"],
@@ -802,9 +802,9 @@ final class VRMExtensionParserTests: XCTestCase {
         let collider = model.springBone?.colliders.first
         XCTAssertNotNil(collider)
         if case let .sphere(offset, _) = collider?.shape {
-            XCTAssertEqual(offset.x, -1.0, accuracy: 0.0001)
+            XCTAssertEqual(offset.x, 1.0, accuracy: 0.0001)
             XCTAssertEqual(offset.y, 0.0, accuracy: 0.0001)
-            XCTAssertEqual(offset.z, -1.0, accuracy: 0.0001)
+            XCTAssertEqual(offset.z, 1.0, accuracy: 0.0001)
         } else {
             XCTFail("Expected sphere collider shape")
         }
@@ -853,9 +853,9 @@ final class VRMExtensionParserTests: XCTestCase {
 
         let collider = model.springBone?.colliders.first
         if case let .sphere(offset, _) = collider?.shape {
-            XCTAssertEqual(offset.x, -0.5, accuracy: 0.0001)
+            XCTAssertEqual(offset.x, 0.5, accuracy: 0.0001)
             XCTAssertEqual(offset.y, 2.0, accuracy: 0.0001)
-            XCTAssertEqual(offset.z, 0.3, accuracy: 0.0001)
+            XCTAssertEqual(offset.z, -0.3, accuracy: 0.0001)
         } else {
             XCTFail("Expected sphere collider shape")
         }

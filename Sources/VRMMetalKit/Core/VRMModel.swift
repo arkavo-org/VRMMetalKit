@@ -942,6 +942,37 @@ public class VRMModel: @unchecked Sendable {
             node.updateWorldTransform()
         }
 
+        // VRM 0.0 → VRM 1.0 coordinate conversion.
+        // Unity left-handed (model faces -Z) → glTF right-handed (model faces +Z).
+        // A 180° rotation around Y aligns facing direction AND makes node.worldPosition
+        // consistent with VRM 1.0 (left limbs positive X).  Applied once at load time
+        // so physics, animation, and culling all see the same coordinate space.
+        if isVRM0 {
+            let ry180 = simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0))
+            for node in nodes {
+                // Conjugate local rotation by 180° Y: (x, y, z, w) → (-x, y, -z, w)
+                node.rotation = simd_normalize(
+                    simd_quatf(ix: -node.rotation.imag.x,
+                               iy:  node.rotation.imag.y,
+                               iz: -node.rotation.imag.z,
+                               r:   node.rotation.real)
+                )
+                // Rotate translation: (x, y, z) → (-x, y, -z)
+                node.translation = SIMD3<Float>(-node.translation.x,
+                                                 node.translation.y,
+                                                -node.translation.z)
+                // Update bind pose storage so resetToBindPose() stays consistent
+                node.initialRotation = node.rotation
+                node.initialTranslation = node.translation
+                // Scale magnitudes are unchanged under 180° rotation
+                node.updateLocalMatrix()
+            }
+            // Recalculate world transforms after mutating every local matrix
+            for node in nodes where node.parent == nil {
+                node.updateWorldTransform()
+            }
+        }
+
         // PERFORMANCE: Build normalized name lookup table for fast animation lookups
         buildNodeLookupTable()
     }

@@ -1075,11 +1075,11 @@ public class VRMNode {
     public var scale: SIMD3<Float> = [1, 1, 1]
 
     /// Bind-pose translation captured at load time. Used by ``resetToBindPose()`` and retargeting.
-    public let initialTranslation: SIMD3<Float>
+    public var initialTranslation: SIMD3<Float>
     /// Bind-pose rotation captured at load time.
-    public let initialRotation: simd_quatf
+    public var initialRotation: simd_quatf
     /// Bind-pose scale captured at load time.
-    public let initialScale: SIMD3<Float>
+    public var initialScale: SIMD3<Float>
 
     /// `translation * rotation * scale`, recomputed by ``updateLocalMatrix()`` whenever the components change.
     ///

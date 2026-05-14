@@ -39,3 +39,4 @@ tmp/
 
 # Local renderer output
 /emote-output/
+.bench-out/

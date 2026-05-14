@@ -154,19 +154,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// The VRM model to render. Set via `loadModel(_:)`.
     public var model: VRMModel?
 
-    /// Model rotation correction for VRM coordinate system differences.
-    /// Standard camera setup: camera at +Z looking towards origin.
-    /// VRM 0.0 (Unity) models face -Z (away from camera) → need 180° Y rotation.
-    /// VRM 1.0 (glTF) models face +Z (towards camera) → no rotation needed.
+    /// VRM 0.0 → 1.0 coordinate conversion is now applied at load time
+    /// (see VRMModel.buildNodeHierarchy).  Kept as identity so call-sites
+    /// don't need churn; can be deleted in a future cleanup pass.
     private var vrmVersionRotation: matrix_float4x4 {
-        guard let model = model else { return matrix_identity_float4x4 }
-        if model.isVRM0 {
-            // VRM 0.0 faces -Z, rotate 180° around Y to face +Z (towards camera at +Z)
-            return matrix_float4x4(simd_quatf(angle: .pi, axis: SIMD3<Float>(0, 1, 0)))
-        } else {
-            // VRM 1.0 already faces +Z (towards camera at +Z), no rotation needed
-            return matrix_identity_float4x4
-        }
+        return matrix_identity_float4x4
     }
 
     // MARK: - Camera Mode (First-Person / Third-Person)
@@ -1487,8 +1479,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         uniforms.projectionMatrix = projectionMatrix
 
         // Build a frustum from the current view-projection for per-primitive culling.
-        // The world-space VRM bounds are pre-rotated by vrmVersionRotation so we
-        // bake that into the matrix used for AABB transformation below.
+        // The world-space VRM bounds use the model's node transforms directly;
+        // VRM 0.0 load-time conversion already rotated them into VRM 1.0 space.
         let frameFrustum = Frustum(viewProjection: simd_mul(projectionMatrix, viewMatrix))
         // Skinned primitives can move outside their rest-pose AABB during animation;
         // inflate the model-space bounds by 50% to give room without producing
@@ -1544,6 +1536,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Camera mode for first-person vertex culling (0 = third-person, 1 = first-person).
         uniforms.cameraMode = cameraMode == .firstPerson ? 1 : 0
+
+        // VRM version drives the toon-ramp NdotL convention in MToonShader.metal:
+        // VRM 1.0 uses raw dot(N,L) (spec-correct); VRM 0.x keeps Half-Lambert.
+        uniforms.vrmVersion = (model.specVersion == .v1_0) ? 1 : 0
 
         // DEBUG: Log lighting values to verify 3-point lighting is configured
         #if DEBUG
@@ -2229,11 +2225,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let cullLocalMax: SIMD3<Float>
             let isSkinnedForCull = (item.node.skin != nil || (item.primitive.hasJoints && item.primitive.hasWeights)) && hasSkinning
             if isSkinnedForCull {
-                cullModelMatrix = vrmVersionRotation
+                cullModelMatrix = matrix_identity_float4x4
                 cullLocalMin = inflatedModelMin
                 cullLocalMax = inflatedModelMax
             } else {
-                cullModelMatrix = simd_mul(vrmVersionRotation, item.node.worldMatrix)
+                cullModelMatrix = item.node.worldMatrix
                 cullLocalMin = primitive.localMin
                 cullLocalMax = primitive.localMax
             }
@@ -2342,9 +2338,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             // Update model matrix for this node
             // Apply VRM version rotation: VRM 1.0 models face +Z, need 180° Y rotation to face camera at -Z
-            // For skinned meshes, use vrmVersionRotation (transforms are in skinning data)
-            // For non-skinned meshes, multiply vrmVersionRotation with node's world transform
-            let vrmRotation = vrmVersionRotation
+            // VRM 0.0 load-time conversion already rotated nodes into VRM 1.0 space.
+            let vrmRotation = matrix_identity_float4x4
             if isSkinned {
                 uniforms.modelMatrix = vrmRotation
                 uniforms.normalMatrix = vrmRotation // Rotation-only matrix works for normals
@@ -3654,11 +3649,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let outlineCullMin: SIMD3<Float>
             let outlineCullMax: SIMD3<Float>
             if isSkinned {
-                outlineCullModel = vrmVersionRotation
+                outlineCullModel = matrix_identity_float4x4
                 outlineCullMin = inflatedModelMin
                 outlineCullMax = inflatedModelMax
             } else {
-                outlineCullModel = simd_mul(vrmVersionRotation, item.node.worldMatrix)
+                outlineCullModel = item.node.worldMatrix
                 outlineCullMin = primitive.localMin
                 outlineCullMax = primitive.localMax
             }
@@ -3689,13 +3684,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
 
             // Per-draw modelMatrix: skinned outlines bake transforms into the
-            // joint palette (so modelMatrix is just vrmVersionRotation); rigid
-            // outlines need the node's world transform multiplied in. Mirrors
-            // the main pass (#181 fix) — without this the outline pass reads
-            // whatever modelMatrix happened to be in the shared uniformsBuffer
+            // joint palette (so modelMatrix is identity); rigid outlines need
+            // the node's world transform multiplied in. Mirrors the main pass
+            // (#181 fix) — without this the outline pass reads whatever
+            // modelMatrix happened to be in the shared uniformsBuffer
             // (frame-level identity after the #181 fix), which puts rigid
             // outlines at the origin (regression #185).
-            let outlineRotation = vrmVersionRotation
+            let outlineRotation = matrix_identity_float4x4
             if isSkinned {
                 uniforms.modelMatrix = outlineRotation
                 uniforms.normalMatrix = outlineRotation
