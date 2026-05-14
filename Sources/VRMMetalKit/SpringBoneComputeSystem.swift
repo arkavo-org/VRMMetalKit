@@ -1709,10 +1709,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Process bones in order (parents before children due to chain structure)
-        // Use gravity direction (downward) for child bones to make hair hang naturally
-        let gravityDir = SIMD3<Float>(0, -1, 0)
-
+        // Process bones in order (parents before children due to chain structure).
+        // Seed each child along its **authored bind direction** rather than a
+        // hardcoded world `-Y`. The previous behavior teleported every chain
+        // joint to "hang straight down from parent," which on assets that
+        // author `gravityPower = 0` (e.g. AvatarSample_A_1.0's `Bust`, `Hair`,
+        // `Hood`) leaves the chains stuck in the world-down-gravity seed pose
+        // rather than the asset's intended rest pose. The integrator already
+        // respects `gravityPower = 0`; the kinematic seed had to be brought
+        // in line with it (vrm-conformance VMK#233).
+        //
+        // Indexing matches the shader's usage at `SpringBonePredict.metal:185`:
+        // `boneBindDirections[N]` stores the direction from bone N to bone N+1
+        // (current→child), so the direction from parent to current bone lives
+        // at `boneBindDirections[parentIdx]`, NOT `[i]`. The issue body's
+        // shorthand `[i]` had an off-by-one — the semantically correct
+        // substitution is `[parentIdx]`.
+        //
+        // For procedural spring-bone test corpora (vertical chains with
+        // authored bind = (0, -1, 0)) this is a no-op against the previous
+        // hardcoded gravity seed.
         for i in 0..<buffers.numBones {
             let parentIdx = cpuParentIndices[i]
 
@@ -1720,12 +1736,16 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 // Root bone - use animated position
                 kinematicPositions[i] = rootPositionMap[i] ?? .zero
             } else {
-                // Child bone - hang down from parent using gravity direction
                 let parentPos = kinematicPositions[parentIdx]
                 let restLength = cpuRestLengths[i]
 
-                // Use gravity direction so hair hangs down naturally
-                kinematicPositions[i] = parentPos + gravityDir * restLength
+                // Use the parent slot's bind direction (parent → me).  Fall
+                // back to world-down if the captured direction degenerated to
+                // zero length so we never produce NaN positions.
+                let bindDir = (parentIdx < boneBindDirections.count) ? boneBindDirections[parentIdx] : SIMD3<Float>(0, -1, 0)
+                let bindLen = simd_length(bindDir)
+                let seedDir = bindLen > 0.001 ? bindDir / bindLen : SIMD3<Float>(0, -1, 0)
+                kinematicPositions[i] = parentPos + seedDir * restLength
             }
         }
 
