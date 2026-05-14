@@ -154,13 +154,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// The VRM model to render. Set via `loadModel(_:)`.
     public var model: VRMModel?
 
-    /// VRM 0.0 → 1.0 coordinate conversion is now applied at load time
-    /// (see VRMModel.buildNodeHierarchy).  Kept as identity so call-sites
-    /// don't need churn; can be deleted in a future cleanup pass.
-    private var vrmVersionRotation: matrix_float4x4 {
-        return matrix_identity_float4x4
-    }
-
     // MARK: - Camera Mode (First-Person / Third-Person)
 
     /// Camera perspective mode for VRM first-person rendering.

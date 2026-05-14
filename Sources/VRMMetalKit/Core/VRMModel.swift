@@ -876,7 +876,8 @@ public class VRMModel: @unchecked Sendable {
     /// (`Ry180·p − p` for a joint at position `p` with identity rotation) rather
     /// than the intended `Ry180`.  Left-multiplying every IBM by `Ry180` cancels
     /// the stray `Ry180⁻¹` so the skinning result is `Ry180 · vertex_world_old`
-    /// at every pose, matching what render-time `vrmVersionRotation` used to do.
+    /// at every pose, matching the render-time Y-axis rotation this load-time
+    /// pass replaces.
     private func applyVRM0InverseBindMatrixConjugation() {
         guard isVRM0 else { return }
         // 180° rotation about Y as a 4x4: negate the X and Z components of every
