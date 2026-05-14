@@ -65,7 +65,7 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
 
         // Match `Sources/VRMRender/main.swift` defaults verbatim: 45° FOV at
         // square aspect, camera at (0, 1.3, 1.8) looking at (0, 1.3, 0); single
-        // key light + dim back-rim + low-ambient anime-style lighting.
+        // stronger key light + subtle back-rim + low neutral ambient.
         let size = 256
         let fov: Float = 45.0 * .pi / 180.0
         renderer.projectionMatrix = RenderTestSupport.makePerspective(fovRadians: fov, aspect: 1.0, near: 0.01, far: 100.0)
@@ -75,11 +75,12 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
             up:     SIMD3<Float>(0, 1, 0)
         )
         renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+                          color: SIMD3<Float>(1, 1, 1), intensity: 1.25)
         renderer.disableLight(1)
         renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 0.3)
-        renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
+                          color: SIMD3<Float>(1, 1, 1), intensity: 0.35)
+        renderer.setAmbientColor(SIMD3<Float>(0.08, 0.08, 0.08))
+        renderer.setLightNormalizationMode(.manual(1.1))
 
         let pixels = try RenderTestSupport.renderFrame(
             renderer: renderer,
