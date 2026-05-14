@@ -1054,8 +1054,9 @@ extension VRMPrimitive {
 /// these into ``localMatrix`` and ``worldMatrix`` via
 /// ``updateLocalMatrix()`` and ``updateWorldTransform()``.
 ///
-/// The bind pose is captured immutably in ``initialTranslation``,
-/// ``initialRotation``, and ``initialScale``. Procedural systems compute
+/// The bind pose is captured at load time in ``initialTranslation``,
+/// ``initialRotation``, and ``initialScale`` (after VRM 0.0 → 1.0
+/// coordinate normalization, if any).  Procedural systems compute
 /// deltas against this rest pose, and ``resetToBindPose()`` restores it.
 public class VRMNode {
     /// Source glTF node index; stable across loads.

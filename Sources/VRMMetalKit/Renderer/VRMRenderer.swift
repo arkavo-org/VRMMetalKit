@@ -2216,10 +2216,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Frustum culling: skip primitives whose world-space AABB is entirely
             // outside the camera frustum. For skinned primitives the rest-pose
             // local bounds may not capture animated extremes, so we use the
-            // inflated model-space bounds instead (transformed by vrmRotation
-            // since skinned vertices are baked into world space by the joint
-            // matrices). For rigid primitives we use their tight local bounds
-            // transformed by the node's world matrix.
+            // inflated model-space bounds instead.  For rigid primitives we use
+            // their tight local bounds transformed by the node's world matrix.
+            // VRM 0.0 → 1.0 coordinate conversion is applied at load time, so
+            // both paths consume world-space coordinates without a per-frame
+            // version rotation.
             let cullModelMatrix: matrix_float4x4
             let cullLocalMin: SIMD3<Float>
             let cullLocalMax: SIMD3<Float>
@@ -2336,9 +2337,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("  - Node: \(item.node.name ?? "unnamed"), WorldPos: (\(worldPos.x), \(worldPos.y), \(worldPos.z))")
             }
 
-            // Update model matrix for this node
-            // Apply VRM version rotation: VRM 1.0 models face +Z, need 180° Y rotation to face camera at -Z
-            // VRM 0.0 load-time conversion already rotated nodes into VRM 1.0 space.
+            // Update model matrix for this node.  VRM 0.0 → 1.0 coordinate
+            // conversion is applied at load time (see
+            // `VRMModel.buildNodeHierarchy` + `applyVRM0InverseBindMatrixConjugation`),
+            // so the render path no longer applies a per-frame Y rotation.
             let vrmRotation = matrix_identity_float4x4
             if isSkinned {
                 uniforms.modelMatrix = vrmRotation
@@ -3684,12 +3686,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
 
             // Per-draw modelMatrix: skinned outlines bake transforms into the
-            // joint palette (so modelMatrix is identity); rigid outlines need
-            // the node's world transform multiplied in. Mirrors the main pass
+            // joint palette (so modelMatrix stays identity); rigid outlines need
+            // the node's world transform multiplied in.  Mirrors the main pass
             // (#181 fix) — without this the outline pass reads whatever
             // modelMatrix happened to be in the shared uniformsBuffer
             // (frame-level identity after the #181 fix), which puts rigid
-            // outlines at the origin (regression #185).
+            // outlines at the origin (regression #185).  VRM 0.0 → 1.0
+            // conversion is applied at load time, so no per-frame Y rotation
+            // is needed here.
             let outlineRotation = matrix_identity_float4x4
             if isSkinned {
                 uniforms.modelMatrix = outlineRotation

@@ -878,12 +878,21 @@ public class VRMExtensionParser {
                             joint.hitRadius = 0.0
                         }
 
-                        // Gravity direction
+                        // Gravity direction.
+                        // VRM 0.x `gravityDir` is a world-space vector authored in
+                        // the original Unity/-Z-forward frame.  The node hierarchy
+                        // is conjugated by `Ry180` at load time (see
+                        // `VRMModel.buildNodeHierarchy`), so any non-default
+                        // gravity (e.g. `(0.3, -0.95, 0)` to pull hair forward)
+                        // would otherwise point the wrong way after conversion.
+                        // The default `(0, -1, 0)` is Ry180-invariant, so common
+                        // assets are unaffected; this flip matches three-vrm's
+                        // VRM0 → VRM1 converter for stylized gravity directions.
                         if let gravityDir = groupDict["gravityDir"] as? [String: Any] {
                             let x = gravityDir["x"] as? Float ?? 0
                             let y = gravityDir["y"] as? Float ?? -1
                             let z = gravityDir["z"] as? Float ?? 0
-                            joint.gravityDir = SIMD3<Float>(x, y, z)
+                            joint.gravityDir = SIMD3<Float>(-x, y, -z)
                         }
 
                         spring.joints.append(joint)
