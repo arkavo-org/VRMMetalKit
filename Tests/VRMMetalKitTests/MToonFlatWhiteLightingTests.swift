@@ -6,16 +6,14 @@ import Metal
 import simd
 @testable import VRMMetalKit
 
-/// Expected-failure coverage for VMK#230, the synthetic factor-only sphere
-/// side of the #183/#229 tradeoff.
+/// Regression coverage for VMK#230, the synthetic factor-only sphere side of
+/// the #183/#229 tradeoff.
 ///
 /// #183 removed the Half-Lambert remap to make factor-only MToon assets show
 /// the raw-NdotL lighting gradient expected by vrm-conformance's synthetic
-/// `mtoon_default` sphere. PR #229 restores Half-Lambert because the raw-NdotL
-/// change regressed real Unity-authored avatars such as `AvatarSample_A` into
-/// near-black output. This test keeps the original synthetic failure visible
-/// in CI without blocking the avatar fix. When VMK#230 lands, remove the
-/// `XCTExpectFailure` wrapper and keep the assertion.
+/// `mtoon_default` sphere. The shader now gates the NdotL mapping by material
+/// version: VRM 1.0 uses raw NdotL per spec, while VRM 0.x keeps the
+/// Half-Lambert input range used by older authored materials.
 @MainActor
 final class MToonFlatWhiteLightingTests: XCTestCase {
     private var device: MTLDevice!
@@ -28,7 +26,7 @@ final class MToonFlatWhiteLightingTests: XCTestCase {
         device = dev
     }
 
-    func testFactorOnlySmoothToonGradientIsTrackedAsExpectedFailure() throws {
+    func testVRM1FactorOnlySmoothToonProducesRawNdotLGradient() throws {
         try ensureDevice()
         let model = try makeTwoNormalTrianglesModel(toony: 0.0)
         let renderer = makeRenderer(model: model)
@@ -43,15 +41,13 @@ final class MToonFlatWhiteLightingTests: XCTestCase {
         let litLuma = sampleLumaRGBA(pixels, quadrant: .bottomLeft)
         let shadowLuma = sampleLumaRGBA(pixels, quadrant: .topRight)
 
-        print("[#230 expected] toony=0 litLuma=\(litLuma) shadowLuma=\(shadowLuma) gap=\(litLuma - shadowLuma)")
+        print("[#230] toony=0 litLuma=\(litLuma) shadowLuma=\(shadowLuma) gap=\(litLuma - shadowLuma)")
 
-        XCTExpectFailure("VMK#230: Half-Lambert restore narrows factor-only synthetic contrast until a narrower #183 replacement lands.", strict: true) {
-            XCTAssertGreaterThan(litLuma - shadowLuma, 0.10,
-                "Factor-only MToon material should show a visible raw-NdotL gradient for vrm-conformance's synthetic sphere.")
-        }
+        XCTAssertGreaterThan(litLuma - shadowLuma, 0.10,
+            "VRM 1.0 factor-only MToon material should show a visible raw-NdotL gradient for vrm-conformance's synthetic sphere.")
     }
 
-    func testFactorOnlySharpToonShadowEndpointIsTrackedAsExpectedFailure() throws {
+    func testVRM1FactorOnlySharpToonUsesRawNdotLShadowEndpoint() throws {
         try ensureDevice()
         let model = try makeTwoNormalTrianglesModel(toony: 0.95)
         let renderer = makeRenderer(model: model)
@@ -65,12 +61,10 @@ final class MToonFlatWhiteLightingTests: XCTestCase {
         let pixels = try renderTwoTriangleFrame(renderer: renderer)
         let shadowLuma = sampleLumaRGBA(pixels, quadrant: .topRight)
 
-        print("[#230 expected] toony=0.95 shadowLuma=\(shadowLuma)")
+        print("[#230] toony=0.95 shadowLuma=\(shadowLuma)")
 
-        XCTExpectFailure("VMK#230: Half-Lambert maps raw NdotL=-1 to the toon threshold midpoint for this synthetic probe.", strict: true) {
-            XCTAssertLessThan(shadowLuma, 0.20,
-                "Sharp-toon synthetic shadow endpoint should stay near shadeColor/pi instead of the Half-Lambert midpoint.")
-        }
+        XCTAssertLessThan(shadowLuma, 0.20,
+            "VRM 1.0 sharp-toon synthetic shadow endpoint should stay near shadeColor/pi instead of the Half-Lambert midpoint.")
     }
 
     private func makeRenderer(model: VRMModel) -> VRMRenderer {

@@ -66,7 +66,7 @@ public struct MToonMaterialUniforms {
     // Block 2: 16 bytes - Material factors (float + packed float3)
 
     /// MToon shading shift (-1…1). Offsets the lit/shade transition along
-    /// the shader's restored Half-Lambert NdotL input; see `MToonShader.metal`.
+    /// the shader's version-gated NdotL input; see `MToonShader.metal`.
     public var shadingShiftFactor: Float = 0.0
     /// Emissive colour, red channel. Use ``MToonMaterialUniforms/emissiveFactor`` for a `SIMD3` view.
     public var emissiveR: Float = 0.0

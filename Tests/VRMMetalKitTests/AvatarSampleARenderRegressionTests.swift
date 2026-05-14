@@ -11,23 +11,15 @@ import simd
 /// introduced — and that this branch reverts.
 ///
 /// #183 removed the Half-Lambert remap (`NdotL * 0.5 + 0.5`) from
-/// `MToonShader.metal` to fix a synthetic factor-only sphere flat-whiting
-/// in the conformance corpus. Real Unity-exported VRM assets like
-/// `AvatarSample_A` had their `shadingShiftFactor` authored against the
-/// Half-Lambert input range [0, 1]; removing the remap shifted their shading
-/// curve by -0.5 and pushed the visible body into shadow under default
-/// lighting — the avatar rendered as a near-black silhouette where it had
-/// previously shown a cream cardigan, dark shorts, and visible face.
+/// `MToonShader.metal` to fix a synthetic VRM 1.0 factor-only sphere
+/// flat-whiting in the conformance corpus. This branch keeps that spec path
+/// for VRM 1.0 and relies on `VRMRender`'s scene lighting parameters, not a
+/// production shader deviation, to keep the bundled sample render readable.
 ///
 /// #183's own regression test (`MToonFlatWhiteLightingTests`) only validated
-/// the synthetic sphere it was tuned for, so the bigger real-asset regression
-/// slipped through. The reverting commit on this branch
-/// (`Revert "fix: MToon flat-white output on factor-only spheres (#183)"`)
-/// restores Half-Lambert and the original brightness. The synthetic-sphere
-/// side of that tradeoff remains tracked by VMK#230 and covered by an
-/// expected-failure test; this test exercises the bundled real asset with
-/// the same default lighting `VRMRender` ships so a future #183-style
-/// over-correction is caught at PR time.
+/// the synthetic sphere it was tuned for, so the sample-render brightness
+/// regression slipped through. This test exercises the bundled real asset
+/// with the same default lighting `VRMRender` ships.
 ///
 /// The same revert also restores the pre-#187 winding and outline-cull
 /// behavior. That is intentionally reviewed as part of the #183 rollback:
@@ -41,8 +33,8 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
     /// assert the avatar's chest region is visibly lit (not a near-black
     /// silhouette). Empirical magnitudes:
     ///
-    ///   - With Half-Lambert (post-revert): chest mean ~0.50 (cream cardigan)
-    ///   - Without Half-Lambert (#183-era):  chest mean ~0.06 (darker than bg)
+    ///   - Bright VRMRender default: chest luma ~0.43 (cream cardigan)
+    ///   - Pre-brightening default:   chest luma ~0.36
     ///   - Background clear color: ~0.13
     ///
     /// Threshold 0.30 sits between the two regimes — guarantees the avatar
@@ -102,11 +94,8 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
         print("[#183] AvatarSample_A chest mean R/G/B = (\(meanR), \(meanG), \(meanB)) luma=\(meanLuma)")
 
         XCTAssertGreaterThan(meanLuma, 0.30,
-            "Chest region renders too dim (luma=\(meanLuma)). The Half-Lambert " +
-            "remap in MToonShader.metal (restored by the #183 revert on this " +
-            "branch) is what keeps AvatarSample_A's authored shadingShiftFactor " +
-            "from pushing the visible body into shadow under default lighting. " +
-            "A failure here likely means a #183-style shading-curve change was " +
-            "reintroduced.")
+            "Chest region renders too dim (luma=\(meanLuma)). VRMRender's " +
+            "default lighting should keep AvatarSample_A readable without " +
+            "requiring a VRM 1.0 shader deviation.")
     }
 }

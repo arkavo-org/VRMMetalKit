@@ -95,13 +95,12 @@ final class MToonRimFresnelTests: XCTestCase {
             center: SIMD3<Float>(0, 1.4, 0),
             up:     SIMD3<Float>(0, 1, 0)
         )
-        // The dim scene is load-bearing: with the
-        // Half-Lambert remap restored (#183 revert), full-intensity scene
-        // light + bright rim both saturate at silhouette, hiding the
-        // orange tint that this test measures. Lower intensity keeps the
-        // rim's orange contribution visible against the body without
-        // changing what the test actually verifies (rim fires across all
-        // silhouette directions, not just the pre-#226 w-leak direction).
+        // The dim scene is load-bearing: full-intensity scene light + bright
+        // rim can saturate at silhouette, hiding the orange tint that this
+        // test measures. Lower intensity keeps the rim's orange contribution
+        // visible against the body without changing what the test actually
+        // verifies (rim fires across all silhouette directions, not just the
+        // pre-#226 w-leak direction).
         renderer.setLight(0, direction: SIMD3<Float>(-0.3, -0.6, -0.7),
                           color: SIMD3<Float>(1, 1, 1),
                           intensity: Self.dimSceneKeyIntensity)
@@ -174,13 +173,12 @@ final class MToonRimFresnelTests: XCTestCase {
             center: SIMD3<Float>(0, 1.4, 0),
             up:     SIMD3<Float>(0, 1, 0)
         )
-        // The dim scene is load-bearing: with the
-        // Half-Lambert remap restored (#183 revert), full-intensity scene
-        // light + bright rim both saturate at silhouette, hiding the
-        // orange tint that this test measures. Lower intensity keeps the
-        // rim's orange contribution visible against the body without
-        // changing what the test actually verifies (rim fires across all
-        // silhouette directions, not just the pre-#226 w-leak direction).
+        // The dim scene is load-bearing: full-intensity scene light + bright
+        // rim can saturate at silhouette, hiding the orange tint that this
+        // test measures. Lower intensity keeps the rim's orange contribution
+        // visible against the body without changing what the test actually
+        // verifies (rim fires across all silhouette directions, not just the
+        // pre-#226 w-leak direction).
         renderer.setLight(0, direction: SIMD3<Float>(-0.3, -0.6, -0.7),
                           color: SIMD3<Float>(1, 1, 1),
                           intensity: Self.dimSceneKeyIntensity)

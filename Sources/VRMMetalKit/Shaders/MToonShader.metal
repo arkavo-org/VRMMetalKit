@@ -233,6 +233,12 @@ static inline float linearstep(float a, float b, float t) {
  return saturate((t - a) / range);
 }
 
+static inline float mtoonShadingNdotL(float rawNdotL, uint32_t vrmVersion) {
+ // VRM 0.x MToon materials were authored against Half-Lambert's [0,1]
+ // lighting range. VRM 1.0's shading formula uses raw NdotL [-1,1].
+ return vrmVersion == 0 ? rawNdotL * 0.5 + 0.5 : rawNdotL;
+}
+
 // Vertex shader with optional morphed positions buffer
 // When morphs are active: morphed positions at buffer(20), original vertex at stage_in
 // When no morphs: only original vertex at stage_in
@@ -361,13 +367,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 14) {
  // Debug mode 14: Output shadowStep as grayscale for sunburn diagnosis
  float3 normal = normalize(in.worldNormal);
- // Half-Lambert to match main lighting
  float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
- float NdotL = rawNdotL * 0.5 + 0.5;
+ float NdotL = mtoonShadingNdotL(rawNdotL, material.vrmVersion);
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
- // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
  float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading);
  return float4(shadowStep, shadowStep, shadowStep, 1.0);
  } else if (uniforms.debugUVs == 24) {
@@ -472,13 +476,11 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // WHITE = fully lit (baseColor), BLACK = fully shadow (shadeColor)
  // This is identical to mode 14 but named for clarity in sunburn diagnosis
  float3 normal = normalize(in.worldNormal);
- // Half-Lambert to match main lighting
  float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
- float NdotL = rawNdotL * 0.5 + 0.5;
+ float NdotL = mtoonShadingNdotL(rawNdotL, material.vrmVersion);
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
- // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
  float lightingFactor = linearstep(-1.0 + toony, 1.0 - toony, shading);
  return float4(lightingFactor, lightingFactor, lightingFactor, 1.0);
  } else if (uniforms.debugUVs == 16) {
@@ -600,17 +602,11 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float intensity2 = uniforms.light2Color.w;
  float totalIntensity = max(intensity0 + intensity1 + intensity2, MIN_TOTAL_INTENSITY);
 
- // Calculate weighted light contributions with version-aware shading formula
- // VRM 0.0: smoothstep formula (converted params were designed for this)
- // VRM 1.0: linearstep formula for sharp cel-shading per spec
- // Half-Lambert remap (`NdotL * 0.5 + 0.5`) softens anime-style shadows on
- // assets whose `shadingShiftFactor` was authored for [0, 1] input range —
- // matches the original VMK 0.x convention and how UniVRM/three-vrm render
- // real Unity-exported VRM avatars at the visible-body level. (#183 removed
- // this remap to fix a synthetic factor-only sphere, but the same change
- // broke AvatarSample_A and every Unity-tooled VRM with default lighting;
- // revert restores avatar parity — the synthetic-sphere case needs a
- // narrower asset-side fix.)
+ // Calculate weighted light contributions with version-aware NdotL mapping.
+ // VRM 0.x keeps the Half-Lambert input range used by MToon 0.x-authored
+ // shading parameters; VRM 1.0 uses the raw-NdotL formula defined by
+ // VRMC_materials_mtoon-1.0. This keeps library shader behavior on the spec
+ // path while allowing applications/VRMRender to choose brighter scene lights.
  // `lighting{i}` is the pre-albedo radiance term captured alongside `lit{i}`
  // so the rim modulator can multiply by `directLight + indirectLight` per
  // MToon-1.0 (vrm-conformance #228, matches UniVRM's `directLightingFactor`).
@@ -618,7 +614,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float3 lighting0 = float3(0.0);
  if (intensity0 > 0.0) {
  float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
- float NdotL = rawNdotL * 0.5 + 0.5;
+ float NdotL = mtoonShadingNdotL(rawNdotL, material.vrmVersion);
  float shading0 = NdotL + shadingShift;
  float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading0);
  float weight = intensity0 / totalIntensity;
@@ -630,7 +626,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float3 lighting1 = float3(0.0);
  if (intensity1 > 0.0) {
  float rawNdotL1 = dot(normal, -uniforms.light1Direction.xyz);
- float NdotL1 = rawNdotL1 * 0.5 + 0.5;
+ float NdotL1 = mtoonShadingNdotL(rawNdotL1, material.vrmVersion);
  float shading1 = NdotL1 + shadingShift;
  float shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
  float weight1 = intensity1 / totalIntensity;
@@ -642,7 +638,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float3 lighting2 = float3(0.0);
  if (intensity2 > 0.0) {
  float rawNdotL2 = dot(normal, -uniforms.light2Direction.xyz);
- float NdotL2 = rawNdotL2 * 0.5 + 0.5;
+ float NdotL2 = mtoonShadingNdotL(rawNdotL2, material.vrmVersion);
  float shading2 = NdotL2 + shadingShift;
  float shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
  float weight2 = intensity2 / totalIntensity;
@@ -909,10 +905,10 @@ fragment float4 mtoon_outline_fragment([[maybe_unused]] VertexOut in [[stage_in]
 
 // Debug fragment shaders for visualizing individual MToon components
 fragment float4 mtoon_debug_nl(VertexOut in [[stage_in]],
-                        [[maybe_unused]] constant MToonMaterial& material [[buffer(8)]],
+                        constant MToonMaterial& material [[buffer(8)]],
                         constant Uniforms& uniforms [[buffer(1)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, -uniforms.lightDirection.xyz));  // Negate for correct convention
+ float nl = mtoonShadingNdotL(dot(normal, -uniforms.lightDirection.xyz), material.vrmVersion);
  return float4(nl, nl, nl, 1.0);
 }
 
@@ -922,7 +918,7 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
                           texture2d<float> shadingShiftTexture [[texture(2)]],
                           sampler textureSampler [[sampler(0)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, -uniforms.lightDirection.xyz));  // Negate for correct convention
+ float nl = mtoonShadingNdotL(dot(normal, -uniforms.lightDirection.xyz), material.vrmVersion);
 
  float shadingShift = material.shadingShiftFactor;
  if (material.hasShadingShiftTexture > 0) {
