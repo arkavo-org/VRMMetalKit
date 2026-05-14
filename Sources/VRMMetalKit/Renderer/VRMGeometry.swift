@@ -1358,7 +1358,10 @@ public class VRMMaterial {
     /// Optional MToon shading parameters; non-nil for materials with the `VRMC_materials_mtoon` extension.
     public var mtoon: VRMMToonMaterial?
 
-    /// Spec version the material was authored against. Drives 0.x-vs-1.0 shader differences (smoothstep vs linearstep).
+    /// Spec version the material was authored against. VRM 0.x MToon parameters
+    /// are converted to VRM 1.0 ramp space before shading; this flag remains
+    /// available for shader paths whose semantics genuinely differ by source
+    /// version.
     public var vrmVersion: VRMSpecVersion = .v1_0
 
     /// Render-queue value for transparency sorting (VRM 0.x uses Unity render-queue numbers; higher = drawn later).
@@ -1428,7 +1431,7 @@ public class VRMMaterial {
     ///   - gltfMaterial: Source glTF material.
     ///   - textures: Texture array used to resolve texture indices.
     ///   - vrm0MaterialProperty: Optional VRM 0.x material property; pass `nil` for VRM 1.0 sources.
-    ///   - vrmVersion: Spec version that drives shader behavior differences.
+    ///   - vrmVersion: Authored spec version retained for version-specific render paths.
     public init(from gltfMaterial: GLTFMaterial, textures: [VRMTexture], vrm0MaterialProperty: VRM0MaterialProperty? = nil, vrmVersion: VRMSpecVersion = .v1_0) {
         self.name = gltfMaterial.name
         self.vrmVersion = vrmVersion

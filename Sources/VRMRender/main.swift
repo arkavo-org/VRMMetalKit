@@ -368,25 +368,7 @@ struct VRMRenderCLI {
                 renderer.applySilhouetteMode(model: model, config: sil)
                 print("  ✓ Silhouette mode (rim power \(options.rimPower))")
             } else {
-                // Bright anime/cel-shading: stronger scene lights are an app
-                // choice here; the library shader keeps VRM 1.0's raw-NdotL
-                // spec path.
-                renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                                  color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.8)
-
-                // Soft frontal fill keeps faces and cream clothing readable
-                // without changing material/shader semantics.
-                renderer.setLight(1, direction: SIMD3<Float>(0.35, 0.05, -0.9),
-                                  color: SIMD3<Float>(0.95, 0.96, 1.0), intensity: 0.35)
-
-                // Subtle rim light for edge definition only
-                renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
-                                  color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.45)
-
-                // Low neutral ambient lifts shadows without washing out the
-                // cel boundary.
-                renderer.setAmbientColor(SIMD3<Float>(0.14, 0.14, 0.14))
-                renderer.setLightNormalizationMode(.manual(1.25))
+                renderer.setupBrightToonLighting()
             }
             
             // Calculate bounding box for auto-framing

@@ -8,7 +8,7 @@ import simd
 
 /// Regression coverage for the "dim AvatarSample_A render" that commit
 /// `83c9da1` (#183: MToon flat-white output on factor-only spheres)
-/// introduced — and that this branch reverts.
+/// introduced.
 ///
 /// #183 removed the Half-Lambert remap (`NdotL * 0.5 + 0.5`) from
 /// `MToonShader.metal` to fix a synthetic VRM 1.0 factor-only sphere
@@ -21,11 +21,11 @@ import simd
 /// regression slipped through. This test exercises the bundled real asset
 /// with the same default lighting `VRMRender` ships.
 ///
-/// The same revert also restores the pre-#187 winding and outline-cull
-/// behavior. That is intentionally reviewed as part of the #183 rollback:
-/// the load-time winding normalizer and outline cull-mode change were coupled
-/// to the synthetic-sphere fix and are not needed by the bundled avatar
-/// fixture guarded here.
+/// The branch also restores the pre-#187 winding and outline-cull behavior.
+/// That is intentionally reviewed as part of the #183 follow-up: the load-time
+/// winding normalizer and outline cull-mode change were coupled to the
+/// synthetic-sphere fix and are not needed by the bundled avatar fixture
+/// guarded here.
 @MainActor
 final class AvatarSampleARenderRegressionTests: XCTestCase {
 
@@ -55,9 +55,9 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
 
-        // Match `Sources/VRMRender/main.swift` defaults verbatim: 45° FOV at
-        // square aspect, camera at (0, 1.3, 1.8) looking at (0, 1.3, 0); single
-        // stronger key light + subtle back-rim + low neutral ambient.
+        // Match `Sources/VRMRender/main.swift` defaults: 45° FOV at square
+        // aspect, camera at (0, 1.3, 1.8) looking at (0, 1.3, 0), plus the
+        // shared brighter toon-lighting preset.
         let size = 256
         let fov: Float = 45.0 * .pi / 180.0
         renderer.projectionMatrix = RenderTestSupport.makePerspective(fovRadians: fov, aspect: 1.0, near: 0.01, far: 100.0)
@@ -66,14 +66,7 @@ final class AvatarSampleARenderRegressionTests: XCTestCase {
             center: SIMD3<Float>(0, 1.3, 0),
             up:     SIMD3<Float>(0, 1, 0)
         )
-        renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 1.8)
-        renderer.setLight(1, direction: SIMD3<Float>(0.35, 0.05, -0.9),
-                          color: SIMD3<Float>(0.95, 0.96, 1.0), intensity: 0.35)
-        renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
-                          color: SIMD3<Float>(1, 1, 1), intensity: 0.45)
-        renderer.setAmbientColor(SIMD3<Float>(0.14, 0.14, 0.14))
-        renderer.setLightNormalizationMode(.manual(1.25))
+        renderer.setupBrightToonLighting()
 
         let pixels = try RenderTestSupport.renderFrame(
             renderer: renderer,

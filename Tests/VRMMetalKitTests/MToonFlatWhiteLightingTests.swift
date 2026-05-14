@@ -11,9 +11,9 @@ import simd
 ///
 /// #183 removed the Half-Lambert remap to make factor-only MToon assets show
 /// the raw-NdotL lighting gradient expected by vrm-conformance's synthetic
-/// `mtoon_default` sphere. The shader now gates the NdotL mapping by material
-/// version: VRM 1.0 uses raw NdotL per spec, while VRM 0.x keeps the
-/// Half-Lambert input range used by older authored materials.
+/// `mtoon_default` sphere. That raw-NdotL shader path is correct for VRM 1.0;
+/// VRM 0.x assets keep compatibility through loader-side conversion of their
+/// old Half-Lambert-authored MToon parameters into the same VRM 1.0 ramp space.
 @MainActor
 final class MToonFlatWhiteLightingTests: XCTestCase {
     private var device: MTLDevice!
@@ -24,6 +24,27 @@ final class MToonFlatWhiteLightingTests: XCTestCase {
             throw XCTSkip("Metal not available on this host")
         }
         device = dev
+    }
+
+    func testVRM0ShadingParamsAreConvertedForRawNdotLShaderInput() {
+        var vrm0 = VRM0MaterialProperty()
+        vrm0.floatProperties["_ShadeToony"] = 0.9
+        vrm0.floatProperties["_ShadeShift"] = 0.0
+
+        let mtoon = vrm0.toMToonMaterial()
+
+        XCTAssertEqual(mtoon.shadingToonyFactor, 0.95, accuracy: 0.0001)
+        XCTAssertEqual(mtoon.shadingShiftFactor, -0.05, accuracy: 0.0001)
+
+        let lower = -1.0 + mtoon.shadingToonyFactor
+        let upper = 1.0 - mtoon.shadingToonyFactor
+        let rawNdotLRamp = cpuLinearstep(lower, upper, 0.0 + mtoon.shadingShiftFactor)
+        let doubleConvertedRamp = cpuLinearstep(lower, upper, 0.5 + mtoon.shadingShiftFactor)
+
+        XCTAssertLessThan(rawNdotLRamp, 0.1,
+            "Converted VRM 0.x params target the shader's raw-NdotL input.")
+        XCTAssertGreaterThan(doubleConvertedRamp, 0.9,
+            "Applying Half-Lambert again in the shader would double-convert the VRM 0.x ramp.")
     }
 
     func testVRM1FactorOnlySmoothToonProducesRawNdotLGradient() throws {
@@ -78,6 +99,14 @@ final class MToonFlatWhiteLightingTests: XCTestCase {
         renderer.viewMatrix = matrix_identity_float4x4
         renderer.projectionMatrix = matrix_identity_float4x4
         return renderer
+    }
+
+    private func cpuLinearstep(_ a: Float, _ b: Float, _ t: Float) -> Float {
+        let range = b - a
+        if range <= 0.0001 {
+            return t >= b ? 1.0 : 0.0
+        }
+        return min(max((t - a) / range, 0.0), 1.0)
     }
 
     private func makeTwoNormalTrianglesModel(toony: Float) throws -> VRMModel {

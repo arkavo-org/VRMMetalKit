@@ -66,7 +66,7 @@ public struct MToonMaterialUniforms {
     // Block 2: 16 bytes - Material factors (float + packed float3)
 
     /// MToon shading shift (-1…1). Offsets the lit/shade transition along
-    /// the shader's version-gated NdotL input; see `MToonShader.metal`.
+    /// the raw-NdotL axis; VRM 0.x inputs are converted to this space on load.
     public var shadingShiftFactor: Float = 0.0
     /// Emissive colour, red channel. Use ``MToonMaterialUniforms/emissiveFactor`` for a `SIMD3` view.
     public var emissiveR: Float = 0.0
@@ -176,7 +176,9 @@ public struct MToonMaterialUniforms {
 
     // Block 12: 16 bytes - Version flag and UV offset
 
-    /// VRM spec version (0 = VRM 0.x, 1 = VRM 1.0). Selects spec-conformant shading paths in MSL.
+    /// VRM spec version (0 = VRM 0.x, 1 = VRM 1.0) retained for shader paths
+    /// that genuinely differ. MToon ramp parameters are already converted to
+    /// VRM 1.0's raw-NdotL space before they reach this uniform.
     public var vrmVersion: UInt32 = 1
     /// UV offset for texture remapping (e.g., face overlays), X component.
     public var uvOffsetX: Float = 0.0
