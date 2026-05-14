@@ -65,7 +65,8 @@ public struct MToonMaterialUniforms {
 
     // Block 2: 16 bytes - Material factors (float + packed float3)
 
-    /// MToon shading shift (-1…1). Offsets the lit/shade transition along NdotL.
+    /// MToon shading shift (-1…1). Offsets the lit/shade transition along
+    /// the raw-NdotL axis; VRM 0.x inputs are converted to this space on load.
     public var shadingShiftFactor: Float = 0.0
     /// Emissive colour, red channel. Use ``MToonMaterialUniforms/emissiveFactor`` for a `SIMD3` view.
     public var emissiveR: Float = 0.0
@@ -111,7 +112,9 @@ public struct MToonMaterialUniforms {
 
     /// Parametric rim lift (typically 0…1). Lifts the rim term off zero.
     public var parametricRimLiftFactor: Float = 0.0
-    /// Mix between unlit rim and lit-coloured rim (0…1).
+    /// Mix between unlit rim and scene-radiance-modulated rim (0…1).
+    /// Validation rejects out-of-range CPU values; the shader also clamps this
+    /// defensively for fuzzed or unchecked uniform buffers.
     public var rimLightingMixFactor: Float = 1.0
     /// Non-zero if a rim-multiply texture is bound for this material.
     public var hasRimMultiplyTexture: Int32 = 0
@@ -173,7 +176,9 @@ public struct MToonMaterialUniforms {
 
     // Block 12: 16 bytes - Version flag and UV offset
 
-    /// VRM spec version (0 = VRM 0.x, 1 = VRM 1.0). Selects spec-conformant shading paths in MSL.
+    /// VRM spec version (0 = VRM 0.x, 1 = VRM 1.0) retained for shader paths
+    /// that genuinely differ. MToon ramp parameters are already converted to
+    /// VRM 1.0's raw-NdotL space before they reach this uniform.
     public var vrmVersion: UInt32 = 1
     /// UV offset for texture remapping (e.g., face overlays), X component.
     public var uvOffsetX: Float = 0.0
@@ -376,4 +381,3 @@ public enum MToonOutlineWidthMode: String {
     /// Outline width is measured in screen units.
     case screenCoordinates = "screenCoordinates"
 }
-

@@ -78,32 +78,60 @@ final class RimLightingTests: XCTestCase {
 
     // MARK: - Rim Lighting Mix Tests
 
-    /// Mix factor of 0 should use fully lit rim (rim affected by light)
-    func testRimLightingMix_FullyLit() {
+    /// MToon-1.0: at `rimLightingMixFactor`=0 the rim is "unlit" — unaffected
+    /// by scene light (pure rim color). Modulator = `mix(1, sceneLight, 0) = 1`.
+    /// Pre-fix (vrm-conformance #228) VMK had this end inverted and produced
+    /// `rimColor * lightColor` here.
+    func testRimLightingMix_AtZero_RimUnaffectedByScene() {
         let rimColor = SIMD3<Float>(1.0, 0.5, 0.0)
-        let lightColor = SIMD3<Float>(0.8, 0.8, 0.8)
+        let sceneLight = SIMD3<Float>(0.8, 0.8, 0.8)  // directLight + indirectLight
         let mixFactor: Float = 0.0
 
-        let rimLit = rimColor * lightColor
-        let rimUnlit = rimColor
-        let finalRim = simd_mix(rimLit, rimUnlit, SIMD3<Float>(repeating: mixFactor))
+        let rimLightingFactor = simd_mix(SIMD3<Float>(repeating: 1.0),
+                                         sceneLight,
+                                         SIMD3<Float>(repeating: mixFactor))
+        let finalRim = rimColor * rimLightingFactor
 
-        XCTAssertEqual(finalRim.x, rimLit.x, accuracy: 0.001, "Mix 0 should return lit rim")
-        XCTAssertEqual(finalRim.y, rimLit.y, accuracy: 0.001)
+        XCTAssertEqual(finalRim.x, rimColor.x, accuracy: 0.001, "Mix 0 should yield pure rim color")
+        XCTAssertEqual(finalRim.y, rimColor.y, accuracy: 0.001)
+        XCTAssertEqual(finalRim.z, rimColor.z, accuracy: 0.001)
     }
 
-    /// Mix factor of 1 should use fully unlit rim (emissive-like)
-    func testRimLightingMix_FullyUnlit() {
+    /// MToon-1.0: at `rimLightingMixFactor`=1 the rim is "lit" — modulated by
+    /// the same direct+indirect radiance as the body. Modulator = `mix(1, sceneLight, 1) = sceneLight`.
+    /// Pre-fix (vrm-conformance #228) VMK collapsed to pure rim color here.
+    func testRimLightingMix_AtOne_RimModulatedByScene() {
         let rimColor = SIMD3<Float>(1.0, 0.5, 0.0)
-        let lightColor = SIMD3<Float>(0.8, 0.8, 0.8)
+        let sceneLight = SIMD3<Float>(0.8, 0.8, 0.8)
         let mixFactor: Float = 1.0
 
-        let rimLit = rimColor * lightColor
-        let rimUnlit = rimColor
-        let finalRim = simd_mix(rimLit, rimUnlit, SIMD3<Float>(repeating: mixFactor))
+        let rimLightingFactor = simd_mix(SIMD3<Float>(repeating: 1.0),
+                                         sceneLight,
+                                         SIMD3<Float>(repeating: mixFactor))
+        let finalRim = rimColor * rimLightingFactor
 
-        XCTAssertEqual(finalRim.x, rimUnlit.x, accuracy: 0.001, "Mix 1 should return unlit rim")
-        XCTAssertEqual(finalRim.y, rimUnlit.y, accuracy: 0.001)
+        XCTAssertEqual(finalRim.x, rimColor.x * sceneLight.x, accuracy: 0.001,
+            "Mix 1 should multiply rim by scene lighting")
+        XCTAssertEqual(finalRim.y, rimColor.y * sceneLight.y, accuracy: 0.001)
+        XCTAssertEqual(finalRim.z, rimColor.z * sceneLight.z, accuracy: 0.001)
+        XCTAssertLessThan(finalRim.x, rimColor.x,
+            "Scene-modulated rim must be dimmer than pure rim color when light < 1.0")
+    }
+
+    /// Intermediate mix value linearly blends unaffected and scene-modulated rim.
+    func testRimLightingMix_AtHalf_LinearBlend() {
+        let rimColor = SIMD3<Float>(1.0, 0.5, 0.0)
+        let sceneLight = SIMD3<Float>(0.8, 0.8, 0.8)
+        let mixFactor: Float = 0.5
+
+        let rimLightingFactor = simd_mix(SIMD3<Float>(repeating: 1.0),
+                                         sceneLight,
+                                         SIMD3<Float>(repeating: mixFactor))
+        let finalRim = rimColor * rimLightingFactor
+
+        // Modulator = mix(1.0, 0.8, 0.5) = 0.9 per channel.
+        XCTAssertEqual(rimLightingFactor.x, 0.9, accuracy: 0.001)
+        XCTAssertEqual(finalRim.x, rimColor.x * 0.9, accuracy: 0.001)
     }
 
     /// Rim multiply texture should mask the rim effect

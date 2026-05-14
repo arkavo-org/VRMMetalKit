@@ -503,7 +503,9 @@ public struct VRM0MaterialProperty {
             )
         }
 
-        // VRM 0.x -> VRM 1.0 shading transformation (from three-vrm)
+        // VRM 0.x -> VRM 1.0 shading transformation (from three-vrm).
+        // The shader consumes VRM 1.0-style raw-NdotL ramp parameters for both
+        // source versions; do not apply Half-Lambert again in MSL after this.
         // These properties are interdependent:
         // shadingToonyFactor = lerp(shadeToony, 1.0, 0.5 + 0.5 * shadeShift)
         // shadingShiftFactor = -shadeShift - (1.0 - shadingToonyFactor)
@@ -624,7 +626,8 @@ public struct VRMMToonMaterial {
     public var shadeColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
     /// Optional texture index multiplying ``shadeColorFactor`` per-pixel.
     public var shadeMultiplyTexture: Int?
-    /// Toon shading shift along the NdotL axis; negative values widen the lit area.
+    /// Toon shading shift along the raw-NdotL axis; negative values widen the lit area.
+    /// VRM 0.x inputs are converted to this VRM 1.0 parameter space on load.
     public var shadingShiftFactor: Float = 0.0
     /// Optional texture providing a per-pixel shading-shift override.
     public var shadingShiftTexture: VRMShadingShiftTexture?

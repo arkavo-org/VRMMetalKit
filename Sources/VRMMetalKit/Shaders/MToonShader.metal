@@ -233,6 +233,14 @@ static inline float linearstep(float a, float b, float t) {
  return saturate((t - a) / range);
 }
 
+static inline float mtoonShadingNdotL(float rawNdotL) {
+ // VRM 1.0 MToon defines the toon ramp over raw NdotL [-1,1]. VRM 0.x
+ // materials are converted to this same parameter space in
+ // VRM0MaterialProperty.toMToonMaterial(), so applying Half-Lambert again
+ // here would double-convert legacy materials.
+ return rawNdotL;
+}
+
 // Vertex shader with optional morphed positions buffer
 // When morphs are active: morphed positions at buffer(20), original vertex at stage_in
 // When no morphs: only original vertex at stage_in
@@ -361,13 +369,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  } else if (uniforms.debugUVs == 14) {
  // Debug mode 14: Output shadowStep as grayscale for sunburn diagnosis
  float3 normal = normalize(in.worldNormal);
- // Half-Lambert to match main lighting
  float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
- float NdotL = rawNdotL * 0.5 + 0.5;
+ float NdotL = mtoonShadingNdotL(rawNdotL);
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
- // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
  float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading);
  return float4(shadowStep, shadowStep, shadowStep, 1.0);
  } else if (uniforms.debugUVs == 24) {
@@ -472,13 +478,11 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // WHITE = fully lit (baseColor), BLACK = fully shadow (shadeColor)
  // This is identical to mode 14 but named for clarity in sunburn diagnosis
  float3 normal = normalize(in.worldNormal);
- // Half-Lambert to match main lighting
  float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
- float NdotL = rawNdotL * 0.5 + 0.5;
+ float NdotL = mtoonShadingNdotL(rawNdotL);
  float shadingShift = material.shadingShiftFactor;
  float toony = material.shadingToonyFactor;
  float shading = NdotL + shadingShift;
- // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
  float lightingFactor = linearstep(-1.0 + toony, 1.0 - toony, shading);
  return float4(lightingFactor, lightingFactor, lightingFactor, 1.0);
  } else if (uniforms.debugUVs == 16) {
@@ -600,41 +604,48 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float intensity2 = uniforms.light2Color.w;
  float totalIntensity = max(intensity0 + intensity1 + intensity2, MIN_TOTAL_INTENSITY);
 
- // Calculate weighted light contributions with version-aware shading formula
- // VRM 0.0: smoothstep formula (converted params were designed for this)
- // VRM 1.0: linearstep formula for sharp cel-shading per spec
- // VRMC_materials_mtoon-1.0 § Shading: shading = NdotL + shadingShift, where
- // NdotL = dot(N, L) is the raw [-1,1] Lambert term. The following linearstep
- // saturates negative shading values to 0 (full shadow). Prior versions
- // applied a Half-Lambert remap (NdotL * 0.5 + 0.5) for "softer anime-style
- // shadows"; that deviation made shadingToonyFactor=0.9 + typical scene
- // lighting saturate to fully-lit across the entire visible hemisphere
- // (vrm-conformance #183).
+ // Calculate weighted light contributions with raw-NdotL toon input. VRM 0.x
+ // materials reach this shader after loader-side conversion to VRM 1.0
+ // shading parameters, so both versions use the same ramp input here. This
+ // keeps library shader behavior on the spec path while allowing
+ // applications/VRMRender to choose brighter scene lights.
+ // `lighting{i}` is the pre-albedo radiance term captured alongside `lit{i}`
+ // so the rim modulator can multiply by `directLight + indirectLight` per
+ // MToon-1.0 (vrm-conformance #228, matches UniVRM's `directLightingFactor`).
  float3 lit0 = float3(0.0);
+ float3 lighting0 = float3(0.0);
  if (intensity0 > 0.0) {
- float NdotL = dot(normal, -uniforms.lightDirection.xyz);
+ float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
+ float NdotL = mtoonShadingNdotL(rawNdotL);
  float shading0 = NdotL + shadingShift;
  float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading0);
  float weight = intensity0 / totalIntensity;
  lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor.xyz * weight;
+ lighting0 = shadowStep * weight * uniforms.lightColor.xyz;
  }
 
  float3 lit1 = float3(0.0);
+ float3 lighting1 = float3(0.0);
  if (intensity1 > 0.0) {
- float NdotL1 = dot(normal, -uniforms.light1Direction.xyz);
+ float rawNdotL1 = dot(normal, -uniforms.light1Direction.xyz);
+ float NdotL1 = mtoonShadingNdotL(rawNdotL1);
  float shading1 = NdotL1 + shadingShift;
  float shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
  float weight1 = intensity1 / totalIntensity;
  lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color.xyz * weight1;
+ lighting1 = shadowStep1 * weight1 * uniforms.light1Color.xyz;
  }
 
  float3 lit2 = float3(0.0);
+ float3 lighting2 = float3(0.0);
  if (intensity2 > 0.0) {
- float NdotL2 = dot(normal, -uniforms.light2Direction.xyz);
+ float rawNdotL2 = dot(normal, -uniforms.light2Direction.xyz);
+ float NdotL2 = mtoonShadingNdotL(rawNdotL2);
  float shading2 = NdotL2 + shadingShift;
  float shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
  float weight2 = intensity2 / totalIntensity;
  lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
+ lighting2 = shadowStep2 * weight2 * uniforms.light2Color.xyz;
  }
 
  // Accumulate weighted contributions (manual normalization factor allows artistic control).
@@ -646,6 +657,11 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // `shadingToonyFactor` (vrm-conformance #205). `setLightNormalizationMode(.manual(f))`
  // multiplies on top — `.manual(1.0)` is now ~1/π × the pre-#205 brightness.
  float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor * BRDF_LAMBERT_NORM;
+
+ // Aggregate pre-albedo radiance for the rim modulator. No /π — UniVRM's
+ // `directLightingFactor` doesn't apply the Lambert BRDF normalization to
+ // the rim path (rim is a stylistic edge highlight, not a diffuse BRDF).
+ float3 directLight = (lighting0 + lighting1 + lighting2) * uniforms.lightNormalizationFactor;
 
  // Indirect diffuse — KNOWN DEVIATION FROM MToon 1.0 SPEC.
  //
@@ -670,6 +686,11 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float3 giAlbedo = mix(shadeColor, baseColor.rgb, material.giEqualizationFactor);
  float3 indirectDiffuse = uniforms.ambientColor.xyz * giAlbedo;
  litColor += indirectDiffuse;
+
+ // Indirect radiance for the rim modulator: raw ambient (no `giAlbedo`).
+ // Rim is not subject to the body's giEqualization mix; it just sees the
+ // scene's indirect radiance, mirroring UniVRM's `indirectLightingFactor`.
+ float3 indirectLight = uniforms.ambientColor.xyz;
 
  // Emissive
  float3 emissive = float3(material.emissiveR, material.emissiveG, material.emissiveB);
@@ -709,8 +730,10 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  float3 Vrim = normalize(in.viewDirection);
  float NdotV = saturate(dot(Nrim, Vrim));
  float vf = 1.0 - NdotV;
+ // `max(power, EPSILON)` matches UniVRM's `EPSILON_FP16` guard against
+ // pow(0, 0) at the head-on view (NdotV=1, vf=0, lift=0).
  float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
-                  material.parametricRimFresnelPowerFactor);
+                  max(material.parametricRimFresnelPowerFactor, 1e-4));
 
  rimColor = parametricRimColorFactor * rimF;
 
@@ -721,14 +744,16 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  }
  }
 
- // Apply rim lighting - blend between lit and unlit rim, then ADD to final color
+ // Apply rim lighting per MToon-1.0 spec — matches UniVRM and three-vrm:
+ // at `rimLightingMixFactor`=0 rim is unaffected by scene light (unlit), at
+ // 1.0 rim is modulated by direct+indirect radiance (lit) (vrm-conformance #228).
  if (any(rimColor > 0.0)) {
- float3 rimLit = rimColor * uniforms.lightColor.xyz;  // Lit rim
- float3 rimUnlit = rimColor;                          // Unlit rim
- float3 finalRim = mix(rimLit, rimUnlit, material.rimLightingMixFactor);
-
- // ADD rim to final color (standard MToon behavior per spec)
- litColor += finalRim;
+ // CPU-side validation rejects out-of-range material values; this clamp keeps
+ // fuzzed or unchecked uniform buffers from extrapolating the rim modulator.
+ float3 rimLightingFactor = mix(float3(1.0),
+                                 directLight + indirectLight,
+                                 saturate(material.rimLightingMixFactor));
+ litColor += rimColor * rimLightingFactor;
  }
 
  // Additive directional rim — opt-in via uniforms.additiveDirectionalRimEnabled.
@@ -884,11 +909,13 @@ fragment float4 mtoon_outline_fragment([[maybe_unused]] VertexOut in [[stage_in]
 
 // Debug fragment shaders for visualizing individual MToon components
 fragment float4 mtoon_debug_nl(VertexOut in [[stage_in]],
-                        [[maybe_unused]] constant MToonMaterial& material [[buffer(8)]],
                         constant Uniforms& uniforms [[buffer(1)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, -uniforms.lightDirection.xyz));  // Negate for correct convention
- return float4(nl, nl, nl, 1.0);
+ float nl = mtoonShadingNdotL(dot(normal, -uniforms.lightDirection.xyz));
+ // Debug color output is display-normalized; mtoon_debug_ramp below shows the
+ // actual raw-NdotL ramp input after applying shading shift.
+ float displayNL = saturate(nl);
+ return float4(displayNL, displayNL, displayNL, 1.0);
 }
 
 fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
@@ -897,7 +924,7 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
                           texture2d<float> shadingShiftTexture [[texture(2)]],
                           sampler textureSampler [[sampler(0)]]) {
  float3 normal = normalize(in.worldNormal);
- float nl = saturate(dot(normal, -uniforms.lightDirection.xyz));  // Negate for correct convention
+ float nl = mtoonShadingNdotL(dot(normal, -uniforms.lightDirection.xyz));
 
  float shadingShift = material.shadingShiftFactor;
  if (material.hasShadingShiftTexture > 0) {

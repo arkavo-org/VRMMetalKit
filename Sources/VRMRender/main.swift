@@ -368,20 +368,7 @@ struct VRMRenderCLI {
                 renderer.applySilhouetteMode(model: model, config: sil)
                 print("  ✓ Silhouette mode (rim power \(options.rimPower))")
             } else {
-                // Pure anime/cel-shading: Single key light for hard step shadows
-                // No fill light = hard edges between light and shadow (traditional anime look)
-                renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                                  color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
-
-                // Fill light disabled - crucial for cel-shading
-                renderer.disableLight(1)
-
-                // Subtle rim light for edge definition only
-                renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
-                                  color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
-
-                // Very low ambient for high contrast (anime style)
-                renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))  // Neutral gray, no blue tint
+                renderer.setupBrightToonLighting()
             }
             
             // Calculate bounding box for auto-framing

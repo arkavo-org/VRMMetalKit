@@ -45,6 +45,8 @@ import simd
 /// space, three-vrm + UniVRM Built-in RP both implement it that way.
 @MainActor
 final class MToonRimFresnelTests: XCTestCase {
+    private static let dimSceneKeyIntensity: Float = 0.3
+    private static let dimSceneAmbient = SIMD3<Float>(0.05, 0.05, 0.05)
 
     /// End-to-end repro against the actual conformance asset that surfaced
     /// the bug. Skips if the asset isn't on disk — regenerate from a checkout
@@ -87,18 +89,32 @@ final class MToonRimFresnelTests: XCTestCase {
         let size = 256
         let aspect: Float = 1.0
         let fov: Float = 30.0 * .pi / 180.0
-        renderer.projectionMatrix = makePerspective(fovRadians: fov, aspect: aspect, near: 0.01, far: 100.0)
-        renderer.viewMatrix = makeLookAt(
+        renderer.projectionMatrix = RenderTestSupport.makePerspective(fovRadians: fov, aspect: aspect, near: 0.01, far: 100.0)
+        renderer.viewMatrix = RenderTestSupport.makeLookAt(
             eye:    SIMD3<Float>(0, 1.4, 1.5),
             center: SIMD3<Float>(0, 1.4, 0),
             up:     SIMD3<Float>(0, 1, 0)
         )
-        renderer.setLight(0, direction: SIMD3<Float>(-0.3, -0.6, -0.7), color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+        // The dim scene is load-bearing: full-intensity scene light + bright
+        // rim can saturate at silhouette, hiding the orange tint that this
+        // test measures. Lower intensity keeps the rim's orange contribution
+        // visible against the body without changing what the test actually
+        // verifies (rim fires across all silhouette directions, not just the
+        // pre-#226 w-leak direction).
+        renderer.setLight(0, direction: SIMD3<Float>(-0.3, -0.6, -0.7),
+                          color: SIMD3<Float>(1, 1, 1),
+                          intensity: Self.dimSceneKeyIntensity)
         renderer.disableLight(1)
         renderer.disableLight(2)
-        renderer.setAmbientColor(SIMD3<Float>(0.5, 0.5, 0.5) * 0.3)
+        renderer.setAmbientColor(Self.dimSceneAmbient)
 
-        let pixels = try renderFrame(renderer: renderer, device: device, size: size)
+        let pixels = try RenderTestSupport.renderFrame(
+            renderer: renderer,
+            device: device,
+            size: size,
+            pixelFormat: .rgba8Unorm_srgb,
+            clearColor: MTLClearColor(red: 1.0, green: 0.0, blue: 1.0, alpha: 1.0)
+        )
 
         // The sphere's visible disk fills roughly x=12-88% of the image (30°
         // FOV, sphere radius 0.3 at distance 1.5). Sample close to the left
@@ -107,9 +123,9 @@ final class MToonRimFresnelTests: XCTestCase {
         // rim tint disappears at 8-bit; that won't surface the bug.
         let xRange = Int(Double(size) * 0.13)...Int(Double(size) * 0.16)
         let yRange = Int(Double(size) * 0.47)...Int(Double(size) * 0.53)
-        let stripR = sampleMeanChannel(pixels, size: size, channel: 0, xRange: xRange, yRange: yRange)
-        let stripG = sampleMeanChannel(pixels, size: size, channel: 1, xRange: xRange, yRange: yRange)
-        let stripB = sampleMeanChannel(pixels, size: size, channel: 2, xRange: xRange, yRange: yRange)
+        let stripR = RenderTestSupport.meanChannelRGBA(pixels, size: size, channel: 0, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+        let stripG = RenderTestSupport.meanChannelRGBA(pixels, size: size, channel: 1, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+        let stripB = RenderTestSupport.meanChannelRGBA(pixels, size: size, channel: 2, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
 
         print("[#226] left silhouette R/G/B = (\(stripR), \(stripG), \(stripB))")
 
@@ -151,27 +167,41 @@ final class MToonRimFresnelTests: XCTestCase {
         let size = 256
         let aspect: Float = 1.0
         let fov: Float = 30.0 * .pi / 180.0
-        renderer.projectionMatrix = makePerspective(fovRadians: fov, aspect: aspect, near: 0.01, far: 100.0)
-        renderer.viewMatrix = makeLookAt(
+        renderer.projectionMatrix = RenderTestSupport.makePerspective(fovRadians: fov, aspect: aspect, near: 0.01, far: 100.0)
+        renderer.viewMatrix = RenderTestSupport.makeLookAt(
             eye:    SIMD3<Float>(0, 1.4, 1.5),
             center: SIMD3<Float>(0, 1.4, 0),
             up:     SIMD3<Float>(0, 1, 0)
         )
-        renderer.setLight(0, direction: SIMD3<Float>(-0.3, -0.6, -0.7), color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+        // The dim scene is load-bearing: full-intensity scene light + bright
+        // rim can saturate at silhouette, hiding the orange tint that this
+        // test measures. Lower intensity keeps the rim's orange contribution
+        // visible against the body without changing what the test actually
+        // verifies (rim fires across all silhouette directions, not just the
+        // pre-#226 w-leak direction).
+        renderer.setLight(0, direction: SIMD3<Float>(-0.3, -0.6, -0.7),
+                          color: SIMD3<Float>(1, 1, 1),
+                          intensity: Self.dimSceneKeyIntensity)
         renderer.disableLight(1)
         renderer.disableLight(2)
-        renderer.setAmbientColor(SIMD3<Float>(0.5, 0.5, 0.5) * 0.3)
+        renderer.setAmbientColor(Self.dimSceneAmbient)
 
-        let pixels = try renderFrame(renderer: renderer, device: device, size: size)
+        let pixels = try RenderTestSupport.renderFrame(
+            renderer: renderer,
+            device: device,
+            size: size,
+            pixelFormat: .rgba8Unorm_srgb,
+            clearColor: MTLClearColor(red: 1.0, green: 0.0, blue: 1.0, alpha: 1.0)
+        )
 
         // Top silhouette: just inside the sphere top edge. Sphere visible
         // disk fills y=12-88%, so y=15-18% is one band inside the top edge
         // where NdotV ≈ 0 and rimF ≈ 1.
         let xRange = Int(Double(size) * 0.47)...Int(Double(size) * 0.53)
         let yRange = Int(Double(size) * 0.15)...Int(Double(size) * 0.18)
-        let stripR = sampleMeanChannel(pixels, size: size, channel: 0, xRange: xRange, yRange: yRange)
-        let stripG = sampleMeanChannel(pixels, size: size, channel: 1, xRange: xRange, yRange: yRange)
-        let stripB = sampleMeanChannel(pixels, size: size, channel: 2, xRange: xRange, yRange: yRange)
+        let stripR = RenderTestSupport.meanChannelRGBA(pixels, size: size, channel: 0, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+        let stripG = RenderTestSupport.meanChannelRGBA(pixels, size: size, channel: 1, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+        let stripB = RenderTestSupport.meanChannelRGBA(pixels, size: size, channel: 2, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
 
         print("[#226] top silhouette R/G/B = (\(stripR), \(stripG), \(stripB))")
 
@@ -182,93 +212,4 @@ final class MToonRimFresnelTests: XCTestCase {
             "Top silhouette strip must show orange (G > B). Got G=\(stripG), B=\(stripB).")
     }
 
-    // MARK: - Helpers
-
-    private func renderFrame(renderer: VRMRenderer, device: MTLDevice, size: Int) throws -> [UInt8] {
-        let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba8Unorm_srgb, width: size, height: size, mipmapped: false)
-        colorDesc.usage = [.renderTarget, .shaderRead]
-        colorDesc.storageMode = .shared
-        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .depth32Float, width: size, height: size, mipmapped: false)
-        depthDesc.usage = .renderTarget
-        depthDesc.storageMode = .private
-
-        guard let colorTex = device.makeTexture(descriptor: colorDesc),
-              let depthTex = device.makeTexture(descriptor: depthDesc),
-              let queue = device.makeCommandQueue(),
-              let cb = queue.makeCommandBuffer() else {
-            throw XCTSkip("Could not allocate Metal render targets")
-        }
-
-        let rpd = MTLRenderPassDescriptor()
-        rpd.colorAttachments[0].texture = colorTex
-        rpd.colorAttachments[0].loadAction = .clear
-        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 1.0, green: 0.0, blue: 1.0, alpha: 1.0)
-        rpd.colorAttachments[0].storeAction = .store
-        rpd.depthAttachment.texture = depthTex
-        rpd.depthAttachment.loadAction = .clear
-        rpd.depthAttachment.clearDepth = 1.0
-        rpd.depthAttachment.storeAction = .dontCare
-
-        renderer.drawOffscreenHeadless(to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
-        cb.commit()
-        cb.waitUntilCompleted()
-
-        var bytes = [UInt8](repeating: 0, count: size * size * 4)
-        bytes.withUnsafeMutableBytes { buf in
-            colorTex.getBytes(buf.baseAddress!, bytesPerRow: size * 4, from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
-        }
-        return bytes
-    }
-
-    /// Mean of a single channel (0=R, 1=G, 2=B) across a rectangular sub-region,
-    /// skipping pixels that match the magenta clear color (255, 0, 255).
-    /// rgba8Unorm_srgb stores RGBA in memory order.
-    private func sampleMeanChannel(
-        _ bytes: [UInt8], size: Int, channel: Int,
-        xRange: ClosedRange<Int>, yRange: ClosedRange<Int>
-    ) -> Float {
-        var sum: Float = 0
-        var count: Int = 0
-        for y in yRange {
-            for x in xRange {
-                let base = (y * size + x) * 4
-                let r = bytes[base], g = bytes[base + 1], b = bytes[base + 2]
-                // Magenta clear color sentinel — skip regardless of which
-                // channel we're sampling so the mean doesn't fold the
-                // background's G=0 into a mostly-rim region.
-                if r == 255 && g == 0 && b == 255 { continue }
-                sum += Float(bytes[base + channel]) / 255.0
-                count += 1
-            }
-        }
-        return count > 0 ? sum / Float(count) : 0
-    }
-
-    // MARK: - Matrix helpers (verbatim from MToonFlatWhiteLightingTests)
-
-    private func makePerspective(fovRadians: Float, aspect: Float, near: Float, far: Float) -> matrix_float4x4 {
-        let yScale = 1.0 / tan(fovRadians * 0.5)
-        let xScale = yScale / aspect
-        let zRange = far - near
-        return matrix_float4x4(columns: (
-            SIMD4<Float>(xScale, 0, 0, 0),
-            SIMD4<Float>(0, yScale, 0, 0),
-            SIMD4<Float>(0, 0, -(far + near) / zRange, -1),
-            SIMD4<Float>(0, 0, -2.0 * far * near / zRange, 0)
-        ))
-    }
-
-    private func makeLookAt(eye: SIMD3<Float>, center: SIMD3<Float>, up: SIMD3<Float>) -> matrix_float4x4 {
-        let f = normalize(center - eye)
-        let s = normalize(cross(f, up))
-        let u = cross(s, f)
-        return matrix_float4x4(columns: (
-            SIMD4<Float>(s.x, u.x, -f.x, 0),
-            SIMD4<Float>(s.y, u.y, -f.y, 0),
-            SIMD4<Float>(s.z, u.z, -f.z, 0),
-            SIMD4<Float>(-dot(s, eye), -dot(u, eye), dot(f, eye), 1)
-        ))
-    }
 }

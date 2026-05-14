@@ -401,6 +401,23 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertGreaterThan(rimBrightness, fillBrightness, "Rim should be brighter than fill")
     }
 
+    /// Test the bright toon-lighting preset used by the VRMRender CLI
+    func testSetupBrightToonLightingPreset() {
+        renderer.setupBrightToonLighting()
+
+        XCTAssertLessThan(simd_length(renderer.uniforms.lightColor - SIMD3<Float>(1.8, 1.8, 1.8)), 0.001)
+        XCTAssertLessThan(simd_length(renderer.uniforms.light1Color - SIMD3<Float>(0.3325, 0.336, 0.35)), 0.001)
+        XCTAssertLessThan(simd_length(renderer.uniforms.light2Color - SIMD3<Float>(0.45, 0.45, 0.45)), 0.001)
+        XCTAssertLessThan(simd_length(renderer.uniforms.ambientColor - SIMD3<Float>(0.14, 0.14, 0.14)), 0.001)
+
+        switch renderer.lightNormalizationMode {
+        case .manual(let factor):
+            XCTAssertEqual(factor, 1.25, accuracy: 0.001)
+        default:
+            XCTFail("Bright toon lighting should use manual normalization")
+        }
+    }
+
     /// Test default ambient color value
     func testDefaultAmbientColor() {
         // Verify default ambient color is 0.05

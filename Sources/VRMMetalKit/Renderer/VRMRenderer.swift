@@ -402,6 +402,31 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                  intensity: rimIntensity)
     }
 
+    /// Configure the brighter toon-lighting preset used by the `VRMRender`
+    /// sample CLI.
+    ///
+    /// This is an application lighting preset, not an MToon shader semantic:
+    /// it keeps character renders readable while preserving VRM 1.0's raw-NdotL
+    /// ramp path in the production shader. The manual normalization factor is
+    /// intentionally above 1.0 to compensate for the direct Lambert `/π`
+    /// normalization introduced for vrm-conformance #205.
+    public func setupBrightToonLighting() {
+        setLight(0,
+                 direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                 color: SIMD3<Float>(1.0, 1.0, 1.0),
+                 intensity: 1.8)
+        setLight(1,
+                 direction: SIMD3<Float>(0.35, 0.05, -0.9),
+                 color: SIMD3<Float>(0.95, 0.96, 1.0),
+                 intensity: 0.35)
+        setLight(2,
+                 direction: SIMD3<Float>(0.0, 0.2, 1.0),
+                 color: SIMD3<Float>(1.0, 1.0, 1.0),
+                 intensity: 0.45)
+        setAmbientColor(SIMD3<Float>(0.14, 0.14, 0.14))
+        setLightNormalizationMode(.manual(1.25))
+    }
+
     /// Set ambient light color
     /// - Parameter color: Ambient light color (RGB, will be clamped to 0-1 range)
     public func setAmbientColor(_ color: SIMD3<Float>) {
@@ -2561,7 +2586,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                    materialIndex < model.materials.count {
                     let material = model.materials[materialIndex]
 
-                    // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
+                    // Preserve source version for shader paths that truly differ
+                    // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
                     mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
                     // Set base PBR properties
@@ -2635,7 +2661,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtoon = material.mtoon {
                         mtoonUniforms = MToonMaterialUniforms(from: mtoon)
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
-                        // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
+                        // Preserve source version for shader paths that truly differ
+                        // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
                         mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
                         // UV FIX: Shift FaceMouth UVs to lip texture area (bottom right of atlas)
@@ -3578,18 +3605,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         let hasSkinning = !model.skins.isEmpty
 
-        // Inverted hull technique: render the extruded shell with reversed
-        // culling so only the back of the shell (between the original mesh
-        // and the extruded surface, viewed past the silhouette edge) is
-        // visible.
-        //
-        // Historically this used `.cullMode(.front)` to match the case where
-        // the asset's primary geometry is CW-from-outside. After the
-        // load-time winding normalization (vrm-conformance #183), assets are
-        // always presented CCW-from-outside; the outline pass therefore
-        // needs `.cullMode(.back)` so its draw still produces the visible
-        // outline band on the far side of the silhouette.
-        encoderStateCache.setCullMode(encoder,.back)
+        // Cull front faces for inverted hull technique
+        encoderStateCache.setCullMode(encoder,.front)
         encoderStateCache.setFrontFacing(encoder,.counterClockwise)
 
         // Set depth state for outlines (test depth but don't write)
@@ -3691,7 +3708,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Set MToon material uniforms
             var mtoonUniforms = MToonMaterialUniforms(from: mtoon)
             mtoonUniforms.baseColorFactor = material.baseColorFactor
-            // Set VRM version for version-aware shading (0 = VRM 0.0, 1 = VRM 1.0)
+            // Preserve source version for shader paths that truly differ
+            // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
             mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
             // Apply global outline width as a multiplier on per-material width
