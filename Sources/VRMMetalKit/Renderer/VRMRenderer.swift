@@ -200,6 +200,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         case automatic              // Auto-normalize when total intensity > 1.0 (default)
         case disabled               // No normalization (naive additive, for testing)
         case manual(Float)          // Custom normalization factor
+        /// Treat per-light `intensity` as **pre-π-absorbed radiance** — the
+        /// convention used by UniVRM Built-in RP (`_LightColor0` already
+        /// includes the Lambert /π) and three-vrm's adapter (which scales
+        /// authored intensity by π before passing to the shader).
+        ///
+        /// Sets `uniforms.lightNormalizationFactor = π`, cancelling the
+        /// shader's internal `BRDF_LAMBERT_NORM = 1/π` so a caller passing
+        /// `intensity: 1.0` produces spec-matching brightness against the
+        /// vrm-conformance corpus (see [issue #213](https://github.com/arkavo-org/VRMMetalKit/issues/213)).
+        case radiometric
     }
 
     /// Current light normalization mode
@@ -392,24 +402,25 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///
     /// This is an application lighting preset, not an MToon shader semantic:
     /// it keeps character renders readable while preserving VRM 1.0's raw-NdotL
-    /// ramp path in the production shader. The manual normalization factor is
-    /// intentionally above 1.0 to compensate for the direct Lambert `/π`
-    /// normalization introduced for vrm-conformance #205.
+    /// ramp path in the production shader. Uses `.radiometric` normalization
+    /// (vrm-conformance #213) so the convention matches UniVRM Built-in RP +
+    /// three-vrm; the per-light intensities are rescaled by the previous
+    /// `1.25 / π` factor to preserve the prior visual output exactly.
     public func setupBrightToonLighting() {
         setLight(0,
                  direction: SIMD3<Float>(-0.2, 0.5, -0.85),
                  color: SIMD3<Float>(1.0, 1.0, 1.0),
-                 intensity: 1.8)
+                 intensity: 0.7162)
         setLight(1,
                  direction: SIMD3<Float>(0.35, 0.05, -0.9),
                  color: SIMD3<Float>(0.95, 0.96, 1.0),
-                 intensity: 0.35)
+                 intensity: 0.1393)
         setLight(2,
                  direction: SIMD3<Float>(0.0, 0.2, 1.0),
                  color: SIMD3<Float>(1.0, 1.0, 1.0),
-                 intensity: 0.45)
+                 intensity: 0.1790)
         setAmbientColor(SIMD3<Float>(0.14, 0.14, 0.14))
-        setLightNormalizationMode(.manual(1.25))
+        setLightNormalizationMode(.radiometric)
     }
 
     /// Set ambient light color
@@ -419,12 +430,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     /// Set light normalization mode for multi-light setups
-    /// - Parameter mode: Normalization mode (.automatic, .disabled, or .manual(factor))
+    /// - Parameter mode: Normalization mode (.automatic, .disabled, .manual(factor), or .radiometric)
     ///
     /// # Modes:
     /// - `.automatic`: Normalize when total light intensity > 1.0 (prevents over-brightness)
     /// - `.disabled`: No normalization (naive additive accumulation, for testing)
     /// - `.manual(factor)`: Custom normalization factor (for artistic control)
+    /// - `.radiometric`: Sets the factor to π. Cancels the shader's internal
+    ///   `BRDF_LAMBERT_NORM = 1/π` so an authored `intensity: 1.0` produces
+    ///   brightness matching UniVRM Built-in RP and three-vrm against the
+    ///   vrm-conformance corpus (see issue #213).
     public func setLightNormalizationMode(_ mode: LightNormalizationMode) {
         lightNormalizationMode = mode
     }
@@ -1541,6 +1556,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             uniforms.lightNormalizationFactor = 1.0
         case .manual(let factor):
             uniforms.lightNormalizationFactor = max(0.0, factor)  // Clamp to non-negative
+        case .radiometric:
+            // π cancels the shader's BRDF_LAMBERT_NORM (1/π). Caller is asserting
+            // that authored intensity is radiometric (UniVRM Built-in RP / three-vrm
+            // post-π convention). See `LightNormalizationMode.radiometric` doc.
+            uniforms.lightNormalizationFactor = .pi
         }
 
         // Pipe the additive directional rim toggle + power through to the

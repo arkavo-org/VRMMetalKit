@@ -590,6 +590,8 @@ struct VRMBenchmarkCLI {
         }
         renderer.debugWireframe = opts.wireframe
         renderer.debugUVs = opts.debugUVs
+        // Intensities rescaled by 1/π under .radiometric to preserve the prior
+        // .automatic behaviour (vrm-conformance #213).
         switch opts.lighting {
         case "ambient":
             renderer.disableLight(0)
@@ -597,17 +599,18 @@ struct VRMBenchmarkCLI {
             renderer.disableLight(2)
         case "single":
             renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                              color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+                              color: SIMD3<Float>(1, 1, 1), intensity: 0.3183)
             renderer.disableLight(1)
             renderer.disableLight(2)
         default:
             renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                              color: SIMD3<Float>(1, 1, 1), intensity: 1.0)
+                              color: SIMD3<Float>(1, 1, 1), intensity: 0.3183)
             renderer.disableLight(1)
             renderer.setLight(2, direction: SIMD3<Float>(0, 0.2, 1),
-                              color: SIMD3<Float>(1, 1, 1), intensity: 0.3)
+                              color: SIMD3<Float>(1, 1, 1), intensity: 0.0955)
         }
         renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
+        renderer.setLightNormalizationMode(.radiometric)
 
         let aspect = Float(opts.width) / Float(opts.height)
         renderer.projectionMatrix = perspectiveMatrix(

@@ -125,3 +125,54 @@ Tracked separately. The IBL/SH implementation work would let us:
    approximation).
 3. Replace the lit/shade mix with the spec lerp.
 4. Update the regression tests to check actual spec compliance.
+
+## Direct lighting brightness conventions
+
+Companion topic to the GI lerp above: matching the consortium reference
+implementations' **direct** lighting brightness requires aligning on the
+input convention for per-light intensity. Three reference cluster
+points + VMK's choice:
+
+| Renderer | Shader `BRDF_Lambert(1/π)` | Input intensity convention |
+|---|---|---|
+| **UniVRM Built-in RP** (`vrmc_materials_mtoon_lighting_mtoon.hlsl:79-82`) | **no** — returns `albedo × directLightColor × shadow` | Unity's `_LightColor0` pre-absorbs π |
+| **three-vrm** (`mtoon.frag.glsl`, `getDiffuse`) | **yes** | vrm-conformance adapter pre-scales authored intensity by π |
+| **VMK** (`MToonShader.metal:655`) | **yes** (per #205) | API takes "photometric" intensity (e.g. `1.0` ≈ "one unit of light") |
+
+VMK applies `BRDF_LAMBERT_NORM = 1.0 / π` correctly per the Lambert BRDF
+spec, but its public lighting API accepts intensity in the **photometric**
+convention: a caller passing `intensity: 1.0` produces an effective light
+contribution of `1.0 × (1/π) ≈ 0.318` after the shader's normalization.
+That's the right answer if "1.0" means "one unit of perceived light";
+it's ≈ 0.318× the UniVRM/three-vrm reference if "1.0" means "one unit of
+radiometric flux" (the conformance corpus convention).
+
+### `LightNormalizationMode.radiometric`
+
+To match the reference cluster's brightness scale, set:
+
+```swift
+renderer.setLightNormalizationMode(.radiometric)
+```
+
+`.radiometric` sets `uniforms.lightNormalizationFactor = π`, which cancels
+the shader's internal `1/π`. After this opt-in, a caller-passed
+`intensity: 1.0` produces brightness matching UniVRM Built-in RP and
+three-vrm rendering the same vrm-conformance test plan (the canonical
+`mtoon_*.test.yaml` `intensity: 1.0` setup).
+
+History: shipped in 0.14.x to close [vrm-conformance issue #213](https://github.com/arkavo-org/VRMMetalKit/issues/213).
+The issue originally hypothesised a curve-shape mismatch (smoothstep vs
+linearstep), but all three reference shaders use the same `linearstep`
+formula. The real divergence was the intensity-unit mismatch above.
+
+### Per-tool defaults
+
+- `setup3PointLighting()` (auto-installed at `init`) keeps `.automatic`.
+  Production apps that didn't pick a preset see no behaviour change.
+- `setupBrightToonLighting()` (the `VRMRender` CLI preset) opts into
+  `.radiometric` and rescales its 3-point intensities by `1.25 / π` so the
+  visual output is preserved exactly.
+- The `VRMVideoRenderer` and `VRMBenchmark` CLI presets opt into
+  `.radiometric` with intensities rescaled by `1.0 / π` (their previous
+  effective normalization was `.automatic` = 1.0).
