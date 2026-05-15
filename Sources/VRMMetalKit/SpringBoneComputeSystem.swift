@@ -130,6 +130,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Flag to request physics state reset on next update (e.g., when returning to idle)
     var requestPhysicsReset = false
 
+    /// Runtime clamps applied to authored spring-bone joint parameters before they
+    /// are uploaded to the GPU. Default is `.none` (no-op).
+    var springBoneOverride: VRMSpringBoneOverride = .none
+
     // MARK: - Runtime Collider Radius Overrides
 
     /// Runtime overrides for sphere collider radii (index -> radius)
@@ -611,13 +615,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let parentIdx = (isRootBone || jointIndexInChain == 0) ? -1 : (boneIndex - 1)
                 parentIndices.append(parentIdx)
 
-                let params = BoneParams(
+                let jointName = model.nodes[safe: joint.node]?.name
+                let clamped = springBoneOverride.apply(
                     stiffness: joint.stiffness,
-                    drag: joint.dragForce,
+                    dragForce: joint.dragForce,
+                    gravityPower: joint.gravityPower,
+                    jointName: jointName
+                )
+
+                let params = BoneParams(
+                    stiffness: clamped.stiffness,
+                    drag: clamped.dragForce,
                     radius: joint.hitRadius,
                     // Only set parent for non-root bones within the same chain
                     parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
-                    gravityPower: joint.gravityPower,
+                    gravityPower: clamped.gravityPower,
                     colliderGroupMask: colliderGroupMask,
                     gravityDir: normalizedGravityDir
                 )
@@ -1874,13 +1886,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // shows the settled state, not the load-time rest pose. Without this,
         // writeBonesToNodes() skips on frame 1 because the async snapshot
         // hasn't completed yet, causing a one-frame lag.
+        //
+        // Skip the apply when every joint in the model has gravityPower == 0
+        // and there are no external forces during warmup (wind/characterVelocity
+        // are zero by construction here). In that case the integrator produces
+        // no movement and applying the snapshot only introduces a tiny readback
+        // divergence vs three-vrm's full-reload reset path on broken assets
+        // like AvatarSample_A_1.0 where authors set gravityPower=0 throughout.
         if !settledPositions.isEmpty {
-            snapshotLock.lock()
-            latestPositionsSnapshot = settledPositions
-            latestCompletedFrame = 1
-            lastAppliedFrame = 0
-            snapshotLock.unlock()
-            writeBonesToNodes(model: model)
+            var anyGravity = false
+            outer: for spring in springBone.springs {
+                for joint in spring.joints {
+                    let jointName = model.nodes[safe: joint.node]?.name
+                    let effective = springBoneOverride.apply(
+                        stiffness: joint.stiffness,
+                        dragForce: joint.dragForce,
+                        gravityPower: joint.gravityPower,
+                        jointName: jointName
+                    )
+                    if effective.gravityPower > 0 {
+                        anyGravity = true
+                        break outer
+                    }
+                }
+            }
+            if anyGravity {
+                snapshotLock.lock()
+                latestPositionsSnapshot = settledPositions
+                latestCompletedFrame = 1
+                lastAppliedFrame = 0
+                snapshotLock.unlock()
+                writeBonesToNodes(model: model)
+            }
         }
 
         // Reset time accumulator

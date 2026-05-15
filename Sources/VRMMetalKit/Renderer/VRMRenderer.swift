@@ -513,6 +513,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Runtime clamps applied to spring-bone joint parameters at `loadModel` time.
+    /// Use this to rescue assets that author rigid hair (e.g., `gravityPower = 0`
+    /// with high `stiffness`) without modifying the source `.vrm`. Must be set
+    /// before `loadModel` is called; setting after has no effect.
+    public var springBoneOverride: VRMSpringBoneOverride = .none
+
     /// When `true`, `drawCore` skips the safety-net root-node `updateWorldTransform`
     /// pass before encoding. Set this on hosts that already update world transforms
     /// every frame (e.g. callers that tick `AnimationPlayer.update` per frame, which
@@ -872,6 +878,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Initialize SpringBone GPU compute system if available
         if model.springBone != nil {
             do {
+                springBoneComputeSystem?.springBoneOverride = self.springBoneOverride
                 try springBoneComputeSystem?.populateSpringBoneData(model: model)
                 vrmLog("[VRMRenderer] SpringBone GPU compute system initialized")
                 vrmLog("  - Total bones: \(model.springBoneBuffers?.numBones ?? 0)")
