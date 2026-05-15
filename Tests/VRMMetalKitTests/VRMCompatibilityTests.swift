@@ -201,12 +201,10 @@ final class VRMCompatibilityTests: XCTestCase {
             print("The VRM 0.0 loader needs coordinate mirroring.")
         }
 
-        // Known issue: VRM 0.0 loader does not yet apply X-axis mirroring.
-        // Tracked separately; this test documents the current behavior.
-        XCTExpectFailure("VRM 0.0 loader missing X-axis mirroring for Unity left-handed coords") {
-            XCTAssertEqual(vrm0_leftIsPositive, vrm1_leftIsPositive,
-                           "VRM 0.0 handedness should match VRM 1.0 after mirroring")
-        }
+        // VRM 0.0 → 1.0 coordinate conversion is applied at model load time
+        // (see VRMModel.buildNodeHierarchy), so handedness should now match.
+        XCTAssertEqual(vrm0_leftIsPositive, vrm1_leftIsPositive,
+                       "VRM 0.0 handedness should match VRM 1.0 after load-time mirroring")
     }
 
     // MARK: - Forward Direction Test

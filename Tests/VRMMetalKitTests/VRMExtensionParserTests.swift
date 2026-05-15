@@ -861,6 +861,169 @@ final class VRMExtensionParserTests: XCTestCase {
         }
     }
 
+    // MARK: - VRM 1.0 Collider Offset JSON-Deserialization Regression
+
+    /// Regression for the silent `[NSNumber]`/`[Double]` vs `[Float]` cast
+    /// failure in `parseVector3`. `JSONSerialization` decodes JSON number
+    /// arrays as `[Double]` on Apple platforms, but the parser previously only
+    /// matched `[Float]`. Result: every VRM 1.0 collider offset, capsule tail,
+    /// and plane normal silently collapsed to `(0, 0, 0)`, parking colliders
+    /// at the owning joint origin. For VRoid bust sub-colliders (authored at
+    /// non-zero chest-bone-local offsets) this let hair/clothes pass through
+    /// the bust mass during animation.
+    ///
+    /// Loads the bundled `AvatarSample_A_1.0.vrm.glb` and asserts the bust
+    /// sub-colliders (indices 2 and 3, both anchored to `J_Bip_C_UpperChest`)
+    /// have the authored non-zero offsets — a hard regression signal that the
+    /// JSON-array cast handles `[Double]`.
+    func testVRM1ColliderOffsets_RoundTripFromJSON_NonZero() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal not available") }
+        let path = "AvatarSample_A_1.0.vrm.glb"
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb fixture not at \(path)")
+        }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
+        guard let sb = model.springBone, sb.colliders.count > 3 else {
+            XCTFail("Expected springBone with ≥4 colliders in fixture")
+            return
+        }
+
+        let leftBust = sb.colliders[2]
+        let rightBust = sb.colliders[3]
+        guard case let .sphere(leftOffset, _) = leftBust.shape,
+              case let .sphere(rightOffset, _) = rightBust.shape else {
+            XCTFail("Expected sphere colliders at indices 2 and 3")
+            return
+        }
+
+        XCTAssertGreaterThan(abs(leftOffset.x), 0.001,
+            "Left bust sub-collider X offset must be non-zero; got \(leftOffset). " +
+            "If this is (0,0,0), `parseVector3` is back to silently dropping JSON [Double] arrays.")
+        XCTAssertGreaterThan(abs(rightOffset.x), 0.001,
+            "Right bust sub-collider X offset must be non-zero; got \(rightOffset).")
+        // Left and right bust offsets should mirror across X.
+        XCTAssertEqual(leftOffset.x, -rightOffset.x, accuracy: 0.0001,
+            "Left/right bust offsets should mirror across X (asset authoring convention).")
+        XCTAssertEqual(leftOffset.y, rightOffset.y, accuracy: 0.0001)
+        XCTAssertEqual(leftOffset.z, rightOffset.z, accuracy: 0.0001)
+    }
+
+    // MARK: - N5b: VRM 0.0 Spring-bone gravityDir Coordinate Flip Tests
+
+    /// Stylized assets author non-default `gravityDir` (e.g. `(0.3, -0.95, 0)`
+    /// to pull hair slightly forward). After load-time `Ry180` conjugation of
+    /// the node hierarchy, the world-space gravity vector must be flipped
+    /// `(-x, y, -z)` so it keeps pointing in the intended direction relative
+    /// to the model. The Ry180-invariant default `(0, -1, 0)` is unaffected.
+    func testVRM0SpringBoneGravityDirXZNegated() throws {
+        let vrmDict: [String: Any] = [
+            "version": "0.0",
+            "meta": ["title": "Test", "author": "Test"],
+            "humanoid": ["humanBones": [
+                ["bone": "hips", "node": 0],
+                ["bone": "leftUpperLeg", "node": 1],
+                ["bone": "rightUpperLeg", "node": 2],
+                ["bone": "leftLowerLeg", "node": 3],
+                ["bone": "rightLowerLeg", "node": 4],
+                ["bone": "leftFoot", "node": 5],
+                ["bone": "rightFoot", "node": 6],
+                ["bone": "spine", "node": 7],
+                ["bone": "chest", "node": 8],
+                ["bone": "neck", "node": 9],
+                ["bone": "head", "node": 10],
+                ["bone": "leftShoulder", "node": 11],
+                ["bone": "rightShoulder", "node": 12],
+                ["bone": "leftUpperArm", "node": 13],
+                ["bone": "rightUpperArm", "node": 14],
+                ["bone": "leftLowerArm", "node": 15],
+                ["bone": "rightLowerArm", "node": 16],
+                ["bone": "leftHand", "node": 17],
+                ["bone": "rightHand", "node": 18]
+            ]],
+            "secondaryAnimation": [
+                "boneGroups": [
+                    [
+                        "comment": "Hair",
+                        "stiffiness": Float(0.85),
+                        "gravityPower": Float(1.0),
+                        "gravityDir": ["x": Float(0.3), "y": Float(-0.95), "z": Float(0.1)],
+                        "dragForce": Float(0.4),
+                        "hitRadius": Float(0.02),
+                        "bones": [0],
+                        "colliderGroups": []
+                    ]
+                ],
+                "colliderGroups": []
+            ]
+        ]
+
+        let document = createMinimalGLTFDocument()
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+
+        XCTAssertNotNil(model.springBone)
+        let firstJoint = model.springBone?.springs.first?.joints.first
+        XCTAssertNotNil(firstJoint, "Spring bone joint should be parsed from boneGroups")
+        XCTAssertEqual(firstJoint?.gravityDir.x ?? .nan, -0.3, accuracy: 0.0001,
+                       "X component must be negated for VRM 0.x gravityDir under load-time Ry180")
+        XCTAssertEqual(firstJoint?.gravityDir.y ?? .nan, -0.95, accuracy: 0.0001,
+                       "Y component is invariant under Ry180")
+        XCTAssertEqual(firstJoint?.gravityDir.z ?? .nan, -0.1, accuracy: 0.0001,
+                       "Z component must be negated for VRM 0.x gravityDir under load-time Ry180")
+    }
+
+    /// The default `gravityDir = (0, -1, 0)` is Ry180-invariant — verify the
+    /// flip doesn't perturb the common case.
+    func testVRM0SpringBoneDefaultGravityDirInvariant() throws {
+        let vrmDict: [String: Any] = [
+            "version": "0.0",
+            "meta": ["title": "Test", "author": "Test"],
+            "humanoid": ["humanBones": [
+                ["bone": "hips", "node": 0],
+                ["bone": "leftUpperLeg", "node": 1],
+                ["bone": "rightUpperLeg", "node": 2],
+                ["bone": "leftLowerLeg", "node": 3],
+                ["bone": "rightLowerLeg", "node": 4],
+                ["bone": "leftFoot", "node": 5],
+                ["bone": "rightFoot", "node": 6],
+                ["bone": "spine", "node": 7],
+                ["bone": "chest", "node": 8],
+                ["bone": "neck", "node": 9],
+                ["bone": "head", "node": 10],
+                ["bone": "leftShoulder", "node": 11],
+                ["bone": "rightShoulder", "node": 12],
+                ["bone": "leftUpperArm", "node": 13],
+                ["bone": "rightUpperArm", "node": 14],
+                ["bone": "leftLowerArm", "node": 15],
+                ["bone": "rightLowerArm", "node": 16],
+                ["bone": "leftHand", "node": 17],
+                ["bone": "rightHand", "node": 18]
+            ]],
+            "secondaryAnimation": [
+                "boneGroups": [
+                    [
+                        "comment": "Hair",
+                        "stiffiness": Float(0.85),
+                        "gravityPower": Float(1.0),
+                        "gravityDir": ["x": Float(0.0), "y": Float(-1.0), "z": Float(0.0)],
+                        "dragForce": Float(0.4),
+                        "hitRadius": Float(0.02),
+                        "bones": [0],
+                        "colliderGroups": []
+                    ]
+                ],
+                "colliderGroups": []
+            ]
+        ]
+
+        let document = createMinimalGLTFDocument()
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+
+        let firstJoint = model.springBone?.springs.first?.joints.first
+        XCTAssertEqual(firstJoint?.gravityDir.x ?? .nan, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(firstJoint?.gravityDir.y ?? .nan, -1.0, accuracy: 0.0001)
+        XCTAssertEqual(firstJoint?.gravityDir.z ?? .nan, 0.0, accuracy: 0.0001)
+    }
+
     // MARK: - N6: VRM 0.0 Synthesized Constraint Axis Flip Tests
 
     func testVRM0SynthesizedArmConstraintAxisNegatedX() throws {

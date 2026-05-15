@@ -139,6 +139,106 @@ final class SpringBoneComputeSystemTests: XCTestCase {
         XCTAssertTrue(true, "Frame versioning working correctly")
     }
 
+    // MARK: - VRMSpringBoneOverride Tests
+
+    /// Default override is a strict no-op: authored values pass through unchanged.
+    func testSpringBoneOverrideDefaultIsNoOp() {
+        let override = VRMSpringBoneOverride.passthrough
+        let out = override.apply(stiffness: 0.85, dragForce: 0.4, gravityPower: 0.0, jointName: "J_Sec_Hair1_01")
+        XCTAssertEqual(out.stiffness, 0.85, accuracy: 1e-6)
+        XCTAssertEqual(out.dragForce, 0.4, accuracy: 1e-6)
+        XCTAssertEqual(out.gravityPower, 0.0, accuracy: 1e-6)
+    }
+
+    /// Clamps apply when the name predicate matches.
+    func testSpringBoneOverrideClampsWhenPredicateMatches() {
+        let override = VRMSpringBoneOverride(
+            minGravityPower: 0.5,
+            maxStiffness: 0.7,
+            maxDragForce: 0.6,
+            jointNameMatches: { $0.contains("Hair") }
+        )
+        let out = override.apply(stiffness: 0.85, dragForce: 0.4, gravityPower: 0.0, jointName: "J_Sec_Hair1_01")
+        XCTAssertEqual(out.stiffness, 0.7, accuracy: 1e-6, "stiffness should be capped at maxStiffness")
+        XCTAssertEqual(out.dragForce, 0.4, accuracy: 1e-6, "drag below cap is unchanged")
+        XCTAssertEqual(out.gravityPower, 0.5, accuracy: 1e-6, "gravityPower should be floored at minGravityPower")
+    }
+
+    /// Clamps skip joints the predicate rejects.
+    func testSpringBoneOverrideSkipsWhenPredicateRejects() {
+        let override = VRMSpringBoneOverride(
+            minGravityPower: 0.5,
+            maxStiffness: 0.7,
+            jointNameMatches: { $0.contains("Hair") }
+        )
+        let out = override.apply(stiffness: 0.9, dragForce: 0.4, gravityPower: 0.0, jointName: "J_Bip_C_Head")
+        XCTAssertEqual(out.stiffness, 0.9, accuracy: 1e-6)
+        XCTAssertEqual(out.gravityPower, 0.0, accuracy: 1e-6)
+    }
+
+    /// Joints with no name are never touched (safe default).
+    func testSpringBoneOverrideSkipsWhenNameIsNil() {
+        let override = VRMSpringBoneOverride(minGravityPower: 0.5, maxStiffness: 0.7)
+        let out = override.apply(stiffness: 1.0, dragForce: 0.4, gravityPower: 0.0, jointName: nil)
+        XCTAssertEqual(out.stiffness, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(out.gravityPower, 0.0, accuracy: 1e-6)
+    }
+
+    /// With no predicate, every named joint is clamped.
+    func testSpringBoneOverrideAppliesToAllNamedJointsWithoutPredicate() {
+        let override = VRMSpringBoneOverride(maxStiffness: 0.7)
+        let out1 = override.apply(stiffness: 0.9, dragForce: 0.4, gravityPower: 0.5, jointName: "AnyName")
+        let out2 = override.apply(stiffness: 0.5, dragForce: 0.4, gravityPower: 0.5, jointName: "OtherName")
+        XCTAssertEqual(out1.stiffness, 0.7, accuracy: 1e-6, "value above cap is clamped")
+        XCTAssertEqual(out2.stiffness, 0.5, accuracy: 1e-6, "value below cap is unchanged")
+    }
+
+    /// Verify the GPU bone-params buffer reflects the clamp after populateSpringBoneData.
+    /// Simulates the AvatarSample_A breakage (high stiffness + zero gravity) and applies
+    /// a rescue override that should reach the GPU buffer.
+    func testSpringBoneOverrideReachesGPUBuffer() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createMinimalSpringBoneModel()
+        model.device = device
+
+        model.springBone?.springs[0].joints[0].stiffness = 1.0
+        model.springBone?.springs[0].joints[0].gravityPower = 0.0
+
+        system.springBoneOverride = VRMSpringBoneOverride(
+            minGravityPower: 0.5,
+            maxStiffness: 0.7
+        )
+        try system.populateSpringBoneData(model: model)
+
+        guard let buffers = model.springBoneBuffers,
+              let boneParamsBuffer = buffers.boneParams else {
+            XCTFail("Spring-bone buffers not populated")
+            return
+        }
+        let ptr = boneParamsBuffer.contents().bindMemory(to: BoneParams.self, capacity: buffers.numBones)
+        XCTAssertEqual(ptr[0].stiffness, 0.7, accuracy: 1e-6, "stiffness on GPU should be clamped")
+        XCTAssertEqual(ptr[0].gravityPower, 0.5, accuracy: 1e-6, "gravityPower on GPU should be floored")
+    }
+
+    /// With override = .none, the GPU bone-params buffer carries authored values exactly.
+    func testSpringBoneOverrideNoneLeavesGPUBufferUntouched() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createMinimalSpringBoneModel()
+        model.device = device
+
+        try system.populateSpringBoneData(model: model)
+
+        guard let buffers = model.springBoneBuffers,
+              let boneParamsBuffer = buffers.boneParams else {
+            XCTFail("Spring-bone buffers not populated")
+            return
+        }
+        let ptr = boneParamsBuffer.contents().bindMemory(to: BoneParams.self, capacity: buffers.numBones)
+        XCTAssertEqual(ptr[0].stiffness, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(ptr[0].drag, 0.4, accuracy: 1e-6)
+        XCTAssertEqual(ptr[0].gravityPower, 0.5, accuracy: 1e-6)
+    }
+
     // MARK: - Performance Tests
 
     /// Test that update performance is reasonable even with many bones

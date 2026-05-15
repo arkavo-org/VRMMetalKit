@@ -859,6 +859,41 @@ public class VRMModel: @unchecked Sendable {
         await context?.updatePhase(.sanitizingJoints, progress: 0.5)
         sanitizeAllMeshJoints()
         await context?.updatePhase(.sanitizingJoints, progress: 1.0)
+
+        // VRM 0.0 → 1.0: companion pass to the per-node TRS conjugation in
+        // `buildNodeHierarchy()`. Must run after skins load their IBMs from
+        // the glTF accessor.
+        applyVRM0InverseBindMatrixConjugation()
+    }
+
+    /// VRM 0.0 → 1.0: rotate every skin's `inverseBindMatrix` by `Ry180` (left-multiply).
+    ///
+    /// `buildNodeHierarchy()` conjugates each node's local TRS so joint world
+    /// matrices end up as `Ry180 · M_old · Ry180⁻¹`. `inverseBindMatrices` are
+    /// loaded later from the glTF accessor in the original VRM 0.x frame, so
+    /// `jointMatrix = joint.worldMatrix · IBM` would expand to
+    /// `Ry180 · M_old · Ry180⁻¹ · M_old⁻¹` — a non-trivial per-joint translation
+    /// (`Ry180·p − p` for a joint at position `p` with identity rotation) rather
+    /// than the intended `Ry180`.  Left-multiplying every IBM by `Ry180` cancels
+    /// the stray `Ry180⁻¹` so the skinning result is `Ry180 · vertex_world_old`
+    /// at every pose, matching the render-time Y-axis rotation this load-time
+    /// pass replaces.
+    private func applyVRM0InverseBindMatrixConjugation() {
+        guard isVRM0 else { return }
+        // 180° rotation about Y as a 4x4: negate the X and Z components of every
+        // column. Cheap to write inline so the math is auditable next to the
+        // node-side conjugation in `buildNodeHierarchy()`.
+        let ry180 = float4x4(
+            SIMD4<Float>(-1, 0,  0, 0),
+            SIMD4<Float>( 0, 1,  0, 0),
+            SIMD4<Float>( 0, 0, -1, 0),
+            SIMD4<Float>( 0, 0,  0, 1)
+        )
+        for skin in skins {
+            for i in 0..<skin.inverseBindMatrices.count {
+                skin.inverseBindMatrices[i] = ry180 * skin.inverseBindMatrices[i]
+            }
+        }
     }
 
     /// "Iron Dome" joint sanitization - ensures all mesh joint indices are within valid bounds.
@@ -940,6 +975,39 @@ public class VRMModel: @unchecked Sendable {
         // Calculate initial transforms
         for node in nodes {
             node.updateWorldTransform()
+        }
+
+        // VRM 0.0 → VRM 1.0 coordinate conversion.
+        // Unity left-handed (model faces -Z) → glTF right-handed (model faces +Z).
+        // A 180° rotation around Y aligns facing direction AND makes node.worldPosition
+        // consistent with VRM 1.0 (left limbs positive X).  Applied once at load time
+        // so physics, animation, and culling all see the same coordinate space.
+        // The matching `inverseBindMatrices` pass runs after skins are loaded — see
+        // `applyVRM0InverseBindMatrixConjugation()`; without it skinning at rest
+        // would displace vertices by `Ry180·p − p` for each joint.
+        if isVRM0 {
+            for node in nodes {
+                // Conjugate local rotation by 180° Y: (x, y, z, w) → (-x, y, -z, w)
+                node.rotation = simd_normalize(
+                    simd_quatf(ix: -node.rotation.imag.x,
+                               iy:  node.rotation.imag.y,
+                               iz: -node.rotation.imag.z,
+                               r:   node.rotation.real)
+                )
+                // Rotate translation: (x, y, z) → (-x, y, -z)
+                node.translation = SIMD3<Float>(-node.translation.x,
+                                                 node.translation.y,
+                                                -node.translation.z)
+                // Update bind pose storage so resetToBindPose() stays consistent
+                node.initialRotation = node.rotation
+                node.initialTranslation = node.translation
+                // Scale magnitudes are unchanged under 180° rotation
+                node.updateLocalMatrix()
+            }
+            // Recalculate world transforms after mutating every local matrix
+            for node in nodes where node.parent == nil {
+                node.updateWorldTransform()
+            }
         }
 
         // PERFORMANCE: Build normalized name lookup table for fast animation lookups

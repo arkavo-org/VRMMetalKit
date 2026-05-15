@@ -654,10 +654,22 @@ public class VRMExtensionParser {
 
         if let materialColorBinds = dict["materialColorBinds"] as? [[String: Any]] {
             for bind in materialColorBinds {
+                // `JSONSerialization` decodes JSON number arrays as `[Double]`;
+                // test fixtures sometimes pass `[Float]`. Accept both — the
+                // `[Float]`-only cast silently dropped every JSON-parsed
+                // materialColorBind in production assets.
+                let targetFloats: [Float]?
+                if let arr = bind["targetValue"] as? [Double] {
+                    targetFloats = arr.map(Float.init)
+                } else if let arr = bind["targetValue"] as? [Float] {
+                    targetFloats = arr
+                } else {
+                    targetFloats = nil
+                }
                 guard let material = bind["material"] as? Int,
                       let typeStr = bind["type"] as? String,
                       let type = VRMMaterialColorType(rawValue: typeStr),
-                      let targetValue = bind["targetValue"] as? [Float],
+                      let targetValue = targetFloats,
                       targetValue.count == 4 else {
                     continue
                 }
@@ -785,10 +797,19 @@ public class VRMExtensionParser {
     }
 
     private func parseVector3(_ value: Any?) -> SIMD3<Float>? {
-        guard let array = value as? [Float], array.count == 3 else {
-            return nil
+        // `JSONSerialization` decodes JSON number arrays as `[Double]` on
+        // Apple platforms; test harnesses sometimes construct `[Float]` arrays
+        // directly. Accept both forms — without this, every collider offset,
+        // capsule tail, and plane normal in a VRM 1.0 asset silently parsed
+        // as `(0, 0, 0)`, which collapsed all spring-bone colliders to their
+        // owning joint origin and let hair clip through the head/face.
+        if let array = value as? [Double], array.count == 3 {
+            return SIMD3<Float>(Float(array[0]), Float(array[1]), Float(array[2]))
         }
-        return SIMD3<Float>(array[0], array[1], array[2])
+        if let array = value as? [Float], array.count == 3 {
+            return SIMD3<Float>(array[0], array[1], array[2])
+        }
+        return nil
     }
 
     // MARK: - VRM 0.0 Secondary Animation Support
@@ -878,12 +899,21 @@ public class VRMExtensionParser {
                             joint.hitRadius = 0.0
                         }
 
-                        // Gravity direction
+                        // Gravity direction.
+                        // VRM 0.x `gravityDir` is a world-space vector authored in
+                        // the original Unity/-Z-forward frame.  The node hierarchy
+                        // is conjugated by `Ry180` at load time (see
+                        // `VRMModel.buildNodeHierarchy`), so any non-default
+                        // gravity (e.g. `(0.3, -0.95, 0)` to pull hair forward)
+                        // would otherwise point the wrong way after conversion.
+                        // The default `(0, -1, 0)` is Ry180-invariant, so common
+                        // assets are unaffected; this flip matches three-vrm's
+                        // VRM0 → VRM1 converter for stylized gravity directions.
                         if let gravityDir = groupDict["gravityDir"] as? [String: Any] {
                             let x = gravityDir["x"] as? Float ?? 0
                             let y = gravityDir["y"] as? Float ?? -1
                             let z = gravityDir["z"] as? Float ?? 0
-                            joint.gravityDir = SIMD3<Float>(x, y, z)
+                            joint.gravityDir = SIMD3<Float>(-x, y, -z)
                         }
 
                         spring.joints.append(joint)
@@ -918,9 +948,12 @@ public class VRMExtensionParser {
                         }
 
                         // VRM 0.0 collider format.
-                        // VRM 0.0 (Unity) uses a right-handed -Z forward system; VRM 1.0 / glTF uses +Z forward.
-                        // The model root is rotated 180° around Y to compensate, so collider offsets that are
-                        // local to their node must have X and Z negated to match the VRM 1.0 convention.
+                        // VRM 0.0 (Unity) uses a left-handed -Z forward system; VRM 1.0 / glTF uses +Z forward.
+                        // The node hierarchy is conjugated by `Ry180` at load time
+                        // (see `VRMModel.buildNodeHierarchy`), so the parent's local frame is
+                        // now rotated in world.  To keep the collider at the same world
+                        // position, the offset (expressed in the parent's local frame) must
+                        // be rotated too: `offset_new = Ry180·offset_old = (-x, y, -z)`.
                         let rawOffset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
                         let offset = SIMD3<Float>(-rawOffset.x, rawOffset.y, -rawOffset.z)
                         let radius = parseFloatValue(colliderDict["radius"]) ?? 0.0

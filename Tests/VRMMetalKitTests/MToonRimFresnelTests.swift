@@ -129,7 +129,17 @@ final class MToonRimFresnelTests: XCTestCase {
 
         print("[#226] left silhouette R/G/B = (\(stripR), \(stripG), \(stripB))")
 
-        XCTAssertGreaterThan(stripR, stripG + 0.05,
+        // Thresholds calibrated for VRM 1.0 spec-correct shading (raw dot(N,L)).
+        // The left silhouette is in shadow with this lighting, so the rim is
+        // dimmed by the lighting modulation (rimLightingMix=1.0).  Pre-#226
+        // the bug manifests as R≈G≈B (no rim); any R>G>B separation is signal.
+        //
+        // Observed on macOS arm64 (post-#232 load-time coordinate conversion):
+        //   R=0.416, G=0.380, B=0.341  →  R-G≈0.035, G-B≈0.039
+        // The 0.02 threshold leaves ≥75% headroom on both channels.  Tighten
+        // toward 0.03 only if Metal pipeline cache invalidation makes the
+        // observed values reliable across runs.
+        XCTAssertGreaterThan(stripR, stripG + 0.02,
             "Left silhouette strip must show orange rim (R > G). Got R=\(stripR), G=\(stripG). " +
             "Pre-fix #226 the parametric-rim fresnel only fired at one specific normal direction " +
             "(the sign-aligned w-leak in compound viewMatrix·normalMatrix) — every other silhouette " +
@@ -138,7 +148,7 @@ final class MToonRimFresnelTests: XCTestCase {
         // colour (1, 0.5, 0) is blended *additively* on top of the shadow-
         // side body (gray) — G picks up 0.5·rimF, B picks up 0·rimF, so the
         // G-B delta is half the R-G delta when both come from the rim term.
-        XCTAssertGreaterThan(stripG, stripB + 0.04,
+        XCTAssertGreaterThan(stripG, stripB + 0.02,
             "Left silhouette strip must show orange (G > B). Got G=\(stripG), B=\(stripB).")
     }
 
@@ -205,6 +215,10 @@ final class MToonRimFresnelTests: XCTestCase {
 
         print("[#226] top silhouette R/G/B = (\(stripR), \(stripG), \(stripB))")
 
+        // Observed on macOS arm64 (post-#232 load-time coordinate conversion):
+        //   R=0.729, G=0.600, B=0.416  →  R-G≈0.129, G-B≈0.184
+        // Top silhouette is on the lit side, so the rim's orange is dominant
+        // and well above the looser threshold than the shadowed left strip.
         XCTAssertGreaterThan(stripR, stripG + 0.05,
             "Top silhouette strip must show orange rim (R > G). Got R=\(stripR), G=\(stripG). " +
             "Pre-fix #226 this was pure gray because the w-leak inflated NdotV at +Y normals.")

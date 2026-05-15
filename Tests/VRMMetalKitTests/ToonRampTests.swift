@@ -5,16 +5,24 @@ import XCTest
 import simd
 @testable import VRMMetalKit
 
-/// Unit tests for MToon toon shading ramp (cel-shading gradient) calculations
-/// Based on MToon 1.0 spec for shadingToonyFactor and shadingShiftFactor
+/// Unit tests for MToon toon shading ramp (cel-shading gradient) calculations.
+/// Tests both the VRM 0.x smoothstep path (legacy) and the VRM 1.0 linearstep
+/// path (spec-correct, raw dot(N,L) in [-1,1]).
 final class ToonRampTests: XCTestCase {
 
-    // MARK: - Smoothstep Function Tests
+    // MARK: - Helper functions
 
     /// Swift implementation of Metal's smoothstep for testing
     func smoothstep(_ edge0: Float, _ edge1: Float, _ x: Float) -> Float {
         let t = max(0, min((x - edge0) / (edge1 - edge0), 1))
         return t * t * (3 - 2 * t)
+    }
+
+    /// Swift implementation of Metal's linearstep for testing
+    func linearstep(_ a: Float, _ b: Float, _ t: Float) -> Float {
+        let range = b - a
+        if range <= 0.0001 { return t >= b ? 1.0 : 0.0 }
+        return max(0, min((t - a) / range, 1))
     }
 
     /// Test smoothstep at exact boundaries
@@ -134,6 +142,56 @@ final class ToonRampTests: XCTestCase {
         // At boundary (NdotL = 0)
         let rampBoundary = smoothstep(shift - toony * 0.5, shift + toony * 0.5, 0.0)
         XCTAssertEqual(rampBoundary, 0.5, accuracy: 0.05)
+    }
+
+    // MARK: - VRM 1.0 Linearstep Tests (spec-correct)
+
+    /// VRM 1.0: linearstep with raw dot(N,L) in [-1,1] produces full Lambert gradient at toony=0
+    func testVRM10_LowToony_ProducesSoftGradient() {
+        let toony: Float = 0.25
+        let shift: Float = 0.0
+
+        // At dot(N,L) = -1 (back face): fully shadowed
+        let rampBack = linearstep(-1.0 + toony, 1.0 - toony, -1.0 + shift)
+        XCTAssertEqual(rampBack, 0.0, accuracy: 0.001)
+
+        // At dot(N,L) = 0 (terminator): half lit
+        let rampTerm = linearstep(-1.0 + toony, 1.0 - toony, 0.0 + shift)
+        XCTAssertEqual(rampTerm, 0.5, accuracy: 0.001)
+
+        // At dot(N,L) = 1 (front face): fully lit
+        let rampFront = linearstep(-1.0 + toony, 1.0 - toony, 1.0 + shift)
+        XCTAssertEqual(rampFront, 1.0, accuracy: 0.001)
+    }
+
+    /// VRM 1.0: high positive shift pushes shadow boundary toward back face
+    func testVRM10_HighPositiveShift_MostlyLit() {
+        let toony: Float = 0.9
+        let shift: Float = 0.8
+
+        // With raw dot(N,L), shift=0.8 means the boundary is at dot(N,L) ≈ -0.8
+        // so most of the visible hemisphere is lit
+        let rampFront = linearstep(-1.0 + toony, 1.0 - toony, 1.0 + shift)
+        XCTAssertEqual(rampFront, 1.0, accuracy: 0.001)
+
+        let rampBack = linearstep(-1.0 + toony, 1.0 - toony, -1.0 + shift)
+        XCTAssertEqual(rampBack, 0.0, accuracy: 0.001)
+
+        // At dot(N,L) = 0 (terminator): well into lit region
+        let rampTerm = linearstep(-1.0 + toony, 1.0 - toony, 0.0 + shift)
+        XCTAssertGreaterThan(rampTerm, 0.9, "Terminator should be nearly fully lit with shift=0.8")
+    }
+
+    /// VRM 1.0: toony=1.0 produces hard step at dot(N,L) = -shift
+    func testVRM10_FullToony_HardStep() {
+        let toony: Float = 1.0
+        let shift: Float = 0.0
+
+        let rampBack = linearstep(-1.0 + toony, 1.0 - toony, -0.1 + shift)
+        XCTAssertEqual(rampBack, 0.0, accuracy: 0.001)
+
+        let rampFront = linearstep(-1.0 + toony, 1.0 - toony, 0.1 + shift)
+        XCTAssertEqual(rampFront, 1.0, accuracy: 0.001)
     }
 
     // MARK: - MToonMaterialUniforms Toon Parameter Tests

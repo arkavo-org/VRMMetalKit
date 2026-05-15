@@ -130,6 +130,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Flag to request physics state reset on next update (e.g., when returning to idle)
     var requestPhysicsReset = false
 
+    /// Runtime clamps applied to authored spring-bone joint parameters before they
+    /// are uploaded to the GPU. Default is `.passthrough` (no-op).
+    var springBoneOverride: VRMSpringBoneOverride = .passthrough
+
     // MARK: - Runtime Collider Radius Overrides
 
     /// Runtime overrides for sphere collider radii (index -> radius)
@@ -611,13 +615,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let parentIdx = (isRootBone || jointIndexInChain == 0) ? -1 : (boneIndex - 1)
                 parentIndices.append(parentIdx)
 
-                let params = BoneParams(
+                let jointName = model.nodes[safe: joint.node]?.name
+                let clamped = springBoneOverride.apply(
                     stiffness: joint.stiffness,
-                    drag: joint.dragForce,
+                    dragForce: joint.dragForce,
+                    gravityPower: joint.gravityPower,
+                    jointName: jointName
+                )
+
+                let params = BoneParams(
+                    stiffness: clamped.stiffness,
+                    drag: clamped.dragForce,
                     radius: joint.hitRadius,
                     // Only set parent for non-root bones within the same chain
                     parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
-                    gravityPower: joint.gravityPower,
+                    gravityPower: clamped.gravityPower,
                     colliderGroupMask: colliderGroupMask,
                     gravityDir: normalizedGravityDir
                 )
@@ -1709,10 +1721,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Process bones in order (parents before children due to chain structure)
-        // Use gravity direction (downward) for child bones to make hair hang naturally
-        let gravityDir = SIMD3<Float>(0, -1, 0)
-
+        // Process bones in order (parents before children due to chain structure).
+        // Seed each child along its **authored bind direction in world space**
+        // rather than a hardcoded world `-Y`. The previous behavior teleported
+        // every chain joint to "hang straight down from parent," which on
+        // assets that author `gravityPower = 0` (e.g. AvatarSample_A_1.0's
+        // `Bust`, `Hair`, `Hood`) leaves the chains stuck in the world-down
+        // seed pose rather than the asset's intended rest pose. The integrator
+        // respects `gravityPower = 0`; the kinematic seed has to match it
+        // (vrm-conformance VMK#233).
+        //
+        // Use `targetWorldBindDirections` (the same buffer the GPU stiffness
+        // target reads — see `SpringBonePredict.metal:185-201` and
+        // `captureTargetWorldBindDirections` above), NOT the raw CPU-side
+        // `boneBindDirections`. The CPU array holds *parent-local* directions;
+        // using it as if it were world space introduces a rotation error equal
+        // to the parent's bind-time world rotation, which leaves the seed in a
+        // wrong world position. The stiffness target then pulls back to the
+        // *correct* world position, producing visibly erratic settling on any
+        // chain whose parent rotation isn't identity at bind (every real
+        // humanoid asset). The world-transformed slot matches the stiffness
+        // target so seed and target converge to the same position.
+        //
+        // Indexing: `targetWorldBindDirections[N]` follows the same convention
+        // as `boneBindDirections[N]` — direction from bone N to bone N+1
+        // (current→child) — so the direction from parent to current bone is at
+        // `targetWorldBindDirections[parentIdx]`. The issue body's `[i]` is
+        // off-by-one; the semantically correct substitution is `[parentIdx]`,
+        // matching the shader's existing usage.
+        //
+        // For procedural spring-bone test corpora (vertical chains with
+        // authored bind = (0, -1, 0) and identity parent rotations) this is
+        // a no-op against the previous hardcoded gravity seed.
         for i in 0..<buffers.numBones {
             let parentIdx = cpuParentIndices[i]
 
@@ -1720,12 +1760,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 // Root bone - use animated position
                 kinematicPositions[i] = rootPositionMap[i] ?? .zero
             } else {
-                // Child bone - hang down from parent using gravity direction
                 let parentPos = kinematicPositions[parentIdx]
                 let restLength = cpuRestLengths[i]
 
-                // Use gravity direction so hair hangs down naturally
-                kinematicPositions[i] = parentPos + gravityDir * restLength
+                // Pull the world-space bind direction from the same buffer the
+                // GPU stiffness target reads. Fall back through previousWorld
+                // (last frame's value, also world-space) and finally world `-Y`
+                // so a setup race never produces NaN seed positions.
+                let seedDir: SIMD3<Float>
+                if parentIdx < targetWorldBindDirections.count {
+                    let d = targetWorldBindDirections[parentIdx]
+                    let len = simd_length(d)
+                    seedDir = len > 0.001 ? d / len : SIMD3<Float>(0, -1, 0)
+                } else if parentIdx < previousWorldBindDirections.count {
+                    let d = previousWorldBindDirections[parentIdx]
+                    let len = simd_length(d)
+                    seedDir = len > 0.001 ? d / len : SIMD3<Float>(0, -1, 0)
+                } else {
+                    seedDir = SIMD3<Float>(0, -1, 0)
+                }
+                kinematicPositions[i] = parentPos + seedDir * restLength
             }
         }
 
@@ -1814,26 +1868,60 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Step 5: Final reset to zero velocity at settled positions
         // Read back the settled positions and use them as the new "rest" state
+        var settledPositions: [SIMD3<Float>] = []
         if let bonePosCurr = buffers.bonePosCurr,
            let bonePosPrev = buffers.bonePosPrev {
             let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
             let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
 
             // Set prev = curr to eliminate any residual velocity
+            settledPositions.reserveCapacity(buffers.numBones)
             for i in 0..<buffers.numBones {
                 prevPtr[i] = currPtr[i]
+                settledPositions.append(currPtr[i])
+            }
+        }
+
+        // VMK#233: Apply settled positions to nodes so the first render frame
+        // shows the settled state, not the load-time rest pose. Without this,
+        // writeBonesToNodes() skips on frame 1 because the async snapshot
+        // hasn't completed yet, causing a one-frame lag.
+        //
+        // Skip the apply when every joint in the model has gravityPower == 0
+        // and there are no external forces during warmup (wind/characterVelocity
+        // are zero by construction here). In that case the integrator produces
+        // no movement and applying the snapshot only introduces a tiny readback
+        // divergence vs three-vrm's full-reload reset path on broken assets
+        // like AvatarSample_A_1.0 where authors set gravityPower=0 throughout.
+        if !settledPositions.isEmpty {
+            var anyGravity = false
+            outer: for spring in springBone.springs {
+                for joint in spring.joints {
+                    let jointName = model.nodes[safe: joint.node]?.name
+                    let effective = springBoneOverride.apply(
+                        stiffness: joint.stiffness,
+                        dragForce: joint.dragForce,
+                        gravityPower: joint.gravityPower,
+                        jointName: jointName
+                    )
+                    if effective.gravityPower > 0 {
+                        anyGravity = true
+                        break outer
+                    }
+                }
+            }
+            if anyGravity {
+                snapshotLock.lock()
+                latestPositionsSnapshot = settledPositions
+                latestCompletedFrame = 1
+                lastAppliedFrame = 0
+                snapshotLock.unlock()
+                writeBonesToNodes(model: model)
             }
         }
 
         // Reset time accumulator
         timeAccumulator = 0
-
-        // Reset readback state
-        snapshotLock.lock()
-        latestPositionsSnapshot.removeAll(keepingCapacity: true)
-        latestCompletedFrame = 0
-        lastAppliedFrame = 0
-        snapshotLock.unlock()
 
         vrmLog("[SpringBone] Physics warmup complete (\(steps) steps)")
     }

@@ -274,12 +274,10 @@ final class VRM1CompatibilityTests: XCTestCase {
         print("VRM 0.0 (AliciaSolid):")
         print("  specVersion: \(vrm0Model.specVersion)")
         print("  isVRM0: \(vrm0Model.isVRM0)")
-        print("  convertForVRM0: true (coordinate conversion applied)")
-        
+
         print("VRM 1.0 (Seed-san):")
         print("  specVersion: \(vrm1Model.specVersion)")
         print("  isVRM0: \(vrm1Model.isVRM0)")
-        print("  convertForVRM0: false (no conversion needed)")
         
         // Load same VRMA with both models
         let vrmaURL = URL(fileURLWithPath: vrmaPath)
