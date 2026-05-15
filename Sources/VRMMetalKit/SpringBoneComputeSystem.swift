@@ -131,8 +131,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     var requestPhysicsReset = false
 
     /// Runtime clamps applied to authored spring-bone joint parameters before they
-    /// are uploaded to the GPU. Default is `.none` (no-op).
-    var springBoneOverride: VRMSpringBoneOverride = .none
+    /// are uploaded to the GPU. Default is `.passthrough` (no-op).
+    var springBoneOverride: VRMSpringBoneOverride = .passthrough
 
     // MARK: - Runtime Collider Radius Overrides
 

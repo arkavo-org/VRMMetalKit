@@ -41,7 +41,11 @@ public struct VRMSpringBoneOverride: Sendable {
     public var maxDragForce: Float?
     public var jointNameMatches: (@Sendable (String) -> Bool)?
 
-    public static let none = VRMSpringBoneOverride()
+    /// Sentinel value meaning "apply no clamps; pass authored joint parameters
+    /// through unchanged." Named `passthrough` rather than `none` so call sites
+    /// like `renderer.springBoneOverride = .passthrough` aren't ambiguous with
+    /// `Optional.none`.
+    public static let passthrough = VRMSpringBoneOverride()
 
     public init(
         minGravityPower: Float? = nil,

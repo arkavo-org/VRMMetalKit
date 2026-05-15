@@ -143,7 +143,7 @@ final class SpringBoneComputeSystemTests: XCTestCase {
 
     /// Default override is a strict no-op: authored values pass through unchanged.
     func testSpringBoneOverrideDefaultIsNoOp() {
-        let override = VRMSpringBoneOverride.none
+        let override = VRMSpringBoneOverride.passthrough
         let out = override.apply(stiffness: 0.85, dragForce: 0.4, gravityPower: 0.0, jointName: "J_Sec_Hair1_01")
         XCTAssertEqual(out.stiffness, 0.85, accuracy: 1e-6)
         XCTAssertEqual(out.dragForce, 0.4, accuracy: 1e-6)

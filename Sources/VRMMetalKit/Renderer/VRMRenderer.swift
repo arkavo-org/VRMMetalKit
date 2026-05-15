@@ -515,9 +515,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     /// Runtime clamps applied to spring-bone joint parameters at `loadModel` time.
     /// Use this to rescue assets that author rigid hair (e.g., `gravityPower = 0`
-    /// with high `stiffness`) without modifying the source `.vrm`. Must be set
-    /// before `loadModel` is called; setting after has no effect.
-    public var springBoneOverride: VRMSpringBoneOverride = .none
+    /// with high `stiffness`) without modifying the source `.vrm`.
+    ///
+    /// Set this **before** calling ``loadModel(_:)``. The clamps are consumed
+    /// when `BoneParams` are uploaded to the GPU during populate, so setting
+    /// after `loadModel` leaves the live physics state unchanged — a fresh
+    /// `loadModel` call is required to apply the new override. Setting post-load
+    /// triggers a one-time warning via `vrmLog` so the silent-no-op case is
+    /// observable.
+    public var springBoneOverride: VRMSpringBoneOverride = .passthrough {
+        didSet {
+            springBoneComputeSystem?.springBoneOverride = springBoneOverride
+            if model != nil && !springBoneOverride.isNoOp {
+                vrmLog("[VRMRenderer] springBoneOverride changed after loadModel; " +
+                       "live BoneParams are not re-uploaded — reload the model to apply.")
+            }
+        }
+    }
 
     /// When `true`, `drawCore` skips the safety-net root-node `updateWorldTransform`
     /// pass before encoding. Set this on hosts that already update world transforms
