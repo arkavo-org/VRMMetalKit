@@ -1856,26 +1856,35 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Step 5: Final reset to zero velocity at settled positions
         // Read back the settled positions and use them as the new "rest" state
+        var settledPositions: [SIMD3<Float>] = []
         if let bonePosCurr = buffers.bonePosCurr,
            let bonePosPrev = buffers.bonePosPrev {
             let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
             let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
 
             // Set prev = curr to eliminate any residual velocity
+            settledPositions.reserveCapacity(buffers.numBones)
             for i in 0..<buffers.numBones {
                 prevPtr[i] = currPtr[i]
+                settledPositions.append(currPtr[i])
             }
+        }
+
+        // VMK#233: Apply settled positions to nodes so the first render frame
+        // shows the settled state, not the load-time rest pose. Without this,
+        // writeBonesToNodes() skips on frame 1 because the async snapshot
+        // hasn't completed yet, causing a one-frame lag.
+        if !settledPositions.isEmpty {
+            snapshotLock.lock()
+            latestPositionsSnapshot = settledPositions
+            latestCompletedFrame = 1
+            lastAppliedFrame = 0
+            snapshotLock.unlock()
+            writeBonesToNodes(model: model)
         }
 
         // Reset time accumulator
         timeAccumulator = 0
-
-        // Reset readback state
-        snapshotLock.lock()
-        latestPositionsSnapshot.removeAll(keepingCapacity: true)
-        latestCompletedFrame = 0
-        lastAppliedFrame = 0
-        snapshotLock.unlock()
 
         vrmLog("[SpringBone] Physics warmup complete (\(steps) steps)")
     }
