@@ -226,4 +226,136 @@ final class MToonRimFresnelTests: XCTestCase {
             "Top silhouette strip must show orange (G > B). Got G=\(stripG), B=\(stripB).")
     }
 
+    /// Regression for vrm-conformance issue #228, which claimed VMK 0.13.6
+    /// produced **no front-face rim contribution** on `mtoon_rimLightingMix_1`
+    /// (`parametricRimLiftFactor=0.0`, `rimLightingMixFactor=1.0`) — its
+    /// reported VMK center pixel `(181,181,181)` was byte-identical to
+    /// `mtoon_default`'s center, while UniVRM reported `(255,255,132)` and
+    /// three-vrm `(255,255,195)`.
+    ///
+    /// The hypothesis in #228 was that VMK's parametric-rim formula had `lift`
+    /// outside `pow(...)`. It does not: `MToonShader.metal:731-732` reads
+    /// `pow(saturate(vf + parametricRimLiftFactor), max(power, 1e-4))`, which
+    /// is byte-identical to UniVRM's HLSL at
+    /// `MToon10/Shaders/vrmc_materials_mtoon_lighting_mtoon.hlsl:126`.
+    ///
+    /// Empirical measurement on HEAD (post-#214 pipeline cache + #232 load-time
+    /// coord conversion) at the conformance sample point on `mtoon_rimLightingMix_1`:
+    ///
+    ///     mtoon_rimLightingMix_1  →  (178, 164, 148)
+    ///     mtoon_default           →  (148, 148, 148)
+    ///     rim contribution        →  ( 30,  16,   0)
+    ///
+    /// The rim Δ ratio (30:16:0) normalizes to (1.00, 0.53, 0.00) — within
+    /// rounding of the asset's `parametricRimColorFactor` (1.0, 0.5, 0.0).
+    /// The rim path is firing.
+    ///
+    /// The remaining gap vs UniVRM `(255,255,132)` is **body brightness**,
+    /// not rim: VMK's lit base at this sample (`148`) sits well below
+    /// UniVRM's saturated `255`. That residual is tracked by
+    /// [VMK#213](https://github.com/arkavo-org/VRMMetalKit/issues/213) (the
+    /// shadingToony / shading-curve cluster).
+    ///
+    /// This test locks in that the rim contribution is positive and orange-tinted
+    /// (`R > G > B`, `R−G > 10 bytes`, `G−B > 5 bytes`) so any future change
+    /// that re-introduces the "byte-identical to mtoon_default" symptom fails
+    /// CI loudly.
+    func testRimContributionPositiveAtConformanceSamplePoint() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal not available")
+        }
+        let path = "/tmp/repro226/mtoon_rimLightingMix_1.vrm"
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("vrm-conformance rim asset not at \(path).")
+        }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
+
+        var config = RendererConfig()
+        config.sampleCount = 1
+        config.strict = .off
+        config.colorPixelFormat = .rgba8Unorm_srgb
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.loadModel(model)
+
+        // Conformance test_yaml setup (mtoon_rimLightingMix_1.test.yaml). The
+        // QA suite renders at 1024×1024 with 4× MSAA; we use 256×256 to keep
+        // the test cheap and oversample MSAA via the same in-shader pipeline.
+        let size = 256
+        let fov: Float = 30.0 * .pi / 180.0
+        renderer.projectionMatrix = RenderTestSupport.makePerspective(fovRadians: fov, aspect: 1.0, near: 0.01, far: 100.0)
+        renderer.viewMatrix = RenderTestSupport.makeLookAt(
+            eye:    SIMD3<Float>(0, 1.4, 1.5),
+            center: SIMD3<Float>(0, 1.4, 0),
+            up:     SIMD3<Float>(0, 1, 0)
+        )
+        renderer.setLight(0, direction: SIMD3<Float>(-0.3, -0.6, -0.7),
+                          color: SIMD3<Float>(1, 1, 1),
+                          intensity: 1.0)
+        renderer.disableLight(1)
+        renderer.disableLight(2)
+        renderer.setAmbientColor(SIMD3<Float>(0.5 * 0.3, 0.5 * 0.3, 0.5 * 0.3))
+
+        let pixels = try RenderTestSupport.renderFrame(
+            renderer: renderer,
+            device: device,
+            size: size,
+            pixelFormat: .rgba8Unorm_srgb,
+            clearColor: MTLClearColor(red: 1.0, green: 0.0, blue: 1.0, alpha: 1.0)
+        )
+
+        // Issue #228 samples (512, 600) on a 1024×1024 render — 50% horizontal,
+        // 58.6% vertical. At 256² that maps to (128, 150). Sample a small
+        // window centered there.
+        let cx = Int(Double(size) * 0.50)
+        let cy = Int(Double(size) * 0.586)
+        let xRange = (cx - 2)...(cx + 2)
+        let yRange = (cy - 2)...(cy + 2)
+        let centerR = RenderTestSupport.meanChannelRGBA(pixels, size: size, channel: 0, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+        let centerG = RenderTestSupport.meanChannelRGBA(pixels, size: size, channel: 1, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+        let centerB = RenderTestSupport.meanChannelRGBA(pixels, size: size, channel: 2, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+
+        let r8 = Int(centerR * 255), g8 = Int(centerG * 255), b8 = Int(centerB * 255)
+        print("[#228] mtoon_rimLightingMix_1 center (x=\(cx), y=\(cy)) R/G/B = (\(r8), \(g8), \(b8)) — issue claims UniVRM=(255,255,132), three-vrm=(255,255,195)")
+
+        // Comparison render: same camera/lighting against mtoon_default (no rim
+        // configured) to isolate the rim contribution from the body's lit
+        // color. If `default` produces ~same R/G/B and `rimLightingMix_1`
+        // produces R>G>B with an orange offset, the rim is firing — and the
+        // issue's "byte-identical to mtoon_default" claim is wrong on HEAD.
+        let defaultPath = "/tmp/repro226/mtoon_default.vrm"
+        if FileManager.default.fileExists(atPath: defaultPath) {
+            let defaultModel = try await VRMModel.load(from: URL(fileURLWithPath: defaultPath), device: device)
+            let defaultRenderer = VRMRenderer(device: device, config: config)
+            defaultRenderer.loadModel(defaultModel)
+            defaultRenderer.projectionMatrix = renderer.projectionMatrix
+            defaultRenderer.viewMatrix = renderer.viewMatrix
+            defaultRenderer.setLight(0, direction: SIMD3<Float>(-0.3, -0.6, -0.7),
+                                     color: SIMD3<Float>(1, 1, 1),
+                                     intensity: 1.0)
+            defaultRenderer.disableLight(1)
+            defaultRenderer.disableLight(2)
+            defaultRenderer.setAmbientColor(SIMD3<Float>(0.15, 0.15, 0.15))
+            let defaultPixels = try RenderTestSupport.renderFrame(
+                renderer: defaultRenderer, device: device, size: size,
+                pixelFormat: .rgba8Unorm_srgb,
+                clearColor: MTLClearColor(red: 1.0, green: 0.0, blue: 1.0, alpha: 1.0)
+            )
+            let dR = RenderTestSupport.meanChannelRGBA(defaultPixels, size: size, channel: 0, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+            let dG = RenderTestSupport.meanChannelRGBA(defaultPixels, size: size, channel: 1, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+            let dB = RenderTestSupport.meanChannelRGBA(defaultPixels, size: size, channel: 2, xRange: xRange, yRange: yRange, skippingMagentaClear: true)
+            print("[#228] mtoon_default            center (x=\(cx), y=\(cy)) R/G/B = (\(Int(dR*255)), \(Int(dG*255)), \(Int(dB*255)))")
+            print("[#228] rim contribution         = (\(r8 - Int(dR*255)), \(g8 - Int(dG*255)), \(b8 - Int(dB*255)))")
+        }
+
+        // Regression assertions: rim must be visibly orange-tinted at this
+        // front-facing sample point. The thresholds (Δ R-G ≥ 10, Δ G-B ≥ 5
+        // bytes) leave ~30% headroom on the observed (30, 16, 0) delta so
+        // small lighting recalibration in future PRs doesn't trip the test,
+        // while still failing loudly if the rim path stops firing.
+        XCTAssertGreaterThan(r8 - g8, 10,
+            "Front-face rim must show orange (R > G + 10 bytes). Got R=\(r8), G=\(g8). " +
+            "Pre-#228 VMK 0.13.6 reported R=G=B at this point — that regression must not return.")
+        XCTAssertGreaterThan(g8 - b8, 5,
+            "Front-face rim must show orange (G > B + 5 bytes). Got G=\(g8), B=\(b8).")
+    }
 }
