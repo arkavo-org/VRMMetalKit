@@ -662,7 +662,7 @@ final class VRMExtensionParserTests: XCTestCase {
         let document = createMinimalGLTFDocument()
 
         XCTAssertThrowsError(try parser.parseVRMExtension(vrmDict, document: document)) { error in
-            guard case VRMError.invalidJSON = error else {
+            guard case GLTFError.invalidJSON = error else {
                 XCTFail("Expected invalidJSON error")
                 return
             }
@@ -678,7 +678,7 @@ final class VRMExtensionParserTests: XCTestCase {
         let document = createMinimalGLTFDocument()
 
         XCTAssertThrowsError(try parser.parseVRMExtension(vrmDict, document: document)) { error in
-            guard case VRMError.invalidJSON = error else {
+            guard case GLTFError.invalidJSON = error else {
                 XCTFail("Expected invalidJSON error")
                 return
             }

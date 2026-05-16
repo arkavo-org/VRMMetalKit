@@ -540,16 +540,6 @@ public class VRMAnimationState {
         // T-pose is the default bind pose for VRM
     }
 
-    /// Pre-fills the state with an A-pose (arms rotated ±45° about Z).
-    public func setAPose() {
-        // A-pose with arms at 45 degrees
-        bones[.leftUpperArm] = BoneTransform()
-        bones[.leftUpperArm]?.rotation = simd_quatf(angle: -.pi/4, axis: [0, 0, 1])
-
-        bones[.rightUpperArm] = BoneTransform()
-        bones[.rightUpperArm]?.rotation = simd_quatf(angle: .pi/4, axis: [0, 0, 1])
-    }
-
     /// Writes the stored bone transforms onto `model.nodes` and propagates world transforms from each root.
     public func applyToModel(_ model: VRMModel) {
         guard let humanoid = model.humanoid else { return }

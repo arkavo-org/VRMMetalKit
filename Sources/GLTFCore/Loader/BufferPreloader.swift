@@ -40,7 +40,7 @@
 ///
 /// External-file reads are checked against the supplied `baseURL`: any URI
 /// that resolves outside the base directory (whether via `..` segments or an
-/// absolute path) throws ``VRMError/invalidPath(path:reason:filePath:)``.
+/// absolute path) throws ``GLTFError/invalidPath(path:reason:filePath:)``.
 /// Absolute paths whose resolved location is still under `baseURL` are
 /// allowed, though relative paths are recommended for portability.
 public final class BufferPreloader: @unchecked Sendable {
@@ -147,7 +147,7 @@ public final class BufferPreloader: @unchecked Sendable {
     
     private func loadDataURI(_ uri: String, bufferIndex: Int) throws -> Data {
         guard let commaIndex = uri.firstIndex(of: ",") else {
-            throw VRMError.invalidPath(
+            throw GLTFError.invalidPath(
                 path: uri,
                 reason: "Data URI missing comma separator",
                 filePath: baseURL?.path
@@ -156,7 +156,7 @@ public final class BufferPreloader: @unchecked Sendable {
         
         let base64String = String(uri[uri.index(after: commaIndex)...])
         guard let data = Data(base64Encoded: base64String) else {
-            throw VRMError.invalidPath(
+            throw GLTFError.invalidPath(
                 path: uri,
                 reason: "Failed to decode base64 data",
                 filePath: baseURL?.path
@@ -168,7 +168,7 @@ public final class BufferPreloader: @unchecked Sendable {
     
     private func loadExternalFile(_ uri: String, bufferIndex: Int) throws -> Data {
         guard let baseURL = baseURL else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferIndex,
                 requiredBy: "buffer loading (no base URL)",
                 expectedSize: nil,
@@ -182,7 +182,7 @@ public final class BufferPreloader: @unchecked Sendable {
         let basePath = baseURL.standardized.path
         let filePath = fileURL.standardized.path
         guard filePath.hasPrefix(basePath) else {
-            throw VRMError.invalidPath(
+            throw GLTFError.invalidPath(
                 path: uri,
                 reason: "Path resolves outside base directory",
                 filePath: baseURL.path
@@ -190,7 +190,7 @@ public final class BufferPreloader: @unchecked Sendable {
         }
         
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferIndex,
                 requiredBy: "external buffer file not found",
                 expectedSize: nil,

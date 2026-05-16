@@ -204,18 +204,6 @@ public final class IKLayer: AnimationLayer {
         pendingOutput = nil
     }
 
-    /// Calculate total leg length for a side.
-    ///
-    /// - Parameters:
-    ///   - model: VRM model
-    ///   - side: Left or right leg
-    /// - Returns: Total leg length (thigh + shin)
-    public func calculateLegLength(model: VRMModel, side: Side) -> Float {
-        self.model = model
-        calculateLegLengths()
-        return side == .left ? leftLegLength : rightLegLength
-    }
-
     private func calculateLegLengths() {
         guard let model = model, let humanoid = model.humanoid else { return }
 

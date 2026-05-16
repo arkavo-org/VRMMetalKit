@@ -108,8 +108,8 @@ final class LoaderSecurityTests: XCTestCase {
         let loader = BufferLoader(document: document, binaryData: binaryData)
 
         XCTAssertThrowsError(try loader.loadAccessor(0, type: UInt32.self)) { error in
-            guard case VRMError.invalidAccessor(_, let reason, _, _) = error else {
-                XCTFail("Expected VRMError.invalidAccessor, got \(error)")
+            guard case GLTFError.invalidAccessor(_, let reason, _, _) = error else {
+                XCTFail("Expected GLTFError.invalidAccessor, got \(error)")
                 return
             }
             XCTAssertTrue(reason.contains("componentType"),
@@ -136,8 +136,8 @@ final class LoaderSecurityTests: XCTestCase {
         let loader = BufferLoader(document: document, binaryData: binaryData)
 
         XCTAssertThrowsError(try loader.loadAccessor(0, type: Float.self)) { error in
-            guard case VRMError.invalidAccessor(_, let reason, _, _) = error else {
-                XCTFail("Expected VRMError.invalidAccessor, got \(error)")
+            guard case GLTFError.invalidAccessor(_, let reason, _, _) = error else {
+                XCTFail("Expected GLTFError.invalidAccessor, got \(error)")
                 return
             }
             XCTAssertTrue(reason.contains("type"),
@@ -182,8 +182,8 @@ final class LoaderSecurityTests: XCTestCase {
         let loader = BufferLoader(document: document, binaryData: nil, baseURL: baseDir)
 
         XCTAssertThrowsError(try loader.loadAccessor(0, type: UInt8.self)) { error in
-            guard case VRMError.invalidPath(_, let reason, _) = error else {
-                XCTFail("Expected VRMError.invalidPath, got \(error)")
+            guard case GLTFError.invalidPath(_, let reason, _) = error else {
+                XCTFail("Expected GLTFError.invalidPath, got \(error)")
                 return
             }
             XCTAssertTrue(reason.lowercased().contains("outside") ||

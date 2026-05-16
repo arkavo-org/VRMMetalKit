@@ -40,7 +40,7 @@ import simd
 /// `bufferView.byteOffset + accessor.byteOffset`, and
 /// [sparse-accessor overrides](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#sparse-accessors).
 /// Unknown component types or accessor types throw
-/// ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)``
+/// ``GLTFError/invalidAccessor(accessorIndex:reason:context:filePath:)``
 /// rather than silently misreading bytes.
 ///
 /// `BufferLoader` is `@unchecked Sendable`; the cached preloaded-data map is
@@ -55,7 +55,7 @@ public class BufferLoader: @unchecked Sendable {
     private var preloadedData: [Int: Data]?
 
     /// The file path for error reporting
-    internal var filePath: String? {
+    public var filePath: String? {
         return baseURL?.path
     }
 
@@ -93,10 +93,10 @@ public class BufferLoader: @unchecked Sendable {
     ///   - accessorIndex: Zero-based index into `GLTFDocument.accessors`.
     ///   - type: Numeric type to decode into (typically `Float.self` or `UInt32.self`).
     /// - Returns: `count * componentsPerElement` scalars, in element-major order.
-    /// - Throws: ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)`` when the accessor index, componentType, or accessor type is unrecognised; ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` when the backing buffer cannot be resolved.
+    /// - Throws: ``GLTFError/invalidAccessor(accessorIndex:reason:context:filePath:)`` when the accessor index, componentType, or accessor type is unrecognised; ``GLTFError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` when the backing buffer cannot be resolved.
     public func loadAccessor<T>(_ accessorIndex: Int, type: T.Type) throws -> [T] where T: Numeric {
         guard let accessor = document.accessors?[safe: accessorIndex] else {
-            throw VRMError.invalidAccessor(
+            throw GLTFError.invalidAccessor(
                 accessorIndex: accessorIndex,
                 reason: "Accessor not found in document",
                 context: "loadAccessor<\(T.self)>",
@@ -152,10 +152,10 @@ public class BufferLoader: @unchecked Sendable {
     /// rules.
     ///
     /// - Parameter accessorIndex: Zero-based index into `GLTFDocument.accessors`.
-    /// - Throws: ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)`` for unknown component/accessor types; ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the buffer cannot be resolved.
+    /// - Throws: ``GLTFError/invalidAccessor(accessorIndex:reason:context:filePath:)`` for unknown component/accessor types; ``GLTFError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the buffer cannot be resolved.
     public func loadAccessorAsFloat(_ accessorIndex: Int) throws -> [Float] {
         guard let accessor = document.accessors?[safe: accessorIndex] else {
-            throw VRMError.invalidAccessor(
+            throw GLTFError.invalidAccessor(
                 accessorIndex: accessorIndex,
                 reason: "Accessor not found in document",
                 context: "loadAccessorAsFloat",
@@ -205,10 +205,10 @@ public class BufferLoader: @unchecked Sendable {
     /// Accepts `UNSIGNED_BYTE`, `UNSIGNED_SHORT`, `UNSIGNED_INT`, and `FLOAT` component types.
     ///
     /// - Parameter accessorIndex: Zero-based index into `GLTFDocument.accessors`.
-    /// - Throws: ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)`` for unknown component/accessor types; ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the buffer cannot be resolved.
+    /// - Throws: ``GLTFError/invalidAccessor(accessorIndex:reason:context:filePath:)`` for unknown component/accessor types; ``GLTFError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the buffer cannot be resolved.
     public func loadAccessorAsUInt32(_ accessorIndex: Int) throws -> [UInt32] {
         guard let accessor = document.accessors?[safe: accessorIndex] else {
-            throw VRMError.invalidAccessor(
+            throw GLTFError.invalidAccessor(
                 accessorIndex: accessorIndex,
                 reason: "Accessor not found in document",
                 context: "loadAccessorAsUInt32",
@@ -258,12 +258,12 @@ public class BufferLoader: @unchecked Sendable {
     ///
     /// Used by ``VRMSkin`` to load inverse bind matrices. The accessor's
     /// `type` field must be `"MAT4"`; any other type raises
-    /// ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)``.
+    /// ``GLTFError/invalidAccessor(accessorIndex:reason:context:filePath:)``.
     ///
     /// - Parameter accessorIndex: Zero-based index into `GLTFDocument.accessors`.
     public func loadAccessorAsMatrix4x4(_ accessorIndex: Int) throws -> [float4x4] {
         guard let accessor = document.accessors?[safe: accessorIndex] else {
-            throw VRMError.invalidAccessor(
+            throw GLTFError.invalidAccessor(
                 accessorIndex: accessorIndex,
                 reason: "Accessor not found in document",
                 context: "loadAccessorAsMatrix4x4",
@@ -273,7 +273,7 @@ public class BufferLoader: @unchecked Sendable {
 
         // MAT4 type should have 16 components per element
         guard accessor.type == "MAT4" else {
-            throw VRMError.invalidAccessor(
+            throw GLTFError.invalidAccessor(
                 accessorIndex: accessorIndex,
                 reason: "Expected MAT4 type but got '\(accessor.type)'",
                 context: "loadAccessorAsMatrix4x4 requires MAT4 accessor type",
@@ -373,7 +373,7 @@ public class BufferLoader: @unchecked Sendable {
     /// Returns the raw bytes for a glTF buffer, consulting preloaded data, the GLB binary chunk, `data:` URIs, and external files in that order.
     ///
     /// - Parameter bufferIndex: Zero-based index into `GLTFDocument.buffers`.
-    /// - Throws: ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the buffer cannot be resolved; ``VRMError/invalidPath(path:reason:filePath:)`` for path-traversal attempts or missing external files.
+    /// - Throws: ``GLTFError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the buffer cannot be resolved; ``GLTFError/invalidPath(path:reason:filePath:)`` for path-traversal attempts or missing external files.
     public func getBufferData(bufferIndex: Int) throws -> Data {
         // Check preloaded data first (optimization)
         if let preloaded = preloadedData?[bufferIndex] {
@@ -381,7 +381,7 @@ public class BufferLoader: @unchecked Sendable {
         }
         
         guard let buffer = document.buffers?[safe: bufferIndex] else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferIndex,
                 requiredBy: "getBufferData",
                 expectedSize: nil,
@@ -401,7 +401,7 @@ public class BufferLoader: @unchecked Sendable {
                 return try loadExternalBuffer(uri)
             }
         } else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferIndex,
                 requiredBy: "getBufferData",
                 expectedSize: buffer.byteLength,
@@ -422,7 +422,7 @@ public class BufferLoader: @unchecked Sendable {
     ///   - bufferViewIndex: Zero-based index into `GLTFDocument.bufferViews`.
     ///   - device: Metal device used for allocation.
     /// - Returns: An `MTLBuffer` sized to `bufferView.byteLength`, or `nil` if `device.makeBuffer(...)` fails.
-    /// - Throws: ``VRMError/invalidAccessor(accessorIndex:reason:context:filePath:)`` if the bufferView is missing; ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the underlying buffer cannot be resolved.
+    /// - Throws: ``GLTFError/invalidAccessor(accessorIndex:reason:context:filePath:)`` if the bufferView is missing; ``GLTFError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)`` if the underlying buffer cannot be resolved.
     public func createMTLBuffer(for bufferViewIndex: Int, device: MTLDevice) throws -> MTLBuffer? {
         let (fullData, bufferView) = try loadBufferView(bufferViewIndex)
 
@@ -431,7 +431,7 @@ public class BufferLoader: @unchecked Sendable {
         let length = bufferView.byteLength
 
         guard offset + length <= fullData.count else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferView.buffer,
                 requiredBy: "createMTLBuffer for bufferView \(bufferViewIndex)",
                 expectedSize: offset + length,
@@ -448,7 +448,7 @@ public class BufferLoader: @unchecked Sendable {
     // Returns the entire buffer data and the bufferView for offset calculation
     private func loadBufferView(_ bufferViewIndex: Int) throws -> (data: Data, bufferView: GLTFBufferView) {
         guard let bufferView = document.bufferViews?[safe: bufferViewIndex] else {
-            throw VRMError.invalidAccessor(
+            throw GLTFError.invalidAccessor(
                 accessorIndex: bufferViewIndex,
                 reason: "BufferView not found in document",
                 context: "loadBufferView",
@@ -457,7 +457,7 @@ public class BufferLoader: @unchecked Sendable {
         }
 
         guard let buffer = document.buffers?[safe: bufferView.buffer] else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferView.buffer,
                 requiredBy: "loadBufferView \(bufferViewIndex)",
                 expectedSize: bufferView.byteLength,
@@ -480,7 +480,7 @@ public class BufferLoader: @unchecked Sendable {
                 data = try loadExternalBuffer(uri)
             }
         } else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferView.buffer,
                 requiredBy: "loadBufferView \(bufferViewIndex)",
                 expectedSize: buffer.byteLength,
@@ -495,7 +495,7 @@ public class BufferLoader: @unchecked Sendable {
 
     private func loadDataURI(_ uri: String) throws -> Data {
         guard let commaIndex = uri.firstIndex(of: ",") else {
-            throw VRMError.invalidJSON(
+            throw GLTFError.invalidJSON(
                 context: "loadDataURI: Invalid data URI format",
                 underlyingError: "Missing comma separator in data URI",
                 filePath: filePath
@@ -504,7 +504,7 @@ public class BufferLoader: @unchecked Sendable {
 
         let base64String = String(uri[uri.index(after: commaIndex)...])
         guard let data = Data(base64Encoded: base64String) else {
-            throw VRMError.invalidJSON(
+            throw GLTFError.invalidJSON(
                 context: "loadDataURI: Failed to decode base64 data",
                 underlyingError: "Invalid base64 encoding in data URI",
                 filePath: filePath
@@ -517,7 +517,7 @@ public class BufferLoader: @unchecked Sendable {
     private func loadExternalBuffer(_ uri: String) throws -> Data {
         guard let baseURL = baseURL else {
             vrmLog("[BufferLoader] Warning: Cannot load external file without base URL: \(uri)")
-            throw VRMError.invalidPath(
+            throw GLTFError.invalidPath(
                 path: uri,
                 reason: "Cannot load external buffer without base URL",
                 filePath: nil
@@ -541,7 +541,7 @@ public class BufferLoader: @unchecked Sendable {
         let resolvedFilePath = fileURL.standardized.resolvingSymlinksInPath().path
         guard resolvedFilePath.hasPrefix(basePath) else {
             vrmLog("[BufferLoader] Security: Refusing to load file outside base directory: \(uri)")
-            throw VRMError.invalidPath(
+            throw GLTFError.invalidPath(
                 path: uri,
                 reason: "Security: Path resolves outside base directory (attempted path traversal)",
                 filePath: filePath
@@ -551,7 +551,7 @@ public class BufferLoader: @unchecked Sendable {
         // Check if file exists
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             vrmLog("[BufferLoader] Warning: External buffer file not found: \(fileURL.path)")
-            throw VRMError.invalidPath(
+            throw GLTFError.invalidPath(
                 path: uri,
                 reason: "External buffer file not found at resolved path: \(fileURL.path)",
                 filePath: filePath
@@ -565,7 +565,7 @@ public class BufferLoader: @unchecked Sendable {
             return data
         } catch {
             vrmLog("[BufferLoader] Error loading external buffer: \(error)")
-            throw VRMError.invalidPath(
+            throw GLTFError.invalidPath(
                 path: uri,
                 reason: "Failed to load external buffer: \(error.localizedDescription)",
                 filePath: filePath
@@ -693,7 +693,7 @@ public class BufferLoader: @unchecked Sendable {
     }
 
     /// Validates that the accessor's componentType and type are known glTF values.
-    /// Rejects with `VRMError.invalidAccessor` rather than silently misreading bytes
+    /// Rejects with `GLTFError.invalidAccessor` rather than silently misreading bytes
     /// (which previously caused either zeroed garbage data or a forced-cast crash in
     /// `extractComponent` when `T` was not `Float`).
     private func validateAccessor(_ accessor: GLTFAccessor, accessorIndex: Int, context: String) throws {
@@ -701,7 +701,7 @@ public class BufferLoader: @unchecked Sendable {
         case 5120, 5121, 5122, 5123, 5125, 5126:
             break
         default:
-            throw VRMError.invalidAccessor(
+            throw GLTFError.invalidAccessor(
                 accessorIndex: accessorIndex,
                 reason: "Unknown componentType \(accessor.componentType); expected 5120 (BYTE), 5121 (UBYTE), 5122 (SHORT), 5123 (USHORT), 5125 (UINT), or 5126 (FLOAT)",
                 context: context,
@@ -712,7 +712,7 @@ public class BufferLoader: @unchecked Sendable {
         case "SCALAR", "VEC2", "VEC3", "VEC4", "MAT2", "MAT3", "MAT4":
             break
         default:
-            throw VRMError.invalidAccessor(
+            throw GLTFError.invalidAccessor(
                 accessorIndex: accessorIndex,
                 reason: "Unknown accessor type '\(accessor.type)'; expected SCALAR, VEC2, VEC3, VEC4, MAT2, MAT3, or MAT4",
                 context: context,
@@ -725,7 +725,7 @@ public class BufferLoader: @unchecked Sendable {
 // MARK: - Array Safe Access
 
 extension Array {
-    subscript(safe index: Int) -> Element? {
+    public subscript(safe index: Int) -> Element? {
         return index >= 0 && index < count ? self[index] : nil
     }
 }

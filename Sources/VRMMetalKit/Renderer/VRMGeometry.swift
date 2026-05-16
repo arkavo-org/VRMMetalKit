@@ -26,7 +26,7 @@ import simd
 /// VRM meshes are loaded from glTF `meshes` entries. A node references one
 /// mesh; rendering iterates each primitive (one draw call per primitive) and
 /// applies the per-primitive material.
-public class VRMMesh {
+public class VRMMesh: @unchecked Sendable {
     /// Original glTF mesh name, when present.
     public let name: String?
     /// Per-primitive draw calls owned by this mesh (one draw call per primitive).
@@ -212,7 +212,7 @@ public class VRMPrimitive {
                 primitive.localMax = hi
             }
         } else {
-            throw VRMError.missingVertexAttribute(
+            throw GLTFError.missingVertexAttribute(
                 meshIndex: 0, // We don't have meshIndex in this context, but this is a required POSITION attribute
                 attributeName: "POSITION",
                 filePath: bufferLoader.filePath

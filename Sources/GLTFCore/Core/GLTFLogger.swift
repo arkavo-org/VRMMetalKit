@@ -41,7 +41,7 @@ private let __vrmLoggerReleaseNotice: Void = {
 
 // MARK: - Logging Infrastructure
 
-enum VRMLogLevel: String {
+public enum VRMLogLevel: String {
     case trace = "TRACE"
     case debug = "DEBUG"
     case info = "INFO"
@@ -52,7 +52,7 @@ enum VRMLogLevel: String {
 }
 
 @inline(__always)
-func vrmLog(
+public func vrmLog(
     _ message: @autoclosure () -> String,
     level: VRMLogLevel = .debug,
     category: StaticString = #fileID,
@@ -75,7 +75,7 @@ func vrmLog(
 
 /// Animation-specific debug logging (gated by VRM_METALKIT_ENABLE_DEBUG_ANIMATION)
 @inline(__always)
-func vrmLogAnimation(
+public func vrmLogAnimation(
     _ message: @autoclosure () -> String,
     category: StaticString = #fileID,
     function: StaticString = #function,
@@ -96,7 +96,7 @@ func vrmLogAnimation(
 
 /// Physics/SpringBone-specific debug logging (gated by VRM_METALKIT_ENABLE_DEBUG_PHYSICS)
 @inline(__always)
-func vrmLogPhysics(
+public func vrmLogPhysics(
     _ message: @autoclosure () -> String,
     category: StaticString = #fileID,
     function: StaticString = #function,
@@ -117,7 +117,7 @@ func vrmLogPhysics(
 
 /// Loader-specific debug logging (gated by VRM_METALKIT_ENABLE_DEBUG_LOADER)
 @inline(__always)
-func vrmLogLoader(
+public func vrmLogLoader(
     _ message: @autoclosure () -> String,
     category: StaticString = #fileID,
     function: StaticString = #function,

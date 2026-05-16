@@ -216,7 +216,7 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
 /// ## Cancellation
 /// When ``enableCancellation`` is `true` (the default), the loader checks
 /// `Task.isCancelled` at each phase boundary and throws
-/// ``VRMError/loadingCancelled`` if cancellation has been requested.
+/// ``GLTFError/loadingCancelled`` if cancellation has been requested.
 public struct VRMLoadingOptions: Sendable {
 
     /// Optional progress callback invoked on the `MainActor` during loading.
@@ -281,7 +281,7 @@ internal actor VRMLoadingContext {
         guard options.enableCancellation else { return }
         
         if Task.isCancelled {
-            throw VRMError.loadingCancelled
+            throw GLTFError.loadingCancelled
         }
     }
     
@@ -371,6 +371,3 @@ internal actor VRMLoadingContext {
     }
 }
 
-// MARK: - VRMError Extension
-
-// Note: VRMError.loadingCancelled is defined in VRMModel.swift

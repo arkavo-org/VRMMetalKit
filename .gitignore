@@ -23,6 +23,19 @@ VRMA_Locomotion_Pack/
 tmp/
 .arkavo/
 *.metallib
+# Bundled shader libraries — SPM .copy() requires these to be present in
+# the source tree, so they ship in git.
+!Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
+!Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
+!Tests/GLTFMetalKitTests/TestData/Box.glb
+!Tests/GLTFMetalKitTests/TestData/BoxTextured.glb
+!Tests/GLTFMetalKitTests/TestData/RiggedSimple.glb
+!Tests/GLTFMetalKitTests/TestData/RiggedFigure.glb
+!Tests/GLTFMetalKitTests/TestData/AnimatedCube.gltf
+!Tests/GLTFMetalKitTests/TestData/AnimatedCube.bin
+!Tests/GLTFMetalKitTests/TestData/AnimatedCube_BaseColor.png
+!Tests/GLTFMetalKitTests/TestData/BoxAnimated.glb
+!Tests/GLTFMetalKitTests/TestData/AnimatedMorphCube.glb
 
 # Test model symlinks (use ENV VAR instead)
 /Seed-san.vrm

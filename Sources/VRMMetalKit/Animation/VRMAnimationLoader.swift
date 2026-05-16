@@ -701,228 +701,44 @@ private func makeExpressionWeightSampler(track: KeyTrack) -> (Float) -> Float {
     }
 }
 
-private func trackRotationRest(_ track: KeyTrack) -> simd_quatf? {
-    guard track.componentCount == 4, !track.times.isEmpty else { return nil }
-    return quaternionValue(from: track, keyIndex: 0)
-}
-
-private func trackVectorRest(_ track: KeyTrack, componentCount: Int) -> SIMD3<Float>? {
-    guard track.componentCount == componentCount, !track.times.isEmpty else { return nil }
-    let vector = vectorValue(from: track, keyIndex: 0, componentCount: componentCount)
-    return vector
-}
+// Quaternion + Vector3 keyframe sampling delegates to GLTFCore's shared
+// `gltfSampleQuaternion` / `gltfSampleVector3` so both VRMMetalKit (VRMA
+// playback) and GLTFMetalKit (glTF animation) interpolate via the same
+// spec-correct math — including `simd_slerp` for LINEAR rotations and
+// shortest-arc fixup on CUBICSPLINE rotation tangents.
 
 private func sampleQuaternion(_ track: KeyTrack, at time: Float) -> simd_quatf {
-    guard track.componentCount == 4 else { return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) }
-    guard !track.times.isEmpty else { return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) }
-
-    switch track.interpolation {
-    case .step:
-        let index = keyframeIndex(for: track.times, time: time)
-        return quaternionValue(from: track, keyIndex: index)
-    case .linear:
-        let (index, frac) = findKeyframeIndexAndFrac(times: track.times, time: time)
-        let q0 = quaternionValue(from: track, keyIndex: index)
-        if index + 1 >= track.times.count { return q0 }
-        var q1 = quaternionValue(from: track, keyIndex: index + 1)
-        if simd_dot(q0.vector, q1.vector) < 0 {
-            q1 = simd_quatf(vector: -q1.vector)
-        }
-        return simd_normalize(simd_slerp(q0, q1, frac))
-    case .cubicSpline:
-        let (index, frac) = findKeyframeIndexAndFrac(times: track.times, time: time)
-        if index + 1 >= track.times.count { return quaternionValue(from: track, keyIndex: index) }
-        let next = index + 1
-        let dt = max(1e-6, track.times[next] - track.times[index])
-
-        let value0 = quaternionVector(from: track, keyIndex: index)
-        var value1 = quaternionVector(from: track, keyIndex: next)
-        var inTan1 = quaternionInTangent(from: track, keyIndex: next)
-        let outTan0 = quaternionOutTangent(from: track, keyIndex: index)
-
-        if simd_dot(value0, value1) < 0 {
-            value1 = -value1
-            inTan1 = -inTan1
-        }
-
-        let m0 = outTan0 * dt
-        let m1 = inTan1 * dt
-
-        let hermiteValue = hermite(value0, m0, value1, m1, frac)
-        return simd_normalize(simd_quatf(ix: hermiteValue[0], iy: hermiteValue[1], iz: hermiteValue[2], r: hermiteValue[3]))
+    guard track.componentCount == 4, !track.times.isEmpty else {
+        return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
     }
+    return gltfSampleQuaternion(
+        times: track.times,
+        values: track.values,
+        interpolation: track.interpolation.asGLTFCore,
+        at: time
+    )
 }
 
 private func sampleVector3(_ track: KeyTrack, at time: Float) -> SIMD3<Float> {
-    guard track.componentCount == 3 else { return SIMD3<Float>(repeating: 0) }
-    guard !track.times.isEmpty else { return SIMD3<Float>(repeating: 0) }
-
-    switch track.interpolation {
-    case .step:
-        let index = keyframeIndex(for: track.times, time: time)
-        return vectorValue(from: track, keyIndex: index, componentCount: 3)
-    case .linear:
-        let (index, frac) = findKeyframeIndexAndFrac(times: track.times, time: time)
-        let v0 = vectorValue(from: track, keyIndex: index, componentCount: 3)
-        if index + 1 >= track.times.count { return v0 }
-        let v1 = vectorValue(from: track, keyIndex: index + 1, componentCount: 3)
-        return mix(v0, v1, t: frac)
-    case .cubicSpline:
-        let (index, frac) = findKeyframeIndexAndFrac(times: track.times, time: time)
-        if index + 1 >= track.times.count { return vectorValue(from: track, keyIndex: index, componentCount: 3) }
-        let next = index + 1
-        let dt = max(1e-6, track.times[next] - track.times[index])
-
-        let value0 = vectorValue(from: track, keyIndex: index, componentCount: 3)
-        let value1 = vectorValue(from: track, keyIndex: next, componentCount: 3)
-        let outTan0 = vectorOutTangent(from: track, keyIndex: index, componentCount: 3)
-        let inTan1 = vectorInTangent(from: track, keyIndex: next, componentCount: 3)
-
-        let m0 = outTan0 * dt
-        let m1 = inTan1 * dt
-        return hermite(value0, m0, value1, m1, frac)
-    }
-}
-
-private func keyframeIndex(for times: [Float], time: Float) -> Int {
-    if time <= times.first ?? 0 { return 0 }
-    if time >= times.last ?? 0 { return max(0, times.count - 1) }
-    for i in (0..<(times.count - 1)).reversed() {
-        if time >= times[i] {
-            return i
-        }
-    }
-    return 0
-}
-
-private func findKeyframeIndexAndFrac(times: [Float], time: Float) -> (Int, Float) {
-    if times.isEmpty { return (0, 0) }
-    if time <= times.first! { return (0, 0) }
-    if time >= times.last! { return (max(0, times.count - 2), 1) }
-
-    for i in 0..<(times.count - 1) {
-        let t0 = times[i]
-        let t1 = times[i + 1]
-        if time >= t0 && time <= t1 {
-            let frac = (time - t0) / max(1e-6, (t1 - t0))
-            return (i, frac)
-        }
-    }
-    return (0, 0)
-}
-
-private enum TrackSegment {
-    case value
-    case inTangent
-    case outTangent
-}
-
-private func valueRange(for track: KeyTrack, keyIndex: Int, componentCount: Int, segment: TrackSegment) -> Range<Int>? {
-    let strideMultiplier = track.interpolation == .cubicSpline ? 3 : 1
-    let stride = componentCount * strideMultiplier
-    let base = keyIndex * stride
-    switch track.interpolation {
-    case .cubicSpline:
-        switch segment {
-        case .inTangent:
-            return base..<(base + componentCount)
-        case .value:
-            return (base + componentCount)..<(base + 2 * componentCount)
-        case .outTangent:
-            return (base + 2 * componentCount)..<(base + 3 * componentCount)
-        }
-    case .linear, .step:
-        guard segment == .value else { return nil }
-        return base..<(base + componentCount)
-    }
-}
-
-private func quaternionValue(from track: KeyTrack, keyIndex: Int) -> simd_quatf {
-    let vector = quaternionVector(from: track, keyIndex: keyIndex)
-    return simd_normalize(simd_quatf(ix: vector[0], iy: vector[1], iz: vector[2], r: vector[3]))
-}
-
-private func quaternionVector(from track: KeyTrack, keyIndex: Int) -> SIMD4<Float> {
-    guard let range = valueRange(for: track, keyIndex: keyIndex, componentCount: 4, segment: .value),
-          range.upperBound <= track.values.count else {
-        return SIMD4<Float>(0, 0, 0, 1)
-    }
-    return SIMD4<Float>(track.values[range.lowerBound + 0],
-                        track.values[range.lowerBound + 1],
-                        track.values[range.lowerBound + 2],
-                        track.values[range.lowerBound + 3])
-}
-
-private func quaternionInTangent(from track: KeyTrack, keyIndex: Int) -> SIMD4<Float> {
-    guard let range = valueRange(for: track, keyIndex: keyIndex, componentCount: 4, segment: .inTangent),
-          range.upperBound <= track.values.count else {
-        return SIMD4<Float>(repeating: 0)
-    }
-    return SIMD4<Float>(track.values[range.lowerBound + 0],
-                        track.values[range.lowerBound + 1],
-                        track.values[range.lowerBound + 2],
-                        track.values[range.lowerBound + 3])
-}
-
-private func quaternionOutTangent(from track: KeyTrack, keyIndex: Int) -> SIMD4<Float> {
-    guard let range = valueRange(for: track, keyIndex: keyIndex, componentCount: 4, segment: .outTangent),
-          range.upperBound <= track.values.count else {
-        return SIMD4<Float>(repeating: 0)
-    }
-    return SIMD4<Float>(track.values[range.lowerBound + 0],
-                        track.values[range.lowerBound + 1],
-                        track.values[range.lowerBound + 2],
-                        track.values[range.lowerBound + 3])
-}
-
-private func vectorValue(from track: KeyTrack, keyIndex: Int, componentCount: Int) -> SIMD3<Float> {
-    guard let range = valueRange(for: track, keyIndex: keyIndex, componentCount: componentCount, segment: .value),
-          range.upperBound <= track.values.count else {
+    guard track.componentCount == 3, !track.times.isEmpty else {
         return SIMD3<Float>(repeating: 0)
     }
-    return SIMD3<Float>(track.values[range.lowerBound + 0],
-                        track.values[range.lowerBound + 1],
-                        track.values[range.lowerBound + 2])
+    return gltfSampleVector3(
+        times: track.times,
+        values: track.values,
+        interpolation: track.interpolation.asGLTFCore,
+        at: time
+    )
 }
 
-private func vectorInTangent(from track: KeyTrack, keyIndex: Int, componentCount: Int) -> SIMD3<Float> {
-    guard let range = valueRange(for: track, keyIndex: keyIndex, componentCount: componentCount, segment: .inTangent),
-          range.upperBound <= track.values.count else {
-        return SIMD3<Float>(repeating: 0)
+private extension Interpolation {
+    var asGLTFCore: GLTFKeyframeInterpolation {
+        switch self {
+        case .linear:      return .linear
+        case .step:        return .step
+        case .cubicSpline: return .cubicSpline
+        }
     }
-    return SIMD3<Float>(track.values[range.lowerBound + 0],
-                        track.values[range.lowerBound + 1],
-                        track.values[range.lowerBound + 2])
-}
-
-private func vectorOutTangent(from track: KeyTrack, keyIndex: Int, componentCount: Int) -> SIMD3<Float> {
-    guard let range = valueRange(for: track, keyIndex: keyIndex, componentCount: componentCount, segment: .outTangent),
-          range.upperBound <= track.values.count else {
-        return SIMD3<Float>(repeating: 0)
-    }
-    return SIMD3<Float>(track.values[range.lowerBound + 0],
-                        track.values[range.lowerBound + 1],
-                        track.values[range.lowerBound + 2])
-}
-
-private func hermite(_ p0: SIMD3<Float>, _ m0: SIMD3<Float>, _ p1: SIMD3<Float>, _ m1: SIMD3<Float>, _ t: Float) -> SIMD3<Float> {
-    let t2 = t * t
-    let t3 = t2 * t
-    let h00 = 2 * t3 - 3 * t2 + 1
-    let h10 = t3 - 2 * t2 + t
-    let h01 = -2 * t3 + 3 * t2
-    let h11 = t3 - t2
-    return h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1
-}
-
-private func hermite(_ p0: SIMD4<Float>, _ m0: SIMD4<Float>, _ p1: SIMD4<Float>, _ m1: SIMD4<Float>, _ t: Float) -> SIMD4<Float> {
-    let t2 = t * t
-    let t3 = t2 * t
-    let h00 = 2 * t3 - 3 * t2 + 1
-    let h10 = t3 - 2 * t2 + t
-    let h01 = -2 * t3 + 3 * t2
-    let h11 = t3 - t2
-    return h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1
 }
 
 private func buildAnimationRestTransforms(document: GLTFDocument) -> [Int: RestTransform] {

@@ -234,7 +234,7 @@ final class VRMMetaSpecTests: XCTestCase {
         do {
             _ = try await VRMModel.load(from: glbData)
             XCTFail("Expected unsupportedRequiredExtension error")
-        } catch VRMError.unsupportedRequiredExtension(let extensions) {
+        } catch GLTFError.unsupportedRequiredExtension(let extensions) {
             XCTAssertTrue(extensions.contains("VRMC_unknown_thing"))
         } catch {
             XCTFail("Expected unsupportedRequiredExtension, got \(error)")

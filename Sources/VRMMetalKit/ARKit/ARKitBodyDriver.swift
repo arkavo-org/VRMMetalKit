@@ -383,54 +383,6 @@ public final class ARKitBodyDriver: @unchecked Sendable {
         }
     }
 
-    // MARK: - Transform Decomposition
-
-    /// Decompose 4×4 transform matrix into position, rotation, and scale by normalizing each basis vector.
-    ///
-    /// Scale is taken as the column-vector magnitudes; rotation comes from the normalized basis vectors
-    /// converted to a quaternion. Unused by the live update path (see
-    /// ``ARKitCoordinateConverter/extractRotation(from:)``); retained for callers that need full TRS
-    /// decomposition.
-    ///
-    /// - Parameter transform: 4×4 transformation matrix
-    /// - Returns: Tuple of (position, rotation, scale)
-    private func decomposeTransform(_ transform: simd_float4x4) -> (SIMD3<Float>, simd_quatf, SIMD3<Float>) {
-        // Extract translation (4th column)
-        let position = SIMD3<Float>(
-            transform.columns.3.x,
-            transform.columns.3.y,
-            transform.columns.3.z
-        )
-
-        // Extract basis vectors (first 3 columns)
-        var basisX = SIMD3<Float>(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
-        var basisY = SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
-        var basisZ = SIMD3<Float>(transform.columns.2.x, transform.columns.2.y, transform.columns.2.z)
-
-        // Extract scale (magnitude of basis vectors)
-        let scaleX = length(basisX)
-        let scaleY = length(basisY)
-        let scaleZ = length(basisZ)
-        let scale = SIMD3<Float>(scaleX, scaleY, scaleZ)
-
-        // Normalize basis vectors to extract rotation
-        if scaleX > 0.0001 { basisX /= scaleX }
-        if scaleY > 0.0001 { basisY /= scaleY }
-        if scaleZ > 0.0001 { basisZ /= scaleZ }
-
-        // Build rotation matrix from normalized basis vectors
-        let rotationMatrix = simd_float3x3(
-            basisX,
-            basisY,
-            basisZ
-        )
-
-        // Convert rotation matrix to quaternion
-        let rotation = simd_quatf(rotationMatrix)
-
-        return (position, rotation, scale)
-    }
-
     // MARK: - Coordinate System Conversion (Consolidated)
 
     /// Compute local rotation from world-space transforms using shared converter

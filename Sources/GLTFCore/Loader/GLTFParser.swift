@@ -180,6 +180,30 @@ public struct GLTFNode: Codable {
     public let weights: [Float]?
     /// Raw node-level extensions (used by `VRMC_node_constraint`).
     public let extensions: [String: AnyCodable]?
+
+    public init(
+        name: String? = nil,
+        children: [Int]? = nil,
+        matrix: [Float]? = nil,
+        translation: [Float]? = nil,
+        rotation: [Float]? = nil,
+        scale: [Float]? = nil,
+        mesh: Int? = nil,
+        skin: Int? = nil,
+        weights: [Float]? = nil,
+        extensions: [String: AnyCodable]? = nil
+    ) {
+        self.name = name
+        self.children = children
+        self.matrix = matrix
+        self.translation = translation
+        self.rotation = rotation
+        self.scale = scale
+        self.mesh = mesh
+        self.skin = skin
+        self.weights = weights
+        self.extensions = extensions
+    }
 }
 
 /// A glTF 2.0 [mesh](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#meshes): a bag of one or more renderable primitives.
@@ -660,8 +684,8 @@ public struct GLTFAnimationSampler: Codable {
 ///
 /// The parser is tolerant of trailing chunks beyond the data length (they
 /// are logged and skipped). It is strict about the magic number and
-/// version, raising ``VRMError/invalidGLBFormat(reason:filePath:)`` or
-/// ``VRMError/unsupportedVersion(version:supported:filePath:)`` on
+/// version, raising ``GLTFError/invalidGLBFormat(reason:filePath:)`` or
+/// ``GLTFError/unsupportedVersion(version:supported:filePath:)`` on
 /// mismatch.
 ///
 /// Plain `.gltf` JSON files are not parsed by this type directly; consumers
@@ -686,13 +710,13 @@ public class GLTFParser {
     ///   - filePath: Optional source file path used to enrich error messages.
     /// - Returns: A tuple of the decoded ``GLTFDocument`` and the optional `BIN` chunk bytes.
     /// - Throws:
-    ///   - ``VRMError/invalidGLBFormat(reason:filePath:)`` if the magic number is wrong or the file is shorter than a GLB header.
-    ///   - ``VRMError/unsupportedVersion(version:supported:filePath:)`` if the GLB container version is not `2`.
-    ///   - ``VRMError/invalidJSON(context:underlyingError:filePath:)`` if the JSON chunk is missing or fails to decode against ``GLTFDocument``.
+    ///   - ``GLTFError/invalidGLBFormat(reason:filePath:)`` if the magic number is wrong or the file is shorter than a GLB header.
+    ///   - ``GLTFError/unsupportedVersion(version:supported:filePath:)`` if the GLB container version is not `2`.
+    ///   - ``GLTFError/invalidJSON(context:underlyingError:filePath:)`` if the JSON chunk is missing or fails to decode against ``GLTFDocument``.
     public func parse(data: Data, filePath: String? = nil) throws -> (document: GLTFDocument, binaryData: Data?) {
         // GLB Header - ensure we have at least 12 bytes for header
         guard data.count >= 12 else {
-            throw VRMError.invalidGLBFormat(
+            throw GLTFError.invalidGLBFormat(
                 reason: "File is too small (\(data.count) bytes). GLB files require at least 12 bytes for the header.",
                 filePath: filePath
             )
@@ -700,7 +724,7 @@ public class GLTFParser {
 
         let magic = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self) }
         guard magic == 0x46546C67 else { // "glTF" in little-endian
-            throw VRMError.invalidGLBFormat(
+            throw GLTFError.invalidGLBFormat(
                 reason: "Invalid magic number 0x\(String(format: "%08X", magic)). Expected 0x46546C67 ('glTF').",
                 filePath: filePath
             )
@@ -708,7 +732,7 @@ public class GLTFParser {
 
         let version = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
         guard version == 2 else {
-            throw VRMError.unsupportedVersion(
+            throw GLTFError.unsupportedVersion(
                 version: "GLB \(version)",
                 supported: ["GLB 2"],
                 filePath: filePath
@@ -751,7 +775,7 @@ public class GLTFParser {
         }
 
         guard let jsonData = jsonChunk else {
-            throw VRMError.invalidJSON(
+            throw GLTFError.invalidJSON(
                 context: "Missing JSON chunk in GLB file",
                 underlyingError: nil,
                 filePath: filePath
@@ -765,7 +789,7 @@ public class GLTFParser {
             self.binaryChunk = parsedBinaryChunk
             return (document, parsedBinaryChunk)
         } catch {
-            throw VRMError.invalidJSON(
+            throw GLTFError.invalidJSON(
                 context: "Failed to decode glTF JSON structure",
                 underlyingError: error.localizedDescription,
                 filePath: filePath
@@ -781,7 +805,7 @@ extension JSONDecoder {
         let json = try JSONSerialization.jsonObject(with: data, options: [])
         guard let dict = json as? [String: Any] else {
             let jsonTypeName = String(describing: Swift.type(of: json))
-            throw VRMError.invalidJSON(
+            throw GLTFError.invalidJSON(
                 context: "JSON root is not a dictionary object",
                 underlyingError: "Expected dictionary, got \(jsonTypeName)",
                 filePath: filePath

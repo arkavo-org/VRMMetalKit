@@ -677,37 +677,3 @@ public class SpriteCacheSystem: @unchecked Sendable {
     }
 }
 
-// MARK: - Sprite Rendering Helper
-
-extension SpriteCacheSystem {
-
-    /// Stub helper for blitting a cached sprite as a screen-space quad.
-    ///
-    /// - Important: This method is a placeholder — the production sprite-batch renderer is not wired in yet.
-    /// Calling it binds the pipeline and the texture but does not actually draw.
-    ///
-    /// - Parameters:
-    ///   - encoder: Active `MTLRenderCommandEncoder`.
-    ///   - texture: Sprite texture to display.
-    ///   - position: Screen-space center position.
-    ///   - scale: Uniform sprite scale.
-    ///   - pipelineState: Pipeline state configured for sprite rendering.
-    public func renderSprite(
-        encoder: MTLRenderCommandEncoder,
-        texture: MTLTexture,
-        position: SIMD2<Float>,
-        scale: Float,
-        pipelineState: MTLRenderPipelineState
-    ) {
-        // Note: This is a simplified API
-        // In production, you'd use a sprite batch renderer with instancing
-
-        encoder.setRenderPipelineState(pipelineState)
-        encoder.setFragmentTexture(texture, index: 0)
-
-        // TODO: Bind sprite quad vertex buffer and uniforms
-        // This requires a sprite shader and quad mesh
-
-        vrmLog("[SpriteCacheSystem] Sprite rendering stub called - implement sprite shader")
-    }
-}
