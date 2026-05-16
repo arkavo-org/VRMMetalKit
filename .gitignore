@@ -27,6 +27,8 @@ tmp/
 # the source tree, so they ship in git.
 !Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
 !Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
+!Tests/GLTFMetalKitTests/TestData/Box.glb
+!Tests/GLTFMetalKitTests/TestData/BoxTextured.glb
 
 # Test model symlinks (use ENV VAR instead)
 /Seed-san.vrm

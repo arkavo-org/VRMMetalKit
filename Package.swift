@@ -108,7 +108,10 @@ let package = Package(
         ),
         .testTarget(
             name: "GLTFMetalKitTests",
-            dependencies: ["GLTFMetalKit"]
+            dependencies: ["GLTFMetalKit"],
+            resources: [
+                .copy("TestData")
+            ]
         ),
     ]
 )
