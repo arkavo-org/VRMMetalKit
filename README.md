@@ -1,19 +1,49 @@
 # VRMMetalKit
 
-A high-performance Swift Package for loading and rendering VRM 1.0 avatars using Apple's Metal framework.
+A high-performance Swift Package for loading and rendering 3D assets on Apple's Metal framework. Ships **two** library products built on a shared `GLTFCore`:
+
+- **VRMMetalKit** — VRM 1.0 avatars with humanoid bones, MToon shading, spring physics, expressions, ARKit drivers.
+- **GLTFMetalKit** — glTF 2.0 PBR renderer for static / skinned / morphed / animated assets. Targets the inanimate-objects half of the ecosystem (props, scenery, items) and clears the Khronos Sample Assets credibility bar (PBR + IBL + skinning + morph + animation + KHR_lights_punctual + KHR_materials_unlit).
 
 [![Swift](https://img.shields.io/badge/Swift-6.2-orange.svg)](https://swift.org)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%2026%2B%20%7C%20iOS%2026%2B-blue.svg)](https://developer.apple.com)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Models License](https://img.shields.io/badge/Models-VPL%201.0-green.svg)](LICENSE-MODELS.md)
 
-## Features
+## Products
 
+### VRMMetalKit
 - **VRM 1.0 Specification Support** — full VRMC_vrm with VRM 0.0 fallback, MToon shader, 55 humanoid bones, 18 facial expressions, and complete metadata.
 - **Animation System** — VRMA loader with rest-pose retargeting, humanoid bone mapping, non-humanoid node animation, and an AnimationPlayer with looping and speed control.
 - **GPU-Accelerated Physics** — SpringBone XPBD simulation in Metal compute shaders at fixed 120Hz substeps, with sphere/capsule colliders.
 - **Advanced Rendering** — MToon NPR with matcap, rim, and outline passes; GPU morph targets; skinning up to 256 joints; triple-buffered uniforms.
 - **Performance & Debugging** — built-in metrics, three-level StrictMode validation, and zero-cost conditional debug logging.
+
+### GLTFMetalKit *(new)*
+- **glTF 2.0 PBR** — Lambert + GGX/Trowbridge-Reitz with Schlick Fresnel, Khronos PBR Neutral tonemap, spec-correct sRGB/linear texture pipeline.
+- **Image-Based Lighting** — split-sum approximation with a runtime-generated procedural sky environment (no HDR asset shipping required); BRDF LUT auto-generated at renderer init.
+- **Asset Loading** — full glTF 2.0 scene-graph + materials + textures + skinning (`JOINTS_0`/`WEIGHTS_0` + IBM joint palettes) + morph targets + animation playback (`LINEAR`/`STEP`/`CUBICSPLINE` samplers, TRS + weights channels).
+- **Extensions** — `KHR_materials_unlit`, `KHR_lights_punctual` (directional/point/spot, max 8).
+- **Sibling CLI** — `GLTFRender` for headless rendering of static or animated glTF assets.
+
+```swift
+import GLTFMetalKit
+
+let renderer = try GLTFRenderer(device: device)
+renderer.environment = try GLTFEnvironment.makeProcedural(device: device, library: renderer.library)
+
+let loader = GLTFAssetLoader()
+let asset = try await loader.load(from: url, device: device)
+
+let pipelines = try renderer.makePipelineStates(colorFormat: .bgra8Unorm, depthFormat: .depth32Float)
+renderer.encodeOpaqueDrawCalls(
+    asset.drawCalls(animationIndex: 0, time: currentTime),
+    scene: scene,
+    pipelineStates: pipelines,
+    depthState: depthState,
+    encoder: encoder
+)
+```
 
 ## Installation
 
@@ -31,7 +61,9 @@ Or in Xcode: **File → Add Package Dependencies** and enter the repository URL.
 
 ## Command Line Rendering
 
-VRMMetalKit includes a command-line tool `VRMRender` for headless VRM rendering - perfect for batch processing, thumbnail generation, or CI/CD pipelines.
+### VRMRender (avatars)
+
+`VRMRender` is a CLI for headless VRM rendering — batch thumbnails, CI/CD pipelines, etc.
 
 ![AvatarSample_A Render](AvatarSample_A.png)
 
@@ -52,6 +84,29 @@ swift run VRMRender -w 2048 -h 2048 --camera-pos 0,1.5,-2 model.vrm output.png
 - `--camera-pos <x,y,z>` - Camera position (default: 0,1.5,2)
 - `--camera-target <x,y,z>` - Camera look-at target (default: 0,1.5,0)
 - `--msaa <samples>` - MSAA sample count: 1, 2, or 4 (default: 1)
+
+### GLTFRender (glTF 2.0 assets)
+
+`GLTFRender` is the inanimate-objects counterpart — single PNG output from any glTF 2.0 `.glb`. Loads + animates + renders in one call.
+
+```bash
+# Basic render
+swift run GLTFRender Box.glb -o box.png
+
+# Sample an animation at a specific time
+swift run GLTFRender BoxAnimated.glb --time 1.5 -o anim_mid.png
+
+# Use the gray fallback environment instead of the procedural sky
+swift run GLTFRender RiggedSimple.glb --no-ibl -o rigged.png
+```
+
+**Options:**
+- `-o <path>` — output PNG path (default: `out.png`)
+- `-w <px>` / `--height <px>` — output size (default: 1024×1024)
+- `--time <sec>` — sample animation at this time (default: rest pose)
+- `--animation <idx>` — animation clip index (default: 0)
+- `--no-ibl` — skip the procedural IBL environment
+- `--camera-distance <s>` — frame scale relative to asset bounds diagonal (default: 1.5)
 
 ## Documentation
 
