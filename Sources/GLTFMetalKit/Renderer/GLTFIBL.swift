@@ -16,6 +16,7 @@
 
 import Foundation
 @preconcurrency import Metal
+import simd
 
 /// Image-based lighting inputs for a single scene/camera.
 ///
@@ -199,6 +200,8 @@ public enum GLTFBRDFLUT {
 public enum GLTFIBLError: Error, LocalizedError {
     case brdfLUTAllocationFailed
     case brdfLUTComputeFailed(reason: String)
+    case environmentAllocationFailed
+    case environmentComputeFailed(reason: String)
 
     public var errorDescription: String? {
         switch self {
@@ -218,6 +221,259 @@ public enum GLTFIBLError: Error, LocalizedError {
 
             Suggestion: Rebuild the GLTFMetalKit shaders via `make gltf-shaders`. The kernel `gltf_ibl_brdf_lut` lives in `Sources/GLTFMetalKit/Shaders/IBLPrefilter.metal`.
             """
+        case .environmentAllocationFailed:
+            return """
+            ❌ Environment Allocation Failed
+
+            Metal failed to allocate a cubemap or compute command buffer for the procedural environment.
+
+            Suggestion: Verify the MTLDevice is valid and the system has enough free GPU memory. The runtime IBL pipeline allocates one 256-cube source + one 32-cube diffuse + one 256-cube specular mip chain — typically a few MB.
+            """
+        case .environmentComputeFailed(let reason):
+            return """
+            ❌ Environment Compute Failed
+
+            Reason: \(reason)
+
+            Suggestion: Rebuild GLTFMetalKit shaders with `make gltf-shaders`. The kernels involved are `gltf_ibl_procedural_sky`, `gltf_ibl_specular_prefilter`, and `gltf_ibl_diffuse_irradiance` (see `Sources/GLTFMetalKit/Shaders/IBLPrefilter.metal`).
+            """
         }
     }
+}
+
+/// Parameters for the procedural sky cubemap kernel. Matches
+/// `GLTFSkyParams` in `IBLPrefilter.metal`.
+public struct GLTFProceduralSkyParams: Sendable {
+    /// World-space direction the sun light travels (downward + sideways).
+    public var sunDirection: SIMD3<Float>
+    public var _pad0: Float = 0
+    /// Linear RGB pre-multiplied by intensity. Bright values are expected
+    /// for a credible IBL response — `[20, 18, 14]` reads as a warm sun.
+    public var sunColor: SIMD3<Float>
+    /// Half-angle of the sun disk in radians. The default ~0.5° matches
+    /// the apparent size of the real sun (~9.3 mrad).
+    public var sunAngularRadius: Float
+    public var zenithColor: SIMD3<Float>
+    public var _pad1: Float = 0
+    public var horizonColor: SIMD3<Float>
+    public var _pad2: Float = 0
+    public var groundColor: SIMD3<Float>
+    public var _pad3: Float = 0
+
+    public static let `default` = GLTFProceduralSkyParams(
+        // Sun roughly up-and-backward — bounces off the +Z facing test quad.
+        sunDirection: normalize(SIMD3<Float>(0.3, -0.7, -0.4)),
+        // Real-world HDR intensities. The diffuse irradiance integrates this
+        // over the whole upper hemisphere; the specular prefilter at low
+        // roughness picks up the sun disk. Without HDR values the metallic
+        // vs dielectric distinction collapses into the noise floor of
+        // 8-bit framebuffer readback.
+        sunColor: SIMD3<Float>(800.0, 700.0, 500.0),
+        // Wider sun so the importance-sampled GGX prefilter reliably hits
+        // it at low roughness — at the canonical 0.5° solar half-angle
+        // the disk spans ~3 texels of a 256-cube and the sampler misses
+        // it for many output texels.
+        sunAngularRadius: 0.15,
+        zenithColor: SIMD3<Float>(0.4, 0.55, 0.85) * 5.0,
+        horizonColor: SIMD3<Float>(0.95, 0.85, 0.75) * 3.0,
+        groundColor: SIMD3<Float>(0.15, 0.13, 0.10)
+    )
+
+    public init(
+        sunDirection: SIMD3<Float>,
+        sunColor: SIMD3<Float>,
+        sunAngularRadius: Float,
+        zenithColor: SIMD3<Float>,
+        horizonColor: SIMD3<Float>,
+        groundColor: SIMD3<Float>
+    ) {
+        self.sunDirection = sunDirection
+        self.sunColor = sunColor
+        self.sunAngularRadius = sunAngularRadius
+        self.zenithColor = zenithColor
+        self.horizonColor = horizonColor
+        self.groundColor = groundColor
+    }
+}
+
+extension GLTFEnvironment {
+
+    /// Generates a real IBL environment at runtime from a procedural sky.
+    ///
+    /// Three compute passes:
+    ///   1. `gltf_ibl_procedural_sky` writes a 256×256 source cubemap
+    ///      using a gradient + sun-disk model.
+    ///   2. `gltf_ibl_specular_prefilter` produces an 8-mip specular
+    ///      cubemap by GGX-importance-sampling the source per roughness.
+    ///   3. `gltf_ibl_diffuse_irradiance` integrates the cosine-weighted
+    ///      hemisphere for the 32×32 diffuse cubemap.
+    ///
+    /// Synchronous — the compute work waits to completion so the returned
+    /// `GLTFEnvironment` is immediately renderable. Costs ~1024
+    /// Hammersley samples × 8 mips × 6 faces × (256→2) — well under a
+    /// second on Apple silicon, and the result caches forever.
+    ///
+    /// Pass to ``GLTFRenderer/environment`` to replace the 1×1 gray
+    /// fallback.
+    public static func makeProcedural(
+        device: MTLDevice,
+        library: MTLLibrary,
+        params: GLTFProceduralSkyParams = .default,
+        sourceSize: Int = 256,
+        specularSize: Int = 256,
+        diffuseSize: Int = 32
+    ) throws -> GLTFEnvironment {
+        let specularMipCount = max(Int(floor(log2(Double(specularSize)))) + 1, 1)
+
+        // --- Allocate textures ---------------------------------------------
+
+        let cubemapPixelFormat: MTLPixelFormat = .rgba16Float
+
+        let sourceDescriptor = MTLTextureDescriptor.textureCubeDescriptor(
+            pixelFormat: cubemapPixelFormat, size: sourceSize, mipmapped: false
+        )
+        sourceDescriptor.usage = [.shaderRead, .shaderWrite]
+        sourceDescriptor.storageMode = .private
+        guard let source = device.makeTexture(descriptor: sourceDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        let specularDescriptor = MTLTextureDescriptor.textureCubeDescriptor(
+            pixelFormat: cubemapPixelFormat, size: specularSize, mipmapped: true
+        )
+        specularDescriptor.mipmapLevelCount = specularMipCount
+        specularDescriptor.usage = [.shaderRead, .shaderWrite, .pixelFormatView]
+        specularDescriptor.storageMode = .private
+        guard let specular = device.makeTexture(descriptor: specularDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        let diffuseDescriptor = MTLTextureDescriptor.textureCubeDescriptor(
+            pixelFormat: cubemapPixelFormat, size: diffuseSize, mipmapped: false
+        )
+        diffuseDescriptor.usage = [.shaderRead, .shaderWrite]
+        diffuseDescriptor.storageMode = .private
+        guard let diffuse = device.makeTexture(descriptor: diffuseDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        // --- Pipeline states -----------------------------------------------
+
+        guard let skyFn      = library.makeFunction(name: "gltf_ibl_procedural_sky") else {
+            throw GLTFRendererError.missingShaderFunction(name: "gltf_ibl_procedural_sky")
+        }
+        guard let specularFn = library.makeFunction(name: "gltf_ibl_specular_prefilter") else {
+            throw GLTFRendererError.missingShaderFunction(name: "gltf_ibl_specular_prefilter")
+        }
+        guard let diffuseFn  = library.makeFunction(name: "gltf_ibl_diffuse_irradiance") else {
+            throw GLTFRendererError.missingShaderFunction(name: "gltf_ibl_diffuse_irradiance")
+        }
+        let skyPipeline      = try device.makeComputePipelineState(function: skyFn)
+        let specularPipeline = try device.makeComputePipelineState(function: specularFn)
+        let diffusePipeline  = try device.makeComputePipelineState(function: diffuseFn)
+
+        guard let queue = device.makeCommandQueue(),
+              let commandBuffer = queue.makeCommandBuffer() else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        // Sampler used by the prefilter + irradiance kernels to read `source`.
+        let samplerDescriptor = MTLSamplerDescriptor()
+        samplerDescriptor.minFilter = .linear
+        samplerDescriptor.magFilter = .linear
+        samplerDescriptor.mipFilter = .linear
+        samplerDescriptor.sAddressMode = .clampToEdge
+        samplerDescriptor.tAddressMode = .clampToEdge
+        samplerDescriptor.rAddressMode = .clampToEdge
+        guard let envSampler = device.makeSamplerState(descriptor: samplerDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        // --- Pass 1: procedural sky into source cubemap --------------------
+
+        do {
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw GLTFIBLError.environmentAllocationFailed
+            }
+            var skyParams = params
+            encoder.setComputePipelineState(skyPipeline)
+            encoder.setTexture(source, index: 0)
+            encoder.setBytes(&skyParams, length: MemoryLayout<GLTFProceduralSkyParams>.stride, index: 0)
+
+            let threadsPerGrid = MTLSize(width: sourceSize, height: sourceSize, depth: 6)
+            let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
+            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            encoder.endEncoding()
+        }
+
+        // --- Pass 2: specular prefilter, one dispatch per mip --------------
+
+        for mip in 0..<specularMipCount {
+            // Create a per-mip texture view so `outCube.write(...)` writes
+            // into the correct mip slice. (texture.makeTextureView limits
+            // the view to one mip; the kernel writes mip 0 of that view.)
+            guard let mipView = specular.makeTextureView(
+                pixelFormat: cubemapPixelFormat,
+                textureType: .typeCube,
+                levels: mip..<(mip + 1),
+                slices: 0..<6
+            ) else {
+                throw GLTFIBLError.environmentAllocationFailed
+            }
+
+            let roughness = specularMipCount == 1 ? 0.0 : Float(mip) / Float(specularMipCount - 1)
+            let faceSize = max(specularSize >> mip, 1)
+
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw GLTFIBLError.environmentAllocationFailed
+            }
+            encoder.setComputePipelineState(specularPipeline)
+            encoder.setTexture(source, index: 0)
+            encoder.setTexture(mipView, index: 1)
+            encoder.setSamplerState(envSampler, index: 0)
+
+            var prefilterParams = ShaderPrefilterParams(roughness: roughness, mipLevel: UInt32(0))
+            encoder.setBytes(&prefilterParams, length: MemoryLayout<ShaderPrefilterParams>.stride, index: 0)
+
+            let threadsPerGrid = MTLSize(width: faceSize, height: faceSize, depth: 6)
+            let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
+            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            encoder.endEncoding()
+        }
+
+        // --- Pass 3: diffuse irradiance ------------------------------------
+
+        do {
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw GLTFIBLError.environmentAllocationFailed
+            }
+            encoder.setComputePipelineState(diffusePipeline)
+            encoder.setTexture(source, index: 0)
+            encoder.setTexture(diffuse, index: 1)
+            encoder.setSamplerState(envSampler, index: 0)
+
+            let threadsPerGrid = MTLSize(width: diffuseSize, height: diffuseSize, depth: 6)
+            let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
+            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            encoder.endEncoding()
+        }
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        if let error = commandBuffer.error {
+            throw GLTFIBLError.environmentComputeFailed(reason: error.localizedDescription)
+        }
+
+        return GLTFEnvironment(diffuse: diffuse, specular: specular)
+    }
+}
+
+/// Per-mip prefilter kernel parameters, mirroring `GLTFPrefilterParams` in
+/// `IBLPrefilter.metal`.
+private struct ShaderPrefilterParams {
+    var roughness: Float
+    var mipLevel: UInt32
+    var _pad0: UInt32 = 0
+    var _pad1: UInt32 = 0
 }
