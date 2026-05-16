@@ -105,26 +105,25 @@ public struct GLTFAsset {
         var meshWeights: [Int: [Float]] = [:]
 
         // 2. Sample each channel at `time` and overwrite the relevant TRS
-        //    or per-node morph weights.
+        //    or per-node morph weights. Each property uses the typed
+        //    sampler entry-point so rotation gets true `simd_slerp` and
+        //    translation/scale stay on the lerp path.
         for channel in clip.channels {
             let n = channel.targetNode
             guard n >= 0, n < nodes.count else { continue }
-            let v = channel.sampler.sample(at: time)
             switch channel.property {
-            case .translation where v.count >= 3:
-                translations[n] = SIMD3<Float>(v[0], v[1], v[2])
-            case .rotation where v.count >= 4:
-                rotations[n] = simd_quatf(ix: v[0], iy: v[1], iz: v[2], r: v[3])
-            case .scale where v.count >= 3:
-                scales[n] = SIMD3<Float>(v[0], v[1], v[2])
+            case .translation:
+                translations[n] = channel.sampler.sampleAsVector3(at: time)
+            case .rotation:
+                rotations[n] = channel.sampler.sampleAsQuaternion(at: time)
+            case .scale:
+                scales[n] = channel.sampler.sampleAsVector3(at: time)
             case .weights:
                 // glTF spec: `weights` animates the mesh attached to this node.
                 // The sampler emits one float per morph target per keyframe.
                 if let meshIdx = nodes[n].mesh {
-                    meshWeights[meshIdx] = v
+                    meshWeights[meshIdx] = channel.sampler.sample(at: time)
                 }
-            default:
-                break
             }
         }
 

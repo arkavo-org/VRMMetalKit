@@ -59,9 +59,16 @@ final class GLTFAnimationTests: XCTestCase {
         XCTAssertEqual(sampler.sample(at: 2.0)[0], 20.0)
     }
 
-    func testSamplerRotationLerpRenormalizes() {
-        // Two unit quaternions; midpoint should still be unit length after lerp+renorm.
-        let q0 = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+    func testSamplerQuaternionUsesSlerp() {
+        // Two unit quaternions 90° apart around Y. `sampleAsQuaternion`
+        // routes through GLTFCore's `gltfSampleQuaternion`, which uses
+        // `simd_slerp` (great-circle interpolation) — at t=0.5 the midpoint
+        // is the 45°-rotation quaternion, exactly unit length, and *equal*
+        // to slerp(q0, q1, 0.5).
+        //
+        // The earlier lerp+renormalize shortcut produced a unit quaternion
+        // but along the chord, not the arc — visibly off for >~30° arcs.
+        let q0 = simd_quatf(angle: 0,       axis: SIMD3<Float>(0, 1, 0))
         let q1 = simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(0, 1, 0))
         let sampler = GLTFRuntimeSampler(
             times: [0.0, 1.0],
@@ -70,10 +77,18 @@ final class GLTFAnimationTests: XCTestCase {
             interpolation: .linear,
             componentsPerKeyframe: 4
         )
-        let v = sampler.sample(at: 0.5)
-        let len = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2] + v[3]*v[3])
+        let q = sampler.sampleAsQuaternion(at: 0.5)
+        let len = sqrt(q.vector.x*q.vector.x + q.vector.y*q.vector.y +
+                       q.vector.z*q.vector.z + q.vector.w*q.vector.w)
         XCTAssertEqual(len, 1.0, accuracy: 1e-4,
-            "Rotation lerp should renormalize to unit length, got \(len)")
+            "Quaternion sampler must return unit length; got \(len)")
+
+        // True slerp midpoint should exactly equal slerp(q0, q1, 0.5).
+        let reference = simd_slerp(q0, q1, 0.5)
+        XCTAssertEqual(q.vector.x, reference.vector.x, accuracy: 1e-5)
+        XCTAssertEqual(q.vector.y, reference.vector.y, accuracy: 1e-5)
+        XCTAssertEqual(q.vector.z, reference.vector.z, accuracy: 1e-5)
+        XCTAssertEqual(q.vector.w, reference.vector.w, accuracy: 1e-5)
     }
 
     func testLoadsBoxAnimatedAndParsesAClip() async throws {

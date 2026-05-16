@@ -46,6 +46,13 @@ public enum GLTFAnimationProperty: Sendable {
 /// One sampler: time array (keyframe inputs) + value array (keyframe outputs)
 /// + interpolation rule. The number of floats per keyframe value depends on
 /// the target property and the interpolation mode (cubic spline triples).
+///
+/// Sampling delegates to the stateless helpers in
+/// `GLTFCore/Animation/KeyframeSampling.swift` (`gltfSampleVector3`,
+/// `gltfSampleQuaternion`, `gltfSampleFloatArray`). Use the typed methods
+/// when the channel target is known (rotation gets true slerp instead of
+/// lerp+renormalize); the legacy `[Float]`-returning `sample(at:)` is
+/// preserved for callers that don't dispatch by property.
 public struct GLTFRuntimeSampler: Sendable {
     public let times: [Float]
     /// Flat array of N keyframes × components-per-keyframe floats. For
@@ -56,106 +63,54 @@ public struct GLTFRuntimeSampler: Sendable {
     /// Components per keyframe — NOT multiplied by the cubic-spline triple.
     public let componentsPerKeyframe: Int
 
-    /// Sample at time `t`, clamped to the sampler's domain. Returns
-    /// `componentsPerKeyframe` floats. For empty samplers returns an
-    /// all-zero array of the right size.
+    /// Sample at time `t` as a generic float array. Returns
+    /// `componentsPerKeyframe` floats. This path uses **per-component lerp**
+    /// for LINEAR — correct for translation, scale, and weights. Rotation
+    /// channels should call ``sampleAsQuaternion(at:)`` instead so they
+    /// get true slerp.
     public func sample(at t: Float) -> [Float] {
-        guard !times.isEmpty else {
-            return Array(repeating: 0, count: componentsPerKeyframe)
-        }
-        if t <= times.first! {
-            return Self.readKeyframe(values: values, index: 0, components: componentsPerKeyframe, interpolation: interpolation)
-        }
-        if t >= times.last! {
-            return Self.readKeyframe(values: values, index: times.count - 1, components: componentsPerKeyframe, interpolation: interpolation)
-        }
-
-        // Binary search for the keyframe interval (i, i+1) where times[i] <= t < times[i+1].
-        var lo = 0, hi = times.count - 1
-        while hi - lo > 1 {
-            let mid = (lo + hi) / 2
-            if times[mid] <= t { lo = mid } else { hi = mid }
-        }
-        let i = lo
-        let t0 = times[i]
-        let t1 = times[i + 1]
-        let interval = max(t1 - t0, 1e-6)
-        let u = (t - t0) / interval
-
-        let v0 = Self.readKeyframe(values: values, index: i, components: componentsPerKeyframe, interpolation: interpolation)
-        let v1 = Self.readKeyframe(values: values, index: i + 1, components: componentsPerKeyframe, interpolation: interpolation)
-
-        switch interpolation {
-        case .step:
-            return v0
-        case .linear:
-            // For rotation (quaternion, components == 4), we want slerp. We
-            // detect it on the caller's side via componentsPerKeyframe == 4
-            // and shortest-arc; here we lerp + renormalize, which is the
-            // common spec-permitted shortcut for short intervals.
-            var out = [Float](repeating: 0, count: componentsPerKeyframe)
-            for c in 0..<componentsPerKeyframe {
-                out[c] = v0[c] * (1 - u) + v1[c] * u
-            }
-            if componentsPerKeyframe == 4 {
-                let len = sqrt(out[0]*out[0] + out[1]*out[1] + out[2]*out[2] + out[3]*out[3])
-                if len > 1e-6 {
-                    for c in 0..<4 { out[c] /= len }
-                }
-            }
-            return out
-        case .cubicSpline:
-            // CUBICSPLINE storage per keyframe: [in_tangent, value, out_tangent], each `components` floats.
-            // Hermite formula: p(t) = (2u³ - 3u² + 1) p0 + (u³ - 2u² + u) Δ·m0 + (-2u³ + 3u²) p1 + (u³ - u²) Δ·m1
-            let m0 = Self.readKeyframeTangent(values: values, index: i, components: componentsPerKeyframe, isOut: true)
-            let m1 = Self.readKeyframeTangent(values: values, index: i + 1, components: componentsPerKeyframe, isOut: false)
-            let p0 = v0
-            let p1 = v1
-            let u2 = u * u
-            let u3 = u2 * u
-            let a =  2*u3 - 3*u2 + 1
-            let b =      u3 - 2*u2 + u
-            let c = -2*u3 + 3*u2
-            let d =      u3 -   u2
-            let dt = interval
-            var out = [Float](repeating: 0, count: componentsPerKeyframe)
-            for k in 0..<componentsPerKeyframe {
-                out[k] = a * p0[k] + b * dt * m0[k] + c * p1[k] + d * dt * m1[k]
-            }
-            if componentsPerKeyframe == 4 {
-                let len = sqrt(out[0]*out[0] + out[1]*out[1] + out[2]*out[2] + out[3]*out[3])
-                if len > 1e-6 {
-                    for k in 0..<4 { out[k] /= len }
-                }
-            }
-            return out
-        }
+        gltfSampleFloatArray(
+            times: times,
+            values: values,
+            interpolation: interpolation.asGLTFCore,
+            components: componentsPerKeyframe,
+            at: t
+        )
     }
 
-    private static func readKeyframe(
-        values: [Float], index: Int, components: Int, interpolation: GLTFAnimationInterpolation
-    ) -> [Float] {
-        let stride = (interpolation == .cubicSpline) ? components * 3 : components
-        let valueStart = index * stride + (interpolation == .cubicSpline ? components : 0)
-        var out = [Float](repeating: 0, count: components)
-        for c in 0..<components {
-            let idx = valueStart + c
-            if idx < values.count { out[c] = values[idx] }
-        }
-        return out
+    /// Sample at time `t` as a 3-component vector — translation/scale channels.
+    public func sampleAsVector3(at t: Float) -> SIMD3<Float> {
+        gltfSampleVector3(
+            times: times,
+            values: values,
+            interpolation: interpolation.asGLTFCore,
+            at: t
+        )
     }
 
-    private static func readKeyframeTangent(
-        values: [Float], index: Int, components: Int, isOut: Bool
-    ) -> [Float] {
-        let stride = components * 3
-        let tangentStart = index * stride + (isOut ? 2 * components : 0)
-        var out = [Float](repeating: 0, count: components)
-        for c in 0..<components {
-            let idx = tangentStart + c
-            if idx < values.count { out[c] = values[idx] }
+    /// Sample at time `t` as a quaternion — rotation channel. Uses
+    /// `simd_slerp` for LINEAR (not lerp+renormalize) so long-arc
+    /// interpolations don't drift away from the great-circle path.
+    public func sampleAsQuaternion(at t: Float) -> simd_quatf {
+        gltfSampleQuaternion(
+            times: times,
+            values: values,
+            interpolation: interpolation.asGLTFCore,
+            at: t
+        )
+    }
+}
+
+private extension GLTFAnimationInterpolation {
+    /// Bridge to the GLTFCore-side enum used by the keyframe-sampling helpers.
+    /// Kept as a one-way adapter so this kit's public API stays stable while
+    /// the shared math lives in GLTFCore.
+    var asGLTFCore: GLTFKeyframeInterpolation {
+        switch self {
+        case .linear:      return .linear
+        case .step:        return .step
+        case .cubicSpline: return .cubicSpline
         }
-        return out
     }
 }
 
