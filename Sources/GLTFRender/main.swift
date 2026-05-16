@@ -65,6 +65,11 @@ enum DebugMode: String {
     /// Render world-space normals as RGB (N * 0.5 + 0.5). Diagnostic for
     /// NORMAL accessor decoding + per-vertex normal interpolation.
     case normals
+    /// Render TEXCOORD_0 as red/green. Diagnostic for UV decoding + chart layout.
+    case uvs
+    /// Render per-fragment roughness as greyscale. Diagnostic for the
+    /// metallic-roughness texture's G channel + `roughnessFactor`.
+    case roughness
 }
 
 func printUsage() {
@@ -91,7 +96,9 @@ func printUsage() {
                            Default: 1.
       --debug <mode>       Diagnostic output mode. Bypasses normal shading.
                            Modes:
-                             normals  — world-space normals as RGB.
+                             normals    — world-space normals as RGB.
+                             uvs        — TEXCOORD_0 as red/green channels.
+                             roughness  — per-fragment roughness as greyscale.
       --diagnostics        Print asset bounds, framing math, and draw-call
                            summary on stderr.
 
@@ -152,6 +159,21 @@ func parseArguments() throws -> CLIOptions {
 }
 
 // MARK: - Camera helpers
+
+/// Builds opaque + skinned debug pipeline pairs using a factory that takes a
+/// `(colorFormat, depthFormat, sampleCount, skinned)` quadruple — the signature
+/// shared by every `makeDebug*PipelineState` method on GLTFRenderer.
+func makeDebugPipelines(
+    renderer: GLTFRenderer,
+    colorFormat: MTLPixelFormat,
+    depthFormat: MTLPixelFormat,
+    sampleCount: Int,
+    make: (MTLPixelFormat, MTLPixelFormat, Int, Bool) throws -> MTLRenderPipelineState
+) throws -> GLTFRenderer.PipelineStates {
+    let opaque = try make(colorFormat, depthFormat, sampleCount, false)
+    let skinned = try make(colorFormat, depthFormat, sampleCount, true)
+    return GLTFRenderer.PipelineStates(opaque: opaque, skinnedOpaque: skinned)
+}
 
 func perspectiveProjection(fovY: Float, aspect: Float, near: Float, far: Float) -> simd_float4x4 {
     let y = 1 / tan(fovY * 0.5)
@@ -252,17 +274,29 @@ struct GLTFRenderCLI {
                 sampleCount: opts.sampleCount
             )
         case .normals:
-            // Build the debug pipelines manually so we can route both the
-            // skinned and unskinned vertex paths to gltf_debug_normals_fragment.
-            let opaque = try renderer.makeDebugNormalsPipelineState(
-                colorFormat: colorFormat, depthFormat: depthFormat,
-                sampleCount: opts.sampleCount, skinned: false
+            pipelines = try makeDebugPipelines(
+                renderer: renderer,
+                colorFormat: colorFormat,
+                depthFormat: depthFormat,
+                sampleCount: opts.sampleCount,
+                make: renderer.makeDebugNormalsPipelineState
             )
-            let skinned = try renderer.makeDebugNormalsPipelineState(
-                colorFormat: colorFormat, depthFormat: depthFormat,
-                sampleCount: opts.sampleCount, skinned: true
+        case .uvs:
+            pipelines = try makeDebugPipelines(
+                renderer: renderer,
+                colorFormat: colorFormat,
+                depthFormat: depthFormat,
+                sampleCount: opts.sampleCount,
+                make: renderer.makeDebugUVsPipelineState
             )
-            pipelines = GLTFRenderer.PipelineStates(opaque: opaque, skinnedOpaque: skinned)
+        case .roughness:
+            pipelines = try makeDebugPipelines(
+                renderer: renderer,
+                colorFormat: colorFormat,
+                depthFormat: depthFormat,
+                sampleCount: opts.sampleCount,
+                make: renderer.makeDebugRoughnessPipelineState
+            )
         }
 
         let depthDescriptor = MTLDepthStencilDescriptor()

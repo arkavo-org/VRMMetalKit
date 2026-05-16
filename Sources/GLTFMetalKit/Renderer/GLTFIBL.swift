@@ -432,7 +432,7 @@ extension GLTFEnvironment {
             encoder.setTexture(mipView, index: 1)
             encoder.setSamplerState(envSampler, index: 0)
 
-            var prefilterParams = ShaderPrefilterParams(roughness: roughness, mipLevel: UInt32(0))
+            var prefilterParams = ShaderPrefilterParams(roughness: roughness)
             encoder.setBytes(&prefilterParams, length: MemoryLayout<ShaderPrefilterParams>.stride, index: 0)
 
             let threadsPerGrid = MTLSize(width: faceSize, height: faceSize, depth: 6)
@@ -473,9 +473,6 @@ extension GLTFEnvironment {
 /// `IBLPrefilter.metal`.
 private struct ShaderPrefilterParams {
     var roughness: Float
-    var mipLevel: UInt32
-    var _pad0: UInt32 = 0
-    var _pad1: UInt32 = 0
 }
 
 extension GLTFEnvironment {
@@ -624,7 +621,7 @@ extension GLTFEnvironment {
             encoder.setTexture(source, index: 0)
             encoder.setTexture(mipView, index: 1)
             encoder.setSamplerState(envSampler, index: 0)
-            var prefilterParams = ShaderPrefilterParams(roughness: roughness, mipLevel: UInt32(0))
+            var prefilterParams = ShaderPrefilterParams(roughness: roughness)
             encoder.setBytes(&prefilterParams, length: MemoryLayout<ShaderPrefilterParams>.stride, index: 0)
             let threadsPerGrid = MTLSize(width: faceSize, height: faceSize, depth: 6)
             let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)

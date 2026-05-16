@@ -205,9 +205,6 @@ constant uint kPrefilterSampleCount = 512u;
 
 struct GLTFPrefilterParams {
     float roughness;
-    uint mipLevel;
-    uint _pad0;
-    uint _pad1;
 };
 
 kernel void gltf_ibl_specular_prefilter(
@@ -217,12 +214,12 @@ kernel void gltf_ibl_specular_prefilter(
     constant GLTFPrefilterParams& params [[buffer(0)]],
     uint3 gid [[thread_position_in_grid]]
 ) {
+    // The host binds a one-mip texture view per dispatch, so `get_width()`
+    // already returns this mip's face size.
     uint size = outCube.get_width();
-    // Account for mip level: at higher mips the output texture face size is smaller.
-    uint faceSize = max(size >> params.mipLevel, 1u);
-    if (gid.x >= faceSize || gid.y >= faceSize || gid.z >= 6u) return;
+    if (gid.x >= size || gid.y >= size || gid.z >= 6u) return;
 
-    float2 uv = (float2(gid.xy) + 0.5) / float(faceSize);
+    float2 uv = (float2(gid.xy) + 0.5) / float(size);
     float3 N = cubemapDirection(gid.z, uv);
     float3 V = N;  // Split-sum IBL: view = normal
 
@@ -261,7 +258,10 @@ kernel void gltf_ibl_specular_prefilter(
 // pre-convolved cubemap that the fragment samples with the surface
 // normal to get the diffuse ambient term in one tap.
 
-constant float kIrradianceSampleDelta = 0.025;
+// Hammersley low-discrepancy sample count for cosine-weighted hemisphere
+// integration. 2048 matches Karis 2013's specular reference and converges
+// at ~20× fewer samples than the prior 251×63 fixed-Δ phi/theta grid.
+constant uint kIrradianceSampleCount = 2048u;
 
 // MARK: - Equirectangular → cubemap
 //
@@ -311,17 +311,20 @@ kernel void gltf_ibl_diffuse_irradiance(
     up = cross(N, right);
 
     float3 sum = float3(0.0);
-    float sampleCount = 0.0;
-
-    for (float phi = 0.0; phi < 2.0 * M_PI_F; phi += kIrradianceSampleDelta) {
-        for (float theta = 0.0; theta < 0.5 * M_PI_F; theta += kIrradianceSampleDelta) {
-            float3 tangentSample = float3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
-            float3 sampleVec = tangentSample.x * right + tangentSample.y * up + tangentSample.z * N;
-            sum += source.sample(envSampler, sampleVec, level(0.0)).rgb * cos(theta) * sin(theta);
-            sampleCount += 1.0;
-        }
+    for (uint i = 0u; i < kIrradianceSampleCount; ++i) {
+        float2 Xi = hammersley(i, kIrradianceSampleCount);
+        // Cosine-weighted hemisphere sampling: cos(θ) = √(1 - ξ.y).
+        float cosTheta = sqrt(1.0 - Xi.y);
+        float sinTheta = sqrt(Xi.y);
+        float phi = 2.0 * M_PI_F * Xi.x;
+        float3 tangentSample = float3(sinTheta * cos(phi), sinTheta * sin(phi), cosTheta);
+        float3 sampleVec = tangentSample.x * right + tangentSample.y * up + tangentSample.z * N;
+        sum += source.sample(envSampler, sampleVec, level(0.0)).rgb;
     }
-
-    sum = M_PI_F * sum * (1.0 / sampleCount);
+    // Cosine-weighted sampling (pdf = cos(θ)/π) gives irradiance E = (π/N)·Σ L.
+    // The fragment uses `baseColor * irradiance` directly (no /π), so the
+    // cubemap stores E/π = (1/N)·Σ L — matches the prior fixed-Δ kernel's
+    // implicit normalization.
+    sum = sum * (1.0 / float(kIrradianceSampleCount));
     outCube.write(float4(sum, 1.0), uint2(gid.xy), gid.z);
 }

@@ -68,6 +68,11 @@ public struct GLTFAsset {
     /// (`mesh.weights`), parallel to `_document.meshes`. Used as the
     /// starting point for any per-frame `.weights` channel samples.
     internal let _defaultMeshWeights: [[Float]]
+    /// Triple-buffered MTLBuffer ring for morphed-primitive vertex output.
+    /// Class instance — shared by reference across `GLTFAsset` value copies
+    /// so animation playback keeps a stable ring even after passing the
+    /// asset through function boundaries. See issue #247.
+    internal let _morphPool: GLTFMorphBufferPool
 
     /// Re-evaluates the scene at a given animation time and returns a
     /// fresh draw list. The asset itself is unchanged — pass the result
@@ -75,20 +80,16 @@ public struct GLTFAsset {
     ///
     /// ## Performance
     ///
-    /// Allocates a fresh `MTLBuffer` per *morphed* primitive each call (the
-    /// CPU morph pre-pass uploads the blended vertex buffer to GPU). For
-    /// canonical Khronos morph-cube-scale assets (e.g. `AnimatedMorphCube`
-    /// at 24 vertices × 2 targets) this is sub-millisecond; for facial
-    /// blendshape rigs at 30K vertices × 30 targets × 60 fps it becomes a
-    /// per-frame bottleneck and an autorelease-pool / heap-fragmentation
-    /// hazard. A GPU compute kernel mirroring VRMMetalKit's
-    /// `MorphAccumulate.metal` SoA pattern is the canonical fix — see PR
-    /// follow-up issue #244. A cheaper intermediate (persistent buffer
-    /// pool keyed by primitive index) is tracked separately.
+    /// Morphed primitives route through a triple-buffered ``GLTFMorphBufferPool``
+    /// keyed by `(meshIndex, primitiveIndex)` — no per-frame `MTLBuffer`
+    /// allocation. When the effective morph weights are unchanged from the
+    /// last call, the pool returns the previously-blended slot without
+    /// re-running the CPU blend. The remaining cost is the per-call CPU blend
+    /// itself; a GPU compute kernel (issue #244) is the next axis of work.
     ///
-    /// Non-morphed primitives don't allocate per call — the same cached
-    /// `MTLBuffer` is reused across frames; only the model matrix and
-    /// skin palette change.
+    /// Non-morphed primitives don't blend or allocate — the same cached
+    /// `MTLBuffer` is reused across frames; only the model matrix and skin
+    /// palette change.
     ///
     /// - Parameters:
     ///   - animationIndex: Index into ``animations``. Out-of-range returns ``drawCalls`` unchanged.
@@ -187,7 +188,7 @@ public struct GLTFAsset {
             let effectiveWeights = meshWeights[meshIndex]
                 ?? (meshIndex < _defaultMeshWeights.count ? _defaultMeshWeights[meshIndex] : [])
 
-            for entry in _runtimePrimitives[meshIndex] {
+            for (primitiveIndex, entry) in _runtimePrimitives[meshIndex].enumerated() {
                 guard let entry = entry else { continue }
                 let mesh = entry.mesh
                 let materialIndex = entry.materialIndex
@@ -200,58 +201,41 @@ public struct GLTFAsset {
                 let model = (mesh.isSkinned && skinPalette != nil) ? matrix_identity_float4x4 : worldMatrix
 
                 // Morph pre-pass — if this primitive has morph data and any
-                // weight is non-zero, blend on CPU and upload a fresh vertex
-                // buffer. The original mesh stays untouched on the asset;
-                // we just emit a draw call referencing the new buffer.
+                // weight is non-zero, route the blend through `_morphPool`.
+                // The pool keeps a 3-deep ring per primitive so per-frame
+                // `MTLBuffer` allocation is eliminated (issue #247) and
+                // unchanged weights reuse the cached slot without re-blend.
                 //
-                // For skinned + morphed primitives, emit a GLTFSkinnedRenderableVertex
-                // layout so the skinned vertex shader still gets the
-                // per-vertex JOINTS_0/WEIGHTS_0 (the skin attrs aren't
-                // animated by morphs; we pass them through from load time).
+                // For skinned + morphed primitives, the pool emits
+                // GLTFSkinnedRenderableVertex stride so the skinned vertex
+                // shader still gets per-vertex JOINTS_0/WEIGHTS_0 — the skin
+                // attrs aren't animated by morphs; they're pulled from the
+                // load-time arrays unchanged.
                 let drawMesh: GLTFRenderableMesh
                 if let morph = entry.morphData,
                    !effectiveWeights.isEmpty,
                    effectiveWeights.contains(where: { $0 != 0 }) {
-                    if mesh.isSkinned, let joints = entry.skinJoints, let skinWeightsArr = entry.skinWeights {
-                        let morphedVerts = morph.skinnedMorphedVertices(
-                            weights: effectiveWeights,
-                            joints: joints,
-                            skinWeights: skinWeightsArr
+                    let primitiveID = (meshIndex << 16) | primitiveIndex
+                    let skinned = mesh.isSkinned && entry.skinJoints != nil && entry.skinWeights != nil
+                    if let newBuffer = _morphPool.buffer(
+                        primitiveID: primitiveID,
+                        morph: morph,
+                        weights: effectiveWeights,
+                        joints: entry.skinJoints,
+                        skinWeights: entry.skinWeights,
+                        skinned: skinned
+                    ) {
+                        drawMesh = GLTFRenderableMesh(
+                            vertexBuffer: newBuffer,
+                            vertexCount: morph.basePositions.count,
+                            indexBuffer: mesh.indexBuffer,
+                            indexCount: mesh.indexCount,
+                            indexType: mesh.indexType,
+                            primitiveType: mesh.primitiveType,
+                            isSkinned: skinned
                         )
-                        let stride = MemoryLayout<GLTFSkinnedRenderableVertex>.stride
-                        if let newBuffer = morphedVerts.withUnsafeBufferPointer({ ptr in
-                            _device.makeBuffer(bytes: ptr.baseAddress!, length: morphedVerts.count * stride, options: [])
-                        }) {
-                            drawMesh = GLTFRenderableMesh(
-                                vertexBuffer: newBuffer,
-                                vertexCount: morphedVerts.count,
-                                indexBuffer: mesh.indexBuffer,
-                                indexCount: mesh.indexCount,
-                                indexType: mesh.indexType,
-                                primitiveType: mesh.primitiveType,
-                                isSkinned: true  // still routes through the skinned pipeline
-                            )
-                        } else {
-                            drawMesh = mesh
-                        }
                     } else {
-                        let morphedVerts = morph.morphedVertices(weights: effectiveWeights)
-                        let stride = MemoryLayout<GLTFRenderableVertex>.stride
-                        if let newBuffer = morphedVerts.withUnsafeBufferPointer({ ptr in
-                            _device.makeBuffer(bytes: ptr.baseAddress!, length: morphedVerts.count * stride, options: [])
-                        }) {
-                            drawMesh = GLTFRenderableMesh(
-                                vertexBuffer: newBuffer,
-                                vertexCount: morphedVerts.count,
-                                indexBuffer: mesh.indexBuffer,
-                                indexCount: mesh.indexCount,
-                                indexType: mesh.indexType,
-                                primitiveType: mesh.primitiveType,
-                                isSkinned: false
-                            )
-                        } else {
-                            drawMesh = mesh
-                        }
+                        drawMesh = mesh
                     }
                 } else {
                     drawMesh = mesh
@@ -445,7 +429,8 @@ public final class GLTFAssetLoader {
             _defaultMaterial: defaultMaterial,
             _skinDefinitions: skinDefinitions,
             _device: device,
-            _defaultMeshWeights: defaultMeshWeights
+            _defaultMeshWeights: defaultMeshWeights,
+            _morphPool: GLTFMorphBufferPool(device: device)
         )
     }
 
@@ -599,10 +584,26 @@ public final class GLTFAssetLoader {
         let origin = worldMatrix.columns.3
         let position = SIMD3<Float>(origin.x, origin.y, origin.z)
 
-        // World-space -Z axis from the upper-left 3×3 (no perspective).
-        let localForward = SIMD4<Float>(0, 0, -1, 0)
-        let world4 = worldMatrix * localForward
-        let direction = normalize(SIMD3<Float>(world4.x, world4.y, world4.z))
+        // Direction vectors transform by the inverse-transpose of the upper
+        // 3×3 (the "normal matrix"). For rotation + diagonal-scale TRS
+        // parents this gives the same direction after normalization as
+        // `worldMatrix * v`; for non-orthogonal explicit-matrix parents it
+        // avoids skewing the axis. Fall back to direct transform when the
+        // 3×3 is singular (degenerate scale).
+        let upper3 = simd_float3x3(
+            SIMD3<Float>(worldMatrix.columns.0.x, worldMatrix.columns.0.y, worldMatrix.columns.0.z),
+            SIMD3<Float>(worldMatrix.columns.1.x, worldMatrix.columns.1.y, worldMatrix.columns.1.z),
+            SIMD3<Float>(worldMatrix.columns.2.x, worldMatrix.columns.2.y, worldMatrix.columns.2.z)
+        )
+        let localForward = SIMD3<Float>(0, 0, -1)
+        let det = upper3.determinant
+        let rawDirection: SIMD3<Float>
+        if abs(det) > 1e-6 {
+            rawDirection = upper3.inverse.transpose * localForward
+        } else {
+            rawDirection = upper3 * localForward
+        }
+        let direction = normalize(rawDirection)
 
         return GLTFPunctualLightUniform(
             type: definition.type,
