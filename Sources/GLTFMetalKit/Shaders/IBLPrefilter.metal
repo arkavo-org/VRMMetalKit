@@ -263,6 +263,37 @@ kernel void gltf_ibl_specular_prefilter(
 
 constant float kIrradianceSampleDelta = 0.025;
 
+// MARK: - Equirectangular → cubemap
+//
+// Projects an equirectangular HDR panorama (loaded from a .hdr file) into
+// a cubemap. For each output cubemap texel, compute its world-space
+// direction, then convert to (phi, theta) → equirectangular UV, and
+// sample the source texture.
+
+kernel void gltf_ibl_equirect_to_cube(
+    texture2d<float, access::sample> source [[texture(0)]],
+    texturecube<float, access::write> outCube [[texture(1)]],
+    sampler envSampler [[sampler(0)]],
+    uint3 gid [[thread_position_in_grid]]
+) {
+    uint size = outCube.get_width();
+    if (gid.x >= size || gid.y >= size || gid.z >= 6u) return;
+
+    float2 uv = (float2(gid.xy) + 0.5) / float(size);
+    float3 dir = cubemapDirection(gid.z, uv);
+
+    // Equirectangular mapping: phi = atan2(x, z), theta = acos(y).
+    // UV.x = phi / (2π) + 0.5, UV.y = 1 - theta / π.
+    float phi = atan2(dir.z, dir.x);
+    float theta = acos(clamp(dir.y, -1.0, 1.0));
+    float2 envUV = float2(phi / (2.0 * M_PI_F) + 0.5, theta / M_PI_F);
+    // Flip Y so the .hdr (which usually has +Y up at row 0) lands oriented correctly.
+    envUV.y = 1.0 - envUV.y;
+
+    float3 color = source.sample(envSampler, envUV, level(0.0)).rgb;
+    outCube.write(float4(color, 1.0), uint2(gid.xy), gid.z);
+}
+
 kernel void gltf_ibl_diffuse_irradiance(
     texturecube<float, access::sample> source [[texture(0)]],
     texturecube<float, access::write>  outCube [[texture(1)]],

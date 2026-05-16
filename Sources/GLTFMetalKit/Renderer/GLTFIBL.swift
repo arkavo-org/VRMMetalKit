@@ -477,3 +477,200 @@ private struct ShaderPrefilterParams {
     var _pad0: UInt32 = 0
     var _pad1: UInt32 = 0
 }
+
+extension GLTFEnvironment {
+
+    /// Builds an IBL environment from a Radiance HDR equirectangular panorama.
+    ///
+    /// Steps:
+    ///   1. Parse the `.hdr` into half-float RGBA pixels.
+    ///   2. Upload as a 2D source texture.
+    ///   3. Run `gltf_ibl_equirect_to_cube` to project into a cubemap.
+    ///   4. Reuse the procedural pipeline's specular prefilter + diffuse
+    ///      irradiance kernels on that cubemap.
+    ///
+    /// Synchronous — compute work waits to completion. Pass the result to
+    /// ``GLTFRenderer/environment`` to replace either the gray fallback or
+    /// a previous procedural environment.
+    public static func makeFromRadianceHDR(
+        data: Data,
+        device: MTLDevice,
+        library: MTLLibrary,
+        sourceCubeSize: Int = 512,
+        specularSize: Int = 256,
+        diffuseSize: Int = 32
+    ) throws -> GLTFEnvironment {
+        let hdr = try GLTFRadianceHDR(data: data)
+        let specularMipCount = max(Int(floor(log2(Double(specularSize)))) + 1, 1)
+
+        // --- 2D source texture from the HDR pixels ---
+        let panoDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float, width: hdr.width, height: hdr.height, mipmapped: false
+        )
+        panoDescriptor.usage = [.shaderRead]
+        panoDescriptor.storageMode = .shared
+        guard let panoTexture = device.makeTexture(descriptor: panoDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+        hdr.pixelsFloat16.withUnsafeBytes { ptr in
+            panoTexture.replace(
+                region: MTLRegionMake2D(0, 0, hdr.width, hdr.height),
+                mipmapLevel: 0,
+                withBytes: ptr.baseAddress!,
+                bytesPerRow: hdr.width * MemoryLayout<UInt16>.stride * 4
+            )
+        }
+
+        // --- Cubemap allocations + pipelines mirror makeProcedural ---
+        let cubemapPixelFormat: MTLPixelFormat = .rgba16Float
+        let sourceDescriptor = MTLTextureDescriptor.textureCubeDescriptor(
+            pixelFormat: cubemapPixelFormat, size: sourceCubeSize, mipmapped: false
+        )
+        sourceDescriptor.usage = [.shaderRead, .shaderWrite]
+        sourceDescriptor.storageMode = .private
+        guard let source = device.makeTexture(descriptor: sourceDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        let specularDescriptor = MTLTextureDescriptor.textureCubeDescriptor(
+            pixelFormat: cubemapPixelFormat, size: specularSize, mipmapped: true
+        )
+        specularDescriptor.mipmapLevelCount = specularMipCount
+        specularDescriptor.usage = [.shaderRead, .shaderWrite, .pixelFormatView]
+        specularDescriptor.storageMode = .private
+        guard let specular = device.makeTexture(descriptor: specularDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        let diffuseDescriptor = MTLTextureDescriptor.textureCubeDescriptor(
+            pixelFormat: cubemapPixelFormat, size: diffuseSize, mipmapped: false
+        )
+        diffuseDescriptor.usage = [.shaderRead, .shaderWrite]
+        diffuseDescriptor.storageMode = .private
+        guard let diffuse = device.makeTexture(descriptor: diffuseDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        guard let equirectFn = library.makeFunction(name: "gltf_ibl_equirect_to_cube") else {
+            throw GLTFRendererError.missingShaderFunction(name: "gltf_ibl_equirect_to_cube")
+        }
+        guard let specularFn = library.makeFunction(name: "gltf_ibl_specular_prefilter") else {
+            throw GLTFRendererError.missingShaderFunction(name: "gltf_ibl_specular_prefilter")
+        }
+        guard let diffuseFn = library.makeFunction(name: "gltf_ibl_diffuse_irradiance") else {
+            throw GLTFRendererError.missingShaderFunction(name: "gltf_ibl_diffuse_irradiance")
+        }
+        let equirectPipeline = try device.makeComputePipelineState(function: equirectFn)
+        let specularPipeline = try device.makeComputePipelineState(function: specularFn)
+        let diffusePipeline = try device.makeComputePipelineState(function: diffuseFn)
+
+        guard let queue = device.makeCommandQueue(),
+              let commandBuffer = queue.makeCommandBuffer() else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        let samplerDescriptor = MTLSamplerDescriptor()
+        samplerDescriptor.minFilter = .linear
+        samplerDescriptor.magFilter = .linear
+        samplerDescriptor.mipFilter = .linear
+        samplerDescriptor.sAddressMode = .repeat   // equirect wraps in U
+        samplerDescriptor.tAddressMode = .clampToEdge
+        samplerDescriptor.rAddressMode = .clampToEdge
+        guard let panoSampler = device.makeSamplerState(descriptor: samplerDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+        let envSamplerDescriptor = MTLSamplerDescriptor()
+        envSamplerDescriptor.minFilter = .linear
+        envSamplerDescriptor.magFilter = .linear
+        envSamplerDescriptor.mipFilter = .linear
+        envSamplerDescriptor.sAddressMode = .clampToEdge
+        envSamplerDescriptor.tAddressMode = .clampToEdge
+        envSamplerDescriptor.rAddressMode = .clampToEdge
+        guard let envSampler = device.makeSamplerState(descriptor: envSamplerDescriptor) else {
+            throw GLTFIBLError.environmentAllocationFailed
+        }
+
+        // --- Pass 1: equirectangular → cubemap ---
+        do {
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw GLTFIBLError.environmentAllocationFailed
+            }
+            encoder.setComputePipelineState(equirectPipeline)
+            encoder.setTexture(panoTexture, index: 0)
+            encoder.setTexture(source, index: 1)
+            encoder.setSamplerState(panoSampler, index: 0)
+            let threadsPerGrid = MTLSize(width: sourceCubeSize, height: sourceCubeSize, depth: 6)
+            let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
+            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            encoder.endEncoding()
+        }
+
+        // --- Pass 2: specular prefilter per mip ---
+        for mip in 0..<specularMipCount {
+            guard let mipView = specular.makeTextureView(
+                pixelFormat: cubemapPixelFormat,
+                textureType: .typeCube,
+                levels: mip..<(mip + 1),
+                slices: 0..<6
+            ) else {
+                throw GLTFIBLError.environmentAllocationFailed
+            }
+            let roughness = specularMipCount == 1 ? 0.0 : Float(mip) / Float(specularMipCount - 1)
+            let faceSize = max(specularSize >> mip, 1)
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw GLTFIBLError.environmentAllocationFailed
+            }
+            encoder.setComputePipelineState(specularPipeline)
+            encoder.setTexture(source, index: 0)
+            encoder.setTexture(mipView, index: 1)
+            encoder.setSamplerState(envSampler, index: 0)
+            var prefilterParams = ShaderPrefilterParams(roughness: roughness, mipLevel: UInt32(0))
+            encoder.setBytes(&prefilterParams, length: MemoryLayout<ShaderPrefilterParams>.stride, index: 0)
+            let threadsPerGrid = MTLSize(width: faceSize, height: faceSize, depth: 6)
+            let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
+            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            encoder.endEncoding()
+        }
+
+        // --- Pass 3: diffuse irradiance ---
+        do {
+            guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                throw GLTFIBLError.environmentAllocationFailed
+            }
+            encoder.setComputePipelineState(diffusePipeline)
+            encoder.setTexture(source, index: 0)
+            encoder.setTexture(diffuse, index: 1)
+            encoder.setSamplerState(envSampler, index: 0)
+            let threadsPerGrid = MTLSize(width: diffuseSize, height: diffuseSize, depth: 6)
+            let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
+            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            encoder.endEncoding()
+        }
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        if let error = commandBuffer.error {
+            throw GLTFIBLError.environmentComputeFailed(reason: error.localizedDescription)
+        }
+
+        return GLTFEnvironment(diffuse: diffuse, specular: specular)
+    }
+
+    /// Convenience: load + decode + bake an HDR from a file URL.
+    public static func makeFromRadianceHDR(
+        url: URL,
+        device: MTLDevice,
+        library: MTLLibrary,
+        sourceCubeSize: Int = 512,
+        specularSize: Int = 256,
+        diffuseSize: Int = 32
+    ) throws -> GLTFEnvironment {
+        let data = try Data(contentsOf: url)
+        return try makeFromRadianceHDR(
+            data: data, device: device, library: library,
+            sourceCubeSize: sourceCubeSize,
+            specularSize: specularSize,
+            diffuseSize: diffuseSize
+        )
+    }
+}
