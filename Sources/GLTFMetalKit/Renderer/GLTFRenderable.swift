@@ -221,22 +221,7 @@ public struct GLTFPrimitiveMorphData {
         out.reserveCapacity(vertexCount)
 
         for v in 0..<vertexCount {
-            var p = basePositions[v]
-            var n = baseNormals[v]
-            var t = SIMD3<Float>(baseTangents[v].x, baseTangents[v].y, baseTangents[v].z)
-            let bitangentSign = baseTangents[v].w
-
-            for ti in 0..<targetCount {
-                let w = ti < weights.count ? weights[ti] : 0
-                if w == 0 { continue }
-                if v < positionDeltas[ti].count { p += positionDeltas[ti][v] * w }
-                if v < normalDeltas[ti].count   { n += normalDeltas[ti][v]   * w }
-                if v < tangentDeltas[ti].count  { t += tangentDeltas[ti][v]  * w }
-            }
-            // Renormalise the morphed normal so lighting math stays well-behaved.
-            let nLen = simd_length(n)
-            if nLen > 1e-6 { n = n / nLen }
-
+            let (p, n, t, bitangentSign) = blend(weights: weights, vertex: v)
             out.append(GLTFRenderableVertex(
                 position: p,
                 normal: n,
@@ -245,6 +230,60 @@ public struct GLTFPrimitiveMorphData {
             ))
         }
         return out
+    }
+
+    /// Skinned variant of ``morphedVertices(weights:)`` — blends the same
+    /// deltas, but emits ``GLTFSkinnedRenderableVertex`` carrying per-vertex
+    /// joint indices + weights from the caller. The caller (asset loader)
+    /// keeps the JOINTS_0 / WEIGHTS_0 arrays alive because they are *not*
+    /// animated by morph targets — the spec only animates position, normal,
+    /// and tangent — so the skin attributes are pulled through unchanged.
+    public func skinnedMorphedVertices(
+        weights: [Float],
+        joints: [SIMD4<UInt16>],
+        skinWeights: [SIMD4<Float>]
+    ) -> [GLTFSkinnedRenderableVertex] {
+        let vertexCount = basePositions.count
+        precondition(joints.count == vertexCount, "joints array must parallel vertex count")
+        precondition(skinWeights.count == vertexCount, "skinWeights array must parallel vertex count")
+
+        var out = [GLTFSkinnedRenderableVertex]()
+        out.reserveCapacity(vertexCount)
+        for v in 0..<vertexCount {
+            let (p, n, t, bitangentSign) = blend(weights: weights, vertex: v)
+            out.append(GLTFSkinnedRenderableVertex(
+                position: p,
+                normal: n,
+                tangent: SIMD4<Float>(t.x, t.y, t.z, bitangentSign),
+                uv0: baseUVs[v],
+                joints: joints[v],
+                weights: skinWeights[v]
+            ))
+        }
+        return out
+    }
+
+    /// Shared blend math — returns the morphed (position, normal, tangent.xyz,
+    /// bitangentSign) for one vertex.
+    private func blend(
+        weights: [Float],
+        vertex v: Int
+    ) -> (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, Float) {
+        var p = basePositions[v]
+        var n = baseNormals[v]
+        var t = SIMD3<Float>(baseTangents[v].x, baseTangents[v].y, baseTangents[v].z)
+        let bitangentSign = baseTangents[v].w
+
+        for ti in 0..<targetCount {
+            let w = ti < weights.count ? weights[ti] : 0
+            if w == 0 { continue }
+            if v < positionDeltas[ti].count { p += positionDeltas[ti][v] * w }
+            if v < normalDeltas[ti].count   { n += normalDeltas[ti][v]   * w }
+            if v < tangentDeltas[ti].count  { t += tangentDeltas[ti][v]  * w }
+        }
+        let nLen = simd_length(n)
+        if nLen > 1e-6 { n = n / nLen }
+        return (p, n, t, bitangentSign)
     }
 }
 

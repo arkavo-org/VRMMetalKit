@@ -27,6 +27,30 @@ import simd
 /// upload, draw-call emission.
 final class GLTFMorphTests: XCTestCase {
 
+    func testSkinnedMorphedVerticesPreservesSkinAttrs() {
+        // Combined skinning + morph: confirm the morph blend updates
+        // position/normal/tangent while the JOINTS_0/WEIGHTS_0 pass through
+        // unchanged (the glTF spec does not animate skin attrs via morphs).
+        let morph = GLTFPrimitiveMorphData(
+            basePositions: [SIMD3<Float>(0, 0, 0)],
+            baseNormals:   [SIMD3<Float>(0, 1, 0)],
+            baseTangents:  [SIMD4<Float>(1, 0, 0, 1)],
+            baseUVs:       [SIMD2<Float>(0, 0)],
+            positionDeltas: [[SIMD3<Float>(2, 0, 0)]],
+            normalDeltas:   [[]],
+            tangentDeltas:  [[]]
+        )
+        let joints: [SIMD4<UInt16>] = [SIMD4<UInt16>(7, 8, 9, 10)]
+        let skinW:  [SIMD4<Float>]  = [SIMD4<Float>(0.5, 0.3, 0.2, 0.0)]
+        let out = morph.skinnedMorphedVertices(weights: [0.5], joints: joints, skinWeights: skinW)
+
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].position.x, 1.0, accuracy: 1e-5)
+        XCTAssertEqual(out[0].joints, SIMD4<UInt16>(7, 8, 9, 10),
+            "JOINTS_0 must pass through the morph pre-pass unchanged.")
+        XCTAssertEqual(out[0].weights.x, 0.5, accuracy: 1e-5)
+    }
+
     func testMorphedVerticesBlendsCorrectly() {
         // Hand-built morph data: one vertex, one morph target whose
         // position delta is (1, 0, 0). At weight 0.5 the morphed

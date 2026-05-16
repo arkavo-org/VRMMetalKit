@@ -187,26 +187,55 @@ public struct GLTFAsset {
                 // weight is non-zero, blend on CPU and upload a fresh vertex
                 // buffer. The original mesh stays untouched on the asset;
                 // we just emit a draw call referencing the new buffer.
+                //
+                // For skinned + morphed primitives, emit a GLTFSkinnedRenderableVertex
+                // layout so the skinned vertex shader still gets the
+                // per-vertex JOINTS_0/WEIGHTS_0 (the skin attrs aren't
+                // animated by morphs; we pass them through from load time).
                 let drawMesh: GLTFRenderableMesh
                 if let morph = entry.morphData,
                    !effectiveWeights.isEmpty,
                    effectiveWeights.contains(where: { $0 != 0 }) {
-                    let morphedVerts = morph.morphedVertices(weights: effectiveWeights)
-                    let stride = MemoryLayout<GLTFRenderableVertex>.stride
-                    if let newBuffer = morphedVerts.withUnsafeBufferPointer({ ptr in
-                        _device.makeBuffer(bytes: ptr.baseAddress!, length: morphedVerts.count * stride, options: [])
-                    }) {
-                        drawMesh = GLTFRenderableMesh(
-                            vertexBuffer: newBuffer,
-                            vertexCount: morphedVerts.count,
-                            indexBuffer: mesh.indexBuffer,
-                            indexCount: mesh.indexCount,
-                            indexType: mesh.indexType,
-                            primitiveType: mesh.primitiveType,
-                            isSkinned: false
+                    if mesh.isSkinned, let joints = entry.skinJoints, let skinWeightsArr = entry.skinWeights {
+                        let morphedVerts = morph.skinnedMorphedVertices(
+                            weights: effectiveWeights,
+                            joints: joints,
+                            skinWeights: skinWeightsArr
                         )
+                        let stride = MemoryLayout<GLTFSkinnedRenderableVertex>.stride
+                        if let newBuffer = morphedVerts.withUnsafeBufferPointer({ ptr in
+                            _device.makeBuffer(bytes: ptr.baseAddress!, length: morphedVerts.count * stride, options: [])
+                        }) {
+                            drawMesh = GLTFRenderableMesh(
+                                vertexBuffer: newBuffer,
+                                vertexCount: morphedVerts.count,
+                                indexBuffer: mesh.indexBuffer,
+                                indexCount: mesh.indexCount,
+                                indexType: mesh.indexType,
+                                primitiveType: mesh.primitiveType,
+                                isSkinned: true  // still routes through the skinned pipeline
+                            )
+                        } else {
+                            drawMesh = mesh
+                        }
                     } else {
-                        drawMesh = mesh
+                        let morphedVerts = morph.morphedVertices(weights: effectiveWeights)
+                        let stride = MemoryLayout<GLTFRenderableVertex>.stride
+                        if let newBuffer = morphedVerts.withUnsafeBufferPointer({ ptr in
+                            _device.makeBuffer(bytes: ptr.baseAddress!, length: morphedVerts.count * stride, options: [])
+                        }) {
+                            drawMesh = GLTFRenderableMesh(
+                                vertexBuffer: newBuffer,
+                                vertexCount: morphedVerts.count,
+                                indexBuffer: mesh.indexBuffer,
+                                indexCount: mesh.indexCount,
+                                indexType: mesh.indexType,
+                                primitiveType: mesh.primitiveType,
+                                isSkinned: false
+                            )
+                        } else {
+                            drawMesh = mesh
+                        }
                     }
                 } else {
                     drawMesh = mesh
@@ -676,6 +705,13 @@ public final class GLTFAssetLoader {
         let mesh: GLTFRenderableMesh
         let materialIndex: Int?
         let morphData: GLTFPrimitiveMorphData?  // nil when the primitive has no morph targets
+        /// Per-vertex JOINTS_0, parallel to the vertex order. Captured when
+        /// the primitive is skinned + has morph targets so the rebuild path
+        /// can re-emit a skinned-morphed vertex buffer (the skin attrs are
+        /// not themselves animated by morphs).
+        let skinJoints: [SIMD4<UInt16>]?
+        /// Per-vertex WEIGHTS_0. Same conditions as `skinJoints`.
+        let skinWeights: [SIMD4<Float>]?
     }
 
     /// Returns the primitive build result or `nil` if the primitive should be skipped
@@ -860,12 +896,14 @@ public final class GLTFAssetLoader {
             isSkinned: isSkinned
         )
 
-        // Optional morph-target data — only built for non-skinned primitives
-        // in this round; CPU pre-pass on a skinned vertex layout is a
-        // follow-up since the morph kernel would also need to update the
-        // skinned-vertex stride.
+        // Optional morph-target data — extracted for both skinned and
+        // non-skinned primitives. The asset's rebuild path uses
+        // `morphedVertices(weights:)` for the unskinned layout and
+        // `skinnedMorphedVertices(weights:joints:skinWeights:)` for the
+        // skinned layout (it re-fetches per-vertex JOINTS_0/WEIGHTS_0
+        // because the skin attrs aren't animated by morphs).
         let morphData: GLTFPrimitiveMorphData? = {
-            guard !isSkinned, let targets = gltf.targets, !targets.isEmpty else { return nil }
+            guard let targets = gltf.targets, !targets.isEmpty else { return nil }
 
             // Pack base attributes into typed arrays in the same order the
             // vertex buffer was built.
@@ -904,7 +942,21 @@ public final class GLTFAssetLoader {
             )
         }()
 
-        return PrimitiveBuildResult(mesh: mesh, materialIndex: gltf.material, morphData: morphData)
+        // Capture the skinning arrays alongside morph data so the rebuild
+        // path can re-emit a skinned-morphed vertex buffer. The skin
+        // attrs are not themselves animated by glTF morph targets — only
+        // POSITION/NORMAL/TANGENT — so we just hold the constant per-
+        // vertex JOINTS_0/WEIGHTS_0 from load time.
+        let skinJoints: [SIMD4<UInt16>]? = (isSkinned && morphData != nil) ? skinningData?.joints : nil
+        let skinWeights: [SIMD4<Float>]? = (isSkinned && morphData != nil) ? skinningData?.weights : nil
+
+        return PrimitiveBuildResult(
+            mesh: mesh,
+            materialIndex: gltf.material,
+            morphData: morphData,
+            skinJoints: skinJoints,
+            skinWeights: skinWeights
+        )
     }
 
     /// Decodes a Vec3 accessor as `[SIMD3<Float>]`, or returns an empty
