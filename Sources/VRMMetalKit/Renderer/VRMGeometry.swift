@@ -212,7 +212,7 @@ public class VRMPrimitive {
                 primitive.localMax = hi
             }
         } else {
-            throw VRMError.missingVertexAttribute(
+            throw GLTFError.missingVertexAttribute(
                 meshIndex: 0, // We don't have meshIndex in this context, but this is a required POSITION attribute
                 attributeName: "POSITION",
                 filePath: bufferLoader.filePath

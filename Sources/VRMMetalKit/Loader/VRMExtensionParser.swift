@@ -101,7 +101,7 @@ public class VRMExtensionParser {
     /// - Returns: A ``VRMModel`` with spec version, meta, humanoid, and all parseable VRM subsystems populated.
     /// - Throws:
     ///   - ``VRMError/missingVRMExtension(filePath:suggestion:)`` if the extension is not a dictionary.
-    ///   - ``VRMError/invalidJSON(context:underlyingError:filePath:)`` if `meta` or `humanoid` is missing or malformed.
+    ///   - ``GLTFError/invalidJSON(context:underlyingError:filePath:)`` if `meta` or `humanoid` is missing or malformed.
     public func parseVRMExtension(_ extension: Any, document: GLTFDocument, filePath: String? = nil) throws -> VRMModel {
         guard let vrmDict = `extension` as? [String: Any] else {
             throw VRMError.missingVRMExtension(
@@ -131,7 +131,7 @@ public class VRMExtensionParser {
         // Parse meta (required)
         guard let metaDict = vrmDict["meta"] as? [String: Any] else {
             vrmLog("[VRMExtensionParser] Missing or invalid meta dictionary")
-            throw VRMError.invalidJSON(
+            throw GLTFError.invalidJSON(
                 context: "VRM extension 'meta' field",
                 underlyingError: "Missing or not a dictionary. VRM models require metadata including name, version, author, etc.",
                 filePath: filePath
@@ -143,7 +143,7 @@ public class VRMExtensionParser {
         // Parse humanoid (required)
         guard let humanoidDict = vrmDict["humanoid"] as? [String: Any] else {
             vrmLog("[VRMExtensionParser] Missing or invalid humanoid dictionary")
-            throw VRMError.invalidJSON(
+            throw GLTFError.invalidJSON(
                 context: "VRM extension 'humanoid' field",
                 underlyingError: "Missing or not a dictionary. VRM models require humanoid bone mappings.",
                 filePath: filePath

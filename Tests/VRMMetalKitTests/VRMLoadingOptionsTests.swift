@@ -222,7 +222,7 @@ final class VRMLoadingOptionsTests: XCTestCase {
     
     func testLoadingCancelledError() {
         // Given
-        let error = VRMError.loadingCancelled
+        let error = GLTFError.loadingCancelled
         
         // When
         let description = error.errorDescription

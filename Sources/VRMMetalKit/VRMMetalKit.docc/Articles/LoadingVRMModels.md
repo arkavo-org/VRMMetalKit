@@ -44,7 +44,7 @@ let loadTask = Task {
 
 // To cancel from elsewhere (e.g. a Cancel button):
 //     loadTask.cancel()
-// The loader throws `VRMError.loadingCancelled` at the next phase boundary.
+// The loader throws `GLTFError.loadingCancelled` at the next phase boundary.
 
 let model = try await loadTask.value
 ```
@@ -57,7 +57,7 @@ Detection is automatic. Loading a VRM 0.x `.vrm` file works without any flag —
 
 ## Error handling
 
-All loader failures throw ``VRMError``, which conforms to `LocalizedError` so `errorDescription` is suitable for direct display. Most cases are recoverable at the UI level (invalid file, missing required extension, unsupported VRM version — show the user a message and move on). `VRMError.loadingCancelled` is the expected cooperative cancellation throw and should be treated as a non-error in your UI. Out-of-memory and I/O failures bubble up as the underlying `Foundation` errors and warrant aborting the load entirely.
+Loader failures throw ``VRMError`` (VRM-specific: missing VRM extension, missing required humanoid bone, invalid meta) or ``GLTFError`` (glTF spec: invalid JSON, missing buffer/accessor/texture, unsupported version, cooperative cancellation, etc.). Both conform to `LocalizedError` so `errorDescription` is suitable for direct display. Most cases are recoverable at the UI level (invalid file, missing required extension, unsupported VRM version — show the user a message and move on). `GLTFError.loadingCancelled` is the expected cooperative cancellation throw and should be treated as a non-error in your UI. Out-of-memory and I/O failures bubble up as the underlying `Foundation` errors and warrant aborting the load entirely.
 
 ## Topics
 
