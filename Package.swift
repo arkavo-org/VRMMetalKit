@@ -34,7 +34,14 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "GLTFCore",
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
+        ),
+        .target(
             name: "VRMMetalKit",
+            dependencies: ["GLTFCore"],
             exclude: [
                 "Shaders/MorphTargetCompute.metal",
                 "Shaders/MorphAccumulate.metal",
