@@ -53,8 +53,18 @@ struct CLIOptions {
     var height: Int = 1024
     var animationTime: Float = 0
     var animationIndex: Int = 0
-    var cameraDistanceScale: Float = 1.5  // Multiplied against asset bounds diagonal.
+    var cameraDistancePadding: Float = 1.15  // Extra margin on the bounding-sphere fit.
     var enableIBL: Bool = true
+    var sampleCount: Int = 1  // MSAA samples; 1, 2, 4, or 8.
+    var debugMode: DebugMode = .none
+    var printDiagnostics: Bool = false
+}
+
+enum DebugMode: String {
+    case none
+    /// Render world-space normals as RGB (N * 0.5 + 0.5). Diagnostic for
+    /// NORMAL accessor decoding + per-vertex normal interpolation.
+    case normals
 }
 
 func printUsage() {
@@ -74,9 +84,16 @@ func printUsage() {
       --no-ibl             Use the gray fallback environment instead of
                            the runtime procedural sky. Tests strict
                            direct-light behaviour.
-      --camera-distance <s> Camera distance scale; the camera is placed
-                           at `bounds_diagonal * s` from the asset center.
-                           Default: 1.5
+      --camera-padding <s> Padding multiplier on the bounding-sphere fit.
+                           Distance = (radius / sin(fovY/2)) * padding.
+                           1.0 = tight fit, 1.15 (default) = comfortable margin.
+      --msaa <n>           MSAA sample count: 1 (off), 2, 4, or 8.
+                           Default: 1.
+      --debug <mode>       Diagnostic output mode. Bypasses normal shading.
+                           Modes:
+                             normals  — world-space normals as RGB.
+      --diagnostics        Print asset bounds, framing math, and draw-call
+                           summary on stderr.
 
     The renderer auto-frames using the asset's world bounds. To render an
     asset's animation frame-by-frame, drive `--time` from a shell loop.
@@ -105,8 +122,17 @@ func parseArguments() throws -> CLIOptions {
             i += 1; opts.animationIndex = Int(args[i]) ?? 0
         case "--no-ibl":
             opts.enableIBL = false
-        case "--camera-distance":
-            i += 1; opts.cameraDistanceScale = Float(args[i]) ?? opts.cameraDistanceScale
+        case "--camera-padding":
+            i += 1; opts.cameraDistancePadding = Float(args[i]) ?? opts.cameraDistancePadding
+        case "--msaa":
+            i += 1
+            let n = Int(args[i]) ?? 1
+            opts.sampleCount = [1, 2, 4, 8].contains(n) ? n : 1
+        case "--debug":
+            i += 1
+            opts.debugMode = DebugMode(rawValue: args[i]) ?? .none
+        case "--diagnostics":
+            opts.printDiagnostics = true
         default:
             if opts.inputPath.isEmpty {
                 opts.inputPath = arg
@@ -217,7 +243,27 @@ struct GLTFRenderCLI {
 
         let colorFormat: MTLPixelFormat = .bgra8Unorm
         let depthFormat: MTLPixelFormat = .depth32Float
-        let pipelines = try renderer.makePipelineStates(colorFormat: colorFormat, depthFormat: depthFormat)
+        let pipelines: GLTFRenderer.PipelineStates
+        switch opts.debugMode {
+        case .none:
+            pipelines = try renderer.makePipelineStates(
+                colorFormat: colorFormat,
+                depthFormat: depthFormat,
+                sampleCount: opts.sampleCount
+            )
+        case .normals:
+            // Build the debug pipelines manually so we can route both the
+            // skinned and unskinned vertex paths to gltf_debug_normals_fragment.
+            let opaque = try renderer.makeDebugNormalsPipelineState(
+                colorFormat: colorFormat, depthFormat: depthFormat,
+                sampleCount: opts.sampleCount, skinned: false
+            )
+            let skinned = try renderer.makeDebugNormalsPipelineState(
+                colorFormat: colorFormat, depthFormat: depthFormat,
+                sampleCount: opts.sampleCount, skinned: true
+            )
+            pipelines = GLTFRenderer.PipelineStates(opaque: opaque, skinnedOpaque: skinned)
+        }
 
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .less
@@ -227,21 +273,56 @@ struct GLTFRenderCLI {
         }
 
         // --- Auto-framing -------------------------------------------------
-        // World bounds in GLTFAsset are best-effort (translation-only). Frame
-        // a comfortable camera distance from the bounds diagonal, looking at
-        // the bounds centre.
+        //
+        // Bounding-sphere fit: enclose the asset in a sphere centred at the
+        // bounds centroid with radius = half-diagonal. Position the camera
+        // far enough along the view direction that the sphere fits inside
+        // the FOV cone with `cameraDistancePadding` margin.
+
         let bMin = asset.worldBounds.min
         let bMax = asset.worldBounds.max
         let center = (bMin + bMax) * 0.5
-        let diag = simd_length(bMax - bMin)
-        // Fallback if bounds collapse (single-point assets like AnimatedCube).
-        let safeDiag = max(diag, 1.0)
-        let distance = max(safeDiag * opts.cameraDistanceScale, 1.0)
-        let eye = center + SIMD3<Float>(0.7, 0.5, 1.0) * distance
+        // Half-diagonal of the world-space AABB. The earlier `max(_, 0.5)`
+        // clamp made small assets like Avocado (~0.06m natural extent) get
+        // framed as if they were a 1m-radius sphere — camera too far,
+        // asset appears as a speck. Keep a tiny epsilon to avoid divide-
+        // by-zero on degenerate bounds; otherwise let the asset's real
+        // size drive the camera distance.
+        let computedRadius = simd_length(bMax - bMin) * 0.5
+        let radius = computedRadius > 1e-4 ? computedRadius : 1.0
 
         let aspect = Float(opts.width) / Float(opts.height)
-        let proj = perspectiveProjection(fovY: .pi / 4, aspect: aspect, near: 0.05, far: max(distance * 10, 100))
+        let fovY: Float = .pi / 4
+        // The vertical FOV is the tight axis when aspect ≥ 1; for wider
+        // outputs the horizontal would be tighter — use the smaller of the
+        // two to make the sphere fit on both axes.
+        let effectiveFov = aspect >= 1 ? fovY : 2 * atan(tan(fovY * 0.5) * aspect)
+        let fitDistance = radius / sin(effectiveFov * 0.5)
+        let distance = fitDistance * opts.cameraDistancePadding
+
+        // Camera direction: slightly above (y) and to the side (x), mostly
+        // along +Z so the camera looks toward -Z. Normalised so the
+        // distance is exactly `distance`.
+        let direction = normalize(SIMD3<Float>(0.5, 0.35, 1.0))
+        let eye = center + direction * distance
+
+        let proj = perspectiveProjection(fovY: fovY, aspect: aspect, near: max(distance * 0.01, 0.01), far: distance * 10)
         let view = lookAt(eye: eye, target: center, up: SIMD3<Float>(0, 1, 0))
+
+        if opts.printDiagnostics {
+            FileHandle.standardError.write(Data("""
+                [GLTFRender diagnostics]
+                  Asset bounds:    min=(\(bMin.x), \(bMin.y), \(bMin.z))  max=(\(bMax.x), \(bMax.y), \(bMax.z))
+                  Bounds center:   (\(center.x), \(center.y), \(center.z))
+                  Sphere radius:   \(radius)
+                  Effective FOV:   \(effectiveFov * 180 / .pi)°  (aspect \(aspect))
+                  Fit distance:    \(fitDistance)
+                  Eye position:    (\(eye.x), \(eye.y), \(eye.z))
+                  Draw calls:      \(asset.drawCalls.count)
+                  Animations:      \(asset.animations.count)
+                  Lights:          \(asset.lights.count)\n
+                """.utf8))
+        }
 
         // Pick draw calls (animated if a clip is asked for, else rest pose).
         let calls: [GLTFDrawCall]
@@ -264,17 +345,41 @@ struct GLTFRenderCLI {
 
         // --- Offscreen render pass ---------------------------------------
 
-        let colorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+        // Single-sample texture for PNG readback (also serves as the
+        // render target when MSAA is off, or the resolve target when on).
+        let resolveDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: colorFormat, width: opts.width, height: opts.height, mipmapped: false
         )
-        colorDescriptor.usage = [.renderTarget, .shaderRead]
-        colorDescriptor.storageMode = .shared
-        guard let colorTexture = device.makeTexture(descriptor: colorDescriptor) else {
+        resolveDescriptor.usage = [.renderTarget, .shaderRead]
+        resolveDescriptor.storageMode = .shared
+        guard let resolveTexture = device.makeTexture(descriptor: resolveDescriptor) else {
             throw GLTFRenderError.textureAllocationFailed
         }
-        let depthDescriptor2 = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: depthFormat, width: opts.width, height: opts.height, mipmapped: false
-        )
+
+        let colorTexture: MTLTexture
+        if opts.sampleCount > 1 {
+            let msaaColorDescriptor = MTLTextureDescriptor()
+            msaaColorDescriptor.textureType = .type2DMultisample
+            msaaColorDescriptor.pixelFormat = colorFormat
+            msaaColorDescriptor.width = opts.width
+            msaaColorDescriptor.height = opts.height
+            msaaColorDescriptor.sampleCount = opts.sampleCount
+            msaaColorDescriptor.usage = [.renderTarget]
+            msaaColorDescriptor.storageMode = .private
+            guard let t = device.makeTexture(descriptor: msaaColorDescriptor) else {
+                throw GLTFRenderError.textureAllocationFailed
+            }
+            colorTexture = t
+        } else {
+            colorTexture = resolveTexture
+        }
+
+        let depthDescriptor2 = MTLTextureDescriptor()
+        depthDescriptor2.textureType = opts.sampleCount > 1 ? .type2DMultisample : .type2D
+        depthDescriptor2.pixelFormat = depthFormat
+        depthDescriptor2.width = opts.width
+        depthDescriptor2.height = opts.height
+        depthDescriptor2.sampleCount = opts.sampleCount
         depthDescriptor2.usage = [.renderTarget]
         depthDescriptor2.storageMode = .private
         guard let depthTexture = device.makeTexture(descriptor: depthDescriptor2) else {
@@ -285,7 +390,12 @@ struct GLTFRenderCLI {
         renderPass.colorAttachments[0].texture = colorTexture
         renderPass.colorAttachments[0].loadAction = .clear
         renderPass.colorAttachments[0].clearColor = MTLClearColor(red: 0.08, green: 0.10, blue: 0.15, alpha: 1)
-        renderPass.colorAttachments[0].storeAction = .store
+        if opts.sampleCount > 1 {
+            renderPass.colorAttachments[0].resolveTexture = resolveTexture
+            renderPass.colorAttachments[0].storeAction = .multisampleResolve
+        } else {
+            renderPass.colorAttachments[0].storeAction = .store
+        }
         renderPass.depthAttachment.texture = depthTexture
         renderPass.depthAttachment.loadAction = .clear
         renderPass.depthAttachment.clearDepth = 1.0
@@ -310,7 +420,8 @@ struct GLTFRenderCLI {
             throw GLTFRenderError.commandBufferFailed(error.localizedDescription)
         }
 
-        try exportTexture(colorTexture, to: opts.outputPath)
-        print("✅ Wrote \(opts.outputPath) (\(opts.width)×\(opts.height), \(calls.count) draw calls)")
+        try exportTexture(resolveTexture, to: opts.outputPath)
+        let msaaTag = opts.sampleCount > 1 ? ", \(opts.sampleCount)× MSAA" : ""
+        print("✅ Wrote \(opts.outputPath) (\(opts.width)×\(opts.height), \(calls.count) draw calls\(msaaTag))")
     }
 }

@@ -74,6 +74,11 @@ public final class GLTFRenderer: @unchecked Sendable {
     public struct PipelineStates {
         public let opaque: MTLRenderPipelineState
         public let skinnedOpaque: MTLRenderPipelineState
+
+        public init(opaque: MTLRenderPipelineState, skinnedOpaque: MTLRenderPipelineState) {
+            self.opaque = opaque
+            self.skinnedOpaque = skinnedOpaque
+        }
     }
 
     /// Build both PBR pipeline states (non-skinned + skinned) in one call.
@@ -91,6 +96,33 @@ public final class GLTFRenderer: @unchecked Sendable {
             colorFormat: colorFormat, depthFormat: depthFormat, sampleCount: sampleCount
         )
         return PipelineStates(opaque: opaque, skinnedOpaque: skinned)
+    }
+
+    /// Pipeline that outputs world-space normals as RGB (debug aid).
+    /// Build alongside the opaque pipeline; use to confirm NORMAL accessor
+    /// decoding and per-vertex normal interpolation are working. See the
+    /// `gltf_debug_normals_fragment` shader.
+    public func makeDebugNormalsPipelineState(
+        colorFormat: MTLPixelFormat,
+        depthFormat: MTLPixelFormat,
+        sampleCount: Int = 1,
+        skinned: Bool = false
+    ) throws -> MTLRenderPipelineState {
+        let vertexFnName = skinned ? "gltf_pbr_vertex_skinned" : "gltf_pbr_vertex"
+        guard let vertexFn = library.makeFunction(name: vertexFnName) else {
+            throw GLTFRendererError.missingShaderFunction(name: vertexFnName)
+        }
+        guard let fragmentFn = library.makeFunction(name: "gltf_debug_normals_fragment") else {
+            throw GLTFRendererError.missingShaderFunction(name: "gltf_debug_normals_fragment")
+        }
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = vertexFn
+        descriptor.fragmentFunction = fragmentFn
+        descriptor.vertexDescriptor = skinned ? Self.makeSkinnedVertexDescriptor() : Self.makeVertexDescriptor()
+        descriptor.colorAttachments[0].pixelFormat = colorFormat
+        descriptor.depthAttachmentPixelFormat = depthFormat
+        descriptor.rasterSampleCount = sampleCount
+        return try device.makeRenderPipelineState(descriptor: descriptor)
     }
 
     /// Skinned-variant pipeline. Same fragment as the opaque pipeline; the

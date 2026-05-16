@@ -293,6 +293,18 @@ vertex GLTFVertexOut gltf_pbr_vertex_skinned(
 
 // MARK: - Fragment
 
+/// Debug fragment that outputs the world-space normal mapped from [-1, 1] to
+/// [0, 1] as RGB. Used by GLTFRender's `--debug normals` mode to confirm the
+/// NORMAL accessor is being decoded correctly and the per-vertex normals are
+/// being smoothly interpolated by the rasterizer. A face-shaded mesh shows
+/// uniform RGB per face; a smooth-shaded mesh shows continuous gradients.
+fragment float4 gltf_debug_normals_fragment(
+    GLTFVertexOut in [[stage_in]]
+) {
+    float3 N = normalize(in.worldNormal);
+    return float4(N * 0.5 + 0.5, 1.0);
+}
+
 fragment float4 gltf_pbr_fragment(
     GLTFVertexOut in [[stage_in]],
     constant GLTFFrameUniforms& frame [[buffer(kFrameUniformsIndex)]],

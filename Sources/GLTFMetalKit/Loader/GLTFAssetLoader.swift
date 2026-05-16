@@ -711,6 +711,11 @@ public final class GLTFAssetLoader {
         let skinJoints: [SIMD4<UInt16>]?
         /// Per-vertex WEIGHTS_0. Same conditions as `skinJoints`.
         let skinWeights: [SIMD4<Float>]?
+        /// Object-space AABB over POSITION. Used by scene traversal to
+        /// build the asset's world-space bounds (camera auto-framing reads
+        /// these).
+        let localMin: SIMD3<Float>
+        let localMax: SIMD3<Float>
     }
 
     /// Returns the primitive build result or `nil` if the primitive should be skipped
@@ -736,6 +741,15 @@ public final class GLTFAssetLoader {
         }
         let vertexCount = positions.count / 3
         guard vertexCount > 0 else { return nil }
+
+        // Object-space AABB sweep — used downstream for camera auto-framing.
+        var localMin = SIMD3<Float>(positions[0], positions[1], positions[2])
+        var localMax = localMin
+        for v in 1..<vertexCount {
+            let p = SIMD3<Float>(positions[v*3 + 0], positions[v*3 + 1], positions[v*3 + 2])
+            localMin = simd_min(localMin, p)
+            localMax = simd_max(localMax, p)
+        }
 
         // Optional attributes — synthesise reasonable defaults when absent.
         let normals: [Float]
@@ -954,7 +968,9 @@ public final class GLTFAssetLoader {
             materialIndex: gltf.material,
             morphData: morphData,
             skinJoints: skinJoints,
-            skinWeights: skinWeights
+            skinWeights: skinWeights,
+            localMin: localMin,
+            localMax: localMax
         )
     }
 
@@ -1031,14 +1047,36 @@ public final class GLTFAssetLoader {
                     skinPalette: skinPalette
                 ))
 
-                // World-bounds rough estimate — transform every vertex would be
-                // accurate but expensive; cheap path is to skip per-primitive
-                // exact bounds and rely on the camera framing being adjusted by
-                // the caller. The world-bounds value is best-effort.
-                let origin = worldMatrix.columns.3
-                let translation = SIMD3<Float>(origin.x, origin.y, origin.z)
-                worldMin = simd_min(worldMin, translation)
-                worldMax = simd_max(worldMax, translation)
+                // World-space AABB. Two paths because the POSITION attribute
+                // means different things for skinned vs non-skinned meshes:
+                //
+                // - Non-skinned: POSITION is in mesh-local space; transform
+                //   the local AABB by the node's world matrix.
+                // - Skinned: POSITION is in joint-local space (per glTF spec),
+                //   and the joint matrices encode the world transform. The
+                //   *vertex* AABB at bind pose equals the local POSITION AABB,
+                //   but in a coordinate system that's only meaningful after
+                //   skinning. For camera framing we want the bounds of where
+                //   the figure actually appears in world space — that's the
+                //   bounds of the joint world positions (the skeleton extent).
+                //   Approximation: union of joint translations from the bind-
+                //   pose skin palette, padded slightly to account for vertices
+                //   extending beyond the skeleton (fingertips past wrists, etc.).
+                if mesh.isSkinned, let nodeSkin = node.skin, nodeSkin < skinDefinitions.count {
+                    let skin = skinDefinitions[nodeSkin]
+                    for jointNode in skin.jointNodeIndices where jointNode < nodeWorldMatrices.count {
+                        let t = nodeWorldMatrices[jointNode].columns.3
+                        let p = SIMD3<Float>(t.x, t.y, t.z)
+                        worldMin = simd_min(worldMin, p)
+                        worldMax = simd_max(worldMax, p)
+                    }
+                } else {
+                    let (transformedMin, transformedMax) = Self.transformAABB(
+                        min: entry.localMin, max: entry.localMax, by: worldMatrix
+                    )
+                    worldMin = simd_min(worldMin, transformedMin)
+                    worldMax = simd_max(worldMax, transformedMax)
+                }
                 foundBounds = true
             }
         }
@@ -1131,6 +1169,35 @@ public final class GLTFAssetLoader {
         for root in scenes[sceneIndex].nodes ?? [] {
             walk(root, parent: matrix_identity_float4x4)
         }
+    }
+
+    /// Transform an object-space AABB by a 4×4 matrix, returning the
+    /// world-space AABB. Transforms all 8 corners and recomputes min/max
+    /// — exact for affine matrices, conservative for projective ones.
+    internal static func transformAABB(
+        min lmin: SIMD3<Float>,
+        max lmax: SIMD3<Float>,
+        by matrix: simd_float4x4
+    ) -> (SIMD3<Float>, SIMD3<Float>) {
+        let corners: [SIMD3<Float>] = [
+            SIMD3(lmin.x, lmin.y, lmin.z),
+            SIMD3(lmax.x, lmin.y, lmin.z),
+            SIMD3(lmin.x, lmax.y, lmin.z),
+            SIMD3(lmax.x, lmax.y, lmin.z),
+            SIMD3(lmin.x, lmin.y, lmax.z),
+            SIMD3(lmax.x, lmin.y, lmax.z),
+            SIMD3(lmin.x, lmax.y, lmax.z),
+            SIMD3(lmax.x, lmax.y, lmax.z),
+        ]
+        var wmin = SIMD3<Float>(repeating: Float.infinity)
+        var wmax = SIMD3<Float>(repeating: -Float.infinity)
+        for c in corners {
+            let p4 = matrix * SIMD4<Float>(c.x, c.y, c.z, 1)
+            let p = SIMD3<Float>(p4.x, p4.y, p4.z)
+            wmin = simd_min(wmin, p)
+            wmax = simd_max(wmax, p)
+        }
+        return (wmin, wmax)
     }
 
     private static func localMatrix(for node: GLTFNode) -> simd_float4x4 {
