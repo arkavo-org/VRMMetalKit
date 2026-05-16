@@ -33,6 +33,12 @@ public enum GLTFShaderBindings {
     public static let frameUniforms = 1
     /// Per-draw material uniforms (factors, flags).
     public static let materialUniforms = 2
+    /// Per-frame punctual-light array (KHR_lights_punctual).
+    public static let lightsBuffer = 3
+
+    /// Hard cap on per-draw punctual lights. Must match `kMaxPunctualLights`
+    /// in the Metal shader.
+    public static let maxPunctualLights = 8
 
     // MARK: Textures
 
@@ -78,6 +84,13 @@ public struct GLTFFrameUniforms {
     /// Set to `0` to fall back to the gray-ambient path (no real IBL bound);
     /// otherwise pass `Float(environment.specularMipCount)`.
     public var specularMipCount: Float
+    /// Number of valid entries in the punctual-light buffer. `0` selects the
+    /// fallback `lightDirection` / `lightColor`; otherwise the shader loops
+    /// over the bound `GLTFPunctualLightUniform` array.
+    public var lightCount: UInt32
+    public var _pad2: UInt32 = 0
+    public var _pad3: UInt32 = 0
+    public var _pad4: UInt32 = 0
 
     public init(
         viewProjection: simd_float4x4,
@@ -86,7 +99,8 @@ public struct GLTFFrameUniforms {
         cameraPosition: SIMD3<Float>,
         lightDirection: SIMD3<Float>,
         lightColor: SIMD3<Float>,
-        specularMipCount: Float
+        specularMipCount: Float,
+        lightCount: UInt32 = 0
     ) {
         self.viewProjection = viewProjection
         self.model = model
@@ -95,6 +109,56 @@ public struct GLTFFrameUniforms {
         self.lightDirection = lightDirection
         self.lightColor = lightColor
         self.specularMipCount = specularMipCount
+        self.lightCount = lightCount
+    }
+}
+
+/// KHR_lights_punctual light type. Must match the `kLightType*` constants in
+/// `GLTFPBRShader.metal`.
+public enum GLTFLightType: UInt32, Sendable {
+    case directional = 0
+    case point       = 1
+    case spot        = 2
+}
+
+/// Per-light shader uniform — fixed-stride GPU layout matching
+/// `GLTFPunctualLight` in `GLTFPBRShader.metal`.
+public struct GLTFPunctualLightUniform {
+    /// World-space position. Ignored for `.directional`.
+    public var position: SIMD3<Float>
+    /// Light type encoded as `GLTFLightType.rawValue`.
+    public var type: UInt32
+    /// World-space direction the light travels. Ignored for `.point`.
+    public var direction: SIMD3<Float>
+    /// Cosine of the spot inner-cone half-angle (1 for non-spot).
+    public var innerConeCos: Float
+    /// Linear RGB pre-multiplied by intensity.
+    public var color: SIMD3<Float>
+    /// Cosine of the spot outer-cone half-angle (-1 for non-spot).
+    public var outerConeCos: Float
+    /// Point/spot falloff range in world units. `0` = infinite (no falloff).
+    public var range: Float
+    public var _pad0: Float = 0
+    public var _pad1: Float = 0
+    public var _pad2: Float = 0
+
+    public init(
+        type: GLTFLightType,
+        color: SIMD3<Float>,
+        intensity: Float = 1,
+        position: SIMD3<Float> = .zero,
+        direction: SIMD3<Float> = SIMD3<Float>(0, -1, 0),
+        range: Float = 0,
+        innerConeAngle: Float = 0,
+        outerConeAngle: Float = .pi / 4
+    ) {
+        self.type = type.rawValue
+        self.position = position
+        self.direction = direction
+        self.color = color * intensity
+        self.range = range
+        self.innerConeCos = type == .spot ? cos(innerConeAngle) : 1
+        self.outerConeCos = type == .spot ? cos(outerConeAngle) : -1
     }
 }
 

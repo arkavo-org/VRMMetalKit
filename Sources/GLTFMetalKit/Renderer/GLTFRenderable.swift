@@ -157,27 +157,36 @@ public struct GLTFDrawCall {
     }
 }
 
-/// Per-frame scene state — camera + single directional light.
+/// Per-frame scene state — camera plus either a single directional fallback
+/// light or an array of `KHR_lights_punctual` lights.
 ///
-/// Punctual-light arrays (`KHR_lights_punctual`) come in step 4c; this type
-/// will grow a `lights:` collection then.
+/// When `lights` is non-empty the shader iterates that array (clamped to
+/// `GLTFShaderBindings.maxPunctualLights`). When it's empty the shader
+/// falls back to `lightDirection` + `lightColor`. The fallback lets a
+/// caller render an asset without parsing the extension at all.
 public struct GLTFSceneState {
     public var viewProjection: simd_float4x4
     public var cameraPosition: SIMD3<Float>
-    /// World-space direction the light travels (i.e. points *from* sun *into* scene).
+    /// Default fallback when `lights` is empty. World-space direction the
+    /// light travels (points *from* sun *into* scene).
     public var lightDirection: SIMD3<Float>
-    /// Linear RGB, pre-multiplied by intensity.
+    /// Default fallback when `lights` is empty. Linear RGB, intensity pre-multiplied.
     public var lightColor: SIMD3<Float>
+    /// `KHR_lights_punctual` array. Empty → fallback path. Capped at
+    /// `GLTFShaderBindings.maxPunctualLights` when bound.
+    public var lights: [GLTFPunctualLightUniform]
 
     public init(
         viewProjection: simd_float4x4,
         cameraPosition: SIMD3<Float>,
         lightDirection: SIMD3<Float> = normalize(SIMD3<Float>(0.3, -1.0, -0.4)),
-        lightColor: SIMD3<Float> = SIMD3<Float>(3.0, 3.0, 3.0)
+        lightColor: SIMD3<Float> = SIMD3<Float>(3.0, 3.0, 3.0),
+        lights: [GLTFPunctualLightUniform] = []
     ) {
         self.viewProjection = viewProjection
         self.cameraPosition = cameraPosition
         self.lightDirection = lightDirection
         self.lightColor = lightColor
+        self.lights = lights
     }
 }

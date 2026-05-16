@@ -41,6 +41,17 @@ using namespace metal;
 // Single source of truth in Swift; keep these in sync if they change.
 constant int kFrameUniformsIndex    = 1;
 constant int kMaterialUniformsIndex = 2;
+constant int kLightsBufferIndex     = 3;
+
+// Maximum number of punctual lights bound per draw. KHR_lights_punctual
+// scenes that exceed this are clamped — the renderer drops the rest with
+// a log. 8 is the conventional small-scene budget; tuneable.
+constant uint kMaxPunctualLights = 8u;
+
+// Light type enum — mirrors KHR_lights_punctual + GLTFLightType in Swift.
+constant uint kLightTypeDirectional = 0u;
+constant uint kLightTypePoint       = 1u;
+constant uint kLightTypeSpot        = 2u;
 
 // MARK: - Texture indices
 constant int kBaseColorTextureIndex          = 0;
@@ -76,10 +87,41 @@ struct GLTFFrameUniforms {
     float3x3 normalMatrix;
     float3 cameraPosition;
     float _pad0;
-    float3 lightDirection;   // World-space, points *from* the light *toward* the scene
+    /// Default-fallback directional light, used when `lightCount == 0`.
+    /// World-space, points *from* the light *toward* the scene.
+    float3 lightDirection;
     float _pad1;
-    float3 lightColor;       // Linear RGB, pre-multiplied by intensity
-    float specularMipCount;  // Number of mip levels in the prefiltered specular cubemap. 0 falls back to the gray ambient.
+    /// Linear RGB, pre-multiplied by intensity.
+    float3 lightColor;
+    /// Number of mip levels in the prefiltered specular cubemap.
+    /// 0 falls back to the gray ambient.
+    float specularMipCount;
+    /// Number of valid entries in the punctual-light buffer. 0 = use the
+    /// fallback lightDirection/lightColor above.
+    uint lightCount;
+    float _pad2;
+    float _pad3;
+    float _pad4;
+};
+
+struct GLTFPunctualLight {
+    /// World-space position (point + spot).
+    float3 position;
+    /// One of kLightType* — must match GLTFLightType in Swift.
+    uint type;
+    /// World-space direction the light travels (directional + spot).
+    float3 direction;
+    /// Spot inner-cone cosine (light type spot only; 1.0 for others).
+    float innerConeCos;
+    /// Linear RGB pre-multiplied by intensity.
+    float3 color;
+    /// Spot outer-cone cosine (light type spot only; -1.0 for others).
+    float outerConeCos;
+    /// Point/spot falloff range in world units. 0 = infinite (no falloff).
+    float range;
+    float _pad0;
+    float _pad1;
+    float _pad2;
 };
 
 struct GLTFMaterialUniforms {
@@ -207,6 +249,7 @@ fragment float4 gltf_pbr_fragment(
     GLTFVertexOut in [[stage_in]],
     constant GLTFFrameUniforms& frame [[buffer(kFrameUniformsIndex)]],
     constant GLTFMaterialUniforms& material [[buffer(kMaterialUniformsIndex)]],
+    constant GLTFPunctualLight* lights [[buffer(kLightsBufferIndex)]],
     texture2d<float>   baseColorTexture          [[texture(kBaseColorTextureIndex)]],
     texture2d<float>   metallicRoughnessTexture  [[texture(kMetallicRoughnessTextureIndex)]],
     texture2d<float>   normalTexture             [[texture(kNormalTextureIndex)]],
@@ -270,26 +313,80 @@ fragment float4 gltf_pbr_fragment(
         N = normalize(in.worldNormal);
     }
     float3 V = normalize(frame.cameraPosition - in.worldPosition);
-    float3 L = normalize(-frame.lightDirection);
-    float3 H = normalize(V + L);
-    float NdotL = saturate(dot(N, L));
     float NdotV = saturate(dot(N, V));
-    float NdotH = saturate(dot(N, H));
-    float VdotH = saturate(dot(V, H));
 
     // --- BRDF ---------------------------------------------------------------
 
     float3 F0  = mix(float3(0.04), baseColor.rgb, metallic);
-    float3 F   = fresnelSchlick(VdotH, F0);
-    float  D   = distributionGGX(NdotH, roughness);
-    float  G   = geometrySmith(NdotV, NdotL, roughness);
 
-    float3 specular = (D * G) * F / max(4.0 * NdotL * NdotV, 1e-4);
-    float3 kS = F;
-    float3 kD = (1.0 - kS) * (1.0 - metallic);
-    float3 diffuse = kD * baseColor.rgb / M_PI_F;
+    // Direct lighting — punctual-light array (KHR_lights_punctual) when
+    // bound, falling back to the single directional light in frame uniforms.
+    float3 direct = float3(0.0);
 
-    float3 direct = (diffuse + specular) * frame.lightColor * NdotL;
+    uint lightCount = min(frame.lightCount, kMaxPunctualLights);
+    if (lightCount == 0u) {
+        // Fallback: one default directional light from the frame uniforms.
+        float3 L = normalize(-frame.lightDirection);
+        float3 H = normalize(V + L);
+        float NdotL = saturate(dot(N, L));
+        float NdotH = saturate(dot(N, H));
+        float VdotH = saturate(dot(V, H));
+
+        float3 F = fresnelSchlick(VdotH, F0);
+        float  D = distributionGGX(NdotH, roughness);
+        float  G = geometrySmith(NdotV, NdotL, roughness);
+
+        float3 spec = (D * G) * F / max(4.0 * NdotL * NdotV, 1e-4);
+        float3 kS = F;
+        float3 kD = (1.0 - kS) * (1.0 - metallic);
+        float3 diff = kD * baseColor.rgb / M_PI_F;
+        direct = (diff + spec) * frame.lightColor * NdotL;
+    } else {
+        for (uint i = 0u; i < lightCount; ++i) {
+            constant GLTFPunctualLight& light = lights[i];
+
+            // Per-type L and attenuation.
+            float3 toLight;
+            float attenuation = 1.0;
+            if (light.type == kLightTypeDirectional) {
+                toLight = -light.direction;
+            } else if (light.type == kLightTypePoint || light.type == kLightTypeSpot) {
+                float3 delta = light.position - in.worldPosition;
+                float dist = length(delta);
+                toLight = delta / max(dist, 1e-4);
+                if (light.range > 0.0) {
+                    float t = saturate(1.0 - pow(dist / light.range, 4.0));
+                    attenuation = t * t / max(dist * dist, 1e-4);
+                } else {
+                    attenuation = 1.0 / max(dist * dist, 1e-4);
+                }
+                if (light.type == kLightTypeSpot) {
+                    float spotCos = dot(toLight, -light.direction);
+                    float spotFactor = saturate((spotCos - light.outerConeCos) /
+                                                max(light.innerConeCos - light.outerConeCos, 1e-4));
+                    attenuation *= spotFactor;
+                }
+            } else {
+                continue;
+            }
+
+            float3 L = normalize(toLight);
+            float3 H = normalize(V + L);
+            float NdotL = saturate(dot(N, L));
+            if (NdotL <= 0.0) continue;
+            float NdotH = saturate(dot(N, H));
+            float VdotH = saturate(dot(V, H));
+
+            float3 F = fresnelSchlick(VdotH, F0);
+            float  D = distributionGGX(NdotH, roughness);
+            float  G = geometrySmith(NdotV, NdotL, roughness);
+            float3 spec = (D * G) * F / max(4.0 * NdotL * NdotV, 1e-4);
+            float3 kS = F;
+            float3 kD = (1.0 - kS) * (1.0 - metallic);
+            float3 diff = kD * baseColor.rgb / M_PI_F;
+            direct += (diff + spec) * light.color * NdotL * attenuation;
+        }
+    }
 
     // --- IBL split-sum (Karis 2013) -----------------------------------------
     //

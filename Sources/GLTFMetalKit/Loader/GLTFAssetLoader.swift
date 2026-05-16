@@ -37,6 +37,12 @@ public struct GLTFAsset {
     /// Axis-aligned bounding box in world space, computed from per-primitive
     /// position bounds. Useful for auto-framing a camera.
     public let worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)
+
+    /// `KHR_lights_punctual` lights, accumulated in scene-traversal order with
+    /// their world-space position/direction baked in. Empty when the extension
+    /// is absent. Pass to ``GLTFSceneState/lights`` to drive the shader's
+    /// punctual-light array.
+    public let lights: [GLTFPunctualLightUniform]
 }
 
 /// Loads a glTF 2.0 asset from a `.glb` or `.gltf` file into a
@@ -146,7 +152,12 @@ public final class GLTFAssetLoader {
         // local→world transforms via TRS multiplication, and flatten into draw
         // calls. World bounds are unioned across primitives.
 
+        // KHR_lights_punctual — root document extension carries the light
+        // definitions; nodes attach lights via `extensions.KHR_lights_punctual.light`.
+        let lightDefinitions = Self.parseLightDefinitions(from: document)
+
         var drawCalls: [GLTFDrawCall] = []
+        var lights: [GLTFPunctualLightUniform] = []
         var worldMin = SIMD3<Float>(repeating: Float.infinity)
         var worldMax = SIMD3<Float>(repeating: -Float.infinity)
         var foundBounds = false
@@ -163,7 +174,9 @@ public final class GLTFAssetLoader {
                     runtimePrimitives: runtimePrimitives,
                     runtimeMaterials: runtimeMaterials,
                     defaultMaterial: defaultMaterial,
+                    lightDefinitions: lightDefinitions,
                     drawCalls: &drawCalls,
+                    lights: &lights,
                     worldMin: &worldMin,
                     worldMax: &worldMax,
                     foundBounds: &foundBounds
@@ -182,8 +195,108 @@ public final class GLTFAssetLoader {
         return GLTFAsset(
             drawCalls: drawCalls,
             textures: retainedTextures,
-            worldBounds: (min: worldMin, max: worldMax)
+            worldBounds: (min: worldMin, max: worldMax),
+            lights: lights
         )
+    }
+
+    // MARK: - KHR_lights_punctual
+
+    /// Light definition decoded from `document.extensions.KHR_lights_punctual.lights`.
+    /// Type is canonicalised; transforms come from the referencing node.
+    private struct LightDefinition {
+        let type: GLTFLightType
+        let color: SIMD3<Float>
+        let intensity: Float
+        let range: Float
+        let innerConeAngle: Float
+        let outerConeAngle: Float
+    }
+
+    /// Parses the root-level `KHR_lights_punctual` extension into typed
+    /// definitions, indexed parallel to the JSON `lights` array.
+    private static func parseLightDefinitions(from document: GLTFDocument) -> [LightDefinition] {
+        guard let extensions = document.extensions,
+              let khr = extensions["KHR_lights_punctual"] as? [String: Any],
+              let lightsArray = khr["lights"] as? [Any] else {
+            return []
+        }
+
+        var result: [LightDefinition] = []
+        result.reserveCapacity(lightsArray.count)
+        for raw in lightsArray {
+            guard let dict = raw as? [String: Any] else { continue }
+
+            let typeString = (dict["type"] as? String) ?? "directional"
+            let type: GLTFLightType
+            switch typeString {
+            case "point":       type = .point
+            case "spot":        type = .spot
+            default:            type = .directional
+            }
+
+            let color: SIMD3<Float>
+            if let rgb = dict["color"] as? [Any], rgb.count >= 3 {
+                color = SIMD3<Float>(asFloat(rgb[0]), asFloat(rgb[1]), asFloat(rgb[2]))
+            } else {
+                color = SIMD3<Float>(1, 1, 1)
+            }
+            let intensity = asFloat(dict["intensity"] ?? 1.0, defaultValue: 1)
+            let range = asFloat(dict["range"] ?? 0.0, defaultValue: 0)
+
+            // Spot-specific cone angles live under `spot: { innerConeAngle, outerConeAngle }`.
+            var innerCone: Float = 0
+            var outerCone: Float = .pi / 4
+            if type == .spot, let spotDict = dict["spot"] as? [String: Any] {
+                innerCone = asFloat(spotDict["innerConeAngle"] ?? 0.0, defaultValue: 0)
+                outerCone = asFloat(spotDict["outerConeAngle"] ?? Double.pi / 4, defaultValue: .pi / 4)
+            }
+
+            result.append(LightDefinition(
+                type: type,
+                color: color,
+                intensity: intensity,
+                range: range,
+                innerConeAngle: innerCone,
+                outerConeAngle: outerCone
+            ))
+        }
+        return result
+    }
+
+    /// Builds a per-frame ``GLTFPunctualLightUniform`` for a light attached to a
+    /// node, baking the world transform into position/direction.
+    private static func makeLightUniform(
+        definition: LightDefinition,
+        worldMatrix: simd_float4x4
+    ) -> GLTFPunctualLightUniform {
+        // glTF: a light at a node points down -Z in the node's local space.
+        // World position is the node's translation column.
+        let origin = worldMatrix.columns.3
+        let position = SIMD3<Float>(origin.x, origin.y, origin.z)
+
+        // World-space -Z axis from the upper-left 3×3 (no perspective).
+        let localForward = SIMD4<Float>(0, 0, -1, 0)
+        let world4 = worldMatrix * localForward
+        let direction = normalize(SIMD3<Float>(world4.x, world4.y, world4.z))
+
+        return GLTFPunctualLightUniform(
+            type: definition.type,
+            color: definition.color,
+            intensity: definition.intensity,
+            position: position,
+            direction: direction,
+            range: definition.range,
+            innerConeAngle: definition.innerConeAngle,
+            outerConeAngle: definition.outerConeAngle
+        )
+    }
+
+    private static func asFloat(_ value: Any, defaultValue: Float = 0) -> Float {
+        if let d = value as? Double { return Float(d) }
+        if let i = value as? Int { return Float(i) }
+        if let f = value as? Float { return f }
+        return defaultValue
     }
 
     // MARK: - Material decoding
@@ -404,7 +517,9 @@ public final class GLTFAssetLoader {
         runtimePrimitives: [[(GLTFRenderableMesh, Int?)?]],
         runtimeMaterials: [GLTFRenderableMaterial],
         defaultMaterial: GLTFRenderableMaterial,
+        lightDefinitions: [LightDefinition],
         drawCalls: inout [GLTFDrawCall],
+        lights: inout [GLTFPunctualLightUniform],
         worldMin: inout SIMD3<Float>,
         worldMax: inout SIMD3<Float>,
         foundBounds: inout Bool
@@ -438,6 +553,18 @@ public final class GLTFAssetLoader {
             }
         }
 
+        // KHR_lights_punctual — `node.extensions.KHR_lights_punctual.light` references the doc light array.
+        if let nodeExtensions = node.extensions,
+           let khrWrapper = nodeExtensions["KHR_lights_punctual"],
+           let khrDict = khrWrapper.value as? [String: Any],
+           let lightIndex = khrDict["light"] as? Int,
+           lightIndex < lightDefinitions.count {
+            lights.append(makeLightUniform(
+                definition: lightDefinitions[lightIndex],
+                worldMatrix: worldMatrix
+            ))
+        }
+
         for child in node.children ?? [] {
             traverse(
                 nodeIndex: child,
@@ -446,7 +573,9 @@ public final class GLTFAssetLoader {
                 runtimePrimitives: runtimePrimitives,
                 runtimeMaterials: runtimeMaterials,
                 defaultMaterial: defaultMaterial,
+                lightDefinitions: lightDefinitions,
                 drawCalls: &drawCalls,
+                lights: &lights,
                 worldMin: &worldMin,
                 worldMax: &worldMax,
                 foundBounds: &foundBounds

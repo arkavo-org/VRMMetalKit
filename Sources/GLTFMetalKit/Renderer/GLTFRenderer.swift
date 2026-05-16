@@ -183,6 +183,15 @@ public final class GLTFRenderer: @unchecked Sendable {
         let defaultColor = defaultWhiteTexture
         let defaultLinear = defaultLinearTexture
 
+        // Per-scene punctual lights — bound once, scoped to the whole batch.
+        // Clamp to the shader's hard cap; anything past is silently dropped.
+        let lightCount = min(scene.lights.count, GLTFShaderBindings.maxPunctualLights)
+        if lightCount > 0 {
+            var lightArray = Array(scene.lights.prefix(lightCount))
+            let bufferSize = lightArray.count * MemoryLayout<GLTFPunctualLightUniform>.stride
+            encoder.setFragmentBytes(&lightArray, length: bufferSize, index: GLTFShaderBindings.lightsBuffer)
+        }
+
         for call in calls {
             // Per-draw frame uniforms — model + normal matrix differ per call.
             let normalMatrix = Self.normalMatrix(from: call.modelMatrix)
@@ -193,7 +202,8 @@ public final class GLTFRenderer: @unchecked Sendable {
                 cameraPosition: scene.cameraPosition,
                 lightDirection: scene.lightDirection,
                 lightColor: scene.lightColor,
-                specularMipCount: Float(environment.specularMipCount)
+                specularMipCount: Float(environment.specularMipCount),
+                lightCount: UInt32(lightCount)
             )
             encoder.setVertexBytes(&frame, length: MemoryLayout<GLTFFrameUniforms>.stride, index: GLTFShaderBindings.frameUniforms)
             encoder.setFragmentBytes(&frame, length: MemoryLayout<GLTFFrameUniforms>.stride, index: GLTFShaderBindings.frameUniforms)
