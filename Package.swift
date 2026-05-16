@@ -27,6 +27,10 @@ let package = Package(
         .library(
             name: "VRMMetalKit",
             targets: ["VRMMetalKit"]
+        ),
+        .library(
+            name: "GLTFMetalKit",
+            targets: ["GLTFMetalKit"]
         )
     ],
     dependencies: [
@@ -35,6 +39,19 @@ let package = Package(
     targets: [
         .target(
             name: "GLTFCore",
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
+        ),
+        .target(
+            name: "GLTFMetalKit",
+            dependencies: ["GLTFCore"],
+            exclude: [
+                "Shaders/GLTFPBRShader.metal"
+            ],
+            resources: [
+                .copy("Resources/GLTFMetalKitShaders.metallib")
+            ],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
@@ -87,6 +104,10 @@ let package = Package(
             resources: [
                 .copy("TestData")
             ]
+        ),
+        .testTarget(
+            name: "GLTFMetalKitTests",
+            dependencies: ["GLTFMetalKit"]
         ),
     ]
 )
