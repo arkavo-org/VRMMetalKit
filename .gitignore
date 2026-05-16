@@ -35,6 +35,7 @@ tmp/
 !Tests/GLTFMetalKitTests/TestData/AnimatedCube.bin
 !Tests/GLTFMetalKitTests/TestData/AnimatedCube_BaseColor.png
 !Tests/GLTFMetalKitTests/TestData/BoxAnimated.glb
+!Tests/GLTFMetalKitTests/TestData/AnimatedMorphCube.glb
 
 # Test model symlinks (use ENV VAR instead)
 /Seed-san.vrm

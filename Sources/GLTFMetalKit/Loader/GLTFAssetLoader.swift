@@ -57,10 +57,17 @@ public struct GLTFAsset {
     // draw calls at arbitrary times without re-decoding buffers.
 
     internal let _document: GLTFDocument
-    internal let _runtimePrimitives: [[(GLTFRenderableMesh, Int?)?]]
+    internal let _runtimePrimitives: [[GLTFAssetLoader.PrimitiveBuildResult?]]
     internal let _runtimeMaterials: [GLTFRenderableMaterial]
     internal let _defaultMaterial: GLTFRenderableMaterial
     internal let _skinDefinitions: [GLTFAssetLoader.SkinDefinition]
+    /// Metal device retained so animated rebuilds can allocate fresh
+    /// vertex buffers when morph weights change.
+    internal let _device: MTLDevice
+    /// Default per-mesh morph weights authored on the glTF mesh
+    /// (`mesh.weights`), parallel to `_document.meshes`. Used as the
+    /// starting point for any per-frame `.weights` channel samples.
+    internal let _defaultMeshWeights: [[Float]]
 
     /// Re-evaluates the scene at a given animation time and returns a
     /// fresh draw list. The asset itself is unchanged — pass the result
@@ -92,7 +99,13 @@ public struct GLTFAsset {
             }
         }
 
-        // 2. Sample each channel at `time` and overwrite the relevant TRS.
+        // Per-mesh weights — start from the default per-mesh `weights`,
+        // overwrite from any `.weights` animation channel hitting a node
+        // whose mesh ends up here.
+        var meshWeights: [Int: [Float]] = [:]
+
+        // 2. Sample each channel at `time` and overwrite the relevant TRS
+        //    or per-node morph weights.
         for channel in clip.channels {
             let n = channel.targetNode
             guard n >= 0, n < nodes.count else { continue }
@@ -105,8 +118,11 @@ public struct GLTFAsset {
             case .scale where v.count >= 3:
                 scales[n] = SIMD3<Float>(v[0], v[1], v[2])
             case .weights:
-                // Morph-target weights — Phase 3b morphs, not wired yet.
-                break
+                // glTF spec: `weights` animates the mesh attached to this node.
+                // The sampler emits one float per morph target per keyframe.
+                if let meshIdx = nodes[n].mesh {
+                    meshWeights[meshIdx] = v
+                }
             default:
                 break
             }
@@ -150,8 +166,15 @@ public struct GLTFAsset {
                 }
             }()
 
+            // Effective weights for this mesh, defaulting to whatever was
+            // authored on the glTF mesh itself.
+            let effectiveWeights = meshWeights[meshIndex]
+                ?? (meshIndex < _defaultMeshWeights.count ? _defaultMeshWeights[meshIndex] : [])
+
             for entry in _runtimePrimitives[meshIndex] {
-                guard let (mesh, materialIndex) = entry else { continue }
+                guard let entry = entry else { continue }
+                let mesh = entry.mesh
+                let materialIndex = entry.materialIndex
                 let material: GLTFRenderableMaterial = {
                     if let idx = materialIndex, idx < _runtimeMaterials.count {
                         return _runtimeMaterials[idx]
@@ -159,7 +182,37 @@ public struct GLTFAsset {
                     return _defaultMaterial
                 }()
                 let model = (mesh.isSkinned && skinPalette != nil) ? matrix_identity_float4x4 : worldMatrix
-                rebuilt.append(GLTFDrawCall(mesh: mesh, material: material, modelMatrix: model, skinPalette: skinPalette))
+
+                // Morph pre-pass — if this primitive has morph data and any
+                // weight is non-zero, blend on CPU and upload a fresh vertex
+                // buffer. The original mesh stays untouched on the asset;
+                // we just emit a draw call referencing the new buffer.
+                let drawMesh: GLTFRenderableMesh
+                if let morph = entry.morphData,
+                   !effectiveWeights.isEmpty,
+                   effectiveWeights.contains(where: { $0 != 0 }) {
+                    let morphedVerts = morph.morphedVertices(weights: effectiveWeights)
+                    let stride = MemoryLayout<GLTFRenderableVertex>.stride
+                    if let newBuffer = morphedVerts.withUnsafeBufferPointer({ ptr in
+                        _device.makeBuffer(bytes: ptr.baseAddress!, length: morphedVerts.count * stride, options: [])
+                    }) {
+                        drawMesh = GLTFRenderableMesh(
+                            vertexBuffer: newBuffer,
+                            vertexCount: morphedVerts.count,
+                            indexBuffer: mesh.indexBuffer,
+                            indexCount: mesh.indexCount,
+                            indexType: mesh.indexType,
+                            primitiveType: mesh.primitiveType,
+                            isSkinned: false
+                        )
+                    } else {
+                        drawMesh = mesh
+                    }
+                } else {
+                    drawMesh = mesh
+                }
+
+                rebuilt.append(GLTFDrawCall(mesh: drawMesh, material: material, modelMatrix: model, skinPalette: skinPalette))
             }
         }
         return rebuilt
@@ -261,7 +314,7 @@ public final class GLTFAssetLoader {
         // Each glTF mesh produces an array of (renderableMesh, materialIndex)
         // tuples, one per primitive. Skipped primitives (non-triangle mode,
         // missing POSITION) emit `nil`.
-        let runtimePrimitives: [[(GLTFRenderableMesh, Int?)?]] = (document.meshes ?? []).map { gltfMesh in
+        let runtimePrimitives: [[GLTFAssetLoader.PrimitiveBuildResult?]] = (document.meshes ?? []).map { gltfMesh in
             gltfMesh.primitives.map { gltfPrimitive in
                 Self.makePrimitive(from: gltfPrimitive, bufferLoader: bufferLoader, device: device)
             }
@@ -327,6 +380,14 @@ public final class GLTFAssetLoader {
         // Parse animation clips, if any.
         let animations = try Self.parseAnimations(from: document, bufferLoader: bufferLoader)
 
+        // Default per-mesh morph weights from `mesh.weights` — used when no
+        // animation channel overrides them. Each entry is parallel to the
+        // primitive's morph target count (per glTF spec, all primitives in
+        // one mesh share the same target count).
+        let defaultMeshWeights: [[Float]] = (document.meshes ?? []).map { mesh in
+            mesh.weights ?? []
+        }
+
         return GLTFAsset(
             drawCalls: drawCalls,
             textures: retainedTextures,
@@ -337,7 +398,9 @@ public final class GLTFAssetLoader {
             _runtimePrimitives: runtimePrimitives,
             _runtimeMaterials: runtimeMaterials,
             _defaultMaterial: defaultMaterial,
-            _skinDefinitions: skinDefinitions
+            _skinDefinitions: skinDefinitions,
+            _device: device,
+            _defaultMeshWeights: defaultMeshWeights
         )
     }
 
@@ -607,13 +670,21 @@ public final class GLTFAssetLoader {
         let weights: [SIMD4<Float>]
     }
 
-    /// Returns `(mesh, materialIndex)` or `nil` if the primitive should be skipped
+    /// Per-primitive bookkeeping that survives load time so animation
+    /// rebuild has everything it needs to blend morph weights on CPU.
+    internal struct PrimitiveBuildResult {
+        let mesh: GLTFRenderableMesh
+        let materialIndex: Int?
+        let morphData: GLTFPrimitiveMorphData?  // nil when the primitive has no morph targets
+    }
+
+    /// Returns the primitive build result or `nil` if the primitive should be skipped
     /// (non-triangle mode, missing POSITION, accessor decode failure).
     private static func makePrimitive(
         from gltf: GLTFPrimitive,
         bufferLoader: BufferLoader,
         device: MTLDevice
-    ) -> (GLTFRenderableMesh, Int?)? {
+    ) -> PrimitiveBuildResult? {
         // Only triangle primitives are supported in step 4b. The mesh modes
         // POINTS/LINES/* would need different pipeline states; deferred.
         let mode = gltf.mode ?? 4
@@ -789,7 +860,67 @@ public final class GLTFAssetLoader {
             isSkinned: isSkinned
         )
 
-        return (mesh, gltf.material)
+        // Optional morph-target data — only built for non-skinned primitives
+        // in this round; CPU pre-pass on a skinned vertex layout is a
+        // follow-up since the morph kernel would also need to update the
+        // skinned-vertex stride.
+        let morphData: GLTFPrimitiveMorphData? = {
+            guard !isSkinned, let targets = gltf.targets, !targets.isEmpty else { return nil }
+
+            // Pack base attributes into typed arrays in the same order the
+            // vertex buffer was built.
+            var basePositions = [SIMD3<Float>](); basePositions.reserveCapacity(vertexCount)
+            var baseNormals   = [SIMD3<Float>](); baseNormals.reserveCapacity(vertexCount)
+            var baseTangents  = [SIMD4<Float>](); baseTangents.reserveCapacity(vertexCount)
+            var baseUVs       = [SIMD2<Float>](); baseUVs.reserveCapacity(vertexCount)
+            for i in 0..<vertexCount {
+                basePositions.append(SIMD3<Float>(positions[i*3+0], positions[i*3+1], positions[i*3+2]))
+                baseNormals.append(SIMD3<Float>(normals[i*3+0], normals[i*3+1], normals[i*3+2]))
+                baseTangents.append(SIMD4<Float>(tangents[i*4+0], tangents[i*4+1], tangents[i*4+2], tangents[i*4+3]))
+                baseUVs.append(SIMD2<Float>(uvs[i*2+0], uvs[i*2+1]))
+            }
+
+            var positionDeltas: [[SIMD3<Float>]] = []
+            var normalDeltas:   [[SIMD3<Float>]] = []
+            var tangentDeltas:  [[SIMD3<Float>]] = []
+            positionDeltas.reserveCapacity(targets.count)
+            normalDeltas.reserveCapacity(targets.count)
+            tangentDeltas.reserveCapacity(targets.count)
+
+            for target in targets {
+                positionDeltas.append(Self.readVec3Accessor(target.position, count: vertexCount, bufferLoader: bufferLoader))
+                normalDeltas.append(Self.readVec3Accessor(target.normal,   count: vertexCount, bufferLoader: bufferLoader))
+                tangentDeltas.append(Self.readVec3Accessor(target.tangent, count: vertexCount, bufferLoader: bufferLoader))
+            }
+
+            return GLTFPrimitiveMorphData(
+                basePositions: basePositions,
+                baseNormals: baseNormals,
+                baseTangents: baseTangents,
+                baseUVs: baseUVs,
+                positionDeltas: positionDeltas,
+                normalDeltas: normalDeltas,
+                tangentDeltas: tangentDeltas
+            )
+        }()
+
+        return PrimitiveBuildResult(mesh: mesh, materialIndex: gltf.material, morphData: morphData)
+    }
+
+    /// Decodes a Vec3 accessor as `[SIMD3<Float>]`, or returns an empty
+    /// array when the accessor index is `nil` or decoding fails.
+    private static func readVec3Accessor(
+        _ index: Int?,
+        count: Int,
+        bufferLoader: BufferLoader
+    ) -> [SIMD3<Float>] {
+        guard let index = index else { return [] }
+        guard let raw = try? bufferLoader.loadAccessorAsFloat(index), raw.count == count * 3 else { return [] }
+        var out = [SIMD3<Float>](); out.reserveCapacity(count)
+        for v in 0..<count {
+            out.append(SIMD3<Float>(raw[v*3+0], raw[v*3+1], raw[v*3+2]))
+        }
+        return out
     }
 
     // MARK: - Scene traversal
@@ -797,7 +928,7 @@ public final class GLTFAssetLoader {
     private static func traverse(
         nodeIndex: Int,
         document: GLTFDocument,
-        runtimePrimitives: [[(GLTFRenderableMesh, Int?)?]],
+        runtimePrimitives: [[GLTFAssetLoader.PrimitiveBuildResult?]],
         runtimeMaterials: [GLTFRenderableMaterial],
         defaultMaterial: GLTFRenderableMaterial,
         lightDefinitions: [LightDefinition],
@@ -829,7 +960,9 @@ public final class GLTFAssetLoader {
             }()
 
             for entry in runtimePrimitives[meshIndex] {
-                guard let (mesh, materialIndex) = entry else { continue }
+                guard let entry = entry else { continue }
+                let mesh = entry.mesh
+                let materialIndex = entry.materialIndex
                 let material: GLTFRenderableMaterial = {
                     if let idx = materialIndex, idx < runtimeMaterials.count {
                         return runtimeMaterials[idx]

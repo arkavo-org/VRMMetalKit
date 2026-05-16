@@ -162,6 +162,92 @@ public struct GLTFRenderableSkin {
     }
 }
 
+/// CPU-side morph-target data for a single primitive. Holds the base
+/// per-vertex POSITION + NORMAL + TANGENT arrays plus deltas for each
+/// target. The asset's animation runtime samples mesh weights, blends the
+/// deltas on CPU, and uploads a fresh vertex buffer for that primitive.
+///
+/// MVP design choice: CPU pre-pass. For small per-frame morph counts and
+/// modest vertex counts (the canonical Khronos AnimatedMorphCube is 24
+/// verts), the CPU loop is well under a millisecond. A GPU compute pre-
+/// pass mirroring VRMMetalKit's MorphAccumulate.metal is the follow-up
+/// for high-vertex-count assets like blendshape-driven faces.
+public struct GLTFPrimitiveMorphData {
+    /// Base positions, parallel to the vertex order.
+    public let basePositions: [SIMD3<Float>]
+    /// Base normals (one per vertex). May be all-zero if NORMAL wasn't authored;
+    /// synthesised defaults from the asset loader stay synthesised here.
+    public let baseNormals: [SIMD3<Float>]
+    /// Base tangents (xyz=tangent dir, w=bitangent sign). Same caveat as normals.
+    public let baseTangents: [SIMD4<Float>]
+    /// UV coordinates — fixed per vertex; morph targets cannot animate UVs in glTF.
+    public let baseUVs: [SIMD2<Float>]
+    /// Per-target position deltas: `positionDeltas[t][v]` for target `t`, vertex `v`.
+    /// A target without POSITION deltas is represented by an empty inner array.
+    public let positionDeltas: [[SIMD3<Float>]]
+    /// Per-target normal deltas. Same shape as `positionDeltas`. Empty when absent.
+    public let normalDeltas: [[SIMD3<Float>]]
+    /// Per-target tangent deltas. Tangent deltas are float3 per the glTF spec
+    /// (only xyz; bitangent sign is not animated). Empty when absent.
+    public let tangentDeltas: [[SIMD3<Float>]]
+    /// Number of morph targets. Convenience accessor matching `positionDeltas.count`.
+    public var targetCount: Int { positionDeltas.count }
+
+    public init(
+        basePositions: [SIMD3<Float>],
+        baseNormals: [SIMD3<Float>],
+        baseTangents: [SIMD4<Float>],
+        baseUVs: [SIMD2<Float>],
+        positionDeltas: [[SIMD3<Float>]],
+        normalDeltas: [[SIMD3<Float>]],
+        tangentDeltas: [[SIMD3<Float>]]
+    ) {
+        self.basePositions = basePositions
+        self.baseNormals = baseNormals
+        self.baseTangents = baseTangents
+        self.baseUVs = baseUVs
+        self.positionDeltas = positionDeltas
+        self.normalDeltas = normalDeltas
+        self.tangentDeltas = tangentDeltas
+    }
+
+    /// Build a fresh interleaved `GLTFRenderableVertex` array by blending
+    /// `basePositions + Σ weights[i]·positionDeltas[i]` (and similar for
+    /// normals / tangents). Weights shorter than `targetCount` are
+    /// zero-extended; longer arrays are clipped.
+    public func morphedVertices(weights: [Float]) -> [GLTFRenderableVertex] {
+        let vertexCount = basePositions.count
+        var out = [GLTFRenderableVertex]()
+        out.reserveCapacity(vertexCount)
+
+        for v in 0..<vertexCount {
+            var p = basePositions[v]
+            var n = baseNormals[v]
+            var t = SIMD3<Float>(baseTangents[v].x, baseTangents[v].y, baseTangents[v].z)
+            let bitangentSign = baseTangents[v].w
+
+            for ti in 0..<targetCount {
+                let w = ti < weights.count ? weights[ti] : 0
+                if w == 0 { continue }
+                if v < positionDeltas[ti].count { p += positionDeltas[ti][v] * w }
+                if v < normalDeltas[ti].count   { n += normalDeltas[ti][v]   * w }
+                if v < tangentDeltas[ti].count  { t += tangentDeltas[ti][v]  * w }
+            }
+            // Renormalise the morphed normal so lighting math stays well-behaved.
+            let nLen = simd_length(n)
+            if nLen > 1e-6 { n = n / nLen }
+
+            out.append(GLTFRenderableVertex(
+                position: p,
+                normal: n,
+                tangent: SIMD4<Float>(t.x, t.y, t.z, bitangentSign),
+                uv0: baseUVs[v]
+            ))
+        }
+        return out
+    }
+}
+
 /// Runtime PBR material: factors + texture refs + flags. One per glTF material.
 ///
 /// Texture refs are optional `MTLTexture` instances — the draw call binds a
