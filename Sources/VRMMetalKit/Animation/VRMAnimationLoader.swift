@@ -701,17 +701,6 @@ private func makeExpressionWeightSampler(track: KeyTrack) -> (Float) -> Float {
     }
 }
 
-private func trackRotationRest(_ track: KeyTrack) -> simd_quatf? {
-    guard track.componentCount == 4, !track.times.isEmpty else { return nil }
-    return quaternionValue(from: track, keyIndex: 0)
-}
-
-private func trackVectorRest(_ track: KeyTrack, componentCount: Int) -> SIMD3<Float>? {
-    guard track.componentCount == componentCount, !track.times.isEmpty else { return nil }
-    let vector = vectorValue(from: track, keyIndex: 0, componentCount: componentCount)
-    return vector
-}
-
 private func sampleQuaternion(_ track: KeyTrack, at time: Float) -> simd_quatf {
     guard track.componentCount == 4 else { return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) }
     guard !track.times.isEmpty else { return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) }
