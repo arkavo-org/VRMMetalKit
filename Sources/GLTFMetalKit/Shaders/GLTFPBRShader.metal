@@ -42,6 +42,7 @@ using namespace metal;
 constant int kFrameUniformsIndex    = 1;
 constant int kMaterialUniformsIndex = 2;
 constant int kLightsBufferIndex     = 3;
+constant int kSkinPaletteIndex      = 4;
 
 // Maximum number of punctual lights bound per draw. KHR_lights_punctual
 // scenes that exceed this are clamped — the renderer drops the rest with
@@ -147,6 +148,15 @@ struct GLTFVertexIn {
     float2 uv0      [[attribute(3)]];
 };
 
+struct GLTFSkinnedVertexIn {
+    float3 position [[attribute(0)]];
+    float3 normal   [[attribute(1)]];
+    float4 tangent  [[attribute(2)]];
+    float2 uv0      [[attribute(3)]];
+    ushort4 joints  [[attribute(4)]];   // JOINTS_0
+    float4 weights  [[attribute(5)]];   // WEIGHTS_0
+};
+
 struct GLTFVertexOut {
     float4 position [[position]];
     float3 worldPosition;
@@ -231,6 +241,44 @@ vertex GLTFVertexOut gltf_pbr_vertex(
     float4 worldPosition4 = frame.model * float4(in.position, 1.0);
     float3 worldNormal    = normalize(frame.normalMatrix * in.normal);
     float3 worldTangent   = normalize(frame.normalMatrix * in.tangent.xyz);
+    float3 worldBitangent = cross(worldNormal, worldTangent) * in.tangent.w;
+
+    GLTFVertexOut out;
+    out.position       = frame.viewProjection * worldPosition4;
+    out.worldPosition  = worldPosition4.xyz;
+    out.worldNormal    = worldNormal;
+    out.worldTangent   = worldTangent;
+    out.worldBitangent = worldBitangent;
+    out.uv0            = in.uv0;
+    return out;
+}
+
+/// Skinned variant: blends four joint matrices weighted by per-vertex
+/// WEIGHTS_0, then applies the model transform like the non-skinned path.
+/// `frame.model` should be identity when the asset's mesh node carries no
+/// own transform (joint matrices already encode world-space placement); use
+/// the node world matrix as `model` when the mesh node has its own offset.
+vertex GLTFVertexOut gltf_pbr_vertex_skinned(
+    GLTFSkinnedVertexIn in [[stage_in]],
+    constant GLTFFrameUniforms& frame [[buffer(kFrameUniformsIndex)]],
+    constant float4x4* skinPalette    [[buffer(kSkinPaletteIndex)]]
+) {
+    float4x4 skinMatrix =
+        in.weights.x * skinPalette[in.joints.x] +
+        in.weights.y * skinPalette[in.joints.y] +
+        in.weights.z * skinPalette[in.joints.z] +
+        in.weights.w * skinPalette[in.joints.w];
+
+    float4 skinned4 = skinMatrix * float4(in.position, 1.0);
+    float4 worldPosition4 = frame.model * skinned4;
+
+    // Skinning math: transforming a normal under a skinMatrix is the same
+    // as under the model matrix — strip translation, normalize. Using
+    // skinMatrix's upper-left 3×3 is correct in the common case (rigid
+    // skinning, no non-uniform bone scale).
+    float3x3 skinNormal3 = float3x3(skinMatrix[0].xyz, skinMatrix[1].xyz, skinMatrix[2].xyz);
+    float3 worldNormal    = normalize(frame.normalMatrix * (skinNormal3 * in.normal));
+    float3 worldTangent   = normalize(frame.normalMatrix * (skinNormal3 * in.tangent.xyz));
     float3 worldBitangent = cross(worldNormal, worldTangent) * in.tangent.w;
 
     GLTFVertexOut out;

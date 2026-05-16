@@ -68,6 +68,122 @@ public final class GLTFRenderer: @unchecked Sendable {
         self.environment = fallback
     }
 
+    /// Bundle of PBR pipeline states for one (color, depth, sample-count)
+    /// framebuffer configuration. The renderer picks `opaque` or
+    /// `skinnedOpaque` per draw based on each mesh's `isSkinned` flag.
+    public struct PipelineStates {
+        public let opaque: MTLRenderPipelineState
+        public let skinnedOpaque: MTLRenderPipelineState
+    }
+
+    /// Build both PBR pipeline states (non-skinned + skinned) in one call.
+    /// The two PSOs share fragment shader; only the vertex stage + vertex
+    /// descriptor differ.
+    public func makePipelineStates(
+        colorFormat: MTLPixelFormat,
+        depthFormat: MTLPixelFormat,
+        sampleCount: Int = 1
+    ) throws -> PipelineStates {
+        let opaque = try makeOpaquePBRPipelineState(
+            colorFormat: colorFormat, depthFormat: depthFormat, sampleCount: sampleCount
+        )
+        let skinned = try makeSkinnedOpaquePBRPipelineState(
+            colorFormat: colorFormat, depthFormat: depthFormat, sampleCount: sampleCount
+        )
+        return PipelineStates(opaque: opaque, skinnedOpaque: skinned)
+    }
+
+    /// Skinned-variant pipeline. Same fragment as the opaque pipeline; the
+    /// difference is the vertex shader (`gltf_pbr_vertex_skinned`) and the
+    /// vertex descriptor (adds `JOINTS_0` + `WEIGHTS_0`).
+    public func makeSkinnedOpaquePBRPipelineState(
+        colorFormat: MTLPixelFormat,
+        depthFormat: MTLPixelFormat,
+        sampleCount: Int = 1
+    ) throws -> MTLRenderPipelineState {
+        guard let vertexFn = library.makeFunction(name: "gltf_pbr_vertex_skinned") else {
+            throw GLTFRendererError.missingShaderFunction(name: "gltf_pbr_vertex_skinned")
+        }
+        guard let fragmentFn = library.makeFunction(name: "gltf_pbr_fragment") else {
+            throw GLTFRendererError.missingShaderFunction(name: "gltf_pbr_fragment")
+        }
+
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = vertexFn
+        descriptor.fragmentFunction = fragmentFn
+        descriptor.vertexDescriptor = Self.makeSkinnedVertexDescriptor()
+        descriptor.colorAttachments[0].pixelFormat = colorFormat
+        descriptor.depthAttachmentPixelFormat = depthFormat
+        descriptor.rasterSampleCount = sampleCount
+
+        return try device.makeRenderPipelineState(descriptor: descriptor)
+    }
+
+    /// Vertex descriptor matching `GLTFSkinnedVertexIn`. Extends the basic
+    /// layout with `JOINTS_0` (ushort4) and `WEIGHTS_0` (float4).
+    public static func makeSkinnedVertexDescriptor() -> MTLVertexDescriptor {
+        let vd = MTLVertexDescriptor()
+
+        vd.attributes[0].format = .float3
+        vd.attributes[0].offset = 0
+        vd.attributes[0].bufferIndex = GLTFShaderBindings.vertexBuffer
+
+        vd.attributes[1].format = .float3
+        vd.attributes[1].offset = MemoryLayout<SIMD3<Float>>.stride
+        vd.attributes[1].bufferIndex = GLTFShaderBindings.vertexBuffer
+
+        vd.attributes[2].format = .float4
+        vd.attributes[2].offset = 2 * MemoryLayout<SIMD3<Float>>.stride
+        vd.attributes[2].bufferIndex = GLTFShaderBindings.vertexBuffer
+
+        vd.attributes[3].format = .float2
+        vd.attributes[3].offset = 2 * MemoryLayout<SIMD3<Float>>.stride + MemoryLayout<SIMD4<Float>>.stride
+        vd.attributes[3].bufferIndex = GLTFShaderBindings.vertexBuffer
+
+        // Compute the offset of `joints` in `GLTFSkinnedRenderableVertex`
+        // by reproducing the Swift layout: position(16) + normal(16) +
+        // tangent(16) + uv0(8) → 56. The struct's alignment is 16 so the
+        // next member starts at offset 64 (`joints` is SIMD4<UInt16> with
+        // 8-byte alignment, so 56 rounds up to next multiple of 8 = 56;
+        // but `weights` is SIMD4<Float> with 16-byte alignment, so joints
+        // ends at 64 and weights starts at 64+8=72 — actually 80 once
+        // the SIMD4<Float> alignment kicks in).
+        //
+        // Safest: stash a static probe to query MemoryLayout offsets via
+        // a sentinel value at debug-time. Production: pin the offsets we
+        // know from the struct definition and rely on
+        // `MemoryLayout<GLTFSkinnedRenderableVertex>.stride` for the
+        // overall stride.
+        vd.attributes[4].format = .ushort4
+        vd.attributes[4].offset = Self.skinnedJointsOffset
+        vd.attributes[4].bufferIndex = GLTFShaderBindings.vertexBuffer
+
+        vd.attributes[5].format = .float4
+        vd.attributes[5].offset = Self.skinnedWeightsOffset
+        vd.attributes[5].bufferIndex = GLTFShaderBindings.vertexBuffer
+
+        vd.layouts[GLTFShaderBindings.vertexBuffer].stride = MemoryLayout<GLTFSkinnedRenderableVertex>.stride
+        vd.layouts[GLTFShaderBindings.vertexBuffer].stepFunction = .perVertex
+        vd.layouts[GLTFShaderBindings.vertexBuffer].stepRate = 1
+
+        return vd
+    }
+
+    /// Offset of `joints` field inside `GLTFSkinnedRenderableVertex`.
+    /// Swift layout: position(0..15) + normal(16..31) + tangent(32..47) +
+    /// uv0(48..55) → joints field follows. joints is `SIMD4<UInt16>`
+    /// (8 bytes), 8-byte aligned. The previous field ended at 56 which
+    /// is already 8-aligned, so joints starts at 56.
+    private static let skinnedJointsOffset =
+        2 * MemoryLayout<SIMD3<Float>>.stride
+        + MemoryLayout<SIMD4<Float>>.stride
+        + MemoryLayout<SIMD2<Float>>.stride
+
+    /// Offset of `weights` field. SIMD4<Float> is 16-byte aligned; after
+    /// joints ends at 56+8=64 we're already 16-aligned, so weights = 64.
+    private static let skinnedWeightsOffset =
+        GLTFRenderer.skinnedJointsOffset + MemoryLayout<SIMD4<UInt16>>.stride
+
     /// Builds the vertex descriptor that matches ``GLTFPBRShader.metal``'s
     /// `GLTFVertexIn`.
     ///
@@ -143,25 +259,28 @@ public final class GLTFRenderer: @unchecked Sendable {
 
     /// Issues an opaque PBR pass for the supplied draw calls.
     ///
-    /// Phase 3a step 4a: single-pipeline opaque only. Alpha-blended and
-    /// double-sided variants come in step 4c. The encoder must already be
-    /// configured for a render pass with a depth attachment.
+    /// Picks the non-skinned or skinned pipeline per draw based on each
+    /// mesh's `isSkinned` flag. The encoder must already be configured
+    /// for a render pass with a depth attachment.
     ///
     /// - Parameters:
     ///   - calls: Draw calls in scene-graph order (back-to-front not yet enforced).
     ///   - scene: Per-frame state: view-projection, camera, directional light.
-    ///   - pipelineState: PBR pipeline state created via ``makeOpaquePBRPipelineState(colorFormat:depthFormat:sampleCount:)``.
+    ///   - pipelineStates: PBR pipeline-state bundle created via ``makePipelineStates(colorFormat:depthFormat:sampleCount:)``.
     ///   - depthState: Depth-stencil state (typically `less`, write enabled). Caller owns it so the same `GLTFRenderer` can serve multiple render passes.
     ///   - encoder: Active render-command encoder.
     public func encodeOpaqueDrawCalls(
         _ calls: [GLTFDrawCall],
         scene: GLTFSceneState,
-        pipelineState: MTLRenderPipelineState,
+        pipelineStates: PipelineStates,
         depthState: MTLDepthStencilState,
         encoder: MTLRenderCommandEncoder
     ) {
-        encoder.setRenderPipelineState(pipelineState)
+        // Bind depth-state up front; pipeline is selected per draw.
         encoder.setDepthStencilState(depthState)
+        // Track the currently bound pipeline to avoid redundant
+        // `setRenderPipelineState` calls when consecutive draws share it.
+        var currentPipeline: MTLRenderPipelineState? = nil
 
         // Samplers — built lazily on first use and cached on the renderer.
         let colorSampler = colorSamplerState
@@ -193,6 +312,13 @@ public final class GLTFRenderer: @unchecked Sendable {
         }
 
         for call in calls {
+            // Pick + bind pipeline state for this draw.
+            let pipelineForCall = call.mesh.isSkinned ? pipelineStates.skinnedOpaque : pipelineStates.opaque
+            if pipelineForCall !== currentPipeline {
+                encoder.setRenderPipelineState(pipelineForCall)
+                currentPipeline = pipelineForCall
+            }
+
             // Per-draw frame uniforms — model + normal matrix differ per call.
             let normalMatrix = Self.normalMatrix(from: call.modelMatrix)
             var frame = GLTFFrameUniforms(
@@ -207,6 +333,16 @@ public final class GLTFRenderer: @unchecked Sendable {
             )
             encoder.setVertexBytes(&frame, length: MemoryLayout<GLTFFrameUniforms>.stride, index: GLTFShaderBindings.frameUniforms)
             encoder.setFragmentBytes(&frame, length: MemoryLayout<GLTFFrameUniforms>.stride, index: GLTFShaderBindings.frameUniforms)
+
+            // Skin palette — only the skinned pipeline reads it. Skip the
+            // bind for non-skinned draws so Metal doesn't complain about
+            // missing buffer when an empty palette would still be valid
+            // input but is semantically wrong.
+            if call.mesh.isSkinned, let palette = call.skinPalette, !palette.isEmpty {
+                var paletteCopy = palette
+                let stride = MemoryLayout<simd_float4x4>.stride
+                encoder.setVertexBytes(&paletteCopy, length: paletteCopy.count * stride, index: GLTFShaderBindings.skinPaletteBuffer)
+            }
 
             var material = call.material.uniforms
             encoder.setFragmentBytes(&material, length: MemoryLayout<GLTFMaterialUniforms>.stride, index: GLTFShaderBindings.materialUniforms)

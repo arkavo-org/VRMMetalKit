@@ -40,7 +40,7 @@ final class GLTFRendererDrawTests: XCTestCase {
         let colorFormat: MTLPixelFormat = .bgra8Unorm
         let depthFormat: MTLPixelFormat = .depth32Float
 
-        let pipelineState = try renderer.makeOpaquePBRPipelineState(
+        let pipelines = try renderer.makePipelineStates(
             colorFormat: colorFormat,
             depthFormat: depthFormat
         )
@@ -146,7 +146,7 @@ final class GLTFRendererDrawTests: XCTestCase {
         renderer.encodeOpaqueDrawCalls(
             calls,
             scene: scene,
-            pipelineState: pipelineState,
+            pipelineStates: pipelines,
             depthState: depthState,
             encoder: encoder
         )
@@ -201,7 +201,7 @@ final class GLTFRendererDrawTests: XCTestCase {
         let renderer = try GLTFRenderer(device: device)
         let colorFormat: MTLPixelFormat = .bgra8Unorm
         let depthFormat: MTLPixelFormat = .depth32Float
-        let pso = try renderer.makeOpaquePBRPipelineState(colorFormat: colorFormat, depthFormat: depthFormat)
+        let pipelines = try renderer.makePipelineStates(colorFormat: colorFormat, depthFormat: depthFormat)
 
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .less
@@ -276,7 +276,7 @@ final class GLTFRendererDrawTests: XCTestCase {
 
         let commandBuffer = commandQueue.makeCommandBuffer()!
         let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass)!
-        renderer.encodeOpaqueDrawCalls(calls, scene: scene, pipelineState: pso, depthState: depthState, encoder: encoder)
+        renderer.encodeOpaqueDrawCalls(calls, scene: scene, pipelineStates: pipelines, depthState: depthState, encoder: encoder)
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()

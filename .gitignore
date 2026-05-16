@@ -29,6 +29,11 @@ tmp/
 !Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
 !Tests/GLTFMetalKitTests/TestData/Box.glb
 !Tests/GLTFMetalKitTests/TestData/BoxTextured.glb
+!Tests/GLTFMetalKitTests/TestData/RiggedSimple.glb
+!Tests/GLTFMetalKitTests/TestData/RiggedFigure.glb
+!Tests/GLTFMetalKitTests/TestData/AnimatedCube.gltf
+!Tests/GLTFMetalKitTests/TestData/AnimatedCube.bin
+!Tests/GLTFMetalKitTests/TestData/AnimatedCube_BaseColor.png
 
 # Test model symlinks (use ENV VAR instead)
 /Seed-san.vrm

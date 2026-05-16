@@ -27,7 +27,10 @@ import simd
 /// for now.
 public struct GLTFAsset {
     /// Flattened draw list — one entry per primitive of every mesh visible
-    /// in the default scene, with world transform pre-multiplied.
+    /// in the default scene, with world transform pre-multiplied. Skinned
+    /// primitives have their `skinPalette` baked from the asset's current
+    /// node TRS state. Re-build via ``rebuildDrawCalls(animationTime:)``
+    /// after stepping the animation clock.
     public let drawCalls: [GLTFDrawCall]
 
     /// All `MTLTexture` instances referenced by materials. Held to keep
@@ -156,6 +159,16 @@ public final class GLTFAssetLoader {
         // definitions; nodes attach lights via `extensions.KHR_lights_punctual.light`.
         let lightDefinitions = Self.parseLightDefinitions(from: document)
 
+        // Pre-decode skin definitions — joint node indices + IBMs. Used at
+        // traversal time to build per-frame skin palettes.
+        let skinDefinitions = try Self.parseSkinDefinitions(from: document, bufferLoader: bufferLoader)
+
+        // Compute the world matrix of every node once (rest pose), then
+        // traverse to emit draw calls + light placement.
+        let nodeCount = document.nodes?.count ?? 0
+        var nodeWorldMatrices = [simd_float4x4](repeating: matrix_identity_float4x4, count: nodeCount)
+        Self.computeWorldMatrices(document: document, into: &nodeWorldMatrices)
+
         var drawCalls: [GLTFDrawCall] = []
         var lights: [GLTFPunctualLightUniform] = []
         var worldMin = SIMD3<Float>(repeating: Float.infinity)
@@ -169,12 +182,13 @@ public final class GLTFAssetLoader {
             for rootNodeIndex in scene.nodes ?? [] {
                 Self.traverse(
                     nodeIndex: rootNodeIndex,
-                    parentMatrix: matrix_identity_float4x4,
                     document: document,
                     runtimePrimitives: runtimePrimitives,
                     runtimeMaterials: runtimeMaterials,
                     defaultMaterial: defaultMaterial,
                     lightDefinitions: lightDefinitions,
+                    skinDefinitions: skinDefinitions,
+                    nodeWorldMatrices: nodeWorldMatrices,
                     drawCalls: &drawCalls,
                     lights: &lights,
                     worldMin: &worldMin,
@@ -384,6 +398,13 @@ public final class GLTFAssetLoader {
 
     // MARK: - Primitive decoding
 
+    /// Per-vertex skinning data parsed from `JOINTS_0` + `WEIGHTS_0`. Only
+    /// returned by `makePrimitive` when both attributes are present.
+    private struct PrimitiveSkinningData {
+        let joints: [SIMD4<UInt16>]
+        let weights: [SIMD4<Float>]
+    }
+
     /// Returns `(mesh, materialIndex)` or `nil` if the primitive should be skipped
     /// (non-triangle mode, missing POSITION, accessor decode failure).
     private static func makePrimitive(
@@ -448,15 +469,82 @@ public final class GLTFAssetLoader {
             tangents = generated
         }
 
-        // Build interleaved vertex array.
-        var vertices = [GLTFRenderableVertex]()
-        vertices.reserveCapacity(vertexCount)
-        for i in 0..<vertexCount {
-            let p = SIMD3<Float>(positions[i*3+0], positions[i*3+1], positions[i*3+2])
-            let n = SIMD3<Float>(normals[i*3+0], normals[i*3+1], normals[i*3+2])
-            let t = SIMD4<Float>(tangents[i*4+0], tangents[i*4+1], tangents[i*4+2], tangents[i*4+3])
-            let uv = SIMD2<Float>(uvs[i*2+0], uvs[i*2+1])
-            vertices.append(GLTFRenderableVertex(position: p, normal: n, tangent: t, uv0: uv))
+        // Optional skinning attributes (JOINTS_0 + WEIGHTS_0). Both must be
+        // present for the mesh to ride the skinned pipeline.
+        let skinningData: PrimitiveSkinningData? = {
+            guard let jointsAccessor = gltf.attributes["JOINTS_0"],
+                  let weightsAccessor = gltf.attributes["WEIGHTS_0"] else {
+                return nil
+            }
+            // glTF JOINTS_0 is UInt8 or UInt16; promote to UInt16. We
+            // route through UInt32 because BufferLoader exposes that as
+            // the lowest-common denominator typed accessor reader.
+            guard let jointsRaw = try? bufferLoader.loadAccessorAsUInt32(jointsAccessor),
+                  jointsRaw.count == vertexCount * 4 else {
+                return nil
+            }
+            guard let weightsRaw = try? bufferLoader.loadAccessorAsFloat(weightsAccessor),
+                  weightsRaw.count == vertexCount * 4 else {
+                return nil
+            }
+            var jointsOut: [SIMD4<UInt16>] = []
+            var weightsOut: [SIMD4<Float>] = []
+            jointsOut.reserveCapacity(vertexCount)
+            weightsOut.reserveCapacity(vertexCount)
+            for i in 0..<vertexCount {
+                jointsOut.append(SIMD4<UInt16>(
+                    UInt16(truncatingIfNeeded: jointsRaw[i*4 + 0]),
+                    UInt16(truncatingIfNeeded: jointsRaw[i*4 + 1]),
+                    UInt16(truncatingIfNeeded: jointsRaw[i*4 + 2]),
+                    UInt16(truncatingIfNeeded: jointsRaw[i*4 + 3])
+                ))
+                weightsOut.append(SIMD4<Float>(
+                    weightsRaw[i*4 + 0], weightsRaw[i*4 + 1],
+                    weightsRaw[i*4 + 2], weightsRaw[i*4 + 3]
+                ))
+            }
+            return PrimitiveSkinningData(joints: jointsOut, weights: weightsOut)
+        }()
+
+        // Build interleaved vertex array (skinned or non-skinned layout).
+        let vertexBuffer: MTLBuffer
+        let isSkinned: Bool
+
+        if let skin = skinningData {
+            var skinnedVertices = [GLTFSkinnedRenderableVertex]()
+            skinnedVertices.reserveCapacity(vertexCount)
+            for i in 0..<vertexCount {
+                let p = SIMD3<Float>(positions[i*3+0], positions[i*3+1], positions[i*3+2])
+                let n = SIMD3<Float>(normals[i*3+0], normals[i*3+1], normals[i*3+2])
+                let t = SIMD4<Float>(tangents[i*4+0], tangents[i*4+1], tangents[i*4+2], tangents[i*4+3])
+                let uv = SIMD2<Float>(uvs[i*2+0], uvs[i*2+1])
+                skinnedVertices.append(GLTFSkinnedRenderableVertex(
+                    position: p, normal: n, tangent: t, uv0: uv,
+                    joints: skin.joints[i], weights: skin.weights[i]
+                ))
+            }
+            let stride = MemoryLayout<GLTFSkinnedRenderableVertex>.stride
+            guard let vbuf = skinnedVertices.withUnsafeBufferPointer({ ptr in
+                device.makeBuffer(bytes: ptr.baseAddress!, length: skinnedVertices.count * stride, options: [])
+            }) else { return nil }
+            vertexBuffer = vbuf
+            isSkinned = true
+        } else {
+            var vertices = [GLTFRenderableVertex]()
+            vertices.reserveCapacity(vertexCount)
+            for i in 0..<vertexCount {
+                let p = SIMD3<Float>(positions[i*3+0], positions[i*3+1], positions[i*3+2])
+                let n = SIMD3<Float>(normals[i*3+0], normals[i*3+1], normals[i*3+2])
+                let t = SIMD4<Float>(tangents[i*4+0], tangents[i*4+1], tangents[i*4+2], tangents[i*4+3])
+                let uv = SIMD2<Float>(uvs[i*2+0], uvs[i*2+1])
+                vertices.append(GLTFRenderableVertex(position: p, normal: n, tangent: t, uv0: uv))
+            }
+            let stride = MemoryLayout<GLTFRenderableVertex>.stride
+            guard let vbuf = vertices.withUnsafeBufferPointer({ ptr in
+                device.makeBuffer(bytes: ptr.baseAddress!, length: vertices.count * stride, options: [])
+            }) else { return nil }
+            vertexBuffer = vbuf
+            isSkinned = false
         }
 
         // Index buffer.
@@ -489,20 +577,14 @@ public final class GLTFAssetLoader {
             }
         }
 
-        let vertexStride = MemoryLayout<GLTFRenderableVertex>.stride
-        guard let vertexBuffer = vertices.withUnsafeBufferPointer({ ptr in
-            device.makeBuffer(bytes: ptr.baseAddress!, length: vertices.count * vertexStride, options: [])
-        }) else {
-            return nil
-        }
-
         let mesh = GLTFRenderableMesh(
             vertexBuffer: vertexBuffer,
             vertexCount: vertexCount,
             indexBuffer: indexBuffer,
             indexCount: indexCount,
             indexType: indexType,
-            primitiveType: .triangle
+            primitiveType: .triangle,
+            isSkinned: isSkinned
         )
 
         return (mesh, gltf.material)
@@ -512,12 +594,13 @@ public final class GLTFAssetLoader {
 
     private static func traverse(
         nodeIndex: Int,
-        parentMatrix: simd_float4x4,
         document: GLTFDocument,
         runtimePrimitives: [[(GLTFRenderableMesh, Int?)?]],
         runtimeMaterials: [GLTFRenderableMaterial],
         defaultMaterial: GLTFRenderableMaterial,
         lightDefinitions: [LightDefinition],
+        skinDefinitions: [SkinDefinition],
+        nodeWorldMatrices: [simd_float4x4],
         drawCalls: inout [GLTFDrawCall],
         lights: inout [GLTFPunctualLightUniform],
         worldMin: inout SIMD3<Float>,
@@ -526,11 +609,23 @@ public final class GLTFAssetLoader {
     ) {
         guard let nodes = document.nodes, nodeIndex < nodes.count else { return }
         let node = nodes[nodeIndex]
-        let localMatrix = Self.localMatrix(for: node)
-        let worldMatrix = parentMatrix * localMatrix
+        let worldMatrix = nodeWorldMatrices[nodeIndex]
 
         if let meshIndex = node.mesh,
            meshIndex < runtimePrimitives.count {
+            // Skin palette (skinned primitives only). Same palette for every
+            // primitive in this mesh because the skin attaches to the node,
+            // not the primitive.
+            let skinPalette: [simd_float4x4]? = {
+                guard let skinIndex = node.skin,
+                      skinIndex < skinDefinitions.count else { return nil }
+                let skin = skinDefinitions[skinIndex]
+                return zip(skin.jointNodeIndices, skin.inverseBindMatrices).map { jointNode, ibm in
+                    let jointWorld = jointNode < nodeWorldMatrices.count ? nodeWorldMatrices[jointNode] : matrix_identity_float4x4
+                    return jointWorld * ibm
+                }
+            }()
+
             for entry in runtimePrimitives[meshIndex] {
                 guard let (mesh, materialIndex) = entry else { continue }
                 let material: GLTFRenderableMaterial = {
@@ -539,7 +634,16 @@ public final class GLTFAssetLoader {
                     }
                     return defaultMaterial
                 }()
-                drawCalls.append(GLTFDrawCall(mesh: mesh, material: material, modelMatrix: worldMatrix))
+                // For skinned meshes, joint matrices already encode world
+                // transform — use identity as the model matrix so we don't
+                // double-transform. Non-skinned uses the node's world matrix.
+                let model = (mesh.isSkinned && skinPalette != nil) ? matrix_identity_float4x4 : worldMatrix
+                drawCalls.append(GLTFDrawCall(
+                    mesh: mesh,
+                    material: material,
+                    modelMatrix: model,
+                    skinPalette: skinPalette
+                ))
 
                 // World-bounds rough estimate — transform every vertex would be
                 // accurate but expensive; cheap path is to skip per-primitive
@@ -568,18 +672,78 @@ public final class GLTFAssetLoader {
         for child in node.children ?? [] {
             traverse(
                 nodeIndex: child,
-                parentMatrix: worldMatrix,
                 document: document,
                 runtimePrimitives: runtimePrimitives,
                 runtimeMaterials: runtimeMaterials,
                 defaultMaterial: defaultMaterial,
                 lightDefinitions: lightDefinitions,
+                skinDefinitions: skinDefinitions,
+                nodeWorldMatrices: nodeWorldMatrices,
                 drawCalls: &drawCalls,
                 lights: &lights,
                 worldMin: &worldMin,
                 worldMax: &worldMax,
                 foundBounds: &foundBounds
             )
+        }
+    }
+
+    // MARK: - Skin parsing
+
+    /// Parsed glTF skin: joint node indices + IBMs. Bake per-frame via
+    /// `nodeWorldMatrix * inverseBindMatrix`.
+    private struct SkinDefinition {
+        let jointNodeIndices: [Int]
+        let inverseBindMatrices: [simd_float4x4]
+    }
+
+    private static func parseSkinDefinitions(
+        from document: GLTFDocument,
+        bufferLoader: BufferLoader
+    ) throws -> [SkinDefinition] {
+        guard let skins = document.skins else { return [] }
+        return skins.map { skin in
+            let joints = skin.joints
+            // glTF: inverseBindMatrices accessor is optional. If absent
+            // every IBM is identity (joints are already in their bind pose).
+            var ibms: [simd_float4x4]
+            if let ibmAccessor = skin.inverseBindMatrices,
+               let mats = try? bufferLoader.loadAccessorAsMatrix4x4(ibmAccessor),
+               mats.count == joints.count {
+                ibms = mats
+            } else {
+                ibms = Array(repeating: matrix_identity_float4x4, count: joints.count)
+            }
+            return SkinDefinition(jointNodeIndices: joints, inverseBindMatrices: ibms)
+        }
+    }
+
+    // MARK: - World-matrix accumulation
+
+    /// Recursively computes the world matrix of every node, starting from
+    /// scene roots. Run once after parsing TRS / matrix and before scene
+    /// traversal so skin-palette computation has every joint's transform.
+    private static func computeWorldMatrices(
+        document: GLTFDocument,
+        into output: inout [simd_float4x4]
+    ) {
+        guard let nodes = document.nodes else { return }
+        let sceneIndex = document.scene ?? 0
+        let scenes = document.scenes ?? []
+        guard sceneIndex < scenes.count else { return }
+
+        func walk(_ nodeIndex: Int, parent: simd_float4x4) {
+            guard nodeIndex < nodes.count else { return }
+            let local = localMatrix(for: nodes[nodeIndex])
+            let world = parent * local
+            output[nodeIndex] = world
+            for child in nodes[nodeIndex].children ?? [] {
+                walk(child, parent: world)
+            }
+        }
+
+        for root in scenes[sceneIndex].nodes ?? [] {
+            walk(root, parent: matrix_identity_float4x4)
         }
     }
 

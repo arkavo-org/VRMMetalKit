@@ -43,12 +43,44 @@ public struct GLTFRenderableVertex {
     }
 }
 
-/// A drawable mesh primitive in GPU-ready form — interleaved vertex buffer
-/// in ``GLTFRenderableVertex`` layout plus an optional index buffer.
+/// Skinned-mesh vertex layout consumed by `GLTFPBRShader.metal`'s
+/// `GLTFSkinnedVertexIn`. Adds `JOINTS_0` + `WEIGHTS_0` to the base layout.
 ///
-/// Distinct from VRMMetalKit's `VRMMesh`: it carries no morph targets, no
-/// skinning palette state, no first-person flags. PBR-rendered static
-/// meshes only.
+/// glTF spec allows `JOINTS_0` to be `UInt8` or `UInt16`. We always promote
+/// to `UInt16` (`SIMD4<UInt16>`) at load time so the GPU sees one stable
+/// vertex format.
+public struct GLTFSkinnedRenderableVertex {
+    public var position: SIMD3<Float>
+    public var normal: SIMD3<Float>
+    public var tangent: SIMD4<Float>
+    public var uv0: SIMD2<Float>
+    public var joints: SIMD4<UInt16>
+    public var weights: SIMD4<Float>
+
+    public init(
+        position: SIMD3<Float>,
+        normal: SIMD3<Float> = SIMD3<Float>(0, 1, 0),
+        tangent: SIMD4<Float> = SIMD4<Float>(1, 0, 0, 1),
+        uv0: SIMD2<Float> = SIMD2<Float>(0, 0),
+        joints: SIMD4<UInt16> = .zero,
+        weights: SIMD4<Float> = SIMD4<Float>(1, 0, 0, 0)
+    ) {
+        self.position = position
+        self.normal = normal
+        self.tangent = tangent
+        self.uv0 = uv0
+        self.joints = joints
+        self.weights = weights
+    }
+}
+
+/// A drawable mesh primitive in GPU-ready form — interleaved vertex buffer
+/// in ``GLTFRenderableVertex`` or ``GLTFSkinnedRenderableVertex`` layout
+/// plus an optional index buffer.
+///
+/// `isSkinned` selects the pipeline state and which Swift vertex layout
+/// the buffer is laid out as. Distinct from VRMMetalKit's `VRMMesh`:
+/// no morph targets (those land in a follow-up), no first-person flags.
 public struct GLTFRenderableMesh {
     public let vertexBuffer: MTLBuffer
     public let vertexCount: Int
@@ -57,6 +89,10 @@ public struct GLTFRenderableMesh {
     public let indexCount: Int
     public let indexType: MTLIndexType
     public let primitiveType: MTLPrimitiveType
+    /// `true` when `vertexBuffer` is in ``GLTFSkinnedRenderableVertex``
+    /// layout and the draw must go through the skinned pipeline + bind a
+    /// skin palette. `false` for the basic ``GLTFRenderableVertex`` layout.
+    public let isSkinned: Bool
 
     /// Builds a non-indexed mesh from in-memory vertices. Direct-array draw.
     public static func make(
@@ -76,7 +112,8 @@ public struct GLTFRenderableMesh {
             indexBuffer: nil,
             indexCount: 0,
             indexType: .uint16,
-            primitiveType: primitiveType
+            primitiveType: primitiveType,
+            isSkinned: false
         )
     }
 
@@ -102,8 +139,26 @@ public struct GLTFRenderableMesh {
             indexBuffer: ibuf,
             indexCount: indices.count,
             indexType: .uint16,
-            primitiveType: primitiveType
+            primitiveType: primitiveType,
+            isSkinned: false
         )
+    }
+}
+
+/// Per-frame skin palette: one column-major joint matrix per joint in a
+/// ``GLTFSkin``. Computed each frame as `nodeWorldMatrix * inverseBindMatrix`
+/// and uploaded as a contiguous `[matrix_float4x4]` buffer at
+/// ``GLTFShaderBindings/skinPaletteBuffer``.
+public struct GLTFRenderableSkin {
+    /// Indices into ``GLTFAsset/joints`` — these point at scene-graph nodes
+    /// whose world matrices the renderer reads each frame.
+    public let jointNodeIndices: [Int]
+    /// One inverse-bind matrix per joint, parallel to ``jointNodeIndices``.
+    public let inverseBindMatrices: [simd_float4x4]
+
+    public init(jointNodeIndices: [Int], inverseBindMatrices: [simd_float4x4]) {
+        self.jointNodeIndices = jointNodeIndices
+        self.inverseBindMatrices = inverseBindMatrices
     }
 }
 
@@ -139,21 +194,28 @@ public struct GLTFRenderableMaterial {
 
 /// One drawable unit — mesh + material + world transform.
 ///
-/// Asset loaders (step 4b) emit these by walking the glTF scene graph; for
-/// step 4a they're hand-built in tests.
+/// Asset loaders emit these by walking the glTF scene graph; tests hand-
+/// build them.
 public struct GLTFDrawCall {
     public let mesh: GLTFRenderableMesh
     public let material: GLTFRenderableMaterial
     public let modelMatrix: simd_float4x4
+    /// Skin palette for this draw, parallel to `mesh.skinIndex`. Each
+    /// matrix is `jointNodeWorldMatrix * inverseBindMatrix[i]`. `nil` for
+    /// non-skinned meshes. Recomputed per frame by the asset's animation
+    /// step; the renderer just binds it.
+    public let skinPalette: [simd_float4x4]?
 
     public init(
         mesh: GLTFRenderableMesh,
         material: GLTFRenderableMaterial,
-        modelMatrix: simd_float4x4 = matrix_identity_float4x4
+        modelMatrix: simd_float4x4 = matrix_identity_float4x4,
+        skinPalette: [simd_float4x4]? = nil
     ) {
         self.mesh = mesh
         self.material = material
         self.modelMatrix = modelMatrix
+        self.skinPalette = skinPalette
     }
 }
 

@@ -77,7 +77,7 @@ final class GLTFIBLTests: XCTestCase {
 
         let colorFormat: MTLPixelFormat = .bgra8Unorm
         let depthFormat: MTLPixelFormat = .depth32Float
-        let pso = try renderer.makeOpaquePBRPipelineState(colorFormat: colorFormat, depthFormat: depthFormat)
+        let pipelines = try renderer.makePipelineStates(colorFormat: colorFormat, depthFormat: depthFormat)
 
         let depthDescriptor = MTLDepthStencilDescriptor()
         depthDescriptor.depthCompareFunction = .less
@@ -135,12 +135,12 @@ final class GLTFIBLTests: XCTestCase {
 
         let metallicLuminance = try renderQuad(
             material: metallicMaterial, mesh: mesh, scene: scene,
-            pipelineState: pso, depthState: depthState, renderer: renderer,
+            pipelines: pipelines, depthState: depthState, renderer: renderer,
             commandQueue: commandQueue, colorFormat: colorFormat, depthFormat: depthFormat
         )
         let dielectricLuminance = try renderQuad(
             material: dielectricMaterial, mesh: mesh, scene: scene,
-            pipelineState: pso, depthState: depthState, renderer: renderer,
+            pipelines: pipelines, depthState: depthState, renderer: renderer,
             commandQueue: commandQueue, colorFormat: colorFormat, depthFormat: depthFormat
         )
 
@@ -157,7 +157,7 @@ final class GLTFIBLTests: XCTestCase {
         material: GLTFRenderableMaterial,
         mesh: GLTFRenderableMesh,
         scene: GLTFSceneState,
-        pipelineState: MTLRenderPipelineState,
+        pipelines: GLTFRenderer.PipelineStates,
         depthState: MTLDepthStencilState,
         renderer: GLTFRenderer,
         commandQueue: MTLCommandQueue,
@@ -194,7 +194,7 @@ final class GLTFIBLTests: XCTestCase {
         let commandBuffer = commandQueue.makeCommandBuffer()!
         let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass)!
         let calls = [GLTFDrawCall(mesh: mesh, material: material, modelMatrix: matrix_identity_float4x4)]
-        renderer.encodeOpaqueDrawCalls(calls, scene: scene, pipelineState: pipelineState, depthState: depthState, encoder: encoder)
+        renderer.encodeOpaqueDrawCalls(calls, scene: scene, pipelineStates: pipelines, depthState: depthState, encoder: encoder)
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()

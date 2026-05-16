@@ -35,6 +35,8 @@ public enum GLTFShaderBindings {
     public static let materialUniforms = 2
     /// Per-frame punctual-light array (KHR_lights_punctual).
     public static let lightsBuffer = 3
+    /// Per-draw skin-palette matrix array (skinned variant only).
+    public static let skinPaletteBuffer = 4
 
     /// Hard cap on per-draw punctual lights. Must match `kMaxPunctualLights`
     /// in the Metal shader.
