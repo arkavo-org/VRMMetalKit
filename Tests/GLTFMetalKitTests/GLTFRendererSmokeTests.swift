@@ -38,8 +38,24 @@ final class GLTFRendererSmokeTests: XCTestCase {
         }
 
         let renderer = try GLTFRenderer(device: device)
-        // Stub shader exposes a vertex + fragment pair; verify both are linkable.
+        // PBR shader exposes a vertex + fragment pair; verify both are linkable.
         XCTAssertNotNil(renderer.library.makeFunction(name: "gltf_pbr_vertex"))
         XCTAssertNotNil(renderer.library.makeFunction(name: "gltf_pbr_fragment"))
+    }
+
+    func testOpaquePBRPipelineStateBuilds() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+
+        let renderer = try GLTFRenderer(device: device)
+        // Catches vertex-descriptor / attribute-layout mismatches against the shader's
+        // GLTFVertexIn declaration. The pipeline-state object isn't drawn with yet;
+        // we just need MTLDevice.makeRenderPipelineState to validate the linkage.
+        let pso = try renderer.makeOpaquePBRPipelineState(
+            colorFormat: .bgra8Unorm_srgb,
+            depthFormat: .depth32Float
+        )
+        XCTAssertNotNil(pso, "Opaque PBR pipeline state must construct from the bundled metallib")
     }
 }

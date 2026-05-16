@@ -35,10 +35,13 @@
 /// dominant cost; running it across a `TaskGroup` reduces wall-clock time
 /// roughly linearly with core count.
 ///
-/// `normalMapIndices` tells the loader which textures must be uploaded as
-/// linear (`.rgba8Unorm`) rather than sRGB (`.rgba8Unorm_srgb`). Failure to
-/// flag a normal map as linear produces visibly wrong shading after a gamma
-/// curve is applied twice.
+/// Linear-vs-sRGB upload format is driven by the caller. Failure to flag a
+/// linear texture (normal, metallic-roughness, occlusion, mask) produces
+/// visibly wrong shading after a gamma curve is applied twice. For glTF
+/// PBR pipelines, callers should pass *every* non-color slot (normal, MR,
+/// occlusion) via ``loadTexturesParallel(indices:linearTextureIndices:progressCallback:)``;
+/// the older ``loadTexturesParallel(indices:normalMapIndices:progressCallback:)``
+/// is preserved for VRM/MToon callers but only covers normal maps.
 ///
 /// The loader is `@unchecked Sendable`; result aggregation uses an internal
 /// `NSLock`. Completion order is indeterminate; the returned map is keyed
@@ -77,6 +80,11 @@ public final class ParallelTextureLoader: @unchecked Sendable {
 
     /// Decodes and uploads the requested glTF textures in parallel.
     ///
+    /// VRM/MToon variant — only flags normal maps as linear. PBR consumers
+    /// should use ``loadTexturesParallel(indices:linearTextureIndices:progressCallback:)``
+    /// instead, which accepts the full set of linear-data slots
+    /// (normal + metallic-roughness + occlusion).
+    ///
     /// - Parameters:
     ///   - indices: Texture indices to load. Out-of-range indices are skipped silently.
     ///   - normalMapIndices: Indices that must be uploaded as linear (not sRGB). All indices not in this set default to sRGB.
@@ -87,22 +95,45 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         normalMapIndices: Set<Int>,
         progressCallback: (@Sendable (Int, Int) -> Void)? = nil
     ) async -> [Int: MTLTexture] {
-        // Use unchecked sendable wrapper for results
+        await loadTexturesParallel(
+            indices: indices,
+            linearTextureIndices: normalMapIndices,
+            progressCallback: progressCallback
+        )
+    }
+
+    /// Decodes and uploads the requested glTF textures in parallel, with explicit
+    /// per-texture color-space control.
+    ///
+    /// glTF 2.0 mandates these slots be linear: normal, metallic-roughness,
+    /// occlusion, and any other data textures (masks, channel-packed maps).
+    /// Color textures (baseColor, emissive) are sRGB. Callers must pass every
+    /// linear-data texture index here; everything not listed defaults to sRGB.
+    ///
+    /// - Parameters:
+    ///   - indices: Texture indices to load. Out-of-range indices are skipped silently.
+    ///   - linearTextureIndices: Indices that must be uploaded as linear (`.rgba8Unorm`). Everything else defaults to sRGB (`.rgba8Unorm_srgb`).
+    ///   - progressCallback: Invoked on the main actor as each texture completes. Receives `(loaded, total)`.
+    /// - Returns: Map from glTF texture index to allocated `MTLTexture`. Failed loads are omitted.
+    public func loadTexturesParallel(
+        indices: [Int],
+        linearTextureIndices: Set<Int>,
+        progressCallback: (@Sendable (Int, Int) -> Void)? = nil
+    ) async -> [Int: MTLTexture] {
         let results = UncheckedTextureDictionary()
         let totalCount = indices.count
         let progressBox = UncheckedProgressBox()
-        
-        // Process textures concurrently using TaskGroup
+
         await withTaskGroup(of: Void.self) { group in
             for textureIndex in indices {
                 let task: @Sendable () async -> Void = { [unowned self] in
-                    let isNormalMap = normalMapIndices.contains(textureIndex)
-                    let texture = try? await self.loadTexture(at: textureIndex, sRGB: !isNormalMap)
-                    
+                    let isLinear = linearTextureIndices.contains(textureIndex)
+                    let texture = try? await self.loadTexture(at: textureIndex, sRGB: !isLinear)
+
                     if let texture = texture {
                         results.set(texture, for: textureIndex)
                     }
-                    
+
                     progressBox.increment()
                     let current = progressBox.countValue
                     await MainActor.run {
@@ -111,10 +142,10 @@ public final class ParallelTextureLoader: @unchecked Sendable {
                 }
                 group.addTask(operation: task)
             }
-            
+
             await group.waitForAll()
         }
-        
+
         return results.getAll()
     }
     

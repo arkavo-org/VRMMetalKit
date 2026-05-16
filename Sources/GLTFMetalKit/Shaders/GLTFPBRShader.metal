@@ -14,29 +14,281 @@
 // limitations under the License.
 //
 
-// SCAFFOLDING — Phase 3a step 1.
-// Real PBR (Lambert + GGX direct + IBL split-sum + Khronos PBR Neutral
-// tonemap) lands in Phase 3a step 2. KHR_materials_unlit fragment variant
-// in step 4. Skinning + morph variants in Phase 3b.
+// glTF 2.0 PBR (metallic-roughness) — Phase 3a step 2.
+//
+// Direct lighting only this round: one default directional light, Lambert
+// diffuse + GGX/Trowbridge–Reitz specular with Schlick Fresnel + Schlick-
+// GGX geometry (k = (roughness + 1)² / 8). Khronos PBR Neutral output
+// tonemap. IBL split-sum (diffuse irradiance + specular prefiltered +
+// BRDF LUT) lands in step 3. Skinning + morph variants in Phase 3b.
+//
+// Texture color-space contract (caller's responsibility — see
+// ParallelTextureLoader linearTextureIndices):
+//   - baseColor, emissive    → sRGB sampler  (.rgba8Unorm_srgb)
+//   - normal, MR, occlusion  → linear sampler (.rgba8Unorm)
+//
+// glTF metallic-roughness texture channel layout (spec §3.9.2):
+//   - R: unused
+//   - G: roughness
+//   - B: metallic
+//   - A: unused
 
 #include <metal_stdlib>
 using namespace metal;
 
+// MARK: - Buffer indices (must match GLTFUniforms.swift)
+//
+// Single source of truth in Swift; keep these in sync if they change.
+constant int kFrameUniformsIndex    = 1;
+constant int kMaterialUniformsIndex = 2;
+
+// MARK: - Texture indices
+constant int kBaseColorTextureIndex          = 0;
+constant int kMetallicRoughnessTextureIndex  = 1;
+constant int kNormalTextureIndex             = 2;
+constant int kOcclusionTextureIndex          = 3;
+constant int kEmissiveTextureIndex           = 4;
+
+// MARK: - Sampler indices
+constant int kColorSamplerIndex  = 0;  // wraps + linear filtering
+constant int kLinearSamplerIndex = 1;
+
+// MARK: - Material flags (must match GLTFMaterialFlags in GLTFUniforms.swift)
+constant uint kFlagHasBaseColorTexture        = 1u << 0;
+constant uint kFlagHasMetallicRoughnessTexture = 1u << 1;
+constant uint kFlagHasNormalTexture           = 1u << 2;
+constant uint kFlagHasOcclusionTexture        = 1u << 3;
+constant uint kFlagHasEmissiveTexture         = 1u << 4;
+constant uint kFlagUnlit                      = 1u << 5;
+constant uint kFlagAlphaMask                  = 1u << 6;
+constant uint kFlagAlphaBlend                 = 1u << 7;
+
+// MARK: - Uniform structs (must match GLTFUniforms.swift)
+
+struct GLTFFrameUniforms {
+    float4x4 viewProjection;
+    float4x4 model;
+    float3x3 normalMatrix;
+    float3 cameraPosition;
+    float _pad0;
+    float3 lightDirection;   // World-space, points *from* the light *toward* the scene
+    float _pad1;
+    float3 lightColor;       // Linear RGB, pre-multiplied by intensity
+    float _pad2;
+};
+
+struct GLTFMaterialUniforms {
+    float4 baseColorFactor;
+    float3 emissiveFactor;
+    float metallicFactor;
+    float roughnessFactor;
+    float normalScale;
+    float occlusionStrength;
+    float alphaCutoff;
+    uint flags;
+    uint _pad0;
+    uint _pad1;
+    uint _pad2;
+};
+
+// MARK: - Stage I/O
+
 struct GLTFVertexIn {
-    float3 position  [[attribute(0)]];
+    float3 position [[attribute(0)]];
+    float3 normal   [[attribute(1)]];
+    float4 tangent  [[attribute(2)]];   // xyz = tangent, w = bitangent sign (±1)
+    float2 uv0      [[attribute(3)]];
 };
 
 struct GLTFVertexOut {
     float4 position [[position]];
+    float3 worldPosition;
+    float3 worldNormal;
+    float3 worldTangent;
+    float3 worldBitangent;
+    float2 uv0;
 };
 
-vertex GLTFVertexOut gltf_pbr_vertex(GLTFVertexIn in [[stage_in]]) {
+// MARK: - Tonemap
+
+// Khronos PBR Neutral — designed for glTF and recommended in the spec.
+// Reference: https://github.com/KhronosGroup/ToneMapping (Neutral.glsl)
+static float3 pbrNeutralToneMap(float3 color) {
+    constexpr float startCompression = 0.8 - 0.04;
+    constexpr float desaturation = 0.15;
+
+    float x = min(color.r, min(color.g, color.b));
+    float offset = x < 0.08 ? x - 6.25 * x * x : 0.04;
+    color -= offset;
+
+    float peak = max(color.r, max(color.g, color.b));
+    if (peak < startCompression) return color;
+
+    constexpr float d = 1.0 - startCompression;
+    float newPeak = 1.0 - d * d / (peak + d - startCompression);
+    color *= newPeak / peak;
+
+    float g = 1.0 - 1.0 / (desaturation * (peak - newPeak) + 1.0);
+    return mix(color, float3(newPeak), g);
+}
+
+// MARK: - BRDF helpers
+
+static float3 fresnelSchlick(float cosTheta, float3 F0) {
+    float oneMinusCos = 1.0 - cosTheta;
+    return F0 + (1.0 - F0) * (oneMinusCos * oneMinusCos * oneMinusCos * oneMinusCos * oneMinusCos);
+}
+
+static float distributionGGX(float NdotH, float roughness) {
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (M_PI_F * denom * denom + 1e-6);
+}
+
+static float geometrySchlickGGX(float NdotV, float roughness) {
+    float r = roughness + 1.0;
+    float k = (r * r) * (1.0 / 8.0);
+    return NdotV / (NdotV * (1.0 - k) + k + 1e-6);
+}
+
+static float geometrySmith(float NdotV, float NdotL, float roughness) {
+    return geometrySchlickGGX(NdotV, roughness) * geometrySchlickGGX(NdotL, roughness);
+}
+
+// MARK: - Normal mapping
+
+static float3 applyNormalMap(
+    float3 sampledNormal,    // tangent-space normal in [0, 1]
+    float normalScale,
+    float3 worldTangent,
+    float3 worldBitangent,
+    float3 worldNormal
+) {
+    float3 tangentNormal = sampledNormal * 2.0 - 1.0;
+    tangentNormal.xy *= normalScale;
+    float3x3 TBN = float3x3(
+        normalize(worldTangent),
+        normalize(worldBitangent),
+        normalize(worldNormal)
+    );
+    return normalize(TBN * tangentNormal);
+}
+
+// MARK: - Vertex
+
+vertex GLTFVertexOut gltf_pbr_vertex(
+    GLTFVertexIn in [[stage_in]],
+    constant GLTFFrameUniforms& frame [[buffer(kFrameUniformsIndex)]]
+) {
+    float4 worldPosition4 = frame.model * float4(in.position, 1.0);
+    float3 worldNormal    = normalize(frame.normalMatrix * in.normal);
+    float3 worldTangent   = normalize(frame.normalMatrix * in.tangent.xyz);
+    float3 worldBitangent = cross(worldNormal, worldTangent) * in.tangent.w;
+
     GLTFVertexOut out;
-    out.position = float4(in.position, 1.0);
+    out.position       = frame.viewProjection * worldPosition4;
+    out.worldPosition  = worldPosition4.xyz;
+    out.worldNormal    = worldNormal;
+    out.worldTangent   = worldTangent;
+    out.worldBitangent = worldBitangent;
+    out.uv0            = in.uv0;
     return out;
 }
 
-fragment float4 gltf_pbr_fragment(GLTFVertexOut in [[stage_in]]) {
-    // Reference `in` so -Wunused-parameter passes under the Makefile's -Werror policy.
-    return float4(0.5, 0.5, 0.5, in.position.w);
+// MARK: - Fragment
+
+fragment float4 gltf_pbr_fragment(
+    GLTFVertexOut in [[stage_in]],
+    constant GLTFFrameUniforms& frame [[buffer(kFrameUniformsIndex)]],
+    constant GLTFMaterialUniforms& material [[buffer(kMaterialUniformsIndex)]],
+    texture2d<float> baseColorTexture          [[texture(kBaseColorTextureIndex)]],
+    texture2d<float> metallicRoughnessTexture  [[texture(kMetallicRoughnessTextureIndex)]],
+    texture2d<float> normalTexture             [[texture(kNormalTextureIndex)]],
+    texture2d<float> occlusionTexture          [[texture(kOcclusionTextureIndex)]],
+    texture2d<float> emissiveTexture           [[texture(kEmissiveTextureIndex)]],
+    sampler colorSampler  [[sampler(kColorSamplerIndex)]],
+    sampler linearSampler [[sampler(kLinearSamplerIndex)]]
+) {
+    // --- Material sampling --------------------------------------------------
+
+    float4 baseColor = material.baseColorFactor;
+    if (material.flags & kFlagHasBaseColorTexture) {
+        // colorSampler binds to an sRGB-decoding texture; sample returns linear RGBA.
+        baseColor *= baseColorTexture.sample(colorSampler, in.uv0);
+    }
+
+    // Alpha test (MASK mode)
+    if ((material.flags & kFlagAlphaMask) && baseColor.a < material.alphaCutoff) {
+        discard_fragment();
+    }
+
+    // KHR_materials_unlit shortcut — bypass shading entirely, just tonemap baseColor.
+    if (material.flags & kFlagUnlit) {
+        float3 unlit = pbrNeutralToneMap(baseColor.rgb);
+        float outAlpha = (material.flags & kFlagAlphaBlend) ? baseColor.a : 1.0;
+        return float4(unlit, outAlpha);
+    }
+
+    float metallic  = material.metallicFactor;
+    float roughness = material.roughnessFactor;
+    if (material.flags & kFlagHasMetallicRoughnessTexture) {
+        // glTF spec: B = metallic, G = roughness.
+        float4 mr = metallicRoughnessTexture.sample(linearSampler, in.uv0);
+        metallic  *= mr.b;
+        roughness *= mr.g;
+    }
+    roughness = clamp(roughness, 0.04, 1.0);
+
+    float3 emissive = material.emissiveFactor;
+    if (material.flags & kFlagHasEmissiveTexture) {
+        emissive *= emissiveTexture.sample(colorSampler, in.uv0).rgb;
+    }
+
+    float occlusion = 1.0;
+    if (material.flags & kFlagHasOcclusionTexture) {
+        float ao = occlusionTexture.sample(linearSampler, in.uv0).r;
+        occlusion = mix(1.0, ao, material.occlusionStrength);
+    }
+
+    // --- Surface frame ------------------------------------------------------
+
+    float3 N;
+    if (material.flags & kFlagHasNormalTexture) {
+        float3 sampled = normalTexture.sample(linearSampler, in.uv0).rgb;
+        N = applyNormalMap(sampled, material.normalScale, in.worldTangent, in.worldBitangent, in.worldNormal);
+    } else {
+        N = normalize(in.worldNormal);
+    }
+    float3 V = normalize(frame.cameraPosition - in.worldPosition);
+    float3 L = normalize(-frame.lightDirection);
+    float3 H = normalize(V + L);
+    float NdotL = saturate(dot(N, L));
+    float NdotV = saturate(dot(N, V));
+    float NdotH = saturate(dot(N, H));
+    float VdotH = saturate(dot(V, H));
+
+    // --- BRDF ---------------------------------------------------------------
+
+    float3 F0  = mix(float3(0.04), baseColor.rgb, metallic);
+    float3 F   = fresnelSchlick(VdotH, F0);
+    float  D   = distributionGGX(NdotH, roughness);
+    float  G   = geometrySmith(NdotV, NdotL, roughness);
+
+    float3 specular = (D * G) * F / max(4.0 * NdotL * NdotV, 1e-4);
+    float3 kS = F;
+    float3 kD = (1.0 - kS) * (1.0 - metallic);
+    float3 diffuse = kD * baseColor.rgb / M_PI_F;
+
+    float3 direct = (diffuse + specular) * frame.lightColor * NdotL;
+
+    // Step 3 will add IBL ambient = (diffuse irradiance + specular prefiltered) * occlusion.
+    // Until then, a tiny constant ambient prevents back-faces from being pitch black.
+    float3 ambient = baseColor.rgb * 0.03 * occlusion;
+
+    float3 color = direct + ambient + emissive;
+    color = pbrNeutralToneMap(color);
+
+    float outAlpha = (material.flags & kFlagAlphaBlend) ? baseColor.a : 1.0;
+    return float4(color, outAlpha);
 }
