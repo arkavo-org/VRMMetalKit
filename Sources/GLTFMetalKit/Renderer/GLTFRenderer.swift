@@ -16,6 +16,7 @@
 
 import Foundation
 @preconcurrency import Metal
+import simd
 
 /// PBR renderer for static glTF 2.0 assets.
 ///
@@ -71,37 +72,38 @@ public final class GLTFRenderer: @unchecked Sendable {
     /// `GLTFVertexIn`.
     ///
     /// Attribute layout: position (float3) | normal (float3) | tangent
-    /// (float4) | uv0 (float2). All in a single interleaved buffer at
-    /// ``GLTFShaderBindings/vertexBuffer``.
+    /// (float4) | uv0 (float2). Interleaved in ``GLTFRenderableVertex``
+    /// layout at ``GLTFShaderBindings/vertexBuffer``.
+    ///
+    /// Per-attribute offsets are fixed (Swift's SIMD3 has 16-byte alignment
+    /// so position/normal each consume a 16-byte slot); the layout stride
+    /// uses `MemoryLayout<GLTFRenderableVertex>.stride` directly so any
+    /// Swift trailing padding (e.g. the 8 bytes after uv0 to round the
+    /// struct to a 16-byte alignment boundary) is honoured.
     public static func makeVertexDescriptor() -> MTLVertexDescriptor {
         let vd = MTLVertexDescriptor()
 
-        var offset = 0
-        // attribute 0: position
+        // attribute 0: position (float3 at offset 0)
         vd.attributes[0].format = .float3
-        vd.attributes[0].offset = offset
+        vd.attributes[0].offset = 0
         vd.attributes[0].bufferIndex = GLTFShaderBindings.vertexBuffer
-        offset += MemoryLayout<SIMD3<Float>>.stride  // 16 — float3 is padded to 16 in MSL
 
-        // attribute 1: normal
+        // attribute 1: normal (float3 at offset 16 — after SIMD3 padding)
         vd.attributes[1].format = .float3
-        vd.attributes[1].offset = offset
+        vd.attributes[1].offset = MemoryLayout<SIMD3<Float>>.stride
         vd.attributes[1].bufferIndex = GLTFShaderBindings.vertexBuffer
-        offset += MemoryLayout<SIMD3<Float>>.stride
 
-        // attribute 2: tangent
+        // attribute 2: tangent (float4 at offset 32)
         vd.attributes[2].format = .float4
-        vd.attributes[2].offset = offset
+        vd.attributes[2].offset = 2 * MemoryLayout<SIMD3<Float>>.stride
         vd.attributes[2].bufferIndex = GLTFShaderBindings.vertexBuffer
-        offset += MemoryLayout<SIMD4<Float>>.stride
 
-        // attribute 3: uv0
+        // attribute 3: uv0 (float2 at offset 48)
         vd.attributes[3].format = .float2
-        vd.attributes[3].offset = offset
+        vd.attributes[3].offset = 2 * MemoryLayout<SIMD3<Float>>.stride + MemoryLayout<SIMD4<Float>>.stride
         vd.attributes[3].bufferIndex = GLTFShaderBindings.vertexBuffer
-        offset += MemoryLayout<SIMD2<Float>>.stride
 
-        vd.layouts[GLTFShaderBindings.vertexBuffer].stride = offset
+        vd.layouts[GLTFShaderBindings.vertexBuffer].stride = MemoryLayout<GLTFRenderableVertex>.stride
         vd.layouts[GLTFShaderBindings.vertexBuffer].stepFunction = .perVertex
         vd.layouts[GLTFShaderBindings.vertexBuffer].stepRate = 1
 
@@ -137,6 +139,155 @@ public final class GLTFRenderer: @unchecked Sendable {
         descriptor.rasterSampleCount = sampleCount
 
         return try device.makeRenderPipelineState(descriptor: descriptor)
+    }
+
+    /// Issues an opaque PBR pass for the supplied draw calls.
+    ///
+    /// Phase 3a step 4a: single-pipeline opaque only. Alpha-blended and
+    /// double-sided variants come in step 4c. The encoder must already be
+    /// configured for a render pass with a depth attachment.
+    ///
+    /// - Parameters:
+    ///   - calls: Draw calls in scene-graph order (back-to-front not yet enforced).
+    ///   - scene: Per-frame state: view-projection, camera, directional light.
+    ///   - pipelineState: PBR pipeline state created via ``makeOpaquePBRPipelineState(colorFormat:depthFormat:sampleCount:)``.
+    ///   - depthState: Depth-stencil state (typically `less`, write enabled). Caller owns it so the same `GLTFRenderer` can serve multiple render passes.
+    ///   - encoder: Active render-command encoder.
+    public func encodeOpaqueDrawCalls(
+        _ calls: [GLTFDrawCall],
+        scene: GLTFSceneState,
+        pipelineState: MTLRenderPipelineState,
+        depthState: MTLDepthStencilState,
+        encoder: MTLRenderCommandEncoder
+    ) {
+        encoder.setRenderPipelineState(pipelineState)
+        encoder.setDepthStencilState(depthState)
+
+        // Samplers — built lazily on first use and cached on the renderer.
+        let colorSampler = colorSamplerState
+        let linearSampler = linearSamplerState
+        let environmentSampler = environmentSamplerState
+
+        encoder.setFragmentSamplerState(colorSampler,       index: GLTFShaderBindings.colorSampler)
+        encoder.setFragmentSamplerState(linearSampler,      index: GLTFShaderBindings.linearSampler)
+        encoder.setFragmentSamplerState(environmentSampler, index: GLTFShaderBindings.environmentSampler)
+
+        // Environment bindings are scene-wide.
+        encoder.setFragmentTexture(environment.diffuse,  index: GLTFShaderBindings.diffuseEnvironmentTexture)
+        encoder.setFragmentTexture(environment.specular, index: GLTFShaderBindings.specularEnvironmentTexture)
+        encoder.setFragmentTexture(brdfLUT,              index: GLTFShaderBindings.brdfLUTTexture)
+
+        // 1×1 white default for unbound material slots so the shader can
+        // sample without worrying about null textures — the material flags
+        // are what gates the contribution.
+        let defaultColor = defaultWhiteTexture
+        let defaultLinear = defaultLinearTexture
+
+        for call in calls {
+            // Per-draw frame uniforms — model + normal matrix differ per call.
+            let normalMatrix = Self.normalMatrix(from: call.modelMatrix)
+            var frame = GLTFFrameUniforms(
+                viewProjection: scene.viewProjection,
+                model: call.modelMatrix,
+                normalMatrix: normalMatrix,
+                cameraPosition: scene.cameraPosition,
+                lightDirection: scene.lightDirection,
+                lightColor: scene.lightColor,
+                specularMipCount: Float(environment.specularMipCount)
+            )
+            encoder.setVertexBytes(&frame, length: MemoryLayout<GLTFFrameUniforms>.stride, index: GLTFShaderBindings.frameUniforms)
+            encoder.setFragmentBytes(&frame, length: MemoryLayout<GLTFFrameUniforms>.stride, index: GLTFShaderBindings.frameUniforms)
+
+            var material = call.material.uniforms
+            encoder.setFragmentBytes(&material, length: MemoryLayout<GLTFMaterialUniforms>.stride, index: GLTFShaderBindings.materialUniforms)
+
+            encoder.setFragmentTexture(call.material.baseColorTexture         ?? defaultColor,  index: GLTFShaderBindings.baseColorTexture)
+            encoder.setFragmentTexture(call.material.metallicRoughnessTexture ?? defaultLinear, index: GLTFShaderBindings.metallicRoughnessTexture)
+            encoder.setFragmentTexture(call.material.normalTexture            ?? defaultLinear, index: GLTFShaderBindings.normalTexture)
+            encoder.setFragmentTexture(call.material.occlusionTexture         ?? defaultLinear, index: GLTFShaderBindings.occlusionTexture)
+            encoder.setFragmentTexture(call.material.emissiveTexture          ?? defaultColor,  index: GLTFShaderBindings.emissiveTexture)
+
+            encoder.setVertexBuffer(call.mesh.vertexBuffer, offset: 0, index: GLTFShaderBindings.vertexBuffer)
+            if let indexBuffer = call.mesh.indexBuffer {
+                encoder.drawIndexedPrimitives(
+                    type: call.mesh.primitiveType,
+                    indexCount: call.mesh.indexCount,
+                    indexType: call.mesh.indexType,
+                    indexBuffer: indexBuffer,
+                    indexBufferOffset: 0
+                )
+            } else {
+                encoder.drawPrimitives(
+                    type: call.mesh.primitiveType,
+                    vertexStart: 0,
+                    vertexCount: call.mesh.vertexCount
+                )
+            }
+        }
+    }
+
+    /// 3×3 inverse-transpose of the upper-left 3×3 of the model matrix —
+    /// the correct way to transform normals into world space when the model
+    /// matrix may include non-uniform scale.
+    private static func normalMatrix(from modelMatrix: simd_float4x4) -> simd_float3x3 {
+        let m = modelMatrix
+        let upperLeft = simd_float3x3(columns: (
+            SIMD3<Float>(m.columns.0.x, m.columns.0.y, m.columns.0.z),
+            SIMD3<Float>(m.columns.1.x, m.columns.1.y, m.columns.1.z),
+            SIMD3<Float>(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+        ))
+        return upperLeft.inverse.transpose
+    }
+
+    // MARK: - Lazy sampler / fallback-texture cache
+
+    private lazy var colorSamplerState: MTLSamplerState = {
+        let d = MTLSamplerDescriptor()
+        d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
+        d.sAddressMode = .repeat; d.tAddressMode = .repeat
+        d.maxAnisotropy = 16
+        return device.makeSamplerState(descriptor: d)!
+    }()
+
+    private lazy var linearSamplerState: MTLSamplerState = {
+        let d = MTLSamplerDescriptor()
+        d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
+        d.sAddressMode = .repeat; d.tAddressMode = .repeat
+        d.maxAnisotropy = 16
+        return device.makeSamplerState(descriptor: d)!
+    }()
+
+    private lazy var environmentSamplerState: MTLSamplerState = {
+        let d = MTLSamplerDescriptor()
+        d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
+        d.sAddressMode = .clampToEdge; d.tAddressMode = .clampToEdge; d.rAddressMode = .clampToEdge
+        return device.makeSamplerState(descriptor: d)!
+    }()
+
+    private lazy var defaultWhiteTexture: MTLTexture = {
+        return Self.makeSolidTexture(device: device, rgba: SIMD4<UInt8>(255, 255, 255, 255), sRGB: true)
+    }()
+
+    private lazy var defaultLinearTexture: MTLTexture = {
+        // Default for MR / normal / AO. Linear (0.5, 0.5, 1.0, 1.0) reads as
+        // “no metallic, mid-roughness, +Z normal, full AO” when sampled by
+        // shaders that gate via the material flags — never actually consumed
+        // because the flags clear those bits when no texture is bound, but
+        // a sensible byte pattern keeps GPU validation layers happy.
+        return Self.makeSolidTexture(device: device, rgba: SIMD4<UInt8>(128, 128, 255, 255), sRGB: false)
+    }()
+
+    private static func makeSolidTexture(device: MTLDevice, rgba: SIMD4<UInt8>, sRGB: Bool) -> MTLTexture {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: sRGB ? .rgba8Unorm_srgb : .rgba8Unorm,
+            width: 1, height: 1, mipmapped: false
+        )
+        descriptor.usage = [.shaderRead]
+        descriptor.storageMode = .shared
+        let texture = device.makeTexture(descriptor: descriptor)!
+        var bytes: [UInt8] = [rgba.x, rgba.y, rgba.z, rgba.w]
+        texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &bytes, bytesPerRow: 4)
+        return texture
     }
 }
 

@@ -41,6 +41,9 @@ public enum GLTFShaderBindings {
     public static let normalTexture = 2
     public static let occlusionTexture = 3
     public static let emissiveTexture = 4
+    public static let diffuseEnvironmentTexture = 5
+    public static let specularEnvironmentTexture = 6
+    public static let brdfLUTTexture = 7
 
     // MARK: Samplers
 
@@ -48,6 +51,8 @@ public enum GLTFShaderBindings {
     public static let colorSampler = 0
     /// Sampler bound to linear-data textures (normal, MR, occlusion).
     public static let linearSampler = 1
+    /// Sampler bound to IBL cubemaps and the BRDF LUT (clamp-to-edge, mipped linear).
+    public static let environmentSampler = 2
 }
 
 /// Per-frame uniforms — model transform, camera, single directional light.
