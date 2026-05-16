@@ -20,14 +20,23 @@ import simd
 
 /// PBR renderer for static glTF 2.0 assets.
 ///
-/// Phase 3a step 2: ships the real PBR shader (Lambert + GGX direct light,
-/// Khronos PBR Neutral tonemap) and constructs the matching render-pipeline
-/// state. Scene-graph traversal, IBL setup, and the draw loop land in steps
-/// 3–4.
+/// Provides the PBR + IBL shader stack (Lambert + GGX direct light,
+/// split-sum IBL, Khronos PBR Neutral tonemap) and the pipeline-state +
+/// per-draw encoding plumbing.
 ///
-/// Public-API note: this is still pre-1.0 and the shape (uniform layout,
-/// IBL binding contract, KHR extension dispatch) may shift until Phase 3a
-/// step 4 lands.
+/// ## Thread safety
+///
+/// Marked `@unchecked Sendable` for ergonomic interop with Swift
+/// concurrency, but **the type is designed for single-threaded use from a
+/// render loop**. The public ``environment`` property is read-write;
+/// concurrent reads-during-writes from different threads are not
+/// synchronised by the renderer. If multi-threaded encoding is desired,
+/// serialise access at the call site (e.g. an actor or a single
+/// dispatch queue per renderer instance).
+///
+/// Stateless per-draw work (encoding draw calls) is safe to issue
+/// concurrently from multiple threads onto different command buffers as
+/// long as the renderer's `environment` isn't being mutated.
 public final class GLTFRenderer: @unchecked Sendable {
     public let device: MTLDevice
     public let library: MTLLibrary
@@ -336,12 +345,19 @@ public final class GLTFRenderer: @unchecked Sendable {
 
         // Per-scene punctual lights — bound once, scoped to the whole batch.
         // Clamp to the shader's hard cap; anything past is silently dropped.
+        //
+        // Always bind something to the lights buffer slot, even when the
+        // scene has no `KHR_lights_punctual` entries: Metal API validation
+        // (in debug builds) flags missing bindings on slots the shader
+        // signature declares, and the shader's `lightCount == 0` branch
+        // doesn't dereference the buffer so a zero placeholder is safe.
         let lightCount = min(scene.lights.count, GLTFShaderBindings.maxPunctualLights)
-        if lightCount > 0 {
-            var lightArray = Array(scene.lights.prefix(lightCount))
-            let bufferSize = lightArray.count * MemoryLayout<GLTFPunctualLightUniform>.stride
-            encoder.setFragmentBytes(&lightArray, length: bufferSize, index: GLTFShaderBindings.lightsBuffer)
+        var lightArray = Array(scene.lights.prefix(lightCount))
+        if lightArray.isEmpty {
+            lightArray = [GLTFPunctualLightUniform(type: .directional, color: SIMD3<Float>(0, 0, 0))]
         }
+        let bufferSize = lightArray.count * MemoryLayout<GLTFPunctualLightUniform>.stride
+        encoder.setFragmentBytes(&lightArray, length: bufferSize, index: GLTFShaderBindings.lightsBuffer)
 
         for call in calls {
             // Pick + bind pipeline state for this draw.
@@ -424,7 +440,10 @@ public final class GLTFRenderer: @unchecked Sendable {
         d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
         d.sAddressMode = .repeat; d.tAddressMode = .repeat
         d.maxAnisotropy = 16
-        return device.makeSamplerState(descriptor: d)!
+        guard let s = device.makeSamplerState(descriptor: d) else {
+            fatalError("GLTFRenderer: MTLDevice.makeSamplerState returned nil for the color sampler — Metal allocation failure")
+        }
+        return s
     }()
 
     private lazy var linearSamplerState: MTLSamplerState = {
@@ -432,14 +451,20 @@ public final class GLTFRenderer: @unchecked Sendable {
         d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
         d.sAddressMode = .repeat; d.tAddressMode = .repeat
         d.maxAnisotropy = 16
-        return device.makeSamplerState(descriptor: d)!
+        guard let s = device.makeSamplerState(descriptor: d) else {
+            fatalError("GLTFRenderer: MTLDevice.makeSamplerState returned nil for the linear sampler — Metal allocation failure")
+        }
+        return s
     }()
 
     private lazy var environmentSamplerState: MTLSamplerState = {
         let d = MTLSamplerDescriptor()
         d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
         d.sAddressMode = .clampToEdge; d.tAddressMode = .clampToEdge; d.rAddressMode = .clampToEdge
-        return device.makeSamplerState(descriptor: d)!
+        guard let s = device.makeSamplerState(descriptor: d) else {
+            fatalError("GLTFRenderer: MTLDevice.makeSamplerState returned nil for the environment sampler — Metal allocation failure")
+        }
+        return s
     }()
 
     private lazy var defaultWhiteTexture: MTLTexture = {
@@ -462,7 +487,9 @@ public final class GLTFRenderer: @unchecked Sendable {
         )
         descriptor.usage = [.shaderRead]
         descriptor.storageMode = .shared
-        let texture = device.makeTexture(descriptor: descriptor)!
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            fatalError("GLTFRenderer: MTLDevice.makeTexture returned nil for a 1×1 default texture — Metal allocation failure")
+        }
         var bytes: [UInt8] = [rgba.x, rgba.y, rgba.z, rgba.w]
         texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &bytes, bytesPerRow: 4)
         return texture

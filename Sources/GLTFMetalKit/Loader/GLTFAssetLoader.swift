@@ -73,6 +73,23 @@ public struct GLTFAsset {
     /// fresh draw list. The asset itself is unchanged — pass the result
     /// to the renderer's encode method.
     ///
+    /// ## Performance
+    ///
+    /// Allocates a fresh `MTLBuffer` per *morphed* primitive each call (the
+    /// CPU morph pre-pass uploads the blended vertex buffer to GPU). For
+    /// canonical Khronos morph-cube-scale assets (e.g. `AnimatedMorphCube`
+    /// at 24 vertices × 2 targets) this is sub-millisecond; for facial
+    /// blendshape rigs at 30K vertices × 30 targets × 60 fps it becomes a
+    /// per-frame bottleneck and an autorelease-pool / heap-fragmentation
+    /// hazard. A GPU compute kernel mirroring VRMMetalKit's
+    /// `MorphAccumulate.metal` SoA pattern is the canonical fix — see PR
+    /// follow-up issue #244. A cheaper intermediate (persistent buffer
+    /// pool keyed by primitive index) is tracked separately.
+    ///
+    /// Non-morphed primitives don't allocate per call — the same cached
+    /// `MTLBuffer` is reused across frames; only the model matrix and
+    /// skin palette change.
+    ///
     /// - Parameters:
     ///   - animationIndex: Index into ``animations``. Out-of-range returns ``drawCalls`` unchanged.
     ///   - time: Time in seconds. Clamped to `[0, clip.duration]`; callers wanting loop semantics should `fmod` first.
@@ -344,7 +361,7 @@ public final class GLTFAssetLoader {
         // missing POSITION) emit `nil`.
         let runtimePrimitives: [[GLTFAssetLoader.PrimitiveBuildResult?]] = (document.meshes ?? []).map { gltfMesh in
             gltfMesh.primitives.map { gltfPrimitive in
-                Self.makePrimitive(from: gltfPrimitive, bufferLoader: bufferLoader, device: device)
+                Self.makePrimitive(from: gltfPrimitive, bufferLoader: bufferLoader, document: document, device: device)
             }
         }
 
@@ -720,9 +737,13 @@ public final class GLTFAssetLoader {
 
     /// Returns the primitive build result or `nil` if the primitive should be skipped
     /// (non-triangle mode, missing POSITION, accessor decode failure).
+    ///
+    /// `document` is threaded through so we can inspect the material slot
+    /// when warning about MikkTSpace fallbacks.
     private static func makePrimitive(
         from gltf: GLTFPrimitive,
         bufferLoader: BufferLoader,
+        document: GLTFDocument,
         device: MTLDevice
     ) -> PrimitiveBuildResult? {
         // Only triangle primitives are supported in step 4b. The mesh modes
@@ -774,14 +795,17 @@ public final class GLTFAssetLoader {
         }
 
         // Tangents: when missing, default to (1, 0, 0, 1). This is good enough
-        // for untextured / normal-map-less assets; a full MikkT generator would
-        // be a follow-up if normal mapping on tangent-less meshes becomes a
-        // real requirement.
+        // for untextured / normal-map-less assets; a full MikkTSpace generator
+        // is tracked as issue #243 for assets where the material references a
+        // normal map but TANGENT is absent (glTF 2.0 §3.7.2.1.1 requires
+        // generation in that case).
         let tangents: [Float]
+        let tangentsSynthesised: Bool
         if let tangentAccessor = gltf.attributes["TANGENT"],
            let loaded = try? bufferLoader.loadAccessorAsFloat(tangentAccessor),
            loaded.count == vertexCount * 4 {
             tangents = loaded
+            tangentsSynthesised = false
         } else {
             var generated = [Float](repeating: 0, count: vertexCount * 4)
             for i in 0..<vertexCount {
@@ -789,6 +813,20 @@ public final class GLTFAssetLoader {
                 generated[i * 4 + 3] = 1
             }
             tangents = generated
+            tangentsSynthesised = true
+        }
+
+        // Warn when the material wants a normal map but the mesh lacks
+        // authored tangents — that combination needs MikkTSpace generation
+        // (see issue #243) and the `(1, 0, 0, 1)` fallback will produce
+        // visibly wrong shading.
+        if tangentsSynthesised, let materialIndex = gltf.material,
+           let materials = document.materials,
+           materialIndex < materials.count,
+           materials[materialIndex].normalTexture != nil {
+            vrmLog("[GLTFAssetLoader] Synthesised (1,0,0,1) tangents for a primitive whose material '" +
+                   (materials[materialIndex].name ?? "<unnamed>") +
+                   "' uses a normal map. Shading will be incorrect on this mesh until MikkTSpace tangent generation lands (issue #243).")
         }
 
         // Optional skinning attributes (JOINTS_0 + WEIGHTS_0). Both must be

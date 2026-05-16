@@ -71,12 +71,30 @@ public struct GLTFRadianceHDR {
     /// scanline-based RLE encoding for rows ≥ 8 and ≤ 0x7FFF wide. Other
     /// Radiance variants throw ``GLTFRadianceHDRError/unsupportedFormat(_:)``.
     public init(data: Data) throws {
+        // Copy into a fresh [UInt8] so all subsequent indexing is zero-
+        // based regardless of whether the caller passed a Data slice with
+        // a non-zero startIndex. Cost is one full buffer copy — trivial
+        // for typical HDRI sizes (< 5 MB).
+        let bytes = [UInt8](data)
+
+        // Validate the signature *before* any header scanning. A stray
+        // `FORMAT=` substring inside a comment line on a bad input could
+        // otherwise be misparsed.
+        guard bytes.count >= 10 else {
+            throw GLTFRadianceHDRError.invalidSignature
+        }
+        let signatureBytes = Array(bytes.prefix(10))
+        let signature = String(decoding: signatureBytes, as: UTF8.self)
+        if !signature.hasPrefix("#?RADIANCE") && !signature.hasPrefix("#?RGBE") {
+            throw GLTFRadianceHDRError.invalidSignature
+        }
+
         // --- Header (ASCII lines, blank line terminator) ---
         var cursor = 0
         var format = "32-bit_rle_rgbe"
         var ascii = ""
-        while cursor < data.count {
-            let byte = data[cursor]
+        while cursor < bytes.count {
+            let byte = bytes[cursor]
             cursor += 1
             if byte == 0x0A {  // newline
                 let line = ascii
@@ -91,20 +109,14 @@ public struct GLTFRadianceHDR {
             }
             ascii.append(Character(Unicode.Scalar(byte)))
         }
-        // First "line" must be the magic.
-        // We loop again above without checking signature; do it now from the start:
-        let signature = String(data: data.prefix(10), encoding: .ascii) ?? ""
-        if !signature.hasPrefix("#?RADIANCE") && !signature.hasPrefix("#?RGBE") {
-            throw GLTFRadianceHDRError.invalidSignature
-        }
         if format != "32-bit_rle_rgbe" {
             throw GLTFRadianceHDRError.unsupportedFormat(format)
         }
 
         // --- Resolution line: e.g. "-Y 1024 +X 2048" ---
         var resolution = ""
-        while cursor < data.count {
-            let byte = data[cursor]
+        while cursor < bytes.count {
+            let byte = bytes[cursor]
             cursor += 1
             if byte == 0x0A {
                 break
@@ -135,7 +147,6 @@ public struct GLTFRadianceHDR {
         // --- Pixel decode ---
         var pixels = [UInt16](repeating: 0, count: width * height * 4)
         var byteIndex = cursor
-        let bytes = [UInt8](data)
         for row in 0..<height {
             guard byteIndex + 4 <= bytes.count else { throw GLTFRadianceHDRError.truncatedFile }
             let h0 = bytes[byteIndex]
