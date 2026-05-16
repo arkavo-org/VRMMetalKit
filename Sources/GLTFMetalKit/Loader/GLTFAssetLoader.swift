@@ -26,11 +26,10 @@ import simd
 /// parsing is step 4c; the `lights` array is wired here but always empty
 /// for now.
 public struct GLTFAsset {
-    /// Flattened draw list — one entry per primitive of every mesh visible
-    /// in the default scene, with world transform pre-multiplied. Skinned
-    /// primitives have their `skinPalette` baked from the asset's current
-    /// node TRS state. Re-build via ``rebuildDrawCalls(animationTime:)``
-    /// after stepping the animation clock.
+    /// Flattened draw list at the rest pose — one entry per primitive of
+    /// every mesh visible in the default scene, with world transform
+    /// pre-multiplied. To animate, call ``drawCalls(animationIndex:time:)``
+    /// which re-evaluates with sampled node transforms.
     public let drawCalls: [GLTFDrawCall]
 
     /// All `MTLTexture` instances referenced by materials. Held to keep
@@ -41,11 +40,130 @@ public struct GLTFAsset {
     /// position bounds. Useful for auto-framing a camera.
     public let worldBounds: (min: SIMD3<Float>, max: SIMD3<Float>)
 
-    /// `KHR_lights_punctual` lights, accumulated in scene-traversal order with
-    /// their world-space position/direction baked in. Empty when the extension
-    /// is absent. Pass to ``GLTFSceneState/lights`` to drive the shader's
-    /// punctual-light array.
+    /// `KHR_lights_punctual` lights at the rest pose. Pass to
+    /// ``GLTFSceneState/lights`` to drive the shader's punctual-light
+    /// array. (Lights on animated nodes will need refresh — out of scope
+    /// for this phase.)
     public let lights: [GLTFPunctualLightUniform]
+
+    /// Parsed animation clips. Empty when the document has no animations.
+    /// Pass the index to ``drawCalls(animationIndex:time:)``.
+    public let animations: [GLTFAnimationClip]
+
+    // MARK: - Internal state for re-evaluation
+    //
+    // GLTFAsset stays a value type, but we retain the parsed document and
+    // the per-primitive/material lookups so animation playback can rebuild
+    // draw calls at arbitrary times without re-decoding buffers.
+
+    internal let _document: GLTFDocument
+    internal let _runtimePrimitives: [[(GLTFRenderableMesh, Int?)?]]
+    internal let _runtimeMaterials: [GLTFRenderableMaterial]
+    internal let _defaultMaterial: GLTFRenderableMaterial
+    internal let _skinDefinitions: [GLTFAssetLoader.SkinDefinition]
+
+    /// Re-evaluates the scene at a given animation time and returns a
+    /// fresh draw list. The asset itself is unchanged — pass the result
+    /// to the renderer's encode method.
+    ///
+    /// - Parameters:
+    ///   - animationIndex: Index into ``animations``. Out-of-range returns ``drawCalls`` unchanged.
+    ///   - time: Time in seconds. Clamped to `[0, clip.duration]`; callers wanting loop semantics should `fmod` first.
+    public func drawCalls(animationIndex: Int, time: Float) -> [GLTFDrawCall] {
+        guard animationIndex >= 0, animationIndex < animations.count else {
+            return drawCalls
+        }
+        let clip = animations[animationIndex]
+
+        // 1. Copy rest-pose TRS for every node.
+        let nodes = _document.nodes ?? []
+        var translations = [SIMD3<Float>](repeating: SIMD3<Float>(0, 0, 0), count: nodes.count)
+        var rotations = [simd_quatf](repeating: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), count: nodes.count)
+        var scales = [SIMD3<Float>](repeating: SIMD3<Float>(1, 1, 1), count: nodes.count)
+        for (i, node) in nodes.enumerated() {
+            if let t = node.translation, t.count >= 3 {
+                translations[i] = SIMD3<Float>(t[0], t[1], t[2])
+            }
+            if let r = node.rotation, r.count >= 4 {
+                rotations[i] = simd_quatf(ix: r[0], iy: r[1], iz: r[2], r: r[3])
+            }
+            if let s = node.scale, s.count >= 3 {
+                scales[i] = SIMD3<Float>(s[0], s[1], s[2])
+            }
+        }
+
+        // 2. Sample each channel at `time` and overwrite the relevant TRS.
+        for channel in clip.channels {
+            let n = channel.targetNode
+            guard n >= 0, n < nodes.count else { continue }
+            let v = channel.sampler.sample(at: time)
+            switch channel.property {
+            case .translation where v.count >= 3:
+                translations[n] = SIMD3<Float>(v[0], v[1], v[2])
+            case .rotation where v.count >= 4:
+                rotations[n] = simd_quatf(ix: v[0], iy: v[1], iz: v[2], r: v[3])
+            case .scale where v.count >= 3:
+                scales[n] = SIMD3<Float>(v[0], v[1], v[2])
+            case .weights:
+                // Morph-target weights — Phase 3b morphs, not wired yet.
+                break
+            default:
+                break
+            }
+        }
+
+        // 3. Recompute world matrices from the sampled TRS.
+        var nodeWorldMatrices = [simd_float4x4](repeating: matrix_identity_float4x4, count: nodes.count)
+        let sceneIndex = _document.scene ?? 0
+        let scenes = _document.scenes ?? []
+        guard sceneIndex < scenes.count else { return drawCalls }
+
+        func walk(_ nodeIndex: Int, parent: simd_float4x4) {
+            guard nodeIndex < nodes.count else { return }
+            let t = simd_float4x4(translation: translations[nodeIndex])
+            let r = simd_float4x4(rotations[nodeIndex])
+            let s = simd_float4x4(scale: scales[nodeIndex])
+            let local = t * r * s
+            let world = parent * local
+            nodeWorldMatrices[nodeIndex] = world
+            for child in nodes[nodeIndex].children ?? [] {
+                walk(child, parent: world)
+            }
+        }
+        for root in scenes[sceneIndex].nodes ?? [] {
+            walk(root, parent: matrix_identity_float4x4)
+        }
+
+        // 4. Rebuild draw calls. Reuses the same runtime meshes/materials —
+        //    only the model matrices + skin palettes change.
+        var rebuilt: [GLTFDrawCall] = []
+        for (nodeIndex, node) in nodes.enumerated() {
+            guard let meshIndex = node.mesh, meshIndex < _runtimePrimitives.count else { continue }
+            let worldMatrix = nodeWorldMatrices[nodeIndex]
+
+            let skinPalette: [simd_float4x4]? = {
+                guard let skinIndex = node.skin, skinIndex < _skinDefinitions.count else { return nil }
+                let skin = _skinDefinitions[skinIndex]
+                return zip(skin.jointNodeIndices, skin.inverseBindMatrices).map { jointNode, ibm in
+                    let jointWorld = jointNode < nodeWorldMatrices.count ? nodeWorldMatrices[jointNode] : matrix_identity_float4x4
+                    return jointWorld * ibm
+                }
+            }()
+
+            for entry in _runtimePrimitives[meshIndex] {
+                guard let (mesh, materialIndex) = entry else { continue }
+                let material: GLTFRenderableMaterial = {
+                    if let idx = materialIndex, idx < _runtimeMaterials.count {
+                        return _runtimeMaterials[idx]
+                    }
+                    return _defaultMaterial
+                }()
+                let model = (mesh.isSkinned && skinPalette != nil) ? matrix_identity_float4x4 : worldMatrix
+                rebuilt.append(GLTFDrawCall(mesh: mesh, material: material, modelMatrix: model, skinPalette: skinPalette))
+            }
+        }
+        return rebuilt
+    }
 }
 
 /// Loads a glTF 2.0 asset from a `.glb` or `.gltf` file into a
@@ -206,12 +324,96 @@ public final class GLTFAssetLoader {
         // Materialize the texture-retention list (deterministic order = sorted by index).
         let retainedTextures = textureMap.keys.sorted().compactMap { textureMap[$0] }
 
+        // Parse animation clips, if any.
+        let animations = try Self.parseAnimations(from: document, bufferLoader: bufferLoader)
+
         return GLTFAsset(
             drawCalls: drawCalls,
             textures: retainedTextures,
             worldBounds: (min: worldMin, max: worldMax),
-            lights: lights
+            lights: lights,
+            animations: animations,
+            _document: document,
+            _runtimePrimitives: runtimePrimitives,
+            _runtimeMaterials: runtimeMaterials,
+            _defaultMaterial: defaultMaterial,
+            _skinDefinitions: skinDefinitions
         )
+    }
+
+    // MARK: - Animation parsing
+
+    private static func parseAnimations(
+        from document: GLTFDocument,
+        bufferLoader: BufferLoader
+    ) throws -> [GLTFAnimationClip] {
+        guard let docAnimations = document.animations else { return [] }
+
+        var clips: [GLTFAnimationClip] = []
+        clips.reserveCapacity(docAnimations.count)
+        for docAnim in docAnimations {
+            // Parse each sampler.
+            var runtimeSamplers: [GLTFRuntimeSampler] = []
+            runtimeSamplers.reserveCapacity(docAnim.samplers.count)
+            for docSampler in docAnim.samplers {
+                let interpolation = GLTFAnimationInterpolation(rawString: docSampler.interpolation)
+                guard let times = try? bufferLoader.loadAccessorAsFloat(docSampler.input) else {
+                    vrmLog("[GLTFAssetLoader] Failed to load animation sampler input accessor \(docSampler.input)")
+                    continue
+                }
+                guard let values = try? bufferLoader.loadAccessorAsFloat(docSampler.output) else {
+                    vrmLog("[GLTFAssetLoader] Failed to load animation sampler output accessor \(docSampler.output)")
+                    continue
+                }
+                // Components per keyframe = values.count / times.count (for non-cubic-spline).
+                // For cubic-spline, values.count = 3 * times.count * components.
+                let totalKeyframes = max(times.count, 1)
+                var componentsPerKeyframe: Int
+                if interpolation == .cubicSpline {
+                    componentsPerKeyframe = values.count / (3 * totalKeyframes)
+                } else {
+                    componentsPerKeyframe = values.count / totalKeyframes
+                }
+                if componentsPerKeyframe <= 0 { componentsPerKeyframe = 1 }
+                runtimeSamplers.append(GLTFRuntimeSampler(
+                    times: times,
+                    values: values,
+                    interpolation: interpolation,
+                    componentsPerKeyframe: componentsPerKeyframe
+                ))
+            }
+
+            // Parse each channel — bind sampler index → runtime sampler.
+            var runtimeChannels: [GLTFRuntimeChannel] = []
+            var duration: Float = 0
+            for docChannel in docAnim.channels {
+                guard docChannel.sampler < runtimeSamplers.count else { continue }
+                let sampler = runtimeSamplers[docChannel.sampler]
+                if let last = sampler.times.last { duration = max(duration, last) }
+
+                guard let targetNode = docChannel.target.node else { continue }
+                let property: GLTFAnimationProperty
+                switch docChannel.target.path {
+                case "translation": property = .translation
+                case "rotation":    property = .rotation
+                case "scale":       property = .scale
+                case "weights":     property = .weights
+                default: continue
+                }
+                runtimeChannels.append(GLTFRuntimeChannel(
+                    targetNode: targetNode,
+                    property: property,
+                    sampler: sampler
+                ))
+            }
+
+            clips.append(GLTFAnimationClip(
+                name: docAnim.name,
+                channels: runtimeChannels,
+                duration: duration
+            ))
+        }
+        return clips
     }
 
     // MARK: - KHR_lights_punctual
@@ -692,12 +894,12 @@ public final class GLTFAssetLoader {
 
     /// Parsed glTF skin: joint node indices + IBMs. Bake per-frame via
     /// `nodeWorldMatrix * inverseBindMatrix`.
-    private struct SkinDefinition {
+    internal struct SkinDefinition {
         let jointNodeIndices: [Int]
         let inverseBindMatrices: [simd_float4x4]
     }
 
-    private static func parseSkinDefinitions(
+    internal static func parseSkinDefinitions(
         from document: GLTFDocument,
         bufferLoader: BufferLoader
     ) throws -> [SkinDefinition] {
