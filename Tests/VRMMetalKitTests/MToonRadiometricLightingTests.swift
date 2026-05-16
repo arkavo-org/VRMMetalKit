@@ -131,10 +131,12 @@ final class MToonRadiometricLightingTests: XCTestCase {
             "Pre-#213 VMK collapsed to ~0.32 across the whole visible disc.")
         XCTAssertGreaterThan(termLuma, 0.50,
             "Disc center brightness must rise with .radiometric. Got luma=\(termLuma).")
-        // Gradient — small but must be in the right direction. Pre-#213 lit
-        // and dim sample points were identical (~0.32, Δ ≈ 0).
-        XCTAssertGreaterThan(litLuma - dimLuma, 0.01,
-            "Lambert gradient must point the right way (lit > dim). " +
+        // Gradient — must be visible in the right direction. Observed Δ ≈ 0.106
+        // on macOS arm64 against this conformance asset; threshold 0.05 leaves
+        // ~50% headroom while still failing loudly if the lit/dim signal
+        // collapses (the symptom #213 originally surfaced as Δ ≈ 0).
+        XCTAssertGreaterThan(litLuma - dimLuma, 0.05,
+            "Lambert gradient must be visible (lit − dim > 0.05). " +
             "Got lit=\(litLuma), dim=\(dimLuma), Δ=\(litLuma - dimLuma).")
     }
 
