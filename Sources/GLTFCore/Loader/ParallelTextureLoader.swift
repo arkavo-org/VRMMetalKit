@@ -147,7 +147,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
     private func loadImageFromBufferView(_ bufferViewIndex: Int, textureIndex: Int) throws -> Data {
         guard let bufferView = document.bufferViews?[safe: bufferViewIndex],
               let _ = document.buffers?[safe: bufferView.buffer] else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferViewIndex,
                 requiredBy: "texture[\(textureIndex)] loading from bufferView",
                 expectedSize: nil,
@@ -160,7 +160,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         let length = bufferView.byteLength
         
         guard offset + length <= bufferData.count else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferView.buffer,
                 requiredBy: "texture[\(textureIndex)] buffer data validation",
                 expectedSize: offset + length,
@@ -173,7 +173,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
     
     private func loadImageFromDataURI(_ uri: String, textureIndex: Int) throws -> Data {
         guard let commaIndex = uri.firstIndex(of: ",") else {
-            throw VRMError.invalidImageData(
+            throw GLTFError.invalidImageData(
                 textureIndex: textureIndex,
                 reason: "Data URI missing comma separator",
                 filePath: baseURL?.path
@@ -182,7 +182,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         
         let base64String = String(uri[uri.index(after: commaIndex)...])
         guard let data = Data(base64Encoded: base64String) else {
-            throw VRMError.invalidImageData(
+            throw GLTFError.invalidImageData(
                 textureIndex: textureIndex,
                 reason: "Failed to decode base64 data",
                 filePath: baseURL?.path
@@ -194,7 +194,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
     
     private func loadImageFromExternalFile(_ uri: String, textureIndex: Int) throws -> Data {
         guard let baseURL = baseURL else {
-            throw VRMError.missingTexture(
+            throw GLTFError.missingTexture(
                 textureIndex: textureIndex,
                 materialName: nil,
                 uri: uri,
@@ -207,7 +207,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         let basePath = baseURL.standardized.path
         let filePath = fileURL.standardized.path
         guard filePath.hasPrefix(basePath) else {
-            throw VRMError.invalidPath(
+            throw GLTFError.invalidPath(
                 path: uri,
                 reason: "Path resolves outside base directory",
                 filePath: baseURL.path
@@ -215,7 +215,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         }
         
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            throw VRMError.missingTexture(
+            throw GLTFError.missingTexture(
                 textureIndex: textureIndex,
                 materialName: nil,
                 uri: uri,
@@ -229,7 +229,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
     private func createTexture(from imageData: Data, textureIndex: Int, sRGB: Bool) async throws -> MTLTexture? {
         guard let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
-            throw VRMError.invalidImageData(
+            throw GLTFError.invalidImageData(
                 textureIndex: textureIndex,
                 reason: "Failed to decode image data",
                 filePath: baseURL?.path

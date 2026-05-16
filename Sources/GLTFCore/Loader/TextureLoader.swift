@@ -67,7 +67,7 @@ public class TextureLoader {
     ///   - index: Texture index in ``GLTFDocument/textures``.
     ///   - sRGB: Treat the texture as sRGB color (default). Pass `false` for linear data such as normal, AO, metallic-roughness, or mask textures.
     /// - Returns: The decoded `MTLTexture`, or `nil` if the texture or its source image cannot be resolved.
-    /// - Throws: ``VRMError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)``, ``VRMError/missingTexture(textureIndex:materialName:uri:filePath:)``, ``VRMError/invalidImageData(textureIndex:reason:filePath:)``, or ``VRMError/invalidPath(path:reason:filePath:)`` per the failure mode.
+    /// - Throws: ``GLTFError/missingBuffer(bufferIndex:requiredBy:expectedSize:filePath:)``, ``GLTFError/missingTexture(textureIndex:materialName:uri:filePath:)``, ``GLTFError/invalidImageData(textureIndex:reason:filePath:)``, or ``GLTFError/invalidPath(path:reason:filePath:)`` per the failure mode.
     public func loadTexture(at index: Int, sRGB: Bool = true) async throws -> MTLTexture? {
         guard let gltfTexture = document.textures?[safe: index] else {
             vrmLog("[TextureLoader] Warning: No texture at index \(index)")
@@ -111,7 +111,7 @@ public class TextureLoader {
     private func loadImageFromBufferView(_ bufferViewIndex: Int, textureIndex: Int) throws -> Data {
         guard let bufferView = document.bufferViews?[safe: bufferViewIndex],
               let _ = document.buffers?[safe: bufferView.buffer] else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferViewIndex,
                 requiredBy: "texture[\(textureIndex)] loading from bufferView",
                 expectedSize: nil,
@@ -126,7 +126,7 @@ public class TextureLoader {
         let length = bufferView.byteLength
 
         guard offset + length <= bufferData.count else {
-            throw VRMError.missingBuffer(
+            throw GLTFError.missingBuffer(
                 bufferIndex: bufferView.buffer,
                 requiredBy: "texture[\(textureIndex)] buffer data validation (offset: \(offset), length: \(length), available: \(bufferData.count))",
                 expectedSize: offset + length,
@@ -139,7 +139,7 @@ public class TextureLoader {
 
     private func loadImageFromDataURI(_ uri: String, textureIndex: Int) throws -> Data {
         guard let commaIndex = uri.firstIndex(of: ",") else {
-            throw VRMError.invalidImageData(
+            throw GLTFError.invalidImageData(
                 textureIndex: textureIndex,
                 reason: "Data URI missing comma separator in '\(uri.prefix(50))...'",
                 filePath: baseURL?.path
@@ -148,7 +148,7 @@ public class TextureLoader {
 
         let base64String = String(uri[uri.index(after: commaIndex)...])
         guard let data = Data(base64Encoded: base64String) else {
-            throw VRMError.invalidImageData(
+            throw GLTFError.invalidImageData(
                 textureIndex: textureIndex,
                 reason: "Failed to decode base64 data from URI",
                 filePath: baseURL?.path
@@ -161,7 +161,7 @@ public class TextureLoader {
     private func loadImageFromExternalFile(_ uri: String, textureIndex: Int) throws -> Data {
         guard let baseURL = baseURL else {
             vrmLog("[TextureLoader] Warning: Cannot load external file without base URL: \(uri)")
-            throw VRMError.missingTexture(
+            throw GLTFError.missingTexture(
                 textureIndex: textureIndex,
                 materialName: nil,
                 uri: uri,
@@ -186,7 +186,7 @@ public class TextureLoader {
         let filePath = fileURL.standardized.resolvingSymlinksInPath().path
         guard filePath.hasPrefix(basePath) else {
             vrmLog("[TextureLoader] Security: Refusing to load file outside base directory: \(uri)")
-            throw VRMError.invalidPath(
+            throw GLTFError.invalidPath(
                 path: uri,
                 reason: "texture[\(textureIndex)]: Path resolves outside base directory (security violation)",
                 filePath: baseURL.path
@@ -196,7 +196,7 @@ public class TextureLoader {
         // Check if file exists
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             vrmLog("[TextureLoader] Warning: External image file not found: \(fileURL.path)")
-            throw VRMError.missingTexture(
+            throw GLTFError.missingTexture(
                 textureIndex: textureIndex,
                 materialName: nil,
                 uri: uri,
@@ -211,7 +211,7 @@ public class TextureLoader {
             return data
         } catch {
             vrmLog("[TextureLoader] Error loading external image: \(error)")
-            throw VRMError.invalidImageData(
+            throw GLTFError.invalidImageData(
                 textureIndex: textureIndex,
                 reason: "Failed to read external image file '\(uri)': \(error.localizedDescription)",
                 filePath: baseURL.path
@@ -242,7 +242,7 @@ public class TextureLoader {
             return texture
         } catch {
             vrmLog("[TextureLoader] Failed to create texture: \(error)")
-            throw VRMError.invalidImageData(
+            throw GLTFError.invalidImageData(
                 textureIndex: textureIndex,
                 reason: "Failed to create Metal texture from image data (mimeType: \(mimeType ?? "unknown")): \(error.localizedDescription)",
                 filePath: baseURL?.path
