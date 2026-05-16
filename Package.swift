@@ -47,7 +47,8 @@ let package = Package(
             name: "GLTFMetalKit",
             dependencies: ["GLTFCore"],
             exclude: [
-                "Shaders/GLTFPBRShader.metal"
+                "Shaders/GLTFPBRShader.metal",
+                "Shaders/IBLPrefilter.metal"
             ],
             resources: [
                 .copy("Resources/GLTFMetalKitShaders.metallib")

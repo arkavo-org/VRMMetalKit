@@ -31,12 +31,23 @@ public final class GLTFRenderer: @unchecked Sendable {
     public let device: MTLDevice
     public let library: MTLLibrary
 
+    /// View-independent BRDF integration LUT used by the IBL split-sum path.
+    /// Generated once at init time via a compute kernel — the math is fixed
+    /// for a given BRDF, so it never needs rebuilding.
+    public let brdfLUT: MTLTexture
+
+    /// Image-based lighting environment. Defaults to a 1×1 neutral-gray
+    /// fallback so the shader's IBL split-sum path stays valid without an
+    /// HDR asset. Replace via assignment when a real environment is loaded
+    /// (the renderer reads this each frame; no rebuild required).
+    public var environment: GLTFEnvironment
+
     /// Creates a renderer bound to a Metal device.
     ///
     /// - Parameter device: The Metal device to use for pipeline state and
     ///   GPU resource allocation. Typically `MTLCreateSystemDefaultDevice()`.
     /// - Throws: An error if the bundled `GLTFMetalKitShaders.metallib`
-    ///   cannot be located or loaded.
+    ///   cannot be located or loaded, or if BRDF LUT generation fails.
     public init(device: MTLDevice) throws {
         self.device = device
 
@@ -48,6 +59,12 @@ public final class GLTFRenderer: @unchecked Sendable {
         }
 
         self.library = try device.makeLibrary(URL: metallibURL)
+        self.brdfLUT = try GLTFBRDFLUT.generate(device: device, library: library)
+
+        guard let fallback = GLTFEnvironment.makeFallback(device: device) else {
+            throw GLTFRendererError.environmentSetupFailed
+        }
+        self.environment = fallback
     }
 
     /// Builds the vertex descriptor that matches ``GLTFPBRShader.metal``'s
@@ -129,6 +146,8 @@ public enum GLTFRendererError: Error, LocalizedError {
     case missingShaderLibrary
     /// A required shader function is absent from the loaded metallib (likely a stale build of `Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib`).
     case missingShaderFunction(name: String)
+    /// The fallback IBL environment could not be allocated. Indicates a deeper Metal-allocation problem.
+    case environmentSetupFailed
 
     public var errorDescription: String? {
         switch self {
@@ -147,6 +166,14 @@ public enum GLTFRendererError: Error, LocalizedError {
             The bundled `GLTFMetalKitShaders.metallib` does not contain '\(name)'.
 
             Suggestion: Re-run `make gltf-shaders` to rebuild the metallib. If the function name recently changed, ensure both the .metal source and the Swift caller reference the same symbol.
+            """
+        case .environmentSetupFailed:
+            return """
+            ❌ Environment Setup Failed
+
+            The fallback 1×1 neutral-gray IBL environment could not be allocated.
+
+            Suggestion: This usually indicates a deeper Metal allocation problem — verify the supplied MTLDevice is valid and the system has enough free GPU memory.
             """
         }
     }

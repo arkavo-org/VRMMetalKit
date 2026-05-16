@@ -69,7 +69,10 @@ public struct GLTFFrameUniforms {
     /// Linear RGB, pre-multiplied by intensity. `[1, 1, 1] * 3.0` gives a
     /// neutral mid-bright key light for a Khronos PBR Neutral pipeline.
     public var lightColor: SIMD3<Float>
-    public var _pad2: Float = 0
+    /// Number of mip levels in the bound specular prefiltered cubemap.
+    /// Set to `0` to fall back to the gray-ambient path (no real IBL bound);
+    /// otherwise pass `Float(environment.specularMipCount)`.
+    public var specularMipCount: Float
 
     public init(
         viewProjection: simd_float4x4,
@@ -77,7 +80,8 @@ public struct GLTFFrameUniforms {
         normalMatrix: simd_float3x3,
         cameraPosition: SIMD3<Float>,
         lightDirection: SIMD3<Float>,
-        lightColor: SIMD3<Float>
+        lightColor: SIMD3<Float>,
+        specularMipCount: Float
     ) {
         self.viewProjection = viewProjection
         self.model = model
@@ -85,6 +89,7 @@ public struct GLTFFrameUniforms {
         self.cameraPosition = cameraPosition
         self.lightDirection = lightDirection
         self.lightColor = lightColor
+        self.specularMipCount = specularMipCount
     }
 }
 

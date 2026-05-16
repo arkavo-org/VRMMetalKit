@@ -48,10 +48,15 @@ constant int kMetallicRoughnessTextureIndex  = 1;
 constant int kNormalTextureIndex             = 2;
 constant int kOcclusionTextureIndex          = 3;
 constant int kEmissiveTextureIndex           = 4;
+// IBL slots — bound from GLTFRenderer.environment.
+constant int kDiffuseEnvironmentIndex        = 5;  // cubemap (irradiance)
+constant int kSpecularEnvironmentIndex       = 6;  // cubemap (prefiltered mip chain)
+constant int kBRDFLUTIndex                   = 7;  // 2D RG16Float
 
 // MARK: - Sampler indices
-constant int kColorSamplerIndex  = 0;  // wraps + linear filtering
-constant int kLinearSamplerIndex = 1;
+constant int kColorSamplerIndex       = 0;  // wraps + linear filtering
+constant int kLinearSamplerIndex      = 1;
+constant int kEnvironmentSamplerIndex = 2;  // clamp to edge, linear mip filtering
 
 // MARK: - Material flags (must match GLTFMaterialFlags in GLTFUniforms.swift)
 constant uint kFlagHasBaseColorTexture        = 1u << 0;
@@ -74,7 +79,7 @@ struct GLTFFrameUniforms {
     float3 lightDirection;   // World-space, points *from* the light *toward* the scene
     float _pad1;
     float3 lightColor;       // Linear RGB, pre-multiplied by intensity
-    float _pad2;
+    float specularMipCount;  // Number of mip levels in the prefiltered specular cubemap. 0 falls back to the gray ambient.
 };
 
 struct GLTFMaterialUniforms {
@@ -202,13 +207,17 @@ fragment float4 gltf_pbr_fragment(
     GLTFVertexOut in [[stage_in]],
     constant GLTFFrameUniforms& frame [[buffer(kFrameUniformsIndex)]],
     constant GLTFMaterialUniforms& material [[buffer(kMaterialUniformsIndex)]],
-    texture2d<float> baseColorTexture          [[texture(kBaseColorTextureIndex)]],
-    texture2d<float> metallicRoughnessTexture  [[texture(kMetallicRoughnessTextureIndex)]],
-    texture2d<float> normalTexture             [[texture(kNormalTextureIndex)]],
-    texture2d<float> occlusionTexture          [[texture(kOcclusionTextureIndex)]],
-    texture2d<float> emissiveTexture           [[texture(kEmissiveTextureIndex)]],
-    sampler colorSampler  [[sampler(kColorSamplerIndex)]],
-    sampler linearSampler [[sampler(kLinearSamplerIndex)]]
+    texture2d<float>   baseColorTexture          [[texture(kBaseColorTextureIndex)]],
+    texture2d<float>   metallicRoughnessTexture  [[texture(kMetallicRoughnessTextureIndex)]],
+    texture2d<float>   normalTexture             [[texture(kNormalTextureIndex)]],
+    texture2d<float>   occlusionTexture          [[texture(kOcclusionTextureIndex)]],
+    texture2d<float>   emissiveTexture           [[texture(kEmissiveTextureIndex)]],
+    texturecube<float> diffuseEnvironment       [[texture(kDiffuseEnvironmentIndex)]],
+    texturecube<float> specularEnvironment      [[texture(kSpecularEnvironmentIndex)]],
+    texture2d<float>   brdfLUT                  [[texture(kBRDFLUTIndex)]],
+    sampler colorSampler       [[sampler(kColorSamplerIndex)]],
+    sampler linearSampler      [[sampler(kLinearSamplerIndex)]],
+    sampler environmentSampler [[sampler(kEnvironmentSamplerIndex)]]
 ) {
     // --- Material sampling --------------------------------------------------
 
@@ -282,9 +291,34 @@ fragment float4 gltf_pbr_fragment(
 
     float3 direct = (diffuse + specular) * frame.lightColor * NdotL;
 
-    // Step 3 will add IBL ambient = (diffuse irradiance + specular prefiltered) * occlusion.
-    // Until then, a tiny constant ambient prevents back-faces from being pitch black.
-    float3 ambient = baseColor.rgb * 0.03 * occlusion;
+    // --- IBL split-sum (Karis 2013) -----------------------------------------
+    //
+    // Diffuse term:  baseColor / π integrated against irradiance map.
+    // Specular term: prefiltered cubemap sampled at LOD = roughness * (mips-1)
+    //                multiplied by BRDF LUT (scale, bias). Fresnel uses
+    //                NdotV (not VdotH) for the ambient lobe.
+    //
+    // When `specularMipCount` is 0 the caller hasn't bound a real environment;
+    // we fall through to a small gray ambient so back-faces aren't pitch black.
+    float3 ambient;
+    if (frame.specularMipCount > 0.5) {
+        float3 R = reflect(-V, N);
+        float3 F_ibl = fresnelSchlick(NdotV, F0);
+        float3 kS_ibl = F_ibl;
+        float3 kD_ibl = (1.0 - kS_ibl) * (1.0 - metallic);
+
+        float3 irradiance = diffuseEnvironment.sample(environmentSampler, N).rgb;
+        float3 diffuseIBL = kD_ibl * baseColor.rgb * irradiance;
+
+        float mipLevel = roughness * (frame.specularMipCount - 1.0);
+        float3 prefiltered = specularEnvironment.sample(environmentSampler, R, level(mipLevel)).rgb;
+        float2 envBRDF = brdfLUT.sample(environmentSampler, float2(NdotV, roughness)).rg;
+        float3 specularIBL = prefiltered * (F_ibl * envBRDF.x + envBRDF.y);
+
+        ambient = (diffuseIBL + specularIBL) * occlusion;
+    } else {
+        ambient = baseColor.rgb * 0.03 * occlusion;
+    }
 
     float3 color = direct + ambient + emissive;
     color = pbrNeutralToneMap(color);

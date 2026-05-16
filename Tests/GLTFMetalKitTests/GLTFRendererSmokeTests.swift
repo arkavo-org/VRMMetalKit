@@ -58,4 +58,28 @@ final class GLTFRendererSmokeTests: XCTestCase {
         )
         XCTAssertNotNil(pso, "Opaque PBR pipeline state must construct from the bundled metallib")
     }
+
+    func testBRDFLUTGenerates() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+
+        let renderer = try GLTFRenderer(device: device)
+        XCTAssertEqual(renderer.brdfLUT.width, GLTFBRDFLUT.size)
+        XCTAssertEqual(renderer.brdfLUT.height, GLTFBRDFLUT.size)
+        XCTAssertEqual(renderer.brdfLUT.pixelFormat, .rg16Float)
+    }
+
+    func testFallbackEnvironmentIsAttached() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+
+        let renderer = try GLTFRenderer(device: device)
+        // Fallback cubemaps are 1×1, single mip — keeps the split-sum path
+        // valid until the consumer supplies a real environment.
+        XCTAssertEqual(renderer.environment.diffuse.textureType, .typeCube)
+        XCTAssertEqual(renderer.environment.specular.textureType, .typeCube)
+        XCTAssertEqual(renderer.environment.specularMipCount, 1)
+    }
 }
