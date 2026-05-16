@@ -206,4 +206,24 @@ final class MToonRadiometricLightingTests: XCTestCase {
                     "Found \(renderer.lightNormalizationMode).")
         }
     }
+
+    /// Code-path verification: `setupBrightToonLighting()` (the `VRMRender`
+    /// CLI preset) must opt into `.radiometric`, not the previous
+    /// `.manual(1.25)`. Without this assertion, a future revert of the preset
+    /// could silently re-enter the dim photometric path while the bundled
+    /// `AvatarSample_A.png` regression test (`chest luma > 0.30`) keeps
+    /// passing on its loose threshold.
+    func testSetupBrightToonLightingOptsIntoRadiometric() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal not available")
+        }
+        let renderer = VRMRenderer(device: device, config: RendererConfig())
+        renderer.setupBrightToonLighting()
+        if case .radiometric = renderer.lightNormalizationMode {
+            // ok
+        } else {
+            XCTFail("setupBrightToonLighting must set lightNormalizationMode to .radiometric. " +
+                    "Found \(renderer.lightNormalizationMode).")
+        }
+    }
 }
