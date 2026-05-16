@@ -99,6 +99,10 @@ let package = Package(
             name: "VRMBenchmark",
             dependencies: ["VRMMetalKit"]
         ),
+        .executableTarget(
+            name: "GLTFRender",
+            dependencies: ["GLTFMetalKit"]
+        ),
         .testTarget(
             name: "VRMMetalKitTests",
             dependencies: ["VRMMetalKit"],
