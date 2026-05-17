@@ -756,6 +756,18 @@ public class VRMExtensionParser {
                             }
                         }
 
+                        // VRMC_springBone_extended_collider per-joint
+                        // angleLimit. The published 1.0 spec does not define
+                        // a unit; conformance fixtures author whole-number
+                        // degrees (e.g. `60`) which would be ~3400° if read
+                        // as radians, so we treat the file value as degrees
+                        // and convert to radians for internal use. Default
+                        // 0 = no limit.
+                        if let jointExt = (jointDict["extensions"] as? [String: Any])?["VRMC_springBone_extended_collider"] as? [String: Any],
+                           let angleLimitDegrees = parseFloatValue(jointExt["angleLimit"]) {
+                            joint.angleLimit = max(0, angleLimitDegrees) * .pi / 180.0
+                        }
+
                         spring.joints.append(joint)
                     }
                 }
@@ -801,6 +813,11 @@ public class VRMExtensionParser {
                let extShape = parseExtendedColliderShape(extShapeDict, colliderIndex: colliderIndex, node: node) {
                 return extShape
             }
+            // Extension present but unusable — leave a forensic trail so the
+            // next "extension didn't behave" report points here.
+            vrmLog("[VRMExtensionParser] WARNING: Collider \(colliderIndex) (node \(node)) " +
+                   "has a VRMC_springBone_extended_collider entry but no readable shape; " +
+                   "falling back to the entry's base `shape` if present.")
         }
         if let shapeDict = colliderDict["shape"] as? [String: Any],
            let baseShape = parseColliderShape(shapeDict) {
@@ -812,12 +829,13 @@ public class VRMExtensionParser {
     /// Parse a `VRMC_springBone_extended_collider.shape` dict. The
     /// extension promotes VMK's existing (originally non-spec) `plane`
     /// collider to the spec, and introduces `insideSphere` / `insideCapsule`
-    /// (containment shapes — bone must stay *inside* the volume) that VMK
-    /// hasn't implemented yet (tracked in VMK#237).
+    /// (containment shapes — bone must stay *inside* the volume).
     ///
-    /// - Returns: A ``VRMColliderShape`` when the extension's shape can be
-    ///   mapped onto a supported VMK collider (currently only `plane`).
-    ///   Returns `nil` and logs a warning for `inside*` variants.
+    /// Spec: <https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_springBone_extended_collider-1.0/README.md>
+    ///
+    /// - Returns: A ``VRMColliderShape`` mapped to the corresponding base
+    ///   or inverted case. Returns `nil` (and logs a warning) when the
+    ///   shape kind is unrecognised.
     private func parseExtendedColliderShape(
         _ dict: [String: Any],
         colliderIndex: Int,
@@ -836,31 +854,18 @@ public class VRMExtensionParser {
             return .plane(offset: offset, normal: normal)
         }
         if let sphereDict = dict["sphere"] as? [String: Any] {
+            let (offset, radius) = parseSphereBody(sphereDict)
             let inside = (sphereDict["inside"] as? Bool) ?? false
-            if !inside {
-                // Non-inverted sphere in the extension is equivalent to the
-                // base spec's sphere — accept and route through .sphere.
-                let offset = parseVector3(sphereDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-                let radius = parseFloatValue(sphereDict["radius"]) ?? 0.0
-                return .sphere(offset: offset, radius: radius)
-            }
-            vrmLog("[VRMExtensionParser] WARNING: Collider \(colliderIndex) (node \(node)) " +
-                   "is an inverted sphere (`inside=true`) — containment-collision kernel not " +
-                   "yet shipping (VMK#237 phase 2); collider skipped.")
-            return nil
+            return inside
+                ? .insideSphere(offset: offset, radius: radius)
+                : .sphere(offset: offset, radius: radius)
         }
         if let capsuleDict = dict["capsule"] as? [String: Any] {
+            let (offset, radius, tail) = parseCapsuleBody(capsuleDict)
             let inside = (capsuleDict["inside"] as? Bool) ?? false
-            if !inside {
-                let offset = parseVector3(capsuleDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-                let radius = parseFloatValue(capsuleDict["radius"]) ?? 0.0
-                let tail = parseVector3(capsuleDict["tail"]) ?? SIMD3<Float>(0, 0, 0)
-                return .capsule(offset: offset, radius: radius, tail: tail)
-            }
-            vrmLog("[VRMExtensionParser] WARNING: Collider \(colliderIndex) (node \(node)) " +
-                   "is an inverted capsule (`inside=true`) — containment-collision kernel " +
-                   "not yet shipping (VMK#237 phase 2); collider skipped.")
-            return nil
+            return inside
+                ? .insideCapsule(offset: offset, radius: radius, tail: tail)
+                : .capsule(offset: offset, radius: radius, tail: tail)
         }
         let keys = dict.keys.joined(separator: ", ")
         vrmLog("[VRMExtensionParser] WARNING: Collider \(colliderIndex) (node \(node)) " +
@@ -869,15 +874,29 @@ public class VRMExtensionParser {
         return nil
     }
 
+    /// Shared `{offset, radius}` extraction used by both the base
+    /// `parseColliderShape` and the extension's non-inverted sphere path.
+    private func parseSphereBody(_ dict: [String: Any]) -> (offset: SIMD3<Float>, radius: Float) {
+        let offset = parseVector3(dict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+        let radius = parseFloatValue(dict["radius"]) ?? 0.0
+        return (offset, radius)
+    }
+
+    /// Shared `{offset, radius, tail}` extraction used by both the base
+    /// `parseColliderShape` and the extension's non-inverted capsule path.
+    private func parseCapsuleBody(_ dict: [String: Any]) -> (offset: SIMD3<Float>, radius: Float, tail: SIMD3<Float>) {
+        let offset = parseVector3(dict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+        let radius = parseFloatValue(dict["radius"]) ?? 0.0
+        let tail = parseVector3(dict["tail"]) ?? SIMD3<Float>(0, 0, 0)
+        return (offset, radius, tail)
+    }
+
     private func parseColliderShape(_ dict: [String: Any]) -> VRMColliderShape? {
         if let sphereDict = dict["sphere"] as? [String: Any] {
-            let offset = parseVector3(sphereDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-            let radius = parseFloatValue(sphereDict["radius"]) ?? 0.0
+            let (offset, radius) = parseSphereBody(sphereDict)
             return .sphere(offset: offset, radius: radius)
         } else if let capsuleDict = dict["capsule"] as? [String: Any] {
-            let offset = parseVector3(capsuleDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-            let radius = parseFloatValue(capsuleDict["radius"]) ?? 0.0
-            let tail = parseVector3(capsuleDict["tail"]) ?? SIMD3<Float>(0, 0, 0)
+            let (offset, radius, tail) = parseCapsuleBody(capsuleDict)
             return .capsule(offset: offset, radius: radius, tail: tail)
         } else if let planeDict = dict["plane"] as? [String: Any] {
             #if VRM_METALKIT_ENABLE_LOGS

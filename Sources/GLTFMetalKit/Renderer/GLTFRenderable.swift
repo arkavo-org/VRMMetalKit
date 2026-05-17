@@ -172,6 +172,23 @@ public struct GLTFRenderableSkin {
 /// verts), the CPU loop is well under a millisecond. A GPU compute pre-
 /// pass mirroring VRMMetalKit's MorphAccumulate.metal is the follow-up
 /// for high-vertex-count assets like blendshape-driven faces.
+///
+/// ## Memory note (issue #251)
+///
+/// For morphed primitives, the base attribute data lives in two places:
+/// once on the GPU as the interleaved `mesh.vertexBuffer` (used by the
+/// rest-pose draw call), and once on the CPU as the `basePositions` /
+/// `baseNormals` / `baseTangents` / `baseUVs` arrays here (used by the
+/// per-frame morph blend). For a typical face blendshape rig (~30K verts)
+/// the duplication is ~1.4 MB CPU — small relative to the morph deltas
+/// themselves (~32 MB at 30 targets × 36 bytes/vertex), so the
+/// `GLTFMorphBufferPool` from #247 dominates the memory profile.
+///
+/// A clean "single source of truth" fix would drop the CPU base arrays
+/// and read them from `mesh.vertexBuffer.contents()` at blend time. That
+/// requires a public API change (a new init taking a buffer reference
+/// instead of arrays) and is tracked separately. Until then, the soft
+/// trade-off documented above is the deliberate state.
 public struct GLTFPrimitiveMorphData {
     /// Base positions, parallel to the vertex order.
     public let basePositions: [SIMD3<Float>]

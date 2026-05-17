@@ -235,11 +235,15 @@ public struct BoneParams {
     public var colliderGroupMask: UInt32
     /// Per-bone gravity direction (normalized; typically `[0, -1, 0]`).
     public var gravityDir: SIMD3<Float>
+    /// Maximum swing angle in radians from the bind direction (from
+    /// `VRMC_springBone_extended_collider.angleLimit`). `0` = no limit.
+    public var angleLimit: Float
 
     /// Creates per-bone XPBD parameters with optional gravity and collider-mask overrides.
     public init(stiffness: Float, drag: Float, radius: Float, parentIndex: UInt32,
                 gravityPower: Float = 1.0, colliderGroupMask: UInt32 = 0xFFFFFFFF,
-                gravityDir: SIMD3<Float> = SIMD3<Float>(0, -1, 0)) {
+                gravityDir: SIMD3<Float> = SIMD3<Float>(0, -1, 0),
+                angleLimit: Float = 0.0) {
         self.stiffness = stiffness
         self.drag = drag
         self.radius = radius
@@ -247,6 +251,7 @@ public struct BoneParams {
         self.gravityPower = gravityPower
         self.colliderGroupMask = colliderGroupMask
         self.gravityDir = gravityDir
+        self.angleLimit = angleLimit
     }
 }
 
@@ -260,12 +265,28 @@ public struct SphereCollider {
     public var radius: Float
     /// Index of the collision group this collider belongs to.
     public var groupIndex: UInt32
+    /// Collision mode. `0` = outside-collision (joints pushed out of the
+    /// sphere — the default and base-spec behaviour). `1` = containment
+    /// (joints pushed *inside* the sphere — from
+    /// `VRMC_springBone_extended_collider.shape.sphere.inside = true`).
+    public var inside: UInt32
 
-    /// Creates a sphere collider at the given centre and radius.
+    /// Creates an outside-collision sphere collider at the given centre and radius.
     public init(center: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
         self.center = center
         self.radius = radius
         self.groupIndex = groupIndex
+        self.inside = 0
+    }
+
+    /// Creates a sphere collider with an explicit collision mode (used by
+    /// the `VRMC_springBone_extended_collider` parser to plumb through
+    /// `inside = true` containment shapes).
+    public init(center: SIMD3<Float>, radius: Float, groupIndex: UInt32, inside: Bool) {
+        self.center = center
+        self.radius = radius
+        self.groupIndex = groupIndex
+        self.inside = inside ? 1 : 0
     }
 }
 
@@ -282,13 +303,27 @@ public struct CapsuleCollider {
     public var radius: Float
     /// Index of the collision group this collider belongs to.
     public var groupIndex: UInt32
+    /// Collision mode. `0` = outside-collision (default). `1` = containment
+    /// (joints pushed *inside* the capsule — from
+    /// `VRMC_springBone_extended_collider.shape.capsule.inside = true`).
+    public var inside: UInt32
 
-    /// Creates a capsule collider between two points with the given sweep radius.
+    /// Creates an outside-collision capsule collider.
     public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
         self.p0 = p0
         self.p1 = p1
         self.radius = radius
         self.groupIndex = groupIndex
+        self.inside = 0
+    }
+
+    /// Creates a capsule collider with an explicit collision mode.
+    public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupIndex: UInt32, inside: Bool) {
+        self.p0 = p0
+        self.p1 = p1
+        self.radius = radius
+        self.groupIndex = groupIndex
+        self.inside = inside ? 1 : 0
     }
 }
 

@@ -41,6 +41,7 @@ struct BoneParams {
     float gravityPower;       // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
     uint colliderGroupMask;   // Bitmask of collision groups this bone collides with
     float3 gravityDir;        // Direction vector (normalized, typically [0, -1, 0])
+    float angleLimit;         // Max swing angle from bind dir (radians); 0 = no limit
 };
 
 // Updates root bone positions from animated transforms.

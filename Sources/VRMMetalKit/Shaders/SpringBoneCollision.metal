@@ -22,6 +22,7 @@ struct SphereCollider {
     float3 center;
     float radius;
     uint groupIndex;  // Index of collision group this collider belongs to
+    uint inside;      // 0 = outside-collision (default), 1 = containment (joint pushed inside)
 };
 
 struct CapsuleCollider {
@@ -29,6 +30,7 @@ struct CapsuleCollider {
     float3 p1;
     float radius;
     uint groupIndex;  // Index of collision group this collider belongs to
+    uint inside;      // 0 = outside-collision (default), 1 = containment (joint pushed inside)
 };
 
 struct PlaneCollider {
@@ -60,9 +62,13 @@ struct BoneParams {
     float gravityPower;       // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
     uint colliderGroupMask;   // Bitmask of collision groups this bone collides with
     float3 gravityDir;        // Direction vector (normalized, typically [0, -1, 0])
+    float angleLimit;         // Max swing angle from bind dir (radians); 0 = no limit
 };
 
-// Sphere collision function with group filtering
+// Sphere collision function with group filtering. Handles both the base
+// "outside" collision (joint pushed out of the sphere) and the
+// VRMC_springBone_extended_collider "inside" / containment collision
+// (joint pushed back into the sphere when it tries to escape).
 float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMask,
                                   constant SphereCollider* spheres, uint numSpheres) {
     float3 result = position;
@@ -73,13 +79,25 @@ float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMa
         // Skip if bone doesn't collide with this group
         if (!(groupMask & (1u << sphere.groupIndex))) continue;
 
-        float3 toCenter = position - sphere.center;
+        float3 toCenter = result - sphere.center;
         float distance = length(toCenter);
-        float penetration = sphere.radius + boneRadius - distance;
 
-        if (penetration > 0.0) {
-            float3 normal = toCenter / max(distance, 1e-6);
-            result += normal * penetration;
+        if (sphere.inside != 0u) {
+            // Containment: penetration when joint is escaping the sphere.
+            // distance > radius - boneRadius means joint is past the inner
+            // safe surface. Push it back toward the centre.
+            float penetration = distance + boneRadius - sphere.radius;
+            if (penetration > 0.0 && distance > 1e-6) {
+                float3 inward = -toCenter / distance;  // toward centre
+                result += inward * penetration;
+            }
+        } else {
+            // Outside collision (default): push joint out of the sphere.
+            float penetration = sphere.radius + boneRadius - distance;
+            if (penetration > 0.0) {
+                float3 outward = toCenter / max(distance, 1e-6);
+                result += outward * penetration;
+            }
         }
     }
 
@@ -103,17 +121,27 @@ float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupM
         float ab_length_sq = dot(ab, ab);
 
         // Add epsilon check to prevent division by zero
-        float t = (ab_length_sq > epsilon) ? dot(position - capsule.p0, ab) / ab_length_sq : 0.0;
+        float t = (ab_length_sq > epsilon) ? dot(result - capsule.p0, ab) / ab_length_sq : 0.0;
         t = clamp(t, 0.0, 1.0);
         float3 closestPoint = capsule.p0 + t * ab;
 
-        float3 toClosest = position - closestPoint;
+        float3 toClosest = result - closestPoint;
         float distance = length(toClosest);
-        float penetration = capsule.radius + boneRadius - distance;
 
-        if (penetration > 0.0) {
-            float3 normal = toClosest / max(distance, epsilon);
-            result += normal * penetration;
+        if (capsule.inside != 0u) {
+            // Containment: joint must stay inside the swept-sphere volume.
+            float penetration = distance + boneRadius - capsule.radius;
+            if (penetration > 0.0 && distance > epsilon) {
+                float3 inward = -toClosest / distance;
+                result += inward * penetration;
+            }
+        } else {
+            // Outside collision (default).
+            float penetration = capsule.radius + boneRadius - distance;
+            if (penetration > 0.0) {
+                float3 outward = toClosest / max(distance, epsilon);
+                result += outward * penetration;
+            }
         }
     }
 

@@ -44,6 +44,7 @@ struct BoneParams {
     float gravityPower;       // Multiplier for global gravity (0.0 = no gravity, 1.0 = full)
     uint colliderGroupMask;   // Bitmask of collision groups this bone collides with
     float3 gravityDir;        // Direction vector (normalized, typically [0, -1, 0])
+    float angleLimit;         // Max swing angle from bind dir (radians); 0 = no limit
 };
 
 kernel void springBonePredict(
@@ -249,6 +250,36 @@ kernel void springBonePredict(
     // This is dt-independent and guarantees consistent % correction per substep
     if (stiffnessBlendFactor > 0.001) {
         newPos = mix(newPos, stiffnessTargetPos, stiffnessBlendFactor);
+    }
+
+    // ANGLE LIMIT (VRMC_springBone_extended_collider per-joint angleLimit,
+    // radians): clamp the bone's swing direction to a cone of half-angle
+    // `angleLimit` around the bind direction. Skip when `angleLimit == 0`
+    // (the spec's "no limit" sentinel) or when bind data is missing.
+    float angleLimit = boneParams[id].angleLimit;
+    if (angleLimit > 0.0001 && stiffnessValid) {
+        float3 parentPosForLimit = bonePosCurr[parentIndex];
+        float3 toBone = newPos - parentPosForLimit;
+        float toBoneLen = length(toBone);
+        if (toBoneLen > 1e-6) {
+            float3 tipDir = toBone / toBoneLen;
+            float3 bindDirNorm = bindDir / bindDirLen;
+            float cosTheta = dot(tipDir, bindDirNorm);
+            float cosLimit = cos(angleLimit);
+            if (cosTheta < cosLimit) {
+                // Project tip direction into the bind-frame plane, then
+                // rebuild it at the limit angle so we preserve the swing
+                // direction while clamping the magnitude.
+                float3 perp = tipDir - bindDirNorm * cosTheta;
+                float perpLen = length(perp);
+                if (perpLen > 1e-6) {
+                    float3 perpNorm = perp / perpLen;
+                    float sinLimit = sqrt(max(0.0, 1.0 - cosLimit * cosLimit));
+                    float3 clampedDir = bindDirNorm * cosLimit + perpNorm * sinLimit;
+                    newPos = parentPosForLimit + clampedDir * toBoneLen;
+                }
+            }
+        }
     }
 
     // Clamp step size to prevent explosion

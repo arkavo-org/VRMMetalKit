@@ -1144,15 +1144,23 @@ public class VRMModel: @unchecked Sendable {
             totalBones += spring.joints.count
         }
 
-        // Count colliders
+        // Count colliders. Inverted (`insideSphere` / `insideCapsule`) variants
+        // from `VRMC_springBone_extended_collider` share the same GPU buffer
+        // layout as their non-inverted counterparts (an `inside` flag on the
+        // collider struct selects the kernel's containment vs outside math),
+        // so they count toward the same totals.
         let totalSpheres = expandedSpringBone.colliders.filter {
-            if case .sphere = $0.shape { return true }
-            return false
+            switch $0.shape {
+            case .sphere, .insideSphere: return true
+            default: return false
+            }
         }.count
 
         let totalCapsules = expandedSpringBone.colliders.filter {
-            if case .capsule = $0.shape { return true }
-            return false
+            switch $0.shape {
+            case .capsule, .insideCapsule: return true
+            default: return false
+            }
         }.count
 
         // Initialize buffers
