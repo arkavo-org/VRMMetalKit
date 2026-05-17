@@ -1819,7 +1819,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     ///   - steps: Number of physics steps to run silently (default: 30, ~0.5s at 60fps)
     func warmupPhysics(model: VRMModel, steps: Int = 30) {
         guard let buffers = model.springBoneBuffers,
-              let globalParams = model.springBoneGlobalParams,
+              var globalParams = model.springBoneGlobalParams,
               buffers.numBones > 0 else {
             return
         }
@@ -1841,8 +1841,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Step 3: Also reset interpolation state to match
         resetInterpolationState()
 
-        // Step 4: Run silent physics steps to let bones settle into natural hanging positions
-        // This happens BEFORE the first render, so there's no visual bounce
+        // Step 4: Run silent physics steps to let bones settle into natural hanging positions.
+        // This happens BEFORE the first render, so there's no visual bounce.
+        //
+        // Decrement `settlingFrames` per step so the warmup *consumes* the
+        // settling period. Previously the counter only decremented during
+        // the animated update path, which meant short post-warmup animations
+        // (e.g. a 0.25 s swing) ran with `settlingFrames` still >60 — the
+        // `1 - smoothstep(0, 60, frames)` scale zeroed every joint's
+        // stiffness and the conformance harness saw all stiffness sweep
+        // values collapse to the same gravity-only trajectory (VMK#240).
+        // Warmup is exactly when settling *should* finish: the bones are
+        // explicitly being settled to their hanging pose.
         let warmupDeltaTime: TimeInterval = 1.0 / 60.0  // Simulate at 60fps
         for _ in 0..<steps {
             // Update animated positions (colliders, bind directions, etc.)
@@ -1851,6 +1861,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Run one physics step
             var params = globalParams
             params.windPhase += Float(warmupDeltaTime)
+            if params.settlingFrames > 0 {
+                params.settlingFrames -= 1
+                model.springBoneGlobalParams?.settlingFrames = params.settlingFrames
+                globalParams.settlingFrames = params.settlingFrames
+            }
 
             // Copy params to GPU
             globalParamsBuffer?.contents().copyMemory(from: &params, byteCount: MemoryLayout<SpringBoneGlobalParams>.stride)

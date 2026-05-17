@@ -46,26 +46,18 @@ final class SpringBoneRenderConformanceTests: XCTestCase {
     private let keyLightColor = SIMD3<Float>(1, 1, 1)
     private let keyLightIntensity: Float = 1.0
     private let ambientColor: SIMD3<Float> = SIMD3<Float>(0.5, 0.5, 0.5) * 0.3
-    private let renderWidth = 256        // smaller than conformance 1024 to keep test fast
+    private let renderWidth = 256
     private let renderHeight = 256
 
-    /// Lock-in for the VMK#240 bug: with deterministic
-    /// `simulationDeltaTime = 1/60`, all four stiffness fixtures
-    /// (`{0, 0.2, 0.8, 1}`) converge to the *same* bind-pose equilibrium
-    /// (chain hanging straight under gravity, which happens to also be
-    /// the bind direction for this fixture) before the captured frame.
-    /// All four therefore hash to a **single** SHA — strict regression
-    /// of the conformance harness's reported 3-of-4 collapse.
-    ///
-    /// This is the bug, not the fix. Closing #240 requires PBD
-    /// convergence tuning in `SpringBonePredict.metal` so VMK's
-    /// transient matches three-vrm's slower profile; the integrator
-    /// itself is correct (the integrator differentiates all four
-    /// stiffnesses at the joint-position level — see
-    /// `SpringBoneSwingTrajectoryTests`). Bumping the assertion below
-    /// past `1` means a tune is landing — verify deliberately at that
-    /// point.
-    func testStiffnessSweepLocksInVMK240Collapse() async throws {
+    /// VMK#240 closed: all four stiffness sweep fixtures
+    /// (`{0, 0.2, 0.8, 1}`) now render with **distinct** SHA256 hashes.
+    /// The fix was at the warmup boundary, not in the PBD math — warmup
+    /// now consumes the `settlingFrames` counter, so the post-warmup
+    /// animation runs with stiffness fully engaged instead of scaled to
+    /// zero by the lingering settling damping. Pre-fix all four collapsed
+    /// to one SHA because `1 - smoothstep(0, 60, settlingFrames)` zeroed
+    /// the stiffness contribution for the entire 0.25 s swing window.
+    func testStiffnessSweepRendersFourDistinctHashes() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("No Metal device available (CI without GPU)")
         }
@@ -118,18 +110,12 @@ final class SpringBoneRenderConformanceTests: XCTestCase {
         }
 
         let unique = Set(hashes.values)
-        // TODO(VMK#240): bump toward 4 when PBD convergence is tuned to
-        // match three-vrm's transient profile. Current renderer-path
-        // behaviour: all four stiffness values reach the same gravity-
-        // aligned bind-pose equilibrium given enough substeps, so the
-        // sweep hashes to a single SHA. Any change here means either a
-        // fix is landing or an unrelated render-path regression appeared
-        // — inspect the per-fixture hashes below before updating the
-        // expected count.
-        XCTAssertEqual(unique.count, 1,
-            "Renderer-side stiffness behaviour changed. " +
+        XCTAssertEqual(unique.count, 4,
+            "Stiffness sweep should produce 4 distinct hashes; got \(unique.count). " +
             "Per-fixture hashes: \(hashes.map { "\($0.key) → \($0.value.prefix(8))" }.joined(separator: ", ")). " +
-            "Bumping this expectation toward 4 means VMK#240 is being closed by PBD tuning — verify which fixtures now differ.")
+            "Regression of VMK#240 — most likely cause is that warmupPhysics " +
+            "stopped decrementing `settlingFrames`, so the post-warmup animation " +
+            "is running with the lingering settling damping zeroing stiffness.")
     }
 
     // MARK: - Render harness
