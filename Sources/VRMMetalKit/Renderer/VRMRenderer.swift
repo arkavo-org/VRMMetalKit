@@ -1392,13 +1392,28 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Update temporary forces if any
             updateSpringBoneForces(deltaTime: clampedDeltaTime)
 
-            // Run GPU physics simulation. Pipe the substep work into the renderer's
-            // own command buffer so we don't pay 1-N extra makeCommandBuffer + commit
-            // round trips per instance per frame (audit's #2 GPU bottleneck).
+            // Run GPU physics simulation. In the default (async) path the substep
+            // work is piped into the renderer's own command buffer so we don't
+            // pay 1-N extra makeCommandBuffer + commit round trips per frame.
+            // `writeBonesToNodes` then consumes the snapshot the addCompletedHandler
+            // populated for the *previous* frame — visible as a one-frame physics
+            // lag during fast head motion (see #267).
+            //
+            // When `config.synchronousSpringBone` is set, spring-bone runs in its
+            // own command buffer that we commit and wait on here, so the snapshot
+            // populated by the completion handler is for *this* frame before
+            // writeBonesToNodes consumes it.
             if let springBoneCompute = springBoneComputeSystem {
-                springBoneCompute.update(model: model,
-                                         deltaTime: TimeInterval(clampedDeltaTime),
-                                         commandBuffer: commandBuffer)
+                if config.synchronousSpringBone {
+                    springBoneCompute.update(model: model,
+                                             deltaTime: TimeInterval(clampedDeltaTime),
+                                             commandBuffer: nil)
+                    springBoneCompute.waitForPendingFrame()
+                } else {
+                    springBoneCompute.update(model: model,
+                                             deltaTime: TimeInterval(clampedDeltaTime),
+                                             commandBuffer: commandBuffer)
+                }
 
                 // Read back GPU positions and update node transforms
                 springBoneCompute.writeBonesToNodes(model: model)
@@ -2340,22 +2355,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("[PIPELINE DEBUG] Node '\(item.node.name ?? "unnamed")': nodeHasSkin=\(nodeHasSkin), meshUsesSkinning=\(meshUsesSkinning), hasSkinning=\(hasSkinning), isSkinned=\(isSkinned)")
             }
 
-            // Select correct pipeline based on alpha mode and debug settings
-            let activePipelineState: MTLRenderPipelineState?
-            if debugWireframe {
-                // Use wireframe pipeline for debugging (non-skinned only for now)
-                activePipelineState = wireframePipelineState
-            } else if materialAlphaMode == "blend" {
-                // Standard 3D BLEND mode requires blending-enabled PSO
-                activePipelineState = isSkinned ? skinnedBlendPipelineState : blendPipelineState
-            } else {
-                // Standard 3D OPAQUE and MASK modes can share the same PSO (no blending)
-                activePipelineState = isSkinned ? skinnedOpaquePipelineState : opaquePipelineState
-
-                // Debug which pipeline is selected
-                if frameCounter % 60 == 0 && isSkinned {
-                    vrmLog("[PIPELINE SELECT] Using skinned pipeline: \(skinnedOpaquePipelineState != nil ? "exists" : "NIL")")
-                }
+            // Select correct pipeline based on alpha mode and debug settings.
+            let activePipelineState = selectPipelineForDraw(
+                alphaMode: materialAlphaMode,
+                isSkinned: isSkinned,
+                debugWireframe: debugWireframe
+            )
+            if frameCounter % 60 == 0 && isSkinned {
+                vrmLog("[PIPELINE SELECT] Using skinned pipeline: \(skinnedOpaquePipelineState != nil ? "exists" : "NIL")")
             }
 
             guard let pipeline = activePipelineState else {
@@ -3133,6 +3140,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if isSkinned && hasSkinning {
                     vrmLog("  - Joint buffer will be set for skin index: \(item.node.skin ?? 0)")
                 }
+            }
+
+            // VMK#264 / VMK#266: when this draw is using the A2C pipeline
+            // for a MASK material, remap the uniform's alphaMode from 1
+            // (MASK with discard) to 3 (MASK_A2C, no discard, hardware
+            // computes subsample coverage from output alpha). Without this
+            // remap the shader's `alphaMode == 1` discard_fragment() wipes
+            // the fragment before A2C can use it. Only remap if the
+            // uniform is already 1 — body-material demotion to OPAQUE etc.
+            // should not accidentally become MASK_A2C. Placed before the
+            // indexed/non-indexed split so both draw paths see the
+            // override.
+            if mtoonUniforms.alphaMode == 1 {
+                mtoonUniforms.alphaMode = alphaModeForUniform(
+                    alphaMode: "mask",
+                    isSkinned: isSkinned
+                )
             }
 
             // Draw with validation
@@ -4000,8 +4024,69 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return descriptor
     }
     
+    /// Returns the render-pipeline state that the draw loop should bind for a
+    /// given material's alpha mode and skinning state.
+    ///
+    /// Default behavior matches the VRM 1.0 spec / UniVRM reference:
+    /// `OPAQUE` and `MASK` both use the opaque PSO (alpha-test in the shader),
+    /// `BLEND` uses the blend PSO. When `RendererConfig.alphaToCoverageForMASK`
+    /// is set AND MSAA is active, MASK opts into the hardware
+    /// alpha-to-coverage pipeline instead — a quality extension that drifts
+    /// from reference rendering.
+    public func selectPipelineForDraw(
+        alphaMode: String,
+        isSkinned: Bool,
+        debugWireframe: Bool
+    ) -> MTLRenderPipelineState? {
+        if debugWireframe {
+            return wireframePipelineState
+        }
+        switch alphaMode {
+        case "blend":
+            return isSkinned ? skinnedBlendPipelineState : blendPipelineState
+        case "mask" where config.alphaToCoverageForMASK && usesMultisampling:
+            let a2c = isSkinned ? skinnedMaskAlphaToCoveragePipelineState : maskAlphaToCoveragePipelineState
+            return a2c ?? (isSkinned ? skinnedOpaquePipelineState : opaquePipelineState)
+        default:
+            return isSkinned ? skinnedOpaquePipelineState : opaquePipelineState
+        }
+    }
+
+    /// Returns the integer value the shader's `MToonMaterial.alphaMode`
+    /// uniform must carry for this draw, given the material's authored
+    /// alpha mode and skinning state.
+    ///
+    /// Spec-default mapping (`OPAQUE → 0`, `MASK → 1`, `BLEND → 2`)
+    /// matches the shader's discard/blend branches. The fourth value
+    /// (`3 = MASK_A2C`) is the VMK#264 fix: when MASK + MSAA + the
+    /// `alphaToCoverageForMASK` opt-in have routed the draw to the
+    /// alpha-to-coverage pipeline, the shader must SKIP its
+    /// `discard_fragment()` so the fragment survives long enough for
+    /// hardware A2C to read its alpha output and compute subsample
+    /// coverage. The shader's discard fires only on `alphaMode == 1`,
+    /// so remapping to `3` here keeps the fragment alive while still
+    /// signalling "this is a MASK material" to downstream logic.
+    public func alphaModeForUniform(
+        alphaMode: String,
+        isSkinned: Bool
+    ) -> UInt32 {
+        switch alphaMode.lowercased() {
+        case "blend":
+            return 2
+        case "mask":
+            let usingA2CPipeline =
+                config.alphaToCoverageForMASK && usesMultisampling &&
+                (isSkinned
+                    ? skinnedMaskAlphaToCoveragePipelineState != nil
+                    : maskAlphaToCoveragePipelineState != nil)
+            return usingA2CPipeline ? 3 : 1
+        default:
+            return 0
+        }
+    }
+
     // MARK: - CLI Rendering Support
-    
+
     /// Sets the integer debug-mode selector consumed by the MToon fragment shader.
     ///
     /// `0` is normal rendering; values 1-16 select diagnostic visualisations

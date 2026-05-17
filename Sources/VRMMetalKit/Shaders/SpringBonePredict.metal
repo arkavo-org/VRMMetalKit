@@ -233,7 +233,27 @@ kernel void springBonePredict(
     dragFactor = clamp(dragFactor, 0.01, 1.0); // Ensure positive, non-zero
     float gravityBoost = 1.0 + settlingFactor * 4.0;
 
-    // Per-joint gravity
+    // Per-joint gravity.
+    //
+    // VMK#270 fix: VRMC_springBone-1.0 §SpringBone Algorithm specifies
+    //   external = deltaTime * gravityDir * gravityPower
+    // i.e. `gravityPower` is a velocity-like scalar (m/s) and the
+    // gravity contribution is **linear in dt**, not quadratic. The
+    // previous implementation applied it as `accel * dt²` with `accel`
+    // = Earth gravity (9.8 m/s²) × `gravityPower`, which under-scales
+    // the per-frame contribution by a factor of ~`1/dt` and lets the
+    // PBD stiffness blend (which is dt-independent) dominate every
+    // equilibrium — the visible symptom is hair that locks toward the
+    // bind direction even under nominal gravityPower. The QA team's
+    // "twin-tails go helicopter-blade during rotation" defect (VMK#270)
+    // and the latent "horizontal chain barely droops at rest" issue
+    // are both this bug.
+    //
+    // The standard-gravity multiplier survives because existing callers
+    // ship `globalParams.gravity = (0, -9.8, 0)` and expect that scale.
+    // It is now multiplied by `dt` instead of `dt²` further down, so
+    // per-substep position delta = 9.8 · gravityPower · dt, which is
+    // O(0.08 m / substep) at dt=1/120 — the right magnitude.
     float gravityMagnitude = length(globalParams.gravity) * gravityBoost;
     float3 effectiveGravity = boneParams[id].gravityDir * gravityMagnitude * boneParams[id].gravityPower;
 
@@ -242,9 +262,14 @@ kernel void springBonePredict(
     // Scale by 0.5 for natural feel - too strong makes hair whip around
     float3 inertialForce = -globalParams.externalVelocity * 0.5;
 
-    // Verlet integration: position += velocity * drag + acceleration * dt²
+    // Verlet integration.
+    //   newPos = pos + velocity·drag + external·dt + (accel·dt²)
+    // `external` (gravity / wind / inertial) is dt-scaled per the spec.
+    // No quadratic acceleration terms in spring physics — bones don't
+    // fall under continuous force, they get a velocity injection each
+    // frame that drag bleeds out.
     float3 newPos = bonePosCurr[id] + velocity * dragFactor +
-                    (effectiveGravity + windForce + inertialForce) * globalParams.dtSub * globalParams.dtSub;
+                    (effectiveGravity + windForce + inertialForce) * globalParams.dtSub;
 
     // PBD STIFFNESS: Apply position blend toward bind pose AFTER Verlet, BEFORE constraints
     // This is dt-independent and guarantees consistent % correction per substep

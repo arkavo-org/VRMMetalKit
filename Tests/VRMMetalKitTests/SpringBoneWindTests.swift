@@ -160,32 +160,34 @@ final class SpringBoneWindTests: XCTestCase {
         XCTAssertTrue(true, "Wind parameters processed without crashing")
     }
 
-    /// Test that wind with static phase (the bug) produces minimal movement
-    func testStaticWindPhaseProducesMinimalMovement() throws {
+    /// Test that wind with a static phase still drives the GPU without crashing.
+    ///
+    /// Historical note: an earlier version of this test claimed that
+    /// `windPhase = 0` made the wind force zero ("sin(0) = 0"). That is
+    /// not true for the current kernel: `SpringBonePredict.metal` evaluates
+    /// `gustFactor = 0.7 + 0.3 * (0.5 + 0.5*sin(0.5·freq·t) + 0.3·sin(1.3·freq·t)*0.5)`
+    /// which equals 0.85 at `t=0` — gusts modulate intensity but never reverse,
+    /// so static phase produces a *steady-state* wind, not zero wind.
+    /// See `SpringBoneWindBehaviorTests` for assertions that exercise the
+    /// actual oscillation when phase advances.
+    func testStaticWindPhaseDoesNotCrashCompute() throws {
         let system = try SpringBoneComputeSystem(device: device)
         let model = try createSpringBoneModel()
         try system.populateSpringBoneData(model: model)
 
-        // Configure wind but keep phase at 0 (the bug condition)
         var params = model.springBoneGlobalParams!
         params.windAmplitude = 5.0
         params.windFrequency = 2.0
-        params.windPhase = 0.0  // Static - never changes!
+        params.windPhase = 0.0
         params.windDirection = simd_normalize(SIMD3<Float>(1, 0, 0))
         model.springBoneGlobalParams = params
 
-        // Run simulation (phase never updates - simulating the bug)
         for _ in 0..<60 {
-            // Note: NOT updating windPhase - this is the bug
             system.update(model: model, deltaTime: 1.0 / 60.0)
         }
 
         waitForGPU()
         system.writeBonesToNodes(model: model)
-
-        // With sin(0) = 0, the effective wind force is always 0
-        // So the bone should primarily respond to gravity only
-        // This test documents the buggy behavior
     }
 
     /// Test that wind phase can be incremented each frame without issues

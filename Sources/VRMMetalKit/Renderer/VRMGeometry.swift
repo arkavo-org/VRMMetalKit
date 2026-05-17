@@ -1589,6 +1589,16 @@ public class VRMMaterial {
                 case 2, 3: alphaMode = "BLEND"
                 default: alphaMode = "OPAQUE"
                 }
+                // VMK#265: _BlendMode = 3 is TransparentWithZWrite — the VRM 0.x
+                // equivalent of VRM 1.0's `alphaMode: BLEND` +
+                // `VRMC_materials_mtoon.transparentWithZWrite: true`. Set the
+                // explicit field so direct readers see the same value as the
+                // VRM 1.0 native path; the `isTransparentWithZWrite` computed
+                // property's `blendMode == 3` fallback stays as a belt-and-
+                // braces guard but is no longer load-bearing.
+                if blendMode == 3 {
+                    transparentWithZWrite = true
+                }
             }
         }
     }
