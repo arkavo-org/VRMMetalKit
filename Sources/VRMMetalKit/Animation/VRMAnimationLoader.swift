@@ -453,7 +453,9 @@ public enum VRMAnimationLoader {
         if let rot = tracks["rotation"] {
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: modelRest?.rotation)
+                                                  animationRestWorldRotation: animationRest.worldRotation,
+                                                  modelRestRotation: modelRest?.rotation,
+                                                  modelRestWorldRotation: modelRest?.worldRotation)
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
@@ -522,7 +524,9 @@ public enum VRMAnimationLoader {
             // No model rest for non-humanoid - use animation data directly
             rotationSampler = makeRotationSampler(track: rot,
                                                   animationRestRotation: rotationRest,
-                                                  modelRestRotation: nil)
+                                                  animationRestWorldRotation: animationRest.worldRotation,
+                                                  modelRestRotation: nil,
+                                                  modelRestWorldRotation: nil)
         }
 
         var translationSampler: ((Float) -> simd_float3)? = nil
@@ -617,25 +621,43 @@ private func componentCount(for path: String) -> Int? {
 //
 private func makeRotationSampler(track: KeyTrack,
                                  animationRestRotation: simd_quatf,
-                                 modelRestRotation: simd_quatf?) -> ((Float) -> simd_quatf)? {
-    let modelRest = modelRestRotation
-    let rotationRest = simd_normalize(animationRestRotation)
+                                 animationRestWorldRotation: simd_quatf,
+                                 modelRestRotation: simd_quatf?,
+                                 modelRestWorldRotation: simd_quatf?) -> ((Float) -> simd_quatf)? {
+    let L_A = simd_normalize(animationRestRotation)
+    let W_A = simd_normalize(animationRestWorldRotation)
 
-    // No model rest data available - apply animation directly
-    if modelRest == nil {
+    // Non-humanoid tracks pass nil for model rest — there's no model-
+    // side bone to normalise against, so the animation rotation flows
+    // through unchanged.
+    guard let modelRest = modelRestRotation,
+          let modelWorld = modelRestWorldRotation else {
         return { t in sampleQuaternion(track, at: t) }
     }
+    let L_B = simd_normalize(modelRest)
+    let W_B = simd_normalize(modelWorld)
 
-    let modelRestNormalized = simd_normalize(modelRest!)
-
+    // VRM 1.0 pose-normalisation (`how_to_transform_human_pose.md`):
+    //
+    //   Normalized       = W_A · L_A⁻¹ · A.LocalRotation · W_A⁻¹
+    //   B.LocalRotation  = L_B · W_B⁻¹ · Normalized · W_B
+    //
+    // Combined: B = L_B · W_B⁻¹ · W_A · L_A⁻¹ · A · W_A⁻¹ · W_B
+    //
+    // For two rigs that share the same world-rest orientation
+    // (`W_A == W_B`), the W terms cancel and the formula collapses to
+    // `B = L_B · L_A⁻¹ · A` — the previous "delta retargeting" formula.
+    // For VRMAs authored on a different rest pose (e.g. arms-forward
+    // when the model is T-pose) the W terms perform the change-of-
+    // basis that aligns the animation's world frame with the model's.
+    // VMK#269 was the regression where the W terms were missing.
+    let invL_A = simd_inverse(L_A)
+    let invW_A = simd_inverse(W_A)
+    let invW_B = simd_inverse(W_B)
     return { t in
-        let animRotation = sampleQuaternion(track, at: t)
-
-        // Delta retargeting (per VRM spec):
-        // delta = inverse(animRest) * animRotation
-        // result = modelRest * delta
-        let delta = simd_normalize(simd_inverse(rotationRest) * animRotation)
-        let result = simd_normalize(modelRestNormalized * delta)
+        let A = sampleQuaternion(track, at: t)
+        let normalized = simd_normalize(W_A * invL_A * A * invW_A)
+        let result = simd_normalize(L_B * invW_B * normalized * W_B)
         return result
     }
 }
@@ -747,6 +769,20 @@ private func buildAnimationRestTransforms(document: GLTFDocument) -> [Int: RestT
     for (index, node) in nodes.enumerated() {
         map[index] = RestTransform(node: node)
     }
+    // Compute world rest rotation `W` for every node by walking up the
+    // parent chain. Required for the VMK#269 fix: the VRM 1.0 spec's
+    // pose-normalisation formula needs both the local and world rest
+    // rotations on each side of the retargeting transform.
+    let parents = buildGLTFParentMap(nodes: nodes)
+    // Snapshot the local-only map so the W computation reads a frozen
+    // copy while we mutate `worldRotation` in `map`. Swift exclusivity
+    // forbids overlapping inout + read access to the same dictionary.
+    let localOnly = map
+    for index in nodes.indices {
+        map[index]?.worldRotation = computeWorldRotation(nodeIndex: index,
+                                                          parents: parents,
+                                                          restMap: localOnly)
+    }
     return map
 }
 
@@ -754,32 +790,102 @@ private func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: Res
     guard let model, let humanoid = model.humanoid else { return [:] }
     guard let gltfNodes = model.gltf.nodes else { return [:] }
 
+    // Build all-node rest transforms first so we can compute `W` for any
+    // humanoid bone by walking up the glTF parent chain — humanoid bones
+    // generally have non-humanoid ancestors (armature root, scene root)
+    // whose rotations contribute to `W`.
+    var allRest: [Int: RestTransform] = [:]
+    for (index, node) in gltfNodes.enumerated() {
+        allRest[index] = RestTransform(node: node)
+    }
+    let parents = buildGLTFParentMap(nodes: gltfNodes)
+    let localOnly = allRest
+    for index in gltfNodes.indices {
+        allRest[index]?.worldRotation = computeWorldRotation(nodeIndex: index,
+                                                              parents: parents,
+                                                              restMap: localOnly)
+    }
+
     var map: [VRMHumanoidBone: RestTransform] = [:]
     for bone in VRMHumanoidBone.allCases {
         guard let nodeIndex = humanoid.getBoneNode(bone),
               nodeIndex < gltfNodes.count else { continue }
-
         // CRITICAL: Use the ORIGINAL glTF node data (bind pose from file),
         // NOT the runtime VRMNode transform (which may have been modified by animations)
-        let gltfNode = gltfNodes[nodeIndex]
-        map[bone] = RestTransform(node: gltfNode)
+        map[bone] = allRest[nodeIndex]
     }
     return map
+}
+
+/// Build a child→parent index map from a glTF node array's `children`
+/// fields. Nodes without a parent (scene roots) are absent from the map.
+private func buildGLTFParentMap(nodes: [GLTFNode]) -> [Int: Int] {
+    var parents: [Int: Int] = [:]
+    for (parentIdx, node) in nodes.enumerated() {
+        guard let children = node.children else { continue }
+        for childIdx in children {
+            parents[childIdx] = parentIdx
+        }
+    }
+    return parents
+}
+
+/// Walk up the parent chain from `nodeIndex` and compute the cumulative
+/// world-space rest rotation: `W_node = W_parent · L_node`.
+///
+/// Iterates parent-first so we don't recurse for deep hierarchies. The
+/// terminating root contributes its own local rotation as the seed.
+private func computeWorldRotation(nodeIndex: Int,
+                                  parents: [Int: Int],
+                                  restMap: [Int: RestTransform]) -> simd_quatf {
+    // Collect the chain from root to this node.
+    var chain: [Int] = [nodeIndex]
+    var current = nodeIndex
+    while let parent = parents[current] {
+        chain.append(parent)
+        current = parent
+    }
+    // Compose root → leaf: W_node = L_root · L_a · L_b · … · L_node
+    var w = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    for idx in chain.reversed() {
+        if let local = restMap[idx]?.rotation {
+            w = simd_normalize(w * local)
+        }
+    }
+    return w
 }
 
 private struct RestTransform {
     var rotation: simd_quatf
     var translation: SIMD3<Float>
     var scale: SIMD3<Float>
+    /// World-space rest rotation `W` — cumulative product of this node's
+    /// rest rotation with every ancestor's rest rotation back to the root.
+    /// Defaults to the local rotation; callers must set this after
+    /// constructing the per-node map so the parent chain is known.
+    ///
+    /// Used by `makeRotationSampler` to implement the VRM 1.0 spec's
+    /// world-space normalisation (see `how_to_transform_human_pose.md` in
+    /// the spec repo). Without `W` the retargeting formula assumes
+    /// `W_A == W_B`, which fails as soon as a VRMA's authored rest pose
+    /// differs from the model's T-pose orientation (VMK#269).
+    var worldRotation: simd_quatf
 
     static let identity = RestTransform(rotation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
                                          translation: SIMD3<Float>(repeating: 0),
-                                         scale: SIMD3<Float>(repeating: 1))
+                                         scale: SIMD3<Float>(repeating: 1),
+                                         worldRotation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))
 
-    init(rotation: simd_quatf, translation: SIMD3<Float>, scale: SIMD3<Float>) {
+    init(rotation: simd_quatf,
+         translation: SIMD3<Float>,
+         scale: SIMD3<Float>,
+         worldRotation: simd_quatf? = nil) {
         self.rotation = rotation
         self.translation = translation
         self.scale = scale
+        // Default world rotation to the local — callers that have parent
+        // hierarchy must overwrite this with the cumulative product.
+        self.worldRotation = worldRotation ?? rotation
     }
 
     init(node: GLTFNode) {
