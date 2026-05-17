@@ -241,6 +241,16 @@ public class VRMExtensionParser {
                         prop.vectorProperties[key] = arrayValue
                     } else if let arrayValue = value as? [Int] {
                         prop.vectorProperties[key] = arrayValue.map { Float($0) }
+                    } else if let arr = value as? [Any] {
+                        // AnyCodable path: a VRM 0.x color literal like
+                        // `_Color: [1, 0, 0, 1.0]` arrives as
+                        // `[Int, Int, Int, Double]`. Per-element coerce so
+                        // the homogeneous-only fallbacks above don't drop
+                        // it — same VMK#236 bug class for VRM 0.x.
+                        let parsed = arr.compactMap { parseFloatValue($0) }
+                        if parsed.count == arr.count {
+                            prop.vectorProperties[key] = parsed
+                        }
                     }
                 }
             }
@@ -467,11 +477,12 @@ public class VRMExtensionParser {
             lookAt.type = type
         }
 
-        // Parse offsetFromHeadBone - JSON numbers are Double by default
-        if let offset = dict["offsetFromHeadBone"] as? [Double], offset.count == 3 {
-            lookAt.offsetFromHeadBone = SIMD3<Float>(Float(offset[0]), Float(offset[1]), Float(offset[2]))
-        } else if let offset = dict["offsetFromHeadBone"] as? [Float], offset.count == 3 {
-            lookAt.offsetFromHeadBone = SIMD3<Float>(offset[0], offset[1], offset[2])
+        // Parse offsetFromHeadBone via the canonical vec3 coercion so
+        // whole-number components (e.g. `[0.0, 0.06, 0.0]`) survive
+        // AnyCodable's Int-before-Double decoder. See VMK#236 for the
+        // bug class.
+        if let offset = parseVector3(dict["offsetFromHeadBone"]) {
+            lookAt.offsetFromHeadBone = offset
         }
 
         if let rangeMap = dict["rangeMapHorizontalInner"] as? [String: Any] {
@@ -646,14 +657,21 @@ public class VRMExtensionParser {
         if let materialColorBinds = dict["materialColorBinds"] as? [[String: Any]] {
             for bind in materialColorBinds {
                 // `JSONSerialization` decodes JSON number arrays as `[Double]`;
-                // test fixtures sometimes pass `[Float]`. Accept both — the
-                // `[Float]`-only cast silently dropped every JSON-parsed
-                // materialColorBind in production assets.
+                // test fixtures sometimes pass `[Float]`. `AnyCodable` is a
+                // third case — whole-number elements arrive as `Int`, so a
+                // spec-typical RGBA like `[1.0, 0.0, 0.0, 1.0]` becomes a
+                // heterogeneous `[Int, Int, Int, Int]` or `[Double, Int, Int, Double]`
+                // depending on which components carry decimals (VMK#236
+                // bug class). Per-element coercion via parseFloatValue
+                // catches all three forms.
                 let targetFloats: [Float]?
                 if let arr = bind["targetValue"] as? [Double] {
                     targetFloats = arr.map(Float.init)
                 } else if let arr = bind["targetValue"] as? [Float] {
                     targetFloats = arr
+                } else if let arr = bind["targetValue"] as? [Any] {
+                    let parsed = arr.compactMap { parseFloatValue($0) }
+                    targetFloats = parsed.count == arr.count ? parsed : nil
                 } else {
                     targetFloats = nil
                 }
@@ -698,14 +716,30 @@ public class VRMExtensionParser {
         }
 
         if let colliders = dict["colliders"] as? [[String: Any]] {
-            for colliderDict in colliders {
-                guard let node = colliderDict["node"] as? Int,
-                      let shapeDict = colliderDict["shape"] as? [String: Any] else {
+            for (colliderIndex, colliderDict) in colliders.enumerated() {
+                guard let node = colliderDict["node"] as? Int else { continue }
+
+                if let shapeDict = colliderDict["shape"] as? [String: Any],
+                   let shape = parseColliderShape(shapeDict) {
+                    springBone.colliders.append(VRMCollider(node: node, shape: shape))
                     continue
                 }
 
-                if let shape = parseColliderShape(shapeDict) {
-                    springBone.colliders.append(VRMCollider(node: node, shape: shape))
+                // No base shape — check for `VRMC_springBone_extended_collider`
+                // (inverted sphere/capsule, plane, per-joint angle-limit). VMK
+                // doesn't implement the extended shapes yet (VMK#237), so log
+                // the gap explicitly rather than silently dropping the
+                // collider and letting the chain fall through. The base-shape
+                // fallback recommended by the spec isn't authored either in
+                // these assets, so there's no salvageable behaviour beyond
+                // surfacing the limitation to the consumer.
+                let extensionsDict = colliderDict["extensions"] as? [String: Any]
+                let hasExtendedCollider = extensionsDict?["VRMC_springBone_extended_collider"] != nil
+                if hasExtendedCollider {
+                    vrmLog("[VRMExtensionParser] WARNING: Collider \(colliderIndex) (node \(node)) " +
+                           "uses VRMC_springBone_extended_collider with no fallback `shape` — " +
+                           "VMK#237 (extended-collider support not yet implemented); " +
+                           "this collider is being skipped and the chain will pass through.")
                 }
             }
         }
@@ -783,9 +817,10 @@ public class VRMExtensionParser {
     /// without the explicit `Int` branch, every `as? Double` cast on a
     /// whole-number factor silently returns `nil` and the field falls back
     /// to its default. This is the root cause class of VMK#238 / VMK#239 in
-    /// MToon parsing; the explicit `Int` branch here keeps the bug from
-    /// re-appearing in VRM 0.x lookAt range maps, firstPersonBoneOffset,
-    /// and similar extension scalars.
+    /// MToon parsing (scalar level) and **VMK#236** in spring-bone collider
+    /// offsets (vector level, see ``parseVector3(_:)``); the explicit `Int`
+    /// branch here keeps the bug from re-appearing in VRM 0.x lookAt range
+    /// maps, firstPersonBoneOffset, and similar extension scalars.
     ///
     /// Internal rather than private so the regression test for this exact
     /// numeric-coercion contract can pin down all four branches without
@@ -803,18 +838,34 @@ public class VRMExtensionParser {
         return nil
     }
 
-    private func parseVector3(_ value: Any?) -> SIMD3<Float>? {
+    /// Internal rather than private so the regression test for this exact
+    /// vec3 coercion contract can pin down all branches (Double-array,
+    /// Float-array, mixed-Any-array, length mismatch, non-numeric element)
+    /// without going through end-to-end VRM loading. Mirror of
+    /// ``parseFloatValue(_:)``'s testability rationale.
+    func parseVector3(_ value: Any?) -> SIMD3<Float>? {
         // `JSONSerialization` decodes JSON number arrays as `[Double]` on
         // Apple platforms; test harnesses sometimes construct `[Float]` arrays
-        // directly. Accept both forms — without this, every collider offset,
-        // capsule tail, and plane normal in a VRM 1.0 asset silently parsed
-        // as `(0, 0, 0)`, which collapsed all spring-bone colliders to their
-        // owning joint origin and let hair clip through the head/face.
+        // directly. The `AnyCodable` path (used for GLTFDocument.extensions)
+        // is the third case: it stores whole-number elements as `Int` and
+        // fractional ones as `Double`, so a spec-typical offset like
+        // `[0.02, -0.10, 0.0]` arrives as `[Double, Double, Int]`. Without
+        // per-element coercion the `as? [Double]` cast fails on the mixed
+        // array, every collider offset / capsule tail / plane normal
+        // collapses to `(0, 0, 0)`, and hair clips through the head/face
+        // (and the chain falls straight through every author-placed
+        // collider during settle — VMK#236).
         if let array = value as? [Double], array.count == 3 {
             return SIMD3<Float>(Float(array[0]), Float(array[1]), Float(array[2]))
         }
         if let array = value as? [Float], array.count == 3 {
             return SIMD3<Float>(array[0], array[1], array[2])
+        }
+        if let array = value as? [Any], array.count == 3,
+           let x = parseFloatValue(array[0]),
+           let y = parseFloatValue(array[1]),
+           let z = parseFloatValue(array[2]) {
+            return SIMD3<Float>(x, y, z)
         }
         return nil
     }

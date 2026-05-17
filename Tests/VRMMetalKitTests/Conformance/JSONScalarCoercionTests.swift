@@ -55,4 +55,64 @@ final class JSONScalarCoercionTests: XCTestCase {
         XCTAssertNil(parser.parseFloatValue("0.5"))
         XCTAssertNil(parser.parseFloatValue([1.0, 2.0]))
     }
+
+    // MARK: - parseVector3 property tests (VMK#236)
+
+    /// Coverage matrix for the vec3 coercion contract: the same
+    /// `AnyCodable` Int-before-Double pathology that hit the scalar
+    /// reader also surfaces at the vec3 level — spec-compliant collider
+    /// offsets like `[0.02, -0.10, 0.0]` decode to `[Double, Double, Int]`
+    /// and the homogeneous-only fallbacks silently miss them, leaving every
+    /// spring-bone collider at `(0, 0, 0)` (VMK#236).
+
+    func testParseVector3AcceptsHomogeneousDoubleArray() {
+        let parser = VRMExtensionParser()
+        let v = parser.parseVector3([1.0, 2.0, 3.0])
+        XCTAssertEqual(v, SIMD3<Float>(1, 2, 3))
+    }
+
+    func testParseVector3AcceptsHomogeneousFloatArray() {
+        let parser = VRMExtensionParser()
+        let v = parser.parseVector3([Float(1), Float(2), Float(3)])
+        XCTAssertEqual(v, SIMD3<Float>(1, 2, 3))
+    }
+
+    func testParseVector3AcceptsMixedAnyCodableArray() {
+        let parser = VRMExtensionParser()
+        // The spec-typical collider-offset shape from AnyCodable.
+        let mixed: [Any] = [Double(0.02), Double(-0.10), Int(0)]
+        let v = parser.parseVector3(mixed)
+        XCTAssertNotNil(v, "Mixed numeric Any-array must coerce per-element (VMK#236 root cause).")
+        XCTAssertEqual(v?.x ?? 0, 0.02, accuracy: 1e-6)
+        XCTAssertEqual(v?.y ?? 0, -0.10, accuracy: 1e-6)
+        XCTAssertEqual(v?.z ?? 0, 0.0, accuracy: 1e-6)
+    }
+
+    func testParseVector3AcceptsAllIntegerAnyCodableArray() {
+        let parser = VRMExtensionParser()
+        // E.g. a plane normal authored as `[0, 1, 0]`.
+        let allInt: [Any] = [Int(0), Int(1), Int(0)]
+        let v = parser.parseVector3(allInt)
+        XCTAssertEqual(v, SIMD3<Float>(0, 1, 0))
+    }
+
+    func testParseVector3RejectsWrongLength() {
+        let parser = VRMExtensionParser()
+        XCTAssertNil(parser.parseVector3([1.0, 2.0]))
+        XCTAssertNil(parser.parseVector3([1.0, 2.0, 3.0, 4.0]))
+    }
+
+    func testParseVector3RejectsNonNumericElement() {
+        let parser = VRMExtensionParser()
+        let bogus: [Any] = [1.0, "two", 3.0]
+        XCTAssertNil(parser.parseVector3(bogus),
+            "A non-numeric element must fail closed — silently dropping it would re-introduce the VMK#236 silent-degradation pattern.")
+    }
+
+    func testParseVector3ReturnsNilForNonArray() {
+        let parser = VRMExtensionParser()
+        XCTAssertNil(parser.parseVector3(nil))
+        XCTAssertNil(parser.parseVector3("x,y,z"))
+        XCTAssertNil(parser.parseVector3(Double(1.0)))
+    }
 }
