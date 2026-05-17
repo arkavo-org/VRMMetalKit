@@ -1613,6 +1613,19 @@ public class VRMMaterial {
         return parsed.count >= count ? parsed : nil
     }
 
+    /// Extract a `Float` from an MToon JSON scalar. ``AnyCodable`` tries
+    /// `Int` before `Double` when decoding numbers, so JSON literals like
+    /// `1.0`, `-1`, and `0` are stored as `Int`. The prior `as? Double`
+    /// casts silently failed for those values, leaving every affected
+    /// factor (shadingShift, shadingToony, rimLightingMix, …) stuck at
+    /// its `VRMMToonMaterial` default — see VMK#238 and VMK#239.
+    private func floatScalar(from value: Any?) -> Float? {
+        if let intVal = value as? Int { return Float(intVal) }
+        if let doubleVal = value as? Double { return Float(doubleVal) }
+        if let floatVal = value as? Float { return floatVal }
+        return nil
+    }
+
     private func parseMToonExtension(_ mtoonExt: [String: Any], textures: [VRMTexture]) -> VRMMToonMaterial {
         var mtoon = VRMMToonMaterial()
 
@@ -1624,16 +1637,16 @@ public class VRMMaterial {
         }
 
         // Shading properties
-        if let shadingToonyFactor = mtoonExt["shadingToonyFactor"] as? Double {
-            mtoon.shadingToonyFactor = Float(shadingToonyFactor)
+        if let shadingToonyFactor = floatScalar(from: mtoonExt["shadingToonyFactor"]) {
+            mtoon.shadingToonyFactor = shadingToonyFactor
         }
-        if let shadingShiftFactor = mtoonExt["shadingShiftFactor"] as? Double {
-            mtoon.shadingShiftFactor = Float(shadingShiftFactor)
+        if let shadingShiftFactor = floatScalar(from: mtoonExt["shadingShiftFactor"]) {
+            mtoon.shadingShiftFactor = shadingShiftFactor
         }
 
         // Global illumination
-        if let giEqualizationFactor = mtoonExt["giEqualizationFactor"] as? Double {
-            mtoon.giEqualizationFactor = Float(giEqualizationFactor)
+        if let giEqualizationFactor = floatScalar(from: mtoonExt["giEqualizationFactor"]) {
+            mtoon.giEqualizationFactor = giEqualizationFactor
         }
 
         // MatCap properties
@@ -1649,41 +1662,41 @@ public class VRMMaterial {
                                                           parametricRimColorFactor[1],
                                                           parametricRimColorFactor[2])
         }
-        if let parametricRimFresnelPowerFactor = mtoonExt["parametricRimFresnelPowerFactor"] as? Double {
-            mtoon.parametricRimFresnelPowerFactor = Float(parametricRimFresnelPowerFactor)
+        if let parametricRimFresnelPowerFactor = floatScalar(from: mtoonExt["parametricRimFresnelPowerFactor"]) {
+            mtoon.parametricRimFresnelPowerFactor = parametricRimFresnelPowerFactor
         }
-        if let parametricRimLiftFactor = mtoonExt["parametricRimLiftFactor"] as? Double {
-            mtoon.parametricRimLiftFactor = Float(parametricRimLiftFactor)
+        if let parametricRimLiftFactor = floatScalar(from: mtoonExt["parametricRimLiftFactor"]) {
+            mtoon.parametricRimLiftFactor = parametricRimLiftFactor
         }
-        if let rimLightingMixFactor = mtoonExt["rimLightingMixFactor"] as? Double {
-            mtoon.rimLightingMixFactor = Float(rimLightingMixFactor)
+        if let rimLightingMixFactor = floatScalar(from: mtoonExt["rimLightingMixFactor"]) {
+            mtoon.rimLightingMixFactor = rimLightingMixFactor
         }
 
         // Outline properties
         if let outlineWidthMode = mtoonExt["outlineWidthMode"] as? String {
             mtoon.outlineWidthMode = VRMOutlineWidthMode(rawValue: outlineWidthMode) ?? .none
         }
-        if let outlineWidthFactor = mtoonExt["outlineWidthFactor"] as? Double {
-            mtoon.outlineWidthFactor = Float(outlineWidthFactor)
+        if let outlineWidthFactor = floatScalar(from: mtoonExt["outlineWidthFactor"]) {
+            mtoon.outlineWidthFactor = outlineWidthFactor
         }
         if let outlineColorFactor = floatArray(from: mtoonExt["outlineColorFactor"], count: 3) {
             mtoon.outlineColorFactor = SIMD3<Float>(outlineColorFactor[0],
                                                     outlineColorFactor[1],
                                                     outlineColorFactor[2])
         }
-        if let outlineLightingMixFactor = mtoonExt["outlineLightingMixFactor"] as? Double {
-            mtoon.outlineLightingMixFactor = Float(outlineLightingMixFactor)
+        if let outlineLightingMixFactor = floatScalar(from: mtoonExt["outlineLightingMixFactor"]) {
+            mtoon.outlineLightingMixFactor = outlineLightingMixFactor
         }
 
         // UV Animation properties
-        if let uvAnimationScrollXSpeedFactor = mtoonExt["uvAnimationScrollXSpeedFactor"] as? Double {
-            mtoon.uvAnimationScrollXSpeedFactor = Float(uvAnimationScrollXSpeedFactor)
+        if let uvAnimationScrollXSpeedFactor = floatScalar(from: mtoonExt["uvAnimationScrollXSpeedFactor"]) {
+            mtoon.uvAnimationScrollXSpeedFactor = uvAnimationScrollXSpeedFactor
         }
-        if let uvAnimationScrollYSpeedFactor = mtoonExt["uvAnimationScrollYSpeedFactor"] as? Double {
-            mtoon.uvAnimationScrollYSpeedFactor = Float(uvAnimationScrollYSpeedFactor)
+        if let uvAnimationScrollYSpeedFactor = floatScalar(from: mtoonExt["uvAnimationScrollYSpeedFactor"]) {
+            mtoon.uvAnimationScrollYSpeedFactor = uvAnimationScrollYSpeedFactor
         }
-        if let uvAnimationRotationSpeedFactor = mtoonExt["uvAnimationRotationSpeedFactor"] as? Double {
-            mtoon.uvAnimationRotationSpeedFactor = Float(uvAnimationRotationSpeedFactor)
+        if let uvAnimationRotationSpeedFactor = floatScalar(from: mtoonExt["uvAnimationRotationSpeedFactor"]) {
+            mtoon.uvAnimationRotationSpeedFactor = uvAnimationRotationSpeedFactor
         }
 
         // Texture references
@@ -1696,11 +1709,11 @@ public class VRMMaterial {
         if let shadingShiftTexture = mtoonExt["shadingShiftTexture"] as? [String: Any],
            let index = shadingShiftTexture["index"] as? Int {
             let texCoord = shadingShiftTexture["texCoord"] as? Int
-            let scale = shadingShiftTexture["scale"] as? Double
+            let scale = floatScalar(from: shadingShiftTexture["scale"])
             mtoon.shadingShiftTexture = VRMShadingShiftTexture(
                 index: index,
                 texCoord: texCoord,
-                scale: scale.map(Float.init)
+                scale: scale
             )
         }
 
