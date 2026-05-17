@@ -486,6 +486,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// - Note: The model must have spring bone data for this to have any effect.
     public var enableSpringBone: Bool = false
 
+    /// Override for the spring-bone simulation timestep. When `nil` (the default),
+    /// the renderer measures actual wall-clock elapsed time between draws via
+    /// `CACurrentMediaTime()`. When set, this exact value (seconds) is passed
+    /// to the compute system each frame.
+    ///
+    /// Use this when:
+    /// - **Offline rendering** drives frames faster (or slower) than the
+    ///   target playback rate — e.g., a test harness rendering a 15-frame
+    ///   swing without 16.67ms between calls would see near-zero wall-clock
+    ///   deltaTime and therefore near-zero physics substeps, making
+    ///   stiffness-dependent dynamics invisible (VMK#240).
+    /// - **Conformance harnesses** need bit-determinism across machines.
+    /// - **Video frame extraction** at non-realtime rates.
+    ///
+    /// Live applications driving frames at display-refresh rate should leave
+    /// this `nil` so physics tracks actual elapsed time.
+    public var simulationDeltaTime: TimeInterval?
+
     /// Character root velocity in world space, used by the spring-bone predict
     /// kernel to apply inertial force opposite to character motion. Set this
     /// each frame from the host application's locomotion code (e.g., the
@@ -1340,13 +1358,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // (compute or render) is active on the same buffer — Metal forbids overlap.
         if enableSpringBone, model.springBone != nil {
 
-            // Calculate actual deltaTime
-            let currentTime = CACurrentMediaTime()
-            let deltaTime = lastUpdateTime > 0 ? Float(currentTime - lastUpdateTime) : 1.0 / 60.0
-            lastUpdateTime = currentTime
-
-            // Clamp deltaTime to reasonable values (prevent huge jumps)
-            let clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
+            // Calculate actual deltaTime. `simulationDeltaTime` is the
+            // offline-rendering escape: when set, use it directly so
+            // tests / video extractors / conformance harnesses get a
+            // deterministic physics timestep independent of wall-clock.
+            let clampedDeltaTime: Float
+            if let override = simulationDeltaTime {
+                clampedDeltaTime = Float(override)
+                lastUpdateTime = CACurrentMediaTime()
+            } else {
+                let currentTime = CACurrentMediaTime()
+                let deltaTime = lastUpdateTime > 0 ? Float(currentTime - lastUpdateTime) : 1.0 / 60.0
+                lastUpdateTime = currentTime
+                // Clamp deltaTime to reasonable values (prevent huge jumps)
+                clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
+            }
 
             // Update temporary forces if any
             updateSpringBoneForces(deltaTime: clampedDeltaTime)
