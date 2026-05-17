@@ -397,26 +397,27 @@ struct VRMVideoRendererCLI {
             print("   🌒 Silhouette mode (rim power \(options.rimPower))")
         } else if options.heroLighting {
             // Hero/portrait setup: 3-point with soft fill and lifted ambient.
-            // Intensities rescaled by 1/π to preserve visual output under the new
-            // .radiometric normalization convention (vrm-conformance #213).
+            // .radiometric (factor π) cancels the shader's BRDF_LAMBERT_NORM (1/π),
+            // so authored intensities pass through unscaled — same effective brightness
+            // as the pre-radiometric setup.
             renderer.setLight(0, direction: SIMD3<Float>(0.3, -0.3, -0.85),
-                              color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 0.3183)
+                              color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 1.0)
             renderer.setLight(1, direction: SIMD3<Float>(-0.5, -0.1, -0.85),
-                              color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.1751)
+                              color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.55)
             renderer.setLight(2, direction: SIMD3<Float>(0.0, -0.4, 0.85),
-                              color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.1273)
+                              color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.4)
             renderer.setAmbientColor(SIMD3<Float>(0.18, 0.18, 0.2))
             renderer.setLightNormalizationMode(.radiometric)
             print("   💡 Lighting: hero (3-point, lifted ambient)")
         } else {
             // Default cel-shading: hard step shadows, dark ambient.
-            // Intensities rescaled by 1/π under .radiometric to preserve the prior
-            // .automatic behaviour exactly (vrm-conformance #213).
+            // .radiometric cancels the shader's BRDF_LAMBERT_NORM (1/π) so
+            // intensity passes through; matches v0.10.0 brightness exactly.
             renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3183)
+                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
             renderer.disableLight(1)
             renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
-                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.0955)
+                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
             renderer.setAmbientColor(SIMD3<Float>(0.03, 0.03, 0.05))
             renderer.setLightNormalizationMode(.radiometric)
         }
@@ -470,8 +471,13 @@ struct VRMVideoRendererCLI {
         
         // Setup video writer
         print("📝 Setting up video encoder...")
-        let videoWriter = try AVAssetWriter(url: URL(fileURLWithPath: options.outputPath), fileType: .mov)
-        
+        let outputURL = URL(fileURLWithPath: options.outputPath)
+        // AVAssetWriter.init throws if the path already exists; remove first.
+        if FileManager.default.fileExists(atPath: options.outputPath) {
+            try FileManager.default.removeItem(at: outputURL)
+        }
+        let videoWriter = try AVAssetWriter(url: outputURL, fileType: .mov)
+
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: options.hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
             AVVideoWidthKey: options.width,
@@ -481,10 +487,10 @@ struct VRMVideoRendererCLI {
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
             ]
         ]
-        
+
         let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
         writerInput.expectsMediaDataInRealTime = false
-        
+
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: writerInput,
             sourcePixelBufferAttributes: [
@@ -493,9 +499,11 @@ struct VRMVideoRendererCLI {
                 kCVPixelBufferHeightKey as String: options.height
             ]
         )
-        
+
         videoWriter.add(writerInput)
-        videoWriter.startWriting()
+        guard videoWriter.startWriting() else {
+            throw VideoRenderError.videoEncodingFailed
+        }
         videoWriter.startSession(atSourceTime: .zero)
         
         // Render loop

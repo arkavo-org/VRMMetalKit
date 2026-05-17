@@ -368,7 +368,16 @@ struct VRMRenderCLI {
                 renderer.applySilhouetteMode(model: model, config: sil)
                 print("  ✓ Silhouette mode (rim power \(options.rimPower))")
             } else {
-                renderer.setupBrightToonLighting()
+                // Anime/cel-shading: single key + rim, dark ambient.
+                // .radiometric (factor π) cancels the shader's BRDF_LAMBERT_NORM (1/π),
+                // so authored intensities pass through unscaled at v0.10.0 brightness.
+                renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                                  color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
+                renderer.disableLight(1)
+                renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
+                                  color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
+                renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
+                renderer.setLightNormalizationMode(.radiometric)
             }
             
             // Calculate bounding box for auto-framing
