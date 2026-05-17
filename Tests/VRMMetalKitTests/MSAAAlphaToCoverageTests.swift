@@ -111,10 +111,68 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         // Arrange
         let config = RendererConfig(strict: .off, sampleCount: 4)
         let renderer = VRMRenderer(device: device, config: config)
-        
+
         // Act & Assert
         XCTAssertNotNil(renderer.maskAlphaToCoveragePipelineState,
             "Renderer should have A2C pipeline for MASK materials with MSAA")
+    }
+
+    /// Test 4a: Spec-baseline routing — MASK uses the opaque PSO by default.
+    ///
+    /// Matches UniVRM (Unity Built-in RP) and three-vrm (WebGL): MASK materials
+    /// use plain alpha-test in the shader, not hardware alpha-to-coverage. A2C
+    /// is an opt-in quality extension, not the default.
+    func testSelectPipelineRoutesMASKToOpaqueByDefault() throws {
+        let config = RendererConfig(strict: .off, sampleCount: 4)
+        let renderer = VRMRenderer(device: device, config: config)
+
+        let selected = renderer.selectPipelineForDraw(
+            alphaMode: "mask",
+            isSkinned: false,
+            debugWireframe: false
+        )
+
+        XCTAssertEqual(selected?.label, "mtoon_opaque",
+            "MASK must default to the opaque PSO to match UniVRM/three-vrm rendering")
+    }
+
+    func testSelectPipelineRoutesSkinnedMASKToSkinnedOpaqueByDefault() throws {
+        let config = RendererConfig(strict: .off, sampleCount: 4)
+        let renderer = VRMRenderer(device: device, config: config)
+
+        let selected = renderer.selectPipelineForDraw(
+            alphaMode: "mask",
+            isSkinned: true,
+            debugWireframe: false
+        )
+
+        XCTAssertEqual(selected?.label, "mtoon_skinned_opaque")
+    }
+
+    func testSelectPipelineRoutesOPAQUEToOpaque() throws {
+        let config = RendererConfig(strict: .off, sampleCount: 4)
+        let renderer = VRMRenderer(device: device, config: config)
+
+        let selected = renderer.selectPipelineForDraw(
+            alphaMode: "opaque",
+            isSkinned: false,
+            debugWireframe: false
+        )
+
+        XCTAssertEqual(selected?.label, "mtoon_opaque")
+    }
+
+    func testSelectPipelineRoutesBLENDToBlend() throws {
+        let config = RendererConfig(strict: .off, sampleCount: 4)
+        let renderer = VRMRenderer(device: device, config: config)
+
+        let selected = renderer.selectPipelineForDraw(
+            alphaMode: "blend",
+            isSkinned: false,
+            debugWireframe: false
+        )
+
+        XCTAssertEqual(selected?.label, "mtoon_blend")
     }
     
     /// Test 5: Alpha-to-coverage reduces MASK material edge flicker

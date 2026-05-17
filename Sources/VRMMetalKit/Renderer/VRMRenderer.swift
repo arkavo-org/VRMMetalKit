@@ -2340,22 +2340,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("[PIPELINE DEBUG] Node '\(item.node.name ?? "unnamed")': nodeHasSkin=\(nodeHasSkin), meshUsesSkinning=\(meshUsesSkinning), hasSkinning=\(hasSkinning), isSkinned=\(isSkinned)")
             }
 
-            // Select correct pipeline based on alpha mode and debug settings
-            let activePipelineState: MTLRenderPipelineState?
-            if debugWireframe {
-                // Use wireframe pipeline for debugging (non-skinned only for now)
-                activePipelineState = wireframePipelineState
-            } else if materialAlphaMode == "blend" {
-                // Standard 3D BLEND mode requires blending-enabled PSO
-                activePipelineState = isSkinned ? skinnedBlendPipelineState : blendPipelineState
-            } else {
-                // Standard 3D OPAQUE and MASK modes can share the same PSO (no blending)
-                activePipelineState = isSkinned ? skinnedOpaquePipelineState : opaquePipelineState
-
-                // Debug which pipeline is selected
-                if frameCounter % 60 == 0 && isSkinned {
-                    vrmLog("[PIPELINE SELECT] Using skinned pipeline: \(skinnedOpaquePipelineState != nil ? "exists" : "NIL")")
-                }
+            // Select correct pipeline based on alpha mode and debug settings.
+            let activePipelineState = selectPipelineForDraw(
+                alphaMode: materialAlphaMode,
+                isSkinned: isSkinned,
+                debugWireframe: debugWireframe
+            )
+            if frameCounter % 60 == 0 && isSkinned {
+                vrmLog("[PIPELINE SELECT] Using skinned pipeline: \(skinnedOpaquePipelineState != nil ? "exists" : "NIL")")
             }
 
             guard let pipeline = activePipelineState else {
@@ -4000,8 +3992,32 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return descriptor
     }
     
+    /// Returns the render-pipeline state that the draw loop should bind for a
+    /// given material's alpha mode and skinning state.
+    ///
+    /// Default behavior matches the VRM 1.0 spec / UniVRM reference:
+    /// `OPAQUE` and `MASK` both use the opaque PSO (alpha-test in the shader),
+    /// `BLEND` uses the blend PSO. Extracted from the inline switch so that
+    /// the routing branch can be asserted by unit tests without rendering a
+    /// frame.
+    public func selectPipelineForDraw(
+        alphaMode: String,
+        isSkinned: Bool,
+        debugWireframe: Bool
+    ) -> MTLRenderPipelineState? {
+        if debugWireframe {
+            return wireframePipelineState
+        }
+        switch alphaMode {
+        case "blend":
+            return isSkinned ? skinnedBlendPipelineState : blendPipelineState
+        default:
+            return isSkinned ? skinnedOpaquePipelineState : opaquePipelineState
+        }
+    }
+
     // MARK: - CLI Rendering Support
-    
+
     /// Sets the integer debug-mode selector consumed by the MToon fragment shader.
     ///
     /// `0` is normal rendering; values 1-16 select diagnostic visualisations
