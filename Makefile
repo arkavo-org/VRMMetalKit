@@ -1,15 +1,16 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders clean test docs docs-static
+.PHONY: help shaders gltf-shaders clean test docs docs-static
 
 help:
 	@echo "VRMMetalKit Build Targets:"
-	@echo "  make shaders     - Compile all .metal files into metallib"
-	@echo "  make clean       - Remove temporary build files"
-	@echo "  make test        - Run Swift tests"
-	@echo "  make docs        - Preview documentation locally"
-	@echo "  make docs-static - Generate a static documentation site under .build/docs"
+	@echo "  make shaders       - Compile VRMMetalKit Metal shaders into metallib"
+	@echo "  make gltf-shaders  - Compile GLTFMetalKit (PBR) shaders into metallib"
+	@echo "  make clean         - Remove temporary build files"
+	@echo "  make test          - Run Swift tests"
+	@echo "  make docs          - Preview documentation locally"
+	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
 
 # Compile all Metal shaders into a single metallib.
 # -Wall -Wextra enables the common clang warning classes; -Werror promotes
@@ -28,6 +29,22 @@ shaders:
 	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib"
 	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
 
+# Compile GLTFMetalKit PBR shaders into a separate metallib so the
+# inanimate-object renderer can load them without dragging the MToon /
+# spring-bone kernels along. Same -Wall -Wextra -Werror policy as the
+# VRM shader build above.
+gltf-shaders:
+	@echo "🔨 Compiling GLTFMetalKit shaders..."
+	@mkdir -p /tmp/gltf-shaders
+	@for file in Sources/GLTFMetalKit/Shaders/*.metal; do \
+		echo "  Compiling $$file..."; \
+		xcrun metal -Wall -Wextra -Werror -c $$file -o /tmp/gltf-shaders/$$(basename $$file .metal).air; \
+	done
+	@xcrun metallib /tmp/gltf-shaders/*.air -o Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
+	@echo "✅ GLTFMetalKit shaders compiled"
+	@echo "📦 Output: Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib"
+	@ls -lh Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
+
 # List functions in the compiled metallib
 list-functions:
 	@echo "📋 Functions in VRMMetalKitShaders.metallib:"
@@ -36,7 +53,7 @@ list-functions:
 # Clean temporary files
 clean:
 	@echo "🗑️  Cleaning temporary files..."
-	@rm -rf /tmp/vrm-shaders
+	@rm -rf /tmp/vrm-shaders /tmp/gltf-shaders
 	@echo "✅ Clean complete"
 
 # Run tests
