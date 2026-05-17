@@ -105,4 +105,99 @@ final class ExtendedColliderTests: XCTestCase {
             XCTFail("Unexpected shape: \(spring.colliders[0].shape)")
         }
     }
+
+    /// Phase 2: `inside: true` sphere is now a first-class shape that maps
+    /// to `.insideSphere`. The GPU collision kernel branches on
+    /// `SphereCollider.inside` to use containment math (push joint *toward*
+    /// the centre when it tries to escape the radius) rather than the
+    /// default outside-collision (push away from the centre when it
+    /// penetrates).
+    func testInsideSphereColliderLoadsAsInvertedShape() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+        guard let url = Bundle.module.url(
+            forResource: "springbone_extended_isphere_pmed",
+            withExtension: "vrm",
+            subdirectory: "TestData/Conformance"
+        ) else {
+            throw XCTSkip("springbone_extended_isphere_pmed.vrm not bundled")
+        }
+
+        let model = try await VRMModel.load(from: url, device: device)
+        let spring = try XCTUnwrap(model.springBone)
+        XCTAssertEqual(spring.colliders.count, 1)
+
+        switch spring.colliders[0].shape {
+        case .insideSphere(_, let radius):
+            XCTAssertEqual(radius, 0.2, accuracy: 1e-5,
+                "Fixture sphere radius is `0.2`; must round-trip through the extension parser.")
+        default:
+            XCTFail("Inverted sphere should map to .insideSphere, got \(spring.colliders[0].shape)")
+        }
+    }
+
+    /// Phase 2: `inside: true` capsule maps to `.insideCapsule`.
+    func testInsideCapsuleColliderLoadsAsInvertedShape() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+        guard let url = Bundle.module.url(
+            forResource: "springbone_extended_icaps_pmed",
+            withExtension: "vrm",
+            subdirectory: "TestData/Conformance"
+        ) else {
+            throw XCTSkip("springbone_extended_icaps_pmed.vrm not bundled")
+        }
+
+        let model = try await VRMModel.load(from: url, device: device)
+        let spring = try XCTUnwrap(model.springBone)
+        XCTAssertEqual(spring.colliders.count, 1)
+
+        switch spring.colliders[0].shape {
+        case .insideCapsule(_, let radius, _):
+            XCTAssertEqual(radius, 0.2, accuracy: 1e-5,
+                "Fixture capsule radius is `0.2`.")
+        default:
+            XCTFail("Inverted capsule should map to .insideCapsule, got \(spring.colliders[0].shape)")
+        }
+    }
+
+    /// Phase 3: per-joint `angleLimit` from the extension is parsed onto
+    /// each `VRMSpringJoint` as **radians**. The fixture authors `60` (in
+    /// degrees, per conformance-suite convention) and the loader converts
+    /// to radians (~1.0472) at the parser boundary so the GPU kernel in
+    /// `SpringBonePredict.metal` can `cos()` it directly.
+    ///
+    /// Pinning the unit contract: if a reader instead treats the file
+    /// value as radians, `cos(60 rad) ≈ -0.95` and the cone is
+    /// effectively unbounded — the regression sweeps would silently lose
+    /// the angleLimit signal.
+    func testPerJointAngleLimitParsesAsRadiansFromDegreesInFile() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+        guard let url = Bundle.module.url(
+            forResource: "springbone_extended_isphere_anglelimit_60",
+            withExtension: "vrm",
+            subdirectory: "TestData/Conformance"
+        ) else {
+            throw XCTSkip("springbone_extended_isphere_anglelimit_60.vrm not bundled")
+        }
+
+        let model = try await VRMModel.load(from: url, device: device)
+        let spring = try XCTUnwrap(model.springBone)
+        let firstSpring = try XCTUnwrap(spring.springs.first)
+        XCTAssertGreaterThan(firstSpring.joints.count, 0)
+
+        // Fixture authors `angleLimit: 60` (degrees). Internal contract is
+        // radians, so the parsed value must equal 60 * π/180.
+        let expectedRadians: Float = 60.0 * .pi / 180.0
+        for (idx, joint) in firstSpring.joints.enumerated() {
+            XCTAssertEqual(joint.angleLimit, expectedRadians, accuracy: 1e-4,
+                "Joint \(idx) angleLimit must be parsed as radians (~1.0472). " +
+                "Got \(joint.angleLimit); if this equals 60.0 the parser is " +
+                "skipping the deg→rad conversion and the cone-clamp signal is lost.")
+        }
+    }
 }

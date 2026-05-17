@@ -631,7 +631,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
                     gravityPower: clamped.gravityPower,
                     colliderGroupMask: colliderGroupMask,
-                    gravityDir: normalizedGravityDir
+                    gravityDir: normalizedGravityDir,
+                    angleLimit: joint.angleLimit
                 )
                 boneParams.append(params)
 
@@ -712,12 +713,24 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let worldCenter = colliderNode.worldPosition + worldOffset
                 sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
 
+            case .insideSphere(let offset, let radius):
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex, inside: true))
+
             case .capsule(let offset, let radius, let tail):
                 let worldOffset = worldRotation * offset
                 let worldTail = worldRotation * tail
                 let worldP0 = colliderNode.worldPosition + worldOffset
                 let worldP1 = worldP0 + worldTail
                 capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+
+            case .insideCapsule(let offset, let radius, let tail):
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex, inside: true))
 
             case .plane(let offset, let normal):
                 let worldOffset = worldRotation * offset
@@ -990,12 +1003,24 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 #endif
                 sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
 
+            case .insideSphere(let offset, let radius):
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex, inside: true))
+
             case .capsule(let offset, let radius, let tail):
                 let worldOffset = worldRotation * offset
                 let worldTail = worldRotation * tail
                 let worldP0 = colliderNode.worldPosition + worldOffset
                 let worldP1 = worldP0 + worldTail
                 capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+
+            case .insideCapsule(let offset, let radius, let tail):
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex, inside: true))
 
             case .plane(let offset, let normal):
                 let worldOffset = worldRotation * offset
@@ -1473,12 +1498,24 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let worldCenter = colliderNode.worldPosition + worldOffset
                 targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
 
+            case .insideSphere(let offset, let radius):
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
+                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex, inside: true))
+
             case .capsule(let offset, let radius, let tail):
                 let worldOffset = worldRotation * offset
                 let worldTail = worldRotation * tail
                 let worldP0 = colliderNode.worldPosition + worldOffset
                 let worldP1 = worldP0 + worldTail
                 targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+
+            case .insideCapsule(let offset, let radius, let tail):
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
+                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex, inside: true))
 
             case .plane(let offset, let normal):
                 let worldOffset = worldRotation * offset

@@ -10,20 +10,26 @@ import simd
 final class BoneParamsLayoutTests: XCTestCase {
 
     func testStructSize() {
-        // Metal layout with collision group mask:
-        // 4 floats (16) + uint (4) + float (4) + uint (4) + float3 (12) = 40 bytes
-        // But float3 forces 16-byte alignment: padded to 48 bytes total
-        let expectedSize = 48
+        // Metal layout (size = last-byte-occupied; stride = size rounded to alignment):
+        //   stiffness/drag/radius/parentIndex: 4×4 = 16
+        //   gravityPower (4) + colliderGroupMask (4) + 8 pad = 16 (aligns float3)
+        //   gravityDir float3: 16 (with simd padding)
+        //   angleLimit: 4 bytes at offset 48
+        // size = 52 bytes; stride = 64 (16-byte aligned).
+        let expectedSize = 52
         let actualSize = MemoryLayout<BoneParams>.size
 
         XCTAssertEqual(actualSize, expectedSize,
                       "BoneParams size mismatch! Expected \(expectedSize) bytes, got \(actualSize) bytes. " +
-                      "This struct must match the Metal shader's memory layout exactly.")
+                      "This struct must match the Metal shader's memory layout exactly. " +
+                      "If you added a field, also update the BoneParams declaration in " +
+                      "SpringBoneCollision.metal, SpringBonePredict.metal, SpringBoneDistance.metal, " +
+                      "and SpringBoneKinematic.metal.")
     }
 
     func testStructStride() {
-        // Stride must be 48 bytes (16-byte aligned) to match Metal shader
-        let expectedStride = 48
+        // Stride must be 64 bytes (16-byte aligned, post angleLimit addition).
+        let expectedStride = 64
         let actualStride = MemoryLayout<BoneParams>.stride
 
         XCTAssertEqual(actualStride, expectedStride,
@@ -102,7 +108,7 @@ final class BoneParamsLayoutTests: XCTestCase {
 
     func testMetalCompatibility() {
         // This test documents the Metal shader struct layout
-        // Metal BoneParams has 7 fields with padding:
+        // Metal BoneParams has 8 fields with padding:
         //   Offset 0:  float stiffness           (4 bytes)
         //   Offset 4:  float drag                (4 bytes)
         //   Offset 8:  float radius              (4 bytes)
@@ -111,7 +117,11 @@ final class BoneParamsLayoutTests: XCTestCase {
         //   Offset 20: uint colliderGroupMask    (4 bytes)
         //   Offset 24: (padding for float3)      (8 bytes)
         //   Offset 32: float3 gravityDir         (12 bytes, padded to 16)
-        //   Total: 48 bytes (16-byte aligned)
+        //   Offset 48: float angleLimit          (4 bytes)
+        //   Offset 52: (padding to 16-byte stride) (12 bytes)
+        //   Total: 64 bytes (16-byte aligned)
+        // angleLimit added for VRMC_springBone_extended_collider per-joint
+        // swing-cone clamp.
 
         let layout = [
             (offset: 0, field: "stiffness", bytes: 4),
@@ -121,16 +131,17 @@ final class BoneParamsLayoutTests: XCTestCase {
             (offset: 16, field: "gravityPower", bytes: 4),
             (offset: 20, field: "colliderGroupMask", bytes: 4),
             (offset: 32, field: "gravityDir", bytes: 12),  // padded to 16
+            (offset: 48, field: "angleLimit", bytes: 4),
         ]
 
         print("\nMetal Shader Layout:")
         for item in layout {
             print("  Offset \(item.offset): \(item.field) (\(item.bytes) bytes)")
         }
-        print("  Total: 48 bytes (16-byte aligned)\n")
+        print("  Total: 64 bytes (16-byte aligned)\n")
 
-        XCTAssertEqual(MemoryLayout<BoneParams>.stride, 48,
-                      "BoneParams must be 48 bytes to match Metal shader")
+        XCTAssertEqual(MemoryLayout<BoneParams>.stride, 64,
+                      "BoneParams must be 64 bytes to match Metal shader")
     }
 
     func testGravityDirectionNormalization() {

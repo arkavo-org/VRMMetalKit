@@ -738,12 +738,24 @@ public struct VRMCollider {
 
 /// Geometric shape of a spring-bone collider in the parent node's local frame.
 public enum VRMColliderShape {
-    /// Sphere collider centered at `offset` with `radius`.
+    /// Sphere collider centered at `offset` with `radius`. Joints are pushed
+    /// outside this sphere.
     case sphere(offset: SIMD3<Float>, radius: Float)
     /// Capsule from `offset` to `tail` with hemispherical caps of `radius`.
+    /// Joints are pushed outside this capsule.
     case capsule(offset: SIMD3<Float>, radius: Float, tail: SIMD3<Float>)
-    /// Infinite plane at `offset` with surface normal `normal`. Non-spec VRMMetalKit extension; not part of `VRMC_springBone-1.0`.
+    /// Infinite plane at `offset` with surface normal `normal`. Joints are
+    /// pushed to the positive-normal side. Promoted from VMK-only to the spec
+    /// via `VRMC_springBone_extended_collider-1.0`.
     case plane(offset: SIMD3<Float>, normal: SIMD3<Float>)
+    /// Inverted sphere (containment collider) — joints are pushed *inside*
+    /// the volume. From `VRMC_springBone_extended_collider-1.0.shape.sphere`
+    /// with `inside: true`.
+    case insideSphere(offset: SIMD3<Float>, radius: Float)
+    /// Inverted capsule (containment collider) — joints are pushed *inside*
+    /// the volume. From `VRMC_springBone_extended_collider-1.0.shape.capsule`
+    /// with `inside: true`.
+    case insideCapsule(offset: SIMD3<Float>, radius: Float, tail: SIMD3<Float>)
 }
 
 /// Named collection of colliders referenced by index from one or more springs.
@@ -791,6 +803,12 @@ public struct VRMSpringJoint {
     public var gravityDir: SIMD3<Float> = [0, -1, 0]
     /// Linear damping in `0...1`; higher values dampen joint motion more aggressively.
     public var dragForce: Float = 0.4
+    /// Maximum swing angle from the joint's bind direction, stored in **radians**.
+    /// Sourced from `VRMC_springBone_extended_collider.angleLimit`, which the
+    /// loader interprets as degrees in the file (per conformance-fixture
+    /// convention; the 1.0 spec does not pin a unit) and converts on parse.
+    /// `0` (default) means no limit — the joint swings freely.
+    public var angleLimit: Float = 0.0
 
     /// Creates a spring-bone joint bound to the given node.
     public init(node: Int) {
