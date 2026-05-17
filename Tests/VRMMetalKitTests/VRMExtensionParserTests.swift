@@ -254,6 +254,61 @@ final class VRMExtensionParserTests: XCTestCase {
         XCTAssertNotNil(model.expressions?.custom["customExpression"])
     }
 
+    func testVRM1MorphTargetBindWeightSurvivesJSONSerialization() throws {
+        // Regression guard for the VRM 1.0 expression bind loader. JSON
+        // weights come through `JSONSerialization` as `NSNumber`, which
+        // can bridge to `Double` or `Int` but does not always bridge to
+        // `Float`. The old `bind["weight"] as? Float` cast silently
+        // dropped most binds, leaving `expressions.preset[.aa]` registered
+        // with an empty `morphTargetBinds` array — so `setExpressionWeight`
+        // had nothing to deform, and visemes / emotion presets were dead
+        // on every VRM 1.0 model loaded through this code path.
+        //
+        // Drive the same path the production loader does (JSON bytes →
+        // JSONSerialization → parseVRMExtension) so the bridge actually
+        // produces `NSNumber` and not a Swift-literal `Double`.
+        let jsonString = """
+        {
+            "specVersion": "1.0",
+            "meta": {"name": "Test", "licenseUrl": "https://example.com"},
+            "humanoid": {"humanBones": {
+                "hips": {"node": 0}, "leftUpperLeg": {"node": 1},
+                "rightUpperLeg": {"node": 2}, "leftLowerLeg": {"node": 3},
+                "rightLowerLeg": {"node": 4}, "leftFoot": {"node": 5},
+                "rightFoot": {"node": 6}, "spine": {"node": 7},
+                "chest": {"node": 8}, "neck": {"node": 9},
+                "head": {"node": 10}, "leftShoulder": {"node": 11},
+                "rightShoulder": {"node": 12}, "leftUpperArm": {"node": 13},
+                "rightUpperArm": {"node": 14}, "leftLowerArm": {"node": 15},
+                "rightLowerArm": {"node": 16}, "leftHand": {"node": 17},
+                "rightHand": {"node": 18}
+            }},
+            "expressions": {
+                "preset": {
+                    "aa": {
+                        "morphTargetBinds": [
+                            {"node": 0, "index": 0, "weight": 1.0},
+                            {"node": 0, "index": 1, "weight": 0.5},
+                            {"node": 0, "index": 2, "weight": 0}
+                        ]
+                    }
+                }
+            }
+        }
+        """
+        let data = Data(jsonString.utf8)
+        let vrmDict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let document = createMinimalGLTFDocument()
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+
+        let binds = model.expressions?.preset[.aa]?.morphTargetBinds ?? []
+        XCTAssertEqual(binds.count, 3,
+                       "All three binds must survive JSONSerialization decode (Double 1.0, Double 0.5, Int 0).")
+        XCTAssertEqual(binds[0].weight, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(binds[1].weight, 0.5, accuracy: 1e-6)
+        XCTAssertEqual(binds[2].weight, 0.0, accuracy: 1e-6)
+    }
+
     func testVRM1LookAtParsing() throws {
         // Note: parseLookAt expects Double values in dictionaries, not Float
         let vrmDict: [String: Any] = [

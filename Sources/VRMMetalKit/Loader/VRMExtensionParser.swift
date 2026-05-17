@@ -643,10 +643,24 @@ public class VRMExtensionParser {
         if let morphTargetBinds = dict["morphTargetBinds"] as? [[String: Any]] {
             for bind in morphTargetBinds {
                 guard let node = bind["node"] as? Int,
-                      let index = bind["index"] as? Int,
-                      let weight = bind["weight"] as? Float else {
+                      let index = bind["index"] as? Int else {
                     continue
                 }
+                // VMK#236 bug class: `JSONSerialization` decodes JSON
+                // numbers as `Double` (or `Int` for whole-number literals
+                // like `1` / `0`); `as? Float` succeeds only on the rare
+                // case where the bridge lands on `Float` directly, so
+                // almost every weight silently failed and the bind was
+                // dropped. Loaded VRM 1.0 expressions ended up registered
+                // but empty, making `setExpressionWeight(...)` a no-op
+                // (visemes never deformed the mesh, blink/emotion presets
+                // dead too). Same Float/Double/Int trichotomy the VRM 0.x
+                // morph-bind path above already handles.
+                let weight: Float
+                if let f = bind["weight"] as? Float { weight = f }
+                else if let d = bind["weight"] as? Double { weight = Float(d) }
+                else if let i = bind["weight"] as? Int { weight = Float(i) }
+                else { continue }
 
                 expression.morphTargetBinds.append(
                     VRMMorphTargetBind(node: node, index: index, weight: weight)
