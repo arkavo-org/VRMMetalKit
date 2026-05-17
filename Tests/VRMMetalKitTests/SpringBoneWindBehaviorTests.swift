@@ -59,7 +59,8 @@ final class SpringBoneWindBehaviorTests: XCTestCase {
         let totalFrames = 120
         let dtFrame: Float = 1.0 / 60.0
         var phase: Float = 0.0
-        let windAmp: Float = 20.0
+        // Velocity-scale amplitude post-VMK#270.
+        let windAmp: Float = 0.3
         let windFreq: Float = 1.0
         let windDir = SIMD3<Float>(1, 0, 0)
 
@@ -109,7 +110,10 @@ final class SpringBoneWindBehaviorTests: XCTestCase {
     /// than wind at lower amplitude. This guards against the wind term
     /// being clamped or saturated somewhere in the kernel.
     func testWindAmplitudeScalesJointDeflection() throws {
-        let amplitudes: [Float] = [5.0, 30.0]
+        // Amplitudes are now velocity-like (m/s) per VMK#270 dt-scaling.
+        // Pre-fix these were `* dt²` and tolerated values up to 30; post-
+        // fix the same numbers pin the chain to its constraint sphere.
+        let amplitudes: [Float] = [0.1, 0.6]
         var deflections: [Float] = []
 
         for amp in amplitudes {
@@ -168,7 +172,9 @@ final class SpringBoneWindBehaviorTests: XCTestCase {
         // oscillating steady state, not the startup transient.
         var phase: Float = 0.0
         let dtFrame: Float = 1.0 / 60.0
-        let amp: Float = 20.0
+        // Velocity-scale amplitude post-VMK#270 (was 20.0 when wind was
+        // dt²-scaled). Saturates the constraint sphere at higher values.
+        let amp: Float = 0.4
         let freq: Float = 3.0
         let dir = SIMD3<Float>(1, 0, 0)
 
