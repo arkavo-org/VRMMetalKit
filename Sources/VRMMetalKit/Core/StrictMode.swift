@@ -87,8 +87,18 @@ public struct RendererConfig {
     /// Global multiplier for per-material depth bias. Increase to push coplanar surfaces further apart.
     public var depthBiasScale: Float = 1.0
 
+    /// Quality extension: when `true` AND `sampleCount > 1`, MASK materials
+    /// render through a hardware alpha-to-coverage pipeline that fades cutout
+    /// edges across MSAA subsamples. Smooths hair / foliage / lace silhouettes.
+    ///
+    /// Default `false` matches UniVRM (Unity Built-in RP) and three-vrm
+    /// (WebGL), which use plain alpha-test in the shader. Enable to opt out
+    /// of bit-exact reference parity in exchange for nicer edges — note that
+    /// hair-silhouette pixel-SSIM against the conformance reference will drop.
+    public var alphaToCoverageForMASK: Bool = false
+
     /// Creates a renderer configuration. Defaults match the production baseline.
-    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0) {
+    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
         self.renderFilter = renderFilter
@@ -97,6 +107,7 @@ public struct RendererConfig {
         self.testIdentityPalette = testIdentityPalette
         self.sampleCount = sampleCount
         self.depthBiasScale = depthBiasScale
+        self.alphaToCoverageForMASK = alphaToCoverageForMASK
     }
 }
 

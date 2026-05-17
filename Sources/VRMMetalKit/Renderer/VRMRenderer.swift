@@ -3997,9 +3997,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///
     /// Default behavior matches the VRM 1.0 spec / UniVRM reference:
     /// `OPAQUE` and `MASK` both use the opaque PSO (alpha-test in the shader),
-    /// `BLEND` uses the blend PSO. Extracted from the inline switch so that
-    /// the routing branch can be asserted by unit tests without rendering a
-    /// frame.
+    /// `BLEND` uses the blend PSO. When `RendererConfig.alphaToCoverageForMASK`
+    /// is set AND MSAA is active, MASK opts into the hardware
+    /// alpha-to-coverage pipeline instead — a quality extension that drifts
+    /// from reference rendering.
     public func selectPipelineForDraw(
         alphaMode: String,
         isSkinned: Bool,
@@ -4011,6 +4012,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         switch alphaMode {
         case "blend":
             return isSkinned ? skinnedBlendPipelineState : blendPipelineState
+        case "mask" where config.alphaToCoverageForMASK && usesMultisampling:
+            let a2c = isSkinned ? skinnedMaskAlphaToCoveragePipelineState : maskAlphaToCoveragePipelineState
+            return a2c ?? (isSkinned ? skinnedOpaquePipelineState : opaquePipelineState)
         default:
             return isSkinned ? skinnedOpaquePipelineState : opaquePipelineState
         }
