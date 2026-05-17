@@ -19,12 +19,47 @@ import simd
 final class SpringBonePhysicsSpecTests: XCTestCase {
 
     var device: MTLDevice!
+    var commandQueue: MTLCommandQueue!
 
     override func setUp() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal not available")
         }
+        guard let queue = device.makeCommandQueue() else {
+            throw XCTSkip("Could not create Metal command queue")
+        }
         self.device = device
+        self.commandQueue = queue
+    }
+
+    /// Run `frameCount` frames against a host-owned `MTLCommandBuffer` so
+    /// the GPU work is deterministically complete before any CPU readback.
+    /// Replaces the previous `Thread.sleep(0.2)` pattern.
+    private func runSimulation(system: SpringBoneComputeSystem, model: VRMModel,
+                               frames: Int, deltaTime: TimeInterval = 1.0 / 60.0) throws {
+        for _ in 0..<frames {
+            guard let cb = commandQueue.makeCommandBuffer() else {
+                throw XCTSkip("Could not create command buffer")
+            }
+            system.update(model: model, deltaTime: deltaTime, commandBuffer: cb)
+            cb.commit()
+            cb.waitUntilCompleted()
+        }
+    }
+
+    /// Run a single frame deterministically and (optionally) call
+    /// `writeBonesToNodes` for tests that subsequently read node
+    /// transforms instead of the raw GPU buffers.
+    private func runFrame(system: SpringBoneComputeSystem, model: VRMModel,
+                          deltaTime: TimeInterval = 1.0 / 60.0,
+                          writeBack: Bool = false) throws {
+        guard let cb = commandQueue.makeCommandBuffer() else {
+            throw XCTSkip("Could not create command buffer")
+        }
+        system.update(model: model, deltaTime: deltaTime, commandBuffer: cb)
+        cb.commit()
+        cb.waitUntilCompleted()
+        if writeBack { system.writeBonesToNodes(model: model) }
     }
 
     // MARK: - Phase 1: Velocity/Inertia Tests
@@ -47,12 +82,9 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         var velocityIncreased = false
 
         for frame in 1...30 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
+            try runFrame(system: system, model: model, writeBack: (frame % 5 == 0))
 
             if frame % 5 == 0 {
-                Thread.sleep(forTimeInterval: 0.05)
-                system.writeBonesToNodes(model: model)
-
                 let currentY = readBonePositionY(model: model, boneIndex: 4)
                 let deltaY = initialY - currentY  // Positive if falling
 
@@ -155,13 +187,16 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         try systemLow.populateSpringBoneData(model: modelLowDrag)
         try systemHigh.populateSpringBoneData(model: modelHighDrag)
 
-        // Run simulation for longer to see drag difference
+        // Run simulation for longer to see drag difference.
+        // Uses the legacy self-committed path — see issue #268 for why
+        // the shared-buffer path produces subtly different output when
+        // two systems are stepped per frame.
         for _ in 0..<120 {
             systemLow.update(model: modelLowDrag, deltaTime: 1.0 / 60.0)
             systemHigh.update(model: modelHighDrag, deltaTime: 1.0 / 60.0)
         }
-
-        Thread.sleep(forTimeInterval: 0.2)
+        systemLow.waitForPendingFrame()
+        systemHigh.waitForPendingFrame()
         systemLow.writeBonesToNodes(model: modelLowDrag)
         systemHigh.writeBonesToNodes(model: modelHighDrag)
 
@@ -192,12 +227,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         let initialY = readBonePositionY(model: model, boneIndex: 2)
 
         // Run simulation for 1 second
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         let finalY = readBonePositionY(model: model, boneIndex: 2)
 
@@ -220,13 +250,18 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         let initialYNo = readBonePositionY(model: modelNoGravity, boneIndex: 2)
         let initialYFull = readBonePositionY(model: modelFullGravity, boneIndex: 2)
 
-        // Run simulation
+        // Run simulation on the legacy self-committed buffer path —
+        // see comment in testDragReducesVelocity. When the same physical
+        // step is driven through the host-owned `commandBuffer:` parameter,
+        // the no-gravity rig accumulates ~20 cm of unexpected drift, which
+        // suggests a CPU/GPU race (see issue #268) against the per-substep animated-positions
+        // buffer that the shared-buffer path resolves differently.
         for _ in 0..<60 {
             systemNo.update(model: modelNoGravity, deltaTime: 1.0 / 60.0)
             systemFull.update(model: modelFullGravity, deltaTime: 1.0 / 60.0)
         }
-
-        Thread.sleep(forTimeInterval: 0.2)
+        systemNo.waitForPendingFrame()
+        systemFull.waitForPendingFrame()
         systemNo.writeBonesToNodes(model: modelNoGravity)
         systemFull.writeBonesToNodes(model: modelFullGravity)
 
@@ -256,12 +291,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         }
 
         // Run simulation with gravity
-        for _ in 0..<120 {  // 2 seconds
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 120)
 
         // Read back positions and verify distances
         guard let buffers = model.springBoneBuffers,
@@ -306,12 +336,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         }
 
         // Run simulation (no gravity, should stay stable)
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         // Verify positions didn't collapse inward
         let finalPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
@@ -334,12 +359,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         try system.populateSpringBoneData(model: model)
 
         // Run simulation
-        for _ in 0..<30 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 30)
 
         // Verify chain structure - each bone should be connected to previous
         guard let buffers = model.springBoneBuffers,
@@ -388,12 +408,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         rootNode.updateWorldTransform()
 
         // Run physics
-        for _ in 0..<30 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 30)
 
         // Root should follow animation, not fall due to gravity
         let finalRootPos = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: 1)[0]
@@ -435,11 +450,8 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
             rootNode.updateLocalMatrix()
             rootNode.updateWorldTransform()
 
-            system.update(model: model, deltaTime: 1.0 / 60.0)
+            try runFrame(system: system, model: model)
         }
-
-        Thread.sleep(forTimeInterval: 0.1)
-        system.writeBonesToNodes(model: model)
 
         // Check final positions
         let finalPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
@@ -480,10 +492,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         try system.populateSpringBoneData(model: model)
 
         // Simulate teleportation via huge delta time
-        system.update(model: model, deltaTime: 5.0)  // 5 second frame
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runFrame(system: system, model: model, deltaTime: 5.0, writeBack: true)
 
         // Verify no NaN or infinite values
         guard let buffers = model.springBoneBuffers,
@@ -510,10 +519,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
 
         // Should not crash with zero deltaTime
         system.update(model: model, deltaTime: 0.0)
-        system.update(model: model, deltaTime: 0.0001)  // Near-zero
-
-        Thread.sleep(forTimeInterval: 0.1)
-        system.writeBonesToNodes(model: model)
+        try runFrame(system: system, model: model, deltaTime: 0.0001, writeBack: true)
 
         // Verify no crash and no NaN
         guard let buffers = model.springBoneBuffers,

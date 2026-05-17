@@ -19,12 +19,40 @@ import simd
 final class SpringBoneCollisionGroupTests: XCTestCase {
 
     var device: MTLDevice!
+    var commandQueue: MTLCommandQueue!
 
     override func setUp() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal not available")
         }
+        guard let queue = device.makeCommandQueue() else {
+            throw XCTSkip("Could not create Metal command queue")
+        }
         self.device = device
+        self.commandQueue = queue
+    }
+
+    /// Run `frameCount` frames using a host-owned `MTLCommandBuffer` per
+    /// frame so each frame's GPU work is deterministically complete
+    /// before the next CPU read. Replaces the previous
+    /// `for { update(...) } Thread.sleep(0.2); writeBonesToNodes(...)`
+    /// pattern, which produced flaky tests under load and read
+    /// `bonePosCurr` after a wall-clock guess.
+    ///
+    /// The collision tests only ever inspect `bonePosCurr` (via
+    /// `readBonePositions(model:)`), so `writeBonesToNodes(...)` is no
+    /// longer called here — the bone positions are read straight from
+    /// the GPU buffer after `waitUntilCompleted()`.
+    private func runSimulation(system: SpringBoneComputeSystem, model: VRMModel,
+                               frames: Int, deltaTime: TimeInterval = 1.0 / 60.0) throws {
+        for _ in 0..<frames {
+            guard let cb = commandQueue.makeCommandBuffer() else {
+                throw XCTSkip("Could not create command buffer")
+            }
+            system.update(model: model, deltaTime: deltaTime, commandBuffer: cb)
+            cb.commit()
+            cb.waitUntilCompleted()
+        }
     }
 
     // MARK: - Collision Group Filtering Tests
@@ -46,12 +74,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<30 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 30)
 
         verifyNoNaNPositions(model: model)
     }
@@ -71,12 +94,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -98,12 +116,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -124,12 +137,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -149,12 +157,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -178,12 +181,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         let positions = readBonePositions(model: model)
 
@@ -210,12 +208,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -237,12 +230,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -264,12 +252,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -289,12 +272,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -314,12 +292,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -337,12 +310,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<30 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 30)
 
         verifyNoNaNPositions(model: model)
     }
@@ -362,12 +330,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -389,12 +352,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<120 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 120)
 
         let positions = readBonePositions(model: model)
         let planeY: Float = 0.5
@@ -422,12 +380,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -448,12 +401,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<180 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 180)
 
         let positions = readBonePositions(model: model)
 
@@ -480,12 +428,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -507,12 +450,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<60 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 60)
 
         verifyNoNaNPositions(model: model)
     }
@@ -538,12 +476,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: model)
 
-        for _ in 0..<120 {
-            system.update(model: model, deltaTime: 1.0 / 60.0)
-        }
-
-        Thread.sleep(forTimeInterval: 0.2)
-        system.writeBonesToNodes(model: model)
+        try runSimulation(system: system, model: model, frames: 120)
 
         verifyNoNaNPositions(model: model)
     }
