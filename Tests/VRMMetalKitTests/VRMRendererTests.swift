@@ -401,20 +401,28 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertGreaterThan(rimBrightness, fillBrightness, "Rim should be brighter than fill")
     }
 
-    /// Test the bright toon-lighting preset used by the VRMRender CLI
+    /// Test the bright toon-lighting preset used by the VRMRender CLI.
+    /// Updated for #213: the preset now uses `.radiometric` normalization
+    /// and the three-point intensities are tuned to match UniVRM Built-in
+    /// RP and three-vrm against the vrm-conformance corpus. The π factor
+    /// implied by `.radiometric` cancels the shader's `BRDF_LAMBERT_NORM`,
+    /// so an authored `intensity: 0.7162` produces the same brightness as
+    /// the prior `.manual(1.25)` × `intensity: 1.5` setup.
     func testSetupBrightToonLightingPreset() {
         renderer.setupBrightToonLighting()
 
-        XCTAssertLessThan(simd_length(renderer.uniforms.lightColor - SIMD3<Float>(1.8, 1.8, 1.8)), 0.001)
-        XCTAssertLessThan(simd_length(renderer.uniforms.light1Color - SIMD3<Float>(0.3325, 0.336, 0.35)), 0.001)
-        XCTAssertLessThan(simd_length(renderer.uniforms.light2Color - SIMD3<Float>(0.45, 0.45, 0.45)), 0.001)
+        // setLight stores `color * intensity`. Verify the three slots'
+        // final values + ambient match the radiometric preset.
+        XCTAssertLessThan(simd_length(renderer.uniforms.lightColor - SIMD3<Float>(0.7162, 0.7162, 0.7162)), 0.001)
+        XCTAssertLessThan(simd_length(renderer.uniforms.light1Color - SIMD3<Float>(0.132335, 0.133728, 0.1393)), 0.001)
+        XCTAssertLessThan(simd_length(renderer.uniforms.light2Color - SIMD3<Float>(0.179, 0.179, 0.179)), 0.001)
         XCTAssertLessThan(simd_length(renderer.uniforms.ambientColor - SIMD3<Float>(0.14, 0.14, 0.14)), 0.001)
 
         switch renderer.lightNormalizationMode {
-        case .manual(let factor):
-            XCTAssertEqual(factor, 1.25, accuracy: 0.001)
+        case .radiometric:
+            break  // expected
         default:
-            XCTFail("Bright toon lighting should use manual normalization")
+            XCTFail("Bright toon lighting should use radiometric normalization (issue #213)")
         }
     }
 

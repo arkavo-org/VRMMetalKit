@@ -397,22 +397,28 @@ struct VRMVideoRendererCLI {
             print("   🌒 Silhouette mode (rim power \(options.rimPower))")
         } else if options.heroLighting {
             // Hero/portrait setup: 3-point with soft fill and lifted ambient.
+            // Intensities rescaled by 1/π to preserve visual output under the new
+            // .radiometric normalization convention (vrm-conformance #213).
             renderer.setLight(0, direction: SIMD3<Float>(0.3, -0.3, -0.85),
-                              color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 1.0)
+                              color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 0.3183)
             renderer.setLight(1, direction: SIMD3<Float>(-0.5, -0.1, -0.85),
-                              color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.55)
+                              color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.1751)
             renderer.setLight(2, direction: SIMD3<Float>(0.0, -0.4, 0.85),
-                              color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.4)
+                              color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.1273)
             renderer.setAmbientColor(SIMD3<Float>(0.18, 0.18, 0.2))
+            renderer.setLightNormalizationMode(.radiometric)
             print("   💡 Lighting: hero (3-point, lifted ambient)")
         } else {
             // Default cel-shading: hard step shadows, dark ambient.
+            // Intensities rescaled by 1/π under .radiometric to preserve the prior
+            // .automatic behaviour exactly (vrm-conformance #213).
             renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 1.0)
+                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3183)
             renderer.disableLight(1)
             renderer.setLight(2, direction: SIMD3<Float>(0.0, 0.2, 1.0),
-                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.3)
+                              color: SIMD3<Float>(1.0, 1.0, 1.0), intensity: 0.0955)
             renderer.setAmbientColor(SIMD3<Float>(0.03, 0.03, 0.05))
+            renderer.setLightNormalizationMode(.radiometric)
         }
 
         // Create resolve texture (final output, non-multisampled)
