@@ -3142,6 +3142,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             }
 
+            // VMK#264 / VMK#266: when this draw is using the A2C pipeline
+            // for a MASK material, remap the uniform's alphaMode from 1
+            // (MASK with discard) to 3 (MASK_A2C, no discard, hardware
+            // computes subsample coverage from output alpha). Without this
+            // remap the shader's `alphaMode == 1` discard_fragment() wipes
+            // the fragment before A2C can use it. Only remap if the
+            // uniform is already 1 — body-material demotion to OPAQUE etc.
+            // should not accidentally become MASK_A2C. Placed before the
+            // indexed/non-indexed split so both draw paths see the
+            // override.
+            if mtoonUniforms.alphaMode == 1 {
+                mtoonUniforms.alphaMode = alphaModeForUniform(
+                    alphaMode: "mask",
+                    isSkinned: isSkinned
+                )
+            }
+
             // Draw with validation
             if let indexBuffer = primitive.indexBuffer {
                 // Validate draw call in strict mode
@@ -4032,6 +4049,39 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             return a2c ?? (isSkinned ? skinnedOpaquePipelineState : opaquePipelineState)
         default:
             return isSkinned ? skinnedOpaquePipelineState : opaquePipelineState
+        }
+    }
+
+    /// Returns the integer value the shader's `MToonMaterial.alphaMode`
+    /// uniform must carry for this draw, given the material's authored
+    /// alpha mode and skinning state.
+    ///
+    /// Spec-default mapping (`OPAQUE → 0`, `MASK → 1`, `BLEND → 2`)
+    /// matches the shader's discard/blend branches. The fourth value
+    /// (`3 = MASK_A2C`) is the VMK#264 fix: when MASK + MSAA + the
+    /// `alphaToCoverageForMASK` opt-in have routed the draw to the
+    /// alpha-to-coverage pipeline, the shader must SKIP its
+    /// `discard_fragment()` so the fragment survives long enough for
+    /// hardware A2C to read its alpha output and compute subsample
+    /// coverage. The shader's discard fires only on `alphaMode == 1`,
+    /// so remapping to `3` here keeps the fragment alive while still
+    /// signalling "this is a MASK material" to downstream logic.
+    public func alphaModeForUniform(
+        alphaMode: String,
+        isSkinned: Bool
+    ) -> UInt32 {
+        switch alphaMode.lowercased() {
+        case "blend":
+            return 2
+        case "mask":
+            let usingA2CPipeline =
+                config.alphaToCoverageForMASK && usesMultisampling &&
+                (isSkinned
+                    ? skinnedMaskAlphaToCoveragePipelineState != nil
+                    : maskAlphaToCoveragePipelineState != nil)
+            return usingA2CPipeline ? 3 : 1
+        default:
+            return 0
         }
     }
 
