@@ -305,6 +305,36 @@ fragment float4 gltf_debug_normals_fragment(
     return float4(N * 0.5 + 0.5, 1.0);
 }
 
+/// Debug fragment that visualizes the primary UV channel. Red = u, green = v
+/// (each fractionally wrapped to keep the range in [0, 1] for assets with
+/// tiled UVs). Used by `--debug uvs` to confirm TEXCOORD_0 decoding and to
+/// inspect chart layout. A clean UV chart shows a smooth red/green gradient
+/// across each chart island.
+fragment float4 gltf_debug_uvs_fragment(
+    GLTFVertexOut in [[stage_in]]
+) {
+    float2 uv = fract(in.uv0);
+    return float4(uv.x, uv.y, 0.0, 1.0);
+}
+
+/// Debug fragment that visualizes per-fragment roughness as greyscale.
+/// Samples the metallic-roughness texture's G channel (glTF spec §3.9.2)
+/// scaled by `roughnessFactor`; falls back to the factor alone if no
+/// texture is bound. Used by `--debug roughness` to inspect microfacet
+/// distribution input.
+fragment float4 gltf_debug_roughness_fragment(
+    GLTFVertexOut in [[stage_in]],
+    constant GLTFMaterialUniforms& material [[buffer(kMaterialUniformsIndex)]],
+    texture2d<float> metallicRoughnessTexture [[texture(kMetallicRoughnessTextureIndex)]],
+    sampler linearSampler [[sampler(kLinearSamplerIndex)]]
+) {
+    float roughness = material.roughnessFactor;
+    if (material.flags & kFlagHasMetallicRoughnessTexture) {
+        roughness *= metallicRoughnessTexture.sample(linearSampler, in.uv0).g;
+    }
+    return float4(float3(roughness), 1.0);
+}
+
 fragment float4 gltf_pbr_fragment(
     GLTFVertexOut in [[stage_in]],
     constant GLTFFrameUniforms& frame [[buffer(kFrameUniformsIndex)]],

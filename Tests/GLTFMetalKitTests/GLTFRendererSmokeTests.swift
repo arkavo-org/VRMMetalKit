@@ -70,6 +70,26 @@ final class GLTFRendererSmokeTests: XCTestCase {
         XCTAssertEqual(renderer.brdfLUT.pixelFormat, .rg16Float)
     }
 
+    func testDebugUVsAndRoughnessPipelinesBuild() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+
+        let renderer = try GLTFRenderer(device: device)
+        XCTAssertNotNil(try renderer.makeDebugUVsPipelineState(
+            colorFormat: .bgra8Unorm, depthFormat: .depth32Float
+        ))
+        XCTAssertNotNil(try renderer.makeDebugUVsPipelineState(
+            colorFormat: .bgra8Unorm, depthFormat: .depth32Float, skinned: true
+        ))
+        XCTAssertNotNil(try renderer.makeDebugRoughnessPipelineState(
+            colorFormat: .bgra8Unorm, depthFormat: .depth32Float
+        ))
+        XCTAssertNotNil(try renderer.makeDebugRoughnessPipelineState(
+            colorFormat: .bgra8Unorm, depthFormat: .depth32Float, skinned: true
+        ))
+    }
+
     func testFallbackEnvironmentIsAttached() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("No Metal device available (CI without GPU)")

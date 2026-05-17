@@ -50,6 +50,10 @@ public final class GLTFRenderer: @unchecked Sendable {
     /// fallback so the shader's IBL split-sum path stays valid without an
     /// HDR asset. Replace via assignment when a real environment is loaded
     /// (the renderer reads this each frame; no rebuild required).
+    ///
+    /// - Important: Read-write access is not synchronised — see
+    ///   ``GLTFRenderer`` thread-safety notes. Mutate from the render thread
+    ///   only, or serialise externally.
     public var environment: GLTFEnvironment
 
     /// Creates a renderer bound to a Metal device.
@@ -117,12 +121,60 @@ public final class GLTFRenderer: @unchecked Sendable {
         sampleCount: Int = 1,
         skinned: Bool = false
     ) throws -> MTLRenderPipelineState {
+        try makeDebugPipelineState(
+            fragmentName: "gltf_debug_normals_fragment",
+            colorFormat: colorFormat,
+            depthFormat: depthFormat,
+            sampleCount: sampleCount,
+            skinned: skinned
+        )
+    }
+
+    /// Pipeline that outputs UV0 as red/green; see `gltf_debug_uvs_fragment`.
+    public func makeDebugUVsPipelineState(
+        colorFormat: MTLPixelFormat,
+        depthFormat: MTLPixelFormat,
+        sampleCount: Int = 1,
+        skinned: Bool = false
+    ) throws -> MTLRenderPipelineState {
+        try makeDebugPipelineState(
+            fragmentName: "gltf_debug_uvs_fragment",
+            colorFormat: colorFormat,
+            depthFormat: depthFormat,
+            sampleCount: sampleCount,
+            skinned: skinned
+        )
+    }
+
+    /// Pipeline that outputs per-fragment roughness as greyscale.
+    public func makeDebugRoughnessPipelineState(
+        colorFormat: MTLPixelFormat,
+        depthFormat: MTLPixelFormat,
+        sampleCount: Int = 1,
+        skinned: Bool = false
+    ) throws -> MTLRenderPipelineState {
+        try makeDebugPipelineState(
+            fragmentName: "gltf_debug_roughness_fragment",
+            colorFormat: colorFormat,
+            depthFormat: depthFormat,
+            sampleCount: sampleCount,
+            skinned: skinned
+        )
+    }
+
+    private func makeDebugPipelineState(
+        fragmentName: String,
+        colorFormat: MTLPixelFormat,
+        depthFormat: MTLPixelFormat,
+        sampleCount: Int,
+        skinned: Bool
+    ) throws -> MTLRenderPipelineState {
         let vertexFnName = skinned ? "gltf_pbr_vertex_skinned" : "gltf_pbr_vertex"
         guard let vertexFn = library.makeFunction(name: vertexFnName) else {
             throw GLTFRendererError.missingShaderFunction(name: vertexFnName)
         }
-        guard let fragmentFn = library.makeFunction(name: "gltf_debug_normals_fragment") else {
-            throw GLTFRendererError.missingShaderFunction(name: "gltf_debug_normals_fragment")
+        guard let fragmentFn = library.makeFunction(name: fragmentName) else {
+            throw GLTFRendererError.missingShaderFunction(name: fragmentName)
         }
         let descriptor = MTLRenderPipelineDescriptor()
         descriptor.vertexFunction = vertexFn
