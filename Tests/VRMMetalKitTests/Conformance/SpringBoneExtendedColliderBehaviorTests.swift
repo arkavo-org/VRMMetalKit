@@ -300,6 +300,96 @@ final class SpringBoneExtendedColliderBehaviorTests: XCTestCase {
             "`ExtendedColliderTests.testPerJointAngleLimitParsesAsRadiansFromDegreesInFile`).")
     }
 
+    // MARK: - Full 18-variant sweep (QA reproduction)
+
+    /// Reproduces the vrm-conformance QA team's 18-variant swing sweep
+    /// in-process. The QA team observed 7 SHA256 buckets across 18
+    /// distinct fixtures via the render-image path; this test runs the
+    /// same fixtures through the sim and clusters their joint
+    /// trajectories with a 1 mm threshold.
+    ///
+    /// Spec-correct outcome: **18 distinct buckets** (one per variant).
+    /// Each unique (shape, placement, angleLimit) tuple should drive a
+    /// distinct chain trajectory under the same swing.
+    ///
+    /// Observed under VMK#237: significant clustering (≪ 18 buckets).
+    /// `XCTExpectFailure` flips this to a regression detector — when the
+    /// runtime honours the spec the assertion becomes strict and the
+    /// expected-failure annotation can come out.
+    ///
+    /// Bucket placements (from `vrm-conformance`
+    /// `2026-05-15-springbone-phase3-extended-colliders` plan):
+    ///
+    ///   * plane Y offset:     ptight = −0.04, pmed = −0.08, ploose = −0.15
+    ///   * sphere/icaps radius: ptight = 0.10,  pmed = 0.20,  ploose = 0.40
+    ///   * capsule tail:       (0, 0.30, 0) always
+    ///   * angleLimit (each joint): 30 / 60 / 90 degrees, at medium
+    ///     placement (radius 0.20 / plane y −0.08)
+    func testFullExtendedColliderSweepProducesDistinctTrajectoryBuckets() async throws {
+        let env = try prepareEnv()
+        let variants = [
+            "springbone_extended_plane_ptight",
+            "springbone_extended_plane_pmed",
+            "springbone_extended_plane_ploose",
+            "springbone_extended_plane_anglelimit_30",
+            "springbone_extended_plane_anglelimit_60",
+            "springbone_extended_plane_anglelimit_90",
+            "springbone_extended_isphere_ptight",
+            "springbone_extended_isphere_pmed",
+            "springbone_extended_isphere_ploose",
+            "springbone_extended_isphere_anglelimit_30",
+            "springbone_extended_isphere_anglelimit_60",
+            "springbone_extended_isphere_anglelimit_90",
+            "springbone_extended_icaps_ptight",
+            "springbone_extended_icaps_pmed",
+            "springbone_extended_icaps_ploose",
+            "springbone_extended_icaps_anglelimit_30",
+            "springbone_extended_icaps_anglelimit_60",
+            "springbone_extended_icaps_anglelimit_90",
+        ]
+
+        var trajectories: [String: [SIMD3<Float>]] = [:]
+        for v in variants {
+            trajectories[v] = try await simulateSwing(fixture: v, env: env).tipPositions
+        }
+
+        // Bucket variants by trajectory similarity (1 mm max-joint-Δ).
+        let threshold: Float = 0.001
+        var buckets: [[String]] = []
+        for v in variants {
+            guard let traj = trajectories[v] else { continue }
+            var matched = false
+            for i in 0..<buckets.count {
+                guard let rep = trajectories[buckets[i][0]] else { continue }
+                if traj.count == rep.count {
+                    let maxDelta = zip(traj, rep).map { simd_distance($0, $1) }.max() ?? 0
+                    if maxDelta < threshold {
+                        buckets[i].append(v)
+                        matched = true
+                        break
+                    }
+                }
+            }
+            if !matched {
+                buckets.append([v])
+            }
+        }
+
+        let summary = buckets.enumerated().map { (i, bucket) in
+            "  bucket \(i + 1) (\(bucket.count)): \(bucket.joined(separator: ", "))"
+        }.joined(separator: "\n")
+
+        XCTExpectFailure("VMK#237: 18 extended-collider variants collapse into <18 buckets — same signature the QA team reported as 7 SHA256 buckets")
+        XCTAssertEqual(buckets.count, variants.count,
+            "VMK#237 full sweep: expected \(variants.count) distinct chain " +
+            "trajectories (one per variant), got \(buckets.count) buckets. " +
+            "Bucket layout:\n\(summary)\n" +
+            "Each bucket holds variants whose post-swing chain pose differs by " +
+            "less than \(threshold * 1000) mm at every joint — i.e. the " +
+            "extended-collider parameters distinguishing them have no " +
+            "observable effect on the simulation.")
+    }
+
     // MARK: - Harness
 
     private struct Env {
