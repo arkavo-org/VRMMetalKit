@@ -386,11 +386,13 @@ public class VRMExtensionParser {
             vrmLog("[VRMExtensionParser] Found firstPersonBone: \(firstPersonBone)")
         }
 
-        // Handle VRM 0.0 firstPersonBoneOffset
+        // Handle VRM 0.0 firstPersonBoneOffset. Use `parseFloatValue` so
+        // whole-number components (e.g. `"x": 0`) decoded as `Int` by
+        // AnyCodable don't silently fall through.
         if let offsetDict = dict["firstPersonBoneOffset"] as? [String: Any],
-           let x = offsetDict["x"] as? Double,
-           let y = offsetDict["y"] as? Double,
-           let z = offsetDict["z"] as? Double {
+           let x = parseFloatValue(offsetDict["x"]),
+           let y = parseFloatValue(offsetDict["y"]),
+           let z = parseFloatValue(offsetDict["z"]) {
             vrmLog("[VRMExtensionParser] Found firstPersonBoneOffset: (\(x), \(y), \(z))")
         }
 
@@ -446,16 +448,11 @@ public class VRMExtensionParser {
     private func parseVRM0LookAtCurve(_ dict: [String: Any]) -> VRMLookAtRangeMap {
         var rangeMap = VRMLookAtRangeMap()
 
-        // VRM 0.0 uses xRange for input and yRange for output
-        if let xRange = dict["xRange"] as? Double {
-            rangeMap.inputMaxValue = Float(xRange)
-        } else if let xRange = dict["xRange"] as? Float {
+        // VRM 0.0 uses xRange for input and yRange for output.
+        if let xRange = parseFloatValue(dict["xRange"]) {
             rangeMap.inputMaxValue = xRange
         }
-
-        if let yRange = dict["yRange"] as? Double {
-            rangeMap.outputScale = Float(yRange)
-        } else if let yRange = dict["yRange"] as? Float {
+        if let yRange = parseFloatValue(dict["yRange"]) {
             rangeMap.outputScale = yRange
         }
 
@@ -499,16 +496,10 @@ public class VRMExtensionParser {
     private func parseRangeMap(_ dict: [String: Any]) -> VRMLookAtRangeMap {
         var rangeMap = VRMLookAtRangeMap()
 
-        // JSON numbers are Double by default, try Double first then Float
-        if let inputMaxValue = dict["inputMaxValue"] as? Double {
-            rangeMap.inputMaxValue = Float(inputMaxValue)
-        } else if let inputMaxValue = dict["inputMaxValue"] as? Float {
+        if let inputMaxValue = parseFloatValue(dict["inputMaxValue"]) {
             rangeMap.inputMaxValue = inputMaxValue
         }
-
-        if let outputScale = dict["outputScale"] as? Double {
-            rangeMap.outputScale = Float(outputScale)
-        } else if let outputScale = dict["outputScale"] as? Float {
+        if let outputScale = parseFloatValue(dict["outputScale"]) {
             rangeMap.outputScale = outputScale
         }
 
@@ -785,11 +776,27 @@ public class VRMExtensionParser {
         return nil
     }
 
-    private func parseFloatValue(_ value: Any?) -> Float? {
+    /// Coerce a JSON scalar to `Float`, accepting whichever numeric type the
+    /// decoder produced. Critical: ``AnyCodable`` (used by `GLTFParser` for
+    /// extension dictionaries) tries `Int` *before* `Double`, so JSON
+    /// whole-number literals like `1.0`, `-1`, `0` arrive as raw `Int` —
+    /// without the explicit `Int` branch, every `as? Double` cast on a
+    /// whole-number factor silently returns `nil` and the field falls back
+    /// to its default. This is the root cause class of VMK#238 / VMK#239 in
+    /// MToon parsing; the explicit `Int` branch here keeps the bug from
+    /// re-appearing in VRM 0.x lookAt range maps, firstPersonBoneOffset,
+    /// and similar extension scalars.
+    ///
+    /// Internal rather than private so the regression test for this exact
+    /// numeric-coercion contract can pin down all four branches without
+    /// going through end-to-end VRM loading.
+    func parseFloatValue(_ value: Any?) -> Float? {
         if let floatVal = value as? Float {
             return floatVal
         } else if let doubleVal = value as? Double {
             return Float(doubleVal)
+        } else if let intVal = value as? Int {
+            return Float(intVal)
         } else if let numVal = value as? NSNumber {
             return numVal.floatValue
         }

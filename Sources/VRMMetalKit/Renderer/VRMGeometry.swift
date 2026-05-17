@@ -1604,12 +1604,7 @@ public class VRMMaterial {
     /// silently failing for spec-conformant integer-valued vectors.
     private func floatArray(from value: Any?, count: Int) -> [Float]? {
         guard let array = value as? [Any], array.count >= count else { return nil }
-        let parsed: [Float] = array.compactMap {
-            if let intVal = $0 as? Int { return Float(intVal) }
-            if let doubleVal = $0 as? Double { return Float(doubleVal) }
-            if let floatVal = $0 as? Float { return floatVal }
-            return nil
-        }
+        let parsed: [Float] = array.compactMap { floatScalar(from: $0) }
         return parsed.count >= count ? parsed : nil
     }
 
