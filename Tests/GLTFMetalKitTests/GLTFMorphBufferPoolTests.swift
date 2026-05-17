@@ -111,6 +111,48 @@ final class GLTFMorphBufferPoolTests: XCTestCase {
         XCTAssertEqual(pool.bufferCount(forPrimitiveID: 2), GLTFMorphBufferPool.framesInFlight)
     }
 
+    func testPruneDropsInactivePrimitives() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+
+        let pool = GLTFMorphBufferPool(device: device)
+        let morph = makeMorphData(vertexCount: 4, targetCount: 2)
+        for id in 1...4 {
+            _ = pool.buffer(primitiveID: id, morph: morph, weights: [1, 0], joints: nil, skinWeights: nil, skinned: false)
+        }
+        XCTAssertEqual(pool.trackedPrimitiveCount, 4)
+
+        // Keep only IDs 2 and 4; the other two should be dropped.
+        pool.prune(activeIDs: [2, 4])
+        XCTAssertEqual(pool.trackedPrimitiveCount, 2)
+        XCTAssertEqual(pool.bufferCount(forPrimitiveID: 1), 0)
+        XCTAssertEqual(pool.bufferCount(forPrimitiveID: 2), GLTFMorphBufferPool.framesInFlight)
+        XCTAssertEqual(pool.bufferCount(forPrimitiveID: 3), 0)
+        XCTAssertEqual(pool.bufferCount(forPrimitiveID: 4), GLTFMorphBufferPool.framesInFlight)
+    }
+
+    func testClearDropsAllPrimitives() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+
+        let pool = GLTFMorphBufferPool(device: device)
+        let morph = makeMorphData(vertexCount: 4, targetCount: 2)
+        _ = pool.buffer(primitiveID: 1, morph: morph, weights: [1, 0], joints: nil, skinWeights: nil, skinned: false)
+        _ = pool.buffer(primitiveID: 2, morph: morph, weights: [0, 1], joints: nil, skinWeights: nil, skinned: false)
+        XCTAssertEqual(pool.trackedPrimitiveCount, 2)
+
+        pool.clear()
+        XCTAssertEqual(pool.trackedPrimitiveCount, 0)
+        XCTAssertEqual(pool.bufferCount(forPrimitiveID: 1), 0)
+        XCTAssertEqual(pool.bufferCount(forPrimitiveID: 2), 0)
+
+        // Re-use after clear: pool still functional.
+        _ = pool.buffer(primitiveID: 1, morph: morph, weights: [0.5, 0.5], joints: nil, skinWeights: nil, skinned: false)
+        XCTAssertEqual(pool.trackedPrimitiveCount, 1)
+    }
+
     // MARK: - Helpers
 
     /// Build a minimal `GLTFPrimitiveMorphData` with `vertexCount` vertices

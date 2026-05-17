@@ -58,8 +58,11 @@ final class GLTFMorphBufferPool: @unchecked Sendable {
     /// weights, returns the cached buffer without re-blending.
     ///
     /// - Parameters:
-    ///   - primitiveID: Stable identifier for the primitive across calls
-    ///     (typically `meshIndex << 16 | primitiveIndex`).
+    ///   - primitiveID: Stable identifier for the primitive across calls.
+    ///     `GLTFAssetLoader` packs this as `(meshIndex << 16) | primitiveIndex`,
+    ///     which assumes both fit in 16 bits (65,535 meshes × 65,535 primitives
+    ///     per mesh). Realistic glTF assets stay well under that bound; if a
+    ///     future caller needs more, switch to `Hasher.combine(...)`.
     ///   - morph: The primitive's morph deltas + base attributes.
     ///   - weights: Per-target weights to blend. Shorter than `targetCount`
     ///     is zero-extended; longer is clipped.
@@ -131,6 +134,27 @@ final class GLTFMorphBufferPool: @unchecked Sendable {
         entry.lastWeights = weights
         entries[primitiveID] = entry
         return target
+    }
+
+    /// Drop ring storage for any primitive ID **not** in `activeIDs`.
+    /// Use this when an asset transitions between large sub-scenes — the
+    /// pool grows monotonically as new primitives are seen and never
+    /// reclaims storage on its own. For long-lived assets with stable
+    /// primitive sets this is a no-op; for assets that swap visible
+    /// primitive sets, call after the swap to release dead rings.
+    func prune(activeIDs: Set<Int>) {
+        lock.lock()
+        defer { lock.unlock() }
+        entries = entries.filter { activeIDs.contains($0.key) }
+    }
+
+    /// Drop ring storage for every tracked primitive. Equivalent to a
+    /// freshly-constructed pool; safe to call between unrelated asset loads
+    /// that share the same pool instance.
+    func clear() {
+        lock.lock()
+        defer { lock.unlock() }
+        entries.removeAll(keepingCapacity: false)
     }
 
     /// Number of primitives currently tracked. Test-only accessor.
