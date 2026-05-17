@@ -1392,13 +1392,28 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Update temporary forces if any
             updateSpringBoneForces(deltaTime: clampedDeltaTime)
 
-            // Run GPU physics simulation. Pipe the substep work into the renderer's
-            // own command buffer so we don't pay 1-N extra makeCommandBuffer + commit
-            // round trips per instance per frame (audit's #2 GPU bottleneck).
+            // Run GPU physics simulation. In the default (async) path the substep
+            // work is piped into the renderer's own command buffer so we don't
+            // pay 1-N extra makeCommandBuffer + commit round trips per frame.
+            // `writeBonesToNodes` then consumes the snapshot the addCompletedHandler
+            // populated for the *previous* frame — visible as a one-frame physics
+            // lag during fast head motion (see #267).
+            //
+            // When `config.synchronousSpringBone` is set, spring-bone runs in its
+            // own command buffer that we commit and wait on here, so the snapshot
+            // populated by the completion handler is for *this* frame before
+            // writeBonesToNodes consumes it.
             if let springBoneCompute = springBoneComputeSystem {
-                springBoneCompute.update(model: model,
-                                         deltaTime: TimeInterval(clampedDeltaTime),
-                                         commandBuffer: commandBuffer)
+                if config.synchronousSpringBone {
+                    springBoneCompute.update(model: model,
+                                             deltaTime: TimeInterval(clampedDeltaTime),
+                                             commandBuffer: nil)
+                    springBoneCompute.waitForPendingFrame()
+                } else {
+                    springBoneCompute.update(model: model,
+                                             deltaTime: TimeInterval(clampedDeltaTime),
+                                             commandBuffer: commandBuffer)
+                }
 
                 // Read back GPU positions and update node transforms
                 springBoneCompute.writeBonesToNodes(model: model)

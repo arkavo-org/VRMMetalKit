@@ -384,6 +384,7 @@ struct VRMVideoRendererCLI {
         var config = RendererConfig()
         config.sampleCount = 4  // Enable 4x MSAA for alpha-to-coverage on MASK materials
         config.strict = .off
+        config.synchronousSpringBone = true  // offline render — no interactivity penalty (#267)
 
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)

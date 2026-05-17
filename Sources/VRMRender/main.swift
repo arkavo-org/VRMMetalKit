@@ -357,7 +357,9 @@ struct VRMRenderCLI {
             var config = RendererConfig()
             config.sampleCount = options.sampleCount
             config.strict = .off
-            
+            config.synchronousSpringBone = true  // offline render — no interactivity penalty (#267)
+
+
             let renderer = VRMRenderer(device: device, config: config)
             renderer.debugUVs = Int32(options.debugMode)
             renderer.loadModel(model)

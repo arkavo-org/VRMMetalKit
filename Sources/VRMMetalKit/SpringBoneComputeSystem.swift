@@ -167,6 +167,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var lastAppliedFrame: UInt64 = 0
     private var skippedReadbacks: Int = 0
 
+    /// Most-recently-committed self-owned command buffer (only populated when
+    /// `update(...)` is called with `commandBuffer: nil`). Held weakly via an
+    /// instance ref so `waitForPendingFrame()` can block on it.
+    private var pendingSelfOwnedCommandBuffer: MTLCommandBuffer?
+
+    /// Signaled by the snapshot-capture completion handler so
+    /// `waitForPendingFrame()` can block until the snapshot is actually
+    /// populated — `MTLCommandBuffer.waitUntilCompleted` only waits for the
+    /// GPU, not for completion handlers that run on a separate queue.
+    private var pendingSnapshotSemaphore: DispatchSemaphore?
+
     init(device: MTLDevice) throws {
         self.device = device
         self.commandQueue = device.makeCommandQueue()!
@@ -522,7 +533,16 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let capturedBonePosCurr = buffers.bonePosCurr
         let capturedNumBones = buffers.numBones
 
+        // For self-owned command buffers, allocate a semaphore so callers can
+        // block on the snapshot actually being captured (the handler runs on
+        // Metal's own queue after the GPU completes — waitUntilCompleted
+        // alone does NOT guarantee the snapshot is populated).
+        let snapshotSemaphore: DispatchSemaphore? = usingSharedBuffer ? nil : DispatchSemaphore(value: 0)
+        if let sem = snapshotSemaphore {
+            pendingSnapshotSemaphore = sem
+        }
         commandBuffer.addCompletedHandler { [weak self] buffer in
+            defer { snapshotSemaphore?.signal() }
             guard let self = self else { return }
 
             // Check for GPU errors before reading back data
@@ -538,8 +558,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Only commit when we own the buffer. Caller commits the shared buffer.
         if !usingSharedBuffer {
+            pendingSelfOwnedCommandBuffer = commandBuffer
             commandBuffer.commit()
         }
+    }
+
+    /// Blocks until the most recently `update(...)`-committed self-owned
+    /// command buffer completes AND its snapshot capture handler has finished.
+    /// No-op when the caller supplied a shared `commandBuffer:` to update —
+    /// in that case the caller commits and waits themselves.
+    /// Use from the renderer when `RendererConfig.synchronousSpringBone` is
+    /// set so `writeBonesToNodes` consumes the current-frame snapshot.
+    func waitForPendingFrame() {
+        guard let cb = pendingSelfOwnedCommandBuffer else { return }
+        cb.waitUntilCompleted()
+        // Then wait for the snapshot-capture completion handler — it runs on
+        // Metal's own dispatch queue, so it may not have finished even though
+        // the GPU is done.
+        pendingSnapshotSemaphore?.wait()
+        pendingSelfOwnedCommandBuffer = nil
+        pendingSnapshotSemaphore = nil
     }
 
     func populateSpringBoneData(model: VRMModel) throws {
