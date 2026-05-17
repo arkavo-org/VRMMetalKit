@@ -719,27 +719,25 @@ public class VRMExtensionParser {
             for (colliderIndex, colliderDict) in colliders.enumerated() {
                 guard let node = colliderDict["node"] as? Int else { continue }
 
+                // Try base `shape` first per the spec's fallback contract.
                 if let shapeDict = colliderDict["shape"] as? [String: Any],
                    let shape = parseColliderShape(shapeDict) {
                     springBone.colliders.append(VRMCollider(node: node, shape: shape))
                     continue
                 }
 
-                // No base shape — check for `VRMC_springBone_extended_collider`
-                // (inverted sphere/capsule, plane, per-joint angle-limit). VMK
-                // doesn't implement the extended shapes yet (VMK#237), so log
-                // the gap explicitly rather than silently dropping the
-                // collider and letting the chain fall through. The base-shape
-                // fallback recommended by the spec isn't authored either in
-                // these assets, so there's no salvageable behaviour beyond
-                // surfacing the limitation to the consumer.
+                // Base shape absent or unparseable — try `VRMC_springBone_extended_collider`.
+                // VMK#237 partial implementation: the extension's `plane` variant
+                // maps cleanly onto VMK's existing plane collider (same fields:
+                // offset + normal). `insideSphere` and `insideCapsule` need
+                // new inverted-collision kernels that aren't shipping yet;
+                // skip with a precise warning.
                 let extensionsDict = colliderDict["extensions"] as? [String: Any]
-                let hasExtendedCollider = extensionsDict?["VRMC_springBone_extended_collider"] != nil
-                if hasExtendedCollider {
-                    vrmLog("[VRMExtensionParser] WARNING: Collider \(colliderIndex) (node \(node)) " +
-                           "uses VRMC_springBone_extended_collider with no fallback `shape` — " +
-                           "VMK#237 (extended-collider support not yet implemented); " +
-                           "this collider is being skipped and the chain will pass through.")
+                if let extColl = extensionsDict?["VRMC_springBone_extended_collider"] as? [String: Any],
+                   let extShapeDict = extColl["shape"] as? [String: Any] {
+                    if let extShape = parseExtendedColliderShape(extShapeDict, colliderIndex: colliderIndex, node: node) {
+                        springBone.colliders.append(VRMCollider(node: node, shape: extShape))
+                    }
                 }
             }
         }
@@ -786,6 +784,59 @@ public class VRMExtensionParser {
 
         validateSpringJointUniqueness(&springBone)
         return springBone
+    }
+
+    /// Parse a `VRMC_springBone_extended_collider.shape` dict. The
+    /// extension promotes VMK's existing (originally non-spec) `plane`
+    /// collider to the spec, and introduces `insideSphere` / `insideCapsule`
+    /// (containment shapes — bone must stay *inside* the volume) that VMK
+    /// hasn't implemented yet (tracked in VMK#237).
+    ///
+    /// - Returns: A ``VRMColliderShape`` when the extension's shape can be
+    ///   mapped onto a supported VMK collider (currently only `plane`).
+    ///   Returns `nil` and logs a warning for `inside*` variants.
+    private func parseExtendedColliderShape(
+        _ dict: [String: Any],
+        colliderIndex: Int,
+        node: Int
+    ) -> VRMColliderShape? {
+        if let planeDict = dict["plane"] as? [String: Any] {
+            let offset = parseVector3(planeDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+            let normal = parseVector3(planeDict["normal"]) ?? SIMD3<Float>(0, 1, 0)
+            return .plane(offset: offset, normal: normal)
+        }
+        if let sphereDict = dict["sphere"] as? [String: Any] {
+            let inside = (sphereDict["inside"] as? Bool) ?? false
+            if !inside {
+                // Non-inverted sphere in the extension is equivalent to the
+                // base spec's sphere — accept and route through .sphere.
+                let offset = parseVector3(sphereDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+                let radius = parseFloatValue(sphereDict["radius"]) ?? 0.0
+                return .sphere(offset: offset, radius: radius)
+            }
+            vrmLog("[VRMExtensionParser] WARNING: Collider \(colliderIndex) (node \(node)) " +
+                   "is an inverted sphere (`inside=true`) — containment-collision kernel not " +
+                   "yet shipping (VMK#237 phase 2); collider skipped.")
+            return nil
+        }
+        if let capsuleDict = dict["capsule"] as? [String: Any] {
+            let inside = (capsuleDict["inside"] as? Bool) ?? false
+            if !inside {
+                let offset = parseVector3(capsuleDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
+                let radius = parseFloatValue(capsuleDict["radius"]) ?? 0.0
+                let tail = parseVector3(capsuleDict["tail"]) ?? SIMD3<Float>(0, 0, 0)
+                return .capsule(offset: offset, radius: radius, tail: tail)
+            }
+            vrmLog("[VRMExtensionParser] WARNING: Collider \(colliderIndex) (node \(node)) " +
+                   "is an inverted capsule (`inside=true`) — containment-collision kernel " +
+                   "not yet shipping (VMK#237 phase 2); collider skipped.")
+            return nil
+        }
+        let keys = dict.keys.joined(separator: ", ")
+        vrmLog("[VRMExtensionParser] WARNING: Collider \(colliderIndex) (node \(node)) " +
+               "uses VRMC_springBone_extended_collider with an unrecognised shape kind " +
+               "(\(keys)); collider skipped.")
+        return nil
     }
 
     private func parseColliderShape(_ dict: [String: Any]) -> VRMColliderShape? {
