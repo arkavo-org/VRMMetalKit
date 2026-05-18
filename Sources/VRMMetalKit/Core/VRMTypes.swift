@@ -520,11 +520,13 @@ public struct VRM0MaterialProperty {
         mtoon.shadingToonyFactor = shadingToonyFactor
         mtoon.shadingShiftFactor = shadingShiftFactor
 
-        // Shade texture from texture properties
-        // Skip when same as main texture - prevents blue padding artifacts
-        if let shadeTexIndex = textureProperties["_ShadeTexture"],
-           let mainTexIndex = textureProperties["_MainTex"],
-           shadeTexIndex != mainTexIndex {
+        // Shade texture from texture properties. Bind unconditionally — Unity
+        // MToon and three-vrm's V0CompatPlugin always multiply shadeColorFactor
+        // by the shade texture, including the common VRM 0.x case of
+        // `_ShadeTexture == _MainTex`. Skipping that case leaves the shadow side
+        // using the bare factor (typically `[1,1,1]` white), washing out
+        // dark-textured materials like hair.
+        if let shadeTexIndex = textureProperties["_ShadeTexture"] {
             mtoon.shadeMultiplyTexture = shadeTexIndex
         }
 
