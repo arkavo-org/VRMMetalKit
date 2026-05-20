@@ -154,7 +154,6 @@ final class HairHeadCollisionTests: XCTestCase {
     /// addressed (likely needs the skinning shader to consume `bonePosCurr`
     /// directly instead of going through node rotations).
     func testHairBonesStayOutsideHeadColliderDuringWalk() async throws {
-        XCTExpectFailure("FK reconstruction round-trip in writeBonesToNodes — residual ~1.4% penetration after sync fix #267")
         let modelPath = resourcesDirectory() + "/AvatarSample_A_1.0.vrm.glb"
         let vrmaPath = resourcesDirectory() + "/VRMA_Locomotion_Pack/Walk.vrma"
         try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),

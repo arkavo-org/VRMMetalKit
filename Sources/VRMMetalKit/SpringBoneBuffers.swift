@@ -149,9 +149,8 @@ public final class SpringBoneBuffers: @unchecked Sendable {
             return
         }
 
-        let ptr = sphereColliders?.contents().bindMemory(to: SphereCollider.self, capacity: numSpheres)
-        for i in 0..<numSpheres {
-            ptr?[i] = colliders[i]
+        if let buffer = sphereColliders, numSpheres > 0 {
+            buffer.contents().copyMemory(from: colliders, byteCount: MemoryLayout<SphereCollider>.stride * numSpheres)
         }
     }
 
@@ -161,9 +160,8 @@ public final class SpringBoneBuffers: @unchecked Sendable {
             return
         }
 
-        let ptr = capsuleColliders?.contents().bindMemory(to: CapsuleCollider.self, capacity: numCapsules)
-        for i in 0..<numCapsules {
-            ptr?[i] = colliders[i]
+        if let buffer = capsuleColliders, numCapsules > 0 {
+            buffer.contents().copyMemory(from: colliders, byteCount: MemoryLayout<CapsuleCollider>.stride * numCapsules)
         }
     }
 
@@ -173,9 +171,8 @@ public final class SpringBoneBuffers: @unchecked Sendable {
             return
         }
 
-        let ptr = planeColliders?.contents().bindMemory(to: PlaneCollider.self, capacity: numPlanes)
-        for i in 0..<numPlanes {
-            ptr?[i] = colliders[i]
+        if let buffer = planeColliders, numPlanes > 0 {
+            buffer.contents().copyMemory(from: colliders, byteCount: MemoryLayout<PlaneCollider>.stride * numPlanes)
         }
     }
 
@@ -197,10 +194,7 @@ public final class SpringBoneBuffers: @unchecked Sendable {
 
         // Copy data to buffer
         guard newCount > 0, let buffer = planeColliders else { return }
-        let ptr = buffer.contents().bindMemory(to: PlaneCollider.self, capacity: newCount)
-        for i in 0..<newCount {
-            ptr[i] = colliders[i]
-        }
+        buffer.contents().copyMemory(from: colliders, byteCount: MemoryLayout<PlaneCollider>.stride * newCount)
     }
 
     func getCurrentPositions() -> [SIMD3<Float>] {

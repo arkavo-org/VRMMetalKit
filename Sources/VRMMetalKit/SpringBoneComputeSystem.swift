@@ -16,7 +16,7 @@
 
 
 import Foundation
-import Metal
+@preconcurrency import Metal
 import QuartzCore  // For CACurrentMediaTime
 import simd
 
@@ -340,8 +340,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 updateAnimatedPositions(model: model, buffers: buffers)
             }
 
+            // Determine if this is the last substep of the frame
+            let isLastSubstep = (timeAccumulator < fixedDeltaTime) || (stepsThisFrame >= maxSubsteps)
+
             // Execute XPBD pipeline
-            executeXPBDStep(buffers: buffers, globalParams: params, sharedCommandBuffer: commandBuffer)
+            executeXPBDStep(buffers: buffers, globalParams: params, sharedCommandBuffer: commandBuffer, registerCompletedHandler: isLastSubstep)
 
             // Debug: Log bone positions occasionally
             updateCounter += 1
@@ -414,7 +417,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     private func executeXPBDStep(buffers: SpringBoneBuffers,
                                   globalParams: SpringBoneGlobalParams,
-                                  sharedCommandBuffer: MTLCommandBuffer? = nil) {
+                                  sharedCommandBuffer: MTLCommandBuffer? = nil,
+                                  registerCompletedHandler: Bool = true) {
         guard let kinematicPipeline = kinematicPipeline,
               let predictPipeline = predictPipeline,
               let distancePipeline = distancePipeline,
@@ -537,23 +541,27 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // block on the snapshot actually being captured (the handler runs on
         // Metal's own queue after the GPU completes — waitUntilCompleted
         // alone does NOT guarantee the snapshot is populated).
-        let snapshotSemaphore: DispatchSemaphore? = usingSharedBuffer ? nil : DispatchSemaphore(value: 0)
+        let shouldRegister = registerCompletedHandler || !usingSharedBuffer
+        let snapshotSemaphore: DispatchSemaphore? = (usingSharedBuffer || !shouldRegister) ? nil : DispatchSemaphore(value: 0)
         if let sem = snapshotSemaphore {
             pendingSnapshotSemaphore = sem
         }
-        commandBuffer.addCompletedHandler { [weak self] buffer in
-            defer { snapshotSemaphore?.signal() }
-            guard let self = self else { return }
+        
+        if shouldRegister {
+            commandBuffer.addCompletedHandler { [weak self] buffer in
+                defer { snapshotSemaphore?.signal() }
+                guard let self = self else { return }
 
-            // Check for GPU errors before reading back data
-            if buffer.status == .error {
-                if let error = buffer.error {
-                    vrmLogPhysics("[SpringBone] GPU command buffer failed: \(error.localizedDescription)")
+                // Check for GPU errors before reading back data
+                if buffer.status == .error {
+                    if let error = buffer.error {
+                        vrmLogPhysics("[SpringBone] GPU command buffer failed: \(error.localizedDescription)")
+                    }
+                    return
                 }
-                return
-            }
 
-            self.captureCompletedPositions(bonePosCurr: capturedBonePosCurr, numBones: capturedNumBones, frameID: frameID)
+                self.captureCompletedPositions(bonePosCurr: capturedBonePosCurr, numBones: capturedNumBones, frameID: frameID)
+            }
         }
 
         // Only commit when we own the buffer. Caller commits the shared buffer.
@@ -1652,7 +1660,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 ptr[i] = SphereCollider(
                     center: simd_mix(prev.center, target.center, SIMD3<Float>(repeating: t)),
                     radius: prev.radius + t * (target.radius - prev.radius),
-                    groupIndex: target.groupIndex
+                    groupIndex: target.groupIndex,
+                    inside: target.inside != 0
                 )
             }
         }
@@ -1669,7 +1678,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     p0: simd_mix(prev.p0, target.p0, SIMD3<Float>(repeating: t)),
                     p1: simd_mix(prev.p1, target.p1, SIMD3<Float>(repeating: t)),
                     radius: prev.radius + t * (target.radius - prev.radius),
-                    groupIndex: target.groupIndex
+                    groupIndex: target.groupIndex,
+                    inside: target.inside != 0
                 )
             }
         }
