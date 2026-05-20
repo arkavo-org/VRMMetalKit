@@ -95,6 +95,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var lastFrameSubstepCount: Int = 1
     private var currentSubstepIndex: Int = 0
 
+    /// Minimum alignment required for buffer offsets in Metal (typically 256 bytes for macOS x86/general safety)
+    private static let kMetalBufferOffsetAlignment = 256
+    
+    /// Stride in bytes for each substep of animated root positions, aligned to 256 bytes.
+    private var alignedStepLength: Int {
+        let raw = MemoryLayout<SIMD3<Float>>.stride * rootBoneIndices.count
+        return (raw + Self.kMetalBufferOffsetAlignment - 1) & ~(Self.kMetalBufferOffsetAlignment - 1)
+    }
+
     // World bind direction interpolation (prevents rotational explosions during fast turns)
     private var previousWorldBindDirections: [SIMD3<Float>] = []
     private var targetWorldBindDirections: [SIMD3<Float>] = []
@@ -293,12 +302,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // kinematic kernel reads previousPos from this buffer so velocity is
         // measured against last frame's animated target — independent of any
         // collision pushes that may have touched bonePosCurr (Bug #4).
+        //
+        // PERFORMANCE NOTE: On unified memory architectures (.storageModeShared), this is
+        // a CPU-side memcpy of the final pose. To ensure no CPU-GPU data race against any
+        // in-flight GPU read of the previous frame's prev buffer, callers must synchronize
+        // at frame boundaries (i.e. wait for frame N to complete before encoding frame N+1).
         if frameSubstepCount > 0,
            let curr = animatedRootPositionsBuffer,
            let prev = animatedRootPositionsPrevBuffer {
             let singleStepLength = MemoryLayout<SIMD3<Float>>.stride * rootBoneIndices.count
-            let alignment = 256
-            let alignedStepLength = (singleStepLength + alignment - 1) & ~(alignment - 1)
             let prevStepCount = max(1, lastFrameSubstepCount)
             let lastSubstepIndex = prevStepCount - 1
             let byteOffset = lastSubstepIndex * alignedStepLength
@@ -499,9 +511,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
            let numRootBonesBuffer = numRootBonesBuffer {
             computeEncoder.setComputePipelineState(kinematicPipeline)
             
-            let singleStepLength = MemoryLayout<SIMD3<Float>>.stride * rootBoneIndices.count
-            let alignment = 256
-            let alignedStepLength = (singleStepLength + alignment - 1) & ~(alignment - 1)
+            assert(substepIndex < VRMConstants.Physics.maxSubstepsPerFrame, "substepIndex \(substepIndex) exceeds max allocated capacity")
             let byteOffset = substepIndex * alignedStepLength
             
             computeEncoder.setBuffer(animatedRootPositionsBuffer, offset: byteOffset, index: 8)
@@ -1036,9 +1046,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Copy to GPU buffer at the correct aligned offset for this substep
         if animatedPositions.count > 0 {
+            assert(substepIndex < VRMConstants.Physics.maxSubstepsPerFrame, "substepIndex \(substepIndex) exceeds max allocated capacity")
             let singleStepLength = MemoryLayout<SIMD3<Float>>.stride * animatedPositions.count
-            let alignment = 256
-            let alignedStepLength = (singleStepLength + alignment - 1) & ~(alignment - 1)
             let byteOffset = substepIndex * alignedStepLength
             
             let dest = animatedRootPositionsBuffer.contents().advanced(by: byteOffset)
@@ -1654,6 +1663,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // MARK: - Substep Interpolation Methods
 
     /// Interpolates all transforms for the current substep
+    /// - Parameters:
+    ///   - t: Interpolation factor [0, 1] where 0 = previous frame, 1 = current frame target
+    ///   - buffers: The spring bone buffers holding the GPU structures
+    ///   - substepIndex: Current substep index of the frame
     private func interpolateAllTransforms(t: Float, buffers: SpringBoneBuffers, substepIndex: Int) {
         interpolateRootPositions(t: t, substepIndex: substepIndex)
         interpolateWorldBindDirections(t: t, buffers: buffers)
@@ -1666,9 +1679,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               let buffer = animatedRootPositionsBuffer,
               !previousRootPositions.isEmpty else { return }
 
-        let singleStepLength = MemoryLayout<SIMD3<Float>>.stride * previousRootPositions.count
-        let alignment = 256
-        let alignedStepLength = (singleStepLength + alignment - 1) & ~(alignment - 1)
+        assert(substepIndex < VRMConstants.Physics.maxSubstepsPerFrame, "substepIndex \(substepIndex) exceeds max allocated capacity")
         let byteOffset = substepIndex * alignedStepLength
         
         let dest = buffer.contents().advanced(by: byteOffset)
