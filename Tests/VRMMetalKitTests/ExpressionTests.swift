@@ -64,6 +64,27 @@ final class ExpressionTests: XCTestCase {
         XCTAssertNotNil(renderer.expressionController, "Expression controller should be initialized")
     }
 
+    func testExpressionControllerGetters() throws {
+        let c = VRMExpressionController()
+        c.setExpressionWeight(.aa, weight: 0.7)
+        XCTAssertEqual(c.weight(for: .aa), 0.7, accuracy: 1e-6)
+        c.setExpressionWeight(.aa, weight: 1.5)  // clamps to 1.0
+        XCTAssertEqual(c.weight(for: .aa), 1.0, accuracy: 1e-6)
+        XCTAssertEqual(c.weight(for: .ih), 0.0, "unset should return default 0.0")
+
+        // Unregistered custom expression should return nil
+        XCTAssertNil(c.weight(forCustom: "PerfectSyncEyeBlinkLeft"))
+
+        // Register and set custom expression
+        let customExpr = VRMExpression()
+        c.registerCustomExpression(customExpr, name: "PerfectSyncEyeBlinkLeft")
+        XCTAssertNil(c.weight(forCustom: "PerfectSyncEyeBlinkLeft"), "registered but unset custom expression should be nil")
+        
+        c.setCustomExpressionWeight("PerfectSyncEyeBlinkLeft", weight: 0.8)
+        let val = try XCTUnwrap(c.weight(forCustom: "PerfectSyncEyeBlinkLeft"))
+        XCTAssertEqual(val, 0.8, accuracy: 1e-6)
+    }
+
     func testSetMoodHappyAppliesWeight() {
         guard let controller = renderer.expressionController else {
             XCTFail("Expression controller not available")
