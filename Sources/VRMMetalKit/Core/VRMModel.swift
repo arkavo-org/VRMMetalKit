@@ -1163,12 +1163,20 @@ public class VRMModel: @unchecked Sendable {
             }
         }.count
 
+        let totalPlanes = expandedSpringBone.colliders.filter {
+            switch $0.shape {
+            case .plane: return true
+            default: return false
+            }
+        }.count
+
         // Initialize buffers
         springBoneBuffers = SpringBoneBuffers(device: device)
         springBoneBuffers?.allocateBuffers(
             numBones: totalBones,
             numSpheres: totalSpheres,
-            numCapsules: totalCapsules
+            numCapsules: totalCapsules,
+            numPlanes: totalPlanes
         )
 
         // Initialize global parameters
@@ -1184,6 +1192,7 @@ public class VRMModel: @unchecked Sendable {
             numBones: UInt32(totalBones),
             numSpheres: UInt32(totalSpheres),
             numCapsules: UInt32(totalCapsules),
+            numPlanes: UInt32(totalPlanes),
             settlingFrames: 120
         )
 

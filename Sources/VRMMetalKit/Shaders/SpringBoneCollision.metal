@@ -160,7 +160,7 @@ float3 collideWithPlaneFiltered(float3 position, float boneRadius, uint groupMas
         if (!(groupMask & (1u << plane.groupIndex))) continue;
 
         // Distance from bone to plane (negative if below plane)
-        float3 toPoint = position - plane.point;
+        float3 toPoint = result - plane.point;
         float distance = dot(toPoint, plane.normal) - boneRadius;
 
         if (distance < 0.0) {
