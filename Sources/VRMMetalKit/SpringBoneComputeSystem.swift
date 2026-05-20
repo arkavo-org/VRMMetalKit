@@ -16,7 +16,7 @@
 
 
 import Foundation
-import Metal
+@preconcurrency import Metal
 import QuartzCore  // For CACurrentMediaTime
 import simd
 
