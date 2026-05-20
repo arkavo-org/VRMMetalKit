@@ -126,17 +126,23 @@ struct GLTFPunctualLight {
 };
 
 struct GLTFMaterialUniforms {
-    float4 baseColorFactor;
-    float3 emissiveFactor;
-    float metallicFactor;
-    float roughnessFactor;
-    float normalScale;
-    float occlusionStrength;
-    float alphaCutoff;
-    uint flags;
-    uint _pad0;
-    uint _pad1;
-    uint _pad2;
+    float4 baseColorFactor;                      // 16 bytes
+    float3 emissiveFactor;                       // 12 bytes
+    float _pad0;                                 // 4 bytes
+    float metallicFactor;                        // 4 bytes
+    float roughnessFactor;                       // 4 bytes
+    float normalScale;                           // 4 bytes
+    float occlusionStrength;                     // 4 bytes
+    float alphaCutoff;                           // 4 bytes
+    uint flags;                                  // 4 bytes
+    float emissiveStrength;                      // 4 bytes
+    float ior;                                   // 4 bytes
+    float2 textureTransformOffset;               // 8 bytes
+    float2 textureTransformScale;                // 8 bytes
+    float textureTransformRotation;              // 4 bytes
+    float _pad1;                                 // 4 bytes
+    float _pad2;                                 // 4 bytes
+    float _pad3;                                 // 4 bytes
 };
 
 // MARK: - Stage I/O
@@ -306,14 +312,30 @@ fragment float4 gltf_debug_normals_fragment(
 }
 
 /// Debug fragment that visualizes the primary UV channel. Red = u, green = v
+static inline float2 applyTextureTransform(float2 uv, float2 offset, float2 scale, float rotation) {
+    float2 scaledUV = uv * scale;
+    if (abs(rotation) > 1e-6) {
+        float c = cos(rotation);
+        float s = sin(rotation);
+        float2 rotatedUV;
+        rotatedUV.x = scaledUV.x * c - scaledUV.y * s;
+        rotatedUV.y = scaledUV.x * s + scaledUV.y * c;
+        return rotatedUV + offset;
+    }
+    return scaledUV + offset;
+}
+
+/// Debug fragment that visualizes the primary UV channel. Red = u, green = v
 /// (each fractionally wrapped to keep the range in [0, 1] for assets with
 /// tiled UVs). Used by `--debug uvs` to confirm TEXCOORD_0 decoding and to
 /// inspect chart layout. A clean UV chart shows a smooth red/green gradient
 /// across each chart island.
 fragment float4 gltf_debug_uvs_fragment(
-    GLTFVertexOut in [[stage_in]]
+    GLTFVertexOut in [[stage_in]],
+    constant GLTFMaterialUniforms& material [[buffer(kMaterialUniformsIndex)]]
 ) {
-    float2 uv = fract(in.uv0);
+    float2 uv = applyTextureTransform(in.uv0, material.textureTransformOffset, material.textureTransformScale, material.textureTransformRotation);
+    uv = fract(uv);
     return float4(uv.x, uv.y, 0.0, 1.0);
 }
 
@@ -328,9 +350,10 @@ fragment float4 gltf_debug_roughness_fragment(
     texture2d<float> metallicRoughnessTexture [[texture(kMetallicRoughnessTextureIndex)]],
     sampler linearSampler [[sampler(kLinearSamplerIndex)]]
 ) {
+    float2 transformedUV = applyTextureTransform(in.uv0, material.textureTransformOffset, material.textureTransformScale, material.textureTransformRotation);
     float roughness = material.roughnessFactor;
     if (material.flags & kFlagHasMetallicRoughnessTexture) {
-        roughness *= metallicRoughnessTexture.sample(linearSampler, in.uv0).g;
+        roughness *= metallicRoughnessTexture.sample(linearSampler, transformedUV).g;
     }
     return float4(float3(roughness), 1.0);
 }
@@ -354,10 +377,12 @@ fragment float4 gltf_pbr_fragment(
 ) {
     // --- Material sampling --------------------------------------------------
 
+    float2 transformedUV = applyTextureTransform(in.uv0, material.textureTransformOffset, material.textureTransformScale, material.textureTransformRotation);
+
     float4 baseColor = material.baseColorFactor;
     if (material.flags & kFlagHasBaseColorTexture) {
         // colorSampler binds to an sRGB-decoding texture; sample returns linear RGBA.
-        baseColor *= baseColorTexture.sample(colorSampler, in.uv0);
+        baseColor *= baseColorTexture.sample(colorSampler, transformedUV);
     }
 
     // Alpha test (MASK mode)
@@ -376,20 +401,20 @@ fragment float4 gltf_pbr_fragment(
     float roughness = material.roughnessFactor;
     if (material.flags & kFlagHasMetallicRoughnessTexture) {
         // glTF spec: B = metallic, G = roughness.
-        float4 mr = metallicRoughnessTexture.sample(linearSampler, in.uv0);
+        float4 mr = metallicRoughnessTexture.sample(linearSampler, transformedUV);
         metallic  *= mr.b;
         roughness *= mr.g;
     }
     roughness = clamp(roughness, 0.04, 1.0);
 
-    float3 emissive = material.emissiveFactor;
+    float3 emissive = material.emissiveFactor * material.emissiveStrength;
     if (material.flags & kFlagHasEmissiveTexture) {
-        emissive *= emissiveTexture.sample(colorSampler, in.uv0).rgb;
+        emissive *= emissiveTexture.sample(colorSampler, transformedUV).rgb;
     }
 
     float occlusion = 1.0;
     if (material.flags & kFlagHasOcclusionTexture) {
-        float ao = occlusionTexture.sample(linearSampler, in.uv0).r;
+        float ao = occlusionTexture.sample(linearSampler, transformedUV).r;
         occlusion = mix(1.0, ao, material.occlusionStrength);
     }
 
@@ -397,7 +422,7 @@ fragment float4 gltf_pbr_fragment(
 
     float3 N;
     if (material.flags & kFlagHasNormalTexture) {
-        float3 sampled = normalTexture.sample(linearSampler, in.uv0).rgb;
+        float3 sampled = normalTexture.sample(linearSampler, transformedUV).rgb;
         N = applyNormalMap(sampled, material.normalScale, in.worldTangent, in.worldBitangent, in.worldNormal);
     } else {
         N = normalize(in.worldNormal);
@@ -407,7 +432,9 @@ fragment float4 gltf_pbr_fragment(
 
     // --- BRDF ---------------------------------------------------------------
 
-    float3 F0  = mix(float3(0.04), baseColor.rgb, metallic);
+    float dielectricF0 = (material.ior - 1.0) / (material.ior + 1.0);
+    dielectricF0 = dielectricF0 * dielectricF0;
+    float3 F0 = mix(float3(dielectricF0), baseColor.rgb, metallic);
 
     // Direct lighting — punctual-light array (KHR_lights_punctual) when
     // bound, falling back to the single directional light in frame uniforms.
