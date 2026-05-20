@@ -19,7 +19,7 @@
 using namespace metal;
 
 #ifndef MTOON_USE_HALF_PRECISION
-#define MTOON_USE_HALF_PRECISION 1
+#define MTOON_USE_HALF_PRECISION 0
 #endif
 
 #if MTOON_USE_HALF_PRECISION
@@ -249,6 +249,7 @@ static inline float linearstep(float a, float b, float t) {
  return saturate((t - a) / range);
 }
 
+#if MTOON_USE_HALF_PRECISION
 static inline half linearstep(half a, half b, half t) {
  half range = b - a;
  if (range <= 0.0001h) {
@@ -256,6 +257,7 @@ static inline half linearstep(half a, half b, half t) {
  }
  return saturate((t - a) / range);
 }
+#endif
 
 // Vertex shader with optional morphed positions buffer
 // When morphs are active: morphed positions at buffer(20), original vertex at stage_in
@@ -637,37 +639,40 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
      // Light direction convention: negate because uniforms stores direction FROM light,
      // but NdotL calculation needs direction TO light.
      // VRM 1.0 uses raw dot(N,L) (spec); VRM 0.x uses Half-Lambert remap.
-     mtoon_float rawNdotL = mtoon_float(dot(float3(normal), -uniforms.lightDirection.xyz));
+     mtoon_float rawNdotL = dot(normal, mtoon_float3(-uniforms.lightDirection.xyz));
      mtoon_float NdotL = (uniforms.vrmVersion == 1) ? rawNdotL : rawNdotL * 0.5 + 0.5;
      mtoon_float shading0 = NdotL + shadingShift;
      mtoon_float shadowStep = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading0);
      mtoon_float weight = intensity0 / totalIntensity;
-     lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * mtoon_float3(uniforms.lightColor.xyz) * weight;
-     lighting0 = shadowStep * weight * mtoon_float3(uniforms.lightColor.xyz);
+     float3 safeLightColor = clamp(uniforms.lightColor.xyz, 0.0f, 65500.0f);
+     lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * mtoon_float3(safeLightColor) * weight;
+     lighting0 = shadowStep * weight * mtoon_float3(safeLightColor);
  }
 
  mtoon_float3 lit1 = mtoon_float3(0.0);
  mtoon_float3 lighting1 = mtoon_float3(0.0);
  if (intensity1 > 0.0) {
-     mtoon_float rawNdotL1 = mtoon_float(dot(normal, mtoon_float3(-uniforms.light1Direction.xyz)));
+     mtoon_float rawNdotL1 = dot(normal, mtoon_float3(-uniforms.light1Direction.xyz));
      mtoon_float NdotL1 = (uniforms.vrmVersion == 1) ? rawNdotL1 : rawNdotL1 * 0.5 + 0.5;
      mtoon_float shading1 = NdotL1 + shadingShift;
      mtoon_float shadowStep1 = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading1);
      mtoon_float weight1 = intensity1 / totalIntensity;
-     lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * mtoon_float3(uniforms.light1Color.xyz) * weight1;
-     lighting1 = shadowStep1 * weight1 * mtoon_float3(uniforms.light1Color.xyz);
+     float3 safeLight1Color = clamp(uniforms.light1Color.xyz, 0.0f, 65500.0f);
+     lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * mtoon_float3(safeLight1Color) * weight1;
+     lighting1 = shadowStep1 * weight1 * mtoon_float3(safeLight1Color);
  }
 
  mtoon_float3 lit2 = mtoon_float3(0.0);
  mtoon_float3 lighting2 = mtoon_float3(0.0);
  if (intensity2 > 0.0) {
-     mtoon_float rawNdotL2 = mtoon_float(dot(normal, mtoon_float3(-uniforms.light2Direction.xyz)));
+     mtoon_float rawNdotL2 = dot(normal, mtoon_float3(-uniforms.light2Direction.xyz));
      mtoon_float NdotL2 = (uniforms.vrmVersion == 1) ? rawNdotL2 : rawNdotL2 * 0.5 + 0.5;
      mtoon_float shading2 = NdotL2 + shadingShift;
      mtoon_float shadowStep2 = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading2);
      mtoon_float weight2 = intensity2 / totalIntensity;
-     lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * mtoon_float3(uniforms.light2Color.xyz) * weight2;
-     lighting2 = shadowStep2 * weight2 * mtoon_float3(uniforms.light2Color.xyz);
+     float3 safeLight2Color = clamp(uniforms.light2Color.xyz, 0.0f, 65500.0f);
+     lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * mtoon_float3(safeLight2Color) * weight2;
+     lighting2 = shadowStep2 * weight2 * mtoon_float3(safeLight2Color);
  }
 
  // Accumulate weighted contributions (manual normalization factor allows artistic control).
@@ -705,14 +710,15 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // three-vrm + UniVRM paths). Note: post-#205, indirect (≈ambient*giAlbedo)
  // is now comparable in magnitude to direct (≈albedo/π) on the lit side —
  // see docs/MTOON_GI_SPEC.md for the rationale.
- mtoon_float3 giAlbedo = mtoon_float3(mix(shadeColor, baseColor.rgb, mtoon_float(material.giEqualizationFactor)));
- mtoon_float3 indirectDiffuse = mtoon_float3(uniforms.ambientColor.xyz) * giAlbedo;
+ mtoon_float3 giAlbedo = mix(shadeColor, baseColor.rgb, mtoon_float(material.giEqualizationFactor));
+ float3 safeAmbientColor = clamp(uniforms.ambientColor.xyz, 0.0f, 65500.0f);
+ mtoon_float3 indirectDiffuse = mtoon_float3(safeAmbientColor) * giAlbedo;
  litColor += indirectDiffuse;
 
  // Indirect radiance for the rim modulator: raw ambient (no `giAlbedo`).
  // Rim is not subject to the body's giEqualization mix; it just sees the
  // scene's indirect radiance, mirroring UniVRM's `indirectLightingFactor`.
- mtoon_float3 indirectLight = mtoon_float3(uniforms.ambientColor.xyz);
+ mtoon_float3 indirectLight = mtoon_float3(safeAmbientColor);
 
  // Emissive
  mtoon_float3 emissive = mtoon_float3(material.emissiveR, material.emissiveG, material.emissiveB);
@@ -747,17 +753,16 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  mtoon_float3 rimColor = mtoon_float3(0.0);
  mtoon_float3 parametricRimColorFactor = mtoon_float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
  if (any(parametricRimColorFactor > 0.0)) {
-     mtoon_float3 Nrim = mtoon_float3(normalize(in.worldNormal));
+     float3 Nrim = normalize(in.worldNormal);
      if (!isFrontFace) Nrim = -Nrim;
-     mtoon_float3 Vrim = mtoon_float3(normalize(in.viewDirection));
-     mtoon_float NdotV = saturate(dot(Nrim, Vrim));
-     mtoon_float vf = mtoon_float(1.0) - NdotV;
-     // `max(power, EPSILON)` matches UniVRM's `EPSILON_FP16` guard against
-     // pow(0, 0) at the head-on view (NdotV=1, vf=0, lift=0).
-     mtoon_float rimF = pow(saturate(vf + mtoon_float(material.parametricRimLiftFactor)),
-                            max(mtoon_float(material.parametricRimFresnelPowerFactor), mtoon_float(1e-4)));
+     float3 Vrim = normalize(in.viewDirection);
+     float NdotV = saturate(dot(Nrim, Vrim));
+     float vf = 1.0f - NdotV;
+     // Compute rimF in single-precision float to protect against FP16 underflow/subnormal precision issues near 1e-4.
+     float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
+                      max(material.parametricRimFresnelPowerFactor, 1e-4f));
 
-     rimColor = parametricRimColorFactor * rimF;
+     rimColor = parametricRimColorFactor * mtoon_float(rimF);
 
      // Apply rim multiply texture for masking
      if (material.hasRimMultiplyTexture > 0) {
@@ -813,7 +818,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
  // Debug mode 9: Show litColor before saturation (scaled down to see overbright)
  if (uniforms.debugUVs == 9) {
-     return float4(float3(litColor) * 0.25, 1.0);  // Scale by 0.25 to see values > 1
+     return float4(float3(litColor * 0.25), 1.0);  // Scale by 0.25 to see values > 1
  }
 
  // Minimum light floor to prevent completely black surfaces

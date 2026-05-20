@@ -204,7 +204,7 @@ func createMultiBoneRotationClip(
 
 /// Get the project root directory for test files
 /// Uses environment variable VRM_TEST_MODELS_PATH if set, otherwise falls back to auto-detection
-func getProjectRoot(filePath: String = #file) -> String {
+func getProjectRoot(filePath: String = #filePath) -> String {
     // First, check for environment variable
     if let envPath = ProcessInfo.processInfo.environment["VRM_TEST_MODELS_PATH"] {
         return envPath
