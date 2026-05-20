@@ -167,18 +167,24 @@ public struct GLTFPunctualLightUniform {
 /// Per-draw material uniforms — glTF 2.0 PBR metallic-roughness factors,
 /// emissive, alpha, and the bitmask of optional texture bindings.
 public struct GLTFMaterialUniforms {
-    public var baseColorFactor: SIMD4<Float>
-    public var emissiveFactor: SIMD3<Float>
-    public var metallicFactor: Float
-    public var roughnessFactor: Float
-    public var normalScale: Float
-    public var occlusionStrength: Float
-    public var alphaCutoff: Float
+    public var baseColorFactor: SIMD4<Float>     // 16 bytes
+    public var emissiveFactor: SIMD3<Float>      // 12 bytes
+    public var _pad0: Float = 0                  // 4 bytes
+    public var metallicFactor: Float             // 4 bytes
+    public var roughnessFactor: Float            // 4 bytes
+    public var normalScale: Float                // 4 bytes
+    public var occlusionStrength: Float          // 4 bytes
+    public var alphaCutoff: Float                // 4 bytes
     /// Bitmask of ``GLTFMaterialFlags`` raw values.
-    public var flags: UInt32
-    public var _pad0: UInt32 = 0
-    public var _pad1: UInt32 = 0
-    public var _pad2: UInt32 = 0
+    public var flags: UInt32                     // 4 bytes
+    public var emissiveStrength: Float           // 4 bytes (defaults to 1.0)
+    public var ior: Float                        // 4 bytes (defaults to 1.5)
+    public var textureTransformOffset: SIMD2<Float> // 8 bytes (defaults to [0, 0])
+    public var textureTransformScale: SIMD2<Float>  // 8 bytes (defaults to [1, 1])
+    public var textureTransformRotation: Float      // 4 bytes (defaults to 0.0)
+    public var _pad1: Float = 0                  // 4 bytes
+    public var _pad2: Float = 0                  // 4 bytes
+    public var _pad3: Float = 0                  // 4 bytes
 
     public init(
         baseColorFactor: SIMD4<Float> = SIMD4<Float>(1, 1, 1, 1),
@@ -188,7 +194,12 @@ public struct GLTFMaterialUniforms {
         normalScale: Float = 1,
         occlusionStrength: Float = 1,
         alphaCutoff: Float = 0.5,
-        flags: GLTFMaterialFlags = []
+        flags: GLTFMaterialFlags = [],
+        emissiveStrength: Float = 1.0,
+        ior: Float = 1.5,
+        textureTransformOffset: SIMD2<Float> = .zero,
+        textureTransformScale: SIMD2<Float> = SIMD2<Float>(1, 1),
+        textureTransformRotation: Float = 0.0
     ) {
         self.baseColorFactor = baseColorFactor
         self.emissiveFactor = emissiveFactor
@@ -198,6 +209,11 @@ public struct GLTFMaterialUniforms {
         self.occlusionStrength = occlusionStrength
         self.alphaCutoff = alphaCutoff
         self.flags = flags.rawValue
+        self.emissiveStrength = emissiveStrength
+        self.ior = ior
+        self.textureTransformOffset = textureTransformOffset
+        self.textureTransformScale = textureTransformScale
+        self.textureTransformRotation = textureTransformRotation
     }
 }
 

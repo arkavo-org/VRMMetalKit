@@ -626,7 +626,7 @@ public final class GLTFAssetLoader {
 
     // MARK: - Material decoding
 
-    private static func makeMaterial(
+    internal static func makeMaterial(
         from gltf: GLTFMaterial,
         textures: [Int: MTLTexture]
     ) -> GLTFRenderableMaterial {
@@ -686,6 +686,35 @@ public final class GLTFAssetLoader {
             flags.insert(.hasEmissiveTexture)
         }
 
+        // Parse KHR_materials_emissive_strength
+        var emissiveStrength: Float = 1.0
+        if let extensions = gltf.extensions,
+           let emissiveStrengthDict = extensions["KHR_materials_emissive_strength"] as? [String: Any],
+           let strengthValue = emissiveStrengthDict["emissiveStrength"] {
+            if let d = strengthValue as? Double { emissiveStrength = Float(d) }
+            else if let i = strengthValue as? Int { emissiveStrength = Float(i) }
+            else if let f = strengthValue as? Float { emissiveStrength = f }
+        }
+
+        // Parse KHR_materials_ior
+        var ior: Float = 1.5
+        if let extensions = gltf.extensions,
+           let iorDict = extensions["KHR_materials_ior"] as? [String: Any],
+           let iorValue = iorDict["ior"] {
+            if let d = iorValue as? Double { ior = Float(d) }
+            else if let i = iorValue as? Int { ior = Float(i) }
+            else if let f = iorValue as? Float { ior = f }
+        }
+
+        // Parse KHR_texture_transform
+        let textureTransform = pbr?.baseColorTexture?.khrTextureTransform ??
+                               pbr?.metallicRoughnessTexture?.khrTextureTransform ??
+                               gltf.emissiveTexture?.khrTextureTransform
+        
+        let transformOffset = textureTransform?.offset ?? SIMD2<Float>(0, 0)
+        let transformScale = textureTransform?.scale ?? SIMD2<Float>(1, 1)
+        let transformRotation = textureTransform?.rotation ?? 0.0
+
         let uniforms = GLTFMaterialUniforms(
             baseColorFactor: baseColorFactor,
             emissiveFactor: emissiveFactor,
@@ -694,7 +723,12 @@ public final class GLTFAssetLoader {
             normalScale: gltf.normalTexture?.scale ?? 1.0,
             occlusionStrength: gltf.occlusionTexture?.strength ?? 1.0,
             alphaCutoff: gltf.alphaCutoff ?? 0.5,
-            flags: flags
+            flags: flags,
+            emissiveStrength: emissiveStrength,
+            ior: ior,
+            textureTransformOffset: transformOffset,
+            textureTransformScale: transformScale,
+            textureTransformRotation: transformRotation
         )
 
         return GLTFRenderableMaterial(

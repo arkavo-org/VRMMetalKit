@@ -164,6 +164,54 @@ final class GLTFAssetLoaderTests: XCTestCase {
             "Only \(lit) lit pixels (\(String(format: "%.1f%%", litFraction * 100))) — the cube did not render.")
     }
 
+    func testKHRExtensionsParsing() throws {
+        let json = """
+        {
+            "asset": { "version": "2.0" },
+            "materials": [
+                {
+                    "name": "ExtendedMaterial",
+                    "pbrMetallicRoughness": {
+                        "baseColorFactor": [1.0, 0.5, 0.5, 1.0],
+                        "baseColorTexture": {
+                            "index": 0,
+                            "extensions": {
+                                "KHR_texture_transform": {
+                                    "offset": [0.1, 0.2],
+                                    "scale": [2.0, 3.0],
+                                    "rotation": 1.57
+                                }
+                            }
+                        }
+                    },
+                    "extensions": {
+                        "KHR_materials_emissive_strength": {
+                            "emissiveStrength": 5.0
+                        },
+                        "KHR_materials_ior": {
+                            "ior": 1.8
+                        }
+                    }
+                }
+            ]
+        }
+        """
+        
+        let data = json.data(using: .utf8)!
+        let doc = try JSONDecoder().decode(GLTFDocument.self, from: data)
+        let material = doc.materials![0]
+        
+        // Use GLTFAssetLoader.makeMaterial to decode the material uniforms
+        let renderableMaterial = GLTFAssetLoader.makeMaterial(from: material, textures: [:])
+        let uniforms = renderableMaterial.uniforms
+        
+        XCTAssertEqual(uniforms.emissiveStrength, 5.0, accuracy: 0.001)
+        XCTAssertEqual(uniforms.ior, 1.8, accuracy: 0.001)
+        XCTAssertEqual(uniforms.textureTransformOffset, SIMD2<Float>(0.1, 0.2))
+        XCTAssertEqual(uniforms.textureTransformScale, SIMD2<Float>(2.0, 3.0))
+        XCTAssertEqual(uniforms.textureTransformRotation, 1.57, accuracy: 0.001)
+    }
+
     // MARK: - Helpers
 
     private func perspectiveProjection(fovY: Float, aspect: Float, near: Float, far: Float) -> simd_float4x4 {
