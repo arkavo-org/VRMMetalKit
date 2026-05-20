@@ -188,15 +188,23 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         try systemHigh.populateSpringBoneData(model: modelHighDrag)
 
         // Run simulation for longer to see drag difference.
-        // Uses the legacy self-committed path — see issue #268 for why
-        // the shared-buffer path produces subtly different output when
-        // two systems are stepped per frame.
-        for _ in 0..<120 {
-            systemLow.update(model: modelLowDrag, deltaTime: 1.0 / 60.0)
-            systemHigh.update(model: modelHighDrag, deltaTime: 1.0 / 60.0)
+        // Uses the host-owned shared-buffer path (passing commandBuffer) to verify
+        // that our substep-offset buffering correctly prevents CPU/GPU races.
+        guard let commandQueue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
         }
-        systemLow.waitForPendingFrame()
-        systemHigh.waitForPendingFrame()
+        for _ in 0..<120 {
+            guard let cbLow = commandQueue.makeCommandBuffer(),
+                  let cbHigh = commandQueue.makeCommandBuffer() else {
+                XCTFail("Could not create command buffer"); return
+            }
+            systemLow.update(model: modelLowDrag, deltaTime: 1.0 / 60.0, commandBuffer: cbLow)
+            systemHigh.update(model: modelHighDrag, deltaTime: 1.0 / 60.0, commandBuffer: cbHigh)
+            cbLow.commit()
+            cbHigh.commit()
+            cbLow.waitUntilCompleted()
+            cbHigh.waitUntilCompleted()
+        }
         systemLow.writeBonesToNodes(model: modelLowDrag)
         systemHigh.writeBonesToNodes(model: modelHighDrag)
 
@@ -250,18 +258,23 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         let initialYNo = readBonePositionY(model: modelNoGravity, boneIndex: 2)
         let initialYFull = readBonePositionY(model: modelFullGravity, boneIndex: 2)
 
-        // Run simulation on the legacy self-committed buffer path —
-        // see comment in testDragReducesVelocity. When the same physical
-        // step is driven through the host-owned `commandBuffer:` parameter,
-        // the no-gravity rig accumulates ~20 cm of unexpected drift, which
-        // suggests a CPU/GPU race (see issue #268) against the per-substep animated-positions
-        // buffer that the shared-buffer path resolves differently.
-        for _ in 0..<60 {
-            systemNo.update(model: modelNoGravity, deltaTime: 1.0 / 60.0)
-            systemFull.update(model: modelFullGravity, deltaTime: 1.0 / 60.0)
+        // Run simulation on the host-owned shared-buffer path (passing commandBuffer) to verify
+        // that our substep-offset buffering correctly prevents CPU/GPU races.
+        guard let commandQueue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
         }
-        systemNo.waitForPendingFrame()
-        systemFull.waitForPendingFrame()
+        for _ in 0..<60 {
+            guard let cbNo = commandQueue.makeCommandBuffer(),
+                  let cbFull = commandQueue.makeCommandBuffer() else {
+                XCTFail("Could not create command buffer"); return
+            }
+            systemNo.update(model: modelNoGravity, deltaTime: 1.0 / 60.0, commandBuffer: cbNo)
+            systemFull.update(model: modelFullGravity, deltaTime: 1.0 / 60.0, commandBuffer: cbFull)
+            cbNo.commit()
+            cbFull.commit()
+            cbNo.waitUntilCompleted()
+            cbFull.waitUntilCompleted()
+        }
         systemNo.writeBonesToNodes(model: modelNoGravity)
         systemFull.writeBonesToNodes(model: modelFullGravity)
 
