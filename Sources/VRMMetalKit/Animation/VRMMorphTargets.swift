@@ -544,6 +544,19 @@ public class VRMExpressionController: @unchecked Sendable {
         updateMorphTargets()
     }
 
+    /// Current weight of a preset expression. Returns 0 when the preset
+    /// has not been set (matches the `init()` default).
+    public func weight(for preset: VRMExpressionPreset) -> Float {
+        currentWeights[preset] ?? 0
+    }
+
+    /// Current weight of a registered custom expression. Returns `nil`
+    /// when the name has not been registered via
+    /// `registerCustomExpression(_:name:)`.
+    public func weight(forCustom name: String) -> Float? {
+        customCurrentWeights[name]
+    }
+
     // MARK: - Preset Animations
 
     /// Plays a one-shot blink that rises to full weight over `duration` and decays back to `0` over the same `duration`.
