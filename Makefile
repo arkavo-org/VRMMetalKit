@@ -98,6 +98,7 @@ $(MUTER_BIN):
 		git clone https://github.com/muter-mutation-testing/muter.git .build/tools/muter-src; \
 	fi
 	@cd .build/tools/muter-src && git fetch && git checkout $(MUTER_SHA)
+	@cd .build/tools/muter-src && git checkout -- . && git apply ../../../.muter/patches/v16-schemata-content-fallback.patch
 	@cd .build/tools/muter-src && swift build -c release --product muter
 	@mkdir -p .build/tools/bin
 	@ln -sf ../muter-src/.build/release/muter $(MUTER_BIN)
