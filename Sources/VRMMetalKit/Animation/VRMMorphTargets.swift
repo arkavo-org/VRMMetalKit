@@ -146,15 +146,14 @@ public class VRMMorphTargetSystem {
     }
 
     private func setupComputePipeline() throws {
-        // Try to load compute pipeline from compiled Metal library
-        // First try package resources (Bundle.module), then fall back to default library
+        // Try to load compute pipeline from compiled Metal library.
+        // First try the platform-appropriate metallib slice via the shared
+        // loader, then fall back to the device's default library.
         var library: MTLLibrary?
 
-        // Try package bundle first (for SPM packages)
-        if let url = Bundle.module.url(forResource: "VRMMetalKitShaders", withExtension: "metallib"),
-           let packageLib = try? device.makeLibrary(URL: url) {
+        if let packageLib = try? VRMShaderLibraryLoader.loadBundledLibrary(device: device) {
             library = packageLib
-            vrmLog("[VRMMorphTargetSystem] Using package Metal library (Bundle.module)")
+            vrmLog("[VRMMorphTargetSystem] Using package Metal library (\(VRMShaderLibraryLoader.bundledLibraryName))")
         } else if let defaultLib = device.makeDefaultLibrary() {
             library = defaultLib
             vrmLog("[VRMMorphTargetSystem] Using default Metal library")
@@ -164,7 +163,7 @@ public class VRMMorphTargetSystem {
         guard let validLibrary = library else {
             throw VRMMorphTargetError.failedToCreateComputePipeline(
                 "No Metal shader library available. " +
-                "Ensure VRMMetalKitShaders.metallib is included in the app bundle."
+                "Ensure VRMMetalKitShaders metallib slices are bundled (run `make shaders`)."
             )
         }
 
