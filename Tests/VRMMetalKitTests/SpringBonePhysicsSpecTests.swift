@@ -188,15 +188,23 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         try systemHigh.populateSpringBoneData(model: modelHighDrag)
 
         // Run simulation for longer to see drag difference.
-        // Uses the legacy self-committed path — see issue #268 for why
-        // the shared-buffer path produces subtly different output when
-        // two systems are stepped per frame.
-        for _ in 0..<120 {
-            systemLow.update(model: modelLowDrag, deltaTime: 1.0 / 60.0)
-            systemHigh.update(model: modelHighDrag, deltaTime: 1.0 / 60.0)
+        // Uses the host-owned shared-buffer path (passing commandBuffer) to verify
+        // that our substep-offset buffering correctly prevents CPU/GPU races.
+        guard let commandQueue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
         }
-        systemLow.waitForPendingFrame()
-        systemHigh.waitForPendingFrame()
+        for _ in 0..<120 {
+            guard let cbLow = commandQueue.makeCommandBuffer(),
+                  let cbHigh = commandQueue.makeCommandBuffer() else {
+                XCTFail("Could not create command buffer"); return
+            }
+            systemLow.update(model: modelLowDrag, deltaTime: 1.0 / 60.0, commandBuffer: cbLow)
+            systemHigh.update(model: modelHighDrag, deltaTime: 1.0 / 60.0, commandBuffer: cbHigh)
+            cbLow.commit()
+            cbHigh.commit()
+            cbLow.waitUntilCompleted()
+            cbHigh.waitUntilCompleted()
+        }
         systemLow.writeBonesToNodes(model: modelLowDrag)
         systemHigh.writeBonesToNodes(model: modelHighDrag)
 
@@ -250,18 +258,23 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         let initialYNo = readBonePositionY(model: modelNoGravity, boneIndex: 2)
         let initialYFull = readBonePositionY(model: modelFullGravity, boneIndex: 2)
 
-        // Run simulation on the legacy self-committed buffer path —
-        // see comment in testDragReducesVelocity. When the same physical
-        // step is driven through the host-owned `commandBuffer:` parameter,
-        // the no-gravity rig accumulates ~20 cm of unexpected drift, which
-        // suggests a CPU/GPU race (see issue #268) against the per-substep animated-positions
-        // buffer that the shared-buffer path resolves differently.
-        for _ in 0..<60 {
-            systemNo.update(model: modelNoGravity, deltaTime: 1.0 / 60.0)
-            systemFull.update(model: modelFullGravity, deltaTime: 1.0 / 60.0)
+        // Run simulation on the host-owned shared-buffer path (passing commandBuffer) to verify
+        // that our substep-offset buffering correctly prevents CPU/GPU races.
+        guard let commandQueue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
         }
-        systemNo.waitForPendingFrame()
-        systemFull.waitForPendingFrame()
+        for _ in 0..<60 {
+            guard let cbNo = commandQueue.makeCommandBuffer(),
+                  let cbFull = commandQueue.makeCommandBuffer() else {
+                XCTFail("Could not create command buffer"); return
+            }
+            systemNo.update(model: modelNoGravity, deltaTime: 1.0 / 60.0, commandBuffer: cbNo)
+            systemFull.update(model: modelFullGravity, deltaTime: 1.0 / 60.0, commandBuffer: cbFull)
+            cbNo.commit()
+            cbFull.commit()
+            cbNo.waitUntilCompleted()
+            cbFull.waitUntilCompleted()
+        }
         systemNo.writeBonesToNodes(model: modelNoGravity)
         systemFull.writeBonesToNodes(model: modelFullGravity)
 
@@ -637,5 +650,56 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
 
         let positions = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
         return positions[boneIndex].y
+    }
+
+    /// Issue #268: Verifies that running multiple systems simultaneously (e.g. multi-avatar
+    /// or separate chains) on a shared MTLCommandBuffer per frame with multiple substeps
+    /// does not suffer from CPU/GPU data races or un-physical drift.
+    /// Asserts exactly 0.00 m of downward drift under zero-gravity.
+    func testMultiSystemSharedCommandBufferZeroDrift() throws {
+        // Create two separate systems/models with zero gravity and 2 substeps per frame
+        let modelA = try buildHorizontalChain(boneCount: 3, gravityPower: 0.0)
+        let modelB = try buildHorizontalChain(boneCount: 3, gravityPower: 0.0)
+        
+        // Explicitly request 2 substeps per frame (120Hz physics on 60fps frame)
+        modelA.springBoneGlobalParams?.substeps = 2
+        modelB.springBoneGlobalParams?.substeps = 2
+        
+        let systemA = try SpringBoneComputeSystem(device: device)
+        let systemB = try SpringBoneComputeSystem(device: device)
+        try systemA.populateSpringBoneData(model: modelA)
+        try systemB.populateSpringBoneData(model: modelB)
+        
+        let initialYA = readBonePositionY(model: modelA, boneIndex: 2)
+        let initialYB = readBonePositionY(model: modelB, boneIndex: 2)
+        XCTAssertEqual(initialYA, 1.0, accuracy: 1e-6)
+        XCTAssertEqual(initialYB, 1.0, accuracy: 1e-6)
+        
+        guard let commandQueue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
+        }
+        
+        // Simulate 60 frames on a single shared command buffer per frame
+        for _ in 0..<60 {
+            guard let sharedCB = commandQueue.makeCommandBuffer() else {
+                XCTFail("Could not create command buffer"); return
+            }
+            // Pass the SAME command buffer to both separate systems, simulating they are drawn in the same render batch!
+            systemA.update(model: modelA, deltaTime: 1.0 / 60.0, commandBuffer: sharedCB)
+            systemB.update(model: modelB, deltaTime: 1.0 / 60.0, commandBuffer: sharedCB)
+            sharedCB.commit()
+            sharedCB.waitUntilCompleted()
+        }
+        
+        systemA.writeBonesToNodes(model: modelA)
+        systemB.writeBonesToNodes(model: modelB)
+        
+        let finalYA = readBonePositionY(model: modelA, boneIndex: 2)
+        let finalYB = readBonePositionY(model: modelB, boneIndex: 2)
+        
+        // Assert EXACTLY 0.00 m of downward drift (the zero-gravity chain must stay completely still!)
+        // Under the old code, this would accumulate ~0.20 m of un-physical downward drift/lag.
+        XCTAssertEqual(finalYA, initialYA, accuracy: 1e-6, "System A accumulated un-physical drift on the shared-buffer path")
+        XCTAssertEqual(finalYB, initialYB, accuracy: 1e-6, "System B accumulated un-physical drift on the shared-buffer path")
     }
 }
