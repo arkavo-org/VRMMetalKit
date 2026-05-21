@@ -1,0 +1,12 @@
+{
+  "executable": "/usr/bin/swift",
+  "arguments": [
+    "test",
+    "--filter",
+    "DepthBiasCalculatorTests",
+    "--disable-sandbox"
+  ],
+  "exclude": [],
+  "excludeCalls": [],
+  "coverageThreshold": 0
+}
