@@ -1,0 +1,11 @@
+executable: /usr/bin/swift
+arguments:
+  - test
+  - --filter
+  - DepthBiasCalculatorTests
+  - --disable-sandbox
+  - --build-path
+  - /tmp/vrm-muter-build
+exclude: []
+excludeCalls: []
+coverageThreshold: 0

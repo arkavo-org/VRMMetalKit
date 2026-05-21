@@ -109,7 +109,7 @@ muter-bootstrap: $(MUTER_BIN)
 mutation-test: $(MUTER_BIN)
 	@mkdir -p .build/mutation-testing
 	@$(MUTER_BIN) run \
-		--configuration .muter/depth-bias.json \
+		--configuration .muter/depth-bias.yml \
 		--files-to-mutate Sources/GLTFCore/Utilities/DepthBiasCalculator.swift \
 		--skip-coverage \
 		--format json \

@@ -184,4 +184,76 @@ final class DepthBiasCalculatorTests: XCTestCase {
         XCTAssertNotEqual(body, cloth,
                           "Distinct material names must produce distinct biases")
     }
+
+    // MARK: - Survivor-driven additions
+
+    // Pins each individual keyword in the clothing || chain so that a
+    // logical-connector mutant (|| → &&) on any one of them is caught.
+
+    func testClothKeywordAloneMatchesClothing() {
+        // "cloth" alone (no "clothing") must still hit the clothing branch (0.015).
+        let calc = DepthBiasCalculator()
+        XCTAssertEqual(calc.depthBias(for: "cloth_mesh", isOverlay: false), 0.015, accuracy: 1e-6)
+    }
+
+    func testClothingKeywordAloneMatchesClothing() {
+        // "clothing" alone (no "skirt") must still hit the clothing branch (0.015).
+        let calc = DepthBiasCalculator()
+        XCTAssertEqual(calc.depthBias(for: "clothing_mesh", isOverlay: false), 0.015, accuracy: 1e-6)
+    }
+
+    func testSkirtKeywordAloneMatchesClothing() {
+        // "skirt" alone (no "bottoms") must still hit the clothing branch (0.015).
+        let calc = DepthBiasCalculator()
+        XCTAssertEqual(calc.depthBias(for: "skirt_back", isOverlay: false), 0.015, accuracy: 1e-6)
+    }
+
+    func testBottomsKeywordAloneMatchesClothing() {
+        // "bottoms" alone (no "pants") must still hit the clothing branch (0.015).
+        let calc = DepthBiasCalculator()
+        XCTAssertEqual(calc.depthBias(for: "bottoms_mesh", isOverlay: false), 0.015, accuracy: 1e-6)
+    }
+
+    func testPantsKeywordAloneMatchesClothing() {
+        // "pants" alone must still hit the clothing branch (0.015).
+        let calc = DepthBiasCalculator()
+        XCTAssertEqual(calc.depthBias(for: "pants_mesh", isOverlay: false), 0.015, accuracy: 1e-6)
+    }
+
+    func testMouthKeywordAloneMatchesMouth() {
+        // "mouth" alone (no "lip") must hit the mouth branch (0.02).
+        let calc = DepthBiasCalculator()
+        XCTAssertEqual(calc.depthBias(for: "mouth_inner", isOverlay: false), 0.02, accuracy: 1e-6)
+    }
+
+    func testLipKeywordAloneMatchesMouth() {
+        // "lip" alone (no "mouth") must hit the mouth branch (0.02).
+        let calc = DepthBiasCalculator()
+        XCTAssertEqual(calc.depthBias(for: "lip_mesh", isOverlay: false), 0.02, accuracy: 1e-6)
+    }
+
+    func testBrowKeywordAloneMatchesEyebrow() {
+        // "brow" alone (no "eyebrow") must hit the eyebrow branch (0.025).
+        let calc = DepthBiasCalculator()
+        XCTAssertEqual(calc.depthBias(for: "brow_left", isOverlay: false), 0.025, accuracy: 1e-6)
+    }
+
+    func testOverlayOffsetIsPositiveNotZero() {
+        // Pins the SwapTernary mutant: isOverlay:true must ADD overlayBiasOffset,
+        // not substitute 0.0. Verifies the absolute value, not just the delta.
+        let calc = DepthBiasCalculator()
+        let base = calc.depthBias(for: "unknown_xyz", isOverlay: false)
+        let overlay = calc.depthBias(for: "unknown_xyz", isOverlay: true)
+        XCTAssertGreaterThan(overlay, base,
+            "overlay bias must be strictly greater than base bias for the same material")
+        XCTAssertEqual(overlay, 0.02, accuracy: 1e-6,
+            "default(0.01) + overlayOffset(0.01) must equal 0.02")
+    }
+
+    func testNonOverlayDoesNotApplyOffset() {
+        // Complementary pin: isOverlay:false must NOT add the overlay offset.
+        let calc = DepthBiasCalculator()
+        XCTAssertEqual(calc.depthBias(for: "unknown_xyz", isOverlay: false), 0.01, accuracy: 1e-6,
+            "Non-overlay unknown material must return exactly the default bias (0.01), not 0.01 + overlayOffset")
+    }
 }
