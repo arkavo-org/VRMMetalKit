@@ -211,18 +211,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Attempt 2: Load from VRMMetalKitShaders.metallib in package resources
+        // Attempt 2: Load the platform-appropriate metallib slice via the shared loader.
         if library == nil {
-            guard let url = Bundle.module.url(forResource: "VRMMetalKitShaders", withExtension: "metallib") else {
-                vrmLog("[SpringBone] ❌ VRMMetalKitShaders.metallib not found in package resources")
-                throw SpringBoneError.failedToLoadShaders
-            }
-
             do {
-                library = try device.makeLibrary(URL: url)
-                vrmLog("[SpringBone] ✅ Loaded from VRMMetalKitShaders.metallib (Bundle.module)")
+                library = try VRMShaderLibraryLoader.loadBundledLibrary(device: device)
+                vrmLog("[SpringBone] ✅ Loaded from \(VRMShaderLibraryLoader.bundledLibraryName).metallib (Bundle.module)")
             } catch {
-                vrmLog("[SpringBone] ❌ Failed to load metallib: \(error)")
+                vrmLog("[SpringBone] ❌ \(error.localizedDescription)")
                 throw SpringBoneError.failedToLoadShaders
             }
         }
