@@ -186,56 +186,58 @@ final class DepthBiasCalculatorTests: XCTestCase {
     }
 
     // MARK: - Survivor-driven additions
+    //
+    // Each test below uses a multi-keyword input that exposes the priority chain.
+    // Single-keyword inputs are caught by the safety-net partial-match scan in
+    // computeBias() and cannot kill the explicit if-chain's logical-connector
+    // mutants.
 
-    // Pins each individual keyword in the clothing || chain so that a
-    // logical-connector mutant (|| → &&) on any one of them is caught.
-
-    func testClothKeywordAloneMatchesClothing() {
-        // "cloth" alone (no "clothing") must still hit the clothing branch (0.015).
+    func testClothBodyReturnsClothing() {
+        // Kills ChangeLogicalConnector at line 165 col 41 (cloth || clothing → &&).
+        // Original: clothing chain catches "cloth" → 0.015.
+        // Mutated: "cloth_body".contains("cloth")=true && contains("clothing")=false
+        //   → false → falls through to body check → 0.005.
         let calc = DepthBiasCalculator()
-        XCTAssertEqual(calc.depthBias(for: "cloth_mesh", isOverlay: false), 0.015, accuracy: 1e-6)
+        XCTAssertEqual(calc.depthBias(for: "cloth_body", isOverlay: false), 0.015, accuracy: 1e-6,
+                       "Multi-keyword 'cloth_body' must hit clothing branch (Priority 1) before body (Priority 2)")
     }
 
-    func testClothingKeywordAloneMatchesClothing() {
-        // "clothing" alone (no "skirt") must still hit the clothing branch (0.015).
+    func testSkirtBodyReturnsClothing() {
+        // Kills ChangeLogicalConnector at line 165 col 76 (clothing || skirt → &&)
+        // AND line 166 col 41 (skirt || bottoms → &&).
+        // Original: "skirt_body" → 0.015 (clothing chain catches "skirt").
+        // Mutated: chain fails → falls through → body → 0.005.
         let calc = DepthBiasCalculator()
-        XCTAssertEqual(calc.depthBias(for: "clothing_mesh", isOverlay: false), 0.015, accuracy: 1e-6)
+        XCTAssertEqual(calc.depthBias(for: "skirt_body", isOverlay: false), 0.015, accuracy: 1e-6,
+                       "Multi-keyword 'skirt_body' must hit clothing branch")
     }
 
-    func testSkirtKeywordAloneMatchesClothing() {
-        // "skirt" alone (no "bottoms") must still hit the clothing branch (0.015).
+    func testBottomsBodyReturnsClothing() {
+        // Kills ChangeLogicalConnector at line 166 col 75 (bottoms || pants → &&).
+        // Original: "bottoms_body" → 0.015.
+        // Mutated: chain fails → body → 0.005.
         let calc = DepthBiasCalculator()
-        XCTAssertEqual(calc.depthBias(for: "skirt_back", isOverlay: false), 0.015, accuracy: 1e-6)
+        XCTAssertEqual(calc.depthBias(for: "bottoms_body", isOverlay: false), 0.015, accuracy: 1e-6,
+                       "Multi-keyword 'bottoms_body' must hit clothing branch")
     }
 
-    func testBottomsKeywordAloneMatchesClothing() {
-        // "bottoms" alone (no "pants") must still hit the clothing branch (0.015).
+    func testMouthEyeReturnsMouth() {
+        // Kills ChangeLogicalConnector at line 178 col 41 (mouth || lip → &&).
+        // Original: "mouth_eye" → 0.02 (mouth branch catches before eye).
+        // Mutated: mouth check fails → eyebrow no → eye yes → 0.03.
         let calc = DepthBiasCalculator()
-        XCTAssertEqual(calc.depthBias(for: "bottoms_mesh", isOverlay: false), 0.015, accuracy: 1e-6)
+        XCTAssertEqual(calc.depthBias(for: "mouth_eye", isOverlay: false), 0.02, accuracy: 1e-6,
+                       "Multi-keyword 'mouth_eye' must hit mouth branch before eye")
     }
 
-    func testPantsKeywordAloneMatchesClothing() {
-        // "pants" alone must still hit the clothing branch (0.015).
+    func testBrowEyeReturnsEyebrow() {
+        // Kills ChangeLogicalConnector at line 181 col 43 (eyebrow || brow → &&).
+        // Original: "brow_eye" → 0.025 (eyebrow check catches via "brow").
+        // Mutated: needs both "eyebrow" AND "brow" → "brow_eye" lacks "eyebrow"
+        //   → falls through → eye → 0.03.
         let calc = DepthBiasCalculator()
-        XCTAssertEqual(calc.depthBias(for: "pants_mesh", isOverlay: false), 0.015, accuracy: 1e-6)
-    }
-
-    func testMouthKeywordAloneMatchesMouth() {
-        // "mouth" alone (no "lip") must hit the mouth branch (0.02).
-        let calc = DepthBiasCalculator()
-        XCTAssertEqual(calc.depthBias(for: "mouth_inner", isOverlay: false), 0.02, accuracy: 1e-6)
-    }
-
-    func testLipKeywordAloneMatchesMouth() {
-        // "lip" alone (no "mouth") must hit the mouth branch (0.02).
-        let calc = DepthBiasCalculator()
-        XCTAssertEqual(calc.depthBias(for: "lip_mesh", isOverlay: false), 0.02, accuracy: 1e-6)
-    }
-
-    func testBrowKeywordAloneMatchesEyebrow() {
-        // "brow" alone (no "eyebrow") must hit the eyebrow branch (0.025).
-        let calc = DepthBiasCalculator()
-        XCTAssertEqual(calc.depthBias(for: "brow_left", isOverlay: false), 0.025, accuracy: 1e-6)
+        XCTAssertEqual(calc.depthBias(for: "brow_eye", isOverlay: false), 0.025, accuracy: 1e-6,
+                       "Multi-keyword 'brow_eye' must hit eyebrow branch before eye")
     }
 
     func testOverlayOffsetIsPositiveNotZero() {
