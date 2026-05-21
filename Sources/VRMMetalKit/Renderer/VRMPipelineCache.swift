@@ -75,7 +75,9 @@ public final class VRMPipelineCache: @unchecked Sendable {
     ///   wrapping the underlying Metal error.
     public func getLibrary(device: MTLDevice) throws -> MTLLibrary {
         return try lock.withLock {
-            let key = "VRMMetalKitShaders"
+            // The bundled library is platform-specific; key the cache on the
+            // resolved slice name so the entry is self-documenting.
+            let key = VRMShaderLibraryLoader.bundledLibraryName
 
             // Return cached library if available
             if let cached = libraries[key] {

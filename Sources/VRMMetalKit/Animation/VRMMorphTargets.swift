@@ -151,12 +151,18 @@ public class VRMMorphTargetSystem {
         // loader, then fall back to the device's default library.
         var library: MTLLibrary?
 
-        if let packageLib = try? VRMShaderLibraryLoader.loadBundledLibrary(device: device) {
-            library = packageLib
+        do {
+            library = try VRMShaderLibraryLoader.loadBundledLibrary(device: device)
             vrmLog("[VRMMorphTargetSystem] Using package Metal library (\(VRMShaderLibraryLoader.bundledLibraryName))")
-        } else if let defaultLib = device.makeDefaultLibrary() {
-            library = defaultLib
-            vrmLog("[VRMMorphTargetSystem] Using default Metal library")
+        } catch {
+            // Log the loader's actionable message before falling back, so the
+            // slice-name + `make shaders` hint isn't lost when the default
+            // library happens to satisfy the lookup.
+            vrmLog("[VRMMorphTargetSystem] Bundled library load failed: \(error.localizedDescription)")
+            if let defaultLib = device.makeDefaultLibrary() {
+                library = defaultLib
+                vrmLog("[VRMMorphTargetSystem] Using default Metal library")
+            }
         }
 
         // Fail fast if no library available
