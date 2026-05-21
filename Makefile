@@ -1,7 +1,7 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static muter-bootstrap mutation-test
 
 help:
 	@echo "VRMMetalKit Build Targets:"
@@ -14,6 +14,8 @@ help:
 	@echo "  make test          - Run Swift tests"
 	@echo "  make docs          - Preview documentation locally"
 	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
+	@echo "  make muter-bootstrap - Build muter from a pinned SHA into .build/tools/"
+	@echo "  make mutation-test - Run mutation testing against DepthBiasCalculator"
 
 # Compile all VRM Metal shaders into three SDK-specific metallibs:
 #   - macosx          (FP32, baseline; preserves PR #279's safe-default)
@@ -82,6 +84,31 @@ gltf-shaders:
 	@echo "✅ GLTFMetalKit shaders compiled"
 	@echo "📦 Output: Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib"
 	@ls -lh Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
+
+# Mutation testing (issue #282) — first target: DepthBiasCalculator
+# muter is built from a pinned master SHA into .build/tools/ because the
+# last tagged release (16, 2023) predates Swift 6.2 toolchain changes.
+MUTER_SHA := 99624ecfde93dac3cc1f7a66ac6f7df05611091d
+MUTER_BIN := .build/tools/bin/muter
+
+$(MUTER_BIN):
+	@echo "🔧 Building muter @ $(MUTER_SHA)..."
+	@mkdir -p .build/tools
+	@if [ ! -d .build/tools/muter-src ]; then \
+		git clone https://github.com/muter-mutation-testing/muter.git .build/tools/muter-src; \
+	fi
+	@cd .build/tools/muter-src && git fetch && git checkout $(MUTER_SHA)
+	@cd .build/tools/muter-src && swift build -c release --product muter
+	@mkdir -p .build/tools/bin
+	@ln -sf ../muter-src/.build/release/muter $(MUTER_BIN)
+	@echo "✅ muter built: $$(./$(MUTER_BIN) --version 2>/dev/null || echo unknown)"
+
+muter-bootstrap: $(MUTER_BIN)
+	@$(MUTER_BIN) --version
+
+mutation-test: $(MUTER_BIN)
+	@mkdir -p .build/mutation-testing
+	@$(MUTER_BIN) run --configuration .muter/depth-bias.json
 
 # List functions in the compiled metallib
 list-functions:
