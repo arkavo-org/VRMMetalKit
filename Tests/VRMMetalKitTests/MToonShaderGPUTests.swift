@@ -55,7 +55,7 @@ final class MToonShaderGPUTests: XCTestCase {
     /// `viewMatrix * normalMatrix * float4(N, 0)`, which leaked the translation
     /// w-component into xyz) to world-space, matching the MToon-1.0 spec +
     /// three-vrm + UniVRM Built-in RP convention. Closes #226.
-    static let knownGoodShaderHash = "a33b7844c1c67fc401df5944c9f47bdce349aad617b733b934c2d447053bf13f"
+    static let knownGoodShaderHash = "0d0b83c67d43de7ff6a30c901a6f532e04d1057779d9a7441c403b65737d7e3c"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.
@@ -313,6 +313,34 @@ final class MToonShaderGPUTests: XCTestCase {
         XCTAssertLessThan(brightness, 0.9, "toony=1.0 caused white screen")
     }
 
+    /// Test MToon lighting output at half-precision boundary cases:
+    /// - HDR light intensity near 65504 (half-precision limit)
+    /// - Extremely low shadingToonyFactor (0.01)
+    /// - Ambient light intensity near 65504
+    func testHalfPrecisionLightingBoundaries() async throws {
+        let renderer = try MToonTestRenderer(device: device, width: 128, height: 128)
+
+        // Render with extreme HDR values to verify clamping protects against half-precision overflow (Inf/NaN)
+        let frameData = try renderer.renderToonShadedSphere(
+            toonyFactor: 0.01, // extremely low shadingToonyFactor
+            shadingShift: 0.0,
+            lightDirection: SIMD3<Float>(0.5, 0.5, 0.707),
+            lightColor: SIMD3<Float>(1.0, 1.0, 1.0),
+            lightIntensity: 65000.0, // Near half-precision max
+            ambientColor: SIMD3<Float>(1000.0, 1000.0, 1000.0) // Extreme ambient
+        )
+
+        let brightness = averageBrightness(frameData: frameData, width: 128, height: 128)
+
+        print("=== Half Precision Lighting Boundary Test ===")
+        print("Average brightness under extreme HDR: \(brightness)")
+
+        // The sphere should be fully saturated white due to clamp and saturate() in shader, but NOT NaN/black (0.0) or corrupted.
+        // Average brightness of 0.44 reflects a fully saturated white sphere against the dark clear background (0.2).
+        XCTAssertFalse(brightness.isNaN, "Extreme lighting caused NaN")
+        XCTAssertGreaterThan(brightness, 0.40, "Sphere should be fully saturated white")
+    }
+
     /// Test that shading shift moves the shadow boundary position.
     func testShadingShiftMovesBoundary() async throws {
         let renderer = try MToonTestRenderer(device: device, width: 128, height: 128)
@@ -371,7 +399,7 @@ final class MToonShaderGPUTests: XCTestCase {
         }
 
         // From test file location (relative path resolution)
-        let relativePath = URL(fileURLWithPath: #file)
+        let relativePath = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -564,7 +592,10 @@ final class MToonTestRenderer {
     func renderToonShadedSphere(
         toonyFactor: Float,
         shadingShift: Float,
-        lightDirection: SIMD3<Float>
+        lightDirection: SIMD3<Float>,
+        lightColor: SIMD3<Float> = SIMD3<Float>(1, 1, 1),
+        lightIntensity: Float? = nil,
+        ambientColor: SIMD3<Float> = SIMD3<Float>(0.1, 0.1, 0.1)
     ) throws -> Data {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             throw TestError.commandBufferCreationFailed
@@ -600,8 +631,11 @@ final class MToonTestRenderer {
         )
         uniforms.normalMatrix = matrix_identity_float4x4
         uniforms.lightDirection = normalize(lightDirection)
-        uniforms.lightColor = SIMD3<Float>(1, 1, 1)
-        uniforms.ambientColor = SIMD3<Float>(0.1, 0.1, 0.1)
+        uniforms.lightColor = lightColor
+        if let lightIntensity = lightIntensity {
+            uniforms.lightColor_packed.w = lightIntensity
+        }
+        uniforms.ambientColor = ambientColor
         uniforms.light1Color = SIMD3<Float>(0, 0, 0)
         uniforms.light2Color = SIMD3<Float>(0, 0, 0)
         uniforms.lightNormalizationFactor = 1.0

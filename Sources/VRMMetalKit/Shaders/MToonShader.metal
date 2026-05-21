@@ -18,6 +18,22 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#ifndef MTOON_USE_HALF_PRECISION
+#define MTOON_USE_HALF_PRECISION 0
+#endif
+
+#if MTOON_USE_HALF_PRECISION
+typedef half mtoon_float;
+typedef half2 mtoon_float2;
+typedef half3 mtoon_float3;
+typedef half4 mtoon_float4;
+#else
+typedef float mtoon_float;
+typedef float2 mtoon_float2;
+typedef float3 mtoon_float3;
+typedef float4 mtoon_float4;
+#endif
+
 // BRDF Lambert normalization constant: a perfectly diffuse surface
 // reflects `albedo/π` per steradian under unit irradiance. Applied to
 // MToon direct lighting only — matches three-vrm's `BRDF_Lambert` and
@@ -232,6 +248,16 @@ static inline float linearstep(float a, float b, float t) {
  }
  return saturate((t - a) / range);
 }
+
+#if MTOON_USE_HALF_PRECISION
+static inline half linearstep(half a, half b, half t) {
+ half range = b - a;
+ if (range <= 0.0001h) {
+     return t >= b ? 1.0h : 0.0h;
+ }
+ return saturate((t - a) / range);
+}
+#endif
 
 // Vertex shader with optional morphed positions buffer
 // When morphs are active: morphed positions at buffer(20), original vertex at stage_in
@@ -510,39 +536,41 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  }
 
  // Sample base color
- float4 baseColor = material.baseColorFactor;
+ mtoon_float4 baseColor = mtoon_float4(material.baseColorFactor);
  if (material.hasBaseColorTexture > 0) {
- float4 texColor = baseColorTexture.sample(textureSampler, uv);
+     mtoon_float4 texColor = mtoon_float4(baseColorTexture.sample(textureSampler, uv));
 
  #if 0  // DEBUG: Output raw texture value (before material factor multiplication) - DISABLED
  return float4(texColor.rgb, 1.0);
  #endif
 
- baseColor *= texColor;
+     baseColor *= texColor;
  }
 
  // Force full opacity for OPAQUE mode materials
  // This fixes materials that were converted from MASK to OPAQUE
  if (material.alphaMode == 0) {
- baseColor.a = 1.0;
+     baseColor.a = 1.0;
  }
 
  // Alpha test for MASK mode - do this early before expensive lighting calculations
- if (material.alphaMode == 1 && baseColor.a < material.alphaCutoff) {
- discard_fragment();
+ // We copy to an explicit float to guarantee single-precision comparison for crisp cutout edges
+ float alphaVal = float(baseColor.a);
+ if (material.alphaMode == 1 && alphaVal < material.alphaCutoff) {
+     discard_fragment();
  }
 
  // Calculate shade color
- float3 shadeColor = float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
+ mtoon_float3 shadeColor = mtoon_float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
  if (material.hasShadeMultiplyTexture > 0) {
- float3 shadeTexColor = shadeMultiplyTexture.sample(textureSampler, uv).rgb;
- shadeColor *= shadeTexColor;
+     mtoon_float3 shadeTexColor = mtoon_float3(shadeMultiplyTexture.sample(textureSampler, uv).rgb);
+     shadeColor *= shadeTexColor;
  }
  // Note: When _ShadeTexture == _MainTex (VRM 0.0), we skip shadeMultiplyTexture
  // assignment in VRMTypes.swift. shadeColor uses shadeColorFactor directly.
 
- float3 normal = normalize(in.worldNormal);
- float3 viewNormal = in.viewNormal;
+ mtoon_float3 normal = mtoon_float3(normalize(in.worldNormal));
+ mtoon_float3 viewNormal = mtoon_float3(in.viewNormal);
 
  bool normalWasFlipped = false;
  if (!isFrontFace) {
@@ -557,22 +585,22 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
      // MESH_PRIMITIVE_GENERATED_TANGENT_SPACE) require synthesizing a TBN basis.
      // Christian Schüler's screen-space-derivative TBN (2010) builds the basis
      // per-fragment from worldPos and uv derivatives — no per-vertex tangents.
-     float3 nMap = normalTexture.sample(textureSampler, uv).xyz * 2.0 - 1.0;
+     mtoon_float3 nMap = mtoon_float3(normalTexture.sample(textureSampler, uv).xyz * 2.0 - 1.0);
 
      float3 dp1 = dfdx(in.worldPosition);
      float3 dp2 = dfdy(in.worldPosition);
      float2 duv1 = dfdx(uv);
      float2 duv2 = dfdy(uv);
 
-     float3 dp2perp = cross(dp2, normal);
-     float3 dp1perp = cross(normal, dp1);
+     float3 dp2perp = cross(dp2, float3(normal));
+     float3 dp1perp = cross(float3(normal), dp1);
      float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
      float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
 
      float invmax = rsqrt(max(dot(T, T), dot(B, B)));
-     float3x3 TBN = float3x3(T * invmax, B * invmax, normal);
+     float3x3 TBN = float3x3(T * invmax, B * invmax, float3(normal));
 
-     normal = normalize(TBN * nMap);
+     normal = mtoon_float3(normalize(TBN * float3(nMap)));
  }
 
  // DEBUG: Show magenta where normal was flipped (enable with debugUVs=11)
@@ -581,21 +609,21 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  }
 
  // Shading shift calculation
- float shadingShift = material.shadingShiftFactor;
+ mtoon_float shadingShift = mtoon_float(material.shadingShiftFactor);
  if (material.hasShadingShiftTexture > 0) {
- float shiftTexValue = shadingShiftTexture.sample(textureSampler, uv).r;
- shadingShift += (shiftTexValue - 0.5) * material.shadingShiftTextureScale;
+     mtoon_float shiftTexValue = mtoon_float(shadingShiftTexture.sample(textureSampler, uv).r);
+     shadingShift += (shiftTexValue - 0.5) * mtoon_float(material.shadingShiftTextureScale);
  }
 
  // MToon toon shading with energy-conserving 3-point lighting
- float toony = material.shadingToonyFactor;
+ mtoon_float toony = mtoon_float(material.shadingToonyFactor);
 
  // Use pre-calculated intensities from CPU (stored in lightColor.w)
- constexpr float MIN_TOTAL_INTENSITY = 0.001;
- float intensity0 = uniforms.lightColor.w;
- float intensity1 = uniforms.light1Color.w;
- float intensity2 = uniforms.light2Color.w;
- float totalIntensity = max(intensity0 + intensity1 + intensity2, MIN_TOTAL_INTENSITY);
+ constexpr mtoon_float MIN_TOTAL_INTENSITY = 0.001;
+ mtoon_float intensity0 = mtoon_float(uniforms.lightColor.w);
+ mtoon_float intensity1 = mtoon_float(uniforms.light1Color.w);
+ mtoon_float intensity2 = mtoon_float(uniforms.light2Color.w);
+ mtoon_float totalIntensity = max(intensity0 + intensity1 + intensity2, MIN_TOTAL_INTENSITY);
 
  // Calculate weighted light contributions with version-aware shading formula.
  // VRM 1.0 (vrm-conformance #213): raw dot(N,L) in [-1,1] + linearstep,
@@ -605,43 +633,46 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // `lighting{i}` is the pre-albedo radiance term captured alongside `lit{i}`
  // so the rim modulator can multiply by `directLight + indirectLight` per
  // MToon-1.0 (vrm-conformance #228, matches UniVRM's `directLightingFactor`).
- float3 lit0 = float3(0.0);
- float3 lighting0 = float3(0.0);
+ mtoon_float3 lit0 = mtoon_float3(0.0);
+ mtoon_float3 lighting0 = mtoon_float3(0.0);
  if (intensity0 > 0.0) {
- // Light direction convention: negate because uniforms stores direction FROM light,
- // but NdotL calculation needs direction TO light.
- // VRM 1.0 uses raw dot(N,L) (spec); VRM 0.x uses Half-Lambert remap.
- float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
- float NdotL = (uniforms.vrmVersion == 1) ? rawNdotL : rawNdotL * 0.5 + 0.5;
- float shading0 = NdotL + shadingShift;
- float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading0);
- float weight = intensity0 / totalIntensity;
- lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * uniforms.lightColor.xyz * weight;
- lighting0 = shadowStep * weight * uniforms.lightColor.xyz;
+     // Light direction convention: negate because uniforms stores direction FROM light,
+     // but NdotL calculation needs direction TO light.
+     // VRM 1.0 uses raw dot(N,L) (spec); VRM 0.x uses Half-Lambert remap.
+     mtoon_float rawNdotL = dot(normal, mtoon_float3(-uniforms.lightDirection.xyz));
+     mtoon_float NdotL = (uniforms.vrmVersion == 1) ? rawNdotL : rawNdotL * 0.5 + 0.5;
+     mtoon_float shading0 = NdotL + shadingShift;
+     mtoon_float shadowStep = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading0);
+     mtoon_float weight = intensity0 / totalIntensity;
+     float3 safeLightColor = clamp(uniforms.lightColor.xyz, 0.0f, 65500.0f);
+     lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * mtoon_float3(safeLightColor) * weight;
+     lighting0 = shadowStep * weight * mtoon_float3(safeLightColor);
  }
 
- float3 lit1 = float3(0.0);
- float3 lighting1 = float3(0.0);
+ mtoon_float3 lit1 = mtoon_float3(0.0);
+ mtoon_float3 lighting1 = mtoon_float3(0.0);
  if (intensity1 > 0.0) {
- float rawNdotL1 = dot(normal, -uniforms.light1Direction.xyz);
- float NdotL1 = (uniforms.vrmVersion == 1) ? rawNdotL1 : rawNdotL1 * 0.5 + 0.5;
- float shading1 = NdotL1 + shadingShift;
- float shadowStep1 = linearstep(-1.0 + toony, 1.0 - toony, shading1);
- float weight1 = intensity1 / totalIntensity;
- lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * uniforms.light1Color.xyz * weight1;
- lighting1 = shadowStep1 * weight1 * uniforms.light1Color.xyz;
+     mtoon_float rawNdotL1 = dot(normal, mtoon_float3(-uniforms.light1Direction.xyz));
+     mtoon_float NdotL1 = (uniforms.vrmVersion == 1) ? rawNdotL1 : rawNdotL1 * 0.5 + 0.5;
+     mtoon_float shading1 = NdotL1 + shadingShift;
+     mtoon_float shadowStep1 = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading1);
+     mtoon_float weight1 = intensity1 / totalIntensity;
+     float3 safeLight1Color = clamp(uniforms.light1Color.xyz, 0.0f, 65500.0f);
+     lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * mtoon_float3(safeLight1Color) * weight1;
+     lighting1 = shadowStep1 * weight1 * mtoon_float3(safeLight1Color);
  }
 
- float3 lit2 = float3(0.0);
- float3 lighting2 = float3(0.0);
+ mtoon_float3 lit2 = mtoon_float3(0.0);
+ mtoon_float3 lighting2 = mtoon_float3(0.0);
  if (intensity2 > 0.0) {
- float rawNdotL2 = dot(normal, -uniforms.light2Direction.xyz);
- float NdotL2 = (uniforms.vrmVersion == 1) ? rawNdotL2 : rawNdotL2 * 0.5 + 0.5;
- float shading2 = NdotL2 + shadingShift;
- float shadowStep2 = linearstep(-1.0 + toony, 1.0 - toony, shading2);
- float weight2 = intensity2 / totalIntensity;
- lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * uniforms.light2Color.xyz * weight2;
- lighting2 = shadowStep2 * weight2 * uniforms.light2Color.xyz;
+     mtoon_float rawNdotL2 = dot(normal, mtoon_float3(-uniforms.light2Direction.xyz));
+     mtoon_float NdotL2 = (uniforms.vrmVersion == 1) ? rawNdotL2 : rawNdotL2 * 0.5 + 0.5;
+     mtoon_float shading2 = NdotL2 + shadingShift;
+     mtoon_float shadowStep2 = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading2);
+     mtoon_float weight2 = intensity2 / totalIntensity;
+     float3 safeLight2Color = clamp(uniforms.light2Color.xyz, 0.0f, 65500.0f);
+     lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * mtoon_float3(safeLight2Color) * weight2;
+     lighting2 = shadowStep2 * weight2 * mtoon_float3(safeLight2Color);
  }
 
  // Accumulate weighted contributions (manual normalization factor allows artistic control).
@@ -652,12 +683,12 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // visible hemisphere and collapsing the soft Lambert gradient at low
  // `shadingToonyFactor` (vrm-conformance #205). `setLightNormalizationMode(.manual(f))`
  // multiplies on top — `.manual(1.0)` is now ~1/π × the pre-#205 brightness.
- float3 litColor = (lit0 + lit1 + lit2) * uniforms.lightNormalizationFactor * BRDF_LAMBERT_NORM;
+ mtoon_float3 litColor = (lit0 + lit1 + lit2) * mtoon_float(uniforms.lightNormalizationFactor) * mtoon_float(BRDF_LAMBERT_NORM);
 
  // Aggregate pre-albedo radiance for the rim modulator. No /π — UniVRM's
  // `directLightingFactor` doesn't apply the Lambert BRDF normalization to
  // the rim path (rim is a stylistic edge highlight, not a diffuse BRDF).
- float3 directLight = (lighting0 + lighting1 + lighting2) * uniforms.lightNormalizationFactor;
+ mtoon_float3 directLight = (lighting0 + lighting1 + lighting2) * mtoon_float(uniforms.lightNormalizationFactor);
 
  // Indirect diffuse — KNOWN DEVIATION FROM MToon 1.0 SPEC.
  //
@@ -679,28 +710,29 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // three-vrm + UniVRM paths). Note: post-#205, indirect (≈ambient*giAlbedo)
  // is now comparable in magnitude to direct (≈albedo/π) on the lit side —
  // see docs/MTOON_GI_SPEC.md for the rationale.
- float3 giAlbedo = mix(shadeColor, baseColor.rgb, material.giEqualizationFactor);
- float3 indirectDiffuse = uniforms.ambientColor.xyz * giAlbedo;
+ mtoon_float3 giAlbedo = mix(shadeColor, baseColor.rgb, mtoon_float(material.giEqualizationFactor));
+ float3 safeAmbientColor = clamp(uniforms.ambientColor.xyz, 0.0f, 65500.0f);
+ mtoon_float3 indirectDiffuse = mtoon_float3(safeAmbientColor) * giAlbedo;
  litColor += indirectDiffuse;
 
  // Indirect radiance for the rim modulator: raw ambient (no `giAlbedo`).
  // Rim is not subject to the body's giEqualization mix; it just sees the
  // scene's indirect radiance, mirroring UniVRM's `indirectLightingFactor`.
- float3 indirectLight = uniforms.ambientColor.xyz;
+ mtoon_float3 indirectLight = mtoon_float3(safeAmbientColor);
 
  // Emissive
- float3 emissive = float3(material.emissiveR, material.emissiveG, material.emissiveB);
+ mtoon_float3 emissive = mtoon_float3(material.emissiveR, material.emissiveG, material.emissiveB);
  if (material.hasEmissiveTexture > 0) {
- float3 emissiveTexColor = emissiveTexture.sample(textureSampler, uv).rgb;
- emissive *= emissiveTexColor;
+     mtoon_float3 emissiveTexColor = mtoon_float3(emissiveTexture.sample(textureSampler, uv).rgb);
+     emissive *= emissiveTexColor;
  }
  litColor += emissive;
 
  // MatCap (use flipped viewNormal for back faces)
  if (material.hasMatcapTexture > 0) {
- float2 matcapUV = calculateMatCapUV(viewNormal);
- float3 matcapColor = matcapTexture.sample(textureSampler, matcapUV).rgb;
- litColor += matcapColor * float3(material.matcapR, material.matcapG, material.matcapB);
+     mtoon_float2 matcapUV = mtoon_float2(calculateMatCapUV(float3(viewNormal)));
+     mtoon_float3 matcapColor = mtoon_float3(matcapTexture.sample(textureSampler, float2(matcapUV)).rgb);
+     litColor += matcapColor * mtoon_float3(material.matcapR, material.matcapG, material.matcapB);
  }
 
  // Parametric rim lighting — fresnel computed in world space per MToon-1.0
@@ -718,35 +750,34 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // from the vertex shader (single matrix multiply with explicit `.xyz`
  // extraction); `viewDirection` is already world-space. This block mirrors
  // the `additiveDirectionalRim` path's coordinate-space handling below.
- float3 rimColor = float3(0.0);
- float3 parametricRimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
+ mtoon_float3 rimColor = mtoon_float3(0.0);
+ mtoon_float3 parametricRimColorFactor = mtoon_float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
  if (any(parametricRimColorFactor > 0.0)) {
- float3 Nrim = normalize(in.worldNormal);
- if (!isFrontFace) Nrim = -Nrim;
- float3 Vrim = normalize(in.viewDirection);
- float NdotV = saturate(dot(Nrim, Vrim));
- float vf = 1.0 - NdotV;
- // `max(power, EPSILON)` matches UniVRM's `EPSILON_FP16` guard against
- // pow(0, 0) at the head-on view (NdotV=1, vf=0, lift=0).
- float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
-                  max(material.parametricRimFresnelPowerFactor, 1e-4));
+     float3 Nrim = normalize(in.worldNormal);
+     if (!isFrontFace) Nrim = -Nrim;
+     float3 Vrim = normalize(in.viewDirection);
+     float NdotV = saturate(dot(Nrim, Vrim));
+     float vf = 1.0f - NdotV;
+     // Compute rimF in single-precision float to protect against FP16 underflow/subnormal precision issues near 1e-4.
+     float rimF = pow(saturate(vf + material.parametricRimLiftFactor),
+                      max(material.parametricRimFresnelPowerFactor, 1e-4f));
 
- rimColor = parametricRimColorFactor * rimF;
+     rimColor = parametricRimColorFactor * mtoon_float(rimF);
 
- // Apply rim multiply texture for masking
- if (material.hasRimMultiplyTexture > 0) {
-     float rimMask = saturate(rimMultiplyTexture.sample(textureSampler, uv).r);
-     rimColor *= rimMask;
- }
+     // Apply rim multiply texture for masking
+     if (material.hasRimMultiplyTexture > 0) {
+         mtoon_float rimMask = saturate(mtoon_float(rimMultiplyTexture.sample(textureSampler, uv).r));
+         rimColor *= rimMask;
+     }
  }
 
  // Apply rim lighting per MToon-1.0 spec — matches UniVRM and three-vrm:
  // at `rimLightingMixFactor`=0 rim is unaffected by scene light (unlit), at
  // 1.0 rim is modulated by direct+indirect radiance (lit) (vrm-conformance #228).
  if (any(rimColor > 0.0)) {
- float3 rimLightingFactor = mix(float3(1.0),
-                                 directLight + indirectLight,
-                                 saturate(material.rimLightingMixFactor));
+     mtoon_float3 rimLightingFactor = mix(mtoon_float3(1.0),
+                                     directLight + indirectLight,
+                                     saturate(mtoon_float(material.rimLightingMixFactor)));
  litColor += rimColor * rimLightingFactor;
  }
 
@@ -756,50 +787,50 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // independent of base albedo. Lets a fully crushed (base = 0) material still
  // show a warm directional edge — silhouette + rim aesthetic.
  if (uniforms.additiveDirectionalRimEnabled > 0.5) {
- float3 Nworld = normalize(in.worldNormal);
- if (!isFrontFace) Nworld = -Nworld;
- float3 Vworld = normalize(in.viewDirection);
- float NdotV_world = saturate(dot(Nworld, Vworld));
- float fresnel = pow(saturate(1.0 - NdotV_world),
-                     max(uniforms.additiveDirectionalRimPower, 0.0001));
+     mtoon_float3 Nworld = mtoon_float3(normalize(in.worldNormal));
+     if (!isFrontFace) Nworld = -Nworld;
+     mtoon_float3 Vworld = mtoon_float3(normalize(in.viewDirection));
+     mtoon_float NdotV_world = saturate(dot(Nworld, Vworld));
+     mtoon_float fresnel = pow(saturate(mtoon_float(1.0) - NdotV_world),
+                          max(mtoon_float(uniforms.additiveDirectionalRimPower), mtoon_float(0.0001)));
 
- float3 dirRim = float3(0.0);
- if (intensity0 > 0.0) {
- float NdotL = saturate(dot(Nworld, -uniforms.lightDirection.xyz));
- dirRim += fresnel * NdotL * uniforms.lightColor.xyz * intensity0;
- }
- if (intensity1 > 0.0) {
- float NdotL = saturate(dot(Nworld, -uniforms.light1Direction.xyz));
- dirRim += fresnel * NdotL * uniforms.light1Color.xyz * intensity1;
- }
- if (intensity2 > 0.0) {
- float NdotL = saturate(dot(Nworld, -uniforms.light2Direction.xyz));
- dirRim += fresnel * NdotL * uniforms.light2Color.xyz * intensity2;
- }
- litColor += dirRim;
+     mtoon_float3 dirRim = mtoon_float3(0.0);
+     if (intensity0 > 0.0) {
+         mtoon_float NdotL = saturate(dot(Nworld, mtoon_float3(-uniforms.lightDirection.xyz)));
+         dirRim += fresnel * NdotL * mtoon_float3(uniforms.lightColor.xyz) * intensity0;
+     }
+     if (intensity1 > 0.0) {
+         mtoon_float NdotL = saturate(dot(Nworld, mtoon_float3(-uniforms.light1Direction.xyz)));
+         dirRim += fresnel * NdotL * mtoon_float3(uniforms.light1Color.xyz) * intensity1;
+     }
+     if (intensity2 > 0.0) {
+         mtoon_float NdotL = saturate(dot(Nworld, mtoon_float3(-uniforms.light2Direction.xyz)));
+         dirRim += fresnel * NdotL * mtoon_float3(uniforms.light2Color.xyz) * intensity2;
+     }
+     litColor += dirRim;
  }
 
  // DEBUG 35: Final lit color before gamma/sRGB conversion
  if (uniforms.debugUVs == 35) {
-     return float4(litColor, 1.0);
+     return float4(float3(litColor), 1.0);
  }
 
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
  // Debug mode 9: Show litColor before saturation (scaled down to see overbright)
  if (uniforms.debugUVs == 9) {
- return float4(litColor * 0.25, 1.0);  // Scale by 0.25 to see values > 1
+     return float4(float3(litColor * 0.25), 1.0);  // Scale by 0.25 to see values > 1
  }
 
  // Minimum light floor to prevent completely black surfaces
  // This handles edge cases where NdotL is negative for all lights and ambient is zero
- float3 minLight = baseColor.rgb * 0.08;  // 8% of base color as minimum
+ mtoon_float3 minLight = baseColor.rgb * mtoon_float(0.08);  // 8% of base color as minimum
  litColor = max(litColor, minLight);
 
  // Final color output
  litColor = saturate(litColor);
 
  #if 0  // DEBUG: Output unlit baseColor to diagnose clipping (DISABLED - using raw texture debug instead)
- return float4(baseColor.rgb * 0.5, baseColor.a);
+ return float4(float3(baseColor.rgb) * 0.5, float(baseColor.a));
  #endif
 
  #if 0  // DEBUG: Visualize vertex attributes
@@ -808,7 +839,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  #endif
 
  // Use the alpha from baseColor which has been corrected for OPAQUE mode
- return float4(litColor, baseColor.a);
+ return float4(float3(litColor), float(baseColor.a));
  #endif
 }
 
