@@ -146,25 +146,30 @@ public class VRMMorphTargetSystem {
     }
 
     private func setupComputePipeline() throws {
-        // Try to load compute pipeline from compiled Metal library
-        // First try package resources (Bundle.module), then fall back to default library
+        // Try to load compute pipeline from compiled Metal library.
+        // First try the platform-appropriate metallib slice via the shared
+        // loader, then fall back to the device's default library.
         var library: MTLLibrary?
 
-        // Try package bundle first (for SPM packages)
-        if let url = Bundle.module.url(forResource: "VRMMetalKitShaders", withExtension: "metallib"),
-           let packageLib = try? device.makeLibrary(URL: url) {
-            library = packageLib
-            vrmLog("[VRMMorphTargetSystem] Using package Metal library (Bundle.module)")
-        } else if let defaultLib = device.makeDefaultLibrary() {
-            library = defaultLib
-            vrmLog("[VRMMorphTargetSystem] Using default Metal library")
+        do {
+            library = try VRMShaderLibraryLoader.loadBundledLibrary(device: device)
+            vrmLog("[VRMMorphTargetSystem] Using package Metal library (\(VRMShaderLibraryLoader.bundledLibraryName))")
+        } catch {
+            // Log the loader's actionable message before falling back, so the
+            // slice-name + `make shaders` hint isn't lost when the default
+            // library happens to satisfy the lookup.
+            vrmLog("[VRMMorphTargetSystem] Bundled library load failed: \(error.localizedDescription)")
+            if let defaultLib = device.makeDefaultLibrary() {
+                library = defaultLib
+                vrmLog("[VRMMorphTargetSystem] Using default Metal library")
+            }
         }
 
         // Fail fast if no library available
         guard let validLibrary = library else {
             throw VRMMorphTargetError.failedToCreateComputePipeline(
                 "No Metal shader library available. " +
-                "Ensure VRMMetalKitShaders.metallib is included in the app bundle."
+                "Ensure VRMMetalKitShaders metallib slices are bundled (run `make shaders`)."
             )
         }
 

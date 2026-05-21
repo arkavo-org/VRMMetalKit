@@ -38,7 +38,7 @@ import QuartzCore
 /// - **Diagnostics**: ``getStatistics()`` reports current cache occupancy.
 ///
 /// The cache is keyed by:
-/// - Shader library: a single bundled `VRMMetalKitShaders.metallib`.
+/// - Shader library: one of three bundled `VRMMetalKitShaders*.metallib` slices (macOS / iOS device / iOS Simulator).
 /// - Pipeline state: caller-supplied `key` string that must encode shader
 ///   function names, pixel format, alpha mode, MSAA sample count, and any
 ///   other discriminator that would change the compiled pipeline.
@@ -63,10 +63,10 @@ public final class VRMPipelineCache: @unchecked Sendable {
 
     /// Returns the bundled MToon/SpringBone `MTLLibrary`, loading it from the package resources on first call.
     ///
-    /// The library file (`VRMMetalKitShaders.metallib`) is compiled by `make
-    /// shaders` and ships inside the package bundle. The first call on a
-    /// given process pays the disk + Metal-validation cost; later calls
-    /// return the same cached library instance.
+    /// The appropriate platform slice (`VRMMetalKitShaders*.metallib` for
+    /// macOS, iOS device, or iOS Simulator) is selected at runtime and compiled
+    /// by `make shaders`. The first call on a given process pays the disk +
+    /// Metal-validation cost; later calls return the same cached library instance.
     ///
     /// - Parameter device: The `MTLDevice` to create the library against.
     /// - Returns: The compiled shader library.
@@ -75,7 +75,9 @@ public final class VRMPipelineCache: @unchecked Sendable {
     ///   wrapping the underlying Metal error.
     public func getLibrary(device: MTLDevice) throws -> MTLLibrary {
         return try lock.withLock {
-            let key = "VRMMetalKitShaders"
+            // The bundled library is platform-specific; key the cache on the
+            // resolved slice name so the entry is self-documenting.
+            let key = VRMShaderLibraryLoader.bundledLibraryName
 
             // Return cached library if available
             if let cached = libraries[key] {
@@ -83,20 +85,16 @@ public final class VRMPipelineCache: @unchecked Sendable {
                 return cached
             }
 
-            // Always load from packaged metallib for consistency
-            // This ensures the same shaders are used regardless of app configuration
-            guard let url = Bundle.module.url(forResource: "VRMMetalKitShaders",
-                                             withExtension: "metallib") else {
-                vrmLog("[VRMPipelineCache] ❌ VRMMetalKitShaders.metallib not found in package resources")
-                throw PipelineCacheError.shaderLibraryNotFound
-            }
-
+            // Load the platform-appropriate metallib slice via the shared loader.
             do {
-                let library = try device.makeLibrary(URL: url)
+                let library = try VRMShaderLibraryLoader.loadBundledLibrary(device: device)
                 libraries[key] = library
                 return library
-            } catch {
-                throw PipelineCacheError.shaderLibraryLoadFailed(error)
+            } catch VRMShaderLibraryLoaderError.shaderLibraryMissing(let name) {
+                vrmLog("[VRMPipelineCache] ❌ \(name).metallib not found in package resources")
+                throw PipelineCacheError.shaderLibraryNotFound
+            } catch VRMShaderLibraryLoaderError.shaderLibraryLoadFailed(_, let underlying) {
+                throw PipelineCacheError.shaderLibraryLoadFailed(underlying)
             }
         }
     }
@@ -182,8 +180,8 @@ public final class VRMPipelineCache: @unchecked Sendable {
 
 /// Failures raised by ``VRMPipelineCache`` when locating or loading the bundled shader library.
 public enum PipelineCacheError: Error, LocalizedError {
-    /// `VRMMetalKitShaders.metallib` is missing from the package's resource bundle.
-    /// Usually means the package was built without first running `make shaders`.
+    /// The platform-appropriate `VRMMetalKitShaders*.metallib` slice is missing from the package's resource bundle.
+    /// Usually means the package was built without first running `make shaders` to generate all platform slices.
     case shaderLibraryNotFound
     /// `MTLDevice.makeLibrary(URL:)` rejected the bundled metallib. The associated error carries
     /// the Metal-driver-level reason.
@@ -193,9 +191,10 @@ public enum PipelineCacheError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .shaderLibraryNotFound:
-            return "VRMMetalKitShaders.metallib not found in package resources"
+            return "Bundled VRMMetalKit shader library not found in package resources. " +
+                   "Run `make shaders` to rebuild all platform slices."
         case .shaderLibraryLoadFailed(let error):
-            return "Failed to load VRMMetalKitShaders.metallib: \(error.localizedDescription)"
+            return "Failed to load bundled VRMMetalKit shader library: \(error.localizedDescription)"
         }
     }
 }
