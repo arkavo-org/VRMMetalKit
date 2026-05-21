@@ -18,7 +18,7 @@ import Foundation
 import Metal
 
 /// Failures raised by ``VRMShaderLibraryLoader`` when locating or loading the bundled shader library.
-public enum VRMShaderLibraryLoaderError: Error, LocalizedError {
+enum VRMShaderLibraryLoaderError: Error, LocalizedError {
     /// The platform-specific `.metallib` slice is missing from the package resource bundle.
     /// Usually means `make shaders` was not run or the wrong slice was not built.
     case shaderLibraryMissing(expected: String)
@@ -26,12 +26,13 @@ public enum VRMShaderLibraryLoaderError: Error, LocalizedError {
     /// the Metal-driver-level reason.
     case shaderLibraryLoadFailed(name: String, underlying: Error)
 
-    public var errorDescription: String? {
+    var errorDescription: String? {
         switch self {
         case .shaderLibraryMissing(let expected):
             return "\(expected).metallib not found in package resources. Run `make shaders` to rebuild all platform slices."
         case .shaderLibraryLoadFailed(let name, let underlying):
-            return "Failed to load \(name).metallib: \(underlying.localizedDescription)"
+            return "Failed to load \(name).metallib: \(underlying.localizedDescription). " +
+                   "Re-run `make shaders` and verify the correct SDK slice was built."
         }
     }
 }
@@ -53,6 +54,7 @@ enum VRMShaderLibraryLoader {
         #elseif os(iOS)
         return "VRMMetalKitShaders_iOS"
         #else
+        // macOS, visionOS, tvOS, macCatalyst — all use the macOS (FP32) slice.
         return "VRMMetalKitShaders"
         #endif
     }

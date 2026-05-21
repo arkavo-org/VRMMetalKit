@@ -21,6 +21,7 @@ import Metal
 final class VRMShaderLibraryLoaderTests: XCTestCase {
 
     func testBundledLibraryNameMatchesCurrentTarget() {
+        // Keep this ladder in sync with VRMShaderLibraryLoader.bundledLibraryName.
         #if os(iOS) && targetEnvironment(simulator)
         let expected = "VRMMetalKitShaders_iOSSimulator"
         #elseif os(iOS)
@@ -37,6 +38,10 @@ final class VRMShaderLibraryLoaderTests: XCTestCase {
         }
         let library = try VRMShaderLibraryLoader.loadBundledLibrary(device: device)
         XCTAssertFalse(library.functionNames.isEmpty, "Loaded library should expose at least one function")
+        XCTAssertTrue(library.functionNames.contains("springBoneKinematic"),
+                      "Bundled library should contain springBoneKinematic compute kernel")
+        XCTAssertTrue(library.functionNames.contains("morph_accumulate_positions"),
+                      "Bundled library should contain morph_accumulate_positions compute kernel")
     }
 
     func testErrorDescriptionIncludesSliceNameAndRebuildHint() {
