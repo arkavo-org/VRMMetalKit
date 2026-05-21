@@ -83,20 +83,16 @@ public final class VRMPipelineCache: @unchecked Sendable {
                 return cached
             }
 
-            // Always load from packaged metallib for consistency
-            // This ensures the same shaders are used regardless of app configuration
-            guard let url = Bundle.module.url(forResource: "VRMMetalKitShaders",
-                                             withExtension: "metallib") else {
-                vrmLog("[VRMPipelineCache] ❌ VRMMetalKitShaders.metallib not found in package resources")
-                throw PipelineCacheError.shaderLibraryNotFound
-            }
-
+            // Load the platform-appropriate metallib slice via the shared loader.
             do {
-                let library = try device.makeLibrary(URL: url)
+                let library = try VRMShaderLibraryLoader.loadBundledLibrary(device: device)
                 libraries[key] = library
                 return library
-            } catch {
-                throw PipelineCacheError.shaderLibraryLoadFailed(error)
+            } catch VRMShaderLibraryLoaderError.shaderLibraryMissing(let name) {
+                vrmLog("[VRMPipelineCache] ❌ \(name).metallib not found in package resources")
+                throw PipelineCacheError.shaderLibraryNotFound
+            } catch VRMShaderLibraryLoaderError.shaderLibraryLoadFailed(_, let underlying) {
+                throw PipelineCacheError.shaderLibraryLoadFailed(underlying)
             }
         }
     }
