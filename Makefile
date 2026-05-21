@@ -108,7 +108,12 @@ muter-bootstrap: $(MUTER_BIN)
 
 mutation-test: $(MUTER_BIN)
 	@mkdir -p .build/mutation-testing
-	@$(MUTER_BIN) run --configuration .muter/depth-bias.json
+	@$(MUTER_BIN) run \
+		--configuration .muter/depth-bias.json \
+		--files-to-mutate Sources/GLTFCore/Utilities/DepthBiasCalculator.swift \
+		--skip-coverage \
+		--format json \
+		--output .build/mutation-testing/last-run.json
 
 # List functions in the compiled metallib
 list-functions:
