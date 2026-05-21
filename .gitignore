@@ -26,6 +26,8 @@ tmp/
 # Bundled shader libraries — SPM .copy() requires these to be present in
 # the source tree, so they ship in git.
 !Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
+!Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOS.metallib
+!Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
 !Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
 !Tests/GLTFMetalKitTests/TestData/Box.glb
 !Tests/GLTFMetalKitTests/TestData/BoxTextured.glb

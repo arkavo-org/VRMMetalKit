@@ -1,33 +1,71 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders gltf-shaders clean test docs docs-static
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static
 
 help:
 	@echo "VRMMetalKit Build Targets:"
-	@echo "  make shaders       - Compile VRMMetalKit Metal shaders into metallib"
+	@echo "  make shaders       - Compile all three VRMMetalKit metallib slices (macOS / iOS / iOS Simulator)"
+	@echo "  make shaders-macos - Compile only the macOS slice (FP32)"
+	@echo "  make shaders-ios   - Compile only the iOS device slice (FP16)"
+	@echo "  make shaders-iossim- Compile only the iOS Simulator slice (FP16)"
 	@echo "  make gltf-shaders  - Compile GLTFMetalKit (PBR) shaders into metallib"
 	@echo "  make clean         - Remove temporary build files"
 	@echo "  make test          - Run Swift tests"
 	@echo "  make docs          - Preview documentation locally"
 	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
 
-# Compile all Metal shaders into a single metallib.
+# Compile all VRM Metal shaders into three SDK-specific metallibs:
+#   - macosx          (FP32, baseline; preserves PR #279's safe-default)
+#   - iphoneos        (FP16, mobile double-rate payoff)
+#   - iphonesimulator (FP16, simulator-native; fixes nil-pipeline error)
 # -Wall -Wextra enables the common clang warning classes; -Werror promotes
 # them to hard errors so the CI Shaders job (and local `make shaders`)
 # catches issues like unused functions, writable-buffer aliasing, and
 # sign-compare bugs before they become harder to fix later.
-shaders:
-	@echo "🔨 Compiling Metal shaders..."
-	@mkdir -p /tmp/vrm-shaders
+shaders: shaders-macos shaders-ios shaders-iossim
+	@echo "✅ All shader slices built"
+
+shaders-macos:
+	@echo "🔨 Compiling macOS shaders (FP32)..."
+	@mkdir -p /tmp/vrm-shaders-macos
 	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
 		echo "  Compiling $$file..."; \
-		xcrun metal -Wall -Wextra -Werror -c $$file -o /tmp/vrm-shaders/$$(basename $$file .metal).air; \
+		xcrun -sdk macosx metal -Wall -Wextra -Werror \
+			-c $$file -o /tmp/vrm-shaders-macos/$$(basename $$file .metal).air; \
 	done
-	@xcrun metallib /tmp/vrm-shaders/*.air -o Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
-	@echo "✅ Shaders compiled successfully"
+	@xcrun -sdk macosx metallib /tmp/vrm-shaders-macos/*.air \
+		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
 	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib"
 	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
+
+shaders-ios:
+	@echo "🔨 Compiling iOS device shaders (FP16)..."
+	@mkdir -p /tmp/vrm-shaders-ios
+	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
+		echo "  Compiling $$file..."; \
+		xcrun -sdk iphoneos metal -Wall -Wextra -Werror \
+			-mios-version-min=26.0 -DMTOON_USE_HALF_PRECISION=1 \
+			-c $$file -o /tmp/vrm-shaders-ios/$$(basename $$file .metal).air; \
+	done
+	@xcrun -sdk iphoneos metallib /tmp/vrm-shaders-ios/*.air \
+		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOS.metallib
+	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOS.metallib"
+	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOS.metallib
+
+shaders-iossim:
+	@echo "🔨 Compiling iOS Simulator shaders (FP16)..."
+	@mkdir -p /tmp/vrm-shaders-iossim
+	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
+		echo "  Compiling $$file..."; \
+		xcrun -sdk iphonesimulator metal -Wall -Wextra -Werror \
+			-mios-simulator-version-min=26.0 -DMTOON_USE_HALF_PRECISION=1 \
+			-c $$file -o /tmp/vrm-shaders-iossim/$$(basename $$file .metal).air; \
+	done
+	@xcrun -sdk iphonesimulator metallib /tmp/vrm-shaders-iossim/*.air \
+		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
+	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib"
+	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
 
 # Compile GLTFMetalKit PBR shaders into a separate metallib so the
 # inanimate-object renderer can load them without dragging the MToon /
@@ -53,7 +91,7 @@ list-functions:
 # Clean temporary files
 clean:
 	@echo "🗑️  Cleaning temporary files..."
-	@rm -rf /tmp/vrm-shaders /tmp/gltf-shaders
+	@rm -rf /tmp/vrm-shaders /tmp/vrm-shaders-macos /tmp/vrm-shaders-ios /tmp/vrm-shaders-iossim /tmp/gltf-shaders
 	@echo "✅ Clean complete"
 
 # Run tests
