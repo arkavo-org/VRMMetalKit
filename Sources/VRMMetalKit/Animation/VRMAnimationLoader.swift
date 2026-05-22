@@ -18,7 +18,7 @@
 import Foundation
 import simd
 
-private enum Interpolation: String {
+enum Interpolation: String {
     case linear = "LINEAR"
     case step = "STEP"
     case cubicSpline = "CUBICSPLINE"
@@ -34,7 +34,7 @@ private enum Interpolation: String {
     var description: String { rawValue }
 }
 
-private struct KeyTrack {
+struct KeyTrack {
     let times: [Float]
     let values: [Float]
     let path: String
@@ -602,116 +602,6 @@ private func componentCount(for path: String) -> Int? {
     }
 }
 
-// Rotation Retargeting (Delta-Based)
-//
-// VRM ANIMATION SPEC:
-// ------------------
-// VRMA animations target humanoid bones identified by extension data.
-// Retargeting transforms animation from animation's rest space to model's rest space.
-//
-// Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/
-//
-// Formula (per VRMC_node_constraint-1.0):
-//   delta = inverse(animationRestRotation) * animationRotation
-//   result = modelRestRotation * delta
-//
-// This works for all cases:
-// - Identical rest poses: delta = animRotation, result = modelRest * animRotation
-// - Different rest poses: delta transforms animation to model's coordinate frame
-//
-private func makeRotationSampler(track: KeyTrack,
-                                 animationRestRotation: simd_quatf,
-                                 animationRestWorldRotation: simd_quatf,
-                                 modelRestRotation: simd_quatf?,
-                                 modelRestWorldRotation: simd_quatf?) -> ((Float) -> simd_quatf)? {
-    let L_A = simd_normalize(animationRestRotation)
-    let W_A = simd_normalize(animationRestWorldRotation)
-
-    // Non-humanoid tracks pass nil for model rest — there's no model-
-    // side bone to normalise against, so the animation rotation flows
-    // through unchanged.
-    guard let modelRest = modelRestRotation,
-          let modelWorld = modelRestWorldRotation else {
-        return { t in sampleQuaternion(track, at: t) }
-    }
-    let L_B = simd_normalize(modelRest)
-    let W_B = simd_normalize(modelWorld)
-
-    // VRM 1.0 pose-normalisation (`how_to_transform_human_pose.md`):
-    //
-    //   Normalized       = W_A · L_A⁻¹ · A.LocalRotation · W_A⁻¹
-    //   B.LocalRotation  = L_B · W_B⁻¹ · Normalized · W_B
-    //
-    // Combined: B = L_B · W_B⁻¹ · W_A · L_A⁻¹ · A · W_A⁻¹ · W_B
-    //
-    // For two rigs that share the same world-rest orientation
-    // (`W_A == W_B`), the W terms cancel and the formula collapses to
-    // `B = L_B · L_A⁻¹ · A` — the previous "delta retargeting" formula.
-    // For VRMAs authored on a different rest pose (e.g. arms-forward
-    // when the model is T-pose) the W terms perform the change-of-
-    // basis that aligns the animation's world frame with the model's.
-    // VMK#269 was the regression where the W terms were missing.
-    let invL_A = simd_inverse(L_A)
-    let invW_A = simd_inverse(W_A)
-    let invW_B = simd_inverse(W_B)
-    return { t in
-        let A = sampleQuaternion(track, at: t)
-        let normalized = simd_normalize(W_A * invL_A * A * invW_A)
-        let result = simd_normalize(L_B * invW_B * normalized * W_B)
-        return result
-    }
-}
-
-// Translation Retargeting with Delta-Based Alignment
-//
-// ROOT MOTION POLICY:
-// -------------------
-// Translation deltas (including hips XYZ) are applied in LOCAL humanoid space.
-// This means hips translation from the animation moves the character relative to
-// its own coordinate frame, not the scene/world.
-//
-// Current Behavior:
-//   • Hips XZ translation = character-relative horizontal movement (walk cycles, shifts)
-//   • Hips Y translation = vertical movement (crouch, jump, body bounce)
-//   • All deltas preserve animation intent while adapting to different skeleton proportions
-//
-// For Scene Locomotion (Future):
-//   If you need the character to move through the world based on animation:
-//   1. Extract hips XZ deltas separately (before applying to bone)
-//   2. Accumulate as "root motion" vector
-//   3. Apply to character's scene transform (not skeleton)
-//   4. Optionally zero out the hips XZ in the skeleton to prevent "double movement"
-//
-// See also: AnimationPlayer.update() for frame-by-frame sampling
-//
-private func makeTranslationSampler(track: KeyTrack,
-                                    animationRestTranslation: SIMD3<Float>,
-                                    modelRestTranslation: SIMD3<Float>?) -> ((Float) -> SIMD3<Float>)? {
-    guard let modelRest = modelRestTranslation else {
-        return { t in sampleVector3(track, at: t) }
-    }
-
-    return { t in
-        let animTranslation = sampleVector3(track, at: t)
-        let delta = animTranslation - animationRestTranslation
-        return modelRest + delta
-    }
-}
-
-private func makeScaleSampler(track: KeyTrack,
-                              animationRestScale: SIMD3<Float>,
-                              modelRestScale: SIMD3<Float>?) -> ((Float) -> SIMD3<Float>)? {
-    guard let modelRest = modelRestScale else {
-        return { t in sampleVector3(track, at: t) }
-    }
-
-    return { t in
-        let animScale = sampleVector3(track, at: t)
-        let ratio = safeDivide(animScale, by: animationRestScale)
-        return modelRest * ratio
-    }
-}
-
 // Expression Weight Sampler
 // Extracts the X component of a translation track as the expression weight.
 // VRMA expression tracks encode weight as translation.x (0.0 to 1.0).
@@ -729,7 +619,7 @@ private func makeExpressionWeightSampler(track: KeyTrack) -> (Float) -> Float {
 // spec-correct math — including `simd_slerp` for LINEAR rotations and
 // shortest-arc fixup on CUBICSPLINE rotation tangents.
 
-private func sampleQuaternion(_ track: KeyTrack, at time: Float) -> simd_quatf {
+func sampleQuaternion(_ track: KeyTrack, at time: Float) -> simd_quatf {
     guard track.componentCount == 4, !track.times.isEmpty else {
         return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
     }
@@ -741,7 +631,7 @@ private func sampleQuaternion(_ track: KeyTrack, at time: Float) -> simd_quatf {
     )
 }
 
-private func sampleVector3(_ track: KeyTrack, at time: Float) -> SIMD3<Float> {
+func sampleVector3(_ track: KeyTrack, at time: Float) -> SIMD3<Float> {
     guard track.componentCount == 3, !track.times.isEmpty else {
         return SIMD3<Float>(repeating: 0)
     }
@@ -926,15 +816,6 @@ private struct RestTransform {
                   translation: node.translation,
                   scale: node.scale)
     }
-}
-
-private func safeDivide(_ numerator: SIMD3<Float>, by denominator: SIMD3<Float>) -> SIMD3<Float> {
-    let epsilon: Float = 1e-6
-    return SIMD3<Float>(
-        numerator.x / (abs(denominator.x) > epsilon ? denominator.x : 1),
-        numerator.y / (abs(denominator.y) > epsilon ? denominator.y : 1),
-        numerator.z / (abs(denominator.z) > epsilon ? denominator.z : 1)
-    )
 }
 
 // MARK: - VRM 0.0 Coordinate Conversion
