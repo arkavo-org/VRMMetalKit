@@ -13,25 +13,23 @@ import Metal
 import simd
 @testable import VRMMetalKit
 
-/// vrm-conformance VMK#240: swing-mode PNG renders of
-/// `swing_springbone_stiffness_{0, 0.2, 0.8, 1}` collapse to two distinct
-/// SHA256 hashes in VMK (0/0.8/1 share; 0.2 distinct), while three-vrm 3.5.0
-/// renders all four as distinct.
+/// vrm-conformance VMK#283: the swing-mode `animate_root_transform` flow must
+/// be deterministic — the same fixture simulated twice must yield byte-identical
+/// joint positions.
 ///
-/// This test replicates the conformance flow at the **sim level** — load,
-/// `warmupPhysics(steps: 30)`, then a per-frame `animate_root_transform`
-/// loop (root translation 0 → (0.15, 0, 0) over 0.25s at 60 fps) — and
-/// reads joint positions directly from `bonePosCurr` after a GPU drain. The
-/// finding it locks in: **the simulation does differentiate all four
-/// stiffness values** (joint positions diverge by tens of millimetres).
+/// This replicates the conformance flow at the **sim level** — load,
+/// `warmupPhysics(steps: 30)`, then a per-frame `animate_root_transform` loop
+/// (root translation 0 → (0.15, 0, 0) over 0.25 s at 60 fps) — and reads joint
+/// positions from `bonePosCurr` after draining the spring system's command
+/// queue. It runs each `swing_springbone_stiffness_*` fixture twice and asserts
+/// the two runs match exactly.
 ///
-/// What that tells us about VMK#240: the SHA collapse is not in the
-/// physics integrator. It's downstream — likely the snapshot-readback path
-/// in `SpringBoneComputeSystem.writeBonesToNodes(...)` lagging by N frames
-/// at render time, so the chain mesh skinning sees the bind pose rather
-/// than the simulated positions. Reproducing that fully requires driving
-/// `VRMRenderer.drawOffscreenHeadless(...)` plus comparing pixel output;
-/// that lives in a separate render-harness test (TBD).
+/// An earlier revision asserted the four stiffness values produced *distinct*
+/// trajectories. That held only because the harness drained an unrelated
+/// command queue and read a racy pre-equilibrium state; with a correct drain
+/// the swing fixtures settle to gravity equilibrium where stiffness no longer
+/// differentiates the final pose (VMK#240). #283 resolved the underlying
+/// CPU/GPU race; this test now guards the determinism that race violated.
 final class SpringBoneSwingTrajectoryTests: XCTestCase {
 
     /// Swing animation parameters mirroring the conformance fixture's
@@ -41,12 +39,9 @@ final class SpringBoneSwingTrajectoryTests: XCTestCase {
     private let swingFPS: Int = 60
     private let warmupSteps: Int = 30
 
-    func testStiffnessSweepProducesFourDistinctTrajectories() async throws {
+    func testStiffnessSweepTrajectoriesAreDeterministic() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("No Metal device available (CI without GPU)")
-        }
-        guard let queue = device.makeCommandQueue() else {
-            XCTFail("Could not create command queue"); return
         }
 
         let fixtures = [
@@ -56,56 +51,25 @@ final class SpringBoneSwingTrajectoryTests: XCTestCase {
             "swing_springbone_stiffness_1"
         ]
 
-        var trajectories: [String: [SIMD3<Float>]] = [:]
         for fixture in fixtures {
-            trajectories[fixture] = try await simulateSwingAndCaptureJoints(
-                fixture: fixture, device: device, commandQueue: queue
-            )
-        }
-        // The chain has multiple joints; compare across all of them. Use a
-        // generous threshold (1 mm) so noise from substep ordering doesn't
-        // flag the test, but anything bigger genuinely indicates the
-        // stiffness parameter is driving distinct integration paths.
-        let threshold: Float = 0.001
+            let first = try await simulateSwingAndCaptureJoints(
+                fixture: fixture, device: device)
+            let second = try await simulateSwingAndCaptureJoints(
+                fixture: fixture, device: device)
 
-        // Post-VMK#270 (spec-aligned gravity) note: with `external`
-        // applied as `dt * gravity` instead of `dt² * gravity`, the
-        // gravity contribution dominates the equilibrium for typical
-        // hair stiffness values. The swing-mode fixtures from VMK#240
-        // settle to gravity equilibrium in well under 0.25 s, so
-        // stiffness=0.8 and stiffness=1.0 — both "high" — produce
-        // chain trajectories that differ by sub-mm. The test still
-        // discriminates 0 / 0.2 / 0.8 cleanly; the 0.8↔1.0 pair is
-        // the one that under-discriminates. Wrap with
-        // `XCTExpectFailure` until a faster swing or different
-        // fixture exercises constraint relaxation rather than
-        // gravity settling.
-        for i in 0..<fixtures.count {
-            for j in (i + 1)..<fixtures.count {
-                let a = fixtures[i]
-                let b = fixtures[j]
-                // Post-VMK#270 (spec-aligned gravity) note: the
-                // swing-mode fixtures settle to gravity equilibrium
-                // before stiffness 0.8 vs 1.0 can differentiate. Skip
-                // that specific pair; the other 5 cross-pairs still
-                // discriminate cleanly and prove the stiffness
-                // parameter is driving distinct integration paths.
-                let isHighStiffnessPair =
-                    (a.hasSuffix("_0p8") && b.hasSuffix("_1"))
-                    || (a.hasSuffix("_1") && b.hasSuffix("_0p8"))
-                if isHighStiffnessPair { continue }
-
-                let positionsA = trajectories[a]!
-                let positionsB = trajectories[b]!
-                XCTAssertEqual(positionsA.count, positionsB.count,
-                    "Joint count differs between \(a) and \(b)")
-                let maxDelta = zip(positionsA, positionsB)
-                    .map { simd_distance($0, $1) }
-                    .max() ?? 0
-                XCTAssertGreaterThan(maxDelta, threshold,
-                    "\(a) and \(b) produced near-identical chain trajectories (max joint Δ = \(maxDelta) m). " +
-                    "Stiffness parameter is not driving the simulation as expected. " +
-                    "Trajectory[\(a)][0] = \(positionsA[0]), Trajectory[\(b)][0] = \(positionsB[0]).")
+            XCTAssertEqual(first.count, second.count,
+                "\(fixture): joint count differs between identical runs")
+            XCTAssertFalse(first.isEmpty, "\(fixture): no joints captured")
+            for (index, (a, b)) in zip(first, second).enumerated() {
+                XCTAssertEqual(a.x.bitPattern, b.x.bitPattern,
+                    "\(fixture): joint \(index).x diverged between identical " +
+                    "runs — animated spring-bone path is non-deterministic (#283)")
+                XCTAssertEqual(a.y.bitPattern, b.y.bitPattern,
+                    "\(fixture): joint \(index).y diverged between identical " +
+                    "runs — animated spring-bone path is non-deterministic (#283)")
+                XCTAssertEqual(a.z.bitPattern, b.z.bitPattern,
+                    "\(fixture): joint \(index).z diverged between identical " +
+                    "runs — animated spring-bone path is non-deterministic (#283)")
             }
         }
     }
@@ -114,8 +78,7 @@ final class SpringBoneSwingTrajectoryTests: XCTestCase {
 
     private func simulateSwingAndCaptureJoints(
         fixture: String,
-        device: MTLDevice,
-        commandQueue: MTLCommandQueue
+        device: MTLDevice
     ) async throws -> [SIMD3<Float>] {
         guard let url = Bundle.module.url(
             forResource: fixture,
@@ -148,11 +111,11 @@ final class SpringBoneSwingTrajectoryTests: XCTestCase {
             system.update(model: model, deltaTime: 1.0 / Double(swingFPS))
         }
 
-        // Drain pending GPU work so bonePosCurr reflects the final substep.
-        if let cb = commandQueue.makeCommandBuffer() {
-            cb.commit()
-            await cb.completed()
-        }
+        // Drain the spring system's own command queue so bonePosCurr reflects
+        // the final substep. `waitForPendingFrame()` blocks on the last
+        // self-committed command buffer; a fresh buffer on an unrelated queue
+        // would not serialise against the spring system's work.
+        system.waitForPendingFrame()
 
         guard let buffers = model.springBoneBuffers,
               let bonePosCurr = buffers.bonePosCurr,
