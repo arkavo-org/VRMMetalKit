@@ -1,7 +1,7 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static muter-bootstrap mutation-test
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static muter-bootstrap mutation-test mutation-test-depth-bias mutation-test-retargeting
 
 help:
 	@echo "VRMMetalKit Build Targets:"
@@ -15,7 +15,9 @@ help:
 	@echo "  make docs          - Preview documentation locally"
 	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
 	@echo "  make muter-bootstrap - Build muter from a pinned SHA into .build/tools/"
-	@echo "  make mutation-test - Run mutation testing against DepthBiasCalculator"
+	@echo "  make mutation-test - Run all mutation-test targets"
+	@echo "  make mutation-test-depth-bias - Mutation-test DepthBiasCalculator"
+	@echo "  make mutation-test-retargeting - Mutation-test RetargetingSamplers"
 
 # Compile all VRM Metal shaders into three SDK-specific metallibs:
 #   - macosx          (FP32, baseline; preserves PR #279's safe-default)
@@ -107,14 +109,26 @@ $(MUTER_BIN):
 muter-bootstrap: $(MUTER_BIN)
 	@$(MUTER_BIN) --version
 
-mutation-test: $(MUTER_BIN)
+mutation-test: mutation-test-depth-bias mutation-test-retargeting
+	@echo "✅ All mutation-test targets complete"
+
+mutation-test-depth-bias: $(MUTER_BIN)
 	@mkdir -p .build/mutation-testing
 	@$(MUTER_BIN) run \
 		--configuration .muter/depth-bias.yml \
 		--files-to-mutate Sources/GLTFCore/Utilities/DepthBiasCalculator.swift \
 		--skip-coverage \
 		--format json \
-		--output .build/mutation-testing/last-run.json
+		--output .build/mutation-testing/depth-bias.json
+
+mutation-test-retargeting: $(MUTER_BIN)
+	@mkdir -p .build/mutation-testing
+	@$(MUTER_BIN) run \
+		--configuration .muter/retargeting-samplers.yml \
+		--files-to-mutate Sources/VRMMetalKit/Animation/RetargetingSamplers.swift \
+		--skip-coverage \
+		--format json \
+		--output .build/mutation-testing/retargeting-samplers.json
 
 # List functions in the compiled metallib
 list-functions:

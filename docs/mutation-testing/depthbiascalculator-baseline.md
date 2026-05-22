@@ -14,8 +14,8 @@
 embedding produced no-op binaries (0% killed on any suite).
 
 - Bootstrap: `make muter-bootstrap`
-- Run: `make mutation-test`
-- Report: `.build/mutation-testing/last-run.json` (gitignored)
+- Run: `make mutation-test-depth-bias`
+- Report: `.build/mutation-testing/depth-bias.json` (gitignored)
 
 ### Bumping the muter SHA
 
