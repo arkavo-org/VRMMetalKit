@@ -273,6 +273,22 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let rateHz = quality.substepRateHz
         guard rateHz > 0 else { return }  // .off
 
+        // #283: On the self-committed path the previous update()'s per-substep
+        // command buffers read `animatedRootPositionsBuffer` and
+        // `animatedRootPositionsPrevBuffer` on the GPU. The frame-boundary prev
+        // copy and the per-substep pose writes below are about to overwrite
+        // both. The #278 aligned-offset segments de-conflict substeps *within*
+        // a frame, but the same slots are reused every frame, so nothing
+        // otherwise orders frame N's GPU reads before frame N+1's host writes.
+        // Drain the previous self-committed frame here — without it the
+        // kinematic kernel races the host and the animated simulation diverges
+        // from the synchronised result and is non-deterministic run-to-run.
+        // The shared-buffer path (commandBuffer != nil) is unaffected: its
+        // caller owns command-buffer lifecycle and frame-boundary sync.
+        if commandBuffer == nil {
+            waitForPendingFrame()
+        }
+
         // Fixed timestep accumulation
         timeAccumulator += deltaTime
         let fixedDeltaTime = 1.0 / rateHz
