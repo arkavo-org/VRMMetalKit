@@ -2030,6 +2030,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             executeXPBDStep(buffers: buffers, globalParams: params, substepIndex: 0)
         }
 
+        // VMK#292 (regression of VMK#240): force `settlingFrames` to 0 at
+        // the end of warmup so the post-warmup animation runs with the
+        // stiffness contribution fully engaged. Per-step decrement above
+        // only drains by `steps`; with the default `steps = 30` against
+        // an initial counter of 120 the loop leaves `settlingFrames = 90`,
+        // and a typical 0.25 s swing decrements another 30 (1/60-s frames
+        // at the 1/120-s fixed substep). That puts the swing inside the
+        // `1 - smoothstep(0, 60, frames)` band where stiffness is scaled
+        // to ~0 — the entire stiffness sweep collapses to the rest
+        // trajectory. Warmup is exactly when settling *should* finish,
+        // so close the gap unconditionally.
+        if globalParams.settlingFrames > 0 {
+            globalParams.settlingFrames = 0
+            model.springBoneGlobalParams?.settlingFrames = 0
+            globalParamsBuffer?.contents().copyMemory(
+                from: &globalParams,
+                byteCount: MemoryLayout<SpringBoneGlobalParams>.stride
+            )
+        }
+
         // Wait for all GPU work to complete before proceeding
         // This ensures warmup physics is fully computed before first render
         if let finalCommandBuffer = commandQueue.makeCommandBuffer() {

@@ -118,6 +118,83 @@ final class SpringBoneRenderConformanceTests: XCTestCase {
             "is running with the lingering settling damping zeroing stiffness.")
     }
 
+    /// VMK#292 — same stiffness sweep on the `synchronousSpringBone` branch
+    /// (PR #291's deterministic offline-render path). The conformance adapter
+    /// takes this branch — it sets `synchronousSpringBone = true` and leaves
+    /// `simulationDeltaTime` unset, so the renderer falls back to a fixed
+    /// 1/60 s timestep. Pre-#291 the adapter's near-zero wall-clock
+    /// `deltaTime` meant the integrator ran no substeps offline; post-#291
+    /// it runs two substeps per frame (1/60 ÷ 1/120 = 2), which drains
+    /// `settlingFrames` past the smoothstep gate during the swing window
+    /// and collapses the stiffness axis to a single output.
+    ///
+    /// `testStiffnessSweepRendersFourDistinctHashes` above doesn't cover
+    /// this branch because it sets `simulationDeltaTime = 1/60` explicitly
+    /// and takes the override-first path in `VRMRenderer.swift:1394`.
+    func testStiffnessSweepRendersFourDistinctHashesUnderSynchronousMode() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+        guard let queue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
+        }
+
+        let fixtures = [
+            "swing_springbone_stiffness_0",
+            "swing_springbone_stiffness_0p2",
+            "swing_springbone_stiffness_0p8",
+            "swing_springbone_stiffness_1"
+        ]
+
+        let swingEnd = swingTranslationEnd
+        let swingDuration = swingDurationSeconds
+        let fps = swingFPS
+        let warmup = warmupSteps
+        let cameraPos = cameraPosition
+        let cameraTgt = cameraTarget
+        let cameraUpV = cameraUp
+        let fovYDeg = cameraFovYDeg
+        let lightDir = keyLightDir
+        let lightCol = keyLightColor
+        let lightInt = keyLightIntensity
+        let ambient = ambientColor
+        let w = renderWidth
+        let h = renderHeight
+
+        var hashes: [String: String] = [:]
+        for fixture in fixtures {
+            let model = try await VRMModel.load(
+                from: try bundleURL(for: fixture),
+                device: device
+            )
+            hashes[fixture] = await MainActor.run {
+                Self.renderFixtureToHash(
+                    model: model, device: device, commandQueue: queue,
+                    swingTranslationEnd: swingEnd, swingDurationSeconds: swingDuration,
+                    swingFPS: fps, warmupSteps: warmup,
+                    cameraPosition: cameraPos, cameraTarget: cameraTgt, cameraUp: cameraUpV,
+                    cameraFovYDeg: fovYDeg,
+                    keyLightDir: lightDir, keyLightColor: lightCol, keyLightIntensity: lightInt,
+                    ambientColor: ambient,
+                    renderWidth: w, renderHeight: h,
+                    useSynchronousSpringBoneFallback: true
+                )
+            }
+        }
+
+        let unique = Set(hashes.values)
+        XCTAssertEqual(unique.count, 4,
+            "VMK#292: stiffness sweep must produce 4 distinct hashes on the " +
+            "synchronousSpringBone fallback branch too, not just when " +
+            "simulationDeltaTime is set explicitly. Got \(unique.count). " +
+            "Per-fixture hashes: \(hashes.map { "\($0.key) → \($0.value.prefix(8))" }.joined(separator: ", ")). " +
+            "Collision on this branch means warmupPhysics isn't fully draining " +
+            "settlingFrames; the post-warmup animation runs through the " +
+            "`1 - smoothstep(0, 60, settlingFrames)` gate while still inside " +
+            "the warmup band, zeroing the stiffness contribution for the " +
+            "entire swing window — exact regression signature of VMK#240.")
+    }
+
     // MARK: - Render harness
 
     private func bundleURL(for fixture: String) throws -> URL {
@@ -149,18 +226,29 @@ final class SpringBoneRenderConformanceTests: XCTestCase {
         keyLightIntensity: Float,
         ambientColor: SIMD3<Float>,
         renderWidth: Int,
-        renderHeight: Int
+        renderHeight: Int,
+        useSynchronousSpringBoneFallback: Bool = false
     ) -> String {
         var config = RendererConfig()
         config.sampleCount = 1
         config.strict = .off
+        // The conformance adapter takes the synchronousSpringBone fallback
+        // (sync flag on, no explicit simulationDeltaTime) — the path PR #291
+        // shipped for VMK#283 determinism. The original VMK#240 test below
+        // takes the explicit-override path. Both must produce four distinct
+        // stiffness hashes (VMK#292).
+        config.synchronousSpringBone = useSynchronousSpringBoneFallback
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
         renderer.enableSpringBone = true
         // Deterministic frame pacing: per-frame physics deltaTime matches
         // the swing fps so the integrator runs the same number of substeps
-        // regardless of wall-clock test speed.
-        renderer.simulationDeltaTime = 1.0 / Double(swingFPS)
+        // regardless of wall-clock test speed. On the sync-fallback branch
+        // we leave `simulationDeltaTime` unset so the renderer falls back
+        // to a fixed 1/60 s — the path the conformance adapter exercises.
+        if !useSynchronousSpringBoneFallback {
+            renderer.simulationDeltaTime = 1.0 / Double(swingFPS)
+        }
 
         // Camera + lighting matched to the conformance test.yaml.
         let aspect = Float(renderWidth) / Float(renderHeight)
