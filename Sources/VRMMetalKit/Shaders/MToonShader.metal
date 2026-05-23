@@ -864,9 +864,14 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  VertexOut out;
 
  // Calculate outline width
+ //
+ // VRMC_materials_mtoon-1.0 §outlineWidthMultiplyTexture: "The G
+ // component of the texture is referred to." Sampling .r here would
+ // pull the wrong channel and produce per-vertex modulation that
+ // doesn't match the spec / three-vrm / UniVRM. VMK#289.
  float outlineWidth = material.outlineWidthFactor;
  if (material.hasOutlineWidthMultiplyTexture > 0) {
- float widthMultiplier = outlineWidthMultiplyTexture.sample(textureSampler, in.texCoord).r;
+ float widthMultiplier = outlineWidthMultiplyTexture.sample(textureSampler, in.texCoord).g;
  outlineWidth *= widthMultiplier;
  }
 

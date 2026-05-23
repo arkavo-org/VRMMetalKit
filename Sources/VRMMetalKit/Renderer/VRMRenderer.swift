@@ -3832,6 +3832,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             encoder.setVertexBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
             encoder.setFragmentBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
 
+            // Bind outlineWidthMultiplyTexture to the outline VERTEX stage
+            // at texture(0) so `mtoon_outline_vertex` can sample the G
+            // channel and modulate the per-vertex extrusion width per the
+            // VRMC_materials_mtoon-1.0 spec. Without this binding,
+            // `hasOutlineWidthMultiplyTexture > 0` causes the shader to
+            // sample an unbound texture slot — the kernel multiplies
+            // outlineWidth by an undefined sample, effectively zeroing
+            // (or otherwise corrupting) the extrusion width and making
+            // outlineWidthFactor / outlineWidthMode inert. VMK#289.
+            if let textureIndex = mtoon.outlineWidthMultiplyTexture,
+               textureIndex < model.textures.count,
+               let mtlTexture = model.textures[textureIndex].mtlTexture {
+                encoder.setVertexTexture(mtlTexture, index: 0)
+                if let cachedSampler = samplerStates["default"] {
+                    encoder.setVertexSamplerState(cachedSampler, index: 0)
+                }
+            }
+
             // Set joint matrices for skinned meshes
             if isSkinned, let skinIndex = item.node.skin, skinIndex < model.skins.count {
                 let skin = model.skins[skinIndex]
