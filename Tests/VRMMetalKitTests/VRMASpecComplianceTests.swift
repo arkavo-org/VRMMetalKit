@@ -301,7 +301,7 @@ final class VRMASpecComplianceTests: XCTestCase {
 ///
 /// The binary chunk contains all float32 accessor data packed sequentially.
 /// JSON references accessors via bufferViews with correct byteOffset/byteLength.
-private final class VRMAGLBBuilder {
+final class VRMAGLBBuilder {
     /// Two channel encodings the loader needs to accept on the lookAt node:
     /// `translation` is the spec-literal reading; `rotation` is what
     /// `@pixiv/three-vrm-animation` consumes and Pixiv's distributed VRMA

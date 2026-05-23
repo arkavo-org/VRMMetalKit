@@ -301,6 +301,53 @@ public final class AnimationPlayer: @unchecked Sendable {
         }
     }
 
+    /// One-call wrapper around `load → seek → update → applyMorphWeights`
+    /// for offline harnesses and single-frame samplers.
+    ///
+    /// Loads `clip`, seeks to `time`, runs a zero-delta ``update(deltaTime:model:)``
+    /// so all per-frame writes (joint tracks, hips translation, look-at,
+    /// constraint solve, world propagation) land on `model`, and — if an
+    /// `expressionController` is supplied — pushes the morph weights cached by
+    /// `update` to it via ``applyMorphWeights(to:)``. When `lookAtController` is
+    /// supplied it is attached to the player so the clip's
+    /// `lookAtTargetSampler` (if any) drives gaze in the same call; passing
+    /// `nil` leaves any previously attached controller in place.
+    ///
+    /// Useful for VRMA-driven test fixtures, render-sequence emitters, and
+    /// any caller whose per-frame pattern is "I want this clip applied at
+    /// this time, end of story." Live playback should continue to use
+    /// ``update(deltaTime:model:)`` directly so frame-to-frame time
+    /// accumulates naturally.
+    ///
+    /// - Parameters:
+    ///   - clip: The animation clip to load and apply.
+    ///   - time: The clip-local time to sample at, in seconds. Clamped or
+    ///     wrapped by `update` per the player's ``isLooping`` setting.
+    ///   - model: The avatar model whose nodes, constraints, and (via
+    ///     `expressionController`) expression weights are updated.
+    ///   - expressionController: Optional controller that morph weights
+    ///     cached by this call are pushed to. `nil` skips the morph push.
+    ///   - lookAtController: Optional look-at controller to attach for
+    ///     this and subsequent updates. `nil` leaves the existing
+    ///     ``lookAtController`` property untouched.
+    public func applyClip(
+        _ clip: AnimationClip,
+        atTime time: Float,
+        to model: VRMModel,
+        expressionController: VRMExpressionController? = nil,
+        lookAtController: VRMLookAtController? = nil
+    ) {
+        if let lookAt = lookAtController {
+            self.lookAtController = lookAt
+        }
+        load(clip)
+        seek(to: time)
+        update(deltaTime: 0, model: model)
+        if let controller = expressionController {
+            applyMorphWeights(to: controller)
+        }
+    }
+
     /// Current playback time in seconds. Reflects accumulated `deltaTime` from
     /// `update(deltaTime:model:)` and is reset by `seek(to:)` / `stop()` /
     /// `load(_:)`. Useful when consumers want to drive their own samplers
