@@ -2744,6 +2744,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // MToon extension struct, so thread it in here
                         // after the mtoon-derived defaults land. VMK#290.
                         mtoonUniforms.normalScale = material.normalScale
+                        // Sibling glTF-core textureInfo: occlusionTexture
+                        // with its `strength` scalar. The binding flag is
+                        // set later when the texture slot is populated.
+                        // VMK#293.
+                        mtoonUniforms.occlusionStrength = material.occlusionStrength
                         // Preserve source version for shader paths that truly differ
                         // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
                         mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
@@ -2887,6 +2892,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                        let mtlTexture = model.textures[textureIndex].mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 7)
                         mtoonUniforms.hasUvAnimationMaskTexture = 1
+                        textureCount += 1
+                    }
+
+                    // Index 8: Occlusion texture (glTF-core, VMK#293).
+                    // R-channel ambient-occlusion sample; modulates final
+                    // shaded color per the spec formula `1 + strength *
+                    // (sample - 1)`. `occlusionStrength` is already on
+                    // mtoonUniforms from the population block above.
+                    if let mtlTexture = material.occlusionTexture?.mtlTexture {
+                        encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 8)
+                        mtoonUniforms.hasOcclusionTexture = 1
                         textureCount += 1
                     }
 

@@ -321,6 +321,33 @@ public class VRMLookAtController {
         }
     }
 
+    /// Snap to the current ``target`` and write through the active ``mode``
+    /// (bones or expression weights) in a single call, bypassing smoothing
+    /// and the ``enabled`` tick gate.
+    ///
+    /// For offline harnesses that apply a clip at a single time and need
+    /// the gaze to land in the next render without waiting for smoothing
+    /// to converge. ``AnimationPlayer/applyClip(_:atTime:to:expressionController:lookAtController:)``
+    /// calls this after the per-frame sampler updates ``target``; otherwise
+    /// the offline render reflects whatever pre-applyClip pose was on the
+    /// bones / weights (typically rest, so all gaze plans render identical
+    /// PNGs — VMK#294).
+    ///
+    /// Live playback should continue to use ``update(deltaTime:)`` so the
+    /// frame-rate-independent smoothing curve runs as designed.
+    public func applyImmediately() {
+        guard model != nil else { return }
+        updateTargetAngles()
+        currentYaw = targetYaw
+        currentPitch = targetPitch
+        applyConstraints()
+        if mode == .bone {
+            applyToBones()
+        } else {
+            applyToExpressions()
+        }
+    }
+
     // MARK: - Target Calculation
 
     private func updateTargetAngles() {

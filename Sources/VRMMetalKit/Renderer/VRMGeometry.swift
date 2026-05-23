@@ -1345,6 +1345,16 @@ public class VRMMaterial {
     /// components of the unpacked tangent-space normal before
     /// renormalisation. Defaults to `1.0`. VMK#290.
     public var normalScale: Float = 1.0
+    /// glTF-core ambient-occlusion texture. The R channel carries the
+    /// per-fragment occlusion value (0 = fully occluded, 1 = no
+    /// occlusion). Modulates the final shaded color via the spec
+    /// formula `1.0 + occlusionStrength * (sample - 1.0)`. VMK#293.
+    public var occlusionTexture: VRMTexture?
+    /// glTF-core `occlusionTextureInfo.strength` — scales the
+    /// occlusion contribution. `0` disables occlusion (final factor =
+    /// 1.0); `1` is full occlusion. Defaults to `1.0` per spec.
+    /// VMK#293.
+    public var occlusionStrength: Float = 1.0
     /// Emissive (self-illuminating) texture.
     public var emissiveTexture: VRMTexture?
     /// glTF metallic factor. Unused by the MToon path; retained for non-MToon fallback shading.
@@ -1487,6 +1497,17 @@ public class VRMMaterial {
             // tangent-space normal's XY before renormalisation. Default 1.0
             // per spec. VMK#290.
             normalScale = normalTextureInfo.scale ?? 1.0
+        }
+
+        // Load occlusion texture (per-fragment ambient occlusion, R
+        // channel per glTF 2.0 spec). Sibling-gap to normalTexture.scale
+        // — same wiring shape: a glTF-core textureInfo with its own
+        // scalar parameter, missing from the VRMMetalKit MToon path
+        // before VMK#293.
+        if let occlusionTextureInfo = gltfMaterial.occlusionTexture,
+           occlusionTextureInfo.index < textures.count {
+            occlusionTexture = textures[occlusionTextureInfo.index]
+            occlusionStrength = occlusionTextureInfo.strength ?? 1.0
         }
 
         // Load emissive texture (for glow effects)
