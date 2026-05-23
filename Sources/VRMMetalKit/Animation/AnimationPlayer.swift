@@ -346,6 +346,15 @@ public final class AnimationPlayer: @unchecked Sendable {
         if let controller = expressionController {
             applyMorphWeights(to: controller)
         }
+        // VMK#294: `update` only sets `lookAtController.target`. The
+        // smoothing-aware `update(deltaTime:)` tick that normally resolves
+        // the target into eye-bone rotations (bone mode) or
+        // `LookLeft`/`Right`/`Up`/`Down` preset weights (expression mode)
+        // runs frame-by-frame in live playback — not in the offline
+        // applyClip path. Without an explicit snap here, the offline
+        // render frame reflects the pre-clip pose (typically rest, so
+        // every gaze plan renders identical PNGs).
+        self.lookAtController?.applyImmediately()
     }
 
     /// Current playback time in seconds. Reflects accumulated `deltaTime` from
