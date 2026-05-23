@@ -153,9 +153,9 @@ struct MToonMaterial {
  float textureTransformRotation;            // 4 bytes
  float textureTransformScaleX;             // 4 bytes
 
- // Block 14: 16 bytes - KHR_texture_transform scale Y + padding
+ // Block 14: 16 bytes - KHR_texture_transform scale Y + normalScale + padding
  float textureTransformScaleY;             // 4 bytes
- float _ttPad0;                             // 4 bytes padding
+ float normalScale;                         // 4 bytes — glTF-core normalTextureInfo.scale (VMK#290)
  float _ttPad1;                             // 4 bytes padding
  float _ttPad2;                             // 4 bytes padding
 };
@@ -593,6 +593,11 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
      // Christian Schüler's screen-space-derivative TBN (2010) builds the basis
      // per-fragment from worldPos and uv derivatives — no per-vertex tangents.
      mtoon_float3 nMap = mtoon_float3(normalTexture.sample(textureSampler, uv).xyz * 2.0 - 1.0);
+     // glTF 2.0 normalTextureInfo.scale — `scaledNormal = normalize((sample
+     // * 2.0 - 1.0) * vec3(scale, scale, 1.0))`. Defaults to 1.0 so existing
+     // assets without an authored `scale` field are unaffected. VMK#290.
+     nMap.xy *= mtoon_float(material.normalScale);
+     nMap = mtoon_float3(normalize(float3(nMap)));
 
      float3 dp1 = dfdx(in.worldPosition);
      float3 dp2 = dfdy(in.worldPosition);

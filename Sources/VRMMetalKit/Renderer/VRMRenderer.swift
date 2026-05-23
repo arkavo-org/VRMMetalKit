@@ -2739,6 +2739,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtoon = material.mtoon {
                         mtoonUniforms = MToonMaterialUniforms(from: mtoon)
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
+                        // glTF-core normalTextureInfo.scale lives on
+                        // VRMMaterial (the glTF base layer), not on the
+                        // MToon extension struct, so thread it in here
+                        // after the mtoon-derived defaults land. VMK#290.
+                        mtoonUniforms.normalScale = material.normalScale
                         // Preserve source version for shader paths that truly differ
                         // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
                         mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1

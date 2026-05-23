@@ -1341,6 +1341,10 @@ public class VRMMaterial {
     public var baseColorTexture: VRMTexture?
     /// Tangent-space normal map used for surface detail.
     public var normalTexture: VRMTexture?
+    /// glTF-core `normalTextureInfo.scale` — multiplies the X and Y
+    /// components of the unpacked tangent-space normal before
+    /// renormalisation. Defaults to `1.0`. VMK#290.
+    public var normalScale: Float = 1.0
     /// Emissive (self-illuminating) texture.
     public var emissiveTexture: VRMTexture?
     /// glTF metallic factor. Unused by the MToon path; retained for non-MToon fallback shading.
@@ -1479,6 +1483,10 @@ public class VRMMaterial {
         if let normalTextureInfo = gltfMaterial.normalTexture,
            normalTextureInfo.index < textures.count {
             normalTexture = textures[normalTextureInfo.index]
+            // glTF 2.0 normalTextureInfo.scale: amplifies the unpacked
+            // tangent-space normal's XY before renormalisation. Default 1.0
+            // per spec. VMK#290.
+            normalScale = normalTextureInfo.scale ?? 1.0
         }
 
         // Load emissive texture (for glow effects)
