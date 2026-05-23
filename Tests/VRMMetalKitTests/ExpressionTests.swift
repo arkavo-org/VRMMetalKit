@@ -626,4 +626,50 @@ final class ExpressionTests: XCTestCase {
         let weights = controller.weightsForMesh(0, morphCount: 64)
         XCTAssertEqual(weights.count, 64, "Should handle repeated setting of same expression")
     }
+
+    /// Regression guard for the registered-but-empty-bind shape that
+    /// shows up in conformance-generated avatars (the asset generator
+    /// emits `expressions.custom[name] = { morphTargetBinds: [] }` to
+    /// register custom expressions before the per-target binds are
+    /// wired). Calling setCustomExpressionWeight on such an expression
+    /// must not crash, must not write NaN into per-mesh weights, and
+    /// must store the requested weight so a later registration that
+    /// adds binds resumes correctly.
+    func testCustomExpressionWithEmptyBindsIsSafe() throws {
+        let controller = VRMExpressionController()
+        let emptyBindExpression = VRMExpression(name: "registered-but-unbound")
+        XCTAssertTrue(emptyBindExpression.morphTargetBinds.isEmpty,
+            "fixture: VRMExpression() starts with no morph binds")
+        controller.registerCustomExpression(emptyBindExpression, name: "registered-but-unbound")
+
+        // Drive a non-zero weight through the full setCustomExpressionWeight
+        // → updateMorphTargets → applyExpressionToMeshWeights path; that's
+        // the chain that previously had a count > 0 / first-element-deref
+        // shape and would crash on empty binds.
+        controller.setCustomExpressionWeight("registered-but-unbound", weight: 0.7)
+
+        // Weight was stored despite empty binds — a future bind registration
+        // would resume from this weight rather than reset to 0.
+        let weight = try XCTUnwrap(controller.weight(forCustom: "registered-but-unbound"),
+            "registered custom expression must have a recorded weight after set")
+        XCTAssertEqual(weight, 0.7, accuracy: 1e-6,
+            "weight must be stored even when morphTargetBinds is empty")
+
+        // No NaN/Inf leaked into the per-mesh weight buffer that the
+        // renderer reads. Empty binds = no morph deltas to write, so all
+        // entries stay at 0.
+        let meshWeights = controller.weightsForMesh(0, morphCount: 16)
+        XCTAssertEqual(meshWeights.count, 16)
+        for (i, w) in meshWeights.enumerated() {
+            XCTAssertFalse(w.isNaN, "weightsForMesh[\(i)] must not be NaN with empty binds")
+            XCTAssertFalse(w.isInfinite, "weightsForMesh[\(i)] must not be infinite with empty binds")
+            XCTAssertEqual(w, 0, accuracy: 1e-6,
+                "weightsForMesh[\(i)] must stay at 0 when the active expression has no morph binds; got \(w)")
+        }
+
+        // Repeat-setting an empty-bind expression must remain stable.
+        controller.setCustomExpressionWeight("registered-but-unbound", weight: 0.3)
+        let secondWeight = try XCTUnwrap(controller.weight(forCustom: "registered-but-unbound"))
+        XCTAssertEqual(secondWeight, 0.3, accuracy: 1e-6)
+    }
 }
