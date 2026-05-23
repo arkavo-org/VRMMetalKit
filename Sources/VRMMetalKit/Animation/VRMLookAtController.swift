@@ -215,7 +215,16 @@ public class VRMLookAtController {
             eyesAreRigid = true
         }
 
-        // Check if we have LookAt expressions - with detailed diagnostics
+        // Check if we have LookAt expressions - with detailed diagnostics.
+        //
+        // VMK#297: check both namespaces — the VRM 1.0 spec preset
+        // namespace (`expressions.preset[.lookLeft]`, lowercase) and the
+        // legacy VRM 0.x custom namespace
+        // (`expressions.custom["LookLeft"]`, PascalCase). Either one
+        // having non-empty morph binds counts as "expression mode is
+        // available." Pre-fix the check was custom-only, so
+        // spec-compliant VRM 1.0 assets fell through to bone-mode
+        // detection or the no-eye-bones fallback (#297).
         if let expressions = model.expressions {
             vrmLog("[VRMLookAtController] Expression diagnostics:")
             vrmLog("  - Total custom expressions: \(expressions.custom.count)")
@@ -223,34 +232,23 @@ public class VRMLookAtController {
                 vrmLog("    Custom '\(name)': \(expr.morphTargetBinds.count) binds")
             }
 
-            // Check if LookAt expressions have actual morph target binds
             var workingLookAtExpressions = 0
-            if let left = expressions.custom["LookLeft"], !left.morphTargetBinds.isEmpty {
-                workingLookAtExpressions += 1
-                vrmLog("    LookLeft: \(left.morphTargetBinds.count) binds ✅")
-            } else if expressions.custom["LookLeft"] != nil {
-                vrmLog("    LookLeft: 0 binds ❌ (empty)")
+            let lookPresets: [VRMExpressionPreset] = [.lookLeft, .lookRight, .lookUp, .lookDown]
+            for preset in lookPresets {
+                if let expr = expressions.preset[preset], !expr.morphTargetBinds.isEmpty {
+                    workingLookAtExpressions += 1
+                    vrmLog("    preset.\(preset): \(expr.morphTargetBinds.count) binds ✅")
+                } else if expressions.preset[preset] != nil {
+                    vrmLog("    preset.\(preset): 0 binds ❌ (empty)")
+                }
             }
-
-            if let right = expressions.custom["LookRight"], !right.morphTargetBinds.isEmpty {
-                workingLookAtExpressions += 1
-                vrmLog("    LookRight: \(right.morphTargetBinds.count) binds ✅")
-            } else if expressions.custom["LookRight"] != nil {
-                vrmLog("    LookRight: 0 binds ❌ (empty)")
-            }
-
-            if let up = expressions.custom["LookUp"], !up.morphTargetBinds.isEmpty {
-                workingLookAtExpressions += 1
-                vrmLog("    LookUp: \(up.morphTargetBinds.count) binds ✅")
-            } else if expressions.custom["LookUp"] != nil {
-                vrmLog("    LookUp: 0 binds ❌ (empty)")
-            }
-
-            if let down = expressions.custom["LookDown"], !down.morphTargetBinds.isEmpty {
-                workingLookAtExpressions += 1
-                vrmLog("    LookDown: \(down.morphTargetBinds.count) binds ✅")
-            } else if expressions.custom["LookDown"] != nil {
-                vrmLog("    LookDown: 0 binds ❌ (empty)")
+            for name in ["LookLeft", "LookRight", "LookUp", "LookDown"] {
+                if let expr = expressions.custom[name], !expr.morphTargetBinds.isEmpty {
+                    workingLookAtExpressions += 1
+                    vrmLog("    custom['\(name)']: \(expr.morphTargetBinds.count) binds ✅")
+                } else if expressions.custom[name] != nil {
+                    vrmLog("    custom['\(name)']: 0 binds ❌ (empty)")
+                }
             }
 
             if workingLookAtExpressions > 0 {
@@ -537,6 +535,17 @@ public class VRMLookAtController {
         guard model != nil else { return }
         guard let lookAt = lookAtData else { return }
 
+        // VMK#297: write to BOTH the VRM 1.0 spec preset namespace
+        // (lookLeft/lookRight/lookUp/lookDown lowercase) and the legacy
+        // VRM 0.x custom namespace (PascalCase). Each setter is a no-op
+        // when its target isn't registered, so spec-compliant assets land
+        // in `expressions.preset[.lookLeft]` and legacy assets land in
+        // `expressions.custom["LookLeft"]` — without the controller
+        // needing to know which.
+        expressionController?.setExpressionWeight(.lookLeft, weight: 0)
+        expressionController?.setExpressionWeight(.lookRight, weight: 0)
+        expressionController?.setExpressionWeight(.lookUp, weight: 0)
+        expressionController?.setExpressionWeight(.lookDown, weight: 0)
         expressionController?.setCustomExpressionWeight("LookLeft", weight: 0)
         expressionController?.setCustomExpressionWeight("LookRight", weight: 0)
         expressionController?.setCustomExpressionWeight("LookUp", weight: 0)
@@ -545,15 +554,17 @@ public class VRMLookAtController {
         if abs(currentYaw) > 0.02 {
             if currentYaw > 0 {
                 let weight = abs(VRMLookAtController.rangeMapOutput(currentYaw, map: lookAt.rangeMapHorizontalOuter))
+                expressionController?.setExpressionWeight(.lookRight, weight: weight)
                 expressionController?.setCustomExpressionWeight("LookRight", weight: weight)
                 if debugFrameCount % 60 == 0 {
-                    vrmLog("[LookAt EXPRESSION] LookRight weight: \(weight)")
+                    vrmLog("[LookAt EXPRESSION] lookRight weight: \(weight)")
                 }
             } else {
                 let weight = abs(VRMLookAtController.rangeMapOutput(currentYaw, map: lookAt.rangeMapHorizontalOuter))
+                expressionController?.setExpressionWeight(.lookLeft, weight: weight)
                 expressionController?.setCustomExpressionWeight("LookLeft", weight: weight)
                 if debugFrameCount % 60 == 0 {
-                    vrmLog("[LookAt EXPRESSION] LookLeft weight: \(weight)")
+                    vrmLog("[LookAt EXPRESSION] lookLeft weight: \(weight)")
                 }
             }
         }
@@ -561,15 +572,17 @@ public class VRMLookAtController {
         if abs(currentPitch) > 0.02 {
             if currentPitch > 0 {
                 let weight = abs(VRMLookAtController.rangeMapOutput(currentPitch, map: lookAt.rangeMapVerticalUp))
+                expressionController?.setExpressionWeight(.lookUp, weight: weight)
                 expressionController?.setCustomExpressionWeight("LookUp", weight: weight)
                 if debugFrameCount % 60 == 0 {
-                    vrmLog("[LookAt EXPRESSION] LookUp weight: \(weight)")
+                    vrmLog("[LookAt EXPRESSION] lookUp weight: \(weight)")
                 }
             } else {
                 let weight = abs(VRMLookAtController.rangeMapOutput(currentPitch, map: lookAt.rangeMapVerticalDown))
+                expressionController?.setExpressionWeight(.lookDown, weight: weight)
                 expressionController?.setCustomExpressionWeight("LookDown", weight: weight)
                 if debugFrameCount % 60 == 0 {
-                    vrmLog("[LookAt EXPRESSION] LookDown weight: \(weight)")
+                    vrmLog("[LookAt EXPRESSION] lookDown weight: \(weight)")
                 }
             }
         }
