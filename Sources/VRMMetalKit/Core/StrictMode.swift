@@ -105,6 +105,14 @@ public struct RendererConfig {
     /// GPU/CPU sync per frame; fine for offline rendering, may drop fps at
     /// 60 fps interactive. Default `false` preserves the interactive
     /// low-latency async path. See #267.
+    ///
+    /// Enabling this flag also switches the spring-bone integrator to a
+    /// fixed 60Hz timestep when `VRMRenderer.simulationDeltaTime` is unset.
+    /// Wall-clock pacing would otherwise feed a varying deltaTime into the
+    /// XPBD substep accumulator, producing different substep counts and
+    /// divergent joint positions across repeated runs of the same input
+    /// (issue #283). Set `simulationDeltaTime` explicitly to override the
+    /// 60Hz default.
     public var synchronousSpringBone: Bool = false
 
     /// Creates a renderer configuration. Defaults match the production baseline.

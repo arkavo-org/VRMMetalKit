@@ -202,7 +202,12 @@ public struct MToonMaterialUniforms {
 
     /// `KHR_texture_transform` scale, Y component.
     public var textureTransformScaleY: Float = 1.0
-    private var _ttPad0: Float = 0.0
+    /// glTF-core `normalTextureInfo.scale` — multiplies the X and Y
+    /// components of the unpacked tangent-space normal before
+    /// renormalisation, per the glTF 2.0 spec formula
+    /// `normalize((sample * 2.0 - 1.0) * vec3(scale, scale, 1.0))`.
+    /// Defaults to 1.0 (no amplification). VMK#290.
+    public var normalScale: Float = 1.0
     private var _ttPad1: Float = 0.0
     private var _ttPad2: Float = 0.0
 

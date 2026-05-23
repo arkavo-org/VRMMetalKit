@@ -153,9 +153,9 @@ struct MToonMaterial {
  float textureTransformRotation;            // 4 bytes
  float textureTransformScaleX;             // 4 bytes
 
- // Block 14: 16 bytes - KHR_texture_transform scale Y + padding
+ // Block 14: 16 bytes - KHR_texture_transform scale Y + normalScale + padding
  float textureTransformScaleY;             // 4 bytes
- float _ttPad0;                             // 4 bytes padding
+ float normalScale;                         // 4 bytes — glTF-core normalTextureInfo.scale (VMK#290)
  float _ttPad1;                             // 4 bytes padding
  float _ttPad2;                             // 4 bytes padding
 };
@@ -293,8 +293,15 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  // Transform normal to world space
  out.worldNormal = normalize((uniforms.normalMatrix * float4(morphedNormal, 0.0)).xyz);
 
- out.texCoord = in.texCoord;
- out.animatedTexCoord = animateUV(applyTextureTransform(in.texCoord, material), material);
+ // KHR_texture_transform is a static affine on UVs (offset / rotation / scale).
+ // The transform must apply to *every* texture lookup — base color, shading
+ // shift, outline width multiplier, MToon's matcap and shade textures, etc. —
+ // so we bake it into `texCoord` here in the vertex shader. Default uniforms
+ // (offset=0, rotation=0, scale=1) make `applyTextureTransform` identity, so
+ // assets without the extension are unaffected. UV animation composes on top
+ // via `animatedTexCoord`. VMK#288.
+ out.texCoord = applyTextureTransform(in.texCoord, material);
+ out.animatedTexCoord = animateUV(out.texCoord, material);
  out.color = in.color;
 
  if (needsViewNormal(material, uniforms)) {
@@ -586,6 +593,11 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
      // Christian Schüler's screen-space-derivative TBN (2010) builds the basis
      // per-fragment from worldPos and uv derivatives — no per-vertex tangents.
      mtoon_float3 nMap = mtoon_float3(normalTexture.sample(textureSampler, uv).xyz * 2.0 - 1.0);
+     // glTF 2.0 normalTextureInfo.scale — `scaledNormal = normalize((sample
+     // * 2.0 - 1.0) * vec3(scale, scale, 1.0))`. Defaults to 1.0 so existing
+     // assets without an authored `scale` field are unaffected. VMK#290.
+     nMap.xy *= mtoon_float(material.normalScale);
+     nMap = mtoon_float3(normalize(float3(nMap)));
 
      float3 dp1 = dfdx(in.worldPosition);
      float3 dp2 = dfdy(in.worldPosition);
@@ -852,9 +864,14 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  VertexOut out;
 
  // Calculate outline width
+ //
+ // VRMC_materials_mtoon-1.0 §outlineWidthMultiplyTexture: "The G
+ // component of the texture is referred to." Sampling .r here would
+ // pull the wrong channel and produce per-vertex modulation that
+ // doesn't match the spec / three-vrm / UniVRM. VMK#289.
  float outlineWidth = material.outlineWidthFactor;
  if (material.hasOutlineWidthMultiplyTexture > 0) {
- float widthMultiplier = outlineWidthMultiplyTexture.sample(textureSampler, in.texCoord).r;
+ float widthMultiplier = outlineWidthMultiplyTexture.sample(textureSampler, in.texCoord).g;
  outlineWidth *= widthMultiplier;
  }
 
@@ -907,8 +924,10 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  out.worldNormal = worldNormal;
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
- out.texCoord = in.texCoord;
- out.animatedTexCoord = animateUV(applyTextureTransform(in.texCoord, material), material);
+ // Same KHR_texture_transform fix as the main vertex shader. See comment
+ // at the equivalent site above. VMK#288.
+ out.texCoord = applyTextureTransform(in.texCoord, material);
+ out.animatedTexCoord = animateUV(out.texCoord, material);
  out.color = in.color;
 
  // View direction already calculated above for edge attenuation

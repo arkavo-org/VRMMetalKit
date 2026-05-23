@@ -239,6 +239,51 @@ final class VRMASpecComplianceTests: XCTestCase {
         XCTAssertEqual(result.z, targetPos.z, accuracy: 0.001)
     }
 
+    /// VMK#286: the rotation-channel encoding (what `@pixiv/three-vrm-animation`
+    /// consumes and Pixiv's distributed VRMA samples emit) must also populate
+    /// the sampler. Identity rotation → head-local forward = (0, 0, -1).
+    func testB1_lookAtTargetSamplerPresentForRotationChannel() throws {
+        let lookAtNodeIndex = 5
+        let glb = try VRMAGLBBuilder()
+            .addLookAtNode(nodeIndex: lookAtNodeIndex,
+                           rotation: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1))
+            .build()
+
+        let url = try writeTemp(glb)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let clip = try VRMAnimationLoader.loadVRMA(from: url, model: nil)
+
+        XCTAssertNotNil(clip.lookAtTargetSampler,
+                        "rotation-channel lookAt must populate lookAtTargetSampler (#286)")
+    }
+
+    /// VMK#286: applying the keyframe rotation to head-local forward (-Z)
+    /// must produce the expected gaze direction. 90° around +Y rotates
+    /// (0,0,-1) → (-1,0,0).
+    func testB1_lookAtTargetSamplerReturnsDirectionForRotationChannel() throws {
+        let lookAtNodeIndex = 5
+        let yaw90 = simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(0, 1, 0))
+        let glb = try VRMAGLBBuilder()
+            .addLookAtNode(nodeIndex: lookAtNodeIndex, rotation: yaw90)
+            .build()
+
+        let url = try writeTemp(glb)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let clip = try VRMAnimationLoader.loadVRMA(from: url, model: nil)
+
+        guard let sampler = clip.lookAtTargetSampler else {
+            XCTFail("rotation-channel lookAt must populate lookAtTargetSampler (#286)")
+            return
+        }
+
+        let dir = sampler(0)
+        XCTAssertEqual(dir.x, -1, accuracy: 1e-5, "yaw 90° around +Y → forward.x = -1")
+        XCTAssertEqual(dir.y,  0, accuracy: 1e-5, "yaw 90° around +Y → forward.y = 0")
+        XCTAssertEqual(dir.z,  0, accuracy: 1e-5, "yaw 90° around +Y → forward.z = 0")
+    }
+
     // MARK: - Helpers
 
     private func writeTemp(_ data: Data) throws -> URL {
@@ -256,13 +301,22 @@ final class VRMASpecComplianceTests: XCTestCase {
 ///
 /// The binary chunk contains all float32 accessor data packed sequentially.
 /// JSON references accessors via bufferViews with correct byteOffset/byteLength.
-private final class VRMAGLBBuilder {
+final class VRMAGLBBuilder {
+    /// Two channel encodings the loader needs to accept on the lookAt node:
+    /// `translation` is the spec-literal reading; `rotation` is what
+    /// `@pixiv/three-vrm-animation` consumes and Pixiv's distributed VRMA
+    /// samples emit (VMK#286). Tests should exercise both.
+    enum LookAtChannel {
+        case translation(SIMD3<Float>)
+        case rotation(simd_quatf)
+    }
+
     private var humanoidBones: [(name: String, nodeIndex: Int)] = []
     private var expressionPresets: [(name: String, nodeIndex: Int, weight: Float)] = []
     private var rotationTrackNodes: [Int] = []
     private var scaleTrackNodes: [Int] = []
     private var translationTrackNodes: [Int] = []
-    private var lookAtNode: (nodeIndex: Int, position: SIMD3<Float>)?
+    private var lookAtNode: (nodeIndex: Int, channel: LookAtChannel)?
 
     @discardableResult
     func addHumanoidBone(name: String, nodeIndex: Int) -> Self {
@@ -296,7 +350,13 @@ private final class VRMAGLBBuilder {
 
     @discardableResult
     func addLookAtNode(nodeIndex: Int, position: SIMD3<Float>) -> Self {
-        lookAtNode = (nodeIndex, position)
+        lookAtNode = (nodeIndex, .translation(position))
+        return self
+    }
+
+    @discardableResult
+    func addLookAtNode(nodeIndex: Int, rotation: simd_quatf) -> Self {
+        lookAtNode = (nodeIndex, .rotation(rotation))
         return self
     }
 
@@ -395,10 +455,18 @@ private final class VRMAGLBBuilder {
                        valueFloats: [weight, 0, 0], valueType: "VEC3")
         }
 
-        // lookAt node translation track
+        // lookAt node channel — emitted in whichever form the caller selected.
         if let la = lookAtNode {
-            addChannel(nodeIndex: la.nodeIndex, path: "translation",
-                       valueFloats: [la.position.x, la.position.y, la.position.z], valueType: "VEC3")
+            switch la.channel {
+            case .translation(let pos):
+                addChannel(nodeIndex: la.nodeIndex, path: "translation",
+                           valueFloats: [pos.x, pos.y, pos.z], valueType: "VEC3")
+            case .rotation(let q):
+                // glTF quaternion accessor stores [x, y, z, w].
+                addChannel(nodeIndex: la.nodeIndex, path: "rotation",
+                           valueFloats: [q.imag.x, q.imag.y, q.imag.z, q.real],
+                           valueType: "VEC4")
+            }
         }
 
         let totalByteLength = binaryFloats.count * 4

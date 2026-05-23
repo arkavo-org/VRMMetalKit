@@ -108,6 +108,7 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``shouldRenderPrimitive(annotation:cameraMode:)``
 - ``processFirstPersonAutoFlags(model:device:)``
 - <doc:RenderingAvatars>
+- <doc:DeterministicRendering>
 
 ### Materials
 

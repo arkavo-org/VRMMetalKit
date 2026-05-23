@@ -1374,12 +1374,26 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if enableSpringBone, model.springBone != nil {
 
             // Calculate actual deltaTime. `simulationDeltaTime` is the
-            // offline-rendering escape: when set, use it directly so
-            // tests / video extractors / conformance harnesses get a
+            // explicit offline-rendering escape: when set, use it directly
+            // so tests / video extractors / conformance harnesses get a
             // deterministic physics timestep independent of wall-clock.
+            //
+            // `config.synchronousSpringBone` is the documented offline-render
+            // mode (see RendererConfig.synchronousSpringBone). Offline rendering
+            // and wall-clock pacing are incompatible: the XPBD substep
+            // accumulator picks up a different substep count each frame as
+            // wall-clock pacing varies, and long chains diverge run-to-run
+            // on the same input (#283 conformance reproducer). When sync
+            // mode is on but no explicit `simulationDeltaTime` was supplied,
+            // fall back to a 60Hz fixed step so callers that opt into the
+            // offline mode get reproducibility without also having to know
+            // about `simulationDeltaTime`.
             let clampedDeltaTime: Float
             if let override = simulationDeltaTime {
                 clampedDeltaTime = Float(override)
+                lastUpdateTime = CACurrentMediaTime()
+            } else if config.synchronousSpringBone {
+                clampedDeltaTime = 1.0 / 60.0
                 lastUpdateTime = CACurrentMediaTime()
             } else {
                 let currentTime = CACurrentMediaTime()
@@ -2725,6 +2739,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtoon = material.mtoon {
                         mtoonUniforms = MToonMaterialUniforms(from: mtoon)
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
+                        // glTF-core normalTextureInfo.scale lives on
+                        // VRMMaterial (the glTF base layer), not on the
+                        // MToon extension struct, so thread it in here
+                        // after the mtoon-derived defaults land. VMK#290.
+                        mtoonUniforms.normalScale = material.normalScale
                         // Preserve source version for shader paths that truly differ
                         // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
                         mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
@@ -3812,6 +3831,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
             encoder.setVertexBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
             encoder.setFragmentBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
+
+            // Bind outlineWidthMultiplyTexture to the outline VERTEX stage
+            // at texture(0) so `mtoon_outline_vertex` can sample the G
+            // channel and modulate the per-vertex extrusion width per the
+            // VRMC_materials_mtoon-1.0 spec. Without this binding,
+            // `hasOutlineWidthMultiplyTexture > 0` causes the shader to
+            // sample an unbound texture slot — the kernel multiplies
+            // outlineWidth by an undefined sample, effectively zeroing
+            // (or otherwise corrupting) the extrusion width and making
+            // outlineWidthFactor / outlineWidthMode inert. VMK#289.
+            if let textureIndex = mtoon.outlineWidthMultiplyTexture,
+               textureIndex < model.textures.count,
+               let mtlTexture = model.textures[textureIndex].mtlTexture {
+                encoder.setVertexTexture(mtlTexture, index: 0)
+                if let cachedSampler = samplerStates["default"] {
+                    encoder.setVertexSamplerState(cachedSampler, index: 0)
+                }
+            }
 
             // Set joint matrices for skinned meshes
             if isSkinned, let skinIndex = item.node.skin, skinIndex < model.skins.count {

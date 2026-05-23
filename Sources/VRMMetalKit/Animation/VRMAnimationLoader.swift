@@ -388,14 +388,33 @@ public enum VRMAnimationLoader {
         }
 
         // B1: Parse lookAt block from VRMC_vrm_animation extension.
-        // Spec: the referenced node's translation track drives the head-local look-at target.
+        // Two encodings appear in the wild:
+        //   1) translation track on the lookAt node — the spec-literal
+        //      reading ("difference between the head position and the
+        //      position of the node specified by `node`") of
+        //      VRMC_vrm_animation-1.0 §lookAt.
+        //   2) rotation track on the lookAt node — what
+        //      `@pixiv/three-vrm-animation` and Pixiv's distributed VRMA
+        //      samples use, applying the rotation to a head-local forward
+        //      (-Z) to derive the gaze direction. Any loader claiming VRMA
+        //      support needs to accept this encoding too (VMK#286).
+        //
+        // Distance for the head-local target is 1.0 by convention because
+        // VRMLookAtController normalises the direction internally; only the
+        // direction matters for the eventual yaw/pitch.
         if let extensionDict = document.extensions?["VRMC_vrm_animation"] as? [String: Any],
            let lookAtBlock = extensionDict["lookAt"] as? [String: Any],
            let lookAtNodeAny = lookAtBlock["node"],
            let lookAtNodeIndex = intValue(from: lookAtNodeAny),
-           let lookAtTracks = nodeTracks[lookAtNodeIndex],
-           let translationTrack = lookAtTracks["translation"] {
-            clip.lookAtTargetSampler = { t in sampleVector3(translationTrack, at: t) }
+           let lookAtTracks = nodeTracks[lookAtNodeIndex] {
+            if let translationTrack = lookAtTracks["translation"] {
+                clip.lookAtTargetSampler = { t in sampleVector3(translationTrack, at: t) }
+            } else if let rotationTrack = lookAtTracks["rotation"] {
+                clip.lookAtTargetSampler = { t in
+                    let q = sampleQuaternion(rotationTrack, at: t)
+                    return q.act(SIMD3<Float>(0, 0, -1))
+                }
+            }
             #if VRM_METALKIT_ENABLE_LOGS
             vrmLogLoader("[VRMAnimationLoader] Parsed lookAt block -> node \(lookAtNodeIndex)")
             #endif

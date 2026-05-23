@@ -1341,6 +1341,10 @@ public class VRMMaterial {
     public var baseColorTexture: VRMTexture?
     /// Tangent-space normal map used for surface detail.
     public var normalTexture: VRMTexture?
+    /// glTF-core `normalTextureInfo.scale` — multiplies the X and Y
+    /// components of the unpacked tangent-space normal before
+    /// renormalisation. Defaults to `1.0`. VMK#290.
+    public var normalScale: Float = 1.0
     /// Emissive (self-illuminating) texture.
     public var emissiveTexture: VRMTexture?
     /// glTF metallic factor. Unused by the MToon path; retained for non-MToon fallback shading.
@@ -1479,6 +1483,10 @@ public class VRMMaterial {
         if let normalTextureInfo = gltfMaterial.normalTexture,
            normalTextureInfo.index < textures.count {
             normalTexture = textures[normalTextureInfo.index]
+            // glTF 2.0 normalTextureInfo.scale: amplifies the unpacked
+            // tangent-space normal's XY before renormalisation. Default 1.0
+            // per spec. VMK#290.
+            normalScale = normalTextureInfo.scale ?? 1.0
         }
 
         // Load emissive texture (for glow effects)
@@ -1489,6 +1497,24 @@ public class VRMMaterial {
 
         if let emissive = gltfMaterial.emissiveFactor, emissive.count == 3 {
             emissiveFactor = SIMD3<Float>(emissive[0], emissive[1], emissive[2])
+        }
+
+        // VRMC_materials_hdr_emissiveMultiplier-1.0 + KHR_materials_emissive_strength.
+        // Both extensions scale `emissiveFactor` by a scalar. The VRMC spec
+        // text reads: "Overwrite material.emissiveFactor of the target
+        // material with the value multiplied by emissiveMultiplier." KHR is
+        // the named glTF replacement and has identical semantics. When both
+        // are present (vanishingly rare) the VRMC variant wins for explicit
+        // alignment with VRM tooling. Negative multipliers are clamped to 0
+        // per VRMC's `minimum: 0.0` schema bound. VMK#287.
+        if let extensions = gltfMaterial.extensions {
+            if let ext = extensions["VRMC_materials_hdr_emissiveMultiplier"] as? [String: Any],
+               let m = floatScalar(from: ext["emissiveMultiplier"]) {
+                emissiveFactor *= max(0, m)
+            } else if let ext = extensions["KHR_materials_emissive_strength"] as? [String: Any],
+                      let s = floatScalar(from: ext["emissiveStrength"]) {
+                emissiveFactor *= max(0, s)
+            }
         }
 
         doubleSided = gltfMaterial.doubleSided ?? false
