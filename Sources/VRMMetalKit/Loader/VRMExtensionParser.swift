@@ -604,6 +604,15 @@ public class VRMExtensionParser {
         case "u": return .ou
         case "e": return .ee
         case "o": return .oh
+        // VMK#297: VRM 0.x's gaze BlendShapeGroups map to VRM 1.0's
+        // preset look-direction expressions. Without these the
+        // VRM 0.x parser dropped them into `expressions.custom`
+        // (PascalCase preserved), bypassing the spec preset
+        // namespace.
+        case "lookup": return .lookUp
+        case "lookdown": return .lookDown
+        case "lookleft": return .lookLeft
+        case "lookright": return .lookRight
         default: return nil
         }
     }
