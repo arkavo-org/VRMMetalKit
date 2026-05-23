@@ -1374,12 +1374,26 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if enableSpringBone, model.springBone != nil {
 
             // Calculate actual deltaTime. `simulationDeltaTime` is the
-            // offline-rendering escape: when set, use it directly so
-            // tests / video extractors / conformance harnesses get a
+            // explicit offline-rendering escape: when set, use it directly
+            // so tests / video extractors / conformance harnesses get a
             // deterministic physics timestep independent of wall-clock.
+            //
+            // `config.synchronousSpringBone` is the documented offline-render
+            // mode (see RendererConfig.synchronousSpringBone). Offline rendering
+            // and wall-clock pacing are incompatible: the XPBD substep
+            // accumulator picks up a different substep count each frame as
+            // wall-clock pacing varies, and long chains diverge run-to-run
+            // on the same input (#283 conformance reproducer). When sync
+            // mode is on but no explicit `simulationDeltaTime` was supplied,
+            // fall back to a 60Hz fixed step so callers that opt into the
+            // offline mode get reproducibility without also having to know
+            // about `simulationDeltaTime`.
             let clampedDeltaTime: Float
             if let override = simulationDeltaTime {
                 clampedDeltaTime = Float(override)
+                lastUpdateTime = CACurrentMediaTime()
+            } else if config.synchronousSpringBone {
+                clampedDeltaTime = 1.0 / 60.0
                 lastUpdateTime = CACurrentMediaTime()
             } else {
                 let currentTime = CACurrentMediaTime()
