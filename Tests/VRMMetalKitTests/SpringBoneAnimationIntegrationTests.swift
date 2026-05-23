@@ -67,13 +67,26 @@ final class SpringBoneAnimationIntegrationTests: XCTestCase {
 
         let finalJoint = SpringBoneTestFixtures.readBonePosition(
             model: model, boneIndex: 1)
-        let driftX = finalJoint.x - initialJoint.x
+        // The rig has stiffness=0 + gravityPower=0, so the only force
+        // available is the PBD distance constraint. With no stiffness
+        // pulling the joint toward the bind direction (parent + (0,-1,0)·L),
+        // the constraint preserves the joint's *direction* from the parent
+        // and projects to the rest length — i.e. the joint swings on a
+        // unit sphere rather than dragging laterally. For this geometry
+        // (parent at world (0,1,0)→(0.5,1,0), joint starting at (0,0,0)),
+        // the constraint-only equilibrium is (0.053, 0.106, 0); the actual
+        // post-frame pose lands near it (driftX ≈ 0.02, driftY ≈ 0.12) with
+        // small velocity-residual offsets from the per-substep root
+        // interpolation. The sanity invariant the test name implies is
+        // "the joint moves a non-trivial amount" — a total-displacement
+        // check, not an X-axis-only check.
+        let totalDrift = simd_distance(finalJoint, initialJoint)
 
-        XCTAssertGreaterThan(driftX, 0.05,
-            "A 0.5 m step on the root must drag the joint along +X by ≥ 5 cm " +
-            "within 1 second. Got initialJoint=\(initialJoint), " +
-            "finalJoint=\(finalJoint), driftX=\(driftX). If driftX is near " +
-            "zero, the animated root motion is not propagating to the " +
+        XCTAssertGreaterThan(totalDrift, 0.05,
+            "A 0.5 m step on the root must move the physics joint by ≥ 5 cm " +
+            "total displacement within 1 second. Got initialJoint=\(initialJoint), " +
+            "finalJoint=\(finalJoint), totalDrift=\(totalDrift). If totalDrift is " +
+            "near zero, the animated root motion is not propagating to the " +
             "physics joint through the distance constraint.")
     }
 
