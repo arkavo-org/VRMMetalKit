@@ -293,8 +293,15 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  // Transform normal to world space
  out.worldNormal = normalize((uniforms.normalMatrix * float4(morphedNormal, 0.0)).xyz);
 
- out.texCoord = in.texCoord;
- out.animatedTexCoord = animateUV(applyTextureTransform(in.texCoord, material), material);
+ // KHR_texture_transform is a static affine on UVs (offset / rotation / scale).
+ // The transform must apply to *every* texture lookup — base color, shading
+ // shift, outline width multiplier, MToon's matcap and shade textures, etc. —
+ // so we bake it into `texCoord` here in the vertex shader. Default uniforms
+ // (offset=0, rotation=0, scale=1) make `applyTextureTransform` identity, so
+ // assets without the extension are unaffected. UV animation composes on top
+ // via `animatedTexCoord`. VMK#288.
+ out.texCoord = applyTextureTransform(in.texCoord, material);
+ out.animatedTexCoord = animateUV(out.texCoord, material);
  out.color = in.color;
 
  if (needsViewNormal(material, uniforms)) {
@@ -907,8 +914,10 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  out.worldNormal = worldNormal;
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
- out.texCoord = in.texCoord;
- out.animatedTexCoord = animateUV(applyTextureTransform(in.texCoord, material), material);
+ // Same KHR_texture_transform fix as the main vertex shader. See comment
+ // at the equivalent site above. VMK#288.
+ out.texCoord = applyTextureTransform(in.texCoord, material);
+ out.animatedTexCoord = animateUV(out.texCoord, material);
  out.color = in.color;
 
  // View direction already calculated above for edge attenuation
