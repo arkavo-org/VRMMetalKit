@@ -101,15 +101,6 @@ final class SpringBoneCenterNodePhysicsTests: XCTestCase {
         let dispWith = postWith - preWith
         let dispWithout = postWithout - preWithout
 
-        // VMK#295: rigid-follow under center-node translation is blocked by
-        // a CPU/GPU race on the shared-command-buffer path. The frame's
-        // center delta is applied CPU-side before the substep loop, while
-        // the root is interpolated per-substep — first substep sees a
-        // stretched chain and the PBD distance constraint pulls the joint
-        // back. Per-substep CPU shifts don't fix it (shared-memory race),
-        // a GPU-side per-substep delta kernel is needed.
-        XCTExpectFailure("VMK#295 follow-up: center-node rigid follow needs a GPU-side per-substep delta kernel; CPU/GPU race on the shared command buffer breaks per-substep CPU shifts")
-
         // With center: physics joint follows the center delta (≥ 80% of the
         // 1m translation on X within a single frame).
         XCTAssertGreaterThan(dispWith.x, 0.8,

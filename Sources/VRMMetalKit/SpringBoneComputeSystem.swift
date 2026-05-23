@@ -55,6 +55,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var kinematicPipeline: MTLComputePipelineState?
     private var predictPipeline: MTLComputePipelineState?
     private var distancePipeline: MTLComputePipelineState?
+    private var centerDeltaPipeline: MTLComputePipelineState?
     private var collideSpheresPipeline: MTLComputePipelineState?
     private var collideCapsulesPipeline: MTLComputePipelineState?
     private var collidePlanesPipeline: MTLComputePipelineState?
@@ -136,6 +137,28 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
     var centerSpringRecords: [CenterSpringRecord] = []
     private var previousCenterWorldMatrices: [Int: float4x4] = [:]
+    /// Per-frame snapshot of each center node's *target* worldMatrix
+    /// captured at the top of `update()`, consumed when the host
+    /// pre-computes per-substep deltas into `centerDeltaBuffer` (VMK#295).
+    private var targetCenterWorldMatrices: [Int: float4x4] = [:]
+    /// GPU-side per-(substep × record) center delta entries — see
+    /// `springBoneApplyCenterDelta` (`SpringBoneCenterDelta.metal`). Filled
+    /// once per frame at the top of `update()` and dispatched per substep
+    /// in `executeXPBDStep`. Allocated lazily once `centerSpringRecords`
+    /// is non-empty.
+    private var centerDeltaBuffer: MTLBuffer?
+
+    /// 80-byte mirror of the `CenterDeltaRecord` struct in
+    /// `SpringBoneCenterDelta.metal` (4 × uint header + 4×4 float matrix).
+    /// Stride must match the Metal struct exactly so the per-substep
+    /// `setBuffer(offset:)` math lands on the right entry.
+    private struct CenterDeltaRecordGPU {
+        var boneStart: UInt32
+        var boneCount: UInt32
+        var _pad0: UInt32 = 0
+        var _pad1: UInt32 = 0
+        var delta: float4x4
+    }
 
     /// Flag to request physics state reset on next update (e.g., when returning to idle)
     var requestPhysicsReset = false
@@ -232,7 +255,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               let distanceFunction = library.makeFunction(name: "springBoneDistance"),
               let collideSpheresFunction = library.makeFunction(name: "springBoneCollideSpheres"),
               let collideCapsulesFunction = library.makeFunction(name: "springBoneCollideCapsules"),
-              let collidePlanesFunction = library.makeFunction(name: "springBoneCollidePlanes") else {
+              let collidePlanesFunction = library.makeFunction(name: "springBoneCollidePlanes"),
+              let centerDeltaFunction = library.makeFunction(name: "springBoneApplyCenterDelta") else {
             vrmLog("[SpringBone] ❌ Failed to find shader functions in library")
             throw SpringBoneError.failedToLoadShaders
         }
@@ -243,6 +267,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         collideSpheresPipeline = try device.makeComputePipelineState(function: collideSpheresFunction)
         collideCapsulesPipeline = try device.makeComputePipelineState(function: collideCapsulesFunction)
         collidePlanesPipeline = try device.makeComputePipelineState(function: collidePlanesFunction)
+        centerDeltaPipeline = try device.makeComputePipelineState(function: centerDeltaFunction)
 
         // Create global params buffer
         globalParamsBuffer = device.makeBuffer(length: MemoryLayout<SpringBoneGlobalParams>.stride, options: [.storageModeShared])
@@ -329,13 +354,20 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             prev.contents().copyMemory(from: curr.contents().advanced(by: byteOffset), byteCount: singleStepLength)
         }
 
-        // Center-space simulation (VRMC_springBone-1.0 §5.1): carry joint positions
-        // along with their center node's rigid-body motion this frame.  Each spring
-        // with a center node has its joints' bonePosCurr/bonePosPrev transformed by
-        // the center's world-space frame delta so that locomotion of the avatar does
-        // not produce phantom inertial drag on the spring chain.
-        if frameSubstepCount > 0 {
-            applyCenterFrameDeltas(model: model, buffers: buffers)
+        // VRMC_springBone-1.0 §5.1 center-node rigid follow (VMK#295):
+        // pre-compute every substep's incremental world-space delta on
+        // the host and pack into `centerDeltaBuffer`. The GPU then
+        // dispatches `springBoneApplyCenterDelta` per substep inside
+        // `executeXPBDStep` (between kinematic and predict) with a fixed
+        // offset into the buffer. Pre-filling once per frame avoids the
+        // CPU/GPU race the earlier in-loop CPU-shift attempt hit on
+        // the shared-command-buffer path: CPU writes between substep
+        // encodings would coalesce against the GPU's first observation
+        // of shared memory, leaving the joint partially-shifted and the
+        // distance constraint fighting the apparent stretch.
+        if frameSubstepCount > 0 && !centerSpringRecords.isEmpty {
+            captureTargetCenterWorldMatrices(model: model)
+            fillCenterDeltaBufferForFrame(substepCount: frameSubstepCount)
         }
 
         var stepsThisFrame = 0
@@ -521,16 +553,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
            let rootBoneIndicesBuffer = rootBoneIndicesBuffer,
            let numRootBonesBuffer = numRootBonesBuffer {
             computeEncoder.setComputePipelineState(kinematicPipeline)
-            
+
             assert(substepIndex < VRMConstants.Physics.maxSubstepsPerFrame, "substepIndex \(substepIndex) exceeds max allocated capacity")
             let byteOffset = substepIndex * alignedStepLength
-            
+
             computeEncoder.setBuffer(animatedRootPositionsBuffer, offset: byteOffset, index: 8)
             computeEncoder.setBuffer(rootBoneIndicesBuffer, offset: 0, index: 9)
             computeEncoder.setBuffer(numRootBonesBuffer, offset: 0, index: 10)
             computeEncoder.setBuffer(animatedRootPositionsPrevBuffer, offset: 0, index: 12)
             let rootGridSize = MTLSize(width: rootBoneIndices.count, height: 1, depth: 1)
             computeEncoder.dispatchThreads(rootGridSize, threadsPerThreadgroup: threadgroupSize)
+            computeEncoder.memoryBarrier(scope: .buffers)
+        }
+
+        // VRMC_springBone-1.0 §5.1 center-frame rigid follow (VMK#295):
+        // apply this substep's pre-computed delta to bonePosCurr +
+        // bonePosPrev for each spring-with-center. Lives between
+        // kinematic and predict so kinematic has anchored the root to
+        // the substep's interpolated animated position, and predict can
+        // then read a consistent layout (root + chain bones shifted by
+        // the same incremental fraction of the frame's center delta).
+        if !centerSpringRecords.isEmpty,
+           let centerDeltaPipeline = centerDeltaPipeline,
+           let centerDeltaBuffer = centerDeltaBuffer {
+            let recordCount = centerSpringRecords.count
+            let recordStride = MemoryLayout<CenterDeltaRecordGPU>.stride
+            let substepByteOffset = substepIndex * recordCount * recordStride
+            computeEncoder.setComputePipelineState(centerDeltaPipeline)
+            computeEncoder.setBuffer(centerDeltaBuffer, offset: substepByteOffset, index: 13)
+            var numRecordsU32 = UInt32(recordCount)
+            computeEncoder.setBytes(&numRecordsU32, length: MemoryLayout<UInt32>.size, index: 14)
+            let recordGridSize = MTLSize(width: recordCount, height: 1, depth: 1)
+            computeEncoder.dispatchThreads(recordGridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
         }
 
@@ -997,6 +1051,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Build center-spring records so update() can apply center-frame deltas.
         centerSpringRecords.removeAll(keepingCapacity: true)
         previousCenterWorldMatrices.removeAll(keepingCapacity: true)
+        targetCenterWorldMatrices.removeAll(keepingCapacity: true)
         var centerBoneIdx = 0
         for spring in springBone.springs {
             let count = spring.joints.count
@@ -1011,6 +1066,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 }
             }
             centerBoneIdx += count
+        }
+
+        // Allocate the GPU center-delta buffer sized for `maxSubsteps ×
+        // numCenterRecords` entries so the host can pre-fill all
+        // per-substep deltas at the top of `update()` and each substep's
+        // dispatch reads its slice at a fixed offset (VMK#295).
+        let numRecords = centerSpringRecords.count
+        if numRecords > 0 {
+            let maxSubsteps = VRMConstants.Physics.maxSubstepsPerFrame
+            let stride = MemoryLayout<CenterDeltaRecordGPU>.stride
+            let totalBytes = stride * numRecords * maxSubsteps
+            centerDeltaBuffer = device.makeBuffer(length: totalBytes,
+                                                   options: [.storageModeShared])
+        } else {
+            centerDeltaBuffer = nil
         }
 
         snapshotLock.lock()
@@ -1788,36 +1858,88 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     // MARK: - Center-space Simulation Helpers
 
-    /// Applies the rigid-body delta of each spring's center node to the joint positions
-    /// in `bonePosCurr` and `bonePosPrev`. This makes joint positions "follow" the center
-    /// node between frames so that avatar locomotion does not induce phantom inertia on
-    /// the spring chains (VRMC_springBone-1.0 §5.1 center node semantics).
-    private func applyCenterFrameDeltas(model: VRMModel, buffers: SpringBoneBuffers) {
-        guard !centerSpringRecords.isEmpty,
-              let currBuf = buffers.bonePosCurr,
-              let prevBuf = buffers.bonePosPrev else { return }
-
-        let numBones = buffers.numBones
-        let currPtr = currBuf.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
-        let prevPtr = prevBuf.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
-
+    /// Snapshots each center node's current `worldMatrix` into
+    /// `targetCenterWorldMatrices` at the top of the frame, before the
+    /// substep loop. Together with `previousCenterWorldMatrices` this
+    /// gives `fillCenterDeltaBufferForFrame` the endpoint matrices it
+    /// interpolates between to compute per-substep incremental deltas.
+    private func captureTargetCenterWorldMatrices(model: VRMModel) {
         for record in centerSpringRecords {
-            guard let centerNode = model.nodes[safe: record.centerNodeIndex] else { continue }
-            guard let prevMatrix = previousCenterWorldMatrices[record.centerNodeIndex] else { continue }
-
-            let currMatrix = centerNode.worldMatrix
-            // delta = currCenter * prevCenter⁻¹ maps points from where the center
-            // was last frame to where it is this frame.
-            let delta = currMatrix * prevMatrix.inverse
-
-            let end = min(record.boneStart + record.boneCount, numBones)
-            for i in record.boneStart..<end {
-                let tc = delta * SIMD4<Float>(currPtr[i].x, currPtr[i].y, currPtr[i].z, 1)
-                currPtr[i] = SIMD3<Float>(tc.x, tc.y, tc.z)
-                let tp = delta * SIMD4<Float>(prevPtr[i].x, prevPtr[i].y, prevPtr[i].z, 1)
-                prevPtr[i] = SIMD3<Float>(tp.x, tp.y, tp.z)
+            if let centerNode = model.nodes[safe: record.centerNodeIndex] {
+                targetCenterWorldMatrices[record.centerNodeIndex] = centerNode.worldMatrix
             }
         }
+    }
+
+    /// Pre-computes every substep's incremental center-frame delta and
+    /// packs them into `centerDeltaBuffer` for the GPU kernel. Layout is
+    /// `[substep0_record0, substep0_record1, ..., substepN_recordM]`;
+    /// each substep's slice has byte offset
+    /// `substepIndex × numRecords × stride`.
+    ///
+    /// Per-substep delta: linearly interpolate `prev → target` to get
+    /// the center's pose at `tPrev = i/N` and `tCurr = (i+1)/N`, then
+    /// `delta = centerAt(tCurr) × inverse(centerAt(tPrev))`. Summed
+    /// across substeps the kernel produces the same cumulative motion
+    /// as the previous single-shot approach (`target × prev⁻¹` at
+    /// `tCurr=1`), but the per-substep apply runs in GPU order in the
+    /// same command buffer as the kinematic/predict/distance kernels,
+    /// so the chain layout stays consistent across each substep.
+    ///
+    /// Linear matrix interpolation is exact for pure translation (the
+    /// common locomotion case). For rotation it introduces per-substep
+    /// non-orthonormality on the order of `θ²/8`, negligible at the
+    /// typical 1/120 s substep cadence.
+    private func fillCenterDeltaBufferForFrame(substepCount: Int) {
+        guard !centerSpringRecords.isEmpty,
+              let buffer = centerDeltaBuffer else { return }
+
+        let stride = MemoryLayout<CenterDeltaRecordGPU>.stride
+        let numRecords = centerSpringRecords.count
+        let ptr = buffer.contents().bindMemory(
+            to: CenterDeltaRecordGPU.self,
+            capacity: numRecords * VRMConstants.Physics.maxSubstepsPerFrame
+        )
+
+        for s in 0..<substepCount {
+            let tPrev = Float(s) / Float(substepCount)
+            let tCurr = Float(s + 1) / Float(substepCount)
+            for (i, record) in centerSpringRecords.enumerated() {
+                guard let prevMatrix = previousCenterWorldMatrices[record.centerNodeIndex],
+                      let targetMatrix = targetCenterWorldMatrices[record.centerNodeIndex] else {
+                    // Center node missing — write identity so the kernel
+                    // becomes a no-op for this entry.
+                    let slot = s * numRecords + i
+                    ptr[slot] = CenterDeltaRecordGPU(
+                        boneStart: UInt32(record.boneStart),
+                        boneCount: UInt32(record.boneCount),
+                        delta: matrix_identity_float4x4
+                    )
+                    continue
+                }
+                let centerAtPrev = mixMatrices(prevMatrix, targetMatrix, tPrev)
+                let centerAtCurr = mixMatrices(prevMatrix, targetMatrix, tCurr)
+                let delta = centerAtCurr * centerAtPrev.inverse
+                let slot = s * numRecords + i
+                ptr[slot] = CenterDeltaRecordGPU(
+                    boneStart: UInt32(record.boneStart),
+                    boneCount: UInt32(record.boneCount),
+                    delta: delta
+                )
+            }
+        }
+        _ = stride  // silence unused if optimizer drops it
+    }
+
+    /// Component-wise linear interpolation of two 4×4 matrices. Exact
+    /// for translation; first-order for rotation.
+    private func mixMatrices(_ a: float4x4, _ b: float4x4, _ t: Float) -> float4x4 {
+        float4x4(
+            mix(a.columns.0, b.columns.0, t: t),
+            mix(a.columns.1, b.columns.1, t: t),
+            mix(a.columns.2, b.columns.2, t: t),
+            mix(a.columns.3, b.columns.3, t: t)
+        )
     }
 
     /// Records the current frame's center node world matrices for use next frame.
