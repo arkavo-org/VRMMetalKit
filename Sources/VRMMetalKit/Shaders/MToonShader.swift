@@ -208,8 +208,12 @@ public struct MToonMaterialUniforms {
     /// `normalize((sample * 2.0 - 1.0) * vec3(scale, scale, 1.0))`.
     /// Defaults to 1.0 (no amplification). VMK#290.
     public var normalScale: Float = 1.0
-    private var _ttPad1: Float = 0.0
-    private var _ttPad2: Float = 0.0
+    /// glTF-core `occlusionTextureInfo.strength` — scales the
+    /// occlusion contribution per the spec formula `1 + strength *
+    /// (sample - 1)`. Defaults to 1.0 (full occlusion). VMK#293.
+    public var occlusionStrength: Float = 1.0
+    /// Non-zero if an occlusion texture is bound for this material.
+    public var hasOcclusionTexture: Int32 = 0
 
     /// Creates a default-initialized uniform payload.
     public init() {}

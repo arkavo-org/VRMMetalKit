@@ -1,0 +1,504 @@
+//
+// Copyright 2025 Arkavo
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+
+import XCTest
+import Metal
+import simd
+import CryptoKit
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
+@testable import VRMMetalKit
+
+/// VMK#293 — glTF 2.0 `occlusionTexture` (with its `strength` field) was
+/// silently dropped on the MToon path. The parser never read
+/// `gltfMaterial.occlusionTexture`, `VRMMaterial` carried no occlusion
+/// field, the MToon uniform struct had no `occlusionStrength` /
+/// `hasOcclusionTexture` slots, and the fragment shader had no
+/// occlusion sampling code. As a result every fragment rendered
+/// without any ambient-occlusion contribution — the conformance suite's
+/// `mtoon_pbrtex_occlusion_*` sweep produced a single hash across
+/// {no-texture baseline, strength=1.0, strength=0.5}.
+///
+/// Sibling shape to VMK#290 (`normalTexture.scale`, closed in PR #291):
+/// another glTF-core textureInfo with a scalar parameter that's missing
+/// from the VRMMetalKit MToon pipeline end-to-end.
+///
+/// These tests synthesise a textured VRM 1.0 in-memory with a procedural
+/// 16×16 quadrant occlusion map (R channel per glTF spec) and assert
+/// that varying `strength` plus the no-texture baseline produce distinct
+/// render hashes.
+final class MToonOcclusionTextureRenderTests: XCTestCase {
+
+    private let renderWidth = 256
+    private let renderHeight = 256
+    private let cameraPosition = SIMD3<Float>(0, 0, 1.4)
+    private let cameraTarget   = SIMD3<Float>(0, 0, 0)
+    private let cameraUp       = SIMD3<Float>(0, 1, 0)
+    private let cameraFovYDeg: Float = 30
+    // Front lighting with a moderate ambient term — occlusion attenuates
+    // ambient light proportionally, so a non-zero ambient is required for
+    // the occlusion contribution to be visible. The key light fills in
+    // direct illumination so the rendered output isn't pure-black where
+    // occlusion is heavy.
+    private let keyLightDir   = SIMD3<Float>(0, 0, -1)
+    private let keyLightColor = SIMD3<Float>(1, 1, 1)
+    private let keyLightIntensity: Float = 0.5
+    private let ambientColor: SIMD3<Float> = SIMD3<Float>(0.6, 0.6, 0.6)
+
+    /// Three strength variants plus a no-texture baseline must produce
+    /// four distinct hashes. Pre-fix all four collapse to the same hash
+    /// because the entire occlusion binding (texture + strength) is
+    /// dropped on the MToon path.
+    func testOcclusionStrengthSweepRendersDistinctHashes() async throws {
+        try await assertDistinctHashes(variants: [
+            ("baseline_no_texture", nil),
+            ("strength_full",       1.0),
+            ("strength_half",       0.5),
+            ("strength_zero",       0.0),
+        ])
+    }
+
+    // MARK: - Harness
+
+    private func assertDistinctHashes(
+        variants: [(label: String, strength: Float?)]
+    ) async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+        guard let queue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
+        }
+
+        let cameraPos = cameraPosition
+        let cameraTgt = cameraTarget
+        let cameraUpV = cameraUp
+        let fovYDeg = cameraFovYDeg
+        let lightDir = keyLightDir
+        let lightCol = keyLightColor
+        let lightInt = keyLightIntensity
+        let ambient = ambientColor
+        let w = renderWidth
+        let h = renderHeight
+
+        var hashes: [String: String] = [:]
+        for variant in variants {
+            let glb = try Self.buildOcclusionFixtureVRMGLB(strength: variant.strength)
+            let model = try await VRMModel.load(from: glb, device: device)
+            hashes[variant.label] = await MainActor.run {
+                Self.renderModelToHash(
+                    model: model, device: device, commandQueue: queue,
+                    cameraPosition: cameraPos, cameraTarget: cameraTgt, cameraUp: cameraUpV,
+                    cameraFovYDeg: fovYDeg,
+                    keyLightDir: lightDir, keyLightColor: lightCol, keyLightIntensity: lightInt,
+                    ambientColor: ambient,
+                    renderWidth: w, renderHeight: h
+                )
+            }
+        }
+
+        // Each variant in the input list must produce a unique pixel hash.
+        // strength=0 (no occlusion attenuation per spec) is allowed to
+        // match the baseline in principle, but only if the shader takes
+        // the `hasOcclusionTexture == 0` branch when strength is 0 — in
+        // practice strength=0 still samples the texture and applies
+        // `1 + 0 * (sample - 1) = 1`, so the rendered output is the same
+        // as the no-texture baseline. We allow that single collision but
+        // require the strength axis itself to differentiate (strength=1
+        // vs strength=0.5 vs strength=0 must produce distinct outputs).
+        let unique = Set(hashes.values)
+        XCTAssertGreaterThanOrEqual(unique.count, variants.count - 1,
+            "VMK#293: occlusion strength sweep must produce at least " +
+            "\(variants.count - 1) distinct render hashes across " +
+            "\(variants.count) variants (strength=0 may match baseline). " +
+            "Got \(unique.count). " +
+            "Hashes: \(hashes.map { "\($0.key) → \($0.value.prefix(8))" }.sorted().joined(separator: ", ")). " +
+            "Total collapse means the entire occlusionTexture path is dropped " +
+            "on the MToon pipeline — texture not bound, strength field " +
+            "unread, shader has no occlusion sampling code.")
+
+        // The headline assertion: the no-texture baseline must NOT
+        // produce the same hash as full-strength occlusion. If it does,
+        // the texture either isn't reaching the shader or the shader
+        // doesn't sample it at all.
+        let baselineHash = hashes["baseline_no_texture"]
+        let strengthFullHash = hashes["strength_full"]
+        XCTAssertNotEqual(baselineHash, strengthFullHash,
+            "VMK#293: full-strength occlusion (strength=1.0) must produce " +
+            "different pixels from the no-texture baseline. Got identical " +
+            "hashes — the occlusionTexture binding is silently dropped on " +
+            "the MToon path.")
+
+        // strength=0.5 must produce different output from strength=1.0 —
+        // the strength field has to reach the shader's modulation
+        // formula `1 + strength * (sample - 1)`.
+        let strengthHalfHash = hashes["strength_half"]
+        XCTAssertNotEqual(strengthHalfHash, strengthFullHash,
+            "VMK#293: strength=0.5 must produce different pixels from " +
+            "strength=1.0. Got identical hashes — the `strength` field " +
+            "isn't reaching the MToon fragment shader.")
+    }
+
+    @MainActor
+    private static func renderModelToHash(
+        model: VRMModel,
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue,
+        cameraPosition: SIMD3<Float>,
+        cameraTarget: SIMD3<Float>,
+        cameraUp: SIMD3<Float>,
+        cameraFovYDeg: Float,
+        keyLightDir: SIMD3<Float>,
+        keyLightColor: SIMD3<Float>,
+        keyLightIntensity: Float,
+        ambientColor: SIMD3<Float>,
+        renderWidth: Int,
+        renderHeight: Int
+    ) -> String {
+        var config = RendererConfig()
+        config.sampleCount = 1
+        config.strict = .off
+        config.synchronousSpringBone = true
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.loadModel(model)
+
+        let aspect = Float(renderWidth) / Float(renderHeight)
+        let fovY = cameraFovYDeg * .pi / 180
+        renderer.projectionMatrix = perspectiveProjection(
+            fovY: fovY, aspect: aspect, near: 0.05, far: 100
+        )
+        renderer.viewMatrix = lookAt(
+            eye: cameraPosition, target: cameraTarget, up: cameraUp
+        )
+        renderer.setLight(0, direction: keyLightDir, color: keyLightColor,
+                          intensity: keyLightIntensity)
+        renderer.setAmbientColor(ambientColor)
+
+        let colorTexture = makeTexture(
+            device: device, width: renderWidth, height: renderHeight,
+            format: .bgra8Unorm, usage: [.renderTarget, .shaderRead], storage: .shared
+        )
+        let depthTexture = makeTexture(
+            device: device, width: renderWidth, height: renderHeight,
+            format: .depth32Float, usage: [.renderTarget], storage: .private
+        )
+        guard let cb = commandQueue.makeCommandBuffer() else {
+            XCTFail("makeCommandBuffer failed"); return ""
+        }
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = colorTexture
+        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].storeAction = .store
+        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        rpd.depthAttachment.texture = depthTexture
+        rpd.depthAttachment.loadAction = .clear
+        rpd.depthAttachment.storeAction = .dontCare
+        rpd.depthAttachment.clearDepth = 1.0
+        renderer.drawOffscreenHeadless(to: colorTexture, depth: depthTexture,
+                                        commandBuffer: cb, renderPassDescriptor: rpd)
+        let sem = DispatchSemaphore(value: 0)
+        cb.addCompletedHandler { _ in sem.signal() }
+        cb.commit()
+        sem.wait()
+
+        let bytesPerRow = renderWidth * 4
+        var pixels = [UInt8](repeating: 0, count: bytesPerRow * renderHeight)
+        pixels.withUnsafeMutableBufferPointer { ptr in
+            colorTexture.getBytes(ptr.baseAddress!, bytesPerRow: bytesPerRow,
+                                  from: MTLRegionMake2D(0, 0, renderWidth, renderHeight),
+                                  mipmapLevel: 0)
+        }
+        let digest = SHA256.hash(data: Data(pixels))
+        return digest.compactMap { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - Minimal occlusion-mapped VRM GLB builder
+
+    /// Builds a minimal valid VRM 1.0 GLB with a single quad facing +Z
+    /// and one MToon material. When `strength` is non-nil, attaches a
+    /// procedural 16×16 quadrant occlusion map (per glTF spec the R
+    /// channel carries the occlusion value, 0=heavy 1=none) as
+    /// `material.occlusionTexture` with the supplied `strength`. When
+    /// `strength` is nil, omits the texture entirely (no-texture baseline).
+    private static func buildOcclusionFixtureVRMGLB(strength: Float?) throws -> Data {
+        var bin = Data()
+
+        let positions: [Float] = [
+            -1, -1, 0,  1, -1, 0,  1, 1, 0,  -1, 1, 0,
+        ]
+        let normals: [Float] = [
+            0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,
+        ]
+        let uvs: [Float] = [
+            0, 1,  1, 1,  1, 0,  0, 0,
+        ]
+        let indices: [UInt16] = [0, 1, 2, 0, 2, 3]
+
+        let positionsOffset = bin.count
+        appendFloats(&bin, positions)
+        let positionsLength = bin.count - positionsOffset
+
+        let normalsOffset = bin.count
+        appendFloats(&bin, normals)
+        let normalsLength = bin.count - normalsOffset
+
+        let uvsOffset = bin.count
+        appendFloats(&bin, uvs)
+        let uvsLength = bin.count - uvsOffset
+
+        let indicesOffset = bin.count
+        appendUInt16s(&bin, indices)
+        let indicesLength = bin.count - indicesOffset
+        while bin.count % 4 != 0 { bin.append(0) }
+
+        var imageOffset = 0
+        var imageLength = 0
+        if strength != nil {
+            let pngBytes = try makeQuadrantOcclusionPNG()
+            imageOffset = bin.count
+            bin.append(pngBytes)
+            imageLength = pngBytes.count
+            while bin.count % 4 != 0 { bin.append(0) }
+        }
+
+        var bufferViews: [[String: Any]] = [
+            ["buffer": 0, "byteOffset": positionsOffset, "byteLength": positionsLength],
+            ["buffer": 0, "byteOffset": normalsOffset,   "byteLength": normalsLength],
+            ["buffer": 0, "byteOffset": uvsOffset,       "byteLength": uvsLength],
+            ["buffer": 0, "byteOffset": indicesOffset,   "byteLength": indicesLength],
+        ]
+        if strength != nil {
+            bufferViews.append(["buffer": 0, "byteOffset": imageOffset, "byteLength": imageLength])
+        }
+
+        var material: [String: Any] = [
+            "name": "fixture-mtoon",
+            "pbrMetallicRoughness": [
+                "baseColorFactor": [0.7, 0.7, 0.7, 1],
+                "metallicFactor": 0,
+                "roughnessFactor": 1,
+            ],
+            "doubleSided": true,
+            "extensions": [
+                "VRMC_materials_mtoon": [
+                    "specVersion": "1.0",
+                    "transparentWithZWrite": false,
+                    "renderQueueOffsetNumber": 0,
+                ],
+            ],
+        ]
+        if let s = strength {
+            // glTF-core: `material.occlusionTexture` is a sibling of
+            // `pbrMetallicRoughness`, not nested under it. `strength` is
+            // a sibling of `index` on the textureInfo struct.
+            material["occlusionTexture"] = [
+                "index": 0,
+                "strength": Double(s),
+            ]
+        }
+
+        var json: [String: Any] = [
+            "asset": ["version": "2.0", "generator": "VMK293-test"],
+            "extensionsUsed": ["VRMC_vrm", "VRMC_materials_mtoon"],
+            "extensions": [
+                "VRMC_vrm": [
+                    "specVersion": "1.0",
+                    "meta": [
+                        "name": "vmk293-fixture",
+                        "version": "1.0",
+                        "authors": ["VMK293 test"],
+                        "licenseUrl": "https://vrm.dev/licenses/1.0/",
+                    ],
+                    "humanoid": [
+                        "humanBones": [
+                            "hips":          ["node": 0],
+                            "spine":         ["node": 0],
+                            "head":          ["node": 0],
+                            "leftUpperArm":  ["node": 0],
+                            "leftLowerArm":  ["node": 0],
+                            "leftHand":      ["node": 0],
+                            "rightUpperArm": ["node": 0],
+                            "rightLowerArm": ["node": 0],
+                            "rightHand":     ["node": 0],
+                            "leftUpperLeg":  ["node": 0],
+                            "leftLowerLeg":  ["node": 0],
+                            "leftFoot":      ["node": 0],
+                            "rightUpperLeg": ["node": 0],
+                            "rightLowerLeg": ["node": 0],
+                            "rightFoot":     ["node": 0],
+                        ] as [String: Any],
+                    ],
+                ],
+            ],
+            "scene": 0,
+            "scenes": [["nodes": [0]]],
+            "nodes": [["mesh": 0]],
+            "meshes": [[
+                "primitives": [[
+                    "attributes": [
+                        "POSITION": 0,
+                        "NORMAL": 1,
+                        "TEXCOORD_0": 2,
+                    ],
+                    "indices": 3,
+                    "material": 0,
+                ]],
+            ]],
+            "materials": [material],
+            "buffers": [["byteLength": bin.count]],
+            "bufferViews": bufferViews,
+            "accessors": [
+                ["bufferView": 0, "componentType": 5126, "count": 4,
+                 "type": "VEC3", "min": [-1, -1, 0], "max": [1, 1, 0]],
+                ["bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"],
+                ["bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2"],
+                ["bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR"],
+            ],
+        ]
+        if strength != nil {
+            json["textures"] = [["source": 0, "sampler": 0]]
+            json["samplers"] = [[
+                "magFilter": 9729, "minFilter": 9729,
+                "wrapS": 10497, "wrapT": 10497,
+            ]]
+            json["images"] = [["bufferView": 4, "mimeType": "image/png"]]
+        }
+
+        var jsonData = try JSONSerialization.data(withJSONObject: json, options: [])
+        while jsonData.count % 4 != 0 { jsonData.append(0x20) }
+
+        let total = 12 + 8 + jsonData.count + 8 + bin.count
+        var glb = Data()
+        glb.appendUInt32LE(0x46546C67)
+        glb.appendUInt32LE(2)
+        glb.appendUInt32LE(UInt32(total))
+        glb.appendUInt32LE(UInt32(jsonData.count))
+        glb.appendUInt32LE(0x4E4F534A)
+        glb.append(jsonData)
+        glb.appendUInt32LE(UInt32(bin.count))
+        glb.appendUInt32LE(0x004E4942)
+        glb.append(bin)
+        return glb
+    }
+
+    /// 16×16 RGBA quadrant occlusion map. The R channel carries the
+    /// occlusion value per the glTF spec — TL=0.1 (heavy), TR=0.3,
+    /// BL=0.7, BR=1.0 (none). G/B set to 255 so the same fixture
+    /// renders sensibly if a caller accidentally samples a non-R channel.
+    private static func makeQuadrantOcclusionPNG() throws -> Data {
+        let size = 16
+        let half = size / 2
+        let tl: UInt8 = UInt8((0.1 * 255.0).rounded())  // 26
+        let tr: UInt8 = UInt8((0.3 * 255.0).rounded())  // 77
+        let bl: UInt8 = UInt8((0.7 * 255.0).rounded())  // 179
+        let br: UInt8 = UInt8((1.0 * 255.0).rounded())  // 255
+
+        var pixels = [UInt8](repeating: 0, count: size * size * 4)
+        for y in 0..<size {
+            for x in 0..<size {
+                let r: UInt8 = {
+                    if y < half && x < half  { return tl }
+                    if y < half && x >= half { return tr }
+                    if y >= half && x < half { return bl }
+                    return br
+                }()
+                let i = (y * size + x) * 4
+                pixels[i+0] = r
+                pixels[i+1] = 255
+                pixels[i+2] = 255
+                pixels[i+3] = 255
+            }
+        }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo: UInt32 = CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let context = CGContext(
+            data: &pixels, width: size, height: size,
+            bitsPerComponent: 8, bytesPerRow: size * 4,
+            space: colorSpace, bitmapInfo: bitmapInfo
+        ), let cgImage = context.makeImage() else {
+            throw NSError(domain: "MToonOcclusionTextureRenderTests", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not create CGImage"])
+        }
+
+        let cfData = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            cfData as CFMutableData, UTType.png.identifier as CFString, 1, nil
+        ) else {
+            throw NSError(domain: "MToonOcclusionTextureRenderTests", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not create PNG destination"])
+        }
+        CGImageDestinationAddImage(dest, cgImage, nil)
+        guard CGImageDestinationFinalize(dest) else {
+            throw NSError(domain: "MToonOcclusionTextureRenderTests", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "PNG encode failed"])
+        }
+        return cfData as Data
+    }
+
+    private static func appendFloats(_ data: inout Data, _ floats: [Float]) {
+        for var f in floats {
+            Swift.withUnsafeBytes(of: &f) { data.append(contentsOf: $0) }
+        }
+    }
+
+    private static func appendUInt16s(_ data: inout Data, _ values: [UInt16]) {
+        for var v in values {
+            v = v.littleEndian
+            Swift.withUnsafeBytes(of: &v) { data.append(contentsOf: $0) }
+        }
+    }
+
+    // MARK: - Math + texture helpers
+
+    private static func perspectiveProjection(fovY: Float, aspect: Float, near: Float, far: Float) -> simd_float4x4 {
+        let y = 1 / tan(fovY * 0.5)
+        let x = y / aspect
+        let z = far / (near - far)
+        return simd_float4x4(
+            SIMD4<Float>(x, 0, 0, 0),
+            SIMD4<Float>(0, y, 0, 0),
+            SIMD4<Float>(0, 0, z, -1),
+            SIMD4<Float>(0, 0, z * near, 0)
+        )
+    }
+
+    private static func lookAt(eye: SIMD3<Float>, target: SIMD3<Float>, up: SIMD3<Float>) -> simd_float4x4 {
+        let z = normalize(eye - target)
+        let x = normalize(cross(up, z))
+        let y = cross(z, x)
+        return simd_float4x4(
+            SIMD4<Float>(x.x, y.x, z.x, 0),
+            SIMD4<Float>(x.y, y.y, z.y, 0),
+            SIMD4<Float>(x.z, y.z, z.z, 0),
+            SIMD4<Float>(-dot(x, eye), -dot(y, eye), -dot(z, eye), 1)
+        )
+    }
+
+    private static func makeTexture(
+        device: MTLDevice, width: Int, height: Int,
+        format: MTLPixelFormat, usage: MTLTextureUsage, storage: MTLStorageMode
+    ) -> MTLTexture {
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: format, width: width, height: height, mipmapped: false
+        )
+        desc.usage = usage
+        desc.storageMode = storage
+        return device.makeTexture(descriptor: desc)!
+    }
+}
+
+private extension Data {
+    mutating func appendUInt32LE(_ value: UInt32) {
+        var v = value.littleEndian
+        Swift.withUnsafeBytes(of: &v) { append(contentsOf: $0) }
+    }
+}

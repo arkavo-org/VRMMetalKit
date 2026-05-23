@@ -153,11 +153,11 @@ struct MToonMaterial {
  float textureTransformRotation;            // 4 bytes
  float textureTransformScaleX;             // 4 bytes
 
- // Block 14: 16 bytes - KHR_texture_transform scale Y + normalScale + padding
+ // Block 14: 16 bytes - KHR_texture_transform scale Y + normalScale + occlusion (VMK#293)
  float textureTransformScaleY;             // 4 bytes
  float normalScale;                         // 4 bytes — glTF-core normalTextureInfo.scale (VMK#290)
- float _ttPad1;                             // 4 bytes padding
- float _ttPad2;                             // 4 bytes padding
+ float occlusionStrength;                   // 4 bytes — glTF-core occlusionTextureInfo.strength (VMK#293)
+ int hasOcclusionTexture;                  // 4 bytes — occlusion texture binding flag (VMK#293)
 };
 
 struct VertexIn {
@@ -341,6 +341,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
                         texture2d<float> matcapTexture [[texture(5)]],
                         texture2d<float> rimMultiplyTexture [[texture(6)]],
                         texture2d<float> uvAnimationMaskTexture [[texture(7)]],
+                        texture2d<float> occlusionTexture [[texture(8)]],
                         sampler textureSampler [[sampler(0)]]) {
 
  // Debug modes are cold in production; keep the normal path to one branch.
@@ -820,6 +821,20 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
          dirRim += fresnel * NdotL * mtoon_float3(uniforms.light2Color.xyz) * intensity2;
      }
      litColor += dirRim;
+ }
+
+ // glTF 2.0 occlusion (VMK#293): modulate the composed shading by the
+ // R-channel of the occlusion texture per the spec formula
+ //   finalColor = litColor * (1.0 + strength * (sample - 1.0))
+ // Applied after all direct + indirect + matcap + rim + emissive
+ // contributions are summed but before the minimum-light floor and the
+ // final saturate. Spec-literal placement; a future pass may refine to
+ // UniVRM's "indirect-only" composition if conformance flags drift on
+ // a textured emissive material.
+ if (material.hasOcclusionTexture > 0) {
+     mtoon_float ao = mtoon_float(occlusionTexture.sample(textureSampler, uv).r);
+     mtoon_float occlusionFactor = mtoon_float(1.0) + mtoon_float(material.occlusionStrength) * (ao - mtoon_float(1.0));
+     litColor *= occlusionFactor;
  }
 
  // DEBUG 35: Final lit color before gamma/sRGB conversion

@@ -51,11 +51,10 @@ final class MToonShaderGPUTests: XCTestCase {
     /// Update this hash when intentionally changing the shader.
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
-    /// Updated: Move MToon parametric-rim fresnel from view-space (compound
-    /// `viewMatrix * normalMatrix * float4(N, 0)`, which leaked the translation
-    /// w-component into xyz) to world-space, matching the MToon-1.0 spec +
-    /// three-vrm + UniVRM Built-in RP convention. Closes #226.
-    static let knownGoodShaderHash = "0d0b83c67d43de7ff6a30c901a6f532e04d1057779d9a7441c403b65737d7e3c"
+    /// Updated: Add glTF-core `occlusionTexture` sampling at texture slot 8
+    /// + `occlusionStrength` field in Block 14. Closes VMK#293 (sibling to
+    /// the normalTexture.scale wiring closed by PR #291).
+    static let knownGoodShaderHash = "5bf854d993225bc284f7fd1c751c86ae28a1a959365c1bbd9ecf113651628220"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.
