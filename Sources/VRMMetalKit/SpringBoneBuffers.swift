@@ -53,6 +53,12 @@ public final class SpringBoneBuffers: @unchecked Sendable {
     var sphereColliders: MTLBuffer?
     var capsuleColliders: MTLBuffer?
     var planeColliders: MTLBuffer?
+    // VMK#237 inside-branch diagnostic. Per-bone last-write entry; allocated
+    // by `allocateInsideColliderDiagnostics` only when the investigation
+    // hook is opted into. A 1-byte placeholder always exists for kernels
+    // that bind the buffer unconditionally — see `insideColliderDiagnosticsPlaceholder`.
+    var insideColliderDiagnostics: MTLBuffer?
+    var insideColliderDiagnosticsPlaceholder: MTLBuffer?
 
     var numBones: Int = 0
     var numSpheres: Int = 0
@@ -94,6 +100,40 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         if numPlanes > 0 {
             planeColliders = device.makeBuffer(length: planeColliderSize, options: [.storageModeShared])
         }
+
+        // Placeholder for the inside-branch diagnostic buffer. Always present so
+        // the kernel can bind buffer(15) unconditionally. The real buffer is
+        // attached only when `allocateInsideColliderDiagnostics()` is called.
+        insideColliderDiagnosticsPlaceholder = device.makeBuffer(
+            length: MemoryLayout<InsideColliderDiagnostic>.stride,
+            options: [.storageModeShared]
+        )
+    }
+
+    /// VMK#237 investigation hook. Allocates the per-bone inside-branch
+    /// diagnostic buffer and seeds each entry as "never written" (shapeType
+    /// = `0xFFFFFFFF`). Call before driving the simulation; read back via
+    /// `SpringBoneComputeSystem.dumpInsideColliderDiagnostics()`.
+    public func allocateInsideColliderDiagnostics() {
+        guard numBones > 0 else { return }
+        let size = MemoryLayout<InsideColliderDiagnostic>.stride * numBones
+        guard let buffer = device.makeBuffer(length: size, options: [.storageModeShared]) else {
+            return
+        }
+        let ptr = buffer.contents().bindMemory(to: InsideColliderDiagnostic.self, capacity: numBones)
+        for i in 0..<numBones {
+            ptr[i] = InsideColliderDiagnostic(
+                shapeType: 0xFFFFFFFF,
+                colliderIndex: 0,
+                angleLimit: 0,
+                boneRadius: 0,
+                distance: 0,
+                boundary: 0,
+                penetration: 0,
+                groupMatched: 0
+            )
+        }
+        insideColliderDiagnostics = buffer
     }
 
     func updateBoneParameters(_ parameters: [BoneParams]) {
@@ -452,4 +492,30 @@ public struct SpringBoneGlobalParams {
         self.dragMultiplier = dragMultiplier
         self.externalVelocity = externalVelocity
     }
+}
+
+/// VMK#237 inside-branch diagnostic record. Per-bone last-write entry
+/// populated by the sphere/capsule collision kernels when the inside (containment)
+/// branch fires. Layout must match `InsideColliderDiagnostic` in
+/// `Sources/VRMMetalKit/Shaders/SpringBoneCollision.metal`.
+///
+/// `shapeType` of `0xFFFFFFFF` means the branch never fired for this bone
+/// since the last `allocateInsideColliderDiagnostics()` reset.
+public struct InsideColliderDiagnostic {
+    /// `0` = inside-sphere branch, `1` = inside-capsule branch, `0xFFFFFFFF` = unwritten.
+    public var shapeType: UInt32
+    /// Index of the collider entry within the sphere/capsule array that fired the branch.
+    public var colliderIndex: UInt32
+    /// `boneParams[id].angleLimit` value the shader read at the inside-branch entry, in radians.
+    public var angleLimit: Float
+    /// `boneParams[id].radius` value the shader read at the inside-branch entry.
+    public var boneRadius: Float
+    /// Distance from the joint to the collider centre (sphere) or capsule-axis closest point (capsule).
+    public var distance: Float
+    /// `collider.radius` — the containment surface the joint is meant to stay inside.
+    public var boundary: Float
+    /// Inward push applied this invocation (`0` if the branch fired but no push was needed).
+    public var penetration: Float
+    /// `1` if `groupMask & (1u << collider.groupIndex)` matched, `0` otherwise.
+    public var groupMatched: UInt32
 }

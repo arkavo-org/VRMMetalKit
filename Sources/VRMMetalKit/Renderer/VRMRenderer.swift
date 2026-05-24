@@ -626,6 +626,28 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         springBoneComputeSystem?.warmupPhysics(model: model, steps: steps)
     }
 
+    /// VMK#237 investigation hook. Opt into per-bone inside-branch diagnostic
+    /// recording in the sphere/capsule collision kernels. When enabled, each
+    /// inside (containment) branch invocation overwrites a per-bone record
+    /// with what the shader observed: shape type, joint `angleLimit`,
+    /// distance to boundary, applied penetration. Read it back via
+    /// ``dumpInsideColliderDiagnostics()``.
+    ///
+    /// - Parameter enabled: `true` to start capturing; `false` to stop.
+    public func setInsideColliderDiagnosticsEnabled(_ enabled: Bool) {
+        guard let model = model else { return }
+        springBoneComputeSystem?.setInsideColliderDiagnosticsEnabled(enabled, model: model)
+    }
+
+    /// VMK#237 investigation hook. One human-readable line per bone whose
+    /// inside-branch fired since the diagnostic was enabled. Bones whose
+    /// branch never fired are omitted. Call after at least one frame has
+    /// been drawn so the GPU has populated the buffer.
+    public func dumpInsideColliderDiagnostics() -> [String] {
+        guard let model = model else { return [] }
+        return springBoneComputeSystem?.dumpInsideColliderDiagnostics(model: model) ?? []
+    }
+
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
     private static let zeroMorphWeights = [Float](repeating: 0, count: 8)
     private var hasLoggedSpringBone = false

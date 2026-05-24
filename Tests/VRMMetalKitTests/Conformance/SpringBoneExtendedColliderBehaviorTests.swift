@@ -449,6 +449,114 @@ final class SpringBoneExtendedColliderBehaviorTests: XCTestCase {
             "signature: extended-collider parameters silently dropping out.")
     }
 
+    // MARK: - VMK#237 diagnostic: pin down whether angleLimit reaches the shader
+
+    /// VMK#237 diagnostic: runs the angle-limited fixture for the full
+    /// swing with the per-bone inside-collider diagnostic enabled, then
+    /// asserts the shader saw the expected `angleLimit` value on at least
+    /// one bone that hit an inside-* branch.
+    ///
+    /// **Finding (2026-05):** `angleLimit` IS reaching the shader (~1.047
+    /// rad / 60°) for every non-root bone hitting the inside-sphere branch.
+    /// The conformance-suite bucket collapse for `springbone_extended_isphere_*`
+    /// variants is **not** a parameter-propagation bug; it's a fixture-design
+    /// outcome:
+    ///   * The chain joints stay at distance 0.0046 / 0.0506 / 0.1005 m from
+    ///     the sphere centre, well inside the boundary 0.20 m at pmed and
+    ///     0.40 m at ploose. Inside-sphere collision correctly never engages
+    ///     because the chain never escapes; r=0.1 (`ptight`) is the only
+    ///     placement tight enough to clip the chain (hence its distinct
+    ///     bucket).
+    ///   * The chain's actual swing relative to the bind direction never
+    ///     exceeds 30°, so cones of 30° / 60° / 90° all collapse to the
+    ///     baseline trajectory because none of them bite.
+    ///
+    /// Keeping this test as a regression detector for the parameter-
+    /// propagation guarantee — if a future change breaks the
+    /// `BoneParams.angleLimit` upload, the dump's `angleLimit=0.000rad`
+    /// will surface immediately.
+    func testInsideSphereAngleLimitReachesShader() async throws {
+        let env = try prepareEnv()
+        guard let url = Bundle.module.url(
+            forResource: "springbone_extended_isphere_anglelimit_60",
+            withExtension: "vrm",
+            subdirectory: "TestData/Conformance"
+        ) else {
+            throw XCTSkip("springbone_extended_isphere_anglelimit_60.vrm not bundled.")
+        }
+
+        let model = try await VRMModel.load(from: url, device: env.device)
+        let system = try SpringBoneComputeSystem(device: env.device)
+        try system.populateSpringBoneData(model: model)
+        system.warmupPhysics(model: model, steps: warmupSteps)
+        system.setInsideColliderDiagnosticsEnabled(true, model: model)
+
+        // Drive the swing as incremental per-frame translations matching
+        // `testAngleLimitVariantDiffersFromNoLimitBaseline`. A one-shot 0.5 m
+        // jump would trip teleportation detection (`detectTeleportation` at
+        // `SpringBoneComputeSystem.swift:1345`) and reset the physics state
+        // before the substep loop runs, leaving the sphere kernel undispatched.
+        let rootNodes = model.nodes.filter { $0.parent == nil }
+        let originals = rootNodes.map { $0.translation }
+        let strongSwing = SIMD3<Float>(0.5, 0, 0)
+        let durationSeconds: Float = 0.25
+        let totalFrames = max(1, Int((durationSeconds * Float(swingFPS)).rounded()))
+        for frame in 1...totalFrames {
+            let t = Float(frame) / Float(totalFrames)
+            let offset = strongSwing * t
+            for (idx, root) in rootNodes.enumerated() {
+                root.translation = originals[idx] + offset
+                root.updateWorldTransform()
+            }
+            guard let cb = env.commandQueue.makeCommandBuffer() else {
+                throw XCTSkip("Could not create command buffer.")
+            }
+            system.update(model: model, deltaTime: 1.0 / Double(swingFPS),
+                          commandBuffer: cb)
+            cb.commit()
+            await cb.completed()
+        }
+
+        let dump = system.dumpInsideColliderDiagnostics(model: model)
+        // Surface the full dump in the test output so failures are
+        // self-diagnosing without re-running with a debugger.
+        for line in dump { print(line) }
+
+        // Expect: at least one bone hit the inside-sphere branch (penetration
+        // doesn't have to be > 0 because the chain may stay safely inside;
+        // just the branch firing tells us the shader got there).
+        let firedRecords = dump.filter { $0.contains("shape=inside-sphere") }
+        XCTAssertFalse(firedRecords.isEmpty,
+            "VMK#237: expected the inside-sphere branch to fire on at " +
+            "least one bone during the swing. Diagnostic dump: \(dump)")
+
+        // Parse `angleLimit=X.XXXrad` out of the diagnostic lines and
+        // assert at least one bone observed a non-zero angleLimit. The
+        // fixture authors all four joints with `angleLimit: 60` so any
+        // non-root bone hitting the inside branch should read ~1.047.
+        let angleLimitRegex = try NSRegularExpression(
+            pattern: "angleLimit=([0-9.]+)rad", options: [])
+        var observedNonZeroAngleLimit = false
+        var observedValues: [Float] = []
+        for line in firedRecords {
+            let range = NSRange(line.startIndex..., in: line)
+            if let match = angleLimitRegex.firstMatch(in: line, options: [], range: range),
+               match.numberOfRanges > 1,
+               let valueRange = Range(match.range(at: 1), in: line),
+               let value = Float(line[valueRange]) {
+                observedValues.append(value)
+                if value > 0.0001 { observedNonZeroAngleLimit = true }
+            }
+        }
+        XCTAssertTrue(observedNonZeroAngleLimit,
+            "VMK#237: at least one bone should observe a non-zero " +
+            "`angleLimit` at the inside-sphere branch entry. Observed " +
+            "values: \(observedValues). If all zero, the parser-to-" +
+            "`BoneParams.angleLimit` plumbing is the bug. If non-zero, " +
+            "the angle-limit clamp in `SpringBonePredict.metal` engages " +
+            "but inside-collision overrides its trajectory effect.")
+    }
+
     // MARK: - Harness
 
     private struct Env {
