@@ -1,0 +1,120 @@
+diff --git a/Sources/muterCore/MutationSchemata/SchemataMutationMapping.swift b/Sources/muterCore/MutationSchemata/SchemataMutationMapping.swift
+index f0a9756..4c9f3fe 100644
+--- a/Sources/muterCore/MutationSchemata/SchemataMutationMapping.swift
++++ b/Sources/muterCore/MutationSchemata/SchemataMutationMapping.swift
+@@ -6,6 +6,10 @@ typealias MutationSchemata = [MutationSchema]
+ final class SchemataMutationMapping {
+     let filePath: String
+     fileprivate var mappings: [CodeBlockItemListSyntax: MutationSchemata]
++    // Content-keyed index built at insertion time (while the syntax arena is alive).
++    // Used as a fallback in schemata(for:) when re-parsed nodes have different
++    // tree-position identity than the original discovery-time nodes.
++    fileprivate var mappingsByDescription: [String: MutationSchemata]
+ 
+     var count: Int {
+         mappings.count
+@@ -20,7 +24,7 @@ final class SchemataMutationMapping {
+     }
+ 
+     var codeBlocks: [String] {
+-        mappings.keys.map(\.description).sorted()
++        Array(mappingsByDescription.keys).sorted()
+     }
+ 
+     var fileName: String {
+@@ -32,16 +36,19 @@ final class SchemataMutationMapping {
+     ) {
+         self.init(
+             filePath: filePath,
+-            mappings: [:]
++            mappings: [:],
++            mappingsByDescription: [:]
+         )
+     }
+ 
+     fileprivate init(
+         filePath: String = "",
+-        mappings: [CodeBlockItemListSyntax: MutationSchemata]
++        mappings: [CodeBlockItemListSyntax: MutationSchemata],
++        mappingsByDescription: [String: MutationSchemata] = [:]
+     ) {
+         self.filePath = filePath
+         self.mappings = mappings
++        self.mappingsByDescription = mappingsByDescription
+     }
+ 
+     func add(
+@@ -49,6 +56,7 @@ final class SchemataMutationMapping {
+         _ schemata: MutationSchema
+     ) {
+         mappings[codeBlockSyntax, default: []].append(schemata)
++        mappingsByDescription[codeBlockSyntax.description, default: []].append(schemata)
+     }
+ 
+     func add(
+@@ -56,12 +64,27 @@ final class SchemataMutationMapping {
+         _ schemata: MutationSchemata
+     ) {
+         mappings[codeBlockSyntax, default: []].append(contentsOf: schemata)
++        mappingsByDescription[codeBlockSyntax.description, default: []].append(contentsOf: schemata)
+     }
+ 
+     func schemata(
+         _ codeBlockSyntax: CodeBlockItemListSyntax
+     ) -> MutationSchemata? {
+-        mappings[codeBlockSyntax]
++        // Fast path: identity-based lookup (works for original discovery-time nodes).
++        if let direct = mappings[codeBlockSyntax] {
++            return direct
++        }
++        // Fallback: content-based lookup for re-parsed nodes whose tree-position
++        // identity differs from the original discovery-time nodes. The description
++        // index is built at insertion time so no arena access is needed here.
++        // Remove the entry after matching to prevent re-injection into the `else`
++        // branch of the injected schemata switch, which contains the original code.
++        let key = codeBlockSyntax.description
++        if let result = mappingsByDescription[key] {
++            mappingsByDescription.removeValue(forKey: key)
++            return result
++        }
++        return nil
+     }
+ }
+ 
+@@ -80,7 +103,8 @@ extension SchemataMutationMapping: Codable {
+ 
+         self.init(
+             filePath: filePath,
+-            mappings: mappings
++            mappings: mappings,
++            mappingsByDescription: [:]
+         )
+     }
+ 
+@@ -110,9 +134,9 @@ func + (
+         filePath: lhs.filePath
+     )
+ 
+-    let mergedMappgins = lhs.mappings.merging(rhs.mappings) { $0 + $1 }
++    let mergedMappings = lhs.mappings.merging(rhs.mappings) { $0 + $1 }
+ 
+-    for (codeBlock, schemata) in mergedMappgins {
++    for (codeBlock, schemata) in mergedMappings {
+         result.add(codeBlock, schemata)
+     }
+ 
+@@ -140,11 +164,11 @@ extension SchemataMutationMapping: CustomStringConvertible, CustomDebugStringCon
+     var debugDescription: String { description }
+ 
+     var description: String {
+-        let description = mappings.keys.sorted().reduce(into: "") { accum, key in
++        let description = mappingsByDescription.keys.sorted().reduce(into: "") { accum, key in
+             accum +=
+                 """
+-                source: "\(key.escapedDescription)",
+-                schemata: \(mappings[key]!)
++                source: "\(key)",
++                schemata: \(mappingsByDescription[key]!)
+                 """
+         }
+         return """
