@@ -57,6 +57,77 @@ enum RenderTestSupport {
         return bytes
     }
 
+    /// Renders one frame through an MSAA color attachment with a resolve
+    /// target and returns the resolved single-sample RGBA bytes.
+    ///
+    /// `drawOffscreenHeadless` forwards the caller's render pass descriptor to
+    /// `drawCore`, so supplying a multisample attachment + `.multisampleResolve`
+    /// store action exercises the same MSAA path the on-screen `MTKView` driver
+    /// uses. The renderer's pipeline states must already be built for
+    /// `sampleCount` (i.e. `RendererConfig.sampleCount == sampleCount`), or
+    /// Metal will reject the attachment/PSO sample-count mismatch.
+    @MainActor
+    static func renderFrameMSAA(
+        renderer: VRMRenderer,
+        device: MTLDevice,
+        size: Int,
+        sampleCount: Int,
+        pixelFormat: MTLPixelFormat,
+        clearColor: MTLClearColor
+    ) throws -> [UInt8] {
+        let msColorDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: pixelFormat, width: size, height: size, mipmapped: false)
+        msColorDesc.textureType = .type2DMultisample
+        msColorDesc.sampleCount = sampleCount
+        msColorDesc.usage = .renderTarget
+        msColorDesc.storageMode = .private
+
+        let resolveDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: pixelFormat, width: size, height: size, mipmapped: false)
+        resolveDesc.usage = [.renderTarget, .shaderRead]
+        resolveDesc.storageMode = .shared
+
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float, width: size, height: size, mipmapped: false)
+        depthDesc.textureType = .type2DMultisample
+        depthDesc.sampleCount = sampleCount
+        depthDesc.usage = .renderTarget
+        depthDesc.storageMode = .private
+
+        guard let msColor = device.makeTexture(descriptor: msColorDesc),
+              let resolveTex = device.makeTexture(descriptor: resolveDesc),
+              let msDepth = device.makeTexture(descriptor: depthDesc),
+              let queue = device.makeCommandQueue(),
+              let cb = queue.makeCommandBuffer() else {
+            throw XCTSkip("Could not allocate MSAA render targets")
+        }
+
+        let rpd = MTLRenderPassDescriptor()
+        rpd.colorAttachments[0].texture = msColor
+        rpd.colorAttachments[0].resolveTexture = resolveTex
+        rpd.colorAttachments[0].loadAction = .clear
+        rpd.colorAttachments[0].clearColor = clearColor
+        rpd.colorAttachments[0].storeAction = .multisampleResolve
+        rpd.depthAttachment.texture = msDepth
+        rpd.depthAttachment.loadAction = .clear
+        rpd.depthAttachment.clearDepth = 1.0
+        rpd.depthAttachment.storeAction = .dontCare
+
+        renderer.drawOffscreenHeadless(
+            to: msColor, depth: msDepth,
+            commandBuffer: cb, renderPassDescriptor: rpd
+        )
+        cb.commit()
+        cb.waitUntilCompleted()
+
+        var bytes = [UInt8](repeating: 0, count: size * size * 4)
+        bytes.withUnsafeMutableBytes { buf in
+            resolveTex.getBytes(buf.baseAddress!, bytesPerRow: size * 4,
+                                from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
+        }
+        return bytes
+    }
+
     static func meanChannelRGBA(
         _ bytes: [UInt8],
         size: Int,
