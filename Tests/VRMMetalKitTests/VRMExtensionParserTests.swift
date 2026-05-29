@@ -706,6 +706,53 @@ final class VRMExtensionParserTests: XCTestCase {
         XCTAssertEqual(model.springBone?.springs.first?.joints.count, 3)
     }
 
+    /// Regression for #306: VRM 0.x bust/breast chains author `gravityPower = 0`
+    /// deliberately (they are anchored to the chest and must not droop). VMK's
+    /// 0.x quirk substitutes `0 → 1.0` so hanging chains (hair, skirts) fall;
+    /// that substitution must NOT apply to bust chains, or the load-time
+    /// warmup collapses the bust. Hair keeps the substitution.
+    func testVRM0BustChainRespectsZeroGravityWhileHairDoesNot() throws {
+        let humanBones: [[String: Any]] = [
+            ["bone": "hips", "node": 0], ["bone": "leftUpperLeg", "node": 1],
+            ["bone": "rightUpperLeg", "node": 2], ["bone": "leftLowerLeg", "node": 3],
+            ["bone": "rightLowerLeg", "node": 4], ["bone": "leftFoot", "node": 5],
+            ["bone": "rightFoot", "node": 6], ["bone": "spine", "node": 7],
+            ["bone": "chest", "node": 8], ["bone": "neck", "node": 9],
+            ["bone": "head", "node": 10], ["bone": "leftShoulder", "node": 11],
+            ["bone": "rightShoulder", "node": 12], ["bone": "leftUpperArm", "node": 13],
+            ["bone": "rightUpperArm", "node": 14], ["bone": "leftLowerArm", "node": 15],
+            ["bone": "rightLowerArm", "node": 16], ["bone": "leftHand", "node": 17],
+            ["bone": "rightHand", "node": 18]
+        ]
+        let vrmDict: [String: Any] = [
+            "version": "0.0",
+            "meta": ["title": "Test", "author": "Test"],
+            "humanoid": ["humanBones": humanBones],
+            "secondaryAnimation": [
+                "boneGroups": [
+                    ["comment": "Bust", "bones": [19], "stiffness": 0.75,
+                     "gravityPower": 0.0, "dragForce": 0.05],
+                    ["comment": "Hair", "bones": [20], "stiffness": 0.85,
+                     "gravityPower": 0.0, "dragForce": 0.4]
+                ]
+            ]
+        ]
+
+        let document = createMinimalGLTFDocument(
+            nodes: 21,
+            nodeNames: [19: "J_Sec_L_Bust1", 20: "J_Sec_Hair1_01"])
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+
+        let springs = try XCTUnwrap(model.springBone?.springs)
+        let bust = try XCTUnwrap(springs.first { $0.joints.contains { $0.node == 19 } })
+        let hair = try XCTUnwrap(springs.first { $0.joints.contains { $0.node == 20 } })
+
+        XCTAssertEqual(bust.joints.first?.gravityPower, 0.0,
+                       "Bust chain must keep authored gravityPower = 0 (no 0→1.0 substitution)")
+        XCTAssertEqual(hair.joints.first?.gravityPower, 1.0,
+                       "Hair chain must keep the 0→1.0 substitution so it still falls")
+    }
+
     // MARK: - Error Handling Tests
 
     func testMissingMetaThrowsError() {
@@ -1181,7 +1228,7 @@ final class VRMExtensionParserTests: XCTestCase {
 
     // MARK: - Helper Methods
 
-    private func createMinimalGLTFDocument(nodes: Int = 1, extensions: [String: Any]? = nil) -> GLTFDocument {
+    private func createMinimalGLTFDocument(nodes: Int = 1, extensions: [String: Any]? = nil, nodeNames: [Int: String] = [:]) -> GLTFDocument {
         // Create a minimal GLTF document as JSON and decode it
         // Include all required humanoid bones for validation
         let requiredBones = [
@@ -1199,7 +1246,7 @@ final class VRMExtensionParserTests: XCTestCase {
             "scene": 0,
             "scenes": [["nodes": Array(0..<nodeCount)]],
             "nodes": (0..<nodeCount).map { i in
-                ["name": "node_\(i)"]
+                ["name": nodeNames[i] ?? "node_\(i)"]
             }
         ]
         
