@@ -380,8 +380,106 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         XCTAssertFalse(renderer1x.usesMultisampling, "1x renderer should not report MSAA")
     }
     
+    // MARK: - Behavioral integration test (#266)
+
+    /// #266: Behavioral guard that the A2C path produces a *visible* change in
+    /// rendered output, not just a selectable pipeline. Both renders use 4x MSAA
+    /// so geometry-edge antialiasing is identical between them — the only
+    /// variable is `alphaToCoverageForMASK`. Any pixel difference is therefore
+    /// attributable to alpha-to-coverage softening MASK cutout edges (gradient
+    /// coverage) instead of the hard binary alpha test.
+    ///
+    /// This is RED if A2C is ever silently disconnected at draw time
+    /// (unconditional `discard_fragment()` re-introduced, the MASK→alphaMode 3
+    /// remap removed, the A2C PSO routing reverted): the two renders collapse to
+    /// identical output and the difference count goes to ~0.
+    func testAlphaToCoverageProducesNonBinaryEdgeAlpha() async throws {
+        let modelPath = "\(modelsDirectory)/AvatarSample_A_1.0.vrm.glb"
+        try XCTSkipIf(!FileManager.default.fileExists(atPath: modelPath),
+                      "Test model not found")
+
+        let size = 384
+        let sampleCount = 4
+        let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+
+        func render(alphaToCoverage: Bool) async throws -> [UInt8] {
+            var config = RendererConfig(strict: .off, sampleCount: sampleCount)
+            config.alphaToCoverageForMASK = alphaToCoverage
+            config.synchronousSpringBone = true
+            let renderer = VRMRenderer(device: device, config: config)
+
+            let model = try await VRMModel.load(
+                from: URL(fileURLWithPath: modelPath), device: device)
+            renderer.loadModel(model)
+
+            renderer.projectionMatrix = RenderTestSupport.makePerspective(
+                fovRadians: 30 * .pi / 180, aspect: 1, near: 0.05, far: 100)
+            // Close-up on the head: eyelash / eyebrow MASK cutouts are the
+            // finest alpha edges and dominate this framing.
+            renderer.viewMatrix = RenderTestSupport.makeLookAt(
+                eye: SIMD3<Float>(0, 1.45, 1.5),
+                center: SIMD3<Float>(0, 1.45, 0),
+                up: SIMD3<Float>(0, 1, 0))
+
+            return try RenderTestSupport.renderFrameMSAA(
+                renderer: renderer, device: device, size: size,
+                sampleCount: sampleCount, pixelFormat: .bgra8Unorm, clearColor: clear)
+        }
+
+        let off = try await render(alphaToCoverage: false)
+        // Control: a second A2C-off render must be bitwise identical to the
+        // first. This proves the render path is deterministic, so the `changed`
+        // count below is attributable to A2C alone and not frame jitter — a raw
+        // pixel diff is only a valid detector once this holds.
+        let off2 = try await render(alphaToCoverage: false)
+        let on = try await render(alphaToCoverage: true)
+
+        func luma(_ b: [UInt8], _ i: Int) -> Float {
+            // bgra8Unorm: byte order B,G,R,A
+            RenderTestSupport.rec709Luma(r: b[i + 2], g: b[i + 1], b: b[i])
+        }
+
+        let floor: Float = 0.02       // above the black clear
+        let changeEps: Float = 0.012  // per-channel ~3/255
+
+        var changed = 0
+        var softened = 0   // changed pixels where A2C value is an intermediate blend
+        var changedControl = 0
+        for p in stride(from: 0, to: size * size * 4, by: 4) {
+            let lo = luma(off, p)
+            let ln = luma(on, p)
+            if abs(luma(off2, p) - lo) > changeEps { changedControl += 1 }
+            if abs(ln - lo) > changeEps {
+                changed += 1
+                if ln > floor && ln < max(lo, floor) {
+                    softened += 1
+                }
+            }
+        }
+
+        print("[#266 A2C] changed=\(changed) softened=\(softened) changedControl=\(changedControl)")
+
+        XCTAssertEqual(changedControl, 0,
+            "Two A2C-off renders must be identical; a non-zero control means the " +
+            "render path is non-deterministic and the diff below is meaningless.")
+
+        // ~69 changed / 57 softened observed locally (Apple Silicon, this
+        // framing). Threshold is set well below that for cross-GPU headroom; the
+        // regression this guards against collapses `changed` to ~0 (A2C PSO
+        // routing reverted, MASK→alphaMode 3 remap removed, or unconditional
+        // discard re-introduced), so any positive floor catches it.
+        XCTAssertGreaterThan(changed, 10,
+            "A2C must visibly change MASK cutout edges vs the hard-cutout path " +
+            "(changed=\(changed)). ~0 means A2C is disconnected at draw time.")
+
+        XCTAssertGreaterThan(softened, changed / 2,
+            "Most A2C changes must be intermediate partial-coverage values " +
+            "(softened=\(softened)/\(changed)) — the non-binary edge alpha #266 " +
+            "requires, not hard on/off flips.")
+    }
+
     // MARK: - Helper Methods
-    
+
     private var modelsDirectory: String {
         ProcessInfo.processInfo.environment["VRM_MODELS_PATH"] ?? getProjectRoot()
     }
