@@ -188,7 +188,7 @@ public class VRMExtensionParser {
         }
         // VRM 0.0 uses secondaryAnimation in the main VRM extension
         else if let secondaryAnimation = vrmDict["secondaryAnimation"] as? [String: Any] {
-            model.springBone = parseSecondaryAnimation(secondaryAnimation)
+            model.springBone = parseSecondaryAnimation(secondaryAnimation, document: document)
         }
 
         // Parse VRM 0.x materialProperties (MToon data at document level)
@@ -995,7 +995,21 @@ public class VRMExtensionParser {
 
     // MARK: - VRM 0.0 Secondary Animation Support
 
-    private func parseSecondaryAnimation(_ dict: [String: Any]) -> VRMSpringBone {
+    /// Returns true when a 0.x spring chain is a bust/breast jiggle chain, by
+    /// group comment or any of its bone-node names. Such chains are anchored to
+    /// the chest and author `gravityPower = 0` deliberately, so they are exempt
+    /// from the 0→1.0 gravity substitution below (see #306).
+    private func isBustChain(comment: String?, boneNodes: [Int], document: GLTFDocument) -> Bool {
+        func matches(_ s: String?) -> Bool {
+            guard let s = s?.lowercased() else { return false }
+            return s.contains("bust") || s.contains("breast")
+        }
+        if matches(comment) { return true }
+        for node in boneNodes where matches(document.nodes?[safe: node]?.name) { return true }
+        return false
+    }
+
+    private func parseSecondaryAnimation(_ dict: [String: Any], document: GLTFDocument) -> VRMSpringBone {
         var springBone = VRMSpringBone()
         springBone.specVersion = "0.0"  // Mark as VRM 0.0 format
 
@@ -1008,6 +1022,13 @@ public class VRMExtensionParser {
                 if let center = groupDict["center"] as? Int {
                     spring.center = center
                 }
+
+                // Bust/breast chains keep their authored (zero) gravity; all other
+                // 0.x chains receive the 0→1.0 substitution below.
+                let chainIsBust = isBustChain(
+                    comment: groupDict["comment"] as? String,
+                    boneNodes: groupDict["bones"] as? [Int] ?? [],
+                    document: document)
 
                 // Bones array becomes joints
                 if let bones = groupDict["bones"] as? [Int] {
@@ -1058,7 +1079,9 @@ public class VRMExtensionParser {
                         } else {
                             rawGravityPower = 0.0
                         }
-                        joint.gravityPower = rawGravityPower > 0 ? rawGravityPower : 1.0
+                        // Bust/breast chains keep authored gravity (commonly 0) so they
+                        // do not droop; other chains fall back to 1.0 when authored 0 (#306).
+                        joint.gravityPower = (chainIsBust || rawGravityPower > 0) ? rawGravityPower : 1.0
 
                         if let dragFloat = groupDict["dragForce"] as? Float {
                             joint.dragForce = dragFloat
