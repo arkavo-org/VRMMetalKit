@@ -54,6 +54,52 @@ final class FrustumCullingTests: XCTestCase {
         XCTAssertTrue(frustum.cullsAABB(min: lo, max: hi))
     }
 
+    // Right-handed look-at view matrix (matches Sources/VRMVideoRenderer lookAt).
+    private func lookAt(eye: SIMD3<Float>, center: SIMD3<Float>, up: SIMD3<Float>) -> matrix_float4x4 {
+        let f = simd_normalize(center - eye)
+        let s = simd_normalize(simd_cross(f, up))
+        let u = simd_cross(s, f)
+        var r = matrix_float4x4(diagonal: SIMD4<Float>(1, 1, 1, 1))
+        r.columns.0 = SIMD4<Float>(s.x, u.x, -f.x, 0)
+        r.columns.1 = SIMD4<Float>(s.y, u.y, -f.y, 0)
+        r.columns.2 = SIMD4<Float>(s.z, u.z, -f.z, 0)
+        r.columns.3 = SIMD4<Float>(-simd_dot(s, eye), -simd_dot(u, eye), simd_dot(f, eye), 1)
+        return r
+    }
+
+    // Metal RH perspective, NDC z in [0, 1] (matches VRMRenderer.makeProjectionMatrix).
+    private func metalPerspective(fovy: Float, aspect: Float, near: Float, far: Float) -> matrix_float4x4 {
+        let ys = 1.0 / tanf(fovy * 0.5)
+        let xs = ys / aspect
+        let zs = far / (near - far)
+        return matrix_float4x4(columns: (
+            SIMD4<Float>(xs, 0, 0, 0),
+            SIMD4<Float>(0, ys, 0, 0),
+            SIMD4<Float>(0, 0, zs, -1),
+            SIMD4<Float>(0, 0, zs * near, 0)
+        ))
+    }
+
+    // Regression for #301: a distant-but-visible avatar must NOT be culled.
+    // Over-the-shoulder camera looking toward +Z at an avatar centered ~27 m
+    // on-axis, well inside the horizontal FOV and far short of the 100 m far
+    // plane. The reported symptom was a wrong REJECT at this range.
+    func testFrustumAcceptsDistantOnScreenAvatar() {
+        let proj = metalPerspective(fovy: .pi / 3, aspect: 16.0 / 9.0, near: 0.1, far: 100)
+        let view = lookAt(
+            eye: SIMD3<Float>(7.18, 1.5, -6.9),
+            center: SIMD3<Float>(7.2, 0.8, -3.9),
+            up: SIMD3<Float>(0, 1, 0))
+        let frustum = Frustum(viewProjection: simd_mul(proj, view))
+
+        // Avatar ~1 m wide, ~1.8 m tall, centered 24–27 m down-range on-axis.
+        let center = SIMD3<Float>(7.4, 0.8, 20.8)
+        let lo = center - SIMD3<Float>(0.5, 0.9, 0.5)
+        let hi = center + SIMD3<Float>(0.5, 0.9, 0.5)
+        XCTAssertFalse(frustum.cullsAABB(min: lo, max: hi),
+                       "Distant on-screen avatar at ~27 m was wrongly culled (see #301)")
+    }
+
     func testWorldAABBTranslatesAndRotates() {
         // Local cube [-1, +1]³, translate +10 along X, no rotation.
         let translation = matrix_float4x4(columns: (
