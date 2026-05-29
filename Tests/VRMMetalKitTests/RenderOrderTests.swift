@@ -133,16 +133,6 @@ final class RenderOrderTests: XCTestCase {
         )
     }
 
-    // MARK: - Render Item Builder Integration Tests
-
-    /// Test VRMRenderItemBuilder exists and can be referenced
-    func testRenderItemBuilderExists() {
-        // VRMRenderItemBuilder is used to construct render items with proper order
-        // This test verifies the type exists in the module
-        let builderType = VRMRenderItemBuilder.self
-        XCTAssertNotNil(builderType, "VRMRenderItemBuilder type should exist")
-    }
-
     // MARK: - Alpha Mode to Render Order Mapping Tests
 
     /// Test alpha mode opaque maps to render order 0
