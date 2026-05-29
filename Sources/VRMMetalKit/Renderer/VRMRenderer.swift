@@ -2948,6 +2948,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("  - Will apply special rendering fixes")
             }
 
+            // Single source of truth for this draw's cull mode (see
+            // selectCullMode). Each case below applies it; the per-category /
+            // per-alpha-mode switches still own depth state, winding, and bias.
+            let selectedCullMode = selectCullMode(
+                faceCategory: item.faceCategory,
+                alphaMode: materialAlphaMode,
+                isDoubleSided: isDoubleSided)
+
             // FACE RENDERING: Apply deterministic states per face category
             if let faceCategory = item.faceCategory {
                 // Calculate view-space Z for logging
@@ -2964,7 +2972,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoderStateCache.setCullMode(encoder,isDoubleSided ? .none : .back)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Z-FIGHTING FIX: Body renders first but pushed back in depth
                     // Negative bias pushes away from camera, allowing overlays to win
@@ -2980,7 +2988,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoderStateCache.setCullMode(encoder,isDoubleSided ? .none : .back)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for clothing (overlay layer)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
@@ -3011,7 +3019,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
                     }
 
-                    encoderStateCache.setCullMode(encoder,isDoubleSided ? .none : .back)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
 
                     // Apply material-specific depth bias from calculator
@@ -3033,7 +3041,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["mask"])
                     }
-                    encoderStateCache.setCullMode(encoder,.none)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for mouth/lip overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
@@ -3049,7 +3057,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["mask"])
                     }
-                    encoderStateCache.setCullMode(encoder,.none)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for eyebrow/eyeline overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
@@ -3066,7 +3074,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoderStateCache.setCullMode(encoder,.none)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for eye overlays (highest priority)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
@@ -3081,7 +3089,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoderStateCache.setCullMode(encoder,.none)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for highlight overlays (highest bias)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
@@ -3099,7 +3107,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoderStateCache.setCullMode(encoder,.none)  // Often double-sided for overlays
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)  // Often double-sided for overlays
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for transparent overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
@@ -3111,7 +3119,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 default:
                     // Unknown face category - fallback to opaque
                     encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
-                    encoderStateCache.setCullMode(encoder,isDoubleSided ? .none : .back)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                 }
             } else {
@@ -3122,15 +3130,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 switch materialAlphaMode {
                 case "opaque":
                     encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
-                    let cullMode = isDoubleSided ? MTLCullMode.none : .back
-                    encoderStateCache.setCullMode(encoder,cullMode)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "mask":
                     encoderStateCache.setDepthStencilState(encoder,depthStencilStates["mask"])
-                    let cullMode = isDoubleSided ? MTLCullMode.none : .back
-                    encoderStateCache.setCullMode(encoder,cullMode)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply base depth bias for MASK materials
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
@@ -3141,14 +3147,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else {
                         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     }
-                    encoderStateCache.setCullMode(encoder,.none)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     // Apply base depth bias for BLEND materials
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 default:
                     encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
-                    let cullMode = isDoubleSided ? MTLCullMode.none : .back
-                    encoderStateCache.setCullMode(encoder,cullMode)
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                 }
             }
@@ -4102,6 +4107,42 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             return a2c ?? (isSkinned ? skinnedOpaquePipelineState : opaquePipelineState)
         default:
             return isSkinned ? skinnedOpaquePipelineState : opaquePipelineState
+        }
+    }
+
+    /// The face-rasterization cull mode for a draw, given its face category
+    /// (nil for non-face materials), effective alpha mode, and effective
+    /// `doubleSided` flag. This is the single source of truth the draw loop's
+    /// per-category / per-alpha-mode state switches call, so a cull regression
+    /// (e.g. hair vanishing when viewed from behind) is caught at the logic
+    /// level rather than only visually.
+    ///
+    /// - Single-sided solid surfaces (face `skin`/`body`/`clothing` and
+    ///   non-face `opaque`/`mask`) cull back faces; marking them `doubleSided`
+    ///   disables culling.
+    /// - Overlay/feature face categories (`eye`, `eyebrow`, `eyeline`,
+    ///   `highlight`, `faceOverlay`, `transparentZWrite`) and non-face `blend`
+    ///   always render two-sided — back-face culling would drop alpha strokes
+    ///   and thin overlays regardless of the authored `doubleSided` flag.
+    public func selectCullMode(
+        faceCategory: String?,
+        alphaMode: String,
+        isDoubleSided: Bool
+    ) -> MTLCullMode {
+        let solidCull: MTLCullMode = isDoubleSided ? .none : .back
+        if let faceCategory {
+            switch faceCategory {
+            case "eye", "eyebrow", "eyeline", "highlight", "faceOverlay", "transparentZWrite":
+                return .none
+            default:  // "body", "clothing", "skin", and any unknown category
+                return solidCull
+            }
+        }
+        switch alphaMode {
+        case "blend":
+            return .none
+        default:  // "opaque", "mask", and any unknown alpha mode
+            return solidCull
         }
     }
 
