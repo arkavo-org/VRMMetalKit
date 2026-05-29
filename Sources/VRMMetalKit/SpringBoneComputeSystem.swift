@@ -117,6 +117,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var previousPlaneColliders: [PlaneCollider] = []
     private var targetPlaneColliders: [PlaneCollider] = []
 
+    // VMK#237 inside-branch diagnostic. Set via `setInsideColliderDiagnosticsEnabled`;
+    // the collision kernels see this as the `insideDiagnosticEnabled` uniform.
+    private var insideColliderDiagnosticsEnabled: Bool = false
+
     // Cached model scale for scale-aware thresholds
     private var cachedModelScale: Float = 1.0
 
@@ -593,28 +597,55 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
         computeEncoder.memoryBarrier(scope: .buffers)
 
-        // Distance constraint iterations (step 2: enforce bone length)
-        // VRM spec: run distance constraint BEFORE collision, do not run it after
+        // VMK#237: distance + sphere/capsule collision are interleaved inside
+        // the constraint iteration loop so that VRMC_springBone_extended_collider
+        // inside-* containment branches re-fire after each distance pass.
+        // Previously, distance ran N times then collision ran once; the
+        // distance constraint could pull a contained tip back outside the
+        // containment surface and only one collision push was applied to
+        // catch it, leaving residual escape (≤4cm in the conformance suite).
+        //
+        // Spec note: VRM 1.0 §SpringBone "collision is the final step" is
+        // honored — the loop's final iteration ends with collision, and only
+        // the *last* `bonePosCurr` write per substep is consumed by the next
+        // predict pass. Plane collision runs once outside the loop because
+        // planes have only outside-collision semantics and don't need
+        // iterative re-application.
+        //
+        // VMK#237 inside-branch diagnostic: bind the per-bone diagnostic buffer
+        // (real or placeholder) at index 15 and the uniform gate flag at index 16
+        // for both sphere and capsule collide kernels. The placeholder is always
+        // allocated; the kernel writes only when the gate flag is non-zero.
+        let diagnosticBufferForBinding = buffers.insideColliderDiagnostics
+            ?? buffers.insideColliderDiagnosticsPlaceholder
+        var insideDiagnosticGate: UInt32 = (insideColliderDiagnosticsEnabled
+            && buffers.insideColliderDiagnostics != nil) ? 1 : 0
+
         let iterations = quality.constraintIterations
         for _ in 0..<iterations {
             computeEncoder.setComputePipelineState(distancePipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
-        }
 
-        // Collision resolution (step 3: push tips out of colliders)
-        // VRM spec: collision runs AFTER distance constraint and is the FINAL step
-        // This prevents distance constraint from pulling hair back into colliders
-        if globalParams.numSpheres > 0 {
-            computeEncoder.setComputePipelineState(collideSpheresPipeline)
-            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-            computeEncoder.memoryBarrier(scope: .buffers)
-        }
+            if globalParams.numSpheres > 0 {
+                computeEncoder.setComputePipelineState(collideSpheresPipeline)
+                if let diagnosticBuffer = diagnosticBufferForBinding {
+                    computeEncoder.setBuffer(diagnosticBuffer, offset: 0, index: 15)
+                }
+                computeEncoder.setBytes(&insideDiagnosticGate, length: MemoryLayout<UInt32>.size, index: 16)
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+                computeEncoder.memoryBarrier(scope: .buffers)
+            }
 
-        if globalParams.numCapsules > 0 {
-            computeEncoder.setComputePipelineState(collideCapsulesPipeline)
-            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-            computeEncoder.memoryBarrier(scope: .buffers)
+            if globalParams.numCapsules > 0 {
+                computeEncoder.setComputePipelineState(collideCapsulesPipeline)
+                if let diagnosticBuffer = diagnosticBufferForBinding {
+                    computeEncoder.setBuffer(diagnosticBuffer, offset: 0, index: 15)
+                }
+                computeEncoder.setBytes(&insideDiagnosticGate, length: MemoryLayout<UInt32>.size, index: 16)
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+                computeEncoder.memoryBarrier(scope: .buffers)
+            }
         }
 
         if globalParams.numPlanes > 0 {
@@ -663,6 +694,68 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             pendingSelfOwnedCommandBuffer = commandBuffer
             commandBuffer.commit()
         }
+    }
+
+    /// VMK#237 investigation hook. Opt into per-bone inside-branch
+    /// diagnostic recording in the sphere/capsule collision kernels.
+    ///
+    /// When enabled, each invocation of the inside (containment) branch
+    /// overwrites `model.springBoneBuffers!.insideColliderDiagnostics[boneId]`
+    /// with what the shader observed: shape type, joint `angleLimit`,
+    /// distance to boundary, applied penetration. Last-write wins per bone.
+    ///
+    /// Cost: one `device` write per bone per inside-branch hit. Production
+    /// path is unaffected when disabled.
+    ///
+    /// - Parameters:
+    ///   - enabled: `true` to start capturing; `false` to stop.
+    ///   - model: required so the per-bone buffer can be sized.
+    public func setInsideColliderDiagnosticsEnabled(_ enabled: Bool, model: VRMModel) {
+        insideColliderDiagnosticsEnabled = enabled
+        guard let buffers = model.springBoneBuffers else { return }
+        if enabled {
+            if buffers.insideColliderDiagnostics == nil {
+                buffers.allocateInsideColliderDiagnostics()
+            }
+        }
+    }
+
+    /// VMK#237 investigation hook. Returns one human-readable line per bone
+    /// whose inside-branch fired since the diagnostic was enabled. Bones
+    /// whose inside branch never fired are omitted from the output.
+    ///
+    /// Call after at least one simulation step has completed (i.e. after
+    /// the diagnostic buffer has had a chance to be populated by the GPU).
+    public func dumpInsideColliderDiagnostics(model: VRMModel) -> [String] {
+        guard let buffers = model.springBoneBuffers,
+              let diagnosticsBuffer = buffers.insideColliderDiagnostics,
+              buffers.numBones > 0 else {
+            return ["[VMK#237] inside-collider diagnostics not allocated; call setInsideColliderDiagnosticsEnabled(true, model:) first."]
+        }
+        let count = buffers.numBones
+        let ptr = diagnosticsBuffer.contents().bindMemory(to: InsideColliderDiagnostic.self, capacity: count)
+        var lines: [String] = []
+        for boneId in 0..<count {
+            let rec = ptr[boneId]
+            if rec.shapeType == 0xFFFFFFFF { continue }
+            let shapeName: String
+            switch rec.shapeType {
+            case 0: shapeName = "inside-sphere"
+            case 1: shapeName = "inside-capsule"
+            case 0xFFFFFFFD: shapeName = "kernel-entered-no-collider-matched"
+            case 0xFFFFFFFE: shapeName = "outside-branch(inside-flag=0-on-GPU)"
+            default: shapeName = "unknown(\(rec.shapeType))"
+            }
+            let angleDegrees = rec.angleLimit * 180.0 / .pi
+            lines.append(
+                String(format: "[VMK#237] bone=%d shape=%@ collider=%d angleLimit=%.3frad(%.1f°) boneRadius=%.4f distance=%.4f boundary=%.4f penetration=%.4f groupMatched=%d",
+                       boneId, shapeName as CVarArg, rec.colliderIndex, rec.angleLimit, angleDegrees, rec.boneRadius, rec.distance, rec.boundary, rec.penetration, rec.groupMatched)
+            )
+        }
+        if lines.isEmpty {
+            lines.append("[VMK#237] inside-collider diagnostics: no bone hit an inside-* branch this run (numBones=\(count)).")
+        }
+        return lines
     }
 
     /// Blocks until the most recently `update(...)`-committed self-owned

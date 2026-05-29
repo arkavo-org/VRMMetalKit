@@ -65,19 +65,49 @@ struct BoneParams {
     float angleLimit;         // Max swing angle from bind dir (radians); 0 = no limit
 };
 
+// VMK#237 inside-branch diagnostic record. Per-bone last-write entry capturing
+// what the shader observed at the entry of an inside-* collision branch.
+// Layout must match `InsideColliderDiagnostic` in SpringBoneBuffers.swift.
+//
+// VMK#237 follow-up: `shapeType` now uses three sentinel values to distinguish
+// "branch fired" from "kernel ran but inside-flag was 0 in the upload":
+//   * `0xFFFFFFFFu` (UINT_MAX)        — never written (kernel didn't run, group filter, root bone)
+//   * `0xFFFFFFFEu` (UINT_MAX - 1)    — kernel ran, group matched, but `sphere.inside == 0` (outside branch taken)
+//   * `0u`                            — inside-sphere branch took the inside path
+//   * `1u`                            — inside-capsule branch took the inside path
+struct InsideColliderDiagnostic {
+    uint shapeType;
+    uint colliderIndex;       // Which entry in the collider array the kernel reached
+    float angleLimit;         // boneParams[id].angleLimit observed at this branch
+    float boneRadius;         // boneParams[id].radius observed at this branch
+    float distance;           // joint→centre (sphere) or joint→axis (capsule)
+    float boundary;           // collider.radius (the containment surface)
+    float penetration;        // Inward push applied this invocation (0 if no push)
+    uint groupMatched;        // 1 if groupMask included this collider, 0 if filtered out
+};
+
 // Sphere collision function with group filtering. Handles both the base
 // "outside" collision (joint pushed out of the sphere) and the
 // VRMC_springBone_extended_collider "inside" / containment collision
 // (joint pushed back into the sphere when it tries to escape).
+//
+// When `diagnosticEnabled != 0u`, writes the last-touched inside-branch
+// observation to `diagnostics[boneId]`. VMK#237 investigation hook —
+// see `dumpInsideColliderDiagnostics` on the Swift side.
 float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMask,
-                                  constant SphereCollider* spheres, uint numSpheres) {
+                                  float angleLimit, uint boneId,
+                                  constant SphereCollider* spheres, uint numSpheres,
+                                  device InsideColliderDiagnostic* diagnostics,
+                                  uint diagnosticEnabled) {
     float3 result = position;
 
     for (uint i = 0; i < numSpheres; i++) {
         SphereCollider sphere = spheres[i];
 
+        bool groupMatched = (groupMask & (1u << sphere.groupIndex)) != 0u;
+
         // Skip if bone doesn't collide with this group
-        if (!(groupMask & (1u << sphere.groupIndex))) continue;
+        if (!groupMatched) continue;
 
         float3 toCenter = result - sphere.center;
         float distance = length(toCenter);
@@ -87,9 +117,23 @@ float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMa
             // distance > radius - boneRadius means joint is past the inner
             // safe surface. Push it back toward the centre.
             float penetration = distance + boneRadius - sphere.radius;
+            float applied = 0.0;
             if (penetration > 0.0 && distance > 1e-6) {
                 float3 inward = -toCenter / distance;  // toward centre
                 result += inward * penetration;
+                applied = penetration;
+            }
+            if (diagnosticEnabled != 0u) {
+                InsideColliderDiagnostic rec;
+                rec.shapeType = 0u;
+                rec.colliderIndex = i;
+                rec.angleLimit = angleLimit;
+                rec.boneRadius = boneRadius;
+                rec.distance = distance;
+                rec.boundary = sphere.radius;
+                rec.penetration = applied;
+                rec.groupMatched = 1u;
+                diagnostics[boneId] = rec;
             }
         } else {
             // Outside collision (default): push joint out of the sphere.
@@ -98,23 +142,45 @@ float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMa
                 float3 outward = toCenter / max(distance, 1e-6);
                 result += outward * penetration;
             }
+            if (diagnosticEnabled != 0u) {
+                // VMK#237 follow-up: capture "kernel ran, group matched,
+                // outside-branch taken" so we can distinguish "inside-flag
+                // not propagated to GPU" from "joint never escaped safe radius."
+                InsideColliderDiagnostic rec;
+                rec.shapeType = 0xFFFFFFFEu;
+                rec.colliderIndex = i;
+                rec.angleLimit = angleLimit;
+                rec.boneRadius = boneRadius;
+                rec.distance = distance;
+                rec.boundary = sphere.radius;
+                rec.penetration = 0.0;
+                rec.groupMatched = 1u;
+                diagnostics[boneId] = rec;
+            }
         }
     }
 
     return result;
 }
 
-// Capsule collision function with group filtering
+// Capsule collision function with group filtering.
+// When `diagnosticEnabled != 0u`, writes the last-touched inside-branch
+// observation to `diagnostics[boneId]`. VMK#237 investigation hook.
 float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupMask,
-                                   constant CapsuleCollider* capsules, uint numCapsules) {
+                                   float angleLimit, uint boneId,
+                                   constant CapsuleCollider* capsules, uint numCapsules,
+                                   device InsideColliderDiagnostic* diagnostics,
+                                   uint diagnosticEnabled) {
     float3 result = position;
     const float epsilon = 1e-6;
 
     for (uint i = 0; i < numCapsules; i++) {
         CapsuleCollider capsule = capsules[i];
 
+        bool groupMatched = (groupMask & (1u << capsule.groupIndex)) != 0u;
+
         // Skip if bone doesn't collide with this group
-        if (!(groupMask & (1u << capsule.groupIndex))) continue;
+        if (!groupMatched) continue;
 
         // Find closest point on capsule segment
         float3 ab = capsule.p1 - capsule.p0;
@@ -131,9 +197,23 @@ float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupM
         if (capsule.inside != 0u) {
             // Containment: joint must stay inside the swept-sphere volume.
             float penetration = distance + boneRadius - capsule.radius;
+            float applied = 0.0;
             if (penetration > 0.0 && distance > epsilon) {
                 float3 inward = -toClosest / distance;
                 result += inward * penetration;
+                applied = penetration;
+            }
+            if (diagnosticEnabled != 0u) {
+                InsideColliderDiagnostic rec;
+                rec.shapeType = 1u;
+                rec.colliderIndex = i;
+                rec.angleLimit = angleLimit;
+                rec.boneRadius = boneRadius;
+                rec.distance = distance;
+                rec.boundary = capsule.radius;
+                rec.penetration = applied;
+                rec.groupMatched = 1u;
+                diagnostics[boneId] = rec;
             }
         } else {
             // Outside collision (default).
@@ -141,6 +221,19 @@ float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupM
             if (penetration > 0.0) {
                 float3 outward = toClosest / max(distance, epsilon);
                 result += outward * penetration;
+            }
+            if (diagnosticEnabled != 0u) {
+                // VMK#237 follow-up: see sphere-kernel comment.
+                InsideColliderDiagnostic rec;
+                rec.shapeType = 0xFFFFFFFEu;
+                rec.colliderIndex = i;
+                rec.angleLimit = angleLimit;
+                rec.boneRadius = boneRadius;
+                rec.distance = distance;
+                rec.boundary = capsule.radius;
+                rec.penetration = 0.0;
+                rec.groupMatched = 1u;
+                diagnostics[boneId] = rec;
             }
         }
     }
@@ -177,6 +270,8 @@ kernel void springBoneCollideSpheres(
     constant BoneParams* boneParams [[buffer(2)]],
     constant SphereCollider* sphereColliders [[buffer(5)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
+    device InsideColliderDiagnostic* insideDiagnostics [[buffer(15)]],
+    constant uint& insideDiagnosticEnabled [[buffer(16)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numSpheres == 0) return;
@@ -187,8 +282,28 @@ kernel void springBoneCollideSpheres(
 
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
+    float angleLimit = boneParams[id].angleLimit;
+
+    // VMK#237 follow-up: "kernel-entered" sentinel BEFORE the per-collider
+    // loop so the diagnostic distinguishes "kernel never ran" from "kernel
+    // ran but every collider was group-filtered out."
+    if (insideDiagnosticEnabled != 0u) {
+        InsideColliderDiagnostic rec;
+        rec.shapeType = 0xFFFFFFFDu;  // kernel-entered, no collider matched yet
+        rec.colliderIndex = 0xFFFFFFFFu;
+        rec.angleLimit = angleLimit;
+        rec.boneRadius = boneRadius;
+        rec.distance = 0.0;
+        rec.boundary = 0.0;
+        rec.penetration = 0.0;
+        rec.groupMatched = 0u;
+        insideDiagnostics[id] = rec;
+    }
+
     bonePosCurr[id] = collideWithSphereFiltered(bonePosCurr[id], boneRadius, groupMask,
-                                                 sphereColliders, globalParams.numSpheres);
+                                                 angleLimit, id,
+                                                 sphereColliders, globalParams.numSpheres,
+                                                 insideDiagnostics, insideDiagnosticEnabled);
 }
 
 kernel void springBoneCollideCapsules(
@@ -196,6 +311,8 @@ kernel void springBoneCollideCapsules(
     constant BoneParams* boneParams [[buffer(2)]],
     constant CapsuleCollider* capsuleColliders [[buffer(6)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
+    device InsideColliderDiagnostic* insideDiagnostics [[buffer(15)]],
+    constant uint& insideDiagnosticEnabled [[buffer(16)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numCapsules == 0) return;
@@ -203,8 +320,11 @@ kernel void springBoneCollideCapsules(
 
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
+    float angleLimit = boneParams[id].angleLimit;
     bonePosCurr[id] = collideWithCapsuleFiltered(bonePosCurr[id], boneRadius, groupMask,
-                                                  capsuleColliders, globalParams.numCapsules);
+                                                  angleLimit, id,
+                                                  capsuleColliders, globalParams.numCapsules,
+                                                  insideDiagnostics, insideDiagnosticEnabled);
 }
 
 kernel void springBoneCollidePlanes(
