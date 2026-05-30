@@ -185,19 +185,24 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
     }
 
 
-    /// Fail-safe: a model with >= 31 authored collider groups disables
-    /// augmentation (the synthetic group bit would alias an authored group).
-    @MainActor func testAugmentSkippedAtOrAbove31ColliderGroups() {
-        let json = #"{"asset":{"version":"2.0"}}"#
-        let gltf = try! JSONDecoder().decode(GLTFDocument.self, from: Data(json.utf8))
-        let humanoid = VRMHumanoid()
-        humanoid.humanBones[.leftUpperArm] = VRMHumanoid.VRMHumanBone(node: 0)
-        humanoid.humanBones[.leftLowerArm] = VRMHumanoid.VRMHumanBone(node: 1)
-        let model = VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: humanoid, gltf: gltf)
-        var sb = VRMSpringBone()
-        sb.colliderGroups = (0..<31).map { VRMColliderGroup(name: "G\($0)", colliders: []) }
-        model.springBone = sb
-        XCTAssertTrue(SpringBoneColliderAugmentor.synthesize(model: model).isEmpty,
-            "Augmentation must be disabled at >= 31 authored collider groups")
+    /// Group-mask fail-safe boundary: the 32-bit collider-group mask reserves one
+    /// bit for the synthetic group, so up to 31 authored groups are supported and
+    /// 32+ disables augmentation. Mutates a real model's `colliderGroups` so the
+    /// guard is exercised on a model whose leg/head bones otherwise emit capsules.
+    @MainActor func testAugmentSupportedAt31GroupsSkippedAt32() async throws {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+        func synthesizedCount(authoredGroups: Int) -> Int {
+            var sb = model.springBone!
+            sb.colliderGroups = (0..<authoredGroups).map { VRMColliderGroup(name: "G\($0)", colliders: []) }
+            model.springBone = sb
+            return SpringBoneColliderAugmentor.synthesize(model: model).count
+        }
+        XCTAssertGreaterThan(synthesizedCount(authoredGroups: 31), 0,
+            "31 authored groups must still be augmented — bit 31 is free for the synthetic group")
+        XCTAssertEqual(synthesizedCount(authoredGroups: 32), 0,
+            "32 authored groups must disable augmentation — no free mask bit")
     }
 }

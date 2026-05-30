@@ -22,12 +22,13 @@ import simd
 /// Output is ADDITIVE; callers never mutate authored colliders.
 public enum SpringBoneColliderAugmentor {
 
-    /// Maximum number of authored collider groups for which augmentation is
-    /// supported. The compute path encodes the synthetic group as
-    /// `min(colliderGroups.count, 31)`; on a model with this many groups that
-    /// index aliases the clamped group-31 bit, so augmentation is disabled to
-    /// avoid silently corrupting authored collision filtering.
-    private static let maxSupportedColliderGroups = 31
+    /// The collider-group mask is 32 bits wide. Augmentation claims one bit for
+    /// the synthetic group (the compute path uses `min(colliderGroups.count, 31)`),
+    /// which is free as long as fewer than 32 authored groups exist — so up to 31
+    /// authored groups are supported, the synthetic group taking the remaining
+    /// bit. With 32+ authored groups every bit is claimed; the synthetic bit
+    /// would alias an authored group, so augmentation is disabled.
+    private static let colliderGroupBitCount = 32
 
     /// Generator ratios (fractions of a reference scale). The generator emits leg
     /// capsules plus one forward head/brow capsule (arm capsules were dropped
@@ -101,8 +102,9 @@ public enum SpringBoneColliderAugmentor {
     /// reaching it.
     ///
     /// Augmentation is skipped (returns `[]`) when the model has no humanoid or
-    /// when it declares `>= maxSupportedColliderGroups` authored collider groups
-    /// (see ``maxSupportedColliderGroups``).
+    /// when it declares 32 or more authored collider groups (the 32-bit
+    /// collider-group mask then has no free bit for the synthetic group; up to
+    /// 31 authored groups are supported — see ``colliderGroupBitCount``).
     ///
     /// - Parameters:
     ///   - model: The model whose humanoid skeleton drives generation.
@@ -112,12 +114,14 @@ public enum SpringBoneColliderAugmentor {
     public static func synthesize(model: VRMModel, ratios: Ratios = Ratios()) -> [VRMCollider] {
         guard let humanoid = model.humanoid else { return [] }
 
-        // Fail-safe: the synthetic group index is `min(colliderGroups.count, 31)`.
-        // On a model with >= 31 authored groups that aliases the clamped group-31
-        // bit, so disable augmentation rather than corrupt authored filtering.
+        // Fail-safe: augmentation claims one bit of the 32-bit collider-group
+        // mask for the synthetic group. With 32+ authored groups no bit is free,
+        // so disable augmentation rather than alias an authored group's bit.
+        // (Up to 31 authored groups are supported — the synthetic group takes
+        // the remaining bit.)
         let groupCount = model.springBone?.colliderGroups.count ?? 0
-        if groupCount >= maxSupportedColliderGroups {
-            vrmLogPhysics("⚠️ [SpringBoneColliderAugmentor] Disabling collider augmentation (issue #309): model declares \(groupCount) authored collider groups (>= \(maxSupportedColliderGroups)); the synthetic group bit would alias an authored group. This is a documented limitation.")
+        if groupCount >= colliderGroupBitCount {
+            vrmLogPhysics("⚠️ [SpringBoneColliderAugmentor] Disabling collider augmentation (issue #309): model declares \(groupCount) authored collider groups; the 32-bit collider-group mask has no free bit for the synthetic group (supported up to \(colliderGroupBitCount - 1)). This is a documented limitation.")
             return []
         }
 

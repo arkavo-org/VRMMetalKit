@@ -25,4 +25,4 @@ let model = try await VRMModel.load(from: url, device: device, options: options)
 | Sleeve / arm clipping | PBD without CCD: joint tunnels through capsule in one substep, impulse overshoots → visible whip | Deferred; arm capsules investigated and dropped (net regression) |
 | Skirt→leg residual transient | Single-frame penetration during high-velocity swing; no CCD | Deferred |
 | Lateral side-bang at temple | Needs a lateral skull collider, not covered by forward head capsule | Deferred |
-| Models with ≥31 authored collider groups skip augmentation | GPU group-bitmask is 32-bit; one slot required for synthetic group | By design; tracked for future bitmask widening |
+| Models with ≥32 authored collider groups skip augmentation | GPU group-bitmask is 32-bit; one slot required for synthetic group (up to 31 supported) | By design; fully lifting it needs a shader-side universal-collider flag |

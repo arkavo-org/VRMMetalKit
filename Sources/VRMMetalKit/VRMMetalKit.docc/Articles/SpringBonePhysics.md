@@ -59,7 +59,7 @@ Because augmentation is default-on, resting spring-bone positions shift on affec
 
 ### Known limitation
 
-Models whose authored VRM file already contains 31 or more collider groups cause augmentation to be skipped entirely, because the GPU-side group-bitmask is 32 bits and at least one slot must remain free for the synthetic group.
+Models whose authored VRM file already contains 32 or more collider groups cause augmentation to be skipped entirely, because the GPU-side group-bitmask is 32 bits and at least one slot must remain free for the synthetic group. Up to 31 authored groups are supported.
 
 ## Tuning
 
