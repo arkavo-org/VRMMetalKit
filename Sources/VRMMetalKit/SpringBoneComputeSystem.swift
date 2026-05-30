@@ -711,6 +711,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
+        // Synthetic colliders (issue #309) live in a reserved group bit so EVERY
+        // spring collides with them, regardless of authored group membership.
+        // Clamp to 31 so the shader's `1u << groupIndex` stays well-defined. Only
+        // reserve the bit when synthetic colliders actually exist — otherwise the
+        // reserved bit could alias an authored group's clamped bit (models with
+        // >=32 groups all clamp to 31) and leak authored colliders through the
+        // spring filter.
+        let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
+        let hasSyntheticColliders = !springBone.syntheticColliders.isEmpty
+        let syntheticGroupBit: UInt32 = hasSyntheticColliders ? (1 << syntheticGroupIndex) : 0
+
         // Process spring chains to extract bone parameters
         var boneIndex = 0
         rootBoneIndices = []
@@ -735,6 +746,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     }
                 }
             }
+            // Always collide with synthetic colliders (issue #309). Harmless when
+            // the mask is already the 0xFFFFFFFF all-groups default.
+            colliderGroupMask |= syntheticGroupBit
 
             for joint in spring.joints {
                 chainGravityPower.append(joint.gravityPower)
@@ -878,6 +892,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let worldPoint = colliderNode.worldPosition + worldOffset
                 let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
                 planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
+            }
+        }
+
+        // Append synthetic colliders (issue #309) using the same world-transform
+        // idiom as the authored pass above. They live in the reserved synthetic
+        // group so every spring collides with them. The augmentor only emits
+        // spheres and capsules.
+        for collider in springBone.syntheticColliders {
+            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+
+            let wm = colliderNode.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: syntheticGroupIndex))
+
+            case .capsule(let offset, let radius, let tail):
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: syntheticGroupIndex))
+
+            default:
+                continue
             }
         }
 
@@ -1208,6 +1254,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let worldPoint = colliderNode.worldPosition + worldOffset
                 let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
                 planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
+            }
+        }
+
+        // Append synthetic colliders (issue #309) using the same world-transform
+        // idiom as the authored pass above. The augmentor only emits spheres and
+        // capsules.
+        let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
+        for collider in springBone.syntheticColliders {
+            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+
+            let wm = colliderNode.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: syntheticGroupIndex))
+
+            case .capsule(let offset, let radius, let tail):
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: syntheticGroupIndex))
+
+            default:
+                continue
             }
         }
 
@@ -1703,6 +1781,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let worldPoint = colliderNode.worldPosition + worldOffset
                 let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
                 targetPlaneColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
+            }
+        }
+
+        // Append synthetic colliders (issue #309) using the same world-transform
+        // idiom as the authored pass above. The augmentor only emits spheres and
+        // capsules.
+        let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
+        for collider in springBone.syntheticColliders {
+            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+
+            let wm = colliderNode.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
+                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: syntheticGroupIndex))
+
+            case .capsule(let offset, let radius, let tail):
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
+                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: syntheticGroupIndex))
+
+            default:
+                continue
             }
         }
 
