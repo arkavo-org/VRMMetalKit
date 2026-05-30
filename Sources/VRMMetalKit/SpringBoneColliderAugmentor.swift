@@ -29,14 +29,10 @@ public enum SpringBoneColliderAugmentor {
     /// avoid silently corrupting authored collision filtering.
     private static let maxSupportedColliderGroups = 31
 
-    /// Generator ratios (fractions of a reference scale). Limb geometry is filled
-    /// in Task 7; head geometry in Task 8.
+    /// Generator ratios (fractions of a reference scale). The generator currently
+    /// emits leg capsules (arm capsules were dropped pending CCD/substep work —
+    /// see ``synthesize(model:ratios:)``); head geometry is added in Task 8.
     public struct Ratios {
-        /// Arm capsule radius as a fraction of the arm segment's length. Floors
-        /// the radius so the capsule comfortably encloses the arm skin with margin
-        /// for motion-transient cloth lag. Tuned near the stable optimum: larger
-        /// values destabilize fast-swing whip (cloth shoved into the other arm).
-        public var armRadiusFractionOfLength: Float = 0.34
         /// Leg capsule radius as a fraction of the leg segment's length. Legs are
         /// thicker relative to their segment length than arms, so this floor is
         /// larger to ensure the thigh capsule encloses the thigh skin.
@@ -56,24 +52,23 @@ public enum SpringBoneColliderAugmentor {
     private struct LimbSegment {
         let from: VRMHumanoidBone
         let to: VRMHumanoidBone
-        let isLeg: Bool
     }
 
     private static let limbSegments: [LimbSegment] = [
-        LimbSegment(from: .leftUpperArm, to: .leftLowerArm, isLeg: false),
-        LimbSegment(from: .leftLowerArm, to: .leftHand, isLeg: false),
-        LimbSegment(from: .rightUpperArm, to: .rightLowerArm, isLeg: false),
-        LimbSegment(from: .rightLowerArm, to: .rightHand, isLeg: false),
-        LimbSegment(from: .leftUpperLeg, to: .leftLowerLeg, isLeg: true),
-        LimbSegment(from: .leftLowerLeg, to: .leftFoot, isLeg: true),
-        LimbSegment(from: .rightUpperLeg, to: .rightLowerLeg, isLeg: true),
-        LimbSegment(from: .rightLowerLeg, to: .rightFoot, isLeg: true),
+        LimbSegment(from: .leftUpperLeg, to: .leftLowerLeg),
+        LimbSegment(from: .leftLowerLeg, to: .leftFoot),
+        LimbSegment(from: .rightUpperLeg, to: .rightLowerLeg),
+        LimbSegment(from: .rightLowerLeg, to: .rightFoot),
     ]
 
     /// Generates additive bone-derived colliders for the given model.
     ///
-    /// Emits one end-to-end capsule per limb segment (upper/lower arms and legs,
-    /// both sides — eight in total on a fully-rigged humanoid). Each capsule is
+    /// Emits one end-to-end capsule per leg segment (upper/lower legs, both
+    /// sides — four in total on a fully-rigged humanoid). Arm capsules were
+    /// dropped: a frequency sweep showed they could not be validated as an
+    /// improvement (the capsule deflects the stiff sleeve whip and frequently
+    /// makes peak penetration worse — a PBD-without-CCD limitation, tracked as a
+    /// CCD/substep follow-up on #309). Each capsule is
     /// anchored at its `from` bone with its far end pointing at the `to` bone
     /// expressed in the `from` bone's local frame, so it rides the limb under
     /// animation once the upload path re-applies the node's world transform.
@@ -141,7 +136,7 @@ public enum SpringBoneColliderAugmentor {
         let fromRot = upperLeft3x3(model.nodes[fromNode].worldMatrix)
         let tailLocal = simd_inverse(fromRot) * segWorld
 
-        let radius = radiusFor(segment, length: length, fromNode: fromNode, model: model, ratios: ratios)
+        let radius = radiusFor(length: length, fromNode: fromNode, model: model, ratios: ratios)
         out.append(VRMCollider(node: fromNode, shape: .capsule(offset: .zero, radius: radius, tail: tailLocal)))
     }
 
@@ -150,13 +145,12 @@ public enum SpringBoneColliderAugmentor {
     /// and a fraction-of-length floor that guarantees the capsule encloses the
     /// limb skin.
     private static func radiusFor(
-        _ segment: LimbSegment,
         length: Float,
         fromNode: Int,
         model: VRMModel,
         ratios: Ratios
     ) -> Float {
-        let fraction = segment.isLeg ? ratios.legRadiusFractionOfLength : ratios.armRadiusFractionOfLength
+        let fraction = ratios.legRadiusFractionOfLength
         let fractionFloor = length * fraction
         let authoredHint = maxAuthoredSphereRadius(parentedTo: fromNode, model: model)
         return max(authoredHint, fractionFloor)

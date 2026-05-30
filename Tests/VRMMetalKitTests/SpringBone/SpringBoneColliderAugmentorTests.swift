@@ -39,14 +39,15 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         XCTAssertEqual(model.springBone?.syntheticColliders.count, 0)
     }
 
-    @MainActor func testAugmentOnAddsEightLimbCapsules() async throws {
+    @MainActor func testAugmentOnAddsFourLegCapsules() async throws {
         let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
                                             options: VRMLoadingOptions(augmentSpringBoneColliders: true))
-        // Eight end-to-end limb capsules: upper/lower arm + upper/lower leg, both sides.
+        // Four end-to-end leg capsules: upper/lower leg, both sides. Arm capsules
+        // were dropped pending CCD/substep work (see SpringBoneColliderAugmentor).
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 8)
+        XCTAssertEqual(synthetic.count, 4)
         for collider in synthetic {
             guard case let .capsule(_, radius, _) = collider.shape else {
                 return XCTFail("Synthetic colliders must all be capsules")
@@ -55,12 +56,13 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         }
     }
 
-    /// AvatarSample_U: `synthesize` returns 8 limb capsules; the `leftUpperArm`
+    /// AvatarSample_U: `synthesize` returns 4 leg capsules; the `leftUpperLeg`
     /// capsule's far end (after applying the from-bone world transform to
-    /// offset+tail) lands within 1 cm of `leftLowerArm`'s world position; and the
-    /// limb radii comfortably exceed the physical skin floors the oracle measured
-    /// (arm > 0.037, thigh > 0.062) — sanity FLOORS, not oracle reads.
-    @MainActor func testAugmentU_limbCapsuleGeometryAndRadii() async throws {
+    /// offset+tail) lands within 1 cm of `leftLowerLeg`'s world position; and the
+    /// thigh radius comfortably exceeds the physical skin floor the oracle
+    /// measured (thigh > 0.062) — a sanity FLOOR, not an oracle read. Arm capsules
+    /// were dropped pending CCD/substep work (see SpringBoneColliderAugmentor).
+    @MainActor func testAugmentU_legCapsuleGeometryAndRadii() async throws {
         let path = getTestModelPath("AvatarSample_U_1.0.vrm.glb")
         try requireFixture(path, hint: "AvatarSample_U_1.0.vrm.glb")
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
@@ -69,43 +71,37 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let humanoid = model.humanoid else { return XCTFail("U must have a humanoid") }
 
         let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
-        XCTAssertEqual(synthetic.count, 8, "U should yield 8 limb capsules")
+        XCTAssertEqual(synthetic.count, 4, "U should yield 4 leg capsules")
 
-        // Resolve the leftUpperArm capsule and verify its far end lands on leftLowerArm.
-        guard let upperArmNode = humanoid.getBoneNode(.leftUpperArm),
-              let lowerArmNode = humanoid.getBoneNode(.leftLowerArm) else {
-            return XCTFail("U must rig left upper/lower arm")
+        // Resolve the leftUpperLeg capsule and verify its far end lands on leftLowerLeg.
+        guard let upperLegNode = humanoid.getBoneNode(.leftUpperLeg),
+              let lowerLegNode = humanoid.getBoneNode(.leftLowerLeg) else {
+            return XCTFail("U must rig left upper/lower leg")
         }
-        guard let upperArmCapsule = synthetic.first(where: { $0.node == upperArmNode }) else {
-            return XCTFail("Missing leftUpperArm capsule")
+        guard let upperLegCapsule = synthetic.first(where: { $0.node == upperLegNode }) else {
+            return XCTFail("Missing leftUpperLeg capsule")
         }
-        guard case let .capsule(offset, radius, tail) = upperArmCapsule.shape else {
-            return XCTFail("leftUpperArm collider must be a capsule")
+        guard case let .capsule(offset, radius, tail) = upperLegCapsule.shape else {
+            return XCTFail("leftUpperLeg collider must be a capsule")
         }
 
-        let wm = model.nodes[upperArmNode].worldMatrix
+        let wm = model.nodes[upperLegNode].worldMatrix
         let rot = simd_float3x3(
             SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
             SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
             SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
         )
-        let p0 = model.nodes[upperArmNode].worldPosition + rot * offset
+        let p0 = model.nodes[upperLegNode].worldPosition + rot * offset
         let farEnd = p0 + rot * tail
-        let lowerArmPos = model.nodes[lowerArmNode].worldPosition
-        XCTAssertLessThan(simd_length(farEnd - lowerArmPos), 0.01,
-            "leftUpperArm capsule far end must land within 1cm of leftLowerArm")
+        let lowerLegPos = model.nodes[lowerLegNode].worldPosition
+        XCTAssertLessThan(simd_length(farEnd - lowerLegPos), 0.01,
+            "leftUpperLeg capsule far end must land within 1cm of leftLowerLeg")
 
-        // Arm radius must enclose the arm skin (oracle measured ~0.037).
+        // Thigh radius must enclose the thigh skin (oracle measured ~0.062), and
+        // stay physically plausible (a real thigh radius is well under ~0.12 m).
         XCTAssertTrue(radius.isFinite)
-        XCTAssertGreaterThan(radius, 0.037, "Arm capsule must enclose the arm skin")
-
-        // Thigh radius must enclose the thigh skin (oracle measured ~0.062).
-        guard let thighNode = humanoid.getBoneNode(.leftUpperLeg),
-              let thighCapsule = synthetic.first(where: { $0.node == thighNode }),
-              case let .capsule(_, thighRadius, _) = thighCapsule.shape else {
-            return XCTFail("Missing leftUpperLeg capsule")
-        }
-        XCTAssertGreaterThan(thighRadius, 0.062, "Thigh capsule must enclose the thigh skin")
+        XCTAssertGreaterThan(radius, 0.062, "Thigh capsule must enclose the thigh skin")
+        XCTAssertLessThan(radius, 0.12, "Thigh capsule radius must stay physically plausible")
     }
 
 
