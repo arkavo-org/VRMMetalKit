@@ -177,15 +177,16 @@ final class SkinReferenceMeasureUtilTests: XCTestCase {
     /// primitives whose material reads as body/skin are included. Returns an
     /// empty array if buffers are missing (e.g. model loaded without a device).
     static func allMeshPositions(model: VRMModel, bodyOnly: Bool) -> [SIMD3<Float>] {
+        // The all-geometry path shares its vertex reader with the oracle's
+        // integrity fingerprint so both count the exact same vertices.
+        if !bodyOnly { return SkinReferenceOracle.allRestPositions(model: model) }
         var out: [SIMD3<Float>] = []
         let stride = MemoryLayout<VRMVertex>.stride
         for mesh in model.meshes {
             for prim in mesh.primitives {
                 guard let buf = prim.vertexBuffer, prim.vertexCount > 0 else { continue }
-                if bodyOnly {
-                    let matName = prim.materialIndex.flatMap { model.materials[safe: $0]?.name }
-                    if !isBodyMaterial(matName) { continue }
-                }
+                let matName = prim.materialIndex.flatMap { model.materials[safe: $0]?.name }
+                if !isBodyMaterial(matName) { continue }
                 let raw = buf.contents()
                 for i in 0..<prim.vertexCount {
                     let p = raw.advanced(by: i * stride)

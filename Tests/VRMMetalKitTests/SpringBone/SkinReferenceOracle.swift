@@ -182,6 +182,46 @@ extension SkinReferenceOracle {
     }
 }
 
+extension SkinReferenceOracle {
+    /// Reads back every primitive's object-space (rest/bind-pose) positions from
+    /// its interleaved `vertexBuffer` (VRMVertex layout). Shared by the oracle's
+    /// integrity fingerprint and the measurement utility so both count the exact
+    /// same vertices. Returns an empty array if buffers are missing (e.g. the
+    /// model was loaded without a Metal device).
+    static func allRestPositions(model: VRMModel) -> [SIMD3<Float>] {
+        var out: [SIMD3<Float>] = []
+        let stride = MemoryLayout<VRMVertex>.stride
+        for mesh in model.meshes {
+            for prim in mesh.primitives {
+                guard let buf = prim.vertexBuffer, prim.vertexCount > 0 else { continue }
+                let raw = buf.contents()
+                for i in 0..<prim.vertexCount {
+                    let p = raw.advanced(by: i * stride)
+                        .assumingMemoryBound(to: VRMVertex.self).pointee.position
+                    out.append(p)
+                }
+            }
+        }
+        return out
+    }
+
+    /// Computes the integrity fingerprint (vertex count + Y bounding box) of the
+    /// loaded model's rest-pose mesh, so a test can fail loudly if the fixture
+    /// mesh drifts out from under the hand-authored oracle.
+    static func measureIntegrity(model: VRMModel) -> Integrity {
+        let verts = allRestPositions(model: model)
+        guard let first = verts.first else {
+            return Integrity(vertexCount: 0, bboxMinY: 0, bboxMaxY: 0)
+        }
+        var minY = first.y, maxY = first.y
+        for v in verts {
+            minY = min(minY, v.y)
+            maxY = max(maxY, v.y)
+        }
+        return Integrity(vertexCount: verts.count, bboxMinY: minY, bboxMaxY: maxY)
+    }
+}
+
 /// Locates a bundled test resource, throwing `XCTSkip` (not a failure) when the
 /// file is absent so suites degrade gracefully on stripped checkouts.
 enum XCTestResource {

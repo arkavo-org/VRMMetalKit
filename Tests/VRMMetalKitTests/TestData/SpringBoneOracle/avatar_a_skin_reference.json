@@ -3,7 +3,7 @@
   "authoredDate": "2026-05-29",
   "poseAssumption": "neutral rest pose at load; shapes transform with live node world matrices",
   "note": "GROUND TRUTH for tests only. NEVER shipped as runtime colliders. Do not edit the generator to match these. Limb radii measured (70th-percentile perpendicular skin distance, body-only for legs) via SkinReferenceMeasureUtilTests; skull sphere radius measured from face/skin cranium extent; head/brow capsule radius is a conservative trace.",
-  "integrity": { "vertexCount": 0, "bboxMinY": 0.0, "bboxMaxY": 0.0 },
+  "integrity": { "vertexCount": 94016, "bboxMinY": 5.1649362e-08, "bboxMaxY": 1.5581173 },
   "colliders": [
     { "bone": "head", "kind": "capsule", "offset": [0.0, 0.02, 0.04], "tail": [0.0, -0.07, 0.06], "radius": 0.055 },
     { "bone": "head", "kind": "sphere", "offset": [0.0, 0.06, -0.01], "radius": 0.10 },
