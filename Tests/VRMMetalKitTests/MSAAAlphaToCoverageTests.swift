@@ -408,8 +408,15 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
             config.synchronousSpringBone = true
             let renderer = VRMRenderer(device: device, config: config)
 
+            // Augmentation off: this test measures A2C edge alpha on a head
+            // close-up and needs a bitwise-deterministic control. The #309
+            // synthetic head/brow capsule puts front hair in collider contact,
+            // and the spring-bone GPU collision path carries ~1e-4 FP-ordering
+            // jitter that surfaces as a few changed pixels in this framing —
+            // irrelevant to A2C but enough to break the determinism control.
             let model = try await VRMModel.load(
-                from: URL(fileURLWithPath: modelPath), device: device)
+                from: URL(fileURLWithPath: modelPath), device: device,
+                options: VRMLoadingOptions(augmentSpringBoneColliders: false))
             renderer.loadModel(model)
 
             renderer.projectionMatrix = RenderTestSupport.makePerspective(
