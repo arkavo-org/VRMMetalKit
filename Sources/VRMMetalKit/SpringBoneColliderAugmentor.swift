@@ -22,18 +22,20 @@ import simd
 /// Output is ADDITIVE; callers never mutate authored colliders.
 public enum SpringBoneColliderAugmentor {
 
-    /// Maximum number of authored collider groups for which augmentation is
-    /// supported. The compute path encodes the synthetic group as
-    /// `min(colliderGroups.count, 31)`; on a model with this many groups that
-    /// index aliases the clamped group-31 bit, so augmentation is disabled to
-    /// avoid silently corrupting authored collision filtering.
-    private static let maxSupportedColliderGroups = 31
+    /// The collider-group mask is 32 bits wide. Augmentation claims one bit for
+    /// the synthetic group (the compute path uses `min(colliderGroups.count, 31)`),
+    /// which is free as long as fewer than 32 authored groups exist — so up to 31
+    /// authored groups are supported, the synthetic group taking the remaining
+    /// bit. With 32+ authored groups every bit is claimed; the synthetic bit
+    /// would alias an authored group, so augmentation is disabled.
+    private static let colliderGroupBitCount = 32
 
     /// Generator ratios (fractions of a reference scale). The generator emits leg
-    /// capsules plus one forward head/brow capsule (arm capsules were dropped
-    /// pending CCD/substep work — see ``synthesize(model:ratios:)``). All head
-    /// geometry is expressed as a fraction of the head's reference radius `rHead`
-    /// (never raw metres), so the capsule scales with the model.
+    /// capsules plus one forward head/brow capsule and one lateral skull sphere
+    /// (arm capsules were dropped pending CCD/substep work — see
+    /// ``synthesize(model:ratios:)``). All head geometry is expressed as a
+    /// fraction of the head's reference radius `rHead` (never raw metres), so the
+    /// head colliders scale with the model.
     public struct Ratios: Sendable {
         /// Leg capsule radius as a fraction of the leg segment's length. Legs are
         /// thicker relative to their segment length than arms, so this floor is
@@ -53,6 +55,18 @@ public enum SpringBoneColliderAugmentor {
         /// Head/brow capsule anchor (offset) forward placement as a fraction of
         /// `rHead` (head-local +Z).
         public var headOffsetFwdFraction: Float = 0.30
+        /// Synthetic skull SPHERE radius as a fraction of `rHead`. A midline
+        /// forward brow capsule cannot reach a lateral temple strand, so one
+        /// skull sphere is appended (into the SEPARATE sphere buffer) to give the
+        /// head lateral coverage. Sized oracle-blind from `rHead` (#309
+        /// manifestation-1 lateral residual).
+        public var headSkullRadiusFraction: Float = 1.0
+        /// Synthetic skull sphere center placement upward along head-local +Y as a
+        /// fraction of `rHead`. Lifts the sphere from the head node (jaw/neck
+        /// height) up to the cranium so it hugs the temple/side strands without
+        /// engulfing the face. Matches the authored head sphere, which on
+        /// AvatarSample_A centers its skull estimate at +1.0×rHead.
+        public var headSkullUpFraction: Float = 1.0
         /// Creates default generator ratios.
         public init() {}
     }
@@ -101,8 +115,9 @@ public enum SpringBoneColliderAugmentor {
     /// reaching it.
     ///
     /// Augmentation is skipped (returns `[]`) when the model has no humanoid or
-    /// when it declares `>= maxSupportedColliderGroups` authored collider groups
-    /// (see ``maxSupportedColliderGroups``).
+    /// when it declares 32 or more authored collider groups (the 32-bit
+    /// collider-group mask then has no free bit for the synthetic group; up to
+    /// 31 authored groups are supported — see ``colliderGroupBitCount``).
     ///
     /// - Parameters:
     ///   - model: The model whose humanoid skeleton drives generation.
@@ -112,12 +127,14 @@ public enum SpringBoneColliderAugmentor {
     public static func synthesize(model: VRMModel, ratios: Ratios = Ratios()) -> [VRMCollider] {
         guard let humanoid = model.humanoid else { return [] }
 
-        // Fail-safe: the synthetic group index is `min(colliderGroups.count, 31)`.
-        // On a model with >= 31 authored groups that aliases the clamped group-31
-        // bit, so disable augmentation rather than corrupt authored filtering.
+        // Fail-safe: augmentation claims one bit of the 32-bit collider-group
+        // mask for the synthetic group. With 32+ authored groups no bit is free,
+        // so disable augmentation rather than alias an authored group's bit.
+        // (Up to 31 authored groups are supported — the synthetic group takes
+        // the remaining bit.)
         let groupCount = model.springBone?.colliderGroups.count ?? 0
-        if groupCount >= maxSupportedColliderGroups {
-            vrmLogPhysics("⚠️ [SpringBoneColliderAugmentor] Disabling collider augmentation (issue #309): model declares \(groupCount) authored collider groups (>= \(maxSupportedColliderGroups)); the synthetic group bit would alias an authored group. This is a documented limitation.")
+        if groupCount >= colliderGroupBitCount {
+            vrmLogPhysics("⚠️ [SpringBoneColliderAugmentor] Disabling collider augmentation (issue #309): model declares \(groupCount) authored collider groups; the 32-bit collider-group mask has no free bit for the synthetic group (supported up to \(colliderGroupBitCount - 1)). This is a documented limitation.")
             return []
         }
 
@@ -129,24 +146,27 @@ public enum SpringBoneColliderAugmentor {
         // occupies buffer slot 4 — the XPBD solver applies corrections in
         // buffer-index order and the validated leg result depends on slots 0–3.
         appendHeadCapsule(humanoid: humanoid, model: model, ratios: ratios, into: &out)
+        // The skull SPHERE is a SPHERE, so it lands in the SEPARATE sphere
+        // collider buffer (not the capsule buffer). Its position in `out` does
+        // NOT affect the capsule buffer order, so the validated leg/head capsule
+        // slots are untouched. It gives the head LATERAL coverage the midline
+        // brow capsule cannot reach (temple side-bang strands, #309).
+        appendHeadSkullSphere(humanoid: humanoid, model: model, ratios: ratios, into: &out)
         return out
     }
 
-    /// Appends one forward head/brow capsule if the head bone resolves and a
-    /// reference radius can be derived. Oracle-blind: the reference radius is the
-    /// largest authored head sphere radius, else `0.9 *` the head→neck length.
-    private static func appendHeadCapsule(
+    /// Derives the head reference radius `rHead` oracle-blind: the largest
+    /// authored sphere/insideSphere radius parented to the head node (the
+    /// author's own skull-scale hint), else `0.9 *` the head→neck length. Returns
+    /// `nil` when the head bone does not resolve or no radius can be derived.
+    private static func headReferenceRadius(
         humanoid: VRMHumanoid,
-        model: VRMModel,
-        ratios: Ratios,
-        into out: inout [VRMCollider]
-    ) {
+        model: VRMModel
+    ) -> (headNode: Int, rHead: Float)? {
         guard let headNode = humanoid.getBoneNode(.head),
               headNode >= 0, headNode < model.nodes.count else {
-            return
+            return nil
         }
-
-        // Reference radius = max authored head sphere radius, else 0.9 * head→neck length.
         var rHead: Float = 0
         if let colliders = model.springBone?.colliders {
             for collider in colliders where collider.node == headNode {
@@ -164,7 +184,45 @@ public enum SpringBoneColliderAugmentor {
             let neckPos = model.nodes[neckNode].worldPosition
             rHead = 0.9 * simd_length(headPos - neckPos)
         }
-        guard rHead > 0 else { return }
+        guard rHead > 0 else { return nil }
+        return (headNode, rHead)
+    }
+
+    /// Appends one synthetic skull SPHERE centered on the cranium to catch
+    /// lateral/temple hair strands that a midline forward brow capsule cannot
+    /// reach (#309 manifestation-1 lateral residual). Oracle-blind: center and
+    /// radius are fractions of `rHead` (the author's own skull estimate), never
+    /// of any oracle. Emitted as `.sphere` so it lands in the SEPARATE sphere
+    /// buffer and never disturbs the validated leg/head capsule buffer order. The
+    /// `offset` is head-local; the upload path re-applies the head world transform.
+    private static func appendHeadSkullSphere(
+        humanoid: VRMHumanoid,
+        model: VRMModel,
+        ratios: Ratios,
+        into out: inout [VRMCollider]
+    ) {
+        guard let (headNode, rHead) = headReferenceRadius(humanoid: humanoid, model: model) else {
+            return
+        }
+        // Center: head node + (head-local +Y up) × upFraction × rHead. Radius: a
+        // fraction of rHead. Both are pure ratios — no raw metres.
+        let offset = SIMD3<Float>(0, ratios.headSkullUpFraction * rHead, 0)
+        let radius = ratios.headSkullRadiusFraction * rHead
+        out.append(VRMCollider(node: headNode, shape: .sphere(offset: offset, radius: radius)))
+    }
+
+    /// Appends one forward head/brow capsule if the head bone resolves and a
+    /// reference radius can be derived. Oracle-blind: the reference radius is the
+    /// largest authored head sphere radius, else `0.9 *` the head→neck length.
+    private static func appendHeadCapsule(
+        humanoid: VRMHumanoid,
+        model: VRMModel,
+        ratios: Ratios,
+        into out: inout [VRMCollider]
+    ) {
+        guard let (headNode, rHead) = headReferenceRadius(humanoid: humanoid, model: model) else {
+            return
+        }
 
         // Head-local axes: +Z forward (the parser normalizes VRM0 -Z facing to
         // +Z), -Y down. Sweep from the upper-face forward to the brow.

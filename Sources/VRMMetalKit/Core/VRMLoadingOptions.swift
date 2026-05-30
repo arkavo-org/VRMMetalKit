@@ -242,8 +242,9 @@ public struct VRMLoadingOptions: Sendable {
     ///   skirt-panel-into-thigh clipping.
     ///
     /// Authored colliders are never mutated or removed; this is purely additive.
-    /// Models with 31 or more authored collider groups skip augmentation because
-    /// the GPU group-bitmask requires at least one free slot.
+    /// Models with 32 or more authored collider groups skip augmentation because
+    /// the 32-bit GPU group-bitmask requires one free slot for the synthetic
+    /// group (up to 31 authored groups are supported).
     ///
     /// Set to `false` to restore authored-only behaviour — useful when bisecting a
     /// physics regression or validating a newly rigged model against its original
