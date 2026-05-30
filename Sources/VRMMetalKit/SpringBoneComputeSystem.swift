@@ -682,6 +682,53 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         pendingSnapshotSemaphore = nil
     }
 
+    /// Transforms additive synthetic colliders (issue #309) into world space and
+    /// appends them to the given destination arrays. They live in the reserved
+    /// synthetic group (`groupIndex`) so every spring collides with them.
+    ///
+    /// This is the single shared implementation behind the three synthetic-upload
+    /// passes (`populateSpringBoneData`, `updateAnimatedPositions`, and
+    /// `captureTargetColliderTransforms`). It mirrors the authored upload idiom:
+    /// a `simd_float3x3` rotation extracted from the node's `worldMatrix`,
+    /// `worldPosition + worldRotation * offset` for the world center, capsule
+    /// `p1 = p0 + worldRotation * tail`, a `model.nodes[safe:]` bounds guard, and
+    /// `default: continue` (the augmentor only emits spheres and capsules).
+    private func appendSyntheticColliders(
+        _ synthetics: [VRMCollider],
+        model: VRMModel,
+        groupIndex: UInt32,
+        spheres: inout [SphereCollider],
+        capsules: inout [CapsuleCollider]
+    ) {
+        for collider in synthetics {
+            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+
+            let wm = colliderNode.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                let worldOffset = worldRotation * offset
+                let worldCenter = colliderNode.worldPosition + worldOffset
+                spheres.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
+
+            case .capsule(let offset, let radius, let tail):
+                let worldOffset = worldRotation * offset
+                let worldTail = worldRotation * tail
+                let worldP0 = colliderNode.worldPosition + worldOffset
+                let worldP1 = worldP0 + worldTail
+                capsules.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+
+            default:
+                continue
+            }
+        }
+    }
+
     func populateSpringBoneData(model: VRMModel) throws {
         guard let springBone = model.springBone,
               let buffers = model.springBoneBuffers,
@@ -895,37 +942,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Append synthetic colliders (issue #309) using the same world-transform
-        // idiom as the authored pass above. They live in the reserved synthetic
-        // group so every spring collides with them. The augmentor only emits
-        // spheres and capsules.
-        for collider in springBone.syntheticColliders {
-            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-
-            let wm = colliderNode.worldMatrix
-            let worldRotation = simd_float3x3(
-                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
-                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
-                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
-            )
-
-            switch collider.shape {
-            case .sphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: syntheticGroupIndex))
-
-            case .capsule(let offset, let radius, let tail):
-                let worldOffset = worldRotation * offset
-                let worldTail = worldRotation * tail
-                let worldP0 = colliderNode.worldPosition + worldOffset
-                let worldP1 = worldP0 + worldTail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: syntheticGroupIndex))
-
-            default:
-                continue
-            }
-        }
+        // Append synthetic colliders (issue #309) via the shared helper. They
+        // live in the reserved synthetic group so every spring collides with them.
+        appendSyntheticColliders(
+            springBone.syntheticColliders, model: model, groupIndex: syntheticGroupIndex,
+            spheres: &sphereColliders, capsules: &capsuleColliders)
 
         // Update buffers
         buffers.updateBoneParameters(boneParams)
@@ -1257,37 +1278,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Append synthetic colliders (issue #309) using the same world-transform
-        // idiom as the authored pass above. The augmentor only emits spheres and
-        // capsules.
+        // Append synthetic colliders (issue #309) via the shared helper.
         let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
-        for collider in springBone.syntheticColliders {
-            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-
-            let wm = colliderNode.worldMatrix
-            let worldRotation = simd_float3x3(
-                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
-                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
-                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
-            )
-
-            switch collider.shape {
-            case .sphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: syntheticGroupIndex))
-
-            case .capsule(let offset, let radius, let tail):
-                let worldOffset = worldRotation * offset
-                let worldTail = worldRotation * tail
-                let worldP0 = colliderNode.worldPosition + worldOffset
-                let worldP1 = worldP0 + worldTail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: syntheticGroupIndex))
-
-            default:
-                continue
-            }
-        }
+        appendSyntheticColliders(
+            springBone.syntheticColliders, model: model, groupIndex: syntheticGroupIndex,
+            spheres: &sphereColliders, capsules: &capsuleColliders)
 
         #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
         if updateCounter % 600 == 1 && !sphereColliders.isEmpty {
@@ -1784,37 +1779,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Append synthetic colliders (issue #309) using the same world-transform
-        // idiom as the authored pass above. The augmentor only emits spheres and
-        // capsules.
+        // Append synthetic colliders (issue #309) via the shared helper.
         let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
-        for collider in springBone.syntheticColliders {
-            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-
-            let wm = colliderNode.worldMatrix
-            let worldRotation = simd_float3x3(
-                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
-                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
-                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
-            )
-
-            switch collider.shape {
-            case .sphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
-                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: syntheticGroupIndex))
-
-            case .capsule(let offset, let radius, let tail):
-                let worldOffset = worldRotation * offset
-                let worldTail = worldRotation * tail
-                let worldP0 = colliderNode.worldPosition + worldOffset
-                let worldP1 = worldP0 + worldTail
-                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: syntheticGroupIndex))
-
-            default:
-                continue
-            }
-        }
+        appendSyntheticColliders(
+            springBone.syntheticColliders, model: model, groupIndex: syntheticGroupIndex,
+            spheres: &targetSphereColliders, capsules: &targetCapsuleColliders)
 
         // Apply runtime radius overrides (e.g., for hair clipping prevention)
         for (index, overrideRadius) in sphereColliderRadiusOverrides {
