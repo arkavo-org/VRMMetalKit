@@ -29,20 +29,30 @@ public enum SpringBoneColliderAugmentor {
     /// avoid silently corrupting authored collision filtering.
     private static let maxSupportedColliderGroups = 31
 
-    /// Generator ratios (fractions of a reference scale). The generator currently
-    /// emits leg capsules (arm capsules were dropped pending CCD/substep work —
-    /// see ``synthesize(model:ratios:)``); head geometry is added in Task 8.
+    /// Generator ratios (fractions of a reference scale). The generator emits leg
+    /// capsules plus one forward head/brow capsule (arm capsules were dropped
+    /// pending CCD/substep work — see ``synthesize(model:ratios:)``). All head
+    /// geometry is expressed as a fraction of the head's reference radius `rHead`
+    /// (never raw metres), so the capsule scales with the model.
     public struct Ratios {
         /// Leg capsule radius as a fraction of the leg segment's length. Legs are
         /// thicker relative to their segment length than arms, so this floor is
         /// larger to ensure the thigh capsule encloses the thigh skin.
         public var legRadiusFractionOfLength: Float = 0.24
-        /// Forward offset of the head sphere as a fraction of head height.
+        /// Head/brow capsule tail forward reach as a fraction of `rHead`
+        /// (head-local +Z). The tail rides forward to the front of the face/brow.
         public var headForwardFraction: Float = 0.60
-        /// Downward offset of the head sphere as a fraction of head height.
-        public var headDownFraction: Float = 0.50
-        /// Head sphere radius as a fraction of head height.
-        public var headRadiusFraction: Float = 0.55
+        /// Head/brow capsule tail drop as a fraction of `rHead` (head-local -Y).
+        /// The tail sweeps down toward the brow/upper-face.
+        public var headDownFraction: Float = 0.55
+        /// Head/brow capsule radius as a fraction of `rHead`.
+        public var headRadiusFraction: Float = 0.50
+        /// Head/brow capsule anchor (offset) upward placement as a fraction of
+        /// `rHead` (head-local +Y).
+        public var headOffsetUpFraction: Float = 0.10
+        /// Head/brow capsule anchor (offset) forward placement as a fraction of
+        /// `rHead` (head-local +Z).
+        public var headOffsetFwdFraction: Float = 0.30
         /// Creates default generator ratios.
         public init() {}
     }
@@ -64,14 +74,25 @@ public enum SpringBoneColliderAugmentor {
     /// Generates additive bone-derived colliders for the given model.
     ///
     /// Emits one end-to-end capsule per leg segment (upper/lower legs, both
-    /// sides — four in total on a fully-rigged humanoid). Arm capsules were
-    /// dropped: a frequency sweep showed they could not be validated as an
-    /// improvement (the capsule deflects the stiff sleeve whip and frequently
-    /// makes peak penetration worse — a PBD-without-CCD limitation, tracked as a
-    /// CCD/substep follow-up on #309). Each capsule is
-    /// anchored at its `from` bone with its far end pointing at the `to` bone
-    /// expressed in the `from` bone's local frame, so it rides the limb under
-    /// animation once the upload path re-applies the node's world transform.
+    /// sides — four in total on a fully-rigged humanoid) PLUS one forward
+    /// head/brow capsule anchored at the head bone. Arm capsules were dropped: a
+    /// frequency sweep showed they could not be validated as an improvement (the
+    /// capsule deflects the stiff sleeve whip and frequently makes peak
+    /// penetration worse — a PBD-without-CCD limitation, tracked as a CCD/substep
+    /// follow-up on #309). Each leg capsule is anchored at its `from` bone with
+    /// its far end pointing at the `to` bone expressed in the `from` bone's local
+    /// frame, so it rides the limb under animation once the upload path re-applies
+    /// the node's world transform.
+    ///
+    /// The head capsule sweeps from the upper face forward and down to the brow
+    /// (head-local +Z forward, -Y down) so that short head-hugging hair chains
+    /// rest on the brow instead of sinking into the forehead when the head tips
+    /// back (#309 manifestation 1). Its size is derived oracle-blind from the
+    /// head's reference radius `rHead` (largest authored head sphere radius, else
+    /// a fraction of the head→neck length); all head geometry is a fraction of
+    /// `rHead`. It is APPENDED AFTER the leg capsules: the synthetic colliders are
+    /// uploaded in array order and the XPBD solver is sensitive to buffer-index
+    /// order, so head must occupy slot 4 to preserve the validated leg slots 0–3.
     ///
     /// The radius is derived oracle-blind: the larger of (a) the largest authored
     /// sphere/insideSphere radius parented to the `from` bone (the author's own
@@ -104,7 +125,53 @@ public enum SpringBoneColliderAugmentor {
         for segment in limbSegments {
             appendLimbCapsule(segment, humanoid: humanoid, model: model, ratios: ratios, into: &out)
         }
+        // CRITICAL: the head capsule MUST be appended AFTER the leg capsules so it
+        // occupies buffer slot 4 — the XPBD solver applies corrections in
+        // buffer-index order and the validated leg result depends on slots 0–3.
+        appendHeadCapsule(humanoid: humanoid, model: model, ratios: ratios, into: &out)
         return out
+    }
+
+    /// Appends one forward head/brow capsule if the head bone resolves and a
+    /// reference radius can be derived. Oracle-blind: the reference radius is the
+    /// largest authored head sphere radius, else `0.9 *` the head→neck length.
+    private static func appendHeadCapsule(
+        humanoid: VRMHumanoid,
+        model: VRMModel,
+        ratios: Ratios,
+        into out: inout [VRMCollider]
+    ) {
+        guard let headNode = humanoid.getBoneNode(.head),
+              headNode >= 0, headNode < model.nodes.count else {
+            return
+        }
+
+        // Reference radius = max authored head sphere radius, else 0.9 * head→neck length.
+        var rHead: Float = 0
+        if let colliders = model.springBone?.colliders {
+            for collider in colliders where collider.node == headNode {
+                switch collider.shape {
+                case .sphere(_, let radius), .insideSphere(_, let radius):
+                    if radius > rHead { rHead = radius }
+                default:
+                    continue
+                }
+            }
+        }
+        if rHead <= 0,
+           let neckNode = humanoid.getBoneNode(.neck), neckNode >= 0, neckNode < model.nodes.count {
+            let headPos = model.nodes[headNode].worldPosition
+            let neckPos = model.nodes[neckNode].worldPosition
+            rHead = 0.9 * simd_length(headPos - neckPos)
+        }
+        guard rHead > 0 else { return }
+
+        // Head-local axes: +Z forward (the parser normalizes VRM0 -Z facing to
+        // +Z), -Y down. Sweep from the upper-face forward to the brow.
+        let offset = SIMD3<Float>(0, ratios.headOffsetUpFraction * rHead, ratios.headOffsetFwdFraction * rHead)
+        let tail = SIMD3<Float>(0, -ratios.headDownFraction * rHead, ratios.headForwardFraction * rHead)
+        let radius = ratios.headRadiusFraction * rHead
+        out.append(VRMCollider(node: headNode, shape: .capsule(offset: offset, radius: radius, tail: tail)))
     }
 
     /// Appends one end-to-end capsule for `segment` if both bones resolve.

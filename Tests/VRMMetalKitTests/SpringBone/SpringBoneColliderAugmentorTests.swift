@@ -44,16 +44,51 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
                                             options: VRMLoadingOptions(augmentSpringBoneColliders: true))
-        // Four end-to-end leg capsules: upper/lower leg, both sides. Arm capsules
-        // were dropped pending CCD/substep work (see SpringBoneColliderAugmentor).
+        // Four end-to-end leg capsules + one forward head/brow capsule. Arm
+        // capsules were dropped pending CCD/substep work (see
+        // SpringBoneColliderAugmentor).
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 4)
+        XCTAssertEqual(synthetic.count, 5)
         for collider in synthetic {
             guard case let .capsule(_, radius, _) = collider.shape else {
                 return XCTFail("Synthetic colliders must all be capsules")
             }
             XCTAssertTrue(radius.isFinite && radius > 0, "Capsule radius must be finite and positive")
         }
+    }
+
+    /// AvatarSample_A: `synthesize` appends a forward head/brow capsule AFTER the
+    /// four leg capsules (slot 4 — buffer-order-sensitive). Its far end
+    /// (offset.z + tail.z, head-local) is forward (> 0) of the head center and its
+    /// radius is finite/plausible. Verifies the #309 manifestation-1 capsule.
+    @MainActor func testAugmentA_appendsForwardHeadCapsule() async throws {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        guard let humanoid = model.humanoid else { return XCTFail("A must have a humanoid") }
+        guard let headNode = humanoid.getBoneNode(.head) else { return XCTFail("A must rig a head") }
+
+        let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
+        XCTAssertEqual(synthetic.count, 5, "A should yield 4 leg capsules + 1 head capsule")
+
+        // Head capsule must be appended AFTER the legs (last element, slot 4).
+        guard let headCapsule = synthetic.last, headCapsule.node == headNode else {
+            return XCTFail("Last synthetic collider must be the head capsule")
+        }
+        guard case let .capsule(offset, radius, tail) = headCapsule.shape else {
+            return XCTFail("Head collider must be a capsule")
+        }
+        print("[#309 head capsule A] offset=\(offset) tail=\(tail) radius=\(radius)")
+
+        XCTAssertTrue(radius.isFinite && radius > 0, "Head capsule radius must be finite and positive")
+        XCTAssertLessThan(radius, 0.12, "Head capsule radius must stay physically plausible")
+        // Head-local +Z is forward: the capsule's far end must sweep forward of
+        // the head center toward the brow.
+        XCTAssertGreaterThan(offset.z + tail.z, 0,
+            "Head capsule far end must reach forward (head-local +Z) toward the brow")
+        // And it must sweep downward (head-local -Y) toward the brow/upper-face.
+        XCTAssertLessThan(tail.y, 0, "Head capsule must sweep down toward the brow")
     }
 
     /// AvatarSample_U: `synthesize` returns 4 leg capsules; the `leftUpperLeg`
@@ -71,7 +106,18 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let humanoid = model.humanoid else { return XCTFail("U must have a humanoid") }
 
         let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
-        XCTAssertEqual(synthetic.count, 4, "U should yield 4 leg capsules")
+        // 4 leg capsules + 1 forward head/brow capsule (Task 8). The leg slots
+        // (0–3) remain first; the head capsule is appended last.
+        let legBoneNodes = Set([
+            humanoid.getBoneNode(.leftUpperLeg), humanoid.getBoneNode(.leftLowerLeg),
+            humanoid.getBoneNode(.rightUpperLeg), humanoid.getBoneNode(.rightLowerLeg),
+        ].compactMap { $0 })
+        let legCapsules = synthetic.filter { legBoneNodes.contains($0.node) }
+        XCTAssertEqual(legCapsules.count, 4, "U should yield 4 leg capsules")
+        if let headNode = humanoid.getBoneNode(.head) {
+            XCTAssertEqual(synthetic.last?.node, headNode,
+                "Head capsule must be appended AFTER the leg capsules (slot 4)")
+        }
 
         // Resolve the leftUpperLeg capsule and verify its far end lands on leftLowerLeg.
         guard let upperLegNode = humanoid.getBoneNode(.leftUpperLeg),
