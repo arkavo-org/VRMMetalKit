@@ -12,6 +12,14 @@
 
 **Deviation from spec:** Spec §5 said the flag lives on "the SpringBone/`RendererConfig` config". Verified during planning that collider buffers are allocated inside `VRMModel.load` (`Core/VRMModel.swift:537`), before any `VRMRenderer`/`RendererConfig` exists. The flag therefore lives on **`VRMLoadingOptions`** (`augmentSpringBoneColliders: Bool = true`). Everything else matches the spec.
 
+**Revision 1 (Option 2 — second fixture).** Phase 0 measurement proved AvatarSample_A has no limb-reaching cloth (only short head/neck `Hair`/`Hood` chains; no skirt). Per spec Revision 1, limb capsules are validated on the in-repo **`AvatarSample_U_1.0.vrm.glb`** (6 `Skirt` chains → legs, `Sleeve`/long-hair → arms). Plan changes:
+- **Task 4 (done)** — keep only the AvatarSample_A `lookUp` head reproduction; the head-dominated `armsRaised`/`armsCrossed`/`seated` A-tests are removed in Task 4b.
+- **Task 4b (NEW)** — generalize the harness to `(modelPath, oracleName)`; author `avatar_u_skin_reference.json` (measured limb/skull oracle for U) + U integrity checksum; add U reproduction tests: `armsRaised` (sleeve/hair→arm) and `seatedDeepFlexion` (skirt→leg), RED with current colliders.
+- **Task 7** — augmented green tests target **AvatarSample_U** (arm + skirt/leg).
+- **Task 8** — augmented green test targets **AvatarSample_A** (`lookUp`).
+- **Task 9** — largely absorbed (U is now the second model); keep only a finite/sane smoke check if a *third* model is configured.
+- Sequencing note: Tasks were executed 1,2,3,**5**,4,4b,6,7,8,… (Task 5's flag was pulled ahead of Task 4 so the `augment:false` tests pin coarse colliders permanently).
+
 ---
 
 ## File Structure

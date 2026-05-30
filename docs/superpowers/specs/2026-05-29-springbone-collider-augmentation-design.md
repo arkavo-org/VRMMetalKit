@@ -2,7 +2,25 @@
 
 **Issue:** #309 — SpringBone collision: coarse collider shapes cause systemic clipping (hair→forehead, hair→arms, arm→skirt)
 **Date:** 2026-05-29
-**Status:** Approved (brainstorming) — pending spec review before implementation plan
+**Status:** Approved (brainstorming); in implementation — see Revision 1 below
+
+---
+
+## Revision 1 (2026-05-29) — Option 2: a second fixture for limb validation
+
+**Trigger.** During Phase 0 execution, measurement proved AvatarSample_A's only spring chains are short `Hair`/`Hood`/`HoodString` clustered around the head — **no skirt, and the hair is too short to reach the arms or legs** (hair Y 1.24–1.35; raised arms reach only X≈±0.14 at chest height). It can validate manifestation 1 (hair→forehead) but **not** manifestations 2/3 (hair→arms, cloth→legs).
+
+**Decision.** Per the test-truth principle (do not ship behavior validated only by self-agreeing geometry unit tests), limb capsules need an *independent* oracle on a fixture that actually exercises them. The already-in-repo **`AvatarSample_U_1.0.vrm.glb`** (same VRoid-sample license class as AvatarSample_A — no new attribution) provides it: 6 named `Skirt` chains reaching Y≈0.55 (35 cm below the upper-leg joint), `Sleeve` chains at arm height, and a 7-joint hair chain reaching Y≈1.009 (arm level). Chosen over shipping unvalidated limb capsules (rejected Option 1) and over descoping limbs (Option 3, the fallback had no fixture existed).
+
+**Validation split.**
+- **AvatarSample_A** → head/brow capsule (Task 8), `lookUp` pose, red→green. (Only its `lookUp` test is kept; the earlier head-dominated `armsRaised`/`armsCrossed`/`seated` tests on A are removed as redundant — U covers limbs properly.)
+- **AvatarSample_U** → limb capsules (Task 7), `armsRaised` (sleeve/hair→arm) + `seatedDeepFlexion` (skirt→leg) poses, red→green, against a **second** hand-measured skin-reference oracle (`avatar_u_skin_reference`) with its own integrity checksum.
+
+**§4 retained.** The default-on global synthetic group stays — limb capsules are now behaviorally validated, so shipping them default-on is justified (the over-subscription risk is now exercised by U's seated pose).
+
+**Plan delta.** New Task 4b (AvatarSample_U oracle + integrity + harness generalization + U reproduction tests). Task 4 trimmed to A/`lookUp`. Task 7 green tests target U; Task 8 green test targets A. Task 9 (generalization smoke) is largely absorbed by U being the second model.
+
+---
 
 ---
 
