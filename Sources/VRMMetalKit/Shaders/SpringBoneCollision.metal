@@ -172,11 +172,43 @@ float3 collideWithPlaneFiltered(float3 position, float boneRadius, uint groupMas
     return result;
 }
 
+// POST-COLLISION VELOCITY CORRECTION (#313, PBD-without-CCD tunneling).
+//
+// Verlet velocity is implicit: v = bonePosCurr - bonePosPrev. The collision
+// kernels push bonePosCurr OUT of a collider but never touch bonePosPrev, so a
+// joint that drove fast INTO a collider keeps its full inward velocity after the
+// push and tunnels straight back in on the next substep — the corrective impulse
+// then overshoots. (`bonePosPrev[id]` was frozen earlier this substep by predict:
+// `bonePosPrev[id] = oldCurr`, so v already encodes this substep's motion.)
+//
+// Fix: after a push moves curr→curr+correction (outward normal n =
+// normalize(correction)), remove ONLY the INWARD normal component of the implicit
+// velocity by translating prev along n. We want dot(curr - prevNew, n) >= 0:
+//   prevNew = prev + n * min(0, dot(curr - prev, n))
+// Tangential (sliding) velocity is preserved, so settled chains keep sliding
+// along the collider and do not gain energy — this only bleeds the momentum that
+// caused the tunnel. No-op when there was no push (correction ≈ 0) and when the
+// joint is already moving outward, so resting/contained cloth is untouched.
+static void applyVelocityCorrection(thread float3& prevPos,
+                                    float3 newPos, float3 oldPos) {
+    float3 correction = newPos - oldPos;
+    float corrLen = length(correction);
+    if (corrLen < 1e-7) return;
+    float3 n = correction / corrLen;
+    float vn = dot(newPos - prevPos, n);
+    if (vn < 0.0) {
+        // Inward residual velocity along the push normal — cancel it so the
+        // joint does not carry momentum back into the collider next substep.
+        prevPos += n * vn;
+    }
+}
+
 kernel void springBoneCollideSpheres(
     device float3* bonePosCurr [[buffer(1)]],
     constant BoneParams* boneParams [[buffer(2)]],
     constant SphereCollider* sphereColliders [[buffer(5)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
+    device float3* bonePosPrev [[buffer(0)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numSpheres == 0) return;
@@ -187,8 +219,13 @@ kernel void springBoneCollideSpheres(
 
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
-    bonePosCurr[id] = collideWithSphereFiltered(bonePosCurr[id], boneRadius, groupMask,
-                                                 sphereColliders, globalParams.numSpheres);
+    float3 oldPos = bonePosCurr[id];
+    float3 newPos = collideWithSphereFiltered(oldPos, boneRadius, groupMask,
+                                              sphereColliders, globalParams.numSpheres);
+    bonePosCurr[id] = newPos;
+    float3 prevPos = bonePosPrev[id];
+    applyVelocityCorrection(prevPos, newPos, oldPos);
+    bonePosPrev[id] = prevPos;
 }
 
 kernel void springBoneCollideCapsules(
@@ -196,6 +233,7 @@ kernel void springBoneCollideCapsules(
     constant BoneParams* boneParams [[buffer(2)]],
     constant CapsuleCollider* capsuleColliders [[buffer(6)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
+    device float3* bonePosPrev [[buffer(0)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numCapsules == 0) return;
@@ -203,8 +241,13 @@ kernel void springBoneCollideCapsules(
 
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
-    bonePosCurr[id] = collideWithCapsuleFiltered(bonePosCurr[id], boneRadius, groupMask,
-                                                  capsuleColliders, globalParams.numCapsules);
+    float3 oldPos = bonePosCurr[id];
+    float3 newPos = collideWithCapsuleFiltered(oldPos, boneRadius, groupMask,
+                                               capsuleColliders, globalParams.numCapsules);
+    bonePosCurr[id] = newPos;
+    float3 prevPos = bonePosPrev[id];
+    applyVelocityCorrection(prevPos, newPos, oldPos);
+    bonePosPrev[id] = prevPos;
 }
 
 kernel void springBoneCollidePlanes(
@@ -212,6 +255,7 @@ kernel void springBoneCollidePlanes(
     constant BoneParams* boneParams [[buffer(2)]],
     constant PlaneCollider* planeColliders [[buffer(7)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
+    device float3* bonePosPrev [[buffer(0)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numPlanes == 0) return;
@@ -219,6 +263,11 @@ kernel void springBoneCollidePlanes(
 
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
-    bonePosCurr[id] = collideWithPlaneFiltered(bonePosCurr[id], boneRadius, groupMask,
-                                                planeColliders, globalParams.numPlanes);
+    float3 oldPos = bonePosCurr[id];
+    float3 newPos = collideWithPlaneFiltered(oldPos, boneRadius, groupMask,
+                                             planeColliders, globalParams.numPlanes);
+    bonePosCurr[id] = newPos;
+    float3 prevPos = bonePosPrev[id];
+    applyVelocityCorrection(prevPos, newPos, oldPos);
+    bonePosPrev[id] = prevPos;
 }
