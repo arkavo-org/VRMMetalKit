@@ -31,6 +31,36 @@ renderer.applySpringBoneForce(
 
 ``VRMRenderer/resetSpringBone()`` is provided as a stable entry point but is currently a no-op: the GPU pipeline reinitializes whenever a model is loaded.
 
+## Procedural collider augmentation (#309)
+
+VRM files rarely include colliders for every body part that animated geometry can reach, which leads to hair sinking into the forehead, skirt panels clipping through thighs, or sleeves passing through arms. To close the most common gaps, the loader can synthesize additional colliders at load time from bone positions and a stored head-radius estimate.
+
+This behaviour is controlled by ``VRMLoadingOptions/augmentSpringBoneColliders`` (default `true`). The flag is purely additive: authored colliders are never mutated or removed. Set it to `false` to restore authored-only colliders — useful when A/B-testing a newly rigged model or bisecting a physics regression.
+
+```swift
+// Authored-only colliders — disable augmentation.
+let options = VRMLoadingOptions(augmentSpringBoneColliders: false)
+let model = try await VRMModel.load(from: url, device: device, options: options)
+```
+
+### What is synthesized
+
+**Forward head/brow capsule.** A single capsule oriented along the forward axis of the head bone, sized from the model's stored head-reference radius. It closes the persistent front-hair-into-forehead clipping (#309 primary repro). Residual: a lone lateral side-bang strand at the temple can still touch the skull region; a future lateral head collider is needed to address it.
+
+**End-to-end leg capsules.** One capsule per leg spanning from the upper-leg to the ankle joint. These substantially reduce skirt-panel-into-thigh clipping (peak penetration drops from roughly 23 mm to roughly 10 mm in the worst dynamic case and is never worse), though a single-frame transient can remain during fast leg swings.
+
+### What is not addressed
+
+Arm and sleeve clipping was investigated and intentionally not shipped: arm capsules could not be validated as an improvement and worsened a stiff-sleeve "whip" artefact. The root cause is PBD without continuous collision detection (CCD); when a joint tunnels through a collider in one substep the impulse overshoots, producing a visible snap. This is deferred.
+
+### Behaviour-change note
+
+Because augmentation is default-on, resting spring-bone positions shift on affected models relative to versions before #309. Any consumer that validates asset appearance against a golden render must re-approve those renders after updating. Per project policy, the release carrying this change is cut as a GitHub pre-release until the primary consumer (Avatar Muse) completes asset validation.
+
+### Known limitation
+
+Models whose authored VRM file already contains 31 or more collider groups cause augmentation to be skipped entirely, because the GPU-side group-bitmask is 32 bits and at least one slot must remain free for the synthetic group.
+
 ## Tuning
 
 Spring parameters are interrelated, and that is the single biggest pitfall when adjusting them. Stiffness and drag together determine settling time; gravity scale shifts the rest pose every chain hangs from; hit radius interacts with collider placement. Changing one value on a model that has already been tuned will usually destabilize the others. Issue [#162](https://github.com/arkavo-org/VRMMetalKit/issues/162) tracks this.

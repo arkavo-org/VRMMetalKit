@@ -230,7 +230,27 @@ public struct VRMLoadingOptions: Sendable {
 
     /// Performance optimizations to apply during this load.
     public let optimizations: VRMLoadingOptimization
-    
+
+    /// When `true` (the default), synthesize bone-derived colliders additive to
+    /// any colliders authored in the VRM file, to reduce common SpringBone clipping
+    /// artefacts (issue #309).
+    ///
+    /// Two shapes are synthesized:
+    /// - A forward head/brow capsule, sized from the model's head-reference radius,
+    ///   which eliminates front-hair-into-forehead sinking.
+    /// - End-to-end leg capsules (upper-leg → ankle) that substantially reduce
+    ///   skirt-panel-into-thigh clipping.
+    ///
+    /// Authored colliders are never mutated or removed; this is purely additive.
+    /// Models with 31 or more authored collider groups skip augmentation because
+    /// the GPU group-bitmask requires at least one free slot.
+    ///
+    /// Set to `false` to restore authored-only behaviour — useful when bisecting a
+    /// physics regression or validating a newly rigged model against its original
+    /// collider layout. Because augmentation is default-on, resting spring-bone
+    /// positions differ from pre-#309 versions on affected models.
+    public let augmentSpringBoneColliders: Bool
+
     /// Creates loading options.
     ///
     /// - Parameters:
@@ -238,16 +258,19 @@ public struct VRMLoadingOptions: Sendable {
     ///   - progressUpdateInterval: Minimum seconds between progress updates (default: 0.1).
     ///   - enableCancellation: Whether to check for Task cancellation (default: true).
     ///   - optimizations: Performance optimizations to apply (default: .default).
+    ///   - augmentSpringBoneColliders: Synthesize bone-derived colliders additive to authored ones (default: true).
     public init(
         progressCallback: (@Sendable (VRMLoadingProgress) -> Void)? = nil,
         progressUpdateInterval: TimeInterval = 0.1,
         enableCancellation: Bool = true,
-        optimizations: VRMLoadingOptimization = .default
+        optimizations: VRMLoadingOptimization = .default,
+        augmentSpringBoneColliders: Bool = true
     ) {
         self.progressCallback = progressCallback
         self.progressUpdateInterval = progressUpdateInterval
         self.enableCancellation = enableCancellation
         self.optimizations = optimizations
+        self.augmentSpringBoneColliders = augmentSpringBoneColliders
     }
     
     /// Default options: no progress callback, cancellation enabled, ``VRMLoadingOptimization/default`` optimizations.

@@ -1,0 +1,19 @@
+{
+  "model": "AvatarSample_A_1.0.vrm.glb",
+  "authoredDate": "2026-05-29",
+  "poseAssumption": "neutral rest pose at load; shapes transform with live node world matrices",
+  "note": "GROUND TRUTH for tests only. NEVER shipped as runtime colliders. Do not edit the generator to match these. Limb radii measured (70th-percentile perpendicular skin distance, body-only for legs) via SkinReferenceMeasureUtilTests; skull sphere radius measured from face/skin cranium extent; head/brow capsule radius is a conservative trace.",
+  "integrity": { "vertexCount": 94016, "bboxMinY": 5.1649362e-08, "bboxMaxY": 1.5581173 },
+  "colliders": [
+    { "bone": "head", "kind": "capsule", "offset": [0.0, 0.02, 0.04], "tail": [0.0, -0.07, 0.06], "radius": 0.055 },
+    { "bone": "head", "kind": "sphere", "offset": [0.0, 0.06, -0.01], "radius": 0.10 },
+    { "bone": "leftUpperArm", "kind": "capsule", "offset": [0, 0, 0], "tailBone": "leftLowerArm", "radius": 0.041 },
+    { "bone": "leftLowerArm", "kind": "capsule", "offset": [0, 0, 0], "tailBone": "leftHand", "radius": 0.042 },
+    { "bone": "rightUpperArm", "kind": "capsule", "offset": [0, 0, 0], "tailBone": "rightLowerArm", "radius": 0.041 },
+    { "bone": "rightLowerArm", "kind": "capsule", "offset": [0, 0, 0], "tailBone": "rightHand", "radius": 0.042 },
+    { "bone": "leftUpperLeg", "kind": "capsule", "offset": [0, 0, 0], "tailBone": "leftLowerLeg", "radius": 0.058 },
+    { "bone": "leftLowerLeg", "kind": "capsule", "offset": [0, 0, 0], "tailBone": "leftFoot", "radius": 0.045 },
+    { "bone": "rightUpperLeg", "kind": "capsule", "offset": [0, 0, 0], "tailBone": "rightLowerLeg", "radius": 0.058 },
+    { "bone": "rightLowerLeg", "kind": "capsule", "offset": [0, 0, 0], "tailBone": "rightFoot", "radius": 0.045 }
+  ]
+}

@@ -682,6 +682,69 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         pendingSnapshotSemaphore = nil
     }
 
+    /// Transforms additive synthetic colliders (issue #309) into world space and
+    /// appends them to the given destination arrays. They live in the reserved
+    /// synthetic group (`groupIndex`) so every spring collides with them.
+    ///
+    /// This is the single shared implementation behind the three synthetic-upload
+    /// passes (`populateSpringBoneData`, `updateAnimatedPositions`, and
+    /// `captureTargetColliderTransforms`). It mirrors the authored upload idiom:
+    /// a `simd_float3x3` rotation extracted from the node's `worldMatrix`,
+    /// `worldPosition + worldRotation * offset` for the world center, capsule
+    /// `p1 = p0 + worldRotation * tail`, and a `model.nodes[safe:]` bounds guard.
+    /// All sphere/capsule shapes (including the `inside` containment variants)
+    /// are handled so the uploaded count always matches the allocation count
+    /// (`VRMModel.initializeSpringBoneGPUSystem` counts `insideSphere`/
+    /// `insideCapsule` toward the sphere/capsule totals). A synthetic `.plane`
+    /// is unsupported here and fails loud rather than silently desyncing that
+    /// count.
+    private func appendSyntheticColliders(
+        _ synthetics: [VRMCollider],
+        model: VRMModel,
+        groupIndex: UInt32,
+        spheres: inout [SphereCollider],
+        capsules: inout [CapsuleCollider]
+    ) {
+        for collider in synthetics {
+            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+
+            let wm = colliderNode.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                let worldCenter = colliderNode.worldPosition + worldRotation * offset
+                spheres.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
+
+            case .insideSphere(let offset, let radius):
+                let worldCenter = colliderNode.worldPosition + worldRotation * offset
+                spheres.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex, inside: true))
+
+            case .capsule(let offset, let radius, let tail):
+                let worldP0 = colliderNode.worldPosition + worldRotation * offset
+                let worldP1 = worldP0 + worldRotation * tail
+                capsules.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+
+            case .insideCapsule(let offset, let radius, let tail):
+                let worldP0 = colliderNode.worldPosition + worldRotation * offset
+                let worldP1 = worldP0 + worldRotation * tail
+                capsules.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex, inside: true))
+
+            case .plane:
+                // Synthetic planes have no buffer here; allocation counts planes
+                // separately, so silently dropping one would NOT desync the
+                // sphere/capsule contract — but the augmentor must never emit a
+                // plane it expects to take effect. Fail loud in debug.
+                assertionFailure("appendSyntheticColliders received a synthetic .plane; planes are not supported on the synthetic upload path")
+                continue
+            }
+        }
+    }
+
     func populateSpringBoneData(model: VRMModel) throws {
         guard let springBone = model.springBone,
               let buffers = model.springBoneBuffers,
@@ -711,6 +774,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
+        // Synthetic colliders (issue #309) live in a reserved group bit so EVERY
+        // spring collides with them, regardless of authored group membership.
+        // Clamp to 31 so the shader's `1u << groupIndex` stays well-defined. Only
+        // reserve the bit when synthetic colliders actually exist — otherwise the
+        // reserved bit could alias an authored group's clamped bit (models with
+        // >=32 groups all clamp to 31) and leak authored colliders through the
+        // spring filter.
+        let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
+        let hasSyntheticColliders = !springBone.syntheticColliders.isEmpty
+        let syntheticGroupBit: UInt32 = hasSyntheticColliders ? (1 << syntheticGroupIndex) : 0
+
         // Process spring chains to extract bone parameters
         var boneIndex = 0
         rootBoneIndices = []
@@ -735,6 +809,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     }
                 }
             }
+            // Always collide with synthetic colliders (issue #309). Harmless when
+            // the mask is already the 0xFFFFFFFF all-groups default.
+            colliderGroupMask |= syntheticGroupBit
 
             for joint in spring.joints {
                 chainGravityPower.append(joint.gravityPower)
@@ -880,6 +957,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
             }
         }
+
+        // Append synthetic colliders (issue #309) via the shared helper. They
+        // live in the reserved synthetic group so every spring collides with them.
+        appendSyntheticColliders(
+            springBone.syntheticColliders, model: model, groupIndex: syntheticGroupIndex,
+            spheres: &sphereColliders, capsules: &capsuleColliders)
 
         // Update buffers
         buffers.updateBoneParameters(boneParams)
@@ -1210,6 +1293,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
             }
         }
+
+        // Append synthetic colliders (issue #309) via the shared helper.
+        let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
+        appendSyntheticColliders(
+            springBone.syntheticColliders, model: model, groupIndex: syntheticGroupIndex,
+            spheres: &sphereColliders, capsules: &capsuleColliders)
 
         #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
         if updateCounter % 600 == 1 && !sphereColliders.isEmpty {
@@ -1705,6 +1794,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 targetPlaneColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
             }
         }
+
+        // Append synthetic colliders (issue #309) via the shared helper.
+        let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
+        appendSyntheticColliders(
+            springBone.syntheticColliders, model: model, groupIndex: syntheticGroupIndex,
+            spheres: &targetSphereColliders, capsules: &targetCapsuleColliders)
 
         // Apply runtime radius overrides (e.g., for hair clipping prevention)
         for (index, overrideRadius) in sphereColliderRadiusOverrides {

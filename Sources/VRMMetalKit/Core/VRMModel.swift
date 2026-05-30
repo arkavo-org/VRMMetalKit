@@ -534,7 +534,8 @@ public class VRMModel: @unchecked Sendable {
         // Initialize SpringBone GPU system if device and spring bone data present
         if let device = device, model.springBone != nil {
             await context?.updatePhase(.initializingPhysics, progress: 0.5)
-            try model.initializeSpringBoneGPUSystem(device: device)
+            let augmentColliders = context?.options.augmentSpringBoneColliders ?? true
+            try model.initializeSpringBoneGPUSystem(device: device, augmentColliders: augmentColliders)
             await context?.updatePhase(.initializingPhysics, progress: 1.0)
         }
 
@@ -1125,9 +1126,13 @@ public class VRMModel: @unchecked Sendable {
     /// `SpringBoneComputeSystem.populateSpringBoneData(model:)` once the
     /// renderer's compute system has been created.
     ///
-    /// - Parameter device: Metal device used to allocate spring-bone buffers.
+    /// - Parameters:
+    ///   - device: Metal device used to allocate spring-bone buffers.
+    ///   - augmentColliders: When true, synthesizes additive bone-derived
+    ///     colliders (issue #309) and persists them on `springBone.syntheticColliders`
+    ///     before sizing GPU buffers. Authored colliders are never mutated.
     /// - Throws: An error if buffer allocation fails.
-    public func initializeSpringBoneGPUSystem(device: MTLDevice) throws {
+    public func initializeSpringBoneGPUSystem(device: MTLDevice, augmentColliders: Bool = true) throws {
         guard springBone != nil else {
             return // No SpringBone data in this model
         }
@@ -1136,7 +1141,19 @@ public class VRMModel: @unchecked Sendable {
         expandVRM0SpringBoneChains()
 
         // Re-read after expansion
-        guard let expandedSpringBone = self.springBone else { return }
+        guard var expandedSpringBone = self.springBone else { return }
+
+        // Synthesize additive colliders (issue #309) BEFORE counting so the GPU
+        // buffers are sized to hold authored + synthetic colliders. The upload
+        // path hard-guards `colliders.count == numCapsules`, so the count seeded
+        // here must match the count uploaded later in
+        // `SpringBoneComputeSystem.populateSpringBoneData(model:)`.
+        if augmentColliders {
+            expandedSpringBone.syntheticColliders = SpringBoneColliderAugmentor.synthesize(model: self)
+        } else {
+            expandedSpringBone.syntheticColliders = []
+        }
+        self.springBone = expandedSpringBone
 
         // Count total bones from all springs
         var totalBones = 0
@@ -1149,21 +1166,24 @@ public class VRMModel: @unchecked Sendable {
         // layout as their non-inverted counterparts (an `inside` flag on the
         // collider struct selects the kernel's containment vs outside math),
         // so they count toward the same totals.
-        let totalSpheres = expandedSpringBone.colliders.filter {
+        // Count authored + synthetic colliders together — both share the same
+        // GPU buffers, so allocation must cover the combined total.
+        let allColliders = expandedSpringBone.colliders + expandedSpringBone.syntheticColliders
+        let totalSpheres = allColliders.filter {
             switch $0.shape {
             case .sphere, .insideSphere: return true
             default: return false
             }
         }.count
 
-        let totalCapsules = expandedSpringBone.colliders.filter {
+        let totalCapsules = allColliders.filter {
             switch $0.shape {
             case .capsule, .insideCapsule: return true
             default: return false
             }
         }.count
 
-        let totalPlanes = expandedSpringBone.colliders.filter {
+        let totalPlanes = allColliders.filter {
             switch $0.shape {
             case .plane: return true
             default: return false
