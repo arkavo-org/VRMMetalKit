@@ -186,6 +186,123 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
         return (rate, worstPenetration)
     }
 
+    // MARK: - Dynamic peak-penetration harness (#309 motion-transient repro)
+
+    /// Drives a fast OSCILLATING clip through the SpringBone simulation and, on
+    /// EVERY frame across the whole motion, measures how far cloth joints
+    /// (hair/skirt/hood/sleeve, root joints exempt) penetrate the LIMB-ONLY
+    /// oracle. Returns the global peak depth, the count of frames in which any
+    /// cloth joint penetrated > 5 mm, and the total frame count.
+    ///
+    /// Determinism: uses the renderer's fixed-timestep path. With
+    /// `synchronousSpringBone = true` and an explicit `simulationDeltaTime`, the
+    /// integrator gets the same delta every render call regardless of wall clock
+    /// (see DeterministicRendering.docc), so NO `Task.sleep` pacing is needed.
+    @MainActor
+    private func measurePeakLimbPenetration(
+        modelPath: String,
+        oracleName: String,
+        clip: AnimationClip,
+        augment: Bool
+    ) async throws -> (peak: Float, penetratingFrames: Int, totalFrames: Int) {
+        try requireFixture(modelPath, hint: (modelPath as NSString).lastPathComponent)
+
+        let options = VRMLoadingOptions(augmentSpringBoneColliders: augment)
+        let model = try await VRMModel.load(
+            from: URL(fileURLWithPath: modelPath),
+            device: device,
+            options: options
+        )
+
+        let oracle = try SkinReferenceOracle.load(named: oracleName)
+
+        let player = AnimationPlayer()
+        player.load(clip)
+        player.play()
+
+        var config = RendererConfig()
+        config.sampleCount = 1
+        config.strict = .off
+        config.synchronousSpringBone = true
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.loadModel(model)
+        renderer.enableSpringBone = true
+        renderer.viewMatrix = matrix_identity_float4x4
+        renderer.projectionMatrix = matrix_identity_float4x4
+
+        // Fixed 1/60 s timestep, fed identically to physics and animation. No
+        // wall-clock sleep — fully deterministic under fast motion.
+        let dt: Float = 1.0 / 60.0
+        renderer.simulationDeltaTime = TimeInterval(dt)
+
+        let clothJoints = clothJointNodeIndices(model)
+        XCTAssertFalse(clothJoints.isEmpty,
+            "Model must declare hair/skirt/hood/sleeve spring chains with child joints")
+
+        let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: 64, height: 64, mipmapped: false)
+        colorDesc.usage = [.renderTarget, .shaderRead]
+        colorDesc.storageMode = .private
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float, width: 64, height: 64, mipmapped: false)
+        depthDesc.usage = .renderTarget
+        depthDesc.storageMode = .private
+        guard let colorTex = device.makeTexture(descriptor: colorDesc),
+              let depthTex = device.makeTexture(descriptor: depthDesc),
+              let queue = device.makeCommandQueue() else {
+            throw XCTSkip("Could not allocate Metal resources")
+        }
+
+        let totalFrames = 180   // 3 s at 60 fps
+        var peak: Float = 0
+        var closest = Float.greatestFiniteMagnitude
+        var penetratingFrames = 0
+
+        for frameIndex in 0..<totalFrames {
+            player.update(deltaTime: dt, model: model)
+
+            guard let cb = queue.makeCommandBuffer() else {
+                XCTFail("Could not create command buffer at frame \(frameIndex)")
+                break
+            }
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = colorTex
+            rpd.colorAttachments[0].loadAction = .clear
+            rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+            rpd.colorAttachments[0].storeAction = .store
+            rpd.depthAttachment.texture = depthTex
+            rpd.depthAttachment.loadAction = .clear
+            rpd.depthAttachment.clearDepth = 1.0
+            rpd.depthAttachment.storeAction = .dontCare
+            renderer.drawOffscreenHeadless(
+                to: colorTex, depth: depthTex,
+                commandBuffer: cb, renderPassDescriptor: rpd)
+            cb.commit()
+            while cb.status != .completed && cb.status != .error { await Task.yield() }
+
+            let shapes = oracle.resolveLimbWorldShapes(model: model)
+            guard !shapes.isEmpty else { continue }
+            var framePenetrated = false
+            for nodeIdx in clothJoints {
+                guard nodeIdx >= 0, nodeIdx < model.nodes.count else { continue }
+                let p = model.nodes[nodeIdx].worldPosition
+                let pen = SkinReferenceOracle.worstPenetration(of: p, shapes: shapes)
+                if pen > peak { peak = pen }
+                if pen > Self.penetrationTolerance { framePenetrated = true }
+                if pen <= 0 {
+                    let near = SkinReferenceOracle.closestApproach(of: p, shapes: shapes)
+                    if near < closest { closest = near }
+                }
+            }
+            if framePenetrated { penetratingFrames += 1 }
+        }
+
+        if peak <= Self.penetrationTolerance, closest < Float.greatestFiniteMagnitude {
+            print("[#309 repro] closest cloth→limb approach=\(closest)m (no >5mm penetration)")
+        }
+        return (peak, penetratingFrames, totalFrames)
+    }
+
     // MARK: - Reproduction tests (RED gate; pin augment:false = coarse)
 
     /// AvatarSample_A head reproduction: the short head-hugging Hair/Hood chains
@@ -203,44 +320,36 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
             "Expected look-up to penetrate the oracle with coarse colliders (rate \(rate), worst \(worst)m). If 0, the pose isn't driving hair to the brow or the oracle is too loose.")
     }
 
-    /// AvatarSample_U cloth-vs-body reproduction under arms-raised.
-    ///
-    /// EMPIRICAL FINDING (#309, measured via UPenetrationDiagnostic): U's Skirt
-    /// and Sleeve spring chains do NOT reproduce limb (arm/leg) penetration with
-    /// tight measured limb capsules, because each is parented to the very limb it
-    /// covers — `SkirtBack`→upperLeg, `Sleeve`→lowerArm/hand — so it rides
-    /// rigidly with that limb and settles to a fixed offset OUTSIDE the skin
-    /// (nearest sleeve→arm stays +0.022 m across all sensible poses). The
-    /// penetration this test pins is U's long 7-joint body `Hair` chain clipping
-    /// the skull-sphere oracle (worst ≈ 0.039 m), a genuine coarse-collider body
-    /// penetration of the same class as A's `lookUp`. It is pose-independent here
-    /// (the hair is head-driven), so this and the seated test reproduce the same
-    /// hair-vs-head manifestation; the arm/leg manifestation could not be driven
-    /// on this asset without loosening the oracle (which we refuse to do).
+    // MARK: - Dynamic U limb reproduction (#309 motion-transient manifestations)
+
+    /// AvatarSample_U sleeve/hair vs ARM oracle under a fast oscillating arm
+    /// swing. U's Sleeve chain is parented to the limb it covers, so a STATIC
+    /// pose lets it settle OUTSIDE the arm capsule (nearest +0.022 m). A fast
+    /// swing makes the trailing spring-bone cloth LAG and transiently dip into
+    /// the arm for a few frames before recovering — manifestation 2 of #309.
     @MainActor
-    func testU_armsRaised_currentColliders_penetrate() async throws {
-        let (rate, worst) = try await measurePenetrationRate(
+    func testU_armSwing_currentColliders_penetrateArm() async throws {
+        let (peak, frames, total) = try await measurePeakLimbPenetration(
             modelPath: getTestModelPath("AvatarSample_U_1.0.vrm.glb"),
             oracleName: "avatar_u_skin_reference",
-            pose: .armsRaised, augment: false)
-        print("[#309 repro] U armsRaised current-collider penetration rate=\(rate) worst=\(worst)m")
-        XCTAssertGreaterThan(rate, Self.maxPenetrationRate,
-            "Expected U cloth (hair) to penetrate the body oracle with coarse colliders (rate \(rate), worst \(worst)m). Measured penetration is hair-vs-skull; U's limb-parented Skirt/Sleeve ride with their limbs and do not clip the arm/leg capsules.")
+            clip: DynamicPoseFactory.armSwingFast(), augment: false)
+        print("[#309 repro] U armSwing current-collider LIMB peak=\(peak)m frames=\(frames)/\(total)")
+        XCTAssertGreaterThan(peak, 0.005,
+            "Expected sleeve/hair to transiently penetrate the ARM oracle during a fast arm swing with coarse colliders (peak \(peak)m over \(frames)/\(total) frames).")
     }
 
-    /// AvatarSample_U cloth-vs-body reproduction under seated deep flexion.
-    /// See `testU_armsRaised_currentColliders_penetrate` for the empirical
-    /// finding: the skirt does NOT reach the legs (its panels splay outward and
-    /// the back panels ride with the thigh), so the reproduced penetration is
-    /// again the head-driven `Hair` chain vs the skull sphere (≈ 0.039 m).
+    /// AvatarSample_U skirt vs LEG oracle under a fast oscillating knee-raise
+    /// march. Manifestation 3 of #309. See the report: the skirt hangs well
+    /// outside the tight leg capsule even when the thigh drives up into it, so
+    /// this may NOT reproduce; the harness prints the closest approach.
     @MainActor
-    func testU_seatedDeepFlexion_currentColliders_penetrate() async throws {
-        let (rate, worst) = try await measurePenetrationRate(
+    func testU_legMarch_currentColliders_penetrateLeg() async throws {
+        let (peak, frames, total) = try await measurePeakLimbPenetration(
             modelPath: getTestModelPath("AvatarSample_U_1.0.vrm.glb"),
             oracleName: "avatar_u_skin_reference",
-            pose: .seatedDeepFlexion, augment: false)
-        print("[#309 repro] U seatedDeepFlexion current-collider penetration rate=\(rate) worst=\(worst)m")
-        XCTAssertGreaterThan(rate, Self.maxPenetrationRate,
-            "Expected U cloth (hair) to penetrate the body oracle with coarse colliders (rate \(rate), worst \(worst)m). Measured penetration is hair-vs-skull; U's Skirt does not reach the leg capsules under seated flexion.")
+            clip: DynamicPoseFactory.legMarchFast(), augment: false)
+        print("[#309 repro] U legMarch current-collider LIMB peak=\(peak)m frames=\(frames)/\(total)")
+        XCTAssertGreaterThan(peak, 0.005,
+            "Expected skirt to transiently penetrate the LEG oracle during a fast leg march with coarse colliders (peak \(peak)m over \(frames)/\(total) frames).")
     }
 }

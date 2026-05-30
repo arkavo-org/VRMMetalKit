@@ -171,6 +171,67 @@ extension SkinReferenceOracle {
         return out
     }
 
+    /// Arm and leg humanoid bones. A shape sourced from one of these is genuine
+    /// LIMB contact geometry, as opposed to head/skull/brow shapes. Used to
+    /// isolate limb penetration so a dynamic pass/fail (#309) cannot be
+    /// contaminated by head-hair-vs-skull clipping.
+    static let limbBones: Set<VRMHumanoidBone> = [
+        .leftUpperArm, .leftLowerArm, .leftHand,
+        .rightUpperArm, .rightLowerArm, .rightHand,
+        .leftUpperLeg, .leftLowerLeg, .leftFoot,
+        .rightUpperLeg, .rightLowerLeg, .rightFoot,
+    ]
+
+    /// Like `resolveWorldShapes`, but returns ONLY the world shapes whose source
+    /// `bone` is an arm or leg bone (excluding head/skull/brow). Isolates genuine
+    /// limb contact for the dynamic limb-penetration gate (#309).
+    func resolveLimbWorldShapes(model: VRMModel) -> [OracleWorldShape] {
+        guard let humanoid = model.humanoid else { return [] }
+        func worldPos(_ bone: VRMHumanoidBone) -> SIMD3<Float>? {
+            guard let n = humanoid.getBoneNode(bone), n >= 0, n < model.nodes.count else { return nil }
+            return model.nodes[n].worldPosition
+        }
+        func worldMatrix(_ bone: VRMHumanoidBone) -> float4x4? {
+            guard let n = humanoid.getBoneNode(bone), n >= 0, n < model.nodes.count else { return nil }
+            return model.nodes[n].worldMatrix
+        }
+        var out: [OracleWorldShape] = []
+        for shape in colliders where Self.limbBones.contains(shape.bone) {
+            guard let m = worldMatrix(shape.bone) else { continue }
+            let originW = (m * SIMD4<Float>(shape.offset, 1)).xyz
+            switch shape.kind {
+            case "sphere":
+                out.append(.sphere(center: originW, radius: shape.radius))
+            case "capsule":
+                let tailW: SIMD3<Float>
+                if let tb = shape.tailBone, let p = worldPos(tb) {
+                    tailW = p
+                } else if let tail = shape.tail {
+                    tailW = (m * SIMD4<Float>(tail, 1)).xyz
+                } else {
+                    tailW = originW
+                }
+                out.append(.capsule(p0: originW, p1: tailW, radius: shape.radius))
+            default:
+                continue
+            }
+        }
+        return out
+    }
+
+    /// Closest approach (>= 0 distance outside the surface, or 0 if inside) of
+    /// `point` to the nearest of `shapes`. Returns `Float.greatestFiniteMagnitude`
+    /// when `shapes` is empty. Used to report how near a non-penetrating cloth
+    /// joint comes to the limb oracle.
+    static func closestApproach(of point: SIMD3<Float>, shapes: [OracleWorldShape]) -> Float {
+        var best = Float.greatestFiniteMagnitude
+        for s in shapes {
+            let d = max(0, s.signedDistance(to: point))
+            if d < best { best = d }
+        }
+        return best
+    }
+
     /// Max penetration depth (>= 0) of `point` across all `shapes`; 0 if outside all.
     static func worstPenetration(of point: SIMD3<Float>, shapes: [OracleWorldShape]) -> Float {
         var worst: Float = 0
