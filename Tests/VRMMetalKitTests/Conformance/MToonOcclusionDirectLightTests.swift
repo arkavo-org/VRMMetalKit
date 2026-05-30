@@ -75,7 +75,7 @@ final class MToonOcclusionDirectLightTests: XCTestCase {
         let lumaOcc  = sampleTopLeftLuma(occluded)
 
         // The only legitimate change is attenuation of the ambient term.
-        // ambient ≈ 0.08, direct toon ≈ ~0.7/π · light ≈ dominant. AO=0.1
+        // ambient ≈ 0.03, direct toon ≈ ~0.7/π · light ≈ dominant. AO=0.1
         // at full strength removes ~90% of ambient (factor 0.1), i.e. it
         // can darken total luma by AT MOST ~0.9 * ambientContribution.
         // We require the directly-lit region to retain the vast majority
