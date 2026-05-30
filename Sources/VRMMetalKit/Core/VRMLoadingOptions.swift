@@ -230,7 +230,12 @@ public struct VRMLoadingOptions: Sendable {
 
     /// Performance optimizations to apply during this load.
     public let optimizations: VRMLoadingOptimization
-    
+
+    /// When `true`, synthesize tight bone-derived colliders (limb capsules +
+    /// head/brow capsule) additive to authored colliders, to reduce SpringBone
+    /// clipping (issue #309). Default `true`.
+    public let augmentSpringBoneColliders: Bool
+
     /// Creates loading options.
     ///
     /// - Parameters:
@@ -238,16 +243,19 @@ public struct VRMLoadingOptions: Sendable {
     ///   - progressUpdateInterval: Minimum seconds between progress updates (default: 0.1).
     ///   - enableCancellation: Whether to check for Task cancellation (default: true).
     ///   - optimizations: Performance optimizations to apply (default: .default).
+    ///   - augmentSpringBoneColliders: Synthesize bone-derived colliders additive to authored ones (default: true).
     public init(
         progressCallback: (@Sendable (VRMLoadingProgress) -> Void)? = nil,
         progressUpdateInterval: TimeInterval = 0.1,
         enableCancellation: Bool = true,
-        optimizations: VRMLoadingOptimization = .default
+        optimizations: VRMLoadingOptimization = .default,
+        augmentSpringBoneColliders: Bool = true
     ) {
         self.progressCallback = progressCallback
         self.progressUpdateInterval = progressUpdateInterval
         self.enableCancellation = enableCancellation
         self.optimizations = optimizations
+        self.augmentSpringBoneColliders = augmentSpringBoneColliders
     }
     
     /// Default options: no progress callback, cancellation enabled, ``VRMLoadingOptimization/default`` optimizations.

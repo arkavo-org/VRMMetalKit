@@ -715,6 +715,11 @@ public struct VRMSpringBone {
     public var specVersion: String = "1.0"
     /// All colliders referenced by this avatar.
     public var colliders: [VRMCollider] = []
+    /// Procedurally synthesized colliders (issue #309). Additive to `colliders`;
+    /// authored `colliders` is never mutated. Populated at load time when
+    /// `VRMLoadingOptions.augmentSpringBoneColliders` is true, and consumed by
+    /// both buffer allocation and collider upload.
+    public var syntheticColliders: [VRMCollider] = []
     /// Named collections of colliders, referenced by ``VRMSpring/colliderGroups``.
     public var colliderGroups: [VRMColliderGroup] = []
     /// Spring chains driving hair, clothing, and accessories.
