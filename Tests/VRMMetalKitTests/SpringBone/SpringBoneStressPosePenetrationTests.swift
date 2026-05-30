@@ -17,20 +17,26 @@ import simd
 /// avatar's body under static stress poses because the shipped colliders are
 /// too coarse.
 ///
-/// The measurement drives AvatarSample_A into one of four stress poses
-/// (`StressPoseFactory`), runs the SpringBone simulation headless with
-/// deterministic 35 ms pacing (mirroring `SpringBoneRegressionTests` and
-/// `HairHeadCollisionTests`), then measures how often a cloth joint's world
-/// position lands *inside* the frozen skin-reference ORACLE
-/// (`SkinReferenceOracle`).
+/// Two complementary reproductions, both asserting penetration of the frozen
+/// skin-reference ORACLE (`SkinReferenceOracle`) with `augment: false` (today's
+/// coarse colliders):
 ///
-/// The three reproduction tests use `augment: false` (today's coarse
-/// colliders) and assert penetration EXISTS. The augmentation generator
-/// (Tasks 6–8) does not exist yet, so `augment: true` currently yields the
-/// same coarse colliders; these tests pin the coarse-collider bug and must
-/// keep passing. The seated baseline merely records a value and asserts the
-/// harness runs — it becomes a real over-subscription guard once the
-/// generator lands (Task 7).
+///  1. `testLookUp` — AvatarSample_A held in a static look-up pose
+///     (`StressPoseFactory`), measured via `measurePenetrationRate` over a
+///     settle window with deterministic 35 ms pacing. Reproduces the PERSISTENT
+///     hair→forehead sink (#309 manifestation 1).
+///  2. `testU_armSwing` / `testU_legMarch` — AvatarSample_U driven through fast
+///     oscillating limb motion (`DynamicPoseFactory`) on a fixed `1/60 s`
+///     timestep (`simulationDeltaTime`, no wall-clock pacing), measured via
+///     `measurePeakLimbPenetration` for PEAK penetration of the LIMB-ONLY
+///     oracle shapes across the whole motion. Reproduces the MOTION-TRANSIENT
+///     sleeve/hair→arm and skirt→leg clipping (#309 manifestations 2/3) that
+///     static poses cannot surface.
+///
+/// The augmentation generator (Tasks 6–8) does not exist yet, so `augment:
+/// true` currently yields the same coarse colliders; these tests pin the
+/// coarse-collider bug and must keep passing (`augment: false` is wired so they
+/// stay valid once augmentation ships default-on).
 final class SpringBoneStressPosePenetrationTests: XCTestCase {
 
     private static let minFrameIntervalNanos: UInt64 = 35_000_000
