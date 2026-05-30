@@ -691,8 +691,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// `captureTargetColliderTransforms`). It mirrors the authored upload idiom:
     /// a `simd_float3x3` rotation extracted from the node's `worldMatrix`,
     /// `worldPosition + worldRotation * offset` for the world center, capsule
-    /// `p1 = p0 + worldRotation * tail`, a `model.nodes[safe:]` bounds guard, and
-    /// `default: continue` (the augmentor only emits spheres and capsules).
+    /// `p1 = p0 + worldRotation * tail`, and a `model.nodes[safe:]` bounds guard.
+    /// All sphere/capsule shapes (including the `inside` containment variants)
+    /// are handled so the uploaded count always matches the allocation count
+    /// (`VRMModel.initializeSpringBoneGPUSystem` counts `insideSphere`/
+    /// `insideCapsule` toward the sphere/capsule totals). A synthetic `.plane`
+    /// is unsupported here and fails loud rather than silently desyncing that
+    /// count.
     private func appendSyntheticColliders(
         _ synthetics: [VRMCollider],
         model: VRMModel,
@@ -712,18 +717,29 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             switch collider.shape {
             case .sphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
+                let worldCenter = colliderNode.worldPosition + worldRotation * offset
                 spheres.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
 
+            case .insideSphere(let offset, let radius):
+                let worldCenter = colliderNode.worldPosition + worldRotation * offset
+                spheres.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex, inside: true))
+
             case .capsule(let offset, let radius, let tail):
-                let worldOffset = worldRotation * offset
-                let worldTail = worldRotation * tail
-                let worldP0 = colliderNode.worldPosition + worldOffset
-                let worldP1 = worldP0 + worldTail
+                let worldP0 = colliderNode.worldPosition + worldRotation * offset
+                let worldP1 = worldP0 + worldRotation * tail
                 capsules.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
 
-            default:
+            case .insideCapsule(let offset, let radius, let tail):
+                let worldP0 = colliderNode.worldPosition + worldRotation * offset
+                let worldP1 = worldP0 + worldRotation * tail
+                capsules.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex, inside: true))
+
+            case .plane:
+                // Synthetic planes have no buffer here; allocation counts planes
+                // separately, so silently dropping one would NOT desync the
+                // sphere/capsule contract — but the augmentor must never emit a
+                // plane it expects to take effect. Fail loud in debug.
+                assertionFailure("appendSyntheticColliders received a synthetic .plane; planes are not supported on the synthetic upload path")
                 continue
             }
         }

@@ -201,6 +201,13 @@ public enum SpringBoneColliderAugmentor {
         // worldMatrix); use the true inverse so the round-trip is exact even if
         // the node carries scale.
         let fromRot = upperLeft3x3(model.nodes[fromNode].worldMatrix)
+        // Skip degenerate bones: a zero/near-zero-scale node yields a singular
+        // rotation matrix, and `simd_inverse` of a singular matrix produces
+        // NaN/Inf — which would propagate a NaN capsule tail into the GPU spring
+        // sim. The length guard above only rules out zero-length segments, not a
+        // singular frame (a collapsed/hidden bone can still have a non-zero
+        // segment to its child via parent transforms).
+        guard abs(simd_determinant(fromRot)) > 1e-6 else { return }
         let tailLocal = simd_inverse(fromRot) * segWorld
 
         let radius = radiusFor(length: length, fromNode: fromNode, model: model, ratios: ratios)

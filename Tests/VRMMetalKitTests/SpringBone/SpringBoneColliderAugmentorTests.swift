@@ -57,6 +57,40 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         }
     }
 
+    /// A bone with a singular (zero-scale) world matrix must be SKIPPED, not emit
+    /// a NaN capsule tail — `simd_inverse` of a singular rotation yields NaN/Inf
+    /// which would propagate into the GPU spring sim. Regression for the
+    /// degenerate-node edge case (PR #311 review).
+    @MainActor func testDegenerateBoneIsSkippedWithoutNaN() async throws {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        let baseline = SpringBoneColliderAugmentor.synthesize(model: model).count
+        guard let legNode = model.humanoid?.getBoneNode(.leftUpperLeg),
+              legNode >= 0, legNode < model.nodes.count else { throw XCTSkip("No leftUpperLeg bone") }
+
+        // Force a singular world matrix on the bone: zero the rotation/scale
+        // block, keep the translation column so worldPosition (and the segment to
+        // its child) stays valid. `simd_inverse` of this block would be NaN.
+        var m = model.nodes[legNode].worldMatrix
+        m.columns.0 = SIMD4<Float>(0, 0, 0, 0)
+        m.columns.1 = SIMD4<Float>(0, 0, 0, 0)
+        m.columns.2 = SIMD4<Float>(0, 0, 0, 0)
+        model.nodes[legNode].worldMatrix = m
+
+        let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
+        XCTAssertEqual(synthetic.count, baseline - 1,
+            "The degenerate leftUpperLeg segment must be skipped (one fewer capsule)")
+        for c in synthetic {
+            if case let .capsule(offset, radius, tail) = c.shape {
+                XCTAssertTrue(offset.x.isFinite && offset.y.isFinite && offset.z.isFinite, "offset must be finite")
+                XCTAssertTrue(tail.x.isFinite && tail.y.isFinite && tail.z.isFinite, "tail must be finite")
+                XCTAssertTrue(radius.isFinite, "radius must be finite")
+            }
+        }
+    }
+
     /// AvatarSample_A: `synthesize` appends a forward head/brow capsule AFTER the
     /// four leg capsules (slot 4 — buffer-order-sensitive). Its far end
     /// (offset.z + tail.z, head-local) is forward (> 0) of the head center and its
