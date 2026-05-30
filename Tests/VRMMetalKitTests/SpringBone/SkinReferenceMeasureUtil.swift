@@ -39,6 +39,29 @@ final class SkinReferenceMeasureUtilTests: XCTestCase {
         let path = getTestVRM10ModelPath()
         try requireFixture(path, hint: testVRM10Filename)
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
+        try Self.measure(model: model, label: "A")
+    }
+
+    /// Author AvatarSample_U_1.0's oracle radii. U has limb-reaching cloth
+    /// (Skirt, Sleeve, long Hair) so it exercises hair-vs-arm and skirt-vs-leg,
+    /// which AvatarSample_A's short head hair cannot. Same gated-utility rules.
+    func testMeasureSkinReferenceRadii_U() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["VRM309_MEASURE_ORACLE"] == "1",
+            "Set VRM309_MEASURE_ORACLE=1 to author oracle radii (utility, not a guard).")
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device")
+        }
+
+        let path = getTestModelPath("AvatarSample_U_1.0.vrm.glb")
+        try requireFixture(path, hint: "AvatarSample_U_1.0.vrm.glb")
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
+        try Self.measure(model: model, label: "U")
+    }
+
+    static func measure(model: VRMModel, label: String) throws {
+        print("[oracle] ===== MEASURING AvatarSample_\(label) =====")
 
         // Object-space (bind/rest-pose) positions of every mesh vertex. At load
         // with an identity model matrix and a VRM authored in A/T-pose, these

@@ -51,16 +51,18 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
     // MARK: - Cloth joint discovery
 
     /// Cloth joints whose penetration we measure: every joint of any spring
-    /// chain whose name mentions hair / skirt / hood, EXCEPT the chain root
-    /// (index 0), which is kinematically driven by its parent bone and thus
-    /// intentionally exempt from collision response.
+    /// chain whose name mentions hair / skirt / hood / sleeve, EXCEPT the chain
+    /// root (index 0), which is kinematically driven by its parent bone and thus
+    /// intentionally exempt from collision response. AvatarSample_U adds
+    /// `Sleeve` chains at arm height, so "sleeve" is included here.
     @MainActor
     private func clothJointNodeIndices(_ model: VRMModel) -> [Int] {
         guard let springBone = model.springBone else { return [] }
         var indices: [Int] = []
         for spring in springBone.springs {
             let name = (spring.name ?? "").lowercased()
-            guard name.contains("hair") || name.contains("skirt") || name.contains("hood") else {
+            guard name.contains("hair") || name.contains("skirt")
+                || name.contains("hood") || name.contains("sleeve") else {
                 continue
             }
             for (i, joint) in spring.joints.enumerated() where i > 0 {
@@ -74,11 +76,12 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
 
     @MainActor
     private func measurePenetrationRate(
+        modelPath: String,
+        oracleName: String,
         pose: StressPose,
         augment: Bool
     ) async throws -> (rate: Float, worst: Float) {
-        let modelPath = getTestVRM10ModelPath()
-        try requireFixture(modelPath, hint: testVRM10Filename)
+        try requireFixture(modelPath, hint: (modelPath as NSString).lastPathComponent)
 
         let options = VRMLoadingOptions(augmentSpringBoneColliders: augment)
         let model = try await VRMModel.load(
@@ -87,7 +90,7 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
             options: options
         )
 
-        let oracle = try SkinReferenceOracle.load(named: "avatar_a_skin_reference")
+        let oracle = try SkinReferenceOracle.load(named: oracleName)
 
         // Drive the static stress pose.
         let clip = StressPoseFactory.clip(pose, duration: Float(Self.frameCount) / Self.fps)
@@ -109,7 +112,7 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
 
         let clothJoints = clothJointNodeIndices(model)
         XCTAssertFalse(clothJoints.isEmpty,
-            "AvatarSample_A must declare hair/skirt/hood spring chains with child joints")
+            "Model must declare hair/skirt/hood/sleeve spring chains with child joints")
 
         // Offscreen render target (we only need the spring-bone update path).
         let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
@@ -185,46 +188,59 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
 
     // MARK: - Reproduction tests (RED gate; pin augment:false = coarse)
 
+    /// AvatarSample_A head reproduction: the short head-hugging Hair/Hood chains
+    /// clip into the skull/brow oracle when the head tips back. A has no
+    /// limb-reaching cloth, so this is the only A penetration manifestation; the
+    /// arm/leg manifestations live on AvatarSample_U below.
     @MainActor
     func testLookUp_currentColliders_penetrate() async throws {
-        let (rate, worst) = try await measurePenetrationRate(pose: .lookUp, augment: false)
-        print("[#309 repro] lookUp current-collider penetration rate=\(rate) worst=\(worst)m")
+        let (rate, worst) = try await measurePenetrationRate(
+            modelPath: getTestVRM10ModelPath(),
+            oracleName: "avatar_a_skin_reference",
+            pose: .lookUp, augment: false)
+        print("[#309 repro] A lookUp current-collider penetration rate=\(rate) worst=\(worst)m")
         XCTAssertGreaterThan(rate, Self.maxPenetrationRate,
             "Expected look-up to penetrate the oracle with coarse colliders (rate \(rate), worst \(worst)m). If 0, the pose isn't driving hair to the brow or the oracle is too loose.")
     }
 
-    /// NOTE: AvatarSample_A's only cloth chains are a short head-hugging
-    /// Hair bob plus Hood/HoodString around the head/neck — there is no skirt
-    /// and the hair never reaches the limbs. Measured arm world positions under
-    /// this pose stay at X≈±0.08…0.14 while the hair centroid sits at X≈0.01
-    /// over the head, so the penetration this reproduces is cloth-vs-head, not
-    /// cloth-vs-arm. The assertion still pins a genuine coarse-collider body
-    /// penetration that augmentation must fix; it does not claim arm contact.
+    /// AvatarSample_U cloth-vs-body reproduction under arms-raised.
+    ///
+    /// EMPIRICAL FINDING (#309, measured via UPenetrationDiagnostic): U's Skirt
+    /// and Sleeve spring chains do NOT reproduce limb (arm/leg) penetration with
+    /// tight measured limb capsules, because each is parented to the very limb it
+    /// covers — `SkirtBack`→upperLeg, `Sleeve`→lowerArm/hand — so it rides
+    /// rigidly with that limb and settles to a fixed offset OUTSIDE the skin
+    /// (nearest sleeve→arm stays +0.022 m across all sensible poses). The
+    /// penetration this test pins is U's long 7-joint body `Hair` chain clipping
+    /// the skull-sphere oracle (worst ≈ 0.039 m), a genuine coarse-collider body
+    /// penetration of the same class as A's `lookUp`. It is pose-independent here
+    /// (the hair is head-driven), so this and the seated test reproduce the same
+    /// hair-vs-head manifestation; the arm/leg manifestation could not be driven
+    /// on this asset without loosening the oracle (which we refuse to do).
     @MainActor
-    func testArmsRaised_currentColliders_penetrate() async throws {
-        let (rate, worst) = try await measurePenetrationRate(pose: .armsRaised, augment: false)
-        print("[#309 repro] armsRaised current-collider penetration rate=\(rate) worst=\(worst)m")
+    func testU_armsRaised_currentColliders_penetrate() async throws {
+        let (rate, worst) = try await measurePenetrationRate(
+            modelPath: getTestModelPath("AvatarSample_U_1.0.vrm.glb"),
+            oracleName: "avatar_u_skin_reference",
+            pose: .armsRaised, augment: false)
+        print("[#309 repro] U armsRaised current-collider penetration rate=\(rate) worst=\(worst)m")
         XCTAssertGreaterThan(rate, Self.maxPenetrationRate,
-            "Expected arms-raised to leave cloth penetrating the body oracle with coarse colliders (rate \(rate), worst \(worst)m). On AvatarSample_A this is dominated by hair/hood-vs-head; the asset has no cloth long enough to reach the arms.")
+            "Expected U cloth (hair) to penetrate the body oracle with coarse colliders (rate \(rate), worst \(worst)m). Measured penetration is hair-vs-skull; U's limb-parented Skirt/Sleeve ride with their limbs and do not clip the arm/leg capsules.")
     }
 
-    /// See `testArmsRaised_currentColliders_penetrate` — same caveat. The
-    /// crossed arms swing the hands to Z≈-0.48 at chest height, far from the
-    /// head-level hair; the reproduced penetration is cloth-vs-head.
+    /// AvatarSample_U cloth-vs-body reproduction under seated deep flexion.
+    /// See `testU_armsRaised_currentColliders_penetrate` for the empirical
+    /// finding: the skirt does NOT reach the legs (its panels splay outward and
+    /// the back panels ride with the thigh), so the reproduced penetration is
+    /// again the head-driven `Hair` chain vs the skull sphere (≈ 0.039 m).
     @MainActor
-    func testArmsCrossed_currentColliders_penetrate() async throws {
-        let (rate, worst) = try await measurePenetrationRate(pose: .armsCrossed, augment: false)
-        print("[#309 repro] armsCrossed current-collider penetration rate=\(rate) worst=\(worst)m")
+    func testU_seatedDeepFlexion_currentColliders_penetrate() async throws {
+        let (rate, worst) = try await measurePenetrationRate(
+            modelPath: getTestModelPath("AvatarSample_U_1.0.vrm.glb"),
+            oracleName: "avatar_u_skin_reference",
+            pose: .seatedDeepFlexion, augment: false)
+        print("[#309 repro] U seatedDeepFlexion current-collider penetration rate=\(rate) worst=\(worst)m")
         XCTAssertGreaterThan(rate, Self.maxPenetrationRate,
-            "Expected arms-crossed to leave cloth penetrating the body oracle with coarse colliders (rate \(rate), worst \(worst)m). On AvatarSample_A this is dominated by hair/hood-vs-head; the asset has no cloth long enough to reach the arms.")
-    }
-
-    // MARK: - Seated baseline (records, never fails)
-
-    @MainActor
-    func testSeatedDeepFlexion_currentColliders_baseline() async throws {
-        let (rate, worst) = try await measurePenetrationRate(pose: .seatedDeepFlexion, augment: false)
-        print("[#309 baseline] seatedDeepFlexion current-collider penetration rate=\(rate) worst=\(worst)m")
-        XCTAssertGreaterThanOrEqual(rate, 0)  // always true; documents the baseline, asserts the harness runs
+            "Expected U cloth (hair) to penetrate the body oracle with coarse colliders (rate \(rate), worst \(worst)m). Measured penetration is hair-vs-skull; U's Skirt does not reach the leg capsules under seated flexion.")
     }
 }

@@ -48,4 +48,27 @@ final class SkinReferenceOracleIntegrityTests: XCTestCase {
         XCTAssertEqual(measured.bboxMaxY, oracle.integrity.bboxMaxY, accuracy: 0.001,
             "AvatarSample_A max-Y changed (\(measured.bboxMaxY) vs \(oracle.integrity.bboxMaxY)) — oracle stale.")
     }
+
+    @MainActor
+    func testAvatarSampleUMatchesOracleIntegrity() async throws {
+        let path = getTestModelPath("AvatarSample_U_1.0.vrm.glb")
+        try requireFixture(path, hint: "AvatarSample_U_1.0.vrm.glb")
+
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device")
+        }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
+
+        let oracle = try SkinReferenceOracle.load(named: "avatar_u_skin_reference")
+        let measured = SkinReferenceOracle.measureIntegrity(model: model)
+
+        XCTAssertGreaterThan(measured.vertexCount, 0,
+            "No vertices read back from AvatarSample_U — Metal buffer/device issue, not asset drift.")
+        XCTAssertEqual(measured.vertexCount, oracle.integrity.vertexCount,
+            "AvatarSample_U vertex count changed (\(measured.vertexCount) vs oracle \(oracle.integrity.vertexCount)) — the U skin-reference oracle is stale. Re-trace it, then update integrity.")
+        XCTAssertEqual(measured.bboxMinY, oracle.integrity.bboxMinY, accuracy: 0.001,
+            "AvatarSample_U min-Y changed (\(measured.bboxMinY) vs \(oracle.integrity.bboxMinY)) — U oracle stale.")
+        XCTAssertEqual(measured.bboxMaxY, oracle.integrity.bboxMaxY, accuracy: 0.001,
+            "AvatarSample_U max-Y changed (\(measured.bboxMaxY) vs \(oracle.integrity.bboxMaxY)) — U oracle stale.")
+    }
 }
