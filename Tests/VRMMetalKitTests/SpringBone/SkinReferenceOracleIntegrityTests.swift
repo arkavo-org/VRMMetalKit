@@ -37,6 +37,10 @@ final class SkinReferenceOracleIntegrityTests: XCTestCase {
         let oracle = try SkinReferenceOracle.load(named: "avatar_a_skin_reference")
         let measured = SkinReferenceOracle.measureIntegrity(model: model)
 
+        // Guard against a vacuous 0 == 0 pass if vertices were unreadable (device/
+        // buffer issue) and the oracle JSON was ever reset to zeros.
+        XCTAssertGreaterThan(measured.vertexCount, 0,
+            "No vertices read back from AvatarSample_A — Metal buffer/device issue, not asset drift.")
         XCTAssertEqual(measured.vertexCount, oracle.integrity.vertexCount,
             "AvatarSample_A vertex count changed (\(measured.vertexCount) vs oracle \(oracle.integrity.vertexCount)) — the skin-reference oracle is stale. Re-trace it, then update integrity.")
         XCTAssertEqual(measured.bboxMinY, oracle.integrity.bboxMinY, accuracy: 0.001,
