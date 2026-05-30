@@ -34,7 +34,7 @@ public enum SpringBoneColliderAugmentor {
     /// pending CCD/substep work — see ``synthesize(model:ratios:)``). All head
     /// geometry is expressed as a fraction of the head's reference radius `rHead`
     /// (never raw metres), so the capsule scales with the model.
-    public struct Ratios {
+    public struct Ratios: Sendable {
         /// Leg capsule radius as a fraction of the leg segment's length. Legs are
         /// thicker relative to their segment length than arms, so this floor is
         /// larger to ensure the thigh capsule encloses the thigh skin.
