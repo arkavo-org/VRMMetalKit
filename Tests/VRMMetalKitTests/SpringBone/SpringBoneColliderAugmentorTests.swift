@@ -44,17 +44,27 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
                                             options: VRMLoadingOptions(augmentSpringBoneColliders: true))
-        // Four end-to-end leg capsules + one forward head/brow capsule. Arm
-        // capsules were dropped pending CCD/substep work (see
-        // SpringBoneColliderAugmentor).
+        // Four end-to-end leg capsules + one forward head/brow capsule + one
+        // lateral skull SPHERE. Arm capsules were dropped pending CCD/substep
+        // work (see SpringBoneColliderAugmentor).
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 5)
+        XCTAssertEqual(synthetic.count, 6)
+        var capsuleCount = 0
+        var sphereCount = 0
         for collider in synthetic {
-            guard case let .capsule(_, radius, _) = collider.shape else {
-                return XCTFail("Synthetic colliders must all be capsules")
+            switch collider.shape {
+            case let .capsule(_, radius, _):
+                capsuleCount += 1
+                XCTAssertTrue(radius.isFinite && radius > 0, "Capsule radius must be finite and positive")
+            case let .sphere(_, radius):
+                sphereCount += 1
+                XCTAssertTrue(radius.isFinite && radius > 0, "Sphere radius must be finite and positive")
+            default:
+                return XCTFail("Synthetic colliders must be capsules or the skull sphere")
             }
-            XCTAssertTrue(radius.isFinite && radius > 0, "Capsule radius must be finite and positive")
         }
+        XCTAssertEqual(capsuleCount, 5, "Expect 4 leg + 1 brow capsules")
+        XCTAssertEqual(sphereCount, 1, "Expect 1 lateral skull sphere")
     }
 
     /// A bone with a singular (zero-scale) world matrix must be SKIPPED, not emit
@@ -104,11 +114,15 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let headNode = humanoid.getBoneNode(.head) else { return XCTFail("A must rig a head") }
 
         let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
-        XCTAssertEqual(synthetic.count, 5, "A should yield 4 leg capsules + 1 head capsule")
+        XCTAssertEqual(synthetic.count, 6, "A should yield 4 leg capsules + 1 head capsule + 1 skull sphere")
 
-        // Head capsule must be appended AFTER the legs (last element, slot 4).
-        guard let headCapsule = synthetic.last, headCapsule.node == headNode else {
-            return XCTFail("Last synthetic collider must be the head capsule")
+        // The brow capsule (the head-node CAPSULE) is appended AFTER the legs.
+        // The skull sphere follows it but is a SPHERE in a separate buffer, so the
+        // brow capsule is the last *capsule* among the synthetic colliders.
+        guard let headCapsule = synthetic.last(where: {
+            if case .capsule = $0.shape { return $0.node == headNode } else { return false }
+        }) else {
+            return XCTFail("Must emit a head/brow capsule on the head node")
         }
         guard case let .capsule(offset, radius, tail) = headCapsule.shape else {
             return XCTFail("Head collider must be a capsule")
@@ -123,6 +137,29 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
             "Head capsule far end must reach forward (head-local +Z) toward the brow")
         // And it must sweep downward (head-local -Y) toward the brow/upper-face.
         XCTAssertLessThan(tail.y, 0, "Head capsule must sweep down toward the brow")
+
+        // The lateral skull SPHERE: appended after the brow capsule, on the head
+        // node, sized/placed oracle-blind as fractions of rHead. Catches lateral
+        // temple strands the midline brow capsule cannot reach (#309).
+        guard let skull = synthetic.last, skull.node == headNode,
+              case let .sphere(sOffset, sRadius) = skull.shape else {
+            return XCTFail("Last synthetic collider must be the head skull sphere")
+        }
+        // Recover rHead from the brow capsule radius (= 0.50 * rHead) to validate
+        // the sphere's ratios independent of the oracle.
+        let rHead = radius / 0.50
+        print("[#309 skull sphere A] rHead=\(rHead) center.offset=\(sOffset) radius=\(sRadius) (radius/rHead=\(sRadius/rHead), up/rHead=\(sOffset.y/rHead))")
+        XCTAssertTrue(sRadius.isFinite && sRadius > 0, "Skull sphere radius must be finite and positive")
+        // Oracle-blind plausibility: the sphere must not balloon past ~1.05×rHead
+        // (the authored skull estimate) — a much larger sphere would float other
+        // hair (back-out criterion on #309).
+        XCTAssertLessThanOrEqual(sRadius, 1.05 * rHead,
+            "Skull sphere must not balloon past the authored skull (≤1.05×rHead)")
+        // The sphere center sits at head-node + (head-local +Y) × up×rHead, lifted
+        // toward the cranium (offset.x == offset.z == 0, offset.y > 0).
+        XCTAssertEqual(sOffset.x, 0, accuracy: 1e-6, "Skull sphere is midline in X")
+        XCTAssertEqual(sOffset.z, 0, accuracy: 1e-6, "Skull sphere is midline in Z")
+        XCTAssertGreaterThan(sOffset.y, 0, "Skull sphere center must lift toward the cranium")
     }
 
     /// AvatarSample_U: `synthesize` returns 4 leg capsules; the `leftUpperLeg`

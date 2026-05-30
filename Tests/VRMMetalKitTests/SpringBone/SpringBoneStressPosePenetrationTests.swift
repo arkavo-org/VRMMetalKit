@@ -409,26 +409,23 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
     }
 
     /// AvatarSample_A look-up GREEN gate: with augmentation on, the synthetic
-    /// forward head/brow capsule (Task 8) catches the FRONT head-hugging hair
+    /// forward head/brow CAPSULE (Task 8) catches the FRONT head-hugging hair
     /// chains (the `J_Sec_Hair3` strands) before they sink into the forehead/brow,
-    /// resolving the persistent hair→forehead sink (#309 manifestation 1,
-    /// reproduced RED by `testLookUp_currentColliders_penetrate`).
+    /// AND the lateral skull SPHERE (#309 follow-up) catches the SIDE-bang temple
+    /// strand (`J_Sec_Hair2_03`, head-local x≈+0.087, ~9 cm off the midline) that
+    /// the midline capsule physically cannot reach. Together they resolve the
+    /// persistent hair→forehead sink AND the lateral temple residual (#309
+    /// manifestation 1, reproduced RED by `testLookUp_currentColliders_penetrate`).
     ///
-    /// HONEST GATE (large reduction, not strict zero — mirrors
-    /// `testU_legMarch_augmented_noPenetration`). The coarse reproduction has
-    /// THREE penetrating joints: two FRONT-hair joints (`J_Sec_Hair3_02` /
-    /// `_02_end`) that sink into the brow — these are the genuine forehead
-    /// manifestation and the forward capsule eliminates them — plus ONE SIDE-bang
-    /// strand (`J_Sec_Hair2_03`) that rests ~6 mm inside the SKULL SPHERE at
-    /// head-local x≈+0.087 (a temple, ~9 cm off the midline). A single midline
-    /// forward brow capsule of plausible radius (~5 cm) physically cannot reach a
-    /// strand 9 cm lateral without ballooning into a ~16 cm-wide head capsule that
-    /// would engulf the face — a separate lateral-skull coverage gap, NOT the
-    /// forehead manifestation and NOT a facing issue (the forward capsule verifiably
-    /// REDUCES penetration, confirming head-local +Z is forward). So this gate
-    /// asserts the achieved forehead win: a large reduction vs coarse that never
-    /// worsens. Closing the lateral residual needs a second (side) collider,
-    /// tracked on #309.
+    /// The coarse reproduction has THREE penetrating joints: two FRONT-hair joints
+    /// (`J_Sec_Hair3_02` / `_02_end`) sunk into the brow — eliminated by the
+    /// forward capsule — plus the lateral side-bang strand resting ~5.9 mm inside
+    /// the skull sphere — eliminated by the lateral skull sphere. The sphere is
+    /// sized oracle-blind to the author's own skull estimate (centre +1.0×rHead,
+    /// radius 1.0×rHead), so it reproduces the authored cranium and pushes the
+    /// temple strand cleanly out without floating other hair (the neutral
+    /// regression baseline shifts only the four temple `J_Sec_Hair*_03` strands by
+    /// ≤5 mm). The augmented result is a clean zero on AvatarSample_A.
     @MainActor func testLookUp_augmented_noForeheadPenetration() async throws {
         let path = getTestVRM10ModelPath()
         let (coarseRate, coarseWorst) = try await measurePenetrationRate(
@@ -438,15 +435,16 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
             modelPath: path, oracleName: "avatar_a_skin_reference",
             pose: .lookUp, augment: true)
         print("[#309 green] A lookUp augmented head/brow penetration rate=\(rate) worst=\(worst)m (coarse rate=\(coarseRate) worst=\(coarseWorst)m)")
-        // The forward brow capsule must eliminate the two FRONT-hair penetrators
-        // (2/3 of the coarse joints) — a large, monotonic reduction that never
-        // worsens. Coarse rate is ~0.10 (3 joints); augmented is ~0.033 (the lone
-        // lateral side-bang residual).
+        // The forward brow capsule + lateral skull sphere together remove ALL
+        // coarse head penetrators — a large, monotonic reduction that never worsens.
         XCTAssertLessThan(rate, coarseRate * 0.5,
-            "Forward brow capsule must remove the front-hair forehead penetrators (augmented rate \(rate) vs coarse \(coarseRate))")
+            "Head colliders must remove the front-hair + temple penetrators (augmented rate \(rate) vs coarse \(coarseRate))")
         XCTAssertLessThanOrEqual(worst, coarseWorst + 1e-4,
             "Augmentation must never worsen peak head penetration (augmented \(worst)m vs coarse \(coarseWorst)m)")
-        XCTAssertLessThan(worst, 0.007,
-            "Residual head penetration must stay a bounded sub-7mm lateral-skull contact (worst \(worst)m)")
+        // The lateral skull sphere closes the temple side-bang residual: augmented
+        // head penetration drops to a bounded sub-2mm contact (clean zero in
+        // practice; the bound carries margin for GPU parallel-scheduling jitter).
+        XCTAssertLessThan(worst, 0.002,
+            "Lateral skull sphere must close the temple residual (worst \(worst)m)")
     }
 }
