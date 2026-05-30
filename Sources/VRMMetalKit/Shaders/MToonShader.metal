@@ -723,15 +723,30 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // three-vrm + UniVRM paths). Note: post-#205, indirect (≈ambient*giAlbedo)
  // is now comparable in magnitude to direct (≈albedo/π) on the lit side —
  // see docs/MTOON_GI_SPEC.md for the rationale.
+ // glTF 2.0 occlusion (VMK#310, was VMK#293): the AO map attenuates only
+ // the INDIRECT / ambient (GI) term — never the direct toon-shaded term.
+ // UniVRM, three-vrm and godot all confine occlusion to the indirect
+ // lighting factor; multiplying it into the composed lit color (incl. the
+ // direct toon lit-cap) crushed directly-lit surfaces into a hard AO band
+ // and broke conformance against the UniVRM golden. Per glTF the R channel
+ // carries the occlusion value and `occlusionTextureInfo.strength` remaps
+ // it as `1 + strength * (sample - 1)`.
+ mtoon_float occlusionFactor = mtoon_float(1.0);
+ if (material.hasOcclusionTexture > 0) {
+     mtoon_float ao = mtoon_float(occlusionTexture.sample(textureSampler, uv).r);
+     occlusionFactor = mtoon_float(1.0) + mtoon_float(material.occlusionStrength) * (ao - mtoon_float(1.0));
+ }
+
  mtoon_float3 giAlbedo = mix(shadeColor, baseColor.rgb, mtoon_float(material.giEqualizationFactor));
  float3 safeAmbientColor = clamp(uniforms.ambientColor.xyz, 0.0f, 65500.0f);
- mtoon_float3 indirectDiffuse = mtoon_float3(safeAmbientColor) * giAlbedo;
+ mtoon_float3 indirectDiffuse = mtoon_float3(safeAmbientColor) * giAlbedo * occlusionFactor;
  litColor += indirectDiffuse;
 
  // Indirect radiance for the rim modulator: raw ambient (no `giAlbedo`).
  // Rim is not subject to the body's giEqualization mix; it just sees the
- // scene's indirect radiance, mirroring UniVRM's `indirectLightingFactor`.
- mtoon_float3 indirectLight = mtoon_float3(safeAmbientColor);
+ // scene's indirect radiance, mirroring UniVRM's `indirectLightingFactor` —
+ // which is itself occlusion-attenuated, so apply the same factor here.
+ mtoon_float3 indirectLight = mtoon_float3(safeAmbientColor) * occlusionFactor;
 
  // Emissive
  mtoon_float3 emissive = mtoon_float3(material.emissiveR, material.emissiveG, material.emissiveB);
@@ -821,20 +836,6 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
          dirRim += fresnel * NdotL * mtoon_float3(uniforms.light2Color.xyz) * intensity2;
      }
      litColor += dirRim;
- }
-
- // glTF 2.0 occlusion (VMK#293): modulate the composed shading by the
- // R-channel of the occlusion texture per the spec formula
- //   finalColor = litColor * (1.0 + strength * (sample - 1.0))
- // Applied after all direct + indirect + matcap + rim + emissive
- // contributions are summed but before the minimum-light floor and the
- // final saturate. Spec-literal placement; a future pass may refine to
- // UniVRM's "indirect-only" composition if conformance flags drift on
- // a textured emissive material.
- if (material.hasOcclusionTexture > 0) {
-     mtoon_float ao = mtoon_float(occlusionTexture.sample(textureSampler, uv).r);
-     mtoon_float occlusionFactor = mtoon_float(1.0) + mtoon_float(material.occlusionStrength) * (ao - mtoon_float(1.0));
-     litColor *= occlusionFactor;
  }
 
  // DEBUG 35: Final lit color before gamma/sRGB conversion

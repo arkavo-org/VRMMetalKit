@@ -1347,8 +1347,10 @@ public class VRMMaterial {
     public var normalScale: Float = 1.0
     /// glTF-core ambient-occlusion texture. The R channel carries the
     /// per-fragment occlusion value (0 = fully occluded, 1 = no
-    /// occlusion). Modulates the final shaded color via the spec
-    /// formula `1.0 + occlusionStrength * (sample - 1.0)`. VMK#293.
+    /// occlusion). Modulates the indirect/ambient (GI) term only — never
+    /// the direct toon-shaded term — via the spec factor
+    /// `1.0 + occlusionStrength * (sample - 1.0)`, matching UniVRM /
+    /// three-vrm / godot. VMK#293, VMK#310.
     public var occlusionTexture: VRMTexture?
     /// glTF-core `occlusionTextureInfo.strength` — scales the
     /// occlusion contribution. `0` disables occlusion (final factor =
