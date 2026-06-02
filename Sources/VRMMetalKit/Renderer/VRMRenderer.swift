@@ -2895,11 +2895,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         textureCount += 1
                     }
 
-                    // Index 8: Occlusion texture (glTF-core, VMK#293).
-                    // R-channel ambient-occlusion sample; modulates final
-                    // shaded color per the spec formula `1 + strength *
-                    // (sample - 1)`. `occlusionStrength` is already on
-                    // mtoonUniforms from the population block above.
+                    // Index 8: Occlusion texture (glTF-core, VMK#293/#310).
+                    // R-channel ambient-occlusion sample; modulates the
+                    // indirect/ambient (GI) term only per the spec factor
+                    // `1 + strength * (sample - 1)`. `occlusionStrength` is
+                    // already on mtoonUniforms from the population block above.
                     if let mtlTexture = material.occlusionTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 8)
                         mtoonUniforms.hasOcclusionTexture = 1
