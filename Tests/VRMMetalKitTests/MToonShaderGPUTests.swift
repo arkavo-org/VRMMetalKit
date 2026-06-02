@@ -54,7 +54,7 @@ final class MToonShaderGPUTests: XCTestCase {
     /// Updated: Add glTF-core `occlusionTexture` sampling at texture slot 8
     /// + `occlusionStrength` field in Block 14. Closes VMK#293 (sibling to
     /// the normalTexture.scale wiring closed by PR #291).
-    static let knownGoodShaderHash = "5bf854d993225bc284f7fd1c751c86ae28a1a959365c1bbd9ecf113651628220"
+    static let knownGoodShaderHash = "2b81af38845e2f231caa60e2d33483dc18fec74869343c9bf8d0b9b224fa5a91"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.
