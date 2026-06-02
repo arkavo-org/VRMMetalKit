@@ -352,6 +352,33 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
             "Expected sleeve/hair to transiently penetrate the ARM oracle during a fast arm swing with coarse colliders (peak \(peak)m over \(frames)/\(total) frames).")
     }
 
+    /// Behavioral guard for the #313 post-collision velocity correction. The
+    /// collision kernels now bleed the INWARD component of a joint's implicit
+    /// Verlet velocity when a collider pushes it out (`applyVelocityCorrection`
+    /// in `SpringBoneCollision.metal`), so a cloth joint that whips into the
+    /// body during a fast arm swing no longer carries momentum straight back in
+    /// next substep. This does NOT change the arm PEAK (the arm itself has no
+    /// collider — see `testU_armSwing_currentColliders_penetrateArm`), but it
+    /// measurably reduces the number of frames the swinging sleeve/hair
+    /// re-penetrates the LIMB oracle by shedding the re-entry momentum against
+    /// the authored torso/body colliders it does touch.
+    ///
+    /// Pre-fix this metric was 18/180 penetrating frames; the velocity
+    /// correction drops it to a stable 13/180. The bound is set to 16 (margin
+    /// for GPU parallel-scheduling jitter) so the guard locks in the win without
+    /// being brittle, while staying comfortably below the 18 pre-fix baseline.
+    /// If this regresses to ≥17, the velocity correction has stopped engaging.
+    @MainActor
+    func testU_armSwing_velocityCorrection_reducesReentryFrames() async throws {
+        let (peak, frames, total) = try await measurePeakLimbPenetration(
+            modelPath: getTestModelPath("AvatarSample_U_1.0.vrm.glb"),
+            oracleName: "avatar_u_skin_reference",
+            clip: DynamicPoseFactory.armSwingFast(), augment: false)
+        print("[#313 guard] U armSwing velocity-correction LIMB peak=\(peak)m frames=\(frames)/\(total)")
+        XCTAssertLessThanOrEqual(frames, 16,
+            "Post-collision velocity correction (#313) must keep sleeve/hair arm re-entry frames below the 18/180 pre-fix baseline (got \(frames)/\(total)). A regression here means the inward-velocity bleed stopped engaging.")
+    }
+
     /// AvatarSample_U skirt vs LEG oracle under a fast oscillating knee-raise
     /// march. Manifestation 3 of #309. See the report: the skirt hangs well
     /// outside the tight leg capsule even when the thigh drives up into it, so
