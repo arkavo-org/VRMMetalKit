@@ -89,12 +89,24 @@ substepping fix buys quality beyond the reference bar on a winding-down project.
   levers it deeper). Only finer substepping moved the result.
 - **Collision op-order confirmed correct**: VMK runs `predict → distance×N →
   collision` (collision last), so there is no length-reprojection amplifier.
-- **Latent bug discovered (follow-up ticket):** `SpringBoneComputeSystem.update`
-  never reassigns `params.dtSub` from the active substep rate. At the default
-  ultra quality (120 Hz, load sets `dtSub = 1/120`) they match, so production is
-  correct — but the non-ultra quality presets (60/90 Hz) integrate at the wrong
-  `dtSub`. The one-line fix (`params.dtSub = Float(fixedDeltaTime)`) is a no-op at
-  ultra; it should ship with its own non-ultra validation, separately from #313.
+- **Latent bug discovered (filed as #316, separate from #313):**
+  `SpringBoneComputeSystem.update` never reassigns `params.dtSub` from the active
+  substep rate. At the default ultra quality (120 Hz, load sets `dtSub = 1/120`)
+  they match, so production is correct — but the non-ultra quality presets
+  (60/90 Hz) integrate at the wrong `dtSub`. The one-line fix
+  (`params.dtSub = Float(fixedDeltaTime)`) is a no-op at ultra; it ships with its
+  own non-ultra validation under #316, not on the #313 branch.
+
+- **Methodology footnote (how this conclusion was reached):** the initial call was
+  a premature "deflection is intrinsic, collider route closed," reached after the
+  radius and friction sweeps. That was overturned by evidence — the VRMConformance
+  team's critique prompted sweeping two untried levers (velocity-kill, then
+  substepping); velocity-kill also failed, but substepping revealed the catapult
+  is a *resolvable* large-timestep instability, which reframed "intrinsic" as
+  "intrinsic at this substep rate." The durable finding is the mechanism above
+  (substepping is the only monotonic lever; the reference single-steps coarser, so
+  there is no gap to close), not the bookkeeping of which interim call was wrong —
+  but the correction is recorded so the "closed" verdict is not re-trusted blindly.
 
 ## Links
 
