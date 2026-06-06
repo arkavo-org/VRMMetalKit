@@ -109,10 +109,16 @@ xcrun instruments -t "Metal System Trace" ./VRMPlayground
 
 ### Memory Management
 - **Problem:** Per-frame allocations causing hitches
-- **Solution:** All buffers pre-allocated
+- **Partial solution:** Hot buffers pre-allocated
   - Uniform buffers: 3x pre-allocated
   - State objects: Cached at init
-  - Zero runtime allocations
+- **NOT yet zero-allocation.** An audit (#225) found per-frame allocations
+  remaining in the render loop, physics, and morph systems — e.g.
+  `morphedBuffers`/`localWeights` dicts and arrays (`VRMRenderer.swift`),
+  `viewZByIndex` clear+re-insert, the morph active-set `candidates` sort
+  (`VRMMorphTargets.swift`), SpringBone collider arrays
+  (`SpringBoneComputeSystem.swift`), and per-draw `MToonMaterialUniforms`. See
+  the Romero-style roadmap (#200) for the tracking issues.
 
 ## 🎯 Optimization Targets for M4
 
@@ -122,7 +128,7 @@ xcrun instruments -t "Metal System Trace" ./VRMPlayground
 | < 8.33ms frame time | For 120Hz | Requires measurement |
 | < 20 draw calls | For typical VRM | Code supports this |
 | < 10 state changes | Per frame | Sorting implemented |
-| Zero allocations | Per frame | ✅ Achieved |
+| Zero allocations | Per frame | ⚠️ Not achieved — per-frame allocations remain (#225, tracked under #200) |
 
 ## 🚀 Next Steps
 
@@ -145,7 +151,7 @@ xcrun instruments -t "Metal System Trace" ./VRMPlayground
 ## 📝 Conclusion
 
 The optimizations implemented provide a solid foundation for high-performance VRM rendering. The code now:
-- ✅ Eliminates per-frame allocations
+- ⚠️ Reduces but does **not** eliminate per-frame allocations (see #225 / #200)
 - ✅ Minimizes state changes through sorting
 - ✅ Prevents CPU-GPU sync stalls
 - ✅ Tracks performance metrics

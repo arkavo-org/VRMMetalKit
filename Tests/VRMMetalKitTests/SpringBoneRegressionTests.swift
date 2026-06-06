@@ -73,31 +73,68 @@ final class SpringBoneRegressionTests: XCTestCase {
     /// `deltaTime` clamp to engage. 1/30 s + a few ms slack.
     private static let minFrameIntervalNanos: UInt64 = 35_000_000
 
+    /// Ultra (120 Hz) — the default tier and the historical baseline.
     @MainActor
     func testAvatarSampleASpringBoneTrajectoryMatchesBaseline() async throws {
+        try await runTierRegression(quality: .ultra, resource: "avatar_a_baseline")
+    }
+
+    // Per-quality-tier frozen baselines (#319). Each preset has its OWN golden:
+    // the PBD stiffness blend is dt-independent, so stiffness-per-wall-second
+    // scales with substep rate — the tiers legitimately differ and CANNOT be
+    // asserted equal to ultra. These guard each tier's own trajectory (e.g. the
+    // #316 dtSub fix is correct at ultra but changes non-ultra dynamics).
+
+    @MainActor
+    func testHighTierTrajectoryMatchesBaseline() async throws {
+        try await runTierRegression(quality: .high, resource: "avatar_a_baseline_high")
+    }
+
+    @MainActor
+    func testMediumTierTrajectoryMatchesBaseline() async throws {
+        try await runTierRegression(quality: .medium, resource: "avatar_a_baseline_medium")
+    }
+
+    @MainActor
+    func testLowTierTrajectoryMatchesBaseline() async throws {
+        try await runTierRegression(quality: .low, resource: "avatar_a_baseline_low")
+    }
+
+    /// Shared per-tier capture → (regenerate | compare) against `resource`.csv.
+    /// Set `VRM_REGENERATE_BASELINE=1` to (re)write the baselines instead of
+    /// comparing.
+    @MainActor
+    private func runTierRegression(
+        quality: VRMConstants.SpringBoneQuality,
+        resource: String
+    ) async throws {
         let modelPath = getTestVRM10ModelPath()
         try requireFixture(modelPath, hint: testVRM10Filename)
 
-        let samples = try await captureSpringBoneTrajectory(modelPath: modelPath)
+        let samples = try await captureSpringBoneTrajectory(modelPath: modelPath, quality: quality)
         XCTAssertGreaterThan(samples.count, 0, "Trajectory dumper produced no samples")
 
         let observed = summarize(samples: samples)
 
-        if ProcessInfo.processInfo.environment["VRM162_REGENERATE_BASELINE"] == "1" {
-            let outPath = baselineSourcePath()
+        let env = ProcessInfo.processInfo.environment
+        if env["VRM_REGENERATE_BASELINE"] == "1" || env["VRM162_REGENERATE_BASELINE"] == "1" {
+            let outPath = baselineSourcePath(resource: resource)
             try writeBaseline(summaries: observed, to: outPath)
-            print("[SpringBoneRegression] Regenerated baseline at \(outPath) (\(observed.count) bones)")
+            print("[SpringBoneRegression] Regenerated \(resource).csv (\(observed.count) bones, \(quality))")
             return
         }
 
-        let baseline = try loadBaseline()
+        let baseline = try loadBaseline(resource: resource)
         try compare(observed: observed, baseline: baseline)
     }
 
     // MARK: - Trajectory capture
 
     @MainActor
-    private func captureSpringBoneTrajectory(modelPath: String) async throws -> [BoneTrajectoryDumper.Sample] {
+    private func captureSpringBoneTrajectory(
+        modelPath: String,
+        quality: VRMConstants.SpringBoneQuality = .ultra
+    ) async throws -> [BoneTrajectoryDumper.Sample] {
         let model = try await VRMModel.load(
             from: URL(fileURLWithPath: modelPath),
             device: device
@@ -114,6 +151,7 @@ final class SpringBoneRegressionTests: XCTestCase {
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
         renderer.enableSpringBone = true
+        renderer.springBoneQuality = quality
         renderer.viewMatrix = matrix_identity_float4x4
         renderer.projectionMatrix = matrix_identity_float4x4
 
@@ -230,22 +268,22 @@ final class SpringBoneRegressionTests: XCTestCase {
 
     // MARK: - Baseline I/O
 
-    private func baselineSourcePath() -> String {
-        return "\(getProjectRoot())/Tests/VRMMetalKitTests/TestData/SpringBoneRegression/avatar_a_baseline.csv"
+    private func baselineSourcePath(resource: String) -> String {
+        return "\(getProjectRoot())/Tests/VRMMetalKitTests/TestData/SpringBoneRegression/\(resource).csv"
     }
 
     private static let csvHeader = "bone,meanX,meanY,meanZ\n"
 
-    private func loadBaseline() throws -> [BoneSummary] {
+    private func loadBaseline(resource: String) throws -> [BoneSummary] {
         guard let url = Bundle.module.url(
-            forResource: "avatar_a_baseline",
+            forResource: resource,
             withExtension: "csv",
             subdirectory: "TestData/SpringBoneRegression"
         ) else {
             XCTFail("""
-                Baseline missing. Generate it with:
-                  VRM162_REGENERATE_BASELINE=1 swift test --filter SpringBoneRegressionTests --disable-sandbox
-                Then commit the file at Tests/VRMMetalKitTests/TestData/SpringBoneRegression/avatar_a_baseline.csv.
+                Baseline '\(resource).csv' missing. Generate it with:
+                  VRM_REGENERATE_BASELINE=1 swift test --filter SpringBoneRegressionTests --disable-sandbox
+                Then commit the file at Tests/VRMMetalKitTests/TestData/SpringBoneRegression/\(resource).csv.
                 """)
             throw XCTSkip("baseline missing")
         }

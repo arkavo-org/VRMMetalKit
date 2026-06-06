@@ -61,12 +61,12 @@ let package = Package(
             name: "VRMMetalKit",
             dependencies: ["GLTFCore"],
             exclude: [
-                "Shaders/MorphTargetCompute.metal",
                 "Shaders/MorphAccumulate.metal",
                 "Shaders/SpringBonePredict.metal",
                 "Shaders/SpringBoneDistance.metal",
                 "Shaders/SpringBoneCollision.metal",
                 "Shaders/SpringBoneKinematic.metal",
+                "Shaders/SpringBoneCenterDelta.metal",
                 "Shaders/DebugShaders.metal",
                 "Shaders/MToonShader.metal",
                 "Shaders/SkinnedShader.metal",

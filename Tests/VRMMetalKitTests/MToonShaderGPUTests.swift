@@ -147,7 +147,6 @@ final class MToonShaderGPUTests: XCTestCase {
             "springBoneCollideSpheres",
             "springBoneCollideCapsules",
             // Morph compute shaders
-            "morphTargetCompute",
             "morph_accumulate_positions",
             "morph_accumulate_normals",
             // Debug shaders
@@ -171,11 +170,14 @@ final class MToonShaderGPUTests: XCTestCase {
             }
         }
 
-        // Check minimum function count (incomplete metallib had ~15, complete has ~40+)
+        // Check minimum function count. A correctly compiled metallib has ~37
+        // functions (was ~41 before #127 removed 4 dead morph kernels); a broken
+        // "only 1 of 10 .metal files compiled" build had ~15. The 30 floor still
+        // catches gross incompleteness while accommodating the post-#127 count.
         XCTAssertGreaterThanOrEqual(
             functionNames.count,
-            40,
-            "Metallib has too few functions (\(functionNames.count)). Expected 40+. Did you forget to compile all .metal files? Use 'make shaders' in VRMMetalKit."
+            30,
+            "Metallib has too few functions (\(functionNames.count)). Expected ~37. Did you forget to compile all .metal files? Use 'make shaders' in VRMMetalKit."
         )
 
         // Check all required functions are present
