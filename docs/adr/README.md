@@ -62,6 +62,11 @@ See [000-template.md](000-template.md) for the full template.
   **Summary:** Use conditional compilation flags to enable subsystem-specific logging with zero production overhead.
   **Key Decision:** Compile-time flags provide true zero-cost abstraction vs. runtime log levels.
 
+- [ADR-007: SpringBone sleeve→arm catapult is a spec-solver-class limitation](007-springbone-sleeve-arm-catapult.md)
+  **Status:** Accepted
+  **Summary:** The stiff-sleeve catapult off an arm collider is a large-timestep characteristic of the VRM spring-bone solver class that the UniVRM reference (60 Hz single-step) exhibits worse; finer substepping fixes it but is supererogatory vs. the reference bar.
+  **Key Decision:** Document and accept rather than ship a 2–4× substepping fix; the real authoring fix is more joints / a softer chain.
+
 ## How to Use ADRs
 
 ### When Reading Code

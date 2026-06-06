@@ -69,9 +69,21 @@ struct BoneParams {
 // "outside" collision (joint pushed out of the sphere) and the
 // VRMC_springBone_extended_collider "inside" / containment collision
 // (joint pushed back into the sphere when it tries to escape).
-float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMask,
+//
+// CONTINUOUS COLLISION (#313): the joint's per-substep motion is the segment
+// `prevPos → position`. Discrete collision tests only `position` (the substep
+// END); a fast joint whose segment passes clean through an outside sphere lands
+// OUTSIDE on the far side, so the endpoint test finds no penetration and the
+// joint tunnels through. For outside spheres we therefore sweep the segment:
+// if it ENTERS the inflated sphere (prev started outside, earliest entry t* in
+// [0,1]) we clamp the joint to that entry surface. When the segment does not
+// cleanly enter (e.g. prev already inside) we fall back to the discrete
+// endpoint push-out, so shallow resting penetration behaves exactly as before.
+float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadius,
+                                  uint groupMask, uint sweptGroupIndex,
                                   constant SphereCollider* spheres, uint numSpheres) {
     float3 result = position;
+    const float epsilon = 1e-6;
 
     for (uint i = 0; i < numSpheres; i++) {
         SphereCollider sphere = spheres[i];
@@ -79,24 +91,77 @@ float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMa
         // Skip if bone doesn't collide with this group
         if (!(groupMask & (1u << sphere.groupIndex))) continue;
 
-        float3 toCenter = result - sphere.center;
-        float distance = length(toCenter);
-
         if (sphere.inside != 0u) {
             // Containment: penetration when joint is escaping the sphere.
             // distance > radius - boneRadius means joint is past the inner
             // safe surface. Push it back toward the centre.
+            float3 toCenter = result - sphere.center;
+            float distance = length(toCenter);
             float penetration = distance + boneRadius - sphere.radius;
-            if (penetration > 0.0 && distance > 1e-6) {
+            if (penetration > 0.0 && distance > epsilon) {
                 float3 inward = -toCenter / distance;  // toward centre
                 result += inward * penetration;
             }
+            continue;
+        }
+
+        // Outside collision (default). Inflated radius = sphere + bone.
+        float R = sphere.radius + boneRadius;
+        float3 toCenter = result - sphere.center;
+        float distance = length(toCenter);
+
+        if (distance < R) {
+            // Endpoint rests INSIDE the sphere: discrete push-out along the
+            // endpoint normal. Identical to the pre-CCD behaviour, so resting
+            // and sliding contact (and the calibrated equilibrium) are
+            // unchanged — the joint still slides tangentially along the
+            // surface instead of being snapped back to its entry point.
+            float penetration = R - distance;
+            float3 outward = toCenter / max(distance, epsilon);
+            result += outward * penetration;
         } else {
-            // Outside collision (default): push joint out of the sphere.
-            float penetration = sphere.radius + boneRadius - distance;
-            if (penetration > 0.0) {
-                float3 outward = toCenter / max(distance, 1e-6);
-                result += outward * penetration;
+            // Endpoint is OUTSIDE — discrete collision would see nothing. Sweep
+            // the segment prevPos → result and, only if it TUNNELED through
+            // (started outside, earliest entry t* ∈ [0,1]), stop the joint at
+            // the entry surface. Solve |prevPos + t·d - C|² = R².
+            //
+            // Scoped (#313): only the SYNTHETIC augmented-collider group gets
+            // continuous collision. Authored body spheres keep the discrete
+            // endpoint test — clamping fast cloth joints against them deflects
+            // stiff chains into adjacent geometry (the arm-swing re-entry
+            // regression). Synthetic colliders exist precisely to stop tunneling,
+            // so swept response is wanted there and nowhere else.
+            float3 d = result - prevPos;
+            float3 m = prevPos - sphere.center;
+            float a = dot(d, d);
+            float c = dot(m, m) - R * R;
+            if (sphere.groupIndex == sweptGroupIndex && a > epsilon && c > 0.0) {
+                // Depth gate: only treat this as a tunnel worth clamping when
+                // the joint CENTRE actually passes through the solid sphere
+                // body (closest approach < sphere.radius), not merely grazes
+                // the bone-inflated shell. A graze falls through to discrete
+                // (a no-op here, endpoint is outside), so fast joints sliding
+                // past nearby colliders are not snapped to the surface — that
+                // spurious snap deflects stiff cloth chains into adjacent
+                // geometry (the arm-swing re-entry regression, #313/#315).
+                float tClose = clamp(-dot(m, d) / a, 0.0, 1.0);
+                float3 closest = prevPos + tClose * d;
+                float distClose = length(closest - sphere.center);
+                if (distClose < sphere.radius) {
+                    float b = 2.0 * dot(m, d);
+                    float disc = b * b - 4.0 * a * c;
+                    if (disc >= 0.0) {
+                        float t = (-b - sqrt(disc)) / (2.0 * a);
+                        if (t >= 0.0 && t <= 1.0) {
+                            float3 contact = prevPos + t * d;
+                            float3 toContact = contact - sphere.center;
+                            float contactLen = length(toContact);
+                            float3 n = (contactLen > epsilon) ? toContact / contactLen
+                                                              : normalize(-d);
+                            result = sphere.center + n * R;  // stop at entry surface
+                        }
+                    }
+                }
             }
         }
     }
@@ -104,8 +169,120 @@ float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMa
     return result;
 }
 
-// Capsule collision function with group filtering
-float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupMask,
+// Closest point on the segment [a,b] to point p.
+static float3 closestPointOnSegment(float3 p, float3 a, float3 b) {
+    float3 ab = b - a;
+    float abLenSq = dot(ab, ab);
+    float t = (abLenSq > 1e-12) ? dot(p - a, ab) / abLenSq : 0.0;
+    return a + clamp(t, 0.0, 1.0) * ab;
+}
+
+// Entry distance along unit `rdn` where ray `ro + s·rdn` first reaches a sphere
+// (center, radius r), or -1 if it never does. `rdn` must be unit length.
+static float raySphereEntryDist(float3 ro, float3 rdn, float3 center, float r) {
+    float3 oc = ro - center;
+    float b = dot(rdn, oc);
+    float c = dot(oc, oc) - r * r;
+    float h = b * b - c;
+    if (h < 0.0) return -1.0;
+    return -b - sqrt(h);  // nearest root (may be negative if the sphere is behind)
+}
+
+// Minimum distance between segments [p1,q1] and [p2,q2]
+// (Ericson, Real-Time Collision Detection §5.1.9). Used as the capsule depth
+// gate: the closest approach of the swept path to the capsule axis.
+static float segmentSegmentDistance(float3 p1, float3 q1, float3 p2, float3 q2) {
+    const float eps = 1e-9;
+    float3 d1 = q1 - p1;
+    float3 d2 = q2 - p2;
+    float3 r = p1 - p2;
+    float a = dot(d1, d1);
+    float e = dot(d2, d2);
+    float f = dot(d2, r);
+    float s, t;
+    if (a <= eps && e <= eps) {
+        return length(p1 - p2);
+    }
+    if (a <= eps) {
+        s = 0.0;
+        t = clamp(f / e, 0.0, 1.0);
+    } else {
+        float c = dot(d1, r);
+        if (e <= eps) {
+            t = 0.0;
+            s = clamp(-c / a, 0.0, 1.0);
+        } else {
+            float b = dot(d1, d2);
+            float denom = a * e - b * b;
+            s = (denom > eps) ? clamp((b * f - c * e) / denom, 0.0, 1.0) : 0.0;
+            t = (b * s + f) / e;
+            if (t < 0.0) {
+                t = 0.0;
+                s = clamp(-c / a, 0.0, 1.0);
+            } else if (t > 1.0) {
+                t = 1.0;
+                s = clamp((b - c) / a, 0.0, 1.0);
+            }
+        }
+    }
+    float3 c1 = p1 + d1 * s;
+    float3 c2 = p2 + d2 * t;
+    return length(c1 - c2);
+}
+
+// Swept point-vs-capsule entry distance (#313). Returns the distance along the
+// UNIT direction `rdn` at which the ray `ro + s·rdn` first enters the capsule
+// (axis pa..pb, radius r), or -1 if it never does. A swept point of radius
+// boneRadius vs a capsule of radius capsuleRadius is a point-vs-capsule test at
+// the inflated radius r = boneRadius + capsuleRadius — i.e. a ray vs a finite
+// cylinder capped by two spheres. Adapted from Inigo Quilez's capsule
+// intersection; `rdn` MUST be unit length so the spherical-cap quadratics (which
+// assume dot(rdn,rdn)=1) are correct.
+static float sweptCapsuleEntryDist(float3 ro, float3 rdn, float3 pa, float3 pb, float r) {
+    float3 ba = pb - pa;
+    float3 oa = ro - pa;
+    float baba = dot(ba, ba);
+    float bard = dot(ba, rdn);
+    float baoa = dot(ba, oa);
+    float rdoa = dot(rdn, oa);
+    float oaoa = dot(oa, oa);
+    float a = baba - bard * bard;
+    // Ray (nearly) parallel to the axis: the cylinder-body solve is degenerate
+    // (a → 0), so test the two end-cap spheres directly — otherwise an
+    // axis-aligned joint tunnels straight through a cap undetected.
+    if (a <= 1e-9) {
+        float s0 = raySphereEntryDist(ro, rdn, pa, r);
+        float s1 = raySphereEntryDist(ro, rdn, pb, r);
+        float best = -1.0;
+        if (s0 >= 0.0) best = s0;
+        if (s1 >= 0.0 && (best < 0.0 || s1 < best)) best = s1;
+        return best;
+    }
+    float b = baba * rdoa - baoa * bard;
+    float c = baba * oaoa - baoa * baoa - r * r * baba;
+    float h = b * b - a * c;
+    if (h >= 0.0) {
+        float s = (-b - sqrt(h)) / a;
+        float y = baoa + s * bard;
+        if (y > 0.0 && y < baba) return s;       // hit the cylinder body
+        // Otherwise test the spherical cap nearest the hit.
+        float3 oc = (y <= 0.0) ? oa : (ro - pb);
+        float cb = dot(rdn, oc);
+        float cc = dot(oc, oc) - r * r;
+        float ch = cb * cb - cc;
+        if (ch > 0.0) return -cb - sqrt(ch);
+    }
+    return -1.0;
+}
+
+// Capsule collision function with group filtering. Like the sphere kernel, the
+// SYNTHETIC augmented group (#309) additionally gets continuous (swept)
+// collision (#313): when a joint tunnels clean through an outside capsule in one
+// substep (endpoint lands outside), it is clamped to the entry surface. Authored
+// capsules keep the discrete endpoint test — see the CCD-scoping invariant in
+// CLAUDE.md §4 and `collideWithSphereFiltered`.
+float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRadius,
+                                   uint groupMask, uint sweptGroupIndex,
                                    constant CapsuleCollider* capsules, uint numCapsules) {
     float3 result = position;
     const float epsilon = 1e-6;
@@ -116,15 +293,7 @@ float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupM
         // Skip if bone doesn't collide with this group
         if (!(groupMask & (1u << capsule.groupIndex))) continue;
 
-        // Find closest point on capsule segment
-        float3 ab = capsule.p1 - capsule.p0;
-        float ab_length_sq = dot(ab, ab);
-
-        // Add epsilon check to prevent division by zero
-        float t = (ab_length_sq > epsilon) ? dot(result - capsule.p0, ab) / ab_length_sq : 0.0;
-        t = clamp(t, 0.0, 1.0);
-        float3 closestPoint = capsule.p0 + t * ab;
-
+        float3 closestPoint = closestPointOnSegment(result, capsule.p0, capsule.p1);
         float3 toClosest = result - closestPoint;
         float distance = length(toClosest);
 
@@ -135,12 +304,45 @@ float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupM
                 float3 inward = -toClosest / distance;
                 result += inward * penetration;
             }
-        } else {
-            // Outside collision (default).
-            float penetration = capsule.radius + boneRadius - distance;
-            if (penetration > 0.0) {
-                float3 outward = toClosest / max(distance, epsilon);
-                result += outward * penetration;
+            continue;
+        }
+
+        // Outside collision (default). Inflated radius = capsule + bone.
+        float R = capsule.radius + boneRadius;
+
+        if (distance < R) {
+            // Endpoint rests INSIDE: discrete push-out along the endpoint
+            // normal. Identical to the pre-CCD behaviour (sliding preserved).
+            float penetration = R - distance;
+            float3 outward = toClosest / max(distance, epsilon);
+            result += outward * penetration;
+        } else if (capsule.groupIndex == sweptGroupIndex) {
+            // Endpoint OUTSIDE — discrete sees nothing. Sweep prevPos → result
+            // against the inflated capsule (synthetic group only) and, if it
+            // tunneled through, stop the joint at the entry surface.
+            float3 seg = result - prevPos;
+            float segLen = length(seg);
+            // Depth gate (mirror of the sphere path, CLAUDE.md §4): only clamp
+            // when the joint CENTRE actually passes through the SOLID capsule
+            // body (closest approach of the swept path to the axis <
+            // capsule.radius), not merely grazes the bone-inflated shell. A
+            // spurious snap on a graze deflects stiff cloth chains into adjacent
+            // geometry (the arm-swing re-entry regression, #313/#315).
+            float axisApproach = segmentSegmentDistance(prevPos, result,
+                                                        capsule.p0, capsule.p1);
+            if (segLen > epsilon && axisApproach < capsule.radius) {
+                float3 rdn = seg / segLen;
+                float sHit = sweptCapsuleEntryDist(prevPos, rdn, capsule.p0, capsule.p1, R);
+                if (sHit >= 0.0 && sHit <= segLen) {
+                    float3 contact = prevPos + rdn * sHit;
+                    // Re-project to the surface along the axis normal for a clean
+                    // resting position (contact is on the R-surface already).
+                    float3 axisPt = closestPointOnSegment(contact, capsule.p0, capsule.p1);
+                    float3 toAxis = contact - axisPt;
+                    float axisLen = length(toAxis);
+                    float3 n = (axisLen > epsilon) ? toAxis / axisLen : normalize(-seg);
+                    result = axisPt + n * R;
+                }
             }
         }
     }
@@ -209,6 +411,7 @@ kernel void springBoneCollideSpheres(
     constant SphereCollider* sphereColliders [[buffer(5)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
     device float3* bonePosPrev [[buffer(0)]],
+    constant uint& sweptGroupIndex [[buffer(15)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numSpheres == 0) return;
@@ -220,7 +423,9 @@ kernel void springBoneCollideSpheres(
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
     float3 oldPos = bonePosCurr[id];
-    float3 newPos = collideWithSphereFiltered(oldPos, boneRadius, groupMask,
+    float3 prevForSweep = bonePosPrev[id];
+    float3 newPos = collideWithSphereFiltered(prevForSweep, oldPos, boneRadius, groupMask,
+                                              sweptGroupIndex,
                                               sphereColliders, globalParams.numSpheres);
     bonePosCurr[id] = newPos;
     float3 prevPos = bonePosPrev[id];
@@ -234,6 +439,7 @@ kernel void springBoneCollideCapsules(
     constant CapsuleCollider* capsuleColliders [[buffer(6)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
     device float3* bonePosPrev [[buffer(0)]],
+    constant uint& sweptGroupIndex [[buffer(15)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numCapsules == 0) return;
@@ -242,7 +448,9 @@ kernel void springBoneCollideCapsules(
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
     float3 oldPos = bonePosCurr[id];
-    float3 newPos = collideWithCapsuleFiltered(oldPos, boneRadius, groupMask,
+    float3 prevForSweep = bonePosPrev[id];
+    float3 newPos = collideWithCapsuleFiltered(prevForSweep, oldPos, boneRadius, groupMask,
+                                               sweptGroupIndex,
                                                capsuleColliders, globalParams.numCapsules);
     bonePosCurr[id] = newPos;
     float3 prevPos = bonePosPrev[id];
