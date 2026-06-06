@@ -169,8 +169,56 @@ float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadi
     return result;
 }
 
-// Capsule collision function with group filtering
-float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupMask,
+// Closest point on the segment [a,b] to point p.
+static float3 closestPointOnSegment(float3 p, float3 a, float3 b) {
+    float3 ab = b - a;
+    float abLenSq = dot(ab, ab);
+    float t = (abLenSq > 1e-12) ? dot(p - a, ab) / abLenSq : 0.0;
+    return a + clamp(t, 0.0, 1.0) * ab;
+}
+
+// Swept point-vs-capsule entry distance (#313). Returns the distance along the
+// UNIT direction `rdn` at which the ray `ro + s·rdn` first enters the capsule
+// (axis pa..pb, radius r), or -1 if it never does. A swept point of radius
+// boneRadius vs a capsule of radius capsuleRadius is a point-vs-capsule test at
+// the inflated radius r = boneRadius + capsuleRadius — i.e. a ray vs a finite
+// cylinder capped by two spheres. Adapted from Inigo Quilez's capsule
+// intersection; `rdn` MUST be unit length so the spherical-cap quadratics (which
+// assume dot(rdn,rdn)=1) are correct.
+static float sweptCapsuleEntryDist(float3 ro, float3 rdn, float3 pa, float3 pb, float r) {
+    float3 ba = pb - pa;
+    float3 oa = ro - pa;
+    float baba = dot(ba, ba);
+    float bard = dot(ba, rdn);
+    float baoa = dot(ba, oa);
+    float rdoa = dot(rdn, oa);
+    float oaoa = dot(oa, oa);
+    float a = baba - bard * bard;
+    float b = baba * rdoa - baoa * bard;
+    float c = baba * oaoa - baoa * baoa - r * r * baba;
+    float h = b * b - a * c;
+    if (h >= 0.0 && a > 1e-9) {
+        float s = (-b - sqrt(h)) / a;
+        float y = baoa + s * bard;
+        if (y > 0.0 && y < baba) return s;       // hit the cylinder body
+        // Otherwise test the spherical cap nearest the hit.
+        float3 oc = (y <= 0.0) ? oa : (ro - pb);
+        float cb = dot(rdn, oc);
+        float cc = dot(oc, oc) - r * r;
+        float ch = cb * cb - cc;
+        if (ch > 0.0) return -cb - sqrt(ch);
+    }
+    return -1.0;
+}
+
+// Capsule collision function with group filtering. Like the sphere kernel, the
+// SYNTHETIC augmented group (#309) additionally gets continuous (swept)
+// collision (#313): when a joint tunnels clean through an outside capsule in one
+// substep (endpoint lands outside), it is clamped to the entry surface. Authored
+// capsules keep the discrete endpoint test — see the CCD-scoping invariant in
+// CLAUDE.md §4 and `collideWithSphereFiltered`.
+float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRadius,
+                                   uint groupMask, uint sweptGroupIndex,
                                    constant CapsuleCollider* capsules, uint numCapsules) {
     float3 result = position;
     const float epsilon = 1e-6;
@@ -181,15 +229,7 @@ float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupM
         // Skip if bone doesn't collide with this group
         if (!(groupMask & (1u << capsule.groupIndex))) continue;
 
-        // Find closest point on capsule segment
-        float3 ab = capsule.p1 - capsule.p0;
-        float ab_length_sq = dot(ab, ab);
-
-        // Add epsilon check to prevent division by zero
-        float t = (ab_length_sq > epsilon) ? dot(result - capsule.p0, ab) / ab_length_sq : 0.0;
-        t = clamp(t, 0.0, 1.0);
-        float3 closestPoint = capsule.p0 + t * ab;
-
+        float3 closestPoint = closestPointOnSegment(result, capsule.p0, capsule.p1);
         float3 toClosest = result - closestPoint;
         float distance = length(toClosest);
 
@@ -200,12 +240,37 @@ float3 collideWithCapsuleFiltered(float3 position, float boneRadius, uint groupM
                 float3 inward = -toClosest / distance;
                 result += inward * penetration;
             }
-        } else {
-            // Outside collision (default).
-            float penetration = capsule.radius + boneRadius - distance;
-            if (penetration > 0.0) {
-                float3 outward = toClosest / max(distance, epsilon);
-                result += outward * penetration;
+            continue;
+        }
+
+        // Outside collision (default). Inflated radius = capsule + bone.
+        float R = capsule.radius + boneRadius;
+
+        if (distance < R) {
+            // Endpoint rests INSIDE: discrete push-out along the endpoint
+            // normal. Identical to the pre-CCD behaviour (sliding preserved).
+            float penetration = R - distance;
+            float3 outward = toClosest / max(distance, epsilon);
+            result += outward * penetration;
+        } else if (capsule.groupIndex == sweptGroupIndex) {
+            // Endpoint OUTSIDE — discrete sees nothing. Sweep prevPos → result
+            // against the inflated capsule (synthetic group only) and, if it
+            // tunneled through, stop the joint at the entry surface.
+            float3 seg = result - prevPos;
+            float segLen = length(seg);
+            if (segLen > epsilon) {
+                float3 rdn = seg / segLen;
+                float sHit = sweptCapsuleEntryDist(prevPos, rdn, capsule.p0, capsule.p1, R);
+                if (sHit >= 0.0 && sHit <= segLen) {
+                    float3 contact = prevPos + rdn * sHit;
+                    // Re-project to the surface along the axis normal for a clean
+                    // resting position (contact is on the R-surface already).
+                    float3 axisPt = closestPointOnSegment(contact, capsule.p0, capsule.p1);
+                    float3 toAxis = contact - axisPt;
+                    float axisLen = length(toAxis);
+                    float3 n = (axisLen > epsilon) ? toAxis / axisLen : normalize(-seg);
+                    result = axisPt + n * R;
+                }
             }
         }
     }
@@ -302,6 +367,7 @@ kernel void springBoneCollideCapsules(
     constant CapsuleCollider* capsuleColliders [[buffer(6)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
     device float3* bonePosPrev [[buffer(0)]],
+    constant uint& sweptGroupIndex [[buffer(15)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numCapsules == 0) return;
@@ -310,7 +376,9 @@ kernel void springBoneCollideCapsules(
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
     float3 oldPos = bonePosCurr[id];
-    float3 newPos = collideWithCapsuleFiltered(oldPos, boneRadius, groupMask,
+    float3 prevForSweep = bonePosPrev[id];
+    float3 newPos = collideWithCapsuleFiltered(prevForSweep, oldPos, boneRadius, groupMask,
+                                               sweptGroupIndex,
                                                capsuleColliders, globalParams.numCapsules);
     bonePosCurr[id] = newPos;
     float3 prevPos = bonePosPrev[id];

@@ -623,6 +623,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         if globalParams.numCapsules > 0 {
             computeEncoder.setComputePipelineState(collideCapsulesPipeline)
+            // Scope swept (continuous) collision to the synthetic group (#313).
+            var sweptGroupCaps = sweptColliderGroupIndex
+            computeEncoder.setBytes(&sweptGroupCaps, length: MemoryLayout<UInt32>.size, index: 15)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
         }
