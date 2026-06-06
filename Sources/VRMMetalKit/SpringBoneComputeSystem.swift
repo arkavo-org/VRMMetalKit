@@ -70,6 +70,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var rootBoneIndicesBuffer: MTLBuffer?
     private var numRootBonesBuffer: MTLBuffer?
     private var rootBoneIndices: [UInt32] = []
+    /// Collider-group index of the synthetic augmented colliders (issue #309),
+    /// surfaced to the sphere-collision kernel so continuous (swept) collision
+    /// (#313) is scoped to that group ONLY. Authored body colliders keep the
+    /// discrete endpoint test, so stiff cloth chains are not deflected against
+    /// them (see `SpringBoneCollision.metal`). `0xFFFFFFFF` = no synthetic group
+    /// present → swept collision never engages.
+    private var sweptColliderGroupIndex: UInt32 = 0xFFFFFFFF
     private var timeAccumulator: TimeInterval = 0
     private var lastUpdateTime: TimeInterval = 0
 
@@ -607,6 +614,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // This prevents distance constraint from pulling hair back into colliders
         if globalParams.numSpheres > 0 {
             computeEncoder.setComputePipelineState(collideSpheresPipeline)
+            // Scope swept (continuous) collision to the synthetic group (#313).
+            var sweptGroup = sweptColliderGroupIndex
+            computeEncoder.setBytes(&sweptGroup, length: MemoryLayout<UInt32>.size, index: 15)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
         }
@@ -784,6 +794,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
         let hasSyntheticColliders = !springBone.syntheticColliders.isEmpty
         let syntheticGroupBit: UInt32 = hasSyntheticColliders ? (1 << syntheticGroupIndex) : 0
+        // Scope swept (continuous) sphere collision to the synthetic group only
+        // (#313). No synthetic colliders → sentinel that matches no group.
+        sweptColliderGroupIndex = hasSyntheticColliders ? syntheticGroupIndex : 0xFFFFFFFF
 
         // Process spring chains to extract bone parameters
         var boneIndex = 0

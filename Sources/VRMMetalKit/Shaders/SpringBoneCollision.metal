@@ -69,9 +69,21 @@ struct BoneParams {
 // "outside" collision (joint pushed out of the sphere) and the
 // VRMC_springBone_extended_collider "inside" / containment collision
 // (joint pushed back into the sphere when it tries to escape).
-float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMask,
+//
+// CONTINUOUS COLLISION (#313): the joint's per-substep motion is the segment
+// `prevPos → position`. Discrete collision tests only `position` (the substep
+// END); a fast joint whose segment passes clean through an outside sphere lands
+// OUTSIDE on the far side, so the endpoint test finds no penetration and the
+// joint tunnels through. For outside spheres we therefore sweep the segment:
+// if it ENTERS the inflated sphere (prev started outside, earliest entry t* in
+// [0,1]) we clamp the joint to that entry surface. When the segment does not
+// cleanly enter (e.g. prev already inside) we fall back to the discrete
+// endpoint push-out, so shallow resting penetration behaves exactly as before.
+float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadius,
+                                  uint groupMask, uint sweptGroupIndex,
                                   constant SphereCollider* spheres, uint numSpheres) {
     float3 result = position;
+    const float epsilon = 1e-6;
 
     for (uint i = 0; i < numSpheres; i++) {
         SphereCollider sphere = spheres[i];
@@ -79,24 +91,77 @@ float3 collideWithSphereFiltered(float3 position, float boneRadius, uint groupMa
         // Skip if bone doesn't collide with this group
         if (!(groupMask & (1u << sphere.groupIndex))) continue;
 
-        float3 toCenter = result - sphere.center;
-        float distance = length(toCenter);
-
         if (sphere.inside != 0u) {
             // Containment: penetration when joint is escaping the sphere.
             // distance > radius - boneRadius means joint is past the inner
             // safe surface. Push it back toward the centre.
+            float3 toCenter = result - sphere.center;
+            float distance = length(toCenter);
             float penetration = distance + boneRadius - sphere.radius;
-            if (penetration > 0.0 && distance > 1e-6) {
+            if (penetration > 0.0 && distance > epsilon) {
                 float3 inward = -toCenter / distance;  // toward centre
                 result += inward * penetration;
             }
+            continue;
+        }
+
+        // Outside collision (default). Inflated radius = sphere + bone.
+        float R = sphere.radius + boneRadius;
+        float3 toCenter = result - sphere.center;
+        float distance = length(toCenter);
+
+        if (distance < R) {
+            // Endpoint rests INSIDE the sphere: discrete push-out along the
+            // endpoint normal. Identical to the pre-CCD behaviour, so resting
+            // and sliding contact (and the calibrated equilibrium) are
+            // unchanged — the joint still slides tangentially along the
+            // surface instead of being snapped back to its entry point.
+            float penetration = R - distance;
+            float3 outward = toCenter / max(distance, epsilon);
+            result += outward * penetration;
         } else {
-            // Outside collision (default): push joint out of the sphere.
-            float penetration = sphere.radius + boneRadius - distance;
-            if (penetration > 0.0) {
-                float3 outward = toCenter / max(distance, 1e-6);
-                result += outward * penetration;
+            // Endpoint is OUTSIDE — discrete collision would see nothing. Sweep
+            // the segment prevPos → result and, only if it TUNNELED through
+            // (started outside, earliest entry t* ∈ [0,1]), stop the joint at
+            // the entry surface. Solve |prevPos + t·d - C|² = R².
+            //
+            // Scoped (#313): only the SYNTHETIC augmented-collider group gets
+            // continuous collision. Authored body spheres keep the discrete
+            // endpoint test — clamping fast cloth joints against them deflects
+            // stiff chains into adjacent geometry (the arm-swing re-entry
+            // regression). Synthetic colliders exist precisely to stop tunneling,
+            // so swept response is wanted there and nowhere else.
+            float3 d = result - prevPos;
+            float3 m = prevPos - sphere.center;
+            float a = dot(d, d);
+            float c = dot(m, m) - R * R;
+            if (sphere.groupIndex == sweptGroupIndex && a > epsilon && c > 0.0) {
+                // Depth gate: only treat this as a tunnel worth clamping when
+                // the joint CENTRE actually passes through the solid sphere
+                // body (closest approach < sphere.radius), not merely grazes
+                // the bone-inflated shell. A graze falls through to discrete
+                // (a no-op here, endpoint is outside), so fast joints sliding
+                // past nearby colliders are not snapped to the surface — that
+                // spurious snap deflects stiff cloth chains into adjacent
+                // geometry (the arm-swing re-entry regression, #313/#315).
+                float tClose = clamp(-dot(m, d) / a, 0.0, 1.0);
+                float3 closest = prevPos + tClose * d;
+                float distClose = length(closest - sphere.center);
+                if (distClose < sphere.radius) {
+                    float b = 2.0 * dot(m, d);
+                    float disc = b * b - 4.0 * a * c;
+                    if (disc >= 0.0) {
+                        float t = (-b - sqrt(disc)) / (2.0 * a);
+                        if (t >= 0.0 && t <= 1.0) {
+                            float3 contact = prevPos + t * d;
+                            float3 toContact = contact - sphere.center;
+                            float contactLen = length(toContact);
+                            float3 n = (contactLen > epsilon) ? toContact / contactLen
+                                                              : normalize(-d);
+                            result = sphere.center + n * R;  // stop at entry surface
+                        }
+                    }
+                }
             }
         }
     }
@@ -209,6 +274,7 @@ kernel void springBoneCollideSpheres(
     constant SphereCollider* sphereColliders [[buffer(5)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
     device float3* bonePosPrev [[buffer(0)]],
+    constant uint& sweptGroupIndex [[buffer(15)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numSpheres == 0) return;
@@ -220,7 +286,9 @@ kernel void springBoneCollideSpheres(
     float boneRadius = boneParams[id].radius;
     uint groupMask = boneParams[id].colliderGroupMask;
     float3 oldPos = bonePosCurr[id];
-    float3 newPos = collideWithSphereFiltered(oldPos, boneRadius, groupMask,
+    float3 prevForSweep = bonePosPrev[id];
+    float3 newPos = collideWithSphereFiltered(prevForSweep, oldPos, boneRadius, groupMask,
+                                              sweptGroupIndex,
                                               sphereColliders, globalParams.numSpheres);
     bonePosCurr[id] = newPos;
     float3 prevPos = bonePosPrev[id];
