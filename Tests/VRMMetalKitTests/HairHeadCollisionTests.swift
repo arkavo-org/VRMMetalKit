@@ -144,15 +144,15 @@ final class HairHeadCollisionTests: XCTestCase {
 
     /// During Walk.vrma playback, every non-root hair joint should stay outside
     /// the head collider (within a 5 mm margin) on at least 99% of frame samples.
-    /// `synchronousSpringBone = true` eliminates the 1-frame physics snapshot lag
-    /// (see #267); it reduces the rate from ~2% to ~1.4% but doesn't close it
-    /// fully — the residual comes from `writeBonesToNodes` reconstructing joint
-    /// orientations from simulated world positions, then forward kinematics
-    /// re-deriving world positions with small per-joint error that occasionally
-    /// puts the FK-reconstructed position back inside the collider. Tracked as
-    /// a follow-up; the test stays RED until the reconstruction round-trip is
-    /// addressed (likely needs the skinning shader to consume `bonePosCurr`
-    /// directly instead of going through node rotations).
+    ///
+    /// GREEN as of 0.17.0-rc.2 (rate 0.0%). #267's residual — historically ~1.4%
+    /// even with `synchronousSpringBone = true`, attributed to the
+    /// `writeBonesToNodes` position→rotation→FK reconstruction round-trip — was
+    /// closed by the rc.2 collision work: swept (continuous) collision (#313) and
+    /// the post-collision inward-velocity bleed (#315) together keep the hair
+    /// outside the head sphere through the fast head swings that previously
+    /// surfaced the round-trip error. The broader interactive (async) matrix is
+    /// guarded by `testHairHead_asyncMatrix_regressionGuard` below.
     func testHairBonesStayOutsideHeadColliderDuringWalk() async throws {
         let modelPath = resourcesDirectory() + "/AvatarSample_A_1.0.vrm.glb"
         let vrmaPath = resourcesDirectory() + "/VRMA_Locomotion_Pack/Walk.vrma"
@@ -296,5 +296,139 @@ final class HairHeadCollisionTests: XCTestCase {
         // 99% of frame samples. Pre-fix observed: 8.1% penetration rate.
         XCTAssertLessThan(rate, 0.01,
             "Hair penetrates the head collider on \(String(format: "%.1f%%", rate*100)) of samples; expected < 1%. Worst penetration: \(String(format: "%.1f mm", worstPenetration*1000))")
+    }
+
+    /// Measures hair-vs-head-collider penetration over a locomotion clip in the
+    /// INTERACTIVE (async) spring-bone path — the path Muse and live apps use,
+    /// where the 1-frame physics-snapshot lag (#267) is present. Returns the
+    /// fraction of (frame × hair-joint) samples inside the head sphere by > 5 mm.
+    private func measureWalkPenetrationRate(
+        modelFile: String, vrmaFile: String, sync: Bool
+    ) async throws -> Float? {
+        let modelPath = resourcesDirectory() + "/" + modelFile
+        let vrmaPath = resourcesDirectory() + "/VRMA_Locomotion_Pack/" + vrmaFile
+        guard FileManager.default.fileExists(atPath: modelPath),
+              FileManager.default.fileExists(atPath: vrmaPath) else { return nil }
+
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: modelPath), device: device)
+        let clip = try VRMAnimationLoader.loadVRMA(from: URL(fileURLWithPath: vrmaPath), model: model)
+        let player = AnimationPlayer()
+        player.load(clip)
+        player.play()
+
+        var config = RendererConfig()
+        config.sampleCount = 1
+        config.strict = .off
+        config.synchronousSpringBone = sync
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.loadModel(model)
+        renderer.enableSpringBone = true
+        renderer.viewMatrix = matrix_identity_float4x4
+        renderer.projectionMatrix = matrix_identity_float4x4
+
+        guard let headNodeIndex = model.humanoid?.getBoneNode(.head),
+              let headNode = model.nodes[safe: headNodeIndex],
+              let springBone = model.springBone else { return nil }
+        var headColliderOffset = SIMD3<Float>(0, 0, 0)
+        var headColliderRadius: Float = 0
+        for c in springBone.colliders where c.node == headNodeIndex {
+            if case .sphere(let offset, let radius) = c.shape {
+                headColliderOffset = offset; headColliderRadius = radius; break
+            }
+        }
+        guard headColliderRadius > 0 else { return nil }
+
+        var hairJointNodeIndices: [Int] = []
+        for spring in springBone.springs {
+            guard let name = spring.name, name.lowercased().contains("hair") else { continue }
+            for (i, joint) in spring.joints.enumerated() where i > 0 {
+                hairJointNodeIndices.append(joint.node)
+            }
+        }
+        guard !hairJointNodeIndices.isEmpty else { return nil }
+
+        let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: 64, height: 64, mipmapped: false)
+        colorDesc.usage = [.renderTarget, .shaderRead]; colorDesc.storageMode = .private
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float, width: 64, height: 64, mipmapped: false)
+        depthDesc.usage = .renderTarget; depthDesc.storageMode = .private
+        guard let colorTex = device.makeTexture(descriptor: colorDesc),
+              let depthTex = device.makeTexture(descriptor: depthDesc),
+              let queue = device.makeCommandQueue() else { return nil }
+
+        let fps: Float = 30, frameCount = 150
+        let dt: Float = 1.0 / fps
+        let penetrationMargin: Float = 0.005
+        var totalSamples = 0, penetrationSamples = 0
+
+        for _ in 0..<frameCount {
+            player.update(deltaTime: dt, model: model)
+            guard let cb = queue.makeCommandBuffer() else { break }
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = colorTex
+            rpd.colorAttachments[0].loadAction = .clear
+            rpd.colorAttachments[0].storeAction = .store
+            rpd.depthAttachment.texture = depthTex
+            rpd.depthAttachment.loadAction = .clear
+            rpd.depthAttachment.clearDepth = 1.0
+            rpd.depthAttachment.storeAction = .dontCare
+            renderer.drawOffscreenHeadless(
+                to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
+            cb.commit()
+            while cb.status != .completed && cb.status != .error { await Task.yield() }
+
+            let headWorld = headNode.worldMatrix
+            let headRot = simd_float3x3(
+                SIMD3<Float>(headWorld[0][0], headWorld[0][1], headWorld[0][2]),
+                SIMD3<Float>(headWorld[1][0], headWorld[1][1], headWorld[1][2]),
+                SIMD3<Float>(headWorld[2][0], headWorld[2][1], headWorld[2][2]))
+            let headPos = SIMD3<Float>(headWorld[3][0], headWorld[3][1], headWorld[3][2])
+            let colliderCenter = headPos + headRot * headColliderOffset
+
+            for nodeIdx in hairJointNodeIndices {
+                guard let node = model.nodes[safe: nodeIdx] else { continue }
+                let d = simd_length(node.worldPosition - colliderCenter)
+                totalSamples += 1
+                if d < headColliderRadius - penetrationMargin { penetrationSamples += 1 }
+            }
+        }
+        return totalSamples > 0 ? Float(penetrationSamples) / Float(totalSamples) : 0
+    }
+
+    /// Regression guard locking in the rc.2 collision improvement (#313/#315) that
+    /// resolved #267 in the interactive (async) spring-bone path live apps use —
+    /// not just the offline `synchronousSpringBone` path. Each cell must keep
+    /// hair-vs-head penetration under the #267 acceptance bar (< 1%).
+    ///
+    /// Cells are the three highest-signal model×clip combinations measured on
+    /// 0.17.0-rc.2 — the ones that actually exercise the residual 1-frame lag:
+    /// A×Run (deepest transient, ~20 mm 1-frame flicker), A×Jog (highest rate,
+    /// ~0.2%), and U×Walk (the U model's only non-zero cell, ~0.17%). The other
+    /// matrix cells sit at 0%. The 1% bound carries comfortable margin over
+    /// observed while still tripping if the lag regresses toward the ~2–8%
+    /// pre-fix range.
+    ///
+    /// COUNT-CONSTRAINED: each cell loads a fresh VRM, and this class already
+    /// loads two (static + walk). The headless Metal harness aborts (SIGTRAP)
+    /// past ~7 model loads in one process, and CI runs each class in its own
+    /// parallel worker, so the guard is capped at three cells to keep the class
+    /// total at five. Cells skip silently when a fixture is absent.
+    func testHairHead_asyncMatrix_regressionGuard() async throws {
+        let cells = [
+            ("AvatarSample_A_1.0.vrm.glb", "Run.vrma"),
+            ("AvatarSample_A_1.0.vrm.glb", "Jog.vrma"),
+            ("AvatarSample_U_1.0.vrm.glb", "Walk.vrma"),
+        ]
+        var measuredAnyCell = false
+        for (m, c) in cells {
+            guard let rate = try await measureWalkPenetrationRate(
+                modelFile: m, vrmaFile: c, sync: false) else { continue }
+            measuredAnyCell = true
+            print("[#267 guard] async \(m) x \(c): rate=\(String(format: "%.2f%%", rate*100))")
+            XCTAssertLessThan(rate, 0.01,
+                "Async hair→head penetration regressed for \(m) x \(c): \(String(format: "%.2f%%", rate*100)) (expected < 1%, #267).")
+        }
+        try XCTSkipIf(!measuredAnyCell, "No locomotion fixtures available")
     }
 }
