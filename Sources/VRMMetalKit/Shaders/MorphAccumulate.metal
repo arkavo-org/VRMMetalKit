@@ -120,12 +120,3 @@ kernel void morph_accumulate_combined(
         outNrm[vid] = normalize(nrm);
     }
 }
-
-// Debug kernel - copy base to output (for K=0 case)
-kernel void morph_copy_base(
-    device const float3* basePos [[buffer(0)]],
-    device float3* outPos [[buffer(1)]],
-    uint vid [[thread_position_in_grid]]
-) {
-    outPos[vid] = basePos[vid];
-}

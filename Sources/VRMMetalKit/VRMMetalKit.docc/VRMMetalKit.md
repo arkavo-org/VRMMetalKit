@@ -127,7 +127,6 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 
 - ``MToonMaterialUniforms``
 - ``MToonOutlineWidthMode``
-- ``SpriteShader``
 - ``SpriteInstanceCPU``
 - ``SpriteUniformsCPU``
 - ``SpriteQuadMesh``
