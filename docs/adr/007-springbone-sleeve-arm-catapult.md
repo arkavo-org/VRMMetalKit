@@ -1,10 +1,10 @@
 # ADR-007: SpringBone sleeve→arm catapult is a spec-solver-class limitation, not a VMK defect
 
-**Status:** Accepted
+**Status:** Amended 2026-06-06 — the "do nothing" outcome is **superseded for hand/arm colliders** by the Amendment below (#321). The mechanism findings (catapult is a large-timestep instability; substepping is the only monotonic lever) still stand and now justify the fix rather than its deferral.
 
 **Date:** 2026-06-06
 
-**Deciders:** VMK, VRMConformance team
+**Deciders:** VMK, VRMConformance team; amended by product (Arkavo) for #321
 
 **Tags:** physics, springbone, conformance
 
@@ -108,7 +108,45 @@ substepping fix buys quality beyond the reference bar on a winding-down project.
   there is no gap to close), not the bookkeeping of which interim call was wrong —
   but the correction is recorded so the "closed" verdict is not re-trusted blindly.
 
+## Amendment (2026-06-06) — pursue hand/arm colliders for #321
+
+**What changed:** product priority, not the physics. On-device QA of a production
+VRoid avatar (`5824032820619220341`) confirms persistent **hand-poke-through** —
+fingers passing through the chest ribbon, hair, and skirt when the hand contacts
+the body (#321). This is a visible defect on real content; the original decision
+optimized for *conformance cost on a winding-down project*, a weighting that no
+longer holds now that the avatar quality bar is the priority.
+
+**Why the original "do nothing" no longer binds here:**
+
+- The hand-poke-through case is **not** the AvatarSample_U stiff-sleeve *catapult*
+  the ADR analyzed. It is a **slow/deliberate gesture** (hand placed on chest,
+  raised to head), not a fast whip — the large-timestep instability that made arm
+  capsules worse is far weaker in this regime, so a hand/lower-arm collider can
+  help at the production substep rate where the sleeve catapult could not.
+- For the fast-motion residual, the ADR already identified the fix and proved it
+  **monotonic**: raise the synthetic group's substep rate (240 Hz ≤ coarse,
+  480 Hz ≈ eliminated) and run swept CCD (now shipped, #313). We accept the
+  2–4× spring-bone GPU cost for the synthetic group as the price of the fix.
+
+**New decision:** ADR-004's solver stands; this ADR's "do nothing" is **lifted for
+the synthetic-collider augmentation path only**. Proceed to:
+
+1. Extend `SpringBoneColliderAugmentor` to emit bone-derived **hand + lower-arm**
+   colliders (palm sphere + lower-arm→hand capsule), in the reserved synthetic
+   group, gated by the existing `augmentSpringBoneColliders` flag.
+2. Validate against a hand-reachable cloth oracle/pose (net-new test infra,
+   mirroring the #309 leg/head oracle) on a model whose hand contacts cloth.
+3. For the fast-swing residual, gate the synthetic group at a higher substep rate
+   (the proven monotonic lever) behind a quality tier, defaulting conservatively.
+
+The arm/hand colliders remain **additive and authored-collider-safe**; if a model
+or pose still catapults at the production rate, that specific case stays the
+documented solver-class behaviour — but the common slow-gesture poke-through is
+fixed. Tracked as #321.
+
 ## Links
 
 - Refines [ADR-004](004-xpbd-springbone-physics.md)
+- Amended for [#321](https://github.com/arkavo-org/VRMMetalKit/issues/321)
 - Context: issues #309, #312, #313
