@@ -177,6 +177,59 @@ static float3 closestPointOnSegment(float3 p, float3 a, float3 b) {
     return a + clamp(t, 0.0, 1.0) * ab;
 }
 
+// Entry distance along unit `rdn` where ray `ro + s·rdn` first reaches a sphere
+// (center, radius r), or -1 if it never does. `rdn` must be unit length.
+static float raySphereEntryDist(float3 ro, float3 rdn, float3 center, float r) {
+    float3 oc = ro - center;
+    float b = dot(rdn, oc);
+    float c = dot(oc, oc) - r * r;
+    float h = b * b - c;
+    if (h < 0.0) return -1.0;
+    return -b - sqrt(h);  // nearest root (may be negative if the sphere is behind)
+}
+
+// Minimum distance between segments [p1,q1] and [p2,q2]
+// (Ericson, Real-Time Collision Detection §5.1.9). Used as the capsule depth
+// gate: the closest approach of the swept path to the capsule axis.
+static float segmentSegmentDistance(float3 p1, float3 q1, float3 p2, float3 q2) {
+    const float eps = 1e-9;
+    float3 d1 = q1 - p1;
+    float3 d2 = q2 - p2;
+    float3 r = p1 - p2;
+    float a = dot(d1, d1);
+    float e = dot(d2, d2);
+    float f = dot(d2, r);
+    float s, t;
+    if (a <= eps && e <= eps) {
+        return length(p1 - p2);
+    }
+    if (a <= eps) {
+        s = 0.0;
+        t = clamp(f / e, 0.0, 1.0);
+    } else {
+        float c = dot(d1, r);
+        if (e <= eps) {
+            t = 0.0;
+            s = clamp(-c / a, 0.0, 1.0);
+        } else {
+            float b = dot(d1, d2);
+            float denom = a * e - b * b;
+            s = (denom > eps) ? clamp((b * f - c * e) / denom, 0.0, 1.0) : 0.0;
+            t = (b * s + f) / e;
+            if (t < 0.0) {
+                t = 0.0;
+                s = clamp(-c / a, 0.0, 1.0);
+            } else if (t > 1.0) {
+                t = 1.0;
+                s = clamp((b - c) / a, 0.0, 1.0);
+            }
+        }
+    }
+    float3 c1 = p1 + d1 * s;
+    float3 c2 = p2 + d2 * t;
+    return length(c1 - c2);
+}
+
 // Swept point-vs-capsule entry distance (#313). Returns the distance along the
 // UNIT direction `rdn` at which the ray `ro + s·rdn` first enters the capsule
 // (axis pa..pb, radius r), or -1 if it never does. A swept point of radius
@@ -194,10 +247,21 @@ static float sweptCapsuleEntryDist(float3 ro, float3 rdn, float3 pa, float3 pb, 
     float rdoa = dot(rdn, oa);
     float oaoa = dot(oa, oa);
     float a = baba - bard * bard;
+    // Ray (nearly) parallel to the axis: the cylinder-body solve is degenerate
+    // (a → 0), so test the two end-cap spheres directly — otherwise an
+    // axis-aligned joint tunnels straight through a cap undetected.
+    if (a <= 1e-9) {
+        float s0 = raySphereEntryDist(ro, rdn, pa, r);
+        float s1 = raySphereEntryDist(ro, rdn, pb, r);
+        float best = -1.0;
+        if (s0 >= 0.0) best = s0;
+        if (s1 >= 0.0 && (best < 0.0 || s1 < best)) best = s1;
+        return best;
+    }
     float b = baba * rdoa - baoa * bard;
     float c = baba * oaoa - baoa * baoa - r * r * baba;
     float h = b * b - a * c;
-    if (h >= 0.0 && a > 1e-9) {
+    if (h >= 0.0) {
         float s = (-b - sqrt(h)) / a;
         float y = baoa + s * bard;
         if (y > 0.0 && y < baba) return s;       // hit the cylinder body
@@ -258,7 +322,15 @@ float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRad
             // tunneled through, stop the joint at the entry surface.
             float3 seg = result - prevPos;
             float segLen = length(seg);
-            if (segLen > epsilon) {
+            // Depth gate (mirror of the sphere path, CLAUDE.md §4): only clamp
+            // when the joint CENTRE actually passes through the SOLID capsule
+            // body (closest approach of the swept path to the axis <
+            // capsule.radius), not merely grazes the bone-inflated shell. A
+            // spurious snap on a graze deflects stiff cloth chains into adjacent
+            // geometry (the arm-swing re-entry regression, #313/#315).
+            float axisApproach = segmentSegmentDistance(prevPos, result,
+                                                        capsule.p0, capsule.p1);
+            if (segLen > epsilon && axisApproach < capsule.radius) {
                 float3 rdn = seg / segLen;
                 float sHit = sweptCapsuleEntryDist(prevPos, rdn, capsule.p0, capsule.p1, R);
                 if (sHit >= 0.0 && sHit <= segLen) {

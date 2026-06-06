@@ -277,6 +277,51 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         XCTAssertEqual(bone.y, 1.0, accuracy: 1e-5, "Non-colliding path untouched (y).")
     }
 
+    /// Depth gate (mirror of the sphere path): a segment that grazes the
+    /// bone-inflated shell (R = capsule.radius + boneRadius) but whose centre
+    /// never enters the SOLID capsule body must fall through to discrete and be
+    /// left untouched — snapping a graze deflects stiff chains into adjacent
+    /// geometry (the arm-swing re-entry class, #313/#315). The path here is
+    /// perpendicular to the axis (so this isolates the depth gate, not the
+    /// parallel-ray case) with closest approach 0.21 ∈ (radius 0.20, R 0.22).
+    func testCapsuleGrazeOfInflatedShellNotSnapped() throws {
+        let boneRadius: Float = 0.02
+        let capsule = CapsuleCollider(p0: SIMD3<Float>(-0.3, 0, 0),
+                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2)
+        // Perpendicular crossing offset in z so the centre's closest approach to
+        // the axis is 0.21 — inside the inflated shell, outside the solid body.
+        let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, -0.5, 0.21)]
+        let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, 0.5, 0.21)]
+
+        let result = try runCapsuleCollision(prev: prev, curr: curr,
+                                             boneRadius: boneRadius, capsule: capsule)
+
+        let bone = result[1]
+        XCTAssertEqual(bone.y, 0.5, accuracy: 1e-4,
+            "A graze of the inflated shell (centre never pierces the solid capsule) must not be snapped — it falls through to discrete (endpoint outside = no-op).")
+        XCTAssertEqual(bone.z, 0.21, accuracy: 1e-4, "Graze path untouched (z).")
+    }
+
+    /// Parallel-axis tunneling: a joint sweeping ALONG the capsule axis tunnels
+    /// straight through an end cap. The cylinder-body solve is degenerate when the
+    /// ray is parallel to the axis (a ≈ 0); the end-cap fallback must still catch
+    /// it.
+    func testParallelAxisTunnelThroughCapIsCaught() throws {
+        let boneRadius: Float = 0.02
+        let capsule = CapsuleCollider(p0: SIMD3<Float>(-0.3, 0, 0),
+                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2)
+        // Sweep along the axis from beyond +x cap to beyond -x cap.
+        let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0.8, 0, 0)]
+        let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(-0.8, 0, 0)]
+
+        let result = try runCapsuleCollision(prev: prev, curr: curr,
+                                             boneRadius: boneRadius, capsule: capsule)
+
+        let bone = result[1]
+        XCTAssertGreaterThan(bone.x, 0.0,
+            "Axis-parallel tunnel must be caught on the +x entry-cap side; got x=\(bone.x). Without the end-cap fallback the joint tunnels through to -0.8.")
+    }
+
     /// A joint sweeps left→right straight through a sphere in a single substep.
     /// Discrete collision sees only the far-side endpoint (outside the sphere)
     /// and lets it pass; swept collision must stop it at the entry surface.
