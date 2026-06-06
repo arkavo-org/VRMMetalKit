@@ -111,6 +111,12 @@ Errors must implement `LocalizedError`. Messages should be LLM-friendly:
 3.  **Suggestion** for fixing.
 4.  **Link** to VRM spec.
 
+### 4. SpringBone Continuous Collision (CCD) Scoping
+Continuous (swept) collision belongs **only on the synthetic augmented-collider group** (issue #309's reserved group), never on authored colliders. Authored colliders are where stiff cloth chains are measured, and there *deflection* — not tunneling — is the dominant failure mode: clamping a fast joint to a collider surface deflects the chain into adjacent geometry (the sleeve→arm re-entry regression). The synthetic group exists precisely to stop tunneling, so swept response is wanted there and nowhere else.
+*   **Mechanism:** the synthetic group index is threaded to the collision kernels (`buffer(15)`, sentinel `0xFFFFFFFF` = none); the swept branch is gated on `collider.groupIndex == sweptGroupIndex`. Endpoint-inside (resting/sliding) push-out stays discrete on **every** collider, preserving the calibrated equilibrium.
+*   **Location:** `SpringBoneCollision.metal` (swept branch), `SpringBoneComputeSystem.swift` (`sweptColliderGroupIndex`).
+*   This is a structural invariant — apply it to any future shape (capsule/plane) CCD without re-litigating depth-gating on authored colliders.
+
 ## Licensing
 *   **Source Code:** Apache License 2.0.
 *   **Assets/Models:** VRM Platform License 1.0 (check model metadata).
