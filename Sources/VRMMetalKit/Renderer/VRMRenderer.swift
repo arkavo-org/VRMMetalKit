@@ -707,6 +707,28 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // per-frame dictionary allocation. Keys are primitiveIndex.
     private var viewZByIndex: [Int: Float] = [:]
 
+    /// Render-order slot for a NON-face material, from its alpha mode and VRM
+    /// `renderQueue`. Lower sorts (and draws) earlier.
+    ///
+    /// - `0` opaque
+    /// - `1` cutout — alpha-tested MASK in the VRM Cutout band (`renderQueue < 2500`).
+    ///   It zWrites, so the depth buffer resolves its occlusion per pixel, and per
+    ///   the VRM spec it renders BEFORE Transparent overlays. Sorting it early (with
+    ///   opaque/face-skin) means alpha-tested hair (queue 2450) precedes the BLEND
+    ///   eyeline/brow face overlays (queue ~2998), matching the author's
+    ///   `renderQueue`; depth — not draw order — then decides hair-vs-eyelash, which
+    ///   stops the semi-transparent eyelash bleeding through gaps in the bangs (#322).
+    /// - `4` transparent-band MASK (`renderQueue >= 2500`) — kept in the later slot.
+    /// - `7` blend (true transparency)
+    static func nonFaceRenderOrder(alphaMode: String, renderQueue: Int) -> Int {
+        switch alphaMode {
+        case "opaque": return 0
+        case "mask":   return renderQueue < 2500 ? 1 : 4
+        case "blend":  return 7
+        default:       return 0
+        }
+    }
+
     // RENDER ITEM: Structure for sorting and rendering primitives
     private struct RenderItem {
         let node: VRMNode
@@ -1925,20 +1947,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         break
                     }
                 } else {
-                    // OPTIMIZATION: Set renderOrder for non-face materials
+                    // Non-face materials: render-order slot from alpha mode + VRM queue
+                    // (see `nonFaceRenderOrder` — cutout-band MASK sorts early, #322).
+                    item.renderOrder = VRMRenderer.nonFaceRenderOrder(
+                        alphaMode: item.effectiveAlphaMode, renderQueue: materialRenderQueue)
                     switch item.effectiveAlphaMode {
-                    case "opaque":
-                        item.renderOrder = 0  // opaque
-                        opaqueCount += 1
-                    case "mask":
-                        item.renderOrder = 4  // mask
-                        maskCount += 1
-                    case "blend":
-                        item.renderOrder = 7  // blend
-                        blendCount += 1
-                    default:
-                        item.renderOrder = 0  // opaque (default)
-                        opaqueCount += 1
+                    case "mask": maskCount += 1
+                    case "blend": blendCount += 1
+                    default: opaqueCount += 1
                     }
                 }
 
