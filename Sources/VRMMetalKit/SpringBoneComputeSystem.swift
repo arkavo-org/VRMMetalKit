@@ -60,7 +60,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var collideCapsulesPipeline: MTLComputePipelineState?
     private var collidePlanesPipeline: MTLComputePipelineState?
 
-    private var globalParamsBuffer: MTLBuffer?
+    /// Per-frame global params uploaded to the GPU each substep. `internal` (not
+    /// `private`) so tests can inspect the actually-uploaded values (e.g. the
+    /// substep `dtSub`, #316) — this is real GPU state, not a test-only shim.
+    var globalParamsBuffer: MTLBuffer?
     private var animatedRootPositionsBuffer: MTLBuffer?
     /// Holds the previous frame's animated root positions so the kinematic
     /// kernel can write a clean velocity history into `bonePosPrev[root]`
@@ -386,6 +389,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             // Update global params with current time
             var params = globalParams
+            // #316: keep dtSub consistent with the active substep rate. dtSub is
+            // seeded once at load to 1/120; without this, non-ultra quality
+            // presets (60/90/30 Hz) run every dt-scaled term at 1/120 and
+            // under-apply it. Affected (all read globalParams.dtSub): gravity,
+            // wind, inertial force — AND drag (`dragFactor = 1 - drag*dtSub*60`,
+            // SpringBonePredict.metal), so this is a damping/transient error too,
+            // not only an equilibrium shift. The PBD stiffness blend and distance
+            // constraint are dt-independent and unaffected. No-op at ultra
+            // (fixedDeltaTime == 1/120), so the frozen AvatarSample_A regression
+            // trajectory is preserved.
+            params.dtSub = Float(fixedDeltaTime)
             params.windPhase += Float(fixedDeltaTime)
 
             // Decrement settling frames counter (allows bones to settle with gravity before inertia compensation)
