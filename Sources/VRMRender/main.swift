@@ -100,6 +100,8 @@ struct RenderOptions {
     var expressionWeight: Float = 1.0
     var silhouette: Bool = false
     var rimPower: Float = 5.0
+    var gaze: String? = nil
+    var bodyYaw: Float = 0
 }
 
 // MARK: - Errors
@@ -156,6 +158,14 @@ func printUsage() {
                                    with an additive directional rim
         --rim-power <float>        Fresnel exponent for silhouette rim
                                    (typical 4..12, default: 5)
+        --gaze <dir>               Drive eye look-at. <dir> is one of:
+                                   center, left, right, up, down (head-local),
+                                   camera (track the camera), or x,y,z
+                                   (an explicit head-local point)
+        --body-yaw <deg>           Rotate the whole avatar around Y by <deg>,
+                                   turning the head away from world-forward.
+                                   Combine with --gaze camera to verify eyes
+                                   track correctly on a turned head.
         --list-debug               List all debug modes
         --help                     Show this help message
     
@@ -257,6 +267,16 @@ func parseArguments() -> RenderOptions? {
             i += 1
             if i < args.count, let val = Float(args[i]) {
                 options.rimPower = max(0, val)
+            }
+        case "--gaze":
+            i += 1
+            if i < args.count {
+                options.gaze = args[i]
+            }
+        case "--body-yaw":
+            i += 1
+            if i < args.count, let val = Float(args[i]) {
+                options.bodyYaw = val
             }
         default:
             if !arg.hasPrefix("-") {
@@ -399,6 +419,54 @@ struct VRMRenderCLI {
                     print("  ⚠️ Unknown expression: \(expressionName)")
                     print("     Available: happy, angry, sad, relaxed, surprised, aa, ih, ou, ee, oh, blink, neutral")
                 }
+            }
+
+            // Turn the whole avatar around Y so the head no longer faces
+            // world-forward. This is what exercises the head-local look-at path:
+            // with a turned head, a world-space gaze must be resolved into the
+            // head's frame or the eyes point off by the body yaw.
+            if options.bodyYaw != 0 {
+                let yawRad = options.bodyYaw * .pi / 180.0
+                let yawQuat = simd_quatf(angle: yawRad, axis: SIMD3<Float>(0, 1, 0))
+                for node in model.nodes where node.parent == nil {
+                    node.rotation = yawQuat * node.rotation
+                    node.updateLocalMatrix()
+                }
+                model.updateNodeTransforms()
+                print("  ✓ Body yaw: \(options.bodyYaw)°")
+            }
+
+            // Drive the eye look-at. The renderer's draw loop calls
+            // lookAtController.update() each frame from controller.target and
+            // refreshes cameraPosition from the view matrix, so we only need to
+            // set the target here. Snap smoothing/saccades off for a static frame.
+            if let gaze = options.gaze, let lookAt = renderer.lookAtController {
+                lookAt.smoothing = 0
+                lookAt.saccadeEnabled = false
+                lookAt.enabled = true
+                switch gaze.lowercased() {
+                case "center", "forward":
+                    lookAt.target = .forward
+                case "left":
+                    lookAt.target = .headLocalPoint(SIMD3<Float>(-0.6, 0, 1))
+                case "right":
+                    lookAt.target = .headLocalPoint(SIMD3<Float>(0.6, 0, 1))
+                case "up":
+                    lookAt.target = .headLocalPoint(SIMD3<Float>(0, 0.6, 1))
+                case "down":
+                    lookAt.target = .headLocalPoint(SIMD3<Float>(0, -0.6, 1))
+                case "camera":
+                    lookAt.target = .camera
+                default:
+                    let parts = gaze.split(separator: ",").compactMap { Float($0) }
+                    if parts.count == 3 {
+                        lookAt.target = .headLocalPoint(SIMD3<Float>(parts[0], parts[1], parts[2]))
+                    } else {
+                        print("  ⚠️ Unrecognized --gaze '\(gaze)'; using center")
+                        lookAt.target = .forward
+                    }
+                }
+                print("  ✓ Gaze: \(gaze) (mode: \(lookAt.mode))")
             }
 
             // Set up camera matrices
