@@ -314,7 +314,6 @@ if rotationDiff > 0.1 {  // ~5.7 degrees
 
 | Limitation | Impact | Workaround |
 |------------|--------|------------|
-| `lookAt` in VRMA | Not implemented | Use runtime LookAt controller |
 | Multiple animations per file | First animation only | Split into separate files |
 | leftEye/rightEye animation | Prohibited by spec | N/A - spec compliance |
 
@@ -328,7 +327,7 @@ if rotationDiff > 0.1 {  // ~5.7 degrees
 |-------------|--------|-------|
 | Humanoid bone animation | ✅ Complete | Full retargeting support |
 | Expression animation | ✅ Complete | Preset + custom |
-| LookAt animation | ⚠️ Not implemented | Runtime controller available |
+| LookAt animation | ✅ Complete | Parses translation- and rotation-channel lookAt from `VRMC_vrm_animation` (#286) |
 | Translation limits (hips only) | ✅ Enforced | Other bones ignore translation |
 | Scale animation | ✅ Supported | With retargeting |
 
