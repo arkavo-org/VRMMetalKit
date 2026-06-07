@@ -74,8 +74,12 @@ public enum SpringBoneColliderAugmentor {
         public var armRadiusFractionOfLength: Float = 0.20
         /// Hand SPHERE radius as a fraction of the lower-arm→hand length. The
         /// sphere caps the palm so a hand placed on the chest/hair pushes cloth
-        /// out instead of the fingers interpenetrating it (#321).
-        public var handSphereRadiusFraction: Float = 0.55
+        /// out instead of the fingers interpenetrating it (#321). Tuned down from
+        /// 0.55 → 0.40 per QA: 0.55 read as an "invisible forcefield" — hair/cloth
+        /// deflected with a visible air gap before the hand made contact. 0.40
+        /// hugs the palm so the interaction reads tactile while still keeping the
+        /// fingers/palm out of the mesh.
+        public var handSphereRadiusFraction: Float = 0.40
         /// Hand sphere center placement toward the fingers as a fraction of the
         /// lower-arm→hand length, expressed in the hand-bone-local +direction of
         /// the lower-arm→hand axis (so it rides over the palm, not the wrist).
