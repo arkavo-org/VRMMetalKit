@@ -647,6 +647,16 @@ public class VRMLookAtController {
     /// (e.g. when retargeting from a manually authored pose) instead of
     /// being applied to the model directly. No-op in expression mode or
     /// when the model's `lookAt` block is missing.
+    /// Eye bone's bind-pose rotation, or identity if the index is missing or no
+    /// longer fits the current model's node array. Bounds-checked to match
+    /// ``applyToBones`` so a stale index skips rather than traps.
+    private func eyeRestRotation(_ index: Int?) -> simd_quatf {
+        guard let index, let model, index < model.nodes.count else {
+            return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        }
+        return model.nodes[index].initialRotation
+    }
+
     public func applyToAnimationState(_ animationState: VRMAnimationState) {
         guard mode == .bone, let lookAt = lookAtData else { return }
 
@@ -654,10 +664,10 @@ public class VRMLookAtController {
         // absolutely (no rest compose), so bake the eye bone's rest rotation in
         // here — same composition as `applyToBones`. Without it, VRoid-style
         // mirrored eye rests are discarded and the eyes go wall-eyed.
-        let leftRest = leftEyeBoneIndex.flatMap { model?.nodes[$0].initialRotation }
-            ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        let rightRest = rightEyeBoneIndex.flatMap { model?.nodes[$0].initialRotation }
-            ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        // Bounds-guard the index like `applyToBones` does (line 500/524): a
+        // stale eye-bone index from a swapped/rebuilt model must skip, not trap.
+        let leftRest = eyeRestRotation(leftEyeBoneIndex)
+        let rightRest = eyeRestRotation(rightEyeBoneIndex)
 
         // Left eye: yaw > 0 (right) is inner (toward nose), yaw < 0 (left) is outer
         if leftEyeBoneIndex != nil {
