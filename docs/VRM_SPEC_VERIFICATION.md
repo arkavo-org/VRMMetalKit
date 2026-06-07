@@ -327,7 +327,7 @@ VRM 0.0 stores spring bone data in `secondaryAnimation` instead of the `VRMC_spr
 | `specVersion` | ✅ Checked | **PASS** |
 | `humanoid` | ✅ Full support with retargeting | **PASS** |
 | `expressions` | ✅ Preset and custom | **PASS** |
-| `lookAt` | ⚠️ Partial (noted in code) | **PENDING** |
+| `lookAt` | ✅ `VRMAnimationLoader` parses translation + rotation channels into `lookAtTargetSampler` (#165, #286) | **PASS** |
 
 ### 7.2 Humanoid Animation
 
@@ -378,11 +378,9 @@ VRM 0.0 stores spring bone data in `secondaryAnimation` instead of the `VRMC_spr
 
 | Feature | Specification | Priority | Notes |
 |---------|---------------|----------|-------|
-| `lookAt` in VRMA (animation channels) | VRMC_vrm_animation | Medium | `VRMLookAtController` exists for runtime gaze targeting, but `VRMAnimationLoader` does not parse the lookAt channel. Tracking issue filed. |
-| `VRMC_node_constraint` aim + rotation | VRM 1.0 | Low | `roll` constraint (twist bones) is fully implemented; `aim` and `rotation` constraints are parsed but `solve()` no-ops both. Tracking issue filed. |
-| MToon `giEqualizationFactor` spec compliance | MToon 1.0 | Low (artistic mix proxy in place) | See `docs/MTOON_GI_SPEC.md`. Current shader is a non-spec lit/shade mix; spec implementation requires IBL/SH plumbing. |
+| MToon `giEqualizationFactor` spec compliance | MToon 1.0 | Low (artistic mix proxy in place) | See `docs/MTOON_GI_SPEC.md`. Current shader is a non-spec lit/shade mix; spec implementation requires IBL/SH plumbing. Tracked by #328. |
 
-`renderQueueOffsetNumber` and the `custom` expression preset enum, formerly listed here, are implemented (see §5.2 / §3 respectively).
+`lookAt` in VRMA (#165, #286), `VRMC_node_constraint` aim + rotation solvers (#166), `renderQueueOffsetNumber`, and the `custom` expression preset enum — formerly listed here — are implemented (see §7.1 / §5.2 / §3 respectively).
 
 ### 8.3 Conclusion
 
