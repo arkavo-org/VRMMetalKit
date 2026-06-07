@@ -491,4 +491,28 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
         XCTAssertLessThan(worst, 0.002,
             "Lateral skull sphere must close the temple residual (worst \(worst)m)")
     }
+
+    // MARK: - #321 hand/arm collider guards (ADR-007 amendment)
+
+    /// ADR-007 bounded-catapult guard for the #321 arm/hand colliders. ADR-007
+    /// (amended) documents that a synthetic arm capsule deflects AvatarSample_U's
+    /// stiff 3-joint sleeve a few mm DEEPER than coarse at the production 120 Hz —
+    /// observed ~26 mm augmented vs ~20–24 mm coarse. That small worsening is
+    /// WITHIN the documented solver-class envelope (UniVRM single-steps coarser
+    /// and catapults at least as hard), so we deliberately do NOT require
+    /// augmented ≤ coarse — that comparison is also GPU-nondeterministic because
+    /// the coarse peak jitters run-to-run. This guard instead pins that the
+    /// catapult stays a BOUNDED transient and never runs away into a deep launch;
+    /// the higher-substep lever (reserved, not required) would remove even this
+    /// residual. A regression here means the synthetic capsule is LAUNCHING the
+    /// sleeve, not merely deflecting it.
+    @MainActor func testU_armSwing_armColliders_catapultStaysBounded() async throws {
+        let path = getTestModelPath("AvatarSample_U_1.0.vrm.glb")
+        let (peak, frames, total) = try await measurePeakLimbPenetration(
+            modelPath: path, oracleName: "avatar_u_skin_reference",
+            clip: DynamicPoseFactory.armSwingFast(), augment: true)
+        print("[#321 catapult] U armSwing augmented LIMB peak=\(peak)m frames=\(frames)/\(total)")
+        XCTAssertLessThan(peak, 0.035,
+            "U sleeve catapult with the synthetic arm colliders must stay a bounded transient (peak \(peak)m over \(frames)/\(total) frames). A runaway here means the capsule is launching the stiff sleeve, not just deflecting it — escalate to the ADR-007 substep lever.")
+    }
 }

@@ -67,6 +67,19 @@ public enum SpringBoneColliderAugmentor {
         /// engulfing the face. Matches the authored head sphere, which on
         /// AvatarSample_A centers its skull estimate at +1.0×rHead.
         public var headSkullUpFraction: Float = 1.0
+        /// Lower-arm→hand capsule radius as a fraction of that segment's length.
+        /// Arms are thinner than legs relative to length, so this floor is
+        /// smaller than ``legRadiusFractionOfLength``. Closes hand-poke-through
+        /// against the forearm (#321).
+        public var armRadiusFractionOfLength: Float = 0.20
+        /// Hand SPHERE radius as a fraction of the lower-arm→hand length. The
+        /// sphere caps the palm so a hand placed on the chest/hair pushes cloth
+        /// out instead of the fingers interpenetrating it (#321).
+        public var handSphereRadiusFraction: Float = 0.55
+        /// Hand sphere center placement toward the fingers as a fraction of the
+        /// lower-arm→hand length, expressed in the hand-bone-local +direction of
+        /// the lower-arm→hand axis (so it rides over the palm, not the wrist).
+        public var handSphereForwardFraction: Float = 0.4
         /// Creates default generator ratios.
         public init() {}
     }
@@ -83,6 +96,15 @@ public enum SpringBoneColliderAugmentor {
         LimbSegment(from: .leftLowerLeg, to: .leftFoot),
         LimbSegment(from: .rightUpperLeg, to: .rightLowerLeg),
         LimbSegment(from: .rightLowerLeg, to: .rightFoot),
+    ]
+
+    /// Lower-arm→hand segments for the hand-poke-through fix (#321, per the
+    /// ADR-007 amendment). Appended AFTER the leg+head colliders so the synthetic
+    /// capsules take buffer slots 5+ and never disturb the validated leg (0–3) /
+    /// head (4) ordering the XPBD solver depends on.
+    private static let armHandSegments: [LimbSegment] = [
+        LimbSegment(from: .leftLowerArm, to: .leftHand),
+        LimbSegment(from: .rightLowerArm, to: .rightHand),
     ]
 
     /// Generates additive bone-derived colliders for the given model.
@@ -140,18 +162,32 @@ public enum SpringBoneColliderAugmentor {
 
         var out: [VRMCollider] = []
         for segment in limbSegments {
-            appendLimbCapsule(segment, humanoid: humanoid, model: model, ratios: ratios, into: &out)
+            appendLimbCapsule(segment, humanoid: humanoid, model: model,
+                              radiusFraction: ratios.legRadiusFractionOfLength, into: &out)
         }
         // CRITICAL: the head capsule MUST be appended AFTER the leg capsules so it
         // occupies buffer slot 4 — the XPBD solver applies corrections in
         // buffer-index order and the validated leg result depends on slots 0–3.
         appendHeadCapsule(humanoid: humanoid, model: model, ratios: ratios, into: &out)
+        // Arm/hand capsules occupy capsule-buffer slots 5+ (appended AFTER the
+        // head capsule) so they never disturb the validated leg (0–3) / head (4)
+        // slots. They close the hand-poke-through (#321): a slow hand gesture into
+        // the chest ribbon / hair / skirt now collides with the forearm.
+        for segment in armHandSegments {
+            appendLimbCapsule(segment, humanoid: humanoid, model: model,
+                              radiusFraction: ratios.armRadiusFractionOfLength, into: &out)
+        }
         // The skull SPHERE is a SPHERE, so it lands in the SEPARATE sphere
         // collider buffer (not the capsule buffer). Its position in `out` does
         // NOT affect the capsule buffer order, so the validated leg/head capsule
         // slots are untouched. It gives the head LATERAL coverage the midline
         // brow capsule cannot reach (temple side-bang strands, #309).
         appendHeadSkullSphere(humanoid: humanoid, model: model, ratios: ratios, into: &out)
+        // Hand SPHERES cap the palms (sphere buffer, after the skull sphere) so a
+        // hand placed on the body pushes cloth out instead of the fingers
+        // interpenetrating it (#321). Sphere-buffer order does not affect the
+        // validated capsule slots.
+        appendHandSpheres(humanoid: humanoid, model: model, ratios: ratios, into: &out)
         return out
     }
 
@@ -237,7 +273,7 @@ public enum SpringBoneColliderAugmentor {
         _ segment: LimbSegment,
         humanoid: VRMHumanoid,
         model: VRMModel,
-        ratios: Ratios,
+        radiusFraction: Float,
         into out: inout [VRMCollider]
     ) {
         guard let fromNode = humanoid.getBoneNode(segment.from),
@@ -268,8 +304,46 @@ public enum SpringBoneColliderAugmentor {
         guard abs(simd_determinant(fromRot)) > 1e-6 else { return }
         let tailLocal = simd_inverse(fromRot) * segWorld
 
-        let radius = radiusFor(length: length, fromNode: fromNode, model: model, ratios: ratios)
+        let radius = radiusFor(length: length, fromNode: fromNode, model: model, fraction: radiusFraction)
         out.append(VRMCollider(node: fromNode, shape: .capsule(offset: .zero, radius: radius, tail: tailLocal)))
+    }
+
+    /// Appends one synthetic palm SPHERE per hand (left/right) if the hand and
+    /// its parent lower-arm both resolve. The sphere is centered on the hand node
+    /// and pushed toward the fingers along the lower-arm→hand axis (hand-local),
+    /// sized as a fraction of the lower-arm→hand length so it scales with the
+    /// model. Emitted as `.sphere` (separate sphere buffer), so it never disturbs
+    /// the validated leg/head/arm capsule ordering (#321).
+    private static func appendHandSpheres(
+        humanoid: VRMHumanoid,
+        model: VRMModel,
+        ratios: Ratios,
+        into out: inout [VRMCollider]
+    ) {
+        for (lowerArm, hand) in [(VRMHumanoidBone.leftLowerArm, VRMHumanoidBone.leftHand),
+                                 (VRMHumanoidBone.rightLowerArm, VRMHumanoidBone.rightHand)] {
+            guard let handNode = humanoid.getBoneNode(hand),
+                  handNode >= 0, handNode < model.nodes.count,
+                  let lowerArmNode = humanoid.getBoneNode(lowerArm),
+                  lowerArmNode >= 0, lowerArmNode < model.nodes.count else {
+                continue
+            }
+            let handPos = model.nodes[handNode].worldPosition
+            let lowerArmPos = model.nodes[lowerArmNode].worldPosition
+            let segWorld = handPos - lowerArmPos
+            let length = simd_length(segWorld)
+            guard length > 1e-4 else { continue }
+
+            // Forward (toward fingers) = the lower-arm→hand direction expressed in
+            // the hand bone's local frame, so the offset rides over the palm under
+            // animation once the upload path re-applies the hand's world rotation.
+            let handRot = upperLeft3x3(model.nodes[handNode].worldMatrix)
+            guard abs(simd_determinant(handRot)) > 1e-6 else { continue }
+            let forwardLocal = simd_normalize(simd_inverse(handRot) * segWorld)
+            let offset = forwardLocal * (ratios.handSphereForwardFraction * length)
+            let radius = ratios.handSphereRadiusFraction * length
+            out.append(VRMCollider(node: handNode, shape: .sphere(offset: offset, radius: radius)))
+        }
     }
 
     /// Derives the capsule radius oracle-blind: the larger of the author's scale
@@ -280,9 +354,8 @@ public enum SpringBoneColliderAugmentor {
         length: Float,
         fromNode: Int,
         model: VRMModel,
-        ratios: Ratios
+        fraction: Float
     ) -> Float {
-        let fraction = ratios.legRadiusFractionOfLength
         let fractionFloor = length * fraction
         let authoredHint = maxAuthoredSphereRadius(parentedTo: fromNode, model: model)
         return max(authoredHint, fractionFloor)
