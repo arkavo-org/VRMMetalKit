@@ -184,15 +184,25 @@ public struct BenchmarkComparison: Equatable, Sendable {
     public var passed: Bool { deltas.allSatisfy(\.passed) }
 
     /// Compares the median and p95 of every phase present in BOTH reports.
-    /// Phases in only one report are skipped (and recorded in ``skippedPhases``).
+    /// Phases in only one report are skipped.
+    ///
+    /// - Parameter gatedPhases: When non-nil, restrict gating to these phase
+    ///   names (intersected with the phases common to both reports). Used by the
+    ///   CI regression gate (issue #156) to gate only the stable `render` total
+    ///   and skip the noisy `encode`/`wait`/near-zero `animation` sub-phases.
+    ///   When nil (default), every common phase is gated — the original behavior.
     public static func compare(
         baseline: BenchmarkReport,
         current: BenchmarkReport,
-        threshold: Threshold = .default
+        threshold: Threshold = .default,
+        gatedPhases: Set<String>? = nil
     ) -> BenchmarkComparison {
         var deltas: [StatDelta] = []
-        let commonPhases = Set(baseline.stats.keys).intersection(current.stats.keys).sorted()
-        for phase in commonPhases {
+        var commonPhases = Set(baseline.stats.keys).intersection(current.stats.keys)
+        if let gatedPhases {
+            commonPhases.formIntersection(gatedPhases)
+        }
+        for phase in commonPhases.sorted() {
             guard let base = baseline.stats[phase], let cur = current.stats[phase] else { continue }
             deltas.append(makeDelta(metric: "\(phase).median",
                                     base: base.medianMs, current: cur.medianMs,

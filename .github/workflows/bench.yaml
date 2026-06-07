@@ -1,10 +1,43 @@
 name: Bench
 
-# Manual-trigger only for now (issue #156, phase 1).
-# A follow-up PR will add a pull_request trigger + committed baseline +
-# perf-override label once we have a few real runs to set thresholds against.
+# Performance regression gate (issue #156).
+#
+# SECURITY — self-hosted runner, PUBLIC repo:
+# This workflow runs on a self-hosted macOS runner so the committed absolute
+# frame-time baseline is captured on, and compared against, fixed hardware.
+# Because the repo is public, it MUST NOT trigger on `pull_request`: a fork PR
+# would run arbitrary code (build scripts, the benchmark, SwiftPM plugins) on
+# the runner host. The gate therefore triggers on `push` only — branches the
+# maintainer pushes are trusted code. Fork PRs are still covered by the
+# GitHub-hosted lint/codeql workflows; they just don't get the perf gate.
+#
+# Modes (by event):
+#   • push (any branch) → GATE: benchmark the committed reference model against
+#     the committed .benchmark-baseline.json; fail if render.median/p95 regress
+#     past threshold. Bypass with `[perf-override]` in the commit message.
+#   • push to main → REFRESH (needs: gate): if the gate passed and render.median
+#     moved beyond the noise floor, commit an updated baseline. Gating before
+#     refresh means a regression never silently raises the bar.
+#   • workflow_dispatch → AD-HOC: benchmark an arbitrary URL-fetched model.
+#
+# The reference model AvatarSample_A_1.0.vrm.glb is committed (whitelisted in
+# .gitignore), so no network fetch is needed for the gate.
+#
+# Runner: register a self-hosted runner with labels [self-hosted, macOS]. The
+# host should hold no secrets reachable from the workflow. Until one is
+# registered, push runs queue.
 
 on:
+  push:
+    branches: ["**"]
+    paths:
+      - "Sources/**"
+      - "Package.swift"
+      - "Package.resolved"
+      - "Makefile"
+      - "**/*.metal"
+      - ".benchmark-baseline.json"
+      - ".github/workflows/bench.yaml"
   workflow_dispatch:
     inputs:
       frames:
@@ -32,42 +65,151 @@ on:
         required: false
         default: ""
 
+# Least privilege at the workflow level; the refresh job opts up to write.
 permissions:
   contents: read
 
-# All workflow_dispatch inputs are user-supplied and reach shell commands via
-# env vars only — never via ${{ … }} interpolation inside run: scripts.
-# That keeps untrusted strings from being parsed by the shell.
+# Gate / refresh tunables. Median is the stable headline metric (~4.5 % run-to-
+# run on the reference hardware); p95 is noisier (~15 %), so it gets more head-
+# room. Only the `render` total phase is gated (--gate-phase render); the
+# encode/wait/animation sub-phases are skipped (see issue #156).
+env:
+  BASELINE_FILE: .benchmark-baseline.json
+  REFERENCE_MODEL: AvatarSample_A_1.0.vrm.glb
+  GATE_FRAMES: "500"
+  GATE_WARMUP: "30"
+  GATE_THRESHOLD: "10:20"     # median +10 %, p95 +20 %
+  REFRESH_MIN_MOVE_PCT: "5"   # only re-commit the baseline when median moves > this
 
 jobs:
-  bench:
-    name: Run VRMBenchmark
-    runs-on: macos-latest
+  # --------------------------------------------------------------------------
+  # GATE — every push. Read-only token.
+  # --------------------------------------------------------------------------
+  gate:
+    name: Perf gate
+    if: github.event_name == 'push'
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 30
-
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Select Xcode with Swift 6.2
         run: |
           XCODE=$(ls -d /Applications/Xcode_26* /Applications/Xcode_27* 2>/dev/null | sort -V | tail -1)
           if [ -z "$XCODE" ]; then
-            echo "::error::No Xcode 26 (or newer) found"
-            ls /Applications | grep -i Xcode || true
-            exit 1
+            echo "::error::No Xcode 26 (or newer) found"; exit 1
           fi
           sudo xcode-select -s "$XCODE/Contents/Developer"
+      - run: swift package resolve
+      - run: make shaders
+      - run: swift build -c release --product VRMBenchmark
+      - name: Run gate
+        env:
+          OVERRIDE: ${{ contains(github.event.head_commit.message, '[perf-override]') }}
+        run: |
+          set -uo pipefail
+          if [ ! -f "$BASELINE_FILE" ]; then
+            echo "::warning::$BASELINE_FILE not found on this ref — skipping gate."
+            exit 0
+          fi
+          set +e
+          .build/release/VRMBenchmark "$REFERENCE_MODEL" \
+            --mode render --frames "$GATE_FRAMES" --warmup "$GATE_WARMUP" \
+            --width 1024 --height 1024 --label "push-${GITHUB_SHA:0:12}" \
+            --baseline "$BASELINE_FILE" --gate-phase render --threshold "$GATE_THRESHOLD"
+          code=$?
+          set -e
+          if [ "$OVERRIDE" = "true" ]; then
+            echo "::notice::[perf-override] in commit message — regression (if any) not blocking."
+            exit 0
+          fi
+          if [ "$code" -ne 0 ]; then
+            echo "::error::render frame-time regressed past $GATE_THRESHOLD vs $BASELINE_FILE. If intentional, put [perf-override] in the commit message and refresh the baseline."
+          fi
+          exit $code
 
-      - name: Resolve dependencies
-        run: swift package resolve
+  # --------------------------------------------------------------------------
+  # REFRESH — main only, after the gate passes. Write token scoped to this job.
+  # --------------------------------------------------------------------------
+  refresh:
+    name: Refresh baseline
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: gate
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode with Swift 6.2
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26* /Applications/Xcode_27* 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 26 (or newer) found"; exit 1
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+      - run: swift package resolve
+      - run: make shaders
+      - run: swift build -c release --product VRMBenchmark
+      - name: Measure and refresh
+        run: |
+          set -euo pipefail
+          .build/release/VRMBenchmark "$REFERENCE_MODEL" \
+            --mode render --frames "$GATE_FRAMES" --warmup "$GATE_WARMUP" \
+            --width 1024 --height 1024 --label "main-${GITHUB_SHA:0:12}" \
+            --json .bench-new.json >/dev/null
 
-      - name: Compile shaders
-        run: make shaders
+          # All JSON parsing + arithmetic happens INSIDE python, reading paths
+          # from env and coercing to float (raises on non-numeric) — no value
+          # is ever spliced into shell or python source.
+          DECISION=$(NEW_FILE=.bench-new.json python3 - <<'PY'
+          import json, os, sys
+          new = float(json.load(open(os.environ["NEW_FILE"]))["stats"]["render"]["medianMs"])
+          base_path = os.environ["BASELINE_FILE"]
+          if not os.path.exists(base_path):
+              print("REFRESH"); sys.exit(0)
+          old = float(json.load(open(base_path))["stats"]["render"]["medianMs"])
+          move = abs(new - old) / old * 100.0 if old > 0 else 100.0
+          min_move = float(os.environ["REFRESH_MIN_MOVE_PCT"])
+          sys.stderr.write(f"render.median old={old:.4f}ms new={new:.4f}ms move={move:.2f}%\n")
+          print("REFRESH" if move > min_move else "KEEP")
+          PY
+          )
+          echo "decision: $DECISION"
+          if [ "$DECISION" != "REFRESH" ]; then
+            echo "Within ±${REFRESH_MIN_MOVE_PCT}% noise floor — baseline unchanged."
+            exit 0
+          fi
+          mv .bench-new.json "$BASELINE_FILE"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "$BASELINE_FILE"
+          git commit -m "chore(bench): refresh render baseline [skip ci]"
+          git push
 
-      - name: Build VRMBenchmark (release)
-        run: swift build -c release --product VRMBenchmark
-
+  # --------------------------------------------------------------------------
+  # AD-HOC — manual benchmark of an arbitrary URL model. Read-only token.
+  # --------------------------------------------------------------------------
+  adhoc:
+    name: Ad-hoc benchmark
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode with Swift 6.2
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26* /Applications/Xcode_27* 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 26 (or newer) found"; exit 1
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+      - run: swift package resolve
+      - run: make shaders
+      - run: swift build -c release --product VRMBenchmark
       - name: Fetch sample VRM
         id: fetch
         env:
@@ -77,17 +219,15 @@ jobs:
           set -euo pipefail
           mkdir -p .bench-assets
           if [ -z "$VRM_URL" ]; then
-            echo "::warning::No vrm_url input — skipping the run. Re-trigger with a vrm_url to collect a sample."
+            echo "::warning::No vrm_url input — skipping the run."
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # curl handles the URL itself; we do not interpolate it into shell.
           curl -fsSL --max-time 120 "$VRM_URL" -o .bench-assets/sample.vrm
           if [ -n "$VRMA_URL" ]; then
             curl -fsSL --max-time 120 "$VRMA_URL" -o .bench-assets/sample.vrma
           fi
           ls -lh .bench-assets/
-
       - name: Run benchmark
         if: steps.fetch.outputs.skip != 'true'
         env:
@@ -99,24 +239,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .bench-out
-          # Derive label from input or fall back to "ci-<sha>". Quoting via
-          # env-var indirection avoids shell parsing of user input.
-          if [ -n "$BENCH_LABEL_INPUT" ]; then
-            LABEL="$BENCH_LABEL_INPUT"
-          else
-            LABEL="ci-$BENCH_SHA"
-          fi
-          ARGS=()
-          ARGS+=(--mode "$BENCH_MODE")
-          ARGS+=(--frames "$BENCH_FRAMES")
-          ARGS+=(--warmup "$BENCH_WARMUP")
-          ARGS+=(--label "$LABEL")
-          ARGS+=(--json .bench-out/benchmark.json)
-          if [ -f .bench-assets/sample.vrma ]; then
-            ARGS+=(--vrma .bench-assets/sample.vrma)
-          fi
+          if [ -n "$BENCH_LABEL_INPUT" ]; then LABEL="$BENCH_LABEL_INPUT"; else LABEL="ci-$BENCH_SHA"; fi
+          ARGS=(--mode "$BENCH_MODE" --frames "$BENCH_FRAMES" --warmup "$BENCH_WARMUP" --label "$LABEL" --json .bench-out/benchmark.json)
+          if [ -f .bench-assets/sample.vrma ]; then ARGS+=(--vrma .bench-assets/sample.vrma); fi
           .build/release/VRMBenchmark .bench-assets/sample.vrm "${ARGS[@]}"
-
       - name: Upload benchmark report
         if: steps.fetch.outputs.skip != 'true'
         uses: actions/upload-artifact@v4

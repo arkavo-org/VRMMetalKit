@@ -173,6 +173,43 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertTrue(comparison.passed)
     }
 
+    // MARK: - Comparator: phase-restricted gating (issue #156 CI gate)
+
+    func testGatedPhasesRestrictsComparisonToNamedPhases() {
+        // encode regresses +50 % (noisy sub-phase), render is flat.
+        // Gating only "render" must PASS despite the encode blow-up.
+        let base    = makeReport(label: "base",    render: (1.5, 3.0), encode: (1.0, 2.0))
+        let current = makeReport(label: "current", render: (1.5, 3.0), encode: (1.5, 3.0))
+
+        // Sanity: gating everything (default) FAILS because encode regressed.
+        XCTAssertFalse(BenchmarkComparison.compare(baseline: base, current: current).passed)
+
+        // Restricting to render only → just render.{median,p95} are gated.
+        let renderOnly = BenchmarkComparison.compare(
+            baseline: base, current: current, gatedPhases: ["render"])
+        XCTAssertTrue(renderOnly.passed)
+        XCTAssertEqual(renderOnly.deltas.count, 2)
+        XCTAssertTrue(renderOnly.deltas.allSatisfy { $0.metricName.hasPrefix("render.") })
+    }
+
+    func testGatedPhasesNilGatesAllCommonPhases() {
+        let base    = makeReport(label: "base",    render: (1.5, 3.0), encode: (1.0, 2.0))
+        let current = makeReport(label: "current", render: (1.5, 3.0), encode: (1.0, 2.0))
+        // nil (default) keeps the existing behavior: every common phase gated.
+        let all = BenchmarkComparison.compare(baseline: base, current: current, gatedPhases: nil)
+        XCTAssertEqual(all.deltas.count, 4)
+    }
+
+    func testGatedPhasesUnknownNameGatesNothing() {
+        let base    = makeReport(label: "base",    render: (1.5, 3.0), encode: (1.0, 2.0))
+        let current = makeReport(label: "current", render: (9.9, 9.9), encode: (9.9, 9.9))
+        // A phase name absent from both reports → no metrics gated → vacuously passes.
+        let none = BenchmarkComparison.compare(
+            baseline: base, current: current, gatedPhases: ["does-not-exist"])
+        XCTAssertTrue(none.passed)
+        XCTAssertTrue(none.deltas.isEmpty)
+    }
+
     func testZeroBaselineDoesNotDivideByZero() {
         // A baseline median of 0 ms (degenerate) should not crash the comparator.
         let base = BenchmarkReport(

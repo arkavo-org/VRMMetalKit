@@ -46,6 +46,7 @@ struct BenchmarkOptions {
     var baselinePath: String? = nil          // --baseline FILE
     var thresholdMedianPct: Double = 10.0    // --threshold MEDIAN:P95
     var thresholdP95Pct: Double = 15.0
+    var gatePhases: Set<String>? = nil       // --gate-phase NAME (repeatable/comma-sep); nil = gate all phases
 }
 
 func usage() {
@@ -85,6 +86,10 @@ func usage() {
                        metric regresses past --threshold.
       --threshold M:P  Regression thresholds as "MEDIAN:P95" percent
                        (default 10:15 → median +10 %, p95 +15 %).
+      --gate-phase N   Restrict --baseline gating to phase N (repeatable or
+                       comma-separated, e.g. "render"). Default gates every
+                       phase; the CI gate uses "render" to skip the noisy
+                       encode/wait and near-zero animation sub-phases.
 
     Recommended invocation:
       swift run -c release VRMBenchmark <vrm-path> --vrma <vrma-path> --frames 500
@@ -187,6 +192,12 @@ func parseArguments() -> BenchmarkOptions? {
             }
             opts.thresholdMedianPct = m
             opts.thresholdP95Pct = p
+        case "--gate-phase":
+            guard let v = nextValue(for: a) else { return nil }
+            // Accept comma-separated values and/or repeated flags.
+            let names = v.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
+                         .filter { !$0.isEmpty }
+            opts.gatePhases = (opts.gatePhases ?? []).union(names)
         default:
             if opts.inputPath.isEmpty && !a.hasPrefix("--") {
                 opts.inputPath = a
@@ -379,7 +390,8 @@ private func finalizeReport(opts: BenchmarkOptions, report: BenchmarkReport) -> 
             medianPercent: opts.thresholdMedianPct,
             p95Percent: opts.thresholdP95Pct)
         let comparison = BenchmarkComparison.compare(
-            baseline: baseline, current: report, threshold: threshold)
+            baseline: baseline, current: report, threshold: threshold,
+            gatedPhases: opts.gatePhases)
         print("\nBaseline comparison (\(basePath))")
         print(comparison.renderTable())
         if comparison.passed {

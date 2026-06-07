@@ -1,0 +1,65 @@
+{
+  "config" : {
+    "height" : 1024,
+    "lighting" : "standard",
+    "loading" : "default",
+    "mode" : "render",
+    "sampleCount" : 1,
+    "springBoneQuality" : "ultra",
+    "width" : 1024
+  },
+  "input" : {
+    "frames" : 500,
+    "vrm" : "AvatarSample_A_1.0.vrm.glb",
+    "warmup" : 30
+  },
+  "label" : "ci-baseline",
+  "schemaVersion" : 1,
+  "stats" : {
+    "animation" : {
+      "count" : 500,
+      "maxMs" : 4.1676685214042664e-05,
+      "meanMs" : 9.499606676399708e-06,
+      "medianMs" : 0,
+      "minMs" : 0,
+      "p95Ms" : 4.1676685214042664e-05,
+      "p99Ms" : 4.1676685214042664e-05,
+      "stddevMs" : 1.748022180776577e-05
+    },
+    "encode" : {
+      "count" : 500,
+      "maxMs" : 0.3299583331681788,
+      "meanMs" : 0.21439650119282305,
+      "medianMs" : 0.20558334654197097,
+      "minMs" : 0.18720829393714666,
+      "p95Ms" : 0.2552916994318366,
+      "p99Ms" : 0.27641665656119585,
+      "stddevMs" : 0.023452531229164325
+    },
+    "render" : {
+      "count" : 500,
+      "maxMs" : 0.7300833240151405,
+      "meanMs" : 0.5273938343161717,
+      "medianMs" : 0.5250416579656303,
+      "minMs" : 0.4528750432655215,
+      "p95Ms" : 0.6405416643247008,
+      "p99Ms" : 0.6715416675433517,
+      "stddevMs" : 0.045933004981669315
+    },
+    "wait" : {
+      "count" : 500,
+      "maxMs" : 0.4766250494867563,
+      "meanMs" : 0.31293558154720813,
+      "medianMs" : 0.30479166889563203,
+      "minMs" : 0.255583378020674,
+      "p95Ms" : 0.4329583025537431,
+      "p99Ms" : 0.4567500436678529,
+      "stddevMs" : 0.04309844512528688
+    }
+  },
+  "system" : {
+    "host" : "pauls-mac-studio-128.local",
+    "os" : "macOS"
+  },
+  "timestamp" : "2026-06-07T19:20:00Z"
+}
