@@ -510,7 +510,13 @@ public class VRMLookAtController {
 
             let pitchQuat = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0])
             let yawQuat = simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
-            node.rotation = pitchQuat * yawQuat
+            // Compose the gaze deviation on top of the eye bone's authored rest
+            // rotation (the bind-pose baseline the eyeball mesh is skinned to).
+            // Overwriting with the bare gaze quaternion discards rest, which on
+            // VRoid-style rigs (large mirrored outward eye rest) snaps the eyes
+            // wall-eyed at center; pre-multiplying makes the rest cancel in the
+            // skinning delta so both eyes track in parallel.
+            node.rotation = pitchQuat * yawQuat * node.initialRotation
 
             if debugFrameCount % 60 == 0 {
                 vrmLog("[LookAt BONE] Left eye node \(leftIndex) yaw=\(mappedYawDeg)° pitch=\(mappedPitchDeg)°")
@@ -534,7 +540,7 @@ public class VRMLookAtController {
 
             let pitchQuat = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0])
             let yawQuat = simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
-            node.rotation = pitchQuat * yawQuat
+            node.rotation = pitchQuat * yawQuat * node.initialRotation
 
             if debugFrameCount % 60 == 0 {
                 vrmLog("[LookAt BONE] Right eye node \(rightIndex) yaw=\(mappedYawDeg)° pitch=\(mappedPitchDeg)°")
@@ -644,6 +650,15 @@ public class VRMLookAtController {
     public func applyToAnimationState(_ animationState: VRMAnimationState) {
         guard mode == .bone, let lookAt = lookAtData else { return }
 
+        // `VRMAnimationState.applyToModel` stamps these rotations onto the nodes
+        // absolutely (no rest compose), so bake the eye bone's rest rotation in
+        // here — same composition as `applyToBones`. Without it, VRoid-style
+        // mirrored eye rests are discarded and the eyes go wall-eyed.
+        let leftRest = leftEyeBoneIndex.flatMap { model?.nodes[$0].initialRotation }
+            ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        let rightRest = rightEyeBoneIndex.flatMap { model?.nodes[$0].initialRotation }
+            ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+
         // Left eye: yaw > 0 (right) is inner (toward nose), yaw < 0 (left) is outer
         if leftEyeBoneIndex != nil {
             let horizontalMap = currentYaw > 0 ? lookAt.rangeMapHorizontalInner : lookAt.rangeMapHorizontalOuter
@@ -652,7 +667,7 @@ public class VRMLookAtController {
             let mappedPitchRad = VRMLookAtController.rangeMapOutput(currentPitch, map: verticalMap) * (.pi / 180.0)
             let eyeRotation = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0]) * simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
             var transform = animationState.bones[.leftEye] ?? VRMAnimationState.BoneTransform()
-            transform.rotation = eyeRotation
+            transform.rotation = eyeRotation * leftRest
             animationState.bones[.leftEye] = transform
         }
 
@@ -664,7 +679,7 @@ public class VRMLookAtController {
             let mappedPitchRad = VRMLookAtController.rangeMapOutput(currentPitch, map: verticalMap) * (.pi / 180.0)
             let eyeRotation = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0]) * simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
             var transform = animationState.bones[.rightEye] ?? VRMAnimationState.BoneTransform()
-            transform.rotation = eyeRotation
+            transform.rotation = eyeRotation * rightRest
             animationState.bones[.rightEye] = transform
         }
     }
