@@ -45,10 +45,10 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
                                             options: VRMLoadingOptions(augmentSpringBoneColliders: true))
         // Four end-to-end leg capsules + one forward head/brow capsule + one
-        // lateral skull SPHERE. Arm capsules were dropped pending CCD/substep
-        // work (see SpringBoneColliderAugmentor).
+        // lateral skull SPHERE, PLUS (since #321, per the ADR-007 amendment) two
+        // lower-arm→hand capsules and two palm spheres for the hand-poke-through.
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 6)
+        XCTAssertEqual(synthetic.count, 10)
         var capsuleCount = 0
         var sphereCount = 0
         for collider in synthetic {
@@ -60,11 +60,11 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
                 sphereCount += 1
                 XCTAssertTrue(radius.isFinite && radius > 0, "Sphere radius must be finite and positive")
             default:
-                return XCTFail("Synthetic colliders must be capsules or the skull sphere")
+                return XCTFail("Synthetic colliders must be capsules or spheres")
             }
         }
-        XCTAssertEqual(capsuleCount, 5, "Expect 4 leg + 1 brow capsules")
-        XCTAssertEqual(sphereCount, 1, "Expect 1 lateral skull sphere")
+        XCTAssertEqual(capsuleCount, 7, "Expect 4 leg + 1 brow + 2 lower-arm→hand capsules")
+        XCTAssertEqual(sphereCount, 3, "Expect 1 lateral skull + 2 palm spheres")
     }
 
     /// A bone with a singular (zero-scale) world matrix must be SKIPPED, not emit
@@ -114,7 +114,8 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let headNode = humanoid.getBoneNode(.head) else { return XCTFail("A must rig a head") }
 
         let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
-        XCTAssertEqual(synthetic.count, 6, "A should yield 4 leg capsules + 1 head capsule + 1 skull sphere")
+        XCTAssertEqual(synthetic.count, 10,
+            "A: 4 leg + 1 brow + 2 lower-arm→hand capsules; 1 skull + 2 palm spheres")
 
         // The brow capsule (the head-node CAPSULE) is appended AFTER the legs.
         // The skull sphere follows it but is a SPHERE in a separate buffer, so the
@@ -140,10 +141,13 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
 
         // The lateral skull SPHERE: appended after the brow capsule, on the head
         // node, sized/placed oracle-blind as fractions of rHead. Catches lateral
-        // temple strands the midline brow capsule cannot reach (#309).
-        guard let skull = synthetic.last, skull.node == headNode,
-              case let .sphere(sOffset, sRadius) = skull.shape else {
-            return XCTFail("Last synthetic collider must be the head skull sphere")
+        // temple strands the midline brow capsule cannot reach (#309). It is the
+        // sphere on the HEAD node (the palm spheres that follow it sit on the
+        // hand nodes), so identify it by node + shape rather than position.
+        guard let skull = synthetic.first(where: {
+                  if case .sphere = $0.shape { return $0.node == headNode } else { return false }
+              }), case let .sphere(sOffset, sRadius) = skull.shape else {
+            return XCTFail("Must emit a head skull sphere on the head node")
         }
         // Recover rHead from the brow capsule radius (= 0.50 * rHead) to validate
         // the sphere's ratios independent of the oracle.
@@ -177,17 +181,19 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let humanoid = model.humanoid else { return XCTFail("U must have a humanoid") }
 
         let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
-        // 4 leg capsules + 1 forward head/brow capsule (Task 8). The leg slots
-        // (0–3) remain first; the head capsule is appended last.
+        // Capsule-buffer order: legs (0–3), head/brow (4), lower-arm→hand (5–6).
+        // The leg slots (0–3) and head slot (4) must stay put — the arm capsules
+        // are appended after them (#321) and never disturb the validated order.
         let legBoneNodes = Set([
             humanoid.getBoneNode(.leftUpperLeg), humanoid.getBoneNode(.leftLowerLeg),
             humanoid.getBoneNode(.rightUpperLeg), humanoid.getBoneNode(.rightLowerLeg),
         ].compactMap { $0 })
         let legCapsules = synthetic.filter { legBoneNodes.contains($0.node) }
         XCTAssertEqual(legCapsules.count, 4, "U should yield 4 leg capsules")
-        if let headNode = humanoid.getBoneNode(.head) {
-            XCTAssertEqual(synthetic.last?.node, headNode,
-                "Head capsule must be appended AFTER the leg capsules (slot 4)")
+        let capsules = synthetic.filter { if case .capsule = $0.shape { return true } else { return false } }
+        if let headNode = humanoid.getBoneNode(.head), capsules.count > 4 {
+            XCTAssertEqual(capsules[4].node, headNode,
+                "Head/brow capsule must occupy capsule slot 4 (after the 4 leg capsules)")
         }
 
         // Resolve the leftUpperLeg capsule and verify its far end lands on leftLowerLeg.

@@ -46,7 +46,7 @@ struct Uniforms {
     var debugUVs: Int32 = 0                                       // 4 bytes, offset 400
     var lightNormalizationFactor: Float = 1.0                     // 4 bytes, offset 404
     var vrmVersion: Int32 = 0                                     // 0 = VRM 0.x (Half-Lambert), 1 = VRM 1.0 (raw dot)
-    var _padding3: Float = 0                                      // 4 bytes padding to align to 16 bytes
+    var useDualQuaternionSkinning: Float = 0          // #197: >0.5 = dual-quaternion skinning (opt-in), else LBS
     var toonBands: Int32 = 3                                      // 4 bytes, offset 416
     /// 0 = legacy MToon rim only. >0.5 = enable an additive directional rim
     /// term in the fragment shader:

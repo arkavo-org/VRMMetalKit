@@ -47,8 +47,11 @@ final class RenderOrderTests: XCTestCase {
         XCTAssertLessThan(faceEyeline, faceEye, "Eyeline renders before eyes")
         XCTAssertLessThan(faceEye, faceHighlight, "Eyes render before highlights")
 
-        // Mask materials render between face and blend
-        XCTAssertLessThan(faceEyeline, mask, "Face materials render before mask")
+        // Transparent-band mask (queue >= 2500) renders between face and blend.
+        // NOTE: cutout-band mask (queue < 2500, e.g. alpha-tested hair @ 2450) is
+        // the exception — it sorts EARLY (renderOrder 1), before the BLEND face
+        // overlays, per `VRMRenderer.nonFaceRenderOrder` (#322). Covered below.
+        XCTAssertLessThan(faceEyeline, mask, "Transparent-band mask renders after face overlays")
 
         // Blend (transparent) materials render last
         XCTAssertEqual(blend, 7, "Blend should have highest render order")
@@ -189,5 +192,49 @@ final class RenderOrderTests: XCTestCase {
             let diff = renderOrders[i + 1] - renderOrders[i]
             XCTAssertLessThanOrEqual(diff, 2, "No large gaps between render orders")
         }
+    }
+
+    // MARK: - Non-face render-order mapping (#322)
+
+    /// Cutout-band MASK (VRM Cutout queue < 2500, e.g. alpha-tested hair @ 2450)
+    /// must sort in the early depth-writing band (1), BEFORE the BLEND face
+    /// overlays (eyeline renderOrder 3), so the author's renderQueue is honored
+    /// and the depth buffer — not draw order — resolves hair-vs-eyelash occlusion.
+    /// Pre-#322 this was renderOrder 4, drawing alpha-tested hair AFTER the BLEND
+    /// eyeline (queue ~2998) and letting the eyelash bleed through the bangs.
+    func testCutoutMaskSortsBeforeFaceBlendOverlays() {
+        let hair = VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2450)
+        let faceEyeline = 3
+        XCTAssertEqual(hair, 1, "Cutout-band hair (queue 2450) sorts in the early depth band")
+        XCTAssertLessThan(hair, faceEyeline,
+            "Alpha-tested hair (queue 2450) must render before BLEND eyeline (queue ~2998) per the author's renderQueue (#322)")
+    }
+
+    /// Transparent-band MASK (queue >= 2500) keeps the later slot (4).
+    func testTransparentBandMaskKeepsLateSlot() {
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2998), 4)
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2500), 4)
+    }
+
+    /// The cutout-band reorder is INTENTIONALLY broad: it covers every non-face
+    /// cutout/alpha-tested MASK material in the VRM Cutout band (queue < 2500),
+    /// not only hair @2450. A material with no explicit VRM renderQueue defaults
+    /// to 2000 (VRMMaterial.renderQueue), so default-queue clothing/accessory MASK
+    /// also sorts in the early depth-writing band (slot 1). This is spec-correct —
+    /// alpha-tested materials zWrite, so the depth buffer resolves their occlusion
+    /// and the Cutout band renders before Transparent — and is documented here so
+    /// the broader scope (vs the hair-specific PR framing) is an explicit contract
+    /// rather than an accident (Gitar review).
+    func testDefaultQueueCutoutMaskAlsoSortsEarly() {
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2000), 1,
+            "Default-queue (2000) non-face cutout MASK sorts in the early depth-writing band")
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2449), 1,
+            "Cutout-band MASK just below the 2500 threshold sorts early")
+    }
+
+    /// Opaque and blend mappings are unchanged by the #322 cutout fix.
+    func testNonFaceOpaqueAndBlendMapping() {
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "opaque", renderQueue: 2000), 0)
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "blend", renderQueue: 3000), 7)
     }
 }

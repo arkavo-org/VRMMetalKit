@@ -62,7 +62,7 @@ struct Uniforms {
  int debugUVs;                 // Debug flag: 1 = show UVs as colors, 0 = normal rendering
  float lightNormalizationFactor;  // Multi-light normalization factor
  int vrmVersion;              // 0 = VRM 0.x (Half-Lambert), 1 = VRM 1.0 (raw dot)
- float _padding3;
+ float useDualQuaternionSkinning;  // #197: >0.5 = DQS, else LBS
  int toonBands;                // Number of cel-shading bands
  float additiveDirectionalRimEnabled;  // 0 = off (legacy), >0.5 = enable additive directional rim
  float additiveDirectionalRimPower;    // Fresnel exponent for the additive rim (typical 4..12)
