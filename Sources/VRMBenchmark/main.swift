@@ -197,6 +197,13 @@ func parseArguments() -> BenchmarkOptions? {
             // Accept comma-separated values and/or repeated flags.
             let names = v.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) }
                          .filter { !$0.isEmpty }
+            // Reject an empty value (e.g. "--gate-phase ," or "--gate-phase ' '").
+            // A non-nil but empty phase set would make the gate vacuously pass.
+            // Exit non-zero (not nil → exit 0) so a malformed gate flag fails CI.
+            guard !names.isEmpty else {
+                FileHandle.standardError.write(Data("ERROR: --gate-phase requires a non-empty phase name (e.g. render)\n".utf8))
+                exit(2)
+            }
             opts.gatePhases = (opts.gatePhases ?? []).union(names)
         default:
             if opts.inputPath.isEmpty && !a.hasPrefix("--") {
@@ -392,6 +399,16 @@ private func finalizeReport(opts: BenchmarkOptions, report: BenchmarkReport) -> 
         let comparison = BenchmarkComparison.compare(
             baseline: baseline, current: report, threshold: threshold,
             gatedPhases: opts.gatePhases)
+        // A comparison with zero gated metrics must NOT report PASS — that would
+        // turn the CI gate into a silent no-op (typo'd --gate-phase, a phase
+        // absent from the baseline, or fully disjoint reports). Fail loudly.
+        if comparison.deltas.isEmpty {
+            let want = opts.gatePhases.map { " for --gate-phase \($0.sorted().joined(separator: ","))" } ?? ""
+            let present = Set(baseline.stats.keys).intersection(report.stats.keys).sorted().joined(separator: ", ")
+            FileHandle.standardError.write(Data(
+                "ERROR: no gated metrics\(want); phases common to baseline and current: [\(present)]. Refusing to report PASS.\n".utf8))
+            return 1
+        }
         print("\nBaseline comparison (\(basePath))")
         print(comparison.renderTable())
         if comparison.passed {

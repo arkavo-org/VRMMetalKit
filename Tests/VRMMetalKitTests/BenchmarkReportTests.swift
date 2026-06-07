@@ -200,14 +200,17 @@ final class BenchmarkReportTests: XCTestCase {
         XCTAssertEqual(all.deltas.count, 4)
     }
 
-    func testGatedPhasesUnknownNameGatesNothing() {
+    func testGatedPhasesUnknownNameProducesNoDeltas() {
         let base    = makeReport(label: "base",    render: (1.5, 3.0), encode: (1.0, 2.0))
         let current = makeReport(label: "current", render: (9.9, 9.9), encode: (9.9, 9.9))
-        // A phase name absent from both reports → no metrics gated → vacuously passes.
+        // A phase name absent from both reports → no metrics gated. The pure
+        // comparator yields empty deltas (and `passed` is vacuously true); the
+        // CLI (`finalizeReport`) treats empty deltas as a gate ERROR so a
+        // typo'd --gate-phase can't silently pass every regression.
         let none = BenchmarkComparison.compare(
             baseline: base, current: current, gatedPhases: ["does-not-exist"])
-        XCTAssertTrue(none.passed)
-        XCTAssertTrue(none.deltas.isEmpty)
+        XCTAssertTrue(none.deltas.isEmpty,
+                      "unknown phase must gate nothing — caller is responsible for treating this as an error")
     }
 
     func testZeroBaselineDoesNotDivideByZero() {
