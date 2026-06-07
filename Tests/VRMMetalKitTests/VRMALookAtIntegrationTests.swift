@@ -224,6 +224,34 @@ final class VRMALookAtIntegrationTests: XCTestCase {
                         "identity-head fixture: right eye paths must agree")
     }
 
+    /// A gaze target sitting along the head's *own* local forward (+Z) means
+    /// "look straight ahead" — so the eye's LOCAL rotation must stay ~identity no
+    /// matter how the head is turned in world space. Pre-fix, `updateTargetAngles`
+    /// computed yaw/pitch in WORLD space (`atan2(direction.x, direction.z)` on a
+    /// world-space direction) and stamped the result into the eye bone's LOCAL
+    /// rotation without subtracting the head's world orientation, so any rig whose
+    /// head was turned (e.g. a body rotated at the root) drove the eyes off by the
+    /// head's yaw. The existing head-local resolution test only checks that
+    /// `.point(head_world*p)` and `.headLocalPoint(p)` agree — both go through the
+    /// same world-space path, so they can be consistently wrong; this test pins the
+    /// absolute correctness those two miss.
+    func testHeadLocalForwardKeepsEyesCenteredRegardlessOfHeadYaw() throws {
+        // Head translated up and turned 60° around world Y (as a body rotated at
+        // the root would turn the head).
+        let rotation  = float4x4(simd_quatf(angle: .pi / 3, axis: SIMD3<Float>(0, 1, 0)))
+        let headWorld = float4x4(translation: SIMD3<Float>(0, 1.6, 0)) * rotation
+
+        let rig = try makeRig(headWorld: headWorld)
+        rig.controller.target = .headLocalPoint(SIMD3<Float>(0, 0, 1)) // straight ahead, head-local
+        rig.controller.update(deltaTime: 1.0 / 60.0)
+
+        let centered = simd_quatf(angle: 0, axis: SIMD3<Float>(0, 1, 0))
+        assertQuatEqual(rig.leftEye.rotation,  centered, accuracy: 1e-4,
+                        "left eye must stay centered when the gaze target lies along head-local forward")
+        assertQuatEqual(rig.rightEye.rotation, centered, accuracy: 1e-4,
+                        "right eye must stay centered when the gaze target lies along head-local forward")
+    }
+
     /// `AnimationPlayer.time` must expose the internal `currentTime` so consumers
     /// who want to drive the controller manually (e.g. via a different sampler)
     /// can read where playback currently sits.

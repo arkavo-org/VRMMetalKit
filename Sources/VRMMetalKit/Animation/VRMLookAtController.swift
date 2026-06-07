@@ -397,8 +397,26 @@ public class VRMLookAtController {
             return
         }
 
-        // Calculate direction vector
-        let direction = normalize(targetPos - eyePosition)
+        // Compute the gaze direction in HEAD-LOCAL space. The yaw/pitch produced
+        // here are written to the eye bone as a *local* rotation, so they must be
+        // expressed relative to the head's frame — not world space. Bringing the
+        // world-space target through the head's inverse world matrix strips the
+        // head's (and any root/body) rotation; computing the angles in world space
+        // and stamping them onto a local bone points the eyes off by the head's
+        // yaw whenever the head is turned (e.g. body rotated at the root).
+        let direction: SIMD3<Float>
+        if let headMatrix = headWorldMatrix {
+            let localTarget4 = headMatrix.inverse * SIMD4<Float>(targetPos, 1)
+            let localTarget = SIMD3<Float>(localTarget4.x, localTarget4.y, localTarget4.z)
+            // The gaze origin in head-local space is the head bone's own origin
+            // (zero) plus the authored offset; the head's world translation is
+            // already removed by the inverse transform above.
+            let gazeOrigin = lookAtData?.offsetFromHeadBone ?? .zero
+            direction = normalize(localTarget - gazeOrigin)
+        } else {
+            // No head bone wired up — fall back to the world-space origin.
+            direction = normalize(targetPos - eyePosition)
+        }
 
         // Convert to yaw/pitch angles
         // Yaw: rotation around Y axis (horizontal)
