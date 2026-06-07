@@ -50,7 +50,7 @@ final class SpringBoneBugAuditTDDTests: XCTestCase {
 
     private func makeGlobalParams(numBones: Int) -> SpringBoneGlobalParams {
         SpringBoneGlobalParams(
-            gravity: SIMD3<Float>(0, -9.8, 0),
+            gravity: SIMD3<Float>(0, 0, 0),  // #324: zero external force; gravity is per-joint gravityPower
             dtSub: Float(1.0 / 120.0),
             windAmplitude: 0.0,
             windFrequency: 0.0,
@@ -396,7 +396,7 @@ final class SpringBoneBugAuditTDDTests: XCTestCase {
         model.springBoneBuffers = buffers
 
         model.springBoneGlobalParams = SpringBoneGlobalParams(
-            gravity: SIMD3<Float>(0, -9.8, 0),
+            gravity: SIMD3<Float>(0, 0, 0),  // #324: zero external force; gravity is per-joint gravityPower
             dtSub: Float(1.0 / 120.0),
             windAmplitude: 0.0,
             windFrequency: 0.0,

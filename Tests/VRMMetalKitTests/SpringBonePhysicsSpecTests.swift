@@ -157,7 +157,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
         model.springBoneBuffers = buffers
 
         let globalParams = SpringBoneGlobalParams(
-            gravity: SIMD3<Float>(0, -9.8, 0),
+            gravity: SIMD3<Float>(0, 0, 0), // #324: spec gravity from per-joint gravityPower
             dtSub: Float(1.0 / 120.0),
             windAmplitude: 0.0,
             windFrequency: 0.0,
@@ -623,7 +623,7 @@ final class SpringBonePhysicsSpecTests: XCTestCase {
 
         // Set up global params
         let globalParams = SpringBoneGlobalParams(
-            gravity: SIMD3<Float>(0, -9.8, 0),
+            gravity: SIMD3<Float>(0, 0, 0), // #324: spec gravity from per-joint gravityPower
             dtSub: Float(1.0 / 120.0),
             windAmplitude: 0.0,
             windFrequency: 0.0,

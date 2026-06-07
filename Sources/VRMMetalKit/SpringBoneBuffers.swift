@@ -401,7 +401,10 @@ public struct PlaneCollider {
 /// the Metal shader source — comments record the byte offset of each field. See
 /// <doc:SpringBonePhysics> for the simulation pipeline that consumes these values.
 public struct SpringBoneGlobalParams {
-    /// World-space gravity vector in m/s² (typically `[0, -9.8, 0]`). Byte offset 0.
+    /// World-space additive external force in m/s² (VRMC_springBone-1.0
+    /// `model.ExternalForce` analog), added on top of each joint's
+    /// `gravityDir · gravityPower`. Defaults to zero; per-joint gravity is the
+    /// spec-exact gravity source (#324). Byte offset 0.
     public var gravity: SIMD3<Float>
     /// Substep dt in seconds (typically `1.0 / (60 * substeps)`). Byte offset 16.
     public var dtSub: Float

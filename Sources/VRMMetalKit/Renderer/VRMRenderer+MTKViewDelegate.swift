@@ -117,9 +117,10 @@ extension VRMRenderer {
     ///
     /// Both inputs are optional; pass `nil` to leave that channel untouched
     /// for this call. While the timer is active the supplied values override
-    /// ``VRMModel/springBoneGlobalParams``'s `gravity` and the wind
+    /// ``VRMModel/springBoneGlobalParams``'s `gravity` (an additive external
+    /// force, VRMC_springBone-1.0 `model.ExternalForce`) and the wind
     /// direction/amplitude derived from `wind`. When the timer elapses the
-    /// renderer restores gravity to its default `(0, -9.8, 0)` and clears any
+    /// renderer restores the external force to its default zero and clears any
     /// wind amplitude that was set via this call.
     ///
     /// Use this to drive transient effects such as gusts, impacts, or jump
@@ -127,8 +128,8 @@ extension VRMRenderer {
     /// configuration.
     ///
     /// - Parameters:
-    ///   - gravity: Temporary gravity vector in world space (m/s²), or `nil`
-    ///     to leave gravity unchanged.
+    ///   - gravity: Temporary additive external force in world space (m/s²),
+    ///     applied on top of per-joint gravity, or `nil` to leave it unchanged.
     ///   - wind: Temporary wind vector; its direction sets the wind direction
     ///     and its length sets the wind amplitude. Pass `nil` to leave wind
     ///     unchanged.
@@ -160,10 +161,10 @@ extension VRMRenderer {
             }
             forceTimer -= deltaTime
         } else if temporaryGravity != nil || temporaryWind != nil {
-            // Timer expired - restore initial gravity and clear wind
+            // Timer expired - restore the external force to zero and clear wind
             // Only restore if we had temporary overrides (don't overwrite initial setup)
             if temporaryGravity != nil {
-                model?.springBoneGlobalParams?.gravity = [0, -9.8, 0]
+                model?.springBoneGlobalParams?.gravity = VRMConstants.Physics.defaultGravity
             }
             if temporaryWind != nil {
                 model?.springBoneGlobalParams?.windAmplitude = 0

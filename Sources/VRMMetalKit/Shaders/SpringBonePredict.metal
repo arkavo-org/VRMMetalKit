@@ -231,31 +231,28 @@ kernel void springBonePredict(
     effectiveDrag = clamp(effectiveDrag, 0.0, 0.99);
     float dragFactor = 1.0 - effectiveDrag * globalParams.dtSub * 60.0;
     dragFactor = clamp(dragFactor, 0.01, 1.0); // Ensure positive, non-zero
-    float gravityBoost = 1.0 + settlingFactor * 4.0;
 
-    // Per-joint gravity.
+    // Per-joint gravity (VMK#324, spec scale).
     //
-    // VMK#270 fix: VRMC_springBone-1.0 §SpringBone Algorithm specifies
-    //   external = deltaTime * gravityDir * gravityPower
-    // i.e. `gravityPower` is a velocity-like scalar (m/s) and the
-    // gravity contribution is **linear in dt**, not quadratic. The
-    // previous implementation applied it as `accel * dt²` with `accel`
-    // = Earth gravity (9.8 m/s²) × `gravityPower`, which under-scales
-    // the per-frame contribution by a factor of ~`1/dt` and lets the
-    // PBD stiffness blend (which is dt-independent) dominate every
-    // equilibrium — the visible symptom is hair that locks toward the
-    // bind direction even under nominal gravityPower. The QA team's
-    // "twin-tails go helicopter-blade during rotation" defect (VMK#270)
-    // and the latent "horizontal chain barely droops at rest" issue
-    // are both this bug.
+    // VRMC_springBone-1.0 §SpringBone Algorithm specifies
+    //   external = gravityDir * gravityPower * deltaTime
+    // with `gravityPower` the gravity *strength* directly. UniVRM (both
+    // the 0.x `SpringBoneJointInit` and 1.0 `UpdateFastSpringBoneJob`
+    // paths), three-vrm, and godot-vrm all compute exactly this — no
+    // Earth-gravity constant, no version-dependent scaling.
     //
-    // The standard-gravity multiplier survives because existing callers
-    // ship `globalParams.gravity = (0, -9.8, 0)` and expect that scale.
-    // It is now multiplied by `dt` instead of `dt²` further down, so
-    // per-substep position delta = 9.8 · gravityPower · dt, which is
-    // O(0.08 m / substep) at dt=1/120 — the right magnitude.
-    float gravityMagnitude = length(globalParams.gravity) * gravityBoost;
-    float3 effectiveGravity = boneParams[id].gravityDir * gravityMagnitude * boneParams[id].gravityPower;
+    // The prior implementation reinterpreted `gravityPower` as a fraction
+    // of Earth gravity, multiplying by `length(globalParams.gravity)`
+    // (= 9.8) plus an up-to-5× settling boost, over-driving gravity ~9.8×
+    // versus every other VRM renderer. Applying `gravityPower` directly
+    // restores parity (the `* dt` is in the Verlet step below).
+    float3 effectiveGravity = boneParams[id].gravityDir * boneParams[id].gravityPower;
+
+    // Global external force (VRMC_springBone-1.0 `model.ExternalForce`
+    // analog). Additive alongside gravity/wind/inertial, not a multiplier
+    // on the gravity term. Defaults to zero so per-joint gravity is the
+    // sole, spec-exact gravity source.
+    float3 externalForce = globalParams.gravity;
 
     // Inertial force from character movement
     // When character moves in a direction, hair/cloth should trail behind (opposite direction)
@@ -269,7 +266,7 @@ kernel void springBonePredict(
     // fall under continuous force, they get a velocity injection each
     // frame that drag bleeds out.
     float3 newPos = bonePosCurr[id] + velocity * dragFactor +
-                    (effectiveGravity + windForce + inertialForce) * globalParams.dtSub;
+                    (effectiveGravity + externalForce + windForce + inertialForce) * globalParams.dtSub;
 
     // PBD STIFFNESS: Apply position blend toward bind pose AFTER Verlet, BEFORE constraints
     // This is dt-independent and guarantees consistent % correction per substep
