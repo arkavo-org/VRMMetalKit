@@ -18,7 +18,7 @@ Spring configuration is authored as part of the VRM file, under the `VRMC_spring
 
 ## Runtime controls
 
-Most applications never touch the spring system at runtime: it is configured at load and stepped automatically. For transient effects — a wind gust, an impact, a jump landing — use ``VRMRenderer/applySpringBoneForce(gravity:wind:duration:)``. It overrides the global gravity and/or wind for `duration` seconds and then restores gravity to `(0, -9.8, 0)` and clears the wind amplitude. Either input can be `nil` to leave that channel untouched.
+Most applications never touch the spring system at runtime: it is configured at load and stepped automatically. For transient effects — a wind gust, an impact, a jump landing — use ``VRMRenderer/applySpringBoneForce(gravity:wind:duration:)``. The `gravity` channel is an additive *external force* (VRMC_springBone-1.0 `model.ExternalForce`) layered on top of each joint's spec-scale `gravityDir · gravityPower`; it overrides the external force and/or wind for `duration` seconds and then restores the external force to zero and clears the wind amplitude. Either input can be `nil` to leave that channel untouched.
 
 ```swift
 // Apply a 2-second wind gust while keeping default gravity.

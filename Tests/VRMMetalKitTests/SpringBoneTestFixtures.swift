@@ -96,7 +96,8 @@ enum SpringBoneTestFixtures {
     // MARK: - Global-params defaults
 
     /// Default `SpringBoneGlobalParams` for unit tests. 120 Hz substep dt,
-    /// standard gravity, no wind. Override individual fields as needed.
+    /// zero external force (spec gravity comes from per-joint `gravityPower`,
+    /// #324), no wind. Override individual fields as needed.
     ///
     /// `numBones` *must* match the chain length; other counts default to 0.
     static func defaultGlobalParams(
@@ -104,7 +105,7 @@ enum SpringBoneTestFixtures {
         numSpheres: Int = 0,
         numCapsules: Int = 0,
         numPlanes: Int = 0,
-        gravity: SIMD3<Float> = SIMD3<Float>(0, -9.8, 0),
+        gravity: SIMD3<Float> = SIMD3<Float>(0, 0, 0),
         windAmplitude: Float = 0.0,
         windFrequency: Float = 0.0,
         windPhase: Float = 0.0,

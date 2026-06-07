@@ -130,8 +130,10 @@ public enum VRMConstants {
         /// - 4+: Stiffer response, reaches equilibrium faster
         public static let constraintIterations: Int = 4
 
-        /// Default gravity vector in world space (m/s²)
-        public static let defaultGravity = SIMD3<Float>(0, -9.8, 0)
+        /// Default global external force (VRMC_springBone-1.0 `model.ExternalForce`
+        /// analog), added on top of per-joint `gravityDir · gravityPower`. Defaults
+        /// to zero so per-joint gravity is the sole, spec-exact gravity source (#324).
+        public static let defaultGravity = SIMD3<Float>(0, 0, 0)
 
         /// Epsilon for morph target weight comparison (weights below this are considered zero)
         public static let morphEpsilon: Float = 1e-4

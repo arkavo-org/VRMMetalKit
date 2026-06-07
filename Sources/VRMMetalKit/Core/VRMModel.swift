@@ -1202,7 +1202,7 @@ public class VRMModel: @unchecked Sendable {
         // Initialize global parameters
         // settlingFrames: 120 frames (~1 second) to let bones settle with gravity before enabling inertia compensation
         springBoneGlobalParams = SpringBoneGlobalParams(
-            gravity: SIMD3<Float>(0, -9.8, 0), // Standard gravity
+            gravity: VRMConstants.Physics.defaultGravity, // Additive external force; zero so per-joint gravityPower is the sole gravity source (#324)
             dtSub: 1.0 / 120.0, // 120Hz fixed substeps
             windAmplitude: 0.0,
             windFrequency: 1.0,
