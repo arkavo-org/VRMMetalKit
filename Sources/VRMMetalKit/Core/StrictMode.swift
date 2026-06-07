@@ -115,8 +115,18 @@ public struct RendererConfig {
     /// 60Hz default.
     public var synchronousSpringBone: Bool = false
 
+    /// Opt-in dual-quaternion skinning (#197). Default `false` = linear-blend
+    /// skinning (LBS), the glTF-standard reference behaviour shared by all VRM
+    /// renderers. When `true`, the skinning vertex shader blends joint dual
+    /// quaternions instead of matrices, preserving volume at high-deformation
+    /// joints (the deltoid/armpit "candy-wrapper" collapse). This is a deliberate
+    /// QUALITY-ABOVE-REFERENCE divergence — flag it / baseline it / pre-release it,
+    /// per the ADR-007-class conformance policy. Assumes rigid joints (no
+    /// non-uniform scale).
+    public var dualQuaternionSkinning: Bool = false
+
     /// Creates a renderer configuration. Defaults match the production baseline.
-    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false) {
+    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false, dualQuaternionSkinning: Bool = false) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
         self.renderFilter = renderFilter
@@ -127,6 +137,7 @@ public struct RendererConfig {
         self.depthBiasScale = depthBiasScale
         self.alphaToCoverageForMASK = alphaToCoverageForMASK
         self.synchronousSpringBone = synchronousSpringBone
+        self.dualQuaternionSkinning = dualQuaternionSkinning
     }
 }
 

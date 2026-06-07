@@ -20,6 +20,70 @@ using namespace metal;
 
 constant float WEIGHT_THRESHOLD = 0.001;
 
+// --- #197 Dual-quaternion skinning (opt-in, quality-above-reference) ----------
+// LBS linearly blends joint MATRICES, which loses volume at high-deformation
+// joints (the deltoid/armpit "candy-wrapper" collapse). DQS blends the joints'
+// dual quaternions instead, preserving rigidity. Assumes RIGID joints (no
+// non-uniform scale) — VRM skeletons are rigid; non-uniform scale corrupts the
+// quaternion extraction (documented DQS caveat). Default-off: LBS is the
+// glTF-standard reference behaviour, so DQS is a deliberate divergence.
+
+// Unit rotation quaternion (xyzw) from a joint matrix's rotation block
+// (Metal is column-major: m[col][row]). Columns are normalized to drop any
+// uniform scale.
+static inline float4 dqsQuatFromMatrix(float4x4 m) {
+    float3 c0 = normalize(m[0].xyz), c1 = normalize(m[1].xyz), c2 = normalize(m[2].xyz);
+    float tr = c0.x + c1.y + c2.z;
+    float4 q;
+    if (tr > 0.0) {
+        float s = sqrt(tr + 1.0) * 2.0;
+        q = float4((c1.z - c2.y)/s, (c2.x - c0.z)/s, (c0.y - c1.x)/s, 0.25*s);
+    } else if (c0.x > c1.y && c0.x > c2.z) {
+        float s = sqrt(1.0 + c0.x - c1.y - c2.z) * 2.0;
+        q = float4(0.25*s, (c1.x + c0.y)/s, (c2.x + c0.z)/s, (c1.z - c2.y)/s);
+    } else if (c1.y > c2.z) {
+        float s = sqrt(1.0 + c1.y - c0.x - c2.z) * 2.0;
+        q = float4((c1.x + c0.y)/s, 0.25*s, (c2.y + c1.z)/s, (c2.x - c0.z)/s);
+    } else {
+        float s = sqrt(1.0 + c2.z - c0.x - c1.y) * 2.0;
+        q = float4((c2.x + c0.z)/s, (c2.y + c1.z)/s, 0.25*s, (c0.y - c1.x)/s);
+    }
+    return normalize(q);
+}
+
+// Hamilton quaternion product (xyzw).
+static inline float4 dqsQuatMul(float4 a, float4 b) {
+    return float4(a.w*b.xyz + b.w*a.xyz + cross(a.xyz, b.xyz),
+                  a.w*b.w - dot(a.xyz, b.xyz));
+}
+
+// Rotate a vector by a unit quaternion (xyzw).
+static inline float3 dqsQuatRotate(float4 q, float3 v) {
+    return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
+}
+
+// Skin a point + normal by the weighted DQS blend of up to 4 joints.
+static inline void dqsSkin(float4x4 m0, float4x4 m1, float4x4 m2, float4x4 m3,
+                           float4 w, thread float3& pos, thread float3& nrm) {
+    float4 q0 = dqsQuatFromMatrix(m0);
+    float4 qr = float4(0.0), qd = float4(0.0);
+    float4x4 mats[4] = { m0, m1, m2, m3 };
+    for (uint i = 0; i < 4; ++i) {
+        if (w[i] <= 0.0) { continue; }
+        float4 qj = dqsQuatFromMatrix(mats[i]);
+        if (dot(qj, q0) < 0.0) { qj = -qj; }              // antipodality: same hemisphere
+        float4 qdj = 0.5 * dqsQuatMul(float4(mats[i][3].xyz, 0.0), qj);
+        qr += w[i] * qj;
+        qd += w[i] * qdj;
+    }
+    float n = length(qr);
+    if (n < 1e-8) { return; }                              // caller keeps base pos/nrm
+    qr /= n; qd /= n;
+    float3 t = 2.0 * dqsQuatMul(qd, float4(-qr.xyz, qr.w)).xyz;
+    pos = dqsQuatRotate(qr, pos) + t;
+    nrm = dqsQuatRotate(qr, nrm);
+}
+
 struct Uniforms {
  float4x4 modelMatrix;
  float4x4 viewMatrix;
@@ -41,7 +105,7 @@ struct Uniforms {
  int debugUVs;
  float lightNormalizationFactor;
  float _padding2;
- float _padding3;
+ float useDualQuaternionSkinning;  // #197: >0.5 = DQS, else LBS
  int toonBands;
  float additiveDirectionalRimEnabled;
  float additiveDirectionalRimPower;
@@ -211,7 +275,6 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
 
  // Apply skeletal skinning with normalized weights
  // CRITICAL: Use RAW weights for threshold check to avoid accessing garbage joint indices
- float4x4 skinMatrix = float4x4(0.0);
  float threshold = WEIGHT_THRESHOLD;
 
  // Safe buffer limit: clamp to 255 to prevent reading garbage memory
@@ -219,27 +282,39 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  uint maxJoint = 255;
  uint4 safeJoints = min(in.joints, uint4(maxJoint));
 
- if (rawWeights[0] > threshold) {
- skinMatrix += jointMatrices[safeJoints[0]] * weights[0];
- }
- if (rawWeights[1] > threshold) {
- skinMatrix += jointMatrices[safeJoints[1]] * weights[1];
- }
- if (rawWeights[2] > threshold) {
- skinMatrix += jointMatrices[safeJoints[2]] * weights[2];
- }
- if (rawWeights[3] > threshold) {
- skinMatrix += jointMatrices[safeJoints[3]] * weights[3];
- }
+ // Threshold-gate the (normalized) weights: zero out any joint whose RAW weight
+ // is below threshold so neither path blends a garbage joint index.
+ float4 gatedWeights = float4(
+     rawWeights[0] > threshold ? weights[0] : 0.0,
+     rawWeights[1] > threshold ? weights[1] : 0.0,
+     rawWeights[2] > threshold ? weights[2] : 0.0,
+     rawWeights[3] > threshold ? weights[3] : 0.0);
 
+ float4 skinnedPosition;
+ float3 skinnedNormal;
+ if (uniforms.useDualQuaternionSkinning > 0.5) {
+ // #197 DQS — volume-preserving blend (opt-in, quality-above-reference).
+ float3 dqPos = basePosition;
+ float3 dqNrm = in.normal;
+ dqsSkin(jointMatrices[safeJoints[0]], jointMatrices[safeJoints[1]],
+         jointMatrices[safeJoints[2]], jointMatrices[safeJoints[3]],
+         gatedWeights, dqPos, dqNrm);
+ skinnedPosition = float4(dqPos, 1.0);
+ skinnedNormal = dqNrm;
+ } else {
+ // LBS — default, glTF-standard reference behaviour.
+ float4x4 skinMatrix = float4x4(0.0);
+ skinMatrix += jointMatrices[safeJoints[0]] * gatedWeights[0];
+ skinMatrix += jointMatrices[safeJoints[1]] * gatedWeights[1];
+ skinMatrix += jointMatrices[safeJoints[2]] * gatedWeights[2];
+ skinMatrix += jointMatrices[safeJoints[3]] * gatedWeights[3];
  // Fallback: if skinMatrix is zero (no weights passed threshold), use first joint
  if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
  skinMatrix = jointMatrices[safeJoints[0]];
  }
-
- // Apply skinning to position and normal (using morphed base position if available)
- float4 skinnedPosition = skinMatrix * float4(basePosition, 1.0);
- float3 skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
+ skinnedPosition = skinMatrix * float4(basePosition, 1.0);
+ skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
+ }
 
  // SANITY CHECK: Detect NaN/Inf or extreme skinned positions and fall back to original
  // This catches cases where joint indices point to garbage memory or matrix is corrupted
@@ -404,26 +479,42 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  }
 
  // Apply skeletal skinning - use RAW weights for threshold check
- float4x4 skinMatrix = float4x4(0.0);
  float threshold = WEIGHT_THRESHOLD;
 
  // Safe buffer limit: clamp to 255 to prevent reading garbage memory
  uint maxJoint = 255;
  uint4 safeJoints = min(in.joints, uint4(maxJoint));
 
- if (rawWeights[0] > threshold) skinMatrix += jointMatrices[safeJoints[0]] * weights[0];
- if (rawWeights[1] > threshold) skinMatrix += jointMatrices[safeJoints[1]] * weights[1];
- if (rawWeights[2] > threshold) skinMatrix += jointMatrices[safeJoints[2]] * weights[2];
- if (rawWeights[3] > threshold) skinMatrix += jointMatrices[safeJoints[3]] * weights[3];
+ float4 gatedWeights = float4(
+     rawWeights[0] > threshold ? weights[0] : 0.0,
+     rawWeights[1] > threshold ? weights[1] : 0.0,
+     rawWeights[2] > threshold ? weights[2] : 0.0,
+     rawWeights[3] > threshold ? weights[3] : 0.0);
 
- // Fallback: if skinMatrix is zero, use first joint
+ // Skin the outline hull with the SAME path as the body (#197) so the
+ // inverted-hull outline tracks the DQS-skinned surface instead of an LBS one.
+ float4 skinnedPosition;
+ float3 skinnedNormal;
+ if (uniforms.useDualQuaternionSkinning > 0.5) {
+ float3 dqPos = in.position;
+ float3 dqNrm = in.normal;
+ dqsSkin(jointMatrices[safeJoints[0]], jointMatrices[safeJoints[1]],
+         jointMatrices[safeJoints[2]], jointMatrices[safeJoints[3]],
+         gatedWeights, dqPos, dqNrm);
+ skinnedPosition = float4(dqPos, 1.0);
+ skinnedNormal = dqNrm;
+ } else {
+ float4x4 skinMatrix = float4x4(0.0);
+ skinMatrix += jointMatrices[safeJoints[0]] * gatedWeights[0];
+ skinMatrix += jointMatrices[safeJoints[1]] * gatedWeights[1];
+ skinMatrix += jointMatrices[safeJoints[2]] * gatedWeights[2];
+ skinMatrix += jointMatrices[safeJoints[3]] * gatedWeights[3];
  if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
  skinMatrix = jointMatrices[safeJoints[0]];
  }
-
- // Apply skinning to position and normal
- float4 skinnedPosition = skinMatrix * float4(in.position, 1.0);
- float3 skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
+ skinnedPosition = skinMatrix * float4(in.position, 1.0);
+ skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
+ }
 
  // SANITY CHECK: Detect NaN/Inf or extreme skinned positions and fall back to original
  bool posHasNaN = any(isnan(skinnedPosition.xyz)) || any(isinf(skinnedPosition.xyz));

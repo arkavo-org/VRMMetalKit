@@ -1648,6 +1648,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Camera mode for first-person vertex culling (0 = third-person, 1 = first-person).
         uniforms.cameraMode = cameraMode == .firstPerson ? 1 : 0
 
+        // #197 opt-in dual-quaternion skinning (default off = LBS reference).
+        uniforms.useDualQuaternionSkinning = config.dualQuaternionSkinning ? 1.0 : 0.0
+
         // VRM version drives the toon-ramp NdotL convention in MToonShader.metal:
         // VRM 1.0 uses raw dot(N,L) (spec-correct); VRM 0.x keeps Half-Lambert.
         uniforms.vrmVersion = (model.specVersion == .v1_0) ? 1 : 0
