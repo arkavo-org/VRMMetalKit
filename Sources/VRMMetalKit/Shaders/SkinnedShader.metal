@@ -77,7 +77,14 @@ static inline void dqsSkin(float4x4 m0, float4x4 m1, float4x4 m2, float4x4 m3,
         qd += w[i] * qdj;
     }
     float n = length(qr);
-    if (n < 1e-8) { return; }                              // caller keeps base pos/nrm
+    if (n < 1e-8) {
+        // Degenerate weights (all four below threshold): match the LBS fallback
+        // and skin by the first joint instead of leaving the vertex untransformed
+        // in bind-local space (Gitar review).
+        pos = (m0 * float4(pos, 1.0)).xyz;
+        nrm = (m0 * float4(nrm, 0.0)).xyz;
+        return;
+    }
     qr /= n; qd /= n;
     float3 t = 2.0 * dqsQuatMul(qd, float4(-qr.xyz, qr.w)).xyz;
     pos = dqsQuatRotate(qr, pos) + t;

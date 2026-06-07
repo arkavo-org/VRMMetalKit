@@ -216,6 +216,22 @@ final class RenderOrderTests: XCTestCase {
         XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2500), 4)
     }
 
+    /// The cutout-band reorder is INTENTIONALLY broad: it covers every non-face
+    /// cutout/alpha-tested MASK material in the VRM Cutout band (queue < 2500),
+    /// not only hair @2450. A material with no explicit VRM renderQueue defaults
+    /// to 2000 (VRMMaterial.renderQueue), so default-queue clothing/accessory MASK
+    /// also sorts in the early depth-writing band (slot 1). This is spec-correct —
+    /// alpha-tested materials zWrite, so the depth buffer resolves their occlusion
+    /// and the Cutout band renders before Transparent — and is documented here so
+    /// the broader scope (vs the hair-specific PR framing) is an explicit contract
+    /// rather than an accident (Gitar review).
+    func testDefaultQueueCutoutMaskAlsoSortsEarly() {
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2000), 1,
+            "Default-queue (2000) non-face cutout MASK sorts in the early depth-writing band")
+        XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "mask", renderQueue: 2449), 1,
+            "Cutout-band MASK just below the 2500 threshold sorts early")
+    }
+
     /// Opaque and blend mappings are unchanged by the #322 cutout fix.
     func testNonFaceOpaqueAndBlendMapping() {
         XCTAssertEqual(VRMRenderer.nonFaceRenderOrder(alphaMode: "opaque", renderQueue: 2000), 0)

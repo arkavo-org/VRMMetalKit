@@ -114,20 +114,31 @@ final class DualQuaternionSkinningTests: XCTestCase {
         }
         XCTAssertEqual(lbs.count, dqs.count)
 
-        var diffSum = 0, lbsNonBg = 0
+        var diffSum = 0, lbsNonBg = 0, dqsNonBg = 0, dqsSaturated = 0
         let bg: [UInt8] = [0x29, 0x1F, 0x19, 0xFF]  // approx clear color in BGRA bytes
+        func nonBg(_ b: [UInt8], _ i: Int) -> Bool {
+            abs(Int(b[i]) - Int(bg[0])) + abs(Int(b[i+1]) - Int(bg[1])) + abs(Int(b[i+2]) - Int(bg[2])) > 30
+        }
         for i in stride(from: 0, to: lbs.count, by: 4) {
-            let d = abs(Int(lbs[i]) - Int(dqs[i])) + abs(Int(lbs[i+1]) - Int(dqs[i+1])) + abs(Int(lbs[i+2]) - Int(dqs[i+2]))
-            diffSum += d
-            if abs(Int(lbs[i]) - Int(bg[0])) + abs(Int(lbs[i+1]) - Int(bg[1])) + abs(Int(lbs[i+2]) - Int(bg[2])) > 30 { lbsNonBg += 1 }
+            diffSum += abs(Int(lbs[i]) - Int(dqs[i])) + abs(Int(lbs[i+1]) - Int(dqs[i+1])) + abs(Int(lbs[i+2]) - Int(dqs[i+2]))
+            if nonBg(lbs, i) { lbsNonBg += 1 }
+            if nonBg(dqs, i) { dqsNonBg += 1 }
+            if Int(dqs[i]) >= 254 && Int(dqs[i+1]) >= 254 && Int(dqs[i+2]) >= 254 { dqsSaturated += 1 }
         }
         let pixels = lbs.count / 4
         let meanDiff = Double(diffSum) / Double(pixels)
-        print("[#197 DQS] meanPixelDiff(LBS↔DQS)=\(String(format: "%.1f", meanDiff)) lbsCoverage=\(lbsNonBg)/\(pixels)")
+        print("[#197 DQS] meanPixelDiff(LBS↔DQS)=\(String(format: "%.1f", meanDiff)) lbsCoverage=\(lbsNonBg)/\(pixels) dqsCoverage=\(dqsNonBg)/\(pixels) dqsSaturated=\(dqsSaturated)")
 
         // The LBS frame must actually show the avatar (guards a broken camera/render).
         XCTAssertGreaterThan(lbsNonBg, pixels / 10,
             "Expected the shoulder to fill a meaningful part of the frame (coverage \(lbsNonBg)/\(pixels))")
+        // The DQS frame must ALSO be a valid render of the avatar — not an
+        // all-black or blown-out frame, which would otherwise inflate meanDiff and
+        // pass the divergence check while hiding a broken DQS path (Gitar review).
+        XCTAssertGreaterThan(dqsNonBg, pixels / 10,
+            "DQS frame must also show the avatar (coverage \(dqsNonBg)/\(pixels)) — guards an all-black/garbage render")
+        XCTAssertLessThan(dqsSaturated, pixels / 2,
+            "DQS frame must not be mostly blown-out white (\(dqsSaturated)/\(pixels) saturated) — guards NaN→saturation")
         // DQS must diverge from LBS at this extreme pose — proves the flag wires
         // through and the dual-quaternion branch runs (LBS≈DQS only at small angles).
         XCTAssertGreaterThan(meanDiff, 3.0,
