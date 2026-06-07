@@ -706,12 +706,14 @@ final class VRMExtensionParserTests: XCTestCase {
         XCTAssertEqual(model.springBone?.springs.first?.joints.count, 3)
     }
 
-    /// Regression for #306: VRM 0.x bust/breast chains author `gravityPower = 0`
-    /// deliberately (they are anchored to the chest and must not droop). VMK's
-    /// 0.x quirk substitutes `0 → 1.0` so hanging chains (hair, skirts) fall;
-    /// that substitution must NOT apply to bust chains, or the load-time
-    /// warmup collapses the bust. Hair keeps the substitution.
-    func testVRM0BustChainRespectsZeroGravityWhileHairDoesNot() throws {
+    /// Regression for #326: VRM 0.x chains that author `gravityPower = 0` must
+    /// stay inert, matching UniVRM/three-vrm. The old VMK quirk substituted
+    /// `0 → 1.0` for non-bust chains (so hair/skirts fell), which over-applied
+    /// gravity to chains the artist authored as inert (e.g. bangs the artist
+    /// wants flat against the forehead). The substitution is removed: authored
+    /// values are respected for every chain. Bust already kept 0 (#306); hair
+    /// now keeps 0 too. Authored non-zero values pass through unchanged.
+    func testVRM0RespectsAuthoredZeroGravityForAllChains() throws {
         let humanBones: [[String: Any]] = [
             ["bone": "hips", "node": 0], ["bone": "leftUpperLeg", "node": 1],
             ["bone": "rightUpperLeg", "node": 2], ["bone": "leftLowerLeg", "node": 3],
@@ -733,24 +735,30 @@ final class VRMExtensionParserTests: XCTestCase {
                     ["comment": "Bust", "bones": [19], "stiffness": 0.75,
                      "gravityPower": 0.0, "dragForce": 0.05],
                     ["comment": "Hair", "bones": [20], "stiffness": 0.85,
-                     "gravityPower": 0.0, "dragForce": 0.4]
+                     "gravityPower": 0.0, "dragForce": 0.4],
+                    ["comment": "Skirt", "bones": [21], "stiffness": 0.2,
+                     "gravityPower": 0.5, "dragForce": 0.3]
                 ]
             ]
         ]
 
         let document = createMinimalGLTFDocument(
-            nodes: 21,
-            nodeNames: [19: "J_Sec_L_Bust1", 20: "J_Sec_Hair1_01"])
+            nodes: 22,
+            nodeNames: [19: "J_Sec_L_Bust1", 20: "J_Sec_Hair1_01", 21: "J_Sec_Skirt1"])
         let model = try parser.parseVRMExtension(vrmDict, document: document)
 
         let springs = try XCTUnwrap(model.springBone?.springs)
         let bust = try XCTUnwrap(springs.first { $0.joints.contains { $0.node == 19 } })
         let hair = try XCTUnwrap(springs.first { $0.joints.contains { $0.node == 20 } })
+        let skirt = try XCTUnwrap(springs.first { $0.joints.contains { $0.node == 21 } })
 
         XCTAssertEqual(bust.joints.first?.gravityPower, 0.0,
-                       "Bust chain must keep authored gravityPower = 0 (no 0→1.0 substitution)")
-        XCTAssertEqual(hair.joints.first?.gravityPower, 1.0,
-                       "Hair chain must keep the 0→1.0 substitution so it still falls")
+                       "Bust chain must keep authored gravityPower = 0")
+        XCTAssertEqual(hair.joints.first?.gravityPower, 0.0,
+                       "Hair authored gravityPower = 0 must stay inert (no 0→1.0 substitution, #326) " +
+                       "— matches UniVRM/three-vrm")
+        XCTAssertEqual(skirt.joints.first?.gravityPower, 0.5,
+                       "Authored non-zero gravityPower must pass through unchanged")
     }
 
     // MARK: - Error Handling Tests

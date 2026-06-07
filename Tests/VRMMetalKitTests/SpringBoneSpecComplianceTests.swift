@@ -183,9 +183,12 @@ final class SpringBoneSpecComplianceTests: XCTestCase {
         }
     }
 
-    /// VRM 0.x: explicit gravityPower=0.0 must be forced to 1.0 (real-world quirk fix).
-    /// Many VRM 0.x models export gravityPower=0 but expect gravity to work.
-    func testVRM0ExplicitGravityPowerZeroIsForcedToOne() throws {
+    /// VRM 0.x: explicit gravityPower=0.0 must be respected as inert (#326),
+    /// matching UniVRM (the 0.x reference) and three-vrm. The old VMK quirk
+    /// forced 0→1.0, which over-applied gravity to chains the artist authored
+    /// inert (e.g. bangs meant to lie flat), parting them — a visible divergence
+    /// from every other VRM renderer.
+    func testVRM0ExplicitGravityPowerZeroIsRespected() throws {
         let (vrmDict, document) = makeMinimalVRM0Dict(secondaryAnimation: [
             "boneGroups": [[
                 "comment": "Hair",
@@ -202,9 +205,9 @@ final class SpringBoneSpecComplianceTests: XCTestCase {
             return
         }
         for joint in spring.joints {
-            XCTAssertEqual(joint.gravityPower, 1.0, accuracy: 0.0001,
-                "VRM 0.x gravityPower=0 must be forced to 1.0 (real-world quirk: many " +
-                "VRM 0.x models export 0 but expect gravity to work).")
+            XCTAssertEqual(joint.gravityPower, 0.0, accuracy: 0.0001,
+                "VRM 0.x gravityPower=0 must stay inert (no 0→1.0 substitution, #326) — " +
+                "matches UniVRM/three-vrm.")
         }
     }
 
