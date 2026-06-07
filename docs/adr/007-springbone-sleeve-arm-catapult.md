@@ -137,13 +137,22 @@ the synthetic-collider augmentation path only**. Proceed to:
    group, gated by the existing `augmentSpringBoneColliders` flag.
 2. Validate against a hand-reachable cloth oracle/pose (net-new test infra,
    mirroring the #309 leg/head oracle) on a model whose hand contacts cloth.
-3. For the fast-swing residual, gate the synthetic group at a higher substep rate
-   (the proven monotonic lever) behind a quality tier, defaulting conservatively.
+3. **RESERVED — not required.** The higher-substep lever (240 Hz+ for the
+   synthetic group, the proven monotonic fix) remains available but is **not** a
+   prerequisite for shipping the colliders. On-device validation confirms the
+   colliders fix the hand-poke-through on real content at the production 120 Hz;
+   the only residual is the stiff-sleeve catapult on the AvatarSample_U stress
+   fixture (~26 mm bounded transient), which is **within this ADR's solver-class
+   envelope** — the reference (UniVRM at 60 Hz) catapults at least as hard, so it
+   is not a quality gap against the spec. Build the substep tier **only if** real
+   content ever exhibits the pathology; paying 2–4× spring-bone GPU on every
+   avatar to fix a stress fixture is the tail wagging the dog.
 
 The arm/hand colliders remain **additive and authored-collider-safe**; if a model
 or pose still catapults at the production rate, that specific case stays the
 documented solver-class behaviour — but the common slow-gesture poke-through is
-fixed. Tracked as #321.
+fixed. Tracked as #321; the bounded U residual is guarded by
+`testU_armSwing_armColliders_catapultStaysBounded`.
 
 ## Links
 
