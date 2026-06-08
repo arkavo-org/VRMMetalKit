@@ -1238,10 +1238,10 @@ final class VRMExtensionParserTests: XCTestCase {
 
     /// VRM 1.0 `morphTargetBind.node` is a glTF **node** index, but the renderer
     /// and `VRMExpressionController` key morph weights by **mesh** index (VRM 0.x
-    /// binds already store the mesh index directly). The parser must resolve
-    /// node → mesh, or every 1.0 morph expression (blink/visemes/emotions)
-    /// silently no-ops because the stored key matches no primitive. Here node 21
-    /// owns mesh 0, so a blink bind on node 21 must come back keyed to mesh 0.
+    /// binds already carry the mesh index). The parser resolves node → mesh into
+    /// `meshIndex` (what morph keying uses) while **preserving the authored
+    /// `node`** so serialization round-trips the VRM 1.0 `node` field correctly.
+    /// Here node 21 owns mesh 0.
     func testVRM1MorphBindNodeResolvesToMeshIndex() throws {
         let nodeCount = 22
         let json: [String: Any] = [
@@ -1284,9 +1284,83 @@ final class VRMExtensionParserTests: XCTestCase {
         let model = try parser.parseVRMExtension(vrmDict, document: document)
         let binds = try XCTUnwrap(model.expressions?.preset[.blink]?.morphTargetBinds)
         XCTAssertEqual(binds.count, 1, "the blink morph bind must parse")
-        XCTAssertEqual(binds.first?.node, 0,
-                       "VRM 1.0 bind node 21 must resolve to its mesh index (0), not stay the node index")
+        XCTAssertEqual(binds.first?.node, 21,
+                       "the authored node index must be preserved so serialization round-trips it")
+        XCTAssertEqual(binds.first?.meshIndex, 0,
+                       "node 21 owns mesh 0 — meshIndex is what morph keying uses")
         XCTAssertEqual(binds.first?.index, 13, "morph index within the mesh is unchanged")
+    }
+
+    /// The resolver must also rewrite custom-expression binds, not just presets.
+    func testVRM1CustomExpressionMorphBindResolvesToMeshIndex() throws {
+        let nodeCount = 22
+        let json: [String: Any] = [
+            "asset": ["version": "2.0", "generator": "Test"],
+            "scene": 0,
+            "scenes": [["nodes": Array(0..<nodeCount)]],
+            "nodes": (0..<nodeCount).map { i -> [String: Any] in
+                i == 20 ? ["name": "Face", "mesh": 1] : ["name": "node_\(i)"]
+            }
+        ]
+        let document = try JSONDecoder().decode(
+            GLTFDocument.self, from: JSONSerialization.data(withJSONObject: json))
+
+        let rawVrmDict: [String: Any] = [
+            "specVersion": "1.0",
+            "meta": ["name": "T", "licenseUrl": "https://example.com/license"],
+            "humanoid": ["humanBones": minimalHumanBones()],
+            "expressions": ["custom": [
+                "Wink": ["morphTargetBinds": [["node": 20, "index": 3, "weight": 1.0]]]
+            ]]
+        ]
+        let vrmDict = try JSONSerialization.jsonObject(
+            with: JSONSerialization.data(withJSONObject: rawVrmDict)) as! [String: Any]
+
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+        let bind = try XCTUnwrap(model.expressions?.custom["Wink"]?.morphTargetBinds.first)
+        XCTAssertEqual(bind.node, 20, "authored node preserved")
+        XCTAssertEqual(bind.meshIndex, 1, "node 20 owns mesh 1")
+    }
+
+    /// A bind whose node is out of range or carries no mesh keeps its authored
+    /// node and falls back to that node for `meshIndex` (it simply won't match a
+    /// primitive — no crash, same as before the fix).
+    func testVRM1MorphBindWithNoMeshLeavesIndicesUnchanged() throws {
+        let document = try JSONDecoder().decode(
+            GLTFDocument.self,
+            from: JSONSerialization.data(withJSONObject: [
+                "asset": ["version": "2.0"],
+                // 20 mesh-less nodes; bind references node 5 which has no mesh.
+                "nodes": (0..<20).map { ["name": "node_\($0)"] }
+            ]))
+        let rawVrmDict: [String: Any] = [
+            "specVersion": "1.0",
+            "meta": ["name": "T", "licenseUrl": "https://example.com/license"],
+            "humanoid": ["humanBones": minimalHumanBones()],
+            "expressions": ["preset": [
+                "blink": ["morphTargetBinds": [["node": 5, "index": 0, "weight": 1.0]]]
+            ]]
+        ]
+        let vrmDict = try JSONSerialization.jsonObject(
+            with: JSONSerialization.data(withJSONObject: rawVrmDict)) as! [String: Any]
+
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+        let bind = try XCTUnwrap(model.expressions?.preset[.blink]?.morphTargetBinds.first)
+        XCTAssertEqual(bind.node, 5, "authored node preserved")
+        XCTAssertEqual(bind.meshIndex, 5, "no mesh on node 5 → meshIndex falls back to the node value")
+    }
+
+    private func minimalHumanBones() -> [String: Any] {
+        [
+            "hips": ["node": 0], "spine": ["node": 7], "chest": ["node": 8],
+            "neck": ["node": 9], "head": ["node": 10],
+            "leftUpperLeg": ["node": 1], "rightUpperLeg": ["node": 2],
+            "leftLowerLeg": ["node": 3], "rightLowerLeg": ["node": 4],
+            "leftFoot": ["node": 5], "rightFoot": ["node": 6],
+            "leftUpperArm": ["node": 13], "rightUpperArm": ["node": 14],
+            "leftLowerArm": ["node": 15], "rightLowerArm": ["node": 16],
+            "leftHand": ["node": 17], "rightHand": ["node": 18]
+        ]
     }
 
     // MARK: - Helper Methods

@@ -228,18 +228,27 @@ public struct VRMExpression {
 
 /// A morph-target weight bound to a node/mesh by an expression. Mirrors VRM 1.0 `expression.morphTargetBinds`.
 public struct VRMMorphTargetBind {
-    /// Node index whose mesh owns the morph target.
+    /// Authored binding index as it appears in the source file: a glTF **node**
+    /// index for VRM 1.0, a **mesh** index for VRM 0.x. Preserved verbatim so
+    /// serialization round-trips the original value.
     public var node: Int
+    /// Resolved **mesh** index the morph weight is keyed by (what the renderer
+    /// and ``VRMExpressionController`` use). For VRM 0.x this equals ``node``;
+    /// for VRM 1.0 the loader resolves `node → nodes[node].mesh`.
+    public var meshIndex: Int
     /// Morph-target index within the mesh.
     public var index: Int
     /// Weight applied when this expression is fully active (typically `0.0...1.0`).
     public var weight: Float
 
-    /// Creates a morph-target binding.
-    public init(node: Int, index: Int, weight: Float) {
+    /// Creates a morph-target binding. `meshIndex` defaults to `node` (correct
+    /// for VRM 0.x, where the authored index is already a mesh index); the VRM
+    /// 1.0 loader overrides it with the resolved mesh index.
+    public init(node: Int, index: Int, weight: Float, meshIndex: Int? = nil) {
         self.node = node
         self.index = index
         self.weight = weight
+        self.meshIndex = meshIndex ?? node
     }
 }
 

@@ -625,18 +625,19 @@ public class VRMExtensionParser {
         }
     }
 
-    /// Rewrites each VRM 1.0 `morphTargetBind.node` (a glTF node index) to the
-    /// mesh index that node carries, so morph weights are keyed by mesh — the
-    /// same convention VRM 0.x binds use and the renderer/controller expect. A
-    /// bind whose node is out of range or carries no mesh is left unchanged
-    /// (it simply won't match any primitive, as before).
+    /// Resolves each VRM 1.0 `morphTargetBind.node` (a glTF node index) into the
+    /// bind's `meshIndex`, so morph weights are keyed by mesh — the same value
+    /// VRM 0.x binds already carry. The authored `node` is left untouched so
+    /// serialization round-trips it. A bind whose node is out of range or carries
+    /// no mesh keeps `meshIndex == node` (it simply won't match a primitive, as
+    /// before).
     private func resolveMorphBindNodesToMeshes(_ expressions: VRMExpressions, nodes: [GLTFNode]) {
         func resolved(_ binds: [VRMMorphTargetBind]) -> [VRMMorphTargetBind] {
             binds.map { bind in
                 guard bind.node >= 0, bind.node < nodes.count,
                       let mesh = nodes[bind.node].mesh else { return bind }
                 var b = bind
-                b.node = mesh
+                b.meshIndex = mesh
                 return b
             }
         }
