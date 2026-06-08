@@ -397,8 +397,26 @@ public class VRMLookAtController {
             return
         }
 
-        // Calculate direction vector
-        let direction = normalize(targetPos - eyePosition)
+        // Compute the gaze direction in HEAD-LOCAL space. The yaw/pitch produced
+        // here are written to the eye bone as a *local* rotation, so they must be
+        // expressed relative to the head's frame — not world space. Bringing the
+        // world-space target through the head's inverse world matrix strips the
+        // head's (and any root/body) rotation; computing the angles in world space
+        // and stamping them onto a local bone points the eyes off by the head's
+        // yaw whenever the head is turned (e.g. body rotated at the root).
+        let direction: SIMD3<Float>
+        if let headMatrix = headWorldMatrix {
+            let localTarget4 = headMatrix.inverse * SIMD4<Float>(targetPos, 1)
+            let localTarget = SIMD3<Float>(localTarget4.x, localTarget4.y, localTarget4.z)
+            // The gaze origin in head-local space is the head bone's own origin
+            // (zero) plus the authored offset; the head's world translation is
+            // already removed by the inverse transform above.
+            let gazeOrigin = lookAtData?.offsetFromHeadBone ?? .zero
+            direction = normalize(localTarget - gazeOrigin)
+        } else {
+            // No head bone wired up — fall back to the world-space origin.
+            direction = normalize(targetPos - eyePosition)
+        }
 
         // Convert to yaw/pitch angles
         // Yaw: rotation around Y axis (horizontal)
@@ -492,7 +510,13 @@ public class VRMLookAtController {
 
             let pitchQuat = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0])
             let yawQuat = simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
-            node.rotation = pitchQuat * yawQuat
+            // Compose the gaze deviation on top of the eye bone's authored rest
+            // rotation (the bind-pose baseline the eyeball mesh is skinned to).
+            // Overwriting with the bare gaze quaternion discards rest, which on
+            // VRoid-style rigs (large mirrored outward eye rest) snaps the eyes
+            // wall-eyed at center; pre-multiplying makes the rest cancel in the
+            // skinning delta so both eyes track in parallel.
+            node.rotation = pitchQuat * yawQuat * node.initialRotation
 
             if debugFrameCount % 60 == 0 {
                 vrmLog("[LookAt BONE] Left eye node \(leftIndex) yaw=\(mappedYawDeg)° pitch=\(mappedPitchDeg)°")
@@ -516,7 +540,7 @@ public class VRMLookAtController {
 
             let pitchQuat = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0])
             let yawQuat = simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
-            node.rotation = pitchQuat * yawQuat
+            node.rotation = pitchQuat * yawQuat * node.initialRotation
 
             if debugFrameCount % 60 == 0 {
                 vrmLog("[LookAt BONE] Right eye node \(rightIndex) yaw=\(mappedYawDeg)° pitch=\(mappedPitchDeg)°")
@@ -623,8 +647,27 @@ public class VRMLookAtController {
     /// (e.g. when retargeting from a manually authored pose) instead of
     /// being applied to the model directly. No-op in expression mode or
     /// when the model's `lookAt` block is missing.
+    /// Eye bone's bind-pose rotation, or identity if the index is missing or no
+    /// longer fits the current model's node array. Bounds-checked to match
+    /// ``applyToBones`` so a stale index skips rather than traps.
+    private func eyeRestRotation(_ index: Int?) -> simd_quatf {
+        guard let index, let model, index < model.nodes.count else {
+            return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        }
+        return model.nodes[index].initialRotation
+    }
+
     public func applyToAnimationState(_ animationState: VRMAnimationState) {
         guard mode == .bone, let lookAt = lookAtData else { return }
+
+        // `VRMAnimationState.applyToModel` stamps these rotations onto the nodes
+        // absolutely (no rest compose), so bake the eye bone's rest rotation in
+        // here — same composition as `applyToBones`. Without it, VRoid-style
+        // mirrored eye rests are discarded and the eyes go wall-eyed.
+        // Bounds-guard the index like `applyToBones` does (line 500/524): a
+        // stale eye-bone index from a swapped/rebuilt model must skip, not trap.
+        let leftRest = eyeRestRotation(leftEyeBoneIndex)
+        let rightRest = eyeRestRotation(rightEyeBoneIndex)
 
         // Left eye: yaw > 0 (right) is inner (toward nose), yaw < 0 (left) is outer
         if leftEyeBoneIndex != nil {
@@ -634,7 +677,7 @@ public class VRMLookAtController {
             let mappedPitchRad = VRMLookAtController.rangeMapOutput(currentPitch, map: verticalMap) * (.pi / 180.0)
             let eyeRotation = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0]) * simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
             var transform = animationState.bones[.leftEye] ?? VRMAnimationState.BoneTransform()
-            transform.rotation = eyeRotation
+            transform.rotation = eyeRotation * leftRest
             animationState.bones[.leftEye] = transform
         }
 
@@ -646,7 +689,7 @@ public class VRMLookAtController {
             let mappedPitchRad = VRMLookAtController.rangeMapOutput(currentPitch, map: verticalMap) * (.pi / 180.0)
             let eyeRotation = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0]) * simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
             var transform = animationState.bones[.rightEye] ?? VRMAnimationState.BoneTransform()
-            transform.rotation = eyeRotation
+            transform.rotation = eyeRotation * rightRest
             animationState.bones[.rightEye] = transform
         }
     }
