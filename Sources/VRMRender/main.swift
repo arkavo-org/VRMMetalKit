@@ -102,6 +102,7 @@ struct RenderOptions {
     var rimPower: Float = 5.0
     var gaze: String? = nil
     var bodyYaw: Float = 0
+    var blink: Float? = nil
 }
 
 // MARK: - Errors
@@ -166,6 +167,9 @@ func printUsage() {
                                    turning the head away from world-forward.
                                    Combine with --gaze camera to verify eyes
                                    track correctly on a turned head.
+        --blink <0-1>              Set the blink expression weight (eyes closed
+                                   at 1.0). Convenience for --expression blink;
+                                   composes with --expression.
         --list-debug               List all debug modes
         --help                     Show this help message
     
@@ -278,6 +282,11 @@ func parseArguments() -> RenderOptions? {
             if i < args.count, let val = Float(args[i]) {
                 options.bodyYaw = val
             }
+        case "--blink":
+            i += 1
+            if i < args.count, let val = Float(args[i]) {
+                options.blink = max(0, min(1, val))
+            }
         default:
             if !arg.hasPrefix("-") {
                 positionalArgs.append(arg)
@@ -371,7 +380,7 @@ struct VRMRenderCLI {
             print("  ✓ Materials: \(model.materials.count)")
             print("  ✓ Meshes: \(model.meshes.count)")
             print("")
-            
+
             // Create renderer
             print("Setting up renderer...")
             var config = RendererConfig()
@@ -419,6 +428,11 @@ struct VRMRenderCLI {
                     print("  ⚠️ Unknown expression: \(expressionName)")
                     print("     Available: happy, angry, sad, relaxed, surprised, aa, ih, ou, ee, oh, blink, neutral")
                 }
+            }
+
+            if let blink = options.blink {
+                print("  ✓ Blink: \(blink)")
+                renderer.expressionController?.setExpressionWeight(.blink, weight: blink)
             }
 
             // Turn the whole avatar around Y so the head no longer faces

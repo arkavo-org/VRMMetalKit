@@ -807,7 +807,10 @@ public class VRMExpressionController: @unchecked Sendable {
         // meshMorphWeights to an arbitrary size (DoS via unbounded allocation)
         // or crash the loader by indexing with a negative value.
         for bind in expression.morphTargetBinds {
-            let meshIndex = bind.node  // 'node' is actually mesh index in VRM 0.0
+            // Use the resolved mesh index, not the authored `node` (a node index
+            // for VRM 1.0). `meshIndex` == `node` for VRM 0.x, so both paths key
+            // morph weights by mesh consistently.
+            let meshIndex = bind.meshIndex
             let morphIndex = bind.index
 
             guard morphIndex >= 0, morphIndex < maxMorphTargets else {

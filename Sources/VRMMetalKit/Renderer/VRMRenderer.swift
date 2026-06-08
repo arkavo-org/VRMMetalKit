@@ -489,6 +489,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Look-at controller that drives eye-bone rotations to track a world-space target. Auto-created in ``init(device:config:)``.
     public var lookAtController: VRMLookAtController?
 
+    /// Sets a preset expression's weight, e.g. `renderer.setExpression(.happy, weight: 1.0)`.
+    ///
+    /// Thin convenience over ``expressionController`` so callers don't thread
+    /// `?.` through the optional controller. Weight is clamped to `[0, 1]`; the
+    /// change is applied on the next ``draw(in:commandBuffer:renderPassDescriptor:)``.
+    /// No-op if the controller is unavailable. Call on the main thread.
+    public func setExpression(_ preset: VRMExpressionPreset, weight: Float) {
+        expressionController?.setExpressionWeight(preset, weight: weight)
+    }
+
+    /// Sets a registered custom expression's weight by name. No-op if the name
+    /// was never registered (or the controller is unavailable). Call on the main thread.
+    public func setExpression(_ name: String, weight: Float) {
+        expressionController?.setCustomExpressionWeight(name, weight: weight)
+    }
+
     // MARK: - Spring Bone Physics
 
     private var springBoneComputeSystem: SpringBoneComputeSystem?
