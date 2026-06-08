@@ -1234,6 +1234,61 @@ final class VRMExtensionParserTests: XCTestCase {
         }
     }
 
+    // MARK: - VRM 1.0 morph-bind node→mesh resolution
+
+    /// VRM 1.0 `morphTargetBind.node` is a glTF **node** index, but the renderer
+    /// and `VRMExpressionController` key morph weights by **mesh** index (VRM 0.x
+    /// binds already store the mesh index directly). The parser must resolve
+    /// node → mesh, or every 1.0 morph expression (blink/visemes/emotions)
+    /// silently no-ops because the stored key matches no primitive. Here node 21
+    /// owns mesh 0, so a blink bind on node 21 must come back keyed to mesh 0.
+    func testVRM1MorphBindNodeResolvesToMeshIndex() throws {
+        let nodeCount = 22
+        let json: [String: Any] = [
+            "asset": ["version": "2.0", "generator": "Test"],
+            "scene": 0,
+            "scenes": [["nodes": Array(0..<nodeCount)]],
+            "nodes": (0..<nodeCount).map { i -> [String: Any] in
+                i == 21 ? ["name": "Face", "mesh": 0] : ["name": "node_\(i)"]
+            }
+        ]
+        let document = try JSONDecoder().decode(
+            GLTFDocument.self, from: JSONSerialization.data(withJSONObject: json))
+
+        let rawVrmDict: [String: Any] = [
+            "specVersion": "1.0",
+            "meta": ["name": "T", "licenseUrl": "https://example.com/license"],
+            "humanoid": ["humanBones": [
+                "hips": ["node": 0], "spine": ["node": 7], "chest": ["node": 8],
+                "neck": ["node": 9], "head": ["node": 10],
+                "leftUpperLeg": ["node": 1], "rightUpperLeg": ["node": 2],
+                "leftLowerLeg": ["node": 3], "rightLowerLeg": ["node": 4],
+                "leftFoot": ["node": 5], "rightFoot": ["node": 6],
+                "leftUpperArm": ["node": 13], "rightUpperArm": ["node": 14],
+                "leftLowerArm": ["node": 15], "rightLowerArm": ["node": 16],
+                "leftHand": ["node": 17], "rightHand": ["node": 18]
+            ]],
+            "expressions": ["preset": [
+                "blink": [
+                    "isBinary": true,
+                    "morphTargetBinds": [["node": 21, "index": 13, "weight": 1.0]]
+                ]
+            ]]
+        ]
+        // Round-trip through JSON so nested numbers are NSNumber-backed, exactly
+        // as the production loader sees them (raw Swift Int/Double literals don't
+        // satisfy the parser's `as? [[String: Any]]` / `as? Int` casts the same way).
+        let vrmDict = try JSONSerialization.jsonObject(
+            with: JSONSerialization.data(withJSONObject: rawVrmDict)) as! [String: Any]
+
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+        let binds = try XCTUnwrap(model.expressions?.preset[.blink]?.morphTargetBinds)
+        XCTAssertEqual(binds.count, 1, "the blink morph bind must parse")
+        XCTAssertEqual(binds.first?.node, 0,
+                       "VRM 1.0 bind node 21 must resolve to its mesh index (0), not stay the node index")
+        XCTAssertEqual(binds.first?.index, 13, "morph index within the mesh is unchanged")
+    }
+
     // MARK: - Helper Methods
 
     private func createMinimalGLTFDocument(nodes: Int = 1, extensions: [String: Any]? = nil, nodeNames: [Int: String] = [:]) -> GLTFDocument {

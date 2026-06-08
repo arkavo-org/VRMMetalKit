@@ -175,7 +175,15 @@ public class VRMExtensionParser {
 
         // VRM 1.0 uses "expressions", VRM 0.0 uses "blendShapeMaster"
         if let expressionsDict = vrmDict["expressions"] as? [String: Any] {
-            model.expressions = try parseExpressions(expressionsDict)
+            let expressions = try parseExpressions(expressionsDict)
+            // VRM 1.0 `morphTargetBind.node` is a glTF *node* index, but the
+            // renderer and VRMExpressionController key morph weights by *mesh*
+            // index (VRM 0.x binds — parseBlendShapeMaster — already store the
+            // mesh index directly). Resolve node → mesh here so 1.0 expressions
+            // (blink/visemes/emotions) actually reach their primitive instead of
+            // landing on a key that matches no mesh and silently no-opping.
+            resolveMorphBindNodesToMeshes(expressions, nodes: document.nodes ?? [])
+            model.expressions = expressions
         } else if let blendShapeMaster = vrmDict["blendShapeMaster"] as? [String: Any] {
             // Parse VRM 0.0 blendShapeMaster
             model.expressions = try parseBlendShapeMaster(blendShapeMaster)
@@ -614,6 +622,33 @@ public class VRMExtensionParser {
         case "lookleft": return .lookLeft
         case "lookright": return .lookRight
         default: return nil
+        }
+    }
+
+    /// Rewrites each VRM 1.0 `morphTargetBind.node` (a glTF node index) to the
+    /// mesh index that node carries, so morph weights are keyed by mesh — the
+    /// same convention VRM 0.x binds use and the renderer/controller expect. A
+    /// bind whose node is out of range or carries no mesh is left unchanged
+    /// (it simply won't match any primitive, as before).
+    private func resolveMorphBindNodesToMeshes(_ expressions: VRMExpressions, nodes: [GLTFNode]) {
+        func resolved(_ binds: [VRMMorphTargetBind]) -> [VRMMorphTargetBind] {
+            binds.map { bind in
+                guard bind.node >= 0, bind.node < nodes.count,
+                      let mesh = nodes[bind.node].mesh else { return bind }
+                var b = bind
+                b.node = mesh
+                return b
+            }
+        }
+        for (preset, expression) in expressions.preset {
+            var e = expression
+            e.morphTargetBinds = resolved(expression.morphTargetBinds)
+            expressions.preset[preset] = e
+        }
+        for (name, expression) in expressions.custom {
+            var e = expression
+            e.morphTargetBinds = resolved(expression.morphTargetBinds)
+            expressions.custom[name] = e
         }
     }
 
