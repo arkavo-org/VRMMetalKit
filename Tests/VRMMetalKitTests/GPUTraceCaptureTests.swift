@@ -12,7 +12,9 @@ import simd
 /// Skipped unless `VRM_GPUTRACE_OUT` names the output path. Capture also
 /// requires `METAL_CAPTURE_ENABLED=1` in the environment. The bundled
 /// VRM 1.0 fixture is rendered by default; set `VRM_GPUTRACE_MODEL=vrm0`
-/// for the VRM 0.0 fixture. Typical use:
+/// for the VRM 0.0 fixture. `VRM_GPUTRACE_SIZE` overrides the render
+/// resolution (default 512; use 2048+ for fragment-bound profiling).
+/// Typical use:
 ///
 ///     make gputrace
 ///
@@ -71,12 +73,13 @@ final class GPUTraceCaptureTests: XCTestCase {
         captureDesc.outputURL = outURL
         try manager.startCapture(with: captureDesc)
 
+        let size = ProcessInfo.processInfo.environment["VRM_GPUTRACE_SIZE"].flatMap { Int($0) } ?? 512
         let pixels: [UInt8]
         do {
             pixels = try RenderTestSupport.renderFrame(
                 renderer: renderer,
                 device: device,
-                size: 512,
+                size: size,
                 pixelFormat: .rgba8Unorm_srgb,
                 clearColor: MTLClearColor(red: 0.12, green: 0.14, blue: 0.18, alpha: 1.0)
             )

@@ -333,15 +333,20 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
                         bool isFrontFace [[front_facing]],
                         constant MToonMaterial& material [[buffer(8)]],
                         constant Uniforms& uniforms [[buffer(1)]],
-                        texture2d<float> baseColorTexture [[texture(0)]],
-                        texture2d<float> shadeMultiplyTexture [[texture(1)]],
-                        texture2d<float> shadingShiftTexture [[texture(2)]],
-                        texture2d<float> normalTexture [[texture(3)]],
-                        texture2d<float> emissiveTexture [[texture(4)]],
-                        texture2d<float> matcapTexture [[texture(5)]],
-                        texture2d<float> rimMultiplyTexture [[texture(6)]],
-                        texture2d<float> uvAnimationMaskTexture [[texture(7)]],
-                        texture2d<float> occlusionTexture [[texture(8)]],
+                        // half returns: every bound texture is 8-bit Unorm/sRGB
+                        // content, so half4 is lossless while halving the
+                        // texture-unit return bandwidth (the top GPU limiter
+                        // for the bundled avatar) and register pressure.
+                        // Lighting math stays in mtoon_float.
+                        texture2d<half> baseColorTexture [[texture(0)]],
+                        texture2d<half> shadeMultiplyTexture [[texture(1)]],
+                        texture2d<half> shadingShiftTexture [[texture(2)]],
+                        texture2d<half> normalTexture [[texture(3)]],
+                        texture2d<half> emissiveTexture [[texture(4)]],
+                        texture2d<half> matcapTexture [[texture(5)]],
+                        texture2d<half> rimMultiplyTexture [[texture(6)]],
+                        texture2d<half> uvAnimationMaskTexture [[texture(7)]],
+                        texture2d<half> occlusionTexture [[texture(8)]],
                         sampler textureSampler [[sampler(0)]]) {
 
  // Debug modes are cold in production; keep the normal path to one branch.
@@ -358,7 +363,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  return material.baseColorFactor;
  } else if (uniforms.debugUVs == 4) {
  // Show sampled texture RGB directly
- float4 texColor = baseColorTexture.sample(textureSampler, in.texCoord);
+ float4 texColor = float4(baseColorTexture.sample(textureSampler, in.texCoord));
  return float4(texColor.rgb, 1.0);
  } else if (uniforms.debugUVs == 5) {
  // Show normal direction as color
@@ -386,7 +391,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Show raw base color (texture * factor, no lighting) - debug black triangles
  float4 debugBaseColor = material.baseColorFactor;
  if (material.hasBaseColorTexture > 0) {
-     debugBaseColor *= baseColorTexture.sample(textureSampler, in.texCoord);
+     debugBaseColor *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
  }
  return float4(debugBaseColor.rgb, 1.0);
  } else if (uniforms.debugUVs == 13) {
@@ -411,7 +416,7 @@ return float4(0.0, 0.0, 1.0, 1.0);
 // Debug mode 25: Raw texture RGBA channels: R=texR, G=texG, B=texAlpha (with MASK discard)
 float4 texSample = float4(1.0);
 if (material.hasBaseColorTexture > 0) {
-    texSample = baseColorTexture.sample(textureSampler, in.texCoord);
+    texSample = float4(baseColorTexture.sample(textureSampler, in.texCoord));
 }
 float4 dbgBase25 = material.baseColorFactor * texSample;
 if (material.alphaMode == 1 && dbgBase25.a < material.alphaCutoff) {
@@ -422,7 +427,7 @@ return float4(texSample.r, texSample.g, texSample.a, 1.0);
 // Debug mode 26: Texture alpha WITH MASK discard (grayscale)
 float4 dbgBase26 = material.baseColorFactor;
 if (material.hasBaseColorTexture > 0) {
-    dbgBase26 *= baseColorTexture.sample(textureSampler, in.texCoord);
+    dbgBase26 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
 }
 if (material.alphaMode == 1 && dbgBase26.a < material.alphaCutoff) {
     discard_fragment();
@@ -432,7 +437,7 @@ return float4(dbgBase26.a, dbgBase26.a, dbgBase26.a, 1.0);
 // Debug mode 27: Shade color factor (identifies material by unique shade color)
 float4 dbgBase27 = material.baseColorFactor;
 if (material.hasBaseColorTexture > 0) {
-    dbgBase27 *= baseColorTexture.sample(textureSampler, in.texCoord);
+    dbgBase27 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
 }
 if (material.alphaMode == 1 && dbgBase27.a < material.alphaCutoff) {
     discard_fragment();
@@ -442,7 +447,7 @@ return float4(material.shadeColorR, material.shadeColorG, material.shadeColorB, 
 // Debug mode 28: Alpha mode with correct discard (RED=OPAQUE, GREEN=MASK, BLUE=BLEND)
 float4 dbgBase28 = material.baseColorFactor;
 if (material.hasBaseColorTexture > 0) {
-    dbgBase28 *= baseColorTexture.sample(textureSampler, in.texCoord);
+    dbgBase28 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
 }
 if (material.alphaMode == 1 && dbgBase28.a < material.alphaCutoff) {
     discard_fragment();
@@ -454,7 +459,7 @@ return float4(0.0, 0.0, 1.0, 1.0);
 // Debug 30: Base color texture RGB after MASK discard (no lighting)
 float4 dbgBase30 = material.baseColorFactor;
 if (material.hasBaseColorTexture > 0) {
-    dbgBase30 *= baseColorTexture.sample(textureSampler, in.texCoord);
+    dbgBase30 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
 }
 if (material.alphaMode == 1 && dbgBase30.a < material.alphaCutoff) {
     discard_fragment();
@@ -464,13 +469,13 @@ return float4(dbgBase30.rgb, 1.0);
 // Debug 31: Raw shade texture sample after MASK discard
 float4 dbgBase31 = material.baseColorFactor;
 if (material.hasBaseColorTexture > 0) {
-    dbgBase31 *= baseColorTexture.sample(textureSampler, in.texCoord);
+    dbgBase31 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
 }
 if (material.alphaMode == 1 && dbgBase31.a < material.alphaCutoff) {
     discard_fragment();
 }
 if (material.hasShadeMultiplyTexture > 0) {
-    return float4(shadeMultiplyTexture.sample(textureSampler, in.texCoord).rgb, 1.0);
+    return float4(float3(shadeMultiplyTexture.sample(textureSampler, in.texCoord).rgb), 1.0);
 }
 return float4(0.5, 0.5, 0.5, 1.0); // Gray = no shade texture
  } else if (uniforms.debugUVs == 33) {
@@ -488,7 +493,7 @@ if (material.hasShadeMultiplyTexture > 0) {
 // Debug 32: Matcap contribution after MASK discard
 float4 dbgBase32 = material.baseColorFactor;
 if (material.hasBaseColorTexture > 0) {
-    dbgBase32 *= baseColorTexture.sample(textureSampler, in.texCoord);
+    dbgBase32 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
 }
 if (material.alphaMode == 1 && dbgBase32.a < material.alphaCutoff) {
     discard_fragment();
@@ -496,7 +501,7 @@ if (material.alphaMode == 1 && dbgBase32.a < material.alphaCutoff) {
 if (material.hasMatcapTexture > 0) {
     float3 vn = normalize(in.viewNormal);
     float2 mcUV = vn.xy * 0.5 + 0.5;
-    return float4(matcapTexture.sample(textureSampler, mcUV).rgb, 1.0);
+    return float4(float3(matcapTexture.sample(textureSampler, mcUV).rgb), 1.0);
 }
 return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  } else if (uniforms.debugUVs == 15) {
@@ -593,7 +598,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
      // MESH_PRIMITIVE_GENERATED_TANGENT_SPACE) require synthesizing a TBN basis.
      // Christian Schüler's screen-space-derivative TBN (2010) builds the basis
      // per-fragment from worldPos and uv derivatives — no per-vertex tangents.
-     mtoon_float3 nMap = mtoon_float3(normalTexture.sample(textureSampler, uv).xyz * 2.0 - 1.0);
+     mtoon_float3 nMap = mtoon_float3(float3(normalTexture.sample(textureSampler, uv).xyz) * 2.0 - 1.0);
      // glTF 2.0 normalTextureInfo.scale — `scaledNormal = normalize((sample
      // * 2.0 - 1.0) * vec3(scale, scale, 1.0))`. Defaults to 1.0 so existing
      // assets without an authored `scale` field are unaffected. VMK#290.
