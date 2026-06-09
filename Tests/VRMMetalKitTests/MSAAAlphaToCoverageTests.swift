@@ -402,21 +402,24 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
         let sampleCount = 4
         let clear = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
-        func render(alphaToCoverage: Bool) async throws -> [UInt8] {
+        // One shared model for every render: VRMModel.load carries per-load
+        // variance (distinct loads of the same file produce renders that
+        // differ by a few thousand bytes), so a fresh load per renderer
+        // breaks the bitwise-determinism control this test depends on.
+        // Rendering is deterministic given the same loaded model instance.
+        // Spring-bone simulation is fully off for the same reason: its GPU
+        // path carries FP-ordering jitter that shifts hair-strand
+        // silhouettes between otherwise identical renders.
+        let model = try await VRMModel.load(
+            from: URL(fileURLWithPath: modelPath), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+
+        func makeRenderer(alphaToCoverage: Bool) -> VRMRenderer {
             var config = RendererConfig(strict: .off, sampleCount: sampleCount)
             config.alphaToCoverageForMASK = alphaToCoverage
             config.synchronousSpringBone = true
             let renderer = VRMRenderer(device: device, config: config)
-
-            // Augmentation off: this test measures A2C edge alpha on a head
-            // close-up and needs a bitwise-deterministic control. The #309
-            // synthetic head/brow capsule puts front hair in collider contact,
-            // and the spring-bone GPU collision path carries ~1e-4 FP-ordering
-            // jitter that surfaces as a few changed pixels in this framing —
-            // irrelevant to A2C but enough to break the determinism control.
-            let model = try await VRMModel.load(
-                from: URL(fileURLWithPath: modelPath), device: device,
-                options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+            renderer.springBoneQuality = .off
             renderer.loadModel(model)
 
             renderer.projectionMatrix = RenderTestSupport.makePerspective(
@@ -427,19 +430,30 @@ final class MSAAAlphaToCoverageTests: XCTestCase {
                 eye: SIMD3<Float>(0, 1.45, 1.5),
                 center: SIMD3<Float>(0, 1.45, 0),
                 up: SIMD3<Float>(0, 1, 0))
+            return renderer
+        }
 
-            return try RenderTestSupport.renderFrameMSAA(
+        func render(_ renderer: VRMRenderer) throws -> [UInt8] {
+            try RenderTestSupport.renderFrameMSAA(
                 renderer: renderer, device: device, size: size,
                 sampleCount: sampleCount, pixelFormat: .bgra8Unorm, clearColor: clear)
         }
 
-        let off = try await render(alphaToCoverage: false)
+        // All three renderers are built before the first render: tearing a
+        // renderer down between renders perturbs shared state enough to break
+        // the bitwise control below, while coexisting renderers over one
+        // shared model render identically.
+        let rendererOff = makeRenderer(alphaToCoverage: false)
+        let rendererOff2 = makeRenderer(alphaToCoverage: false)
+        let rendererOn = makeRenderer(alphaToCoverage: true)
+
+        let off = try render(rendererOff)
         // Control: a second A2C-off render must be bitwise identical to the
         // first. This proves the render path is deterministic, so the `changed`
         // count below is attributable to A2C alone and not frame jitter — a raw
         // pixel diff is only a valid detector once this holds.
-        let off2 = try await render(alphaToCoverage: false)
-        let on = try await render(alphaToCoverage: true)
+        let off2 = try render(rendererOff2)
+        let on = try render(rendererOn)
 
         func luma(_ b: [UInt8], _ i: Int) -> Float {
             // bgra8Unorm: byte order B,G,R,A
