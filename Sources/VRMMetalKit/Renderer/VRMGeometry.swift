@@ -300,6 +300,7 @@ public class VRMPrimitive {
                     length: vertices.count * MemoryLayout<VRMVertex>.stride,
                     options: .storageModeShared
                 )
+                primitive.vertexBuffer?.label = "VRM Vertices (mat \(primitive.materialIndex.map(String.init) ?? "—"))"
             }
         }
 
@@ -360,6 +361,7 @@ public class VRMPrimitive {
                         length: indices.count * MemoryLayout<UInt32>.stride,
                         options: .storageModeShared
                     )
+                    primitive.indexBuffer?.label = "VRM Indices u32 (mat \(primitive.materialIndex.map(String.init) ?? "—"))"
                 } else { // UNSIGNED_SHORT or UNSIGNED_BYTE
                     primitive.indexType = .uint16
                     let uint16Indices = indices.map { UInt16($0) }
@@ -368,6 +370,7 @@ public class VRMPrimitive {
                         length: uint16Indices.count * MemoryLayout<UInt16>.stride,
                         options: .storageModeShared
                     )
+                    primitive.indexBuffer?.label = "VRM Indices u16 (mat \(primitive.materialIndex.map(String.init) ?? "—"))"
                 }
             }
         }
@@ -593,6 +596,7 @@ public class VRMPrimitive {
             if let positionDeltas = target.positionDeltas {
                 let bufferSize = positionDeltas.count * MemoryLayout<SIMD3<Float>>.stride
                 if let buffer = device.makeBuffer(bytes: positionDeltas, length: bufferSize, options: .storageModeShared) {
+                    buffer.label = "Morph Position Delta [\(morphPositionBuffers.count)]"
                     morphPositionBuffers.append(buffer)
                 }
             }
@@ -601,6 +605,7 @@ public class VRMPrimitive {
             if let normalDeltas = target.normalDeltas {
                 let bufferSize = normalDeltas.count * MemoryLayout<SIMD3<Float>>.stride
                 if let buffer = device.makeBuffer(bytes: normalDeltas, length: bufferSize, options: .storageModeShared) {
+                    buffer.label = "Morph Normal Delta [\(morphNormalBuffers.count)]"
                     morphNormalBuffers.append(buffer)
                 }
             }
@@ -609,6 +614,7 @@ public class VRMPrimitive {
             if let tangentDeltas = target.tangentDeltas {
                 let bufferSize = tangentDeltas.count * MemoryLayout<SIMD3<Float>>.stride
                 if let buffer = device.makeBuffer(bytes: tangentDeltas, length: bufferSize, options: .storageModeShared) {
+                    buffer.label = "Morph Tangent Delta [\(morphTangentBuffers.count)]"
                     morphTangentBuffers.append(buffer)
                 }
             }
@@ -635,6 +641,7 @@ public class VRMPrimitive {
             // Create base positions buffer
             let basePositionsSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
             basePositionsBuffer = device.makeBuffer(length: basePositionsSize, options: .storageModeShared)
+            basePositionsBuffer?.label = "Morph Base Positions"
 
             if let baseBuffer = basePositionsBuffer {
                 let basePointer = baseBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertexCount)
@@ -647,6 +654,7 @@ public class VRMPrimitive {
             if hasNormals {
                 let baseNormalsSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
                 baseNormalsBuffer = device.makeBuffer(length: baseNormalsSize, options: .storageModeShared)
+                baseNormalsBuffer?.label = "Morph Base Normals"
 
                 if let normalsBuffer = baseNormalsBuffer {
                     let normalsPointer = normalsBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertexCount)
@@ -663,6 +671,7 @@ public class VRMPrimitive {
 
         // Position deltas SoA
         morphPositionsSoA = device.makeBuffer(length: totalDeltasSize, options: .storageModeShared)
+        morphPositionsSoA?.label = "Morph Position Deltas SoA"
         if let soaBuffer = morphPositionsSoA {
             let soaPointer = soaBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: morphCount * vertexCount)
 
@@ -690,6 +699,7 @@ public class VRMPrimitive {
         // Normal deltas SoA (if we have normals)
         if hasNormals {
             morphNormalsSoA = device.makeBuffer(length: totalDeltasSize, options: .storageModeShared)
+            morphNormalsSoA?.label = "Morph Normal Deltas SoA"
             if let soaBuffer = morphNormalsSoA {
                 let soaPointer = soaBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: morphCount * vertexCount)
 
@@ -853,6 +863,7 @@ public class VRMPrimitive {
             length: length,
             options: .storageModeShared
         )
+        firstPersonHiddenFlagsBuffer?.label = "FirstPerson Hidden Flags"
     }
 }
 
@@ -1332,7 +1343,7 @@ public class VRMTexture {
 /// Sorting between transparent primitives is driven by ``renderQueue`` and
 /// ``renderQueueOffset`` (see the VRM 1.0 spec for the base values: 2000 for
 /// OPAQUE, 2450 for MASK, 2510 for transparent-with-zwrite, 3000 for BLEND).
-public class VRMMaterial {
+public class VRMMaterial: @unchecked Sendable {
     /// Source material name from glTF.
     public let name: String?
     /// Base color (albedo) tint applied to ``baseColorTexture``. Clamped to `[0, 1]` per the glTF 2.0 spec.

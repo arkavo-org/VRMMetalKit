@@ -79,13 +79,11 @@ public final class BufferPreloader: @unchecked Sendable {
         }
         
         let totalCount = buffers.count
-        let progressBox = UncheckedProgressBox()
-        let results = UncheckedBufferDictionary()
-        
-        // Convert buffers to arrays for safe iteration
         let bufferURIs: [String?] = buffers.map { $0.uri }
-        
-        await withTaskGroup(of: Void.self) { group in
+        var results: [Int: Data] = [:]
+        var loaded = 0
+
+        await withTaskGroup(of: (Int, Data?).self) { group in
             for (index, _) in buffers.enumerated() {
                 group.addTask {
                     do {
@@ -94,25 +92,26 @@ public final class BufferPreloader: @unchecked Sendable {
                             index: index,
                             binaryData: binaryData
                         )
-                        if let data = data {
-                            results.set(data, for: index)
-                        }
+                        return (index, data)
                     } catch {
                         vrmLog("[BufferPreloader] Failed to load buffer \(index): \(error)")
-                    }
-                    
-                    progressBox.increment()
-                    let current = progressBox.countValue
-                    await MainActor.run {
-                        progressCallback?(current, totalCount)
+                        return (index, nil)
                     }
                 }
             }
-            
-            await group.waitForAll()
+
+            for await (index, data) in group {
+                loaded += 1
+                if let data {
+                    results[index] = data
+                }
+                await MainActor.run {
+                    progressCallback?(loaded, totalCount)
+                }
+            }
         }
-        
-        preloadedData = results.getAll()
+
+        preloadedData = results
         return preloadedData
     }
     
@@ -202,40 +201,3 @@ public final class BufferPreloader: @unchecked Sendable {
     }
 }
 
-// MARK: - Helper Types
-
-/// Thread-safe dictionary for buffer results
-private final class UncheckedBufferDictionary: @unchecked Sendable {
-    private var dict: [Int: Data] = [:]
-    private let lock = NSLock()
-    
-    func set(_ data: Data, for index: Int) {
-        lock.lock()
-        dict[index] = data
-        lock.unlock()
-    }
-    
-    func getAll() -> [Int: Data] {
-        lock.lock()
-        defer { lock.unlock() }
-        return dict
-    }
-}
-
-/// Thread-safe progress counter
-private final class UncheckedProgressBox: @unchecked Sendable {
-    private var count: Int = 0
-    private let lock = NSLock()
-    
-    var countValue: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return count
-    }
-    
-    func increment() {
-        lock.lock()
-        count += 1
-        lock.unlock()
-    }
-}

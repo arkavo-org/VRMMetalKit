@@ -127,7 +127,17 @@ public class VRMMorphTargetSystem {
     ///   `morph_accumulate_positions` kernel is missing from the library.
     public init(device: MTLDevice) throws {
         self.device = device
-        guard let queue = device.makeCommandQueue() else {
+        #if DEBUG
+        let logStateDesc = MTLLogStateDescriptor()
+        logStateDesc.level = .debug
+        let logState = try? device.makeLogState(descriptor: logStateDesc)
+        let queueDesc = MTLCommandQueueDescriptor()
+        queueDesc.logState = logState
+        let queue = device.makeCommandQueue(descriptor: queueDesc) ?? device.makeCommandQueue()
+        #else
+        let queue = device.makeCommandQueue()
+        #endif
+        guard let queue else {
             throw VRMMorphTargetError.failedToCreateCommandQueue
         }
         self.commandQueue = queue
@@ -139,10 +149,12 @@ public class VRMMorphTargetSystem {
         // Pre-allocate buffer for morph weights
         let bufferSize = MemoryLayout<Float>.stride * maxMorphTargets
         morphWeightsBuffer = device.makeBuffer(length: bufferSize, options: .storageModeShared)
+        morphWeightsBuffer?.label = "Morph Weights"
 
         // Pre-allocate active set buffer
         let activeSetSize = MemoryLayout<ActiveMorph>.stride * VRMMorphTargetSystem.maxActiveMorphs
         activeSetBuffer = device.makeBuffer(length: activeSetSize, options: .storageModeShared)
+        activeSetBuffer?.label = "Morph ActiveSet"
     }
 
     private func setupComputePipeline() throws {
@@ -182,7 +194,14 @@ public class VRMMorphTargetSystem {
         
         // Create pipeline from precompiled library (single code path, no JIT fallback)
         do {
+            #if DEBUG
+            let pipelineDesc = MTLComputePipelineDescriptor()
+            pipelineDesc.computeFunction = function
+            pipelineDesc.shaderValidation = .enabled
+            morphAccumulatePipelineState = try device.makeComputePipelineState(descriptor: pipelineDesc, options: [], reflection: nil)
+            #else
             morphAccumulatePipelineState = try device.makeComputePipelineState(function: function)
+            #endif
             vrmLog("[VRMMorphTargetSystem] Morph accumulate compute pipeline created from precompiled library")
         } catch {
             throw VRMMorphTargetError.failedToCreateComputePipeline(error.localizedDescription)
@@ -272,6 +291,7 @@ public class VRMMorphTargetSystem {
         // Create new buffer for morphed positions
         let bufferSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
         let buffer = device.makeBuffer(length: bufferSize, options: .storageModePrivate)
+        buffer?.label = "Morph Output Positions (prim \(primitiveID))"
         morphedPositionBuffers[primitiveID] = buffer
         return buffer
     }
@@ -285,6 +305,7 @@ public class VRMMorphTargetSystem {
         // Create new buffer for morphed normals
         let bufferSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
         let buffer = device.makeBuffer(length: bufferSize, options: .storageModePrivate)
+        buffer?.label = "Morph Output Normals (prim \(primitiveID))"
         morphedNormalBuffers[primitiveID] = buffer
         return buffer
     }
@@ -327,6 +348,7 @@ public class VRMMorphTargetSystem {
                 vrmLog("[VRMMorphTargetSystem] Failed to create blit encoder for copy")
                 return false
             }
+            blitEncoder.label = "Morph Base Copy (no active morphs)"
 
             let copySize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
             blitEncoder.copy(from: basePositions, sourceOffset: 0,
@@ -362,6 +384,7 @@ public class VRMMorphTargetSystem {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return false
         }
+        computeEncoder.label = "Morph Accumulate"
 
         computeEncoder.setComputePipelineState(pipelineState)
 

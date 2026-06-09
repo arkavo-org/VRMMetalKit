@@ -813,7 +813,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// after init to override the defaults.
     public init(device: MTLDevice, config: RendererConfig = RendererConfig(strict: .off)) {
         self.device = device
+        #if DEBUG
+        let logStateDesc = MTLLogStateDescriptor()
+        logStateDesc.level = .debug
+        let logState = try? device.makeLogState(descriptor: logStateDesc)
+        let queueDesc = MTLCommandQueueDescriptor()
+        queueDesc.logState = logState
+        self.commandQueue = device.makeCommandQueue(descriptor: queueDesc) ?? device.makeCommandQueue()!
+        #else
         self.commandQueue = device.makeCommandQueue()!
+        #endif
         self.config = config
         self.strictValidator = StrictValidator(config: config)
         self.skinningSystem = VRMSkinningSystem(device: device)
@@ -859,6 +868,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             vrmLog("⚠️ [VRMRenderer] Morph target system unavailable, expressions may be limited")
         }
 
+        // Opt-in pipeline persistence: route the pipeline builds below through
+        // an on-disk MTLBinaryArchive so the next launch reloads them instead
+        // of recompiling (large win on mobile GPUs). Enabled before the builds,
+        // flushed after. Failures degrade silently to plain in-memory caching.
+        let pipelineArchiveEnabled = Self.enablePipelineArchiveIfRequested(device: device, config: config)
+
         setupPipeline()
         vrmLog("[VRMRenderer] About to setup skinned pipeline...")
         setupSkinnedPipeline()
@@ -866,6 +881,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[VRMRenderer] About to setup sprite pipeline...")
         setupSpritePipeline()
         vrmLog("[VRMRenderer] Finished setup sprite pipeline")
+
+        if pipelineArchiveEnabled {
+            try? VRMPipelineCache.shared.flushPersistentArchive()
+        }
 
         // Issue #147: Auto-configure 3-point lighting so hands-off consumers
         // get a usable image immediately. Apps that want different lighting

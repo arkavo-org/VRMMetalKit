@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import Synchronization
 import simd
 
 // MARK: - ARKit Face Blend Shapes
@@ -556,106 +557,114 @@ public protocol ARMetadataSource: Sendable {
 
 // MARK: - Face Source
 
-/// Source of ARKit face tracking data, holding the latest ``ARKitFaceBlendShapes`` snapshot under an internal lock.
+/// Source of ARKit face tracking data, holding the latest ``ARKitFaceBlendShapes`` snapshot.
 ///
-/// Push new snapshots in via ``update(blendShapes:)`` from any thread; readers fetch the most recent via
-/// ``blendShapes``. Marked `@unchecked Sendable` because the `NSLock` is held over every mutating access.
-public final class ARFaceSource: ARMetadataSource, @unchecked Sendable {
+/// Push new snapshots in via ``update(blendShapes:)`` from any thread; readers fetch the most recent
+/// via ``blendShapes``. All mutable state is bundled in a `Mutex`-protected `State`, making the class
+/// fully `Sendable` without manual lock/unlock.
+public final class ARFaceSource: ARMetadataSource, Sendable {
     /// Stable identifier used by ``ARKitFaceDriver`` priority strategies to select among multiple sources.
     public let sourceID: UUID
     /// Human-readable name (e.g., "iPhone 15 Pro").
     public let name: String
-    /// Timestamp of the most recent ``update(blendShapes:)`` call.
-    public private(set) var lastUpdate: TimeInterval
-    /// Free-form metadata about the source (device model, connection type, etc.).
-    public var metadata: [String: String]
 
-    /// Maximum age before source is considered stale (default: 150ms)
-    public var maxAge: TimeInterval = 0.150
-
-    /// Whether ``lastUpdate`` is within ``maxAge`` of the current time.
-    public var isActive: Bool {
-        let now = Date().timeIntervalSinceReferenceDate
-        return now - lastUpdate < maxAge
+    private struct State: Sendable {
+        var blendShapes: ARKitFaceBlendShapes? = nil
+        var lastUpdate: TimeInterval = 0
+        var maxAge: TimeInterval = 0.150
+        var metadata: [String: String]
     }
 
-    /// Latest blend shapes (thread-safe access)
-    private var _blendShapes: ARKitFaceBlendShapes?
-    private let lock = NSLock()
+    private let _state: Mutex<State>
 
-    /// Latest pushed ``ARKitFaceBlendShapes`` snapshot, or `nil` if none has arrived. Safe to read from any thread.
-    public var blendShapes: ARKitFaceBlendShapes? {
-        lock.lock()
-        defer { lock.unlock() }
-        return _blendShapes
+    /// Latest pushed ``ARKitFaceBlendShapes`` snapshot, or `nil` if none has arrived.
+    public var blendShapes: ARKitFaceBlendShapes? { _state.withLock { $0.blendShapes } }
+    /// Timestamp of the most recent ``update(blendShapes:)`` call.
+    public var lastUpdate: TimeInterval { _state.withLock { $0.lastUpdate } }
+    /// Maximum age before source is considered stale (default: 150 ms).
+    public var maxAge: TimeInterval {
+        get { _state.withLock { $0.maxAge } }
+        set { _state.withLock { $0.maxAge = newValue } }
+    }
+    /// Free-form metadata about the source (device model, connection type, etc.).
+    public var metadata: [String: String] {
+        get { _state.withLock { $0.metadata } }
+        set { _state.withLock { $0.metadata = newValue } }
+    }
+    /// Whether ``lastUpdate`` is within ``maxAge`` of the current time.
+    public var isActive: Bool {
+        _state.withLock { Date().timeIntervalSinceReferenceDate - $0.lastUpdate < $0.maxAge }
     }
 
     /// Creates a face source with an identifier, display name, and optional metadata. `lastUpdate` starts at 0.
     public init(sourceID: UUID = UUID(), name: String, metadata: [String: String] = [:]) {
         self.sourceID = sourceID
         self.name = name
-        self.lastUpdate = 0
-        self.metadata = metadata
+        self._state = Mutex(State(metadata: metadata))
     }
 
     /// Replaces the stored blend shapes and advances ``lastUpdate`` to the snapshot's timestamp.
     public func update(blendShapes: ARKitFaceBlendShapes) {
-        lock.lock()
-        defer { lock.unlock() }
-        _blendShapes = blendShapes
-        lastUpdate = blendShapes.timestamp
+        _state.withLock { state in
+            state.blendShapes = blendShapes
+            state.lastUpdate = blendShapes.timestamp
+        }
     }
 }
 
 // MARK: - Body Source
 
-/// Source of ARKit body tracking data, holding the latest ``ARKitBodySkeleton`` snapshot under an internal lock.
+/// Source of ARKit body tracking data, holding the latest ``ARKitBodySkeleton`` snapshot.
 ///
-/// Companion to ``ARFaceSource`` for body-only producers. Marked `@unchecked Sendable` because the
-/// `NSLock` guards every mutating access.
-public final class ARBodySource: ARMetadataSource, @unchecked Sendable {
+/// Companion to ``ARFaceSource`` for body-only producers. All mutable state is bundled in a
+/// `Mutex`-protected `State`.
+public final class ARBodySource: ARMetadataSource, Sendable {
     /// Stable identifier used to disambiguate multiple body sources.
     public let sourceID: UUID
     /// Human-readable name for the source.
     public let name: String
-    /// Timestamp of the most recent ``update(skeleton:)`` call.
-    public private(set) var lastUpdate: TimeInterval
-    /// Free-form metadata about the source.
-    public var metadata: [String: String]
 
-    /// Maximum age before this source is considered stale (default: 150 ms).
-    public var maxAge: TimeInterval = 0.150
-
-    /// Whether ``lastUpdate`` is within ``maxAge`` of the current time.
-    public var isActive: Bool {
-        let now = Date().timeIntervalSinceReferenceDate
-        return now - lastUpdate < maxAge
+    private struct State: Sendable {
+        var skeleton: ARKitBodySkeleton? = nil
+        var lastUpdate: TimeInterval = 0
+        var maxAge: TimeInterval = 0.150
+        var metadata: [String: String]
     }
 
-    private var _skeleton: ARKitBodySkeleton?
-    private let lock = NSLock()
+    private let _state: Mutex<State>
 
-    /// Latest pushed ``ARKitBodySkeleton`` snapshot, or `nil` if none has arrived. Safe to read from any thread.
-    public var skeleton: ARKitBodySkeleton? {
-        lock.lock()
-        defer { lock.unlock() }
-        return _skeleton
+    /// Latest pushed ``ARKitBodySkeleton`` snapshot, or `nil` if none has arrived.
+    public var skeleton: ARKitBodySkeleton? { _state.withLock { $0.skeleton } }
+    /// Timestamp of the most recent ``update(skeleton:)`` call.
+    public var lastUpdate: TimeInterval { _state.withLock { $0.lastUpdate } }
+    /// Maximum age before this source is considered stale (default: 150 ms).
+    public var maxAge: TimeInterval {
+        get { _state.withLock { $0.maxAge } }
+        set { _state.withLock { $0.maxAge = newValue } }
+    }
+    /// Free-form metadata about the source.
+    public var metadata: [String: String] {
+        get { _state.withLock { $0.metadata } }
+        set { _state.withLock { $0.metadata = newValue } }
+    }
+    /// Whether ``lastUpdate`` is within ``maxAge`` of the current time.
+    public var isActive: Bool {
+        _state.withLock { Date().timeIntervalSinceReferenceDate - $0.lastUpdate < $0.maxAge }
     }
 
     /// Creates a body source with an identifier, display name, and optional metadata. `lastUpdate` starts at 0.
     public init(sourceID: UUID = UUID(), name: String, metadata: [String: String] = [:]) {
         self.sourceID = sourceID
         self.name = name
-        self.lastUpdate = 0
-        self.metadata = metadata
+        self._state = Mutex(State(metadata: metadata))
     }
 
     /// Replaces the stored skeleton and advances ``lastUpdate`` to the snapshot's timestamp.
     public func update(skeleton: ARKitBodySkeleton) {
-        lock.lock()
-        defer { lock.unlock() }
-        _skeleton = skeleton
-        lastUpdate = skeleton.timestamp
+        _state.withLock { state in
+            state.skeleton = skeleton
+            state.lastUpdate = skeleton.timestamp
+        }
     }
 }
 
@@ -665,64 +674,64 @@ public final class ARBodySource: ARMetadataSource, @unchecked Sendable {
 ///
 /// Use when a single hardware producer (e.g., one iPhone running an `ARFaceTrackingConfiguration` plus body
 /// tracking) supplies both modalities. ``lastUpdate`` advances monotonically with whichever stream is newer.
-public final class ARCombinedSource: ARMetadataSource, @unchecked Sendable {
+/// All mutable state is bundled in a `Mutex`-protected `State`.
+public final class ARCombinedSource: ARMetadataSource, Sendable {
     /// Stable identifier used to disambiguate sources.
     public let sourceID: UUID
     /// Human-readable name for the source.
     public let name: String
+
+    private struct State: Sendable {
+        var blendShapes: ARKitFaceBlendShapes? = nil
+        var skeleton: ARKitBodySkeleton? = nil
+        var lastUpdate: TimeInterval = 0
+        var maxAge: TimeInterval = 0.150
+        var metadata: [String: String]
+    }
+
+    private let _state: Mutex<State>
+
+    /// Latest pushed face blend shapes, or `nil` if none has arrived.
+    public var blendShapes: ARKitFaceBlendShapes? { _state.withLock { $0.blendShapes } }
+    /// Latest pushed body skeleton, or `nil` if none has arrived.
+    public var skeleton: ARKitBodySkeleton? { _state.withLock { $0.skeleton } }
     /// Timestamp of the most recent update across either stream (max of face and body timestamps).
-    public private(set) var lastUpdate: TimeInterval
-    /// Free-form metadata about the source.
-    public var metadata: [String: String]
-
+    public var lastUpdate: TimeInterval { _state.withLock { $0.lastUpdate } }
     /// Maximum age before this source is considered stale (default: 150 ms).
-    public var maxAge: TimeInterval = 0.150
-
+    public var maxAge: TimeInterval {
+        get { _state.withLock { $0.maxAge } }
+        set { _state.withLock { $0.maxAge = newValue } }
+    }
+    /// Free-form metadata about the source.
+    public var metadata: [String: String] {
+        get { _state.withLock { $0.metadata } }
+        set { _state.withLock { $0.metadata = newValue } }
+    }
     /// Whether ``lastUpdate`` is within ``maxAge`` of the current time.
     public var isActive: Bool {
-        let now = Date().timeIntervalSinceReferenceDate
-        return now - lastUpdate < maxAge
-    }
-
-    private var _blendShapes: ARKitFaceBlendShapes?
-    private var _skeleton: ARKitBodySkeleton?
-    private let lock = NSLock()
-
-    /// Latest pushed face blend shapes, or `nil` if none has arrived. Safe to read from any thread.
-    public var blendShapes: ARKitFaceBlendShapes? {
-        lock.lock()
-        defer { lock.unlock() }
-        return _blendShapes
-    }
-
-    /// Latest pushed body skeleton, or `nil` if none has arrived. Safe to read from any thread.
-    public var skeleton: ARKitBodySkeleton? {
-        lock.lock()
-        defer { lock.unlock() }
-        return _skeleton
+        _state.withLock { Date().timeIntervalSinceReferenceDate - $0.lastUpdate < $0.maxAge }
     }
 
     /// Creates a combined source with an identifier, display name, and optional metadata.
     public init(sourceID: UUID = UUID(), name: String, metadata: [String: String] = [:]) {
         self.sourceID = sourceID
         self.name = name
-        self.lastUpdate = 0
-        self.metadata = metadata
+        self._state = Mutex(State(metadata: metadata))
     }
 
     /// Replaces the face snapshot and advances ``lastUpdate`` to the newer of its timestamp or the previous value.
     public func update(blendShapes: ARKitFaceBlendShapes) {
-        lock.lock()
-        defer { lock.unlock() }
-        _blendShapes = blendShapes
-        lastUpdate = max(lastUpdate, blendShapes.timestamp)
+        _state.withLock { state in
+            state.blendShapes = blendShapes
+            state.lastUpdate = max(state.lastUpdate, blendShapes.timestamp)
+        }
     }
 
     /// Replaces the body snapshot and advances ``lastUpdate`` to the newer of its timestamp or the previous value.
     public func update(skeleton: ARKitBodySkeleton) {
-        lock.lock()
-        defer { lock.unlock() }
-        _skeleton = skeleton
-        lastUpdate = max(lastUpdate, skeleton.timestamp)
+        _state.withLock { state in
+            state.skeleton = skeleton
+            state.lastUpdate = max(state.lastUpdate, skeleton.timestamp)
+        }
     }
 }

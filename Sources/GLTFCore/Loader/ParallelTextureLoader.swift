@@ -43,9 +43,8 @@
 /// the older ``loadTexturesParallel(indices:normalMapIndices:progressCallback:)``
 /// is preserved for VRM/MToon callers but only covers normal maps.
 ///
-/// The loader is `@unchecked Sendable`; result aggregation uses an internal
-/// `NSLock`. Completion order is indeterminate; the returned map is keyed
-/// by source texture index. A Metal device is required.
+/// The loader is `@unchecked Sendable`. Completion order is indeterminate;
+/// the returned map is keyed by source texture index. A Metal device is required.
 public final class ParallelTextureLoader: @unchecked Sendable {
     private let device: MTLDevice
     private let textureLoader: MTKTextureLoader
@@ -120,33 +119,31 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         linearTextureIndices: Set<Int>,
         progressCallback: (@Sendable (Int, Int) -> Void)? = nil
     ) async -> [Int: MTLTexture] {
-        let results = UncheckedTextureDictionary()
         let totalCount = indices.count
-        let progressBox = UncheckedProgressBox()
+        var results: [Int: MTLTexture] = [:]
+        var loaded = 0
 
-        await withTaskGroup(of: Void.self) { group in
+        await withTaskGroup(of: (Int, MTLTexture?).self) { group in
             for textureIndex in indices {
-                let task: @Sendable () async -> Void = { [unowned self] in
+                group.addTask { [unowned self] in
                     let isLinear = linearTextureIndices.contains(textureIndex)
                     let texture = try? await self.loadTexture(at: textureIndex, sRGB: !isLinear)
-
-                    if let texture = texture {
-                        results.set(texture, for: textureIndex)
-                    }
-
-                    progressBox.increment()
-                    let current = progressBox.countValue
-                    await MainActor.run {
-                        progressCallback?(current, totalCount)
-                    }
+                    return (textureIndex, texture)
                 }
-                group.addTask(operation: task)
             }
 
-            await group.waitForAll()
+            for await (index, texture) in group {
+                loaded += 1
+                if let texture {
+                    results[index] = texture
+                }
+                await MainActor.run {
+                    progressCallback?(loaded, totalCount)
+                }
+            }
         }
 
-        return results.getAll()
+        return results
     }
     
     private func loadTexture(at index: Int, sRGB: Bool = true) async throws -> MTLTexture? {
@@ -317,40 +314,3 @@ public final class ParallelTextureLoader: @unchecked Sendable {
     }
 }
 
-// MARK: - Helper Types
-
-/// Thread-safe dictionary for texture results
-private final class UncheckedTextureDictionary: @unchecked Sendable {
-    private var dict: [Int: MTLTexture] = [:]
-    private let lock = NSLock()
-    
-    func set(_ texture: MTLTexture, for index: Int) {
-        lock.lock()
-        dict[index] = texture
-        lock.unlock()
-    }
-    
-    func getAll() -> [Int: MTLTexture] {
-        lock.lock()
-        defer { lock.unlock() }
-        return dict
-    }
-}
-
-/// Thread-safe progress counter
-private final class UncheckedProgressBox: @unchecked Sendable {
-    private var count: Int = 0
-    private let lock = NSLock()
-    
-    var countValue: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return count
-    }
-    
-    func increment() {
-        lock.lock()
-        count += 1
-        lock.unlock()
-    }
-}

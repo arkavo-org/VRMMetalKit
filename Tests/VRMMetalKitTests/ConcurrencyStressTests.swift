@@ -63,6 +63,97 @@ final class ConcurrencyStressTests: XCTestCase {
     private let stressThreadCount = 16
     private let stressIterations = 500
 
+    // MARK: - ARKit Sources
+
+    /// Writer threads call `update(blendShapes:)` while reader threads concurrently
+    /// read `isActive`, `blendShapes`, and `lastUpdate`.
+    ///
+    /// Before the Mutex<State> fix, `isActive` read `lastUpdate` and `maxAge` as
+    /// plain vars outside any lock while `update()` wrote `lastUpdate` under the
+    /// lock — a genuine data race. TSan would flag it; this test surfaces the
+    /// resulting crash or NaN under high contention without TSan.
+    func testStressARFaceSource_ConcurrentUpdateAndRead() {
+        let source = ARFaceSource(name: "StressTest")
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "stress-arface", attributes: .concurrent)
+        let iterations = stressIterations
+
+        // Writer threads
+        for i in 0..<stressThreadCount / 2 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                for j in 0..<iterations {
+                    let shapes = ARKitFaceBlendShapes(
+                        timestamp: TimeInterval(i * iterations + j) * 0.001,
+                        shapes: ["eyeBlinkLeft": Float(j % 100) / 100.0]
+                    )
+                    source.update(blendShapes: shapes)
+                }
+            }
+        }
+
+        // Reader threads — isActive previously had a data race here
+        for _ in 0..<stressThreadCount / 2 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                for _ in 0..<iterations {
+                    _ = source.isActive
+                    _ = source.lastUpdate
+                    _ = source.blendShapes
+                }
+            }
+        }
+
+        group.wait()
+
+        let t = source.lastUpdate
+        XCTAssertFalse(t.isNaN, "lastUpdate must not be NaN after concurrent updates")
+        XCTAssertFalse(t.isInfinite, "lastUpdate must not be Inf after concurrent updates")
+    }
+
+    /// Same race surface for `ARBodySource`.
+    func testStressARBodySource_ConcurrentUpdateAndRead() {
+        let source = ARBodySource(name: "StressTest")
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "stress-arbody", attributes: .concurrent)
+        let iterations = stressIterations
+
+        for i in 0..<stressThreadCount / 2 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                for j in 0..<iterations {
+                    let skeleton = ARKitBodySkeleton(
+                        timestamp: TimeInterval(i * iterations + j) * 0.001,
+                        joints: [:],
+                        isTracked: true
+                    )
+                    source.update(skeleton: skeleton)
+                }
+            }
+        }
+
+        for _ in 0..<stressThreadCount / 2 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                for _ in 0..<iterations {
+                    _ = source.isActive
+                    _ = source.lastUpdate
+                    _ = source.skeleton
+                }
+            }
+        }
+
+        group.wait()
+
+        let t = source.lastUpdate
+        XCTAssertFalse(t.isNaN, "lastUpdate must not be NaN after concurrent updates")
+        XCTAssertFalse(t.isInfinite, "lastUpdate must not be Inf after concurrent updates")
+    }
+
     // MARK: - VRMPipelineCache
 
     /// Hammers `getLibrary` from many threads. The cache promises (a) no
