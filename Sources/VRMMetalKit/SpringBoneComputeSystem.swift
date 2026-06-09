@@ -223,16 +223,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     init(device: MTLDevice) throws {
         self.device = device
-        #if DEBUG
-        let logStateDesc = MTLLogStateDescriptor()
-        logStateDesc.level = .debug
-        let logState = try? device.makeLogState(descriptor: logStateDesc)
-        let queueDesc = MTLCommandQueueDescriptor()
-        queueDesc.logState = logState
-        self.commandQueue = device.makeCommandQueue(descriptor: queueDesc) ?? device.makeCommandQueue()!
-        #else
-        self.commandQueue = device.makeCommandQueue()!
-        #endif
+        self.commandQueue = MetalQueueFactory.makeCommandQueue(device: device)!
 
         // Load compute shaders from pre-compiled .metallib
         var library: MTLLibrary?

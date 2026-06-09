@@ -127,16 +127,7 @@ public class VRMMorphTargetSystem {
     ///   `morph_accumulate_positions` kernel is missing from the library.
     public init(device: MTLDevice) throws {
         self.device = device
-        #if DEBUG
-        let logStateDesc = MTLLogStateDescriptor()
-        logStateDesc.level = .debug
-        let logState = try? device.makeLogState(descriptor: logStateDesc)
-        let queueDesc = MTLCommandQueueDescriptor()
-        queueDesc.logState = logState
-        let queue = device.makeCommandQueue(descriptor: queueDesc) ?? device.makeCommandQueue()
-        #else
-        let queue = device.makeCommandQueue()
-        #endif
+        let queue = MetalQueueFactory.makeCommandQueue(device: device)
         guard let queue else {
             throw VRMMorphTargetError.failedToCreateCommandQueue
         }

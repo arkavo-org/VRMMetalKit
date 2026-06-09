@@ -64,6 +64,22 @@ let renderer = VRMRenderer(device: device, config: config)
 - Metal device (tests skip on CI without GPU)
 - `AvatarSample_A.vrm.glb` in `../Muse/Resources/VRM/` or set `MUSE_RESOURCES_PATH` env var
 
+### GPU Trace Debugging (Xcode 27 `gpudebug`)
+Capture a `.gputrace` of the bundled avatar render and inspect it from the terminal — draw calls, pipeline state, bound resources, rendered attachments (as PNG), and per-shader GPU costs:
+```bash
+make gputrace                              # writes /tmp/vrmmetalkit/avatar.gputrace
+gpudebug -t /tmp/vrmmetalkit/avatar.gputrace -c "list"   # prints a session ID, reuse with -s
+gpudebug -s <id> -c "go commands/cb0/re0" -c "list --all"        # draws in the encoder
+gpudebug -s <id> -c "go commands/cb0/re0/draw0" -c "info pipeline"
+gpudebug -s <id> -c "go /commands/cb0/re0" -c "fetch color0"     # rendered frame → PNG
+gpudebug -s <id> -c "profile run --embed"                        # GPU counters (M3/A17+)
+gpudebug -s <id> -c "go /performance/shaders" -c "list"          # shader cost ranking
+gpudebug --terminate <id>                  # when done
+```
+Add `--json` for machine-readable output (agent-friendly). Sessions persist between invocations — create once, reuse with `-s` (a fresh `--oneshot` reloads the trace each time, which is slow). Capture any other render path by wrapping it like `GPUTraceCaptureTests` does with `MTLCaptureManager`.
+
+**Constraint:** GPU capture is incompatible with shader logging (`MTLLogState`). `MetalQueueFactory.makeCommandQueue` therefore skips log-state attachment when `METAL_CAPTURE_ENABLED` is set; all command queues must be created through it.
+
 ## Architecture & Design Patterns
 
 ### Core Systems

@@ -1,7 +1,7 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static gputrace
 
 help:
 	@echo "VRMMetalKit Build Targets:"
@@ -12,6 +12,7 @@ help:
 	@echo "  make gltf-shaders  - Compile GLTFMetalKit (PBR) shaders into metallib"
 	@echo "  make clean         - Remove temporary build files"
 	@echo "  make test          - Run Swift tests"
+	@echo "  make gputrace      - Capture a .gputrace of the bundled avatar render (inspect with gpudebug)"
 	@echo "  make docs          - Preview documentation locally"
 	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
 
@@ -98,6 +99,17 @@ clean:
 test:
 	@echo "🧪 Running tests..."
 	@swift test
+
+# Capture a GPU trace of the bundled avatar render for offline debugging.
+# Override the output path with GPUTRACE_OUT=/path/to/out.gputrace and the
+# fixture with GPUTRACE_MODEL=vrm0 (default renders the VRM 1.0 fixture).
+GPUTRACE_OUT ?= /tmp/vrmmetalkit/avatar.gputrace
+GPUTRACE_MODEL ?= vrm1
+gputrace:
+	@echo "🎞️  Capturing GPU trace ($(GPUTRACE_MODEL)) to $(GPUTRACE_OUT)..."
+	@METAL_CAPTURE_ENABLED=1 VRM_GPUTRACE_OUT=$(GPUTRACE_OUT) VRM_GPUTRACE_MODEL=$(GPUTRACE_MODEL) \
+		swift test --filter GPUTraceCaptureTests --disable-sandbox
+	@echo "✅ Inspect with: gpudebug -t $(GPUTRACE_OUT)"
 
 # Build the package
 build:

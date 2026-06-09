@@ -813,16 +813,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// after init to override the defaults.
     public init(device: MTLDevice, config: RendererConfig = RendererConfig(strict: .off)) {
         self.device = device
-        #if DEBUG
-        let logStateDesc = MTLLogStateDescriptor()
-        logStateDesc.level = .debug
-        let logState = try? device.makeLogState(descriptor: logStateDesc)
-        let queueDesc = MTLCommandQueueDescriptor()
-        queueDesc.logState = logState
-        self.commandQueue = device.makeCommandQueue(descriptor: queueDesc) ?? device.makeCommandQueue()!
-        #else
-        self.commandQueue = device.makeCommandQueue()!
-        #endif
+        self.commandQueue = MetalQueueFactory.makeCommandQueue(device: device)!
         self.config = config
         self.strictValidator = StrictValidator(config: config)
         self.skinningSystem = VRMSkinningSystem(device: device)
