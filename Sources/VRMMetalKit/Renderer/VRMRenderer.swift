@@ -3462,14 +3462,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         let paletteCount = skin.joints.count
                         let required = prim.requiredPaletteSize
 
-                        // Condition 1: Required palette fits
+                        // Condition 1: Required palette fits. A mismatch is bad
+                        // model data, not a renderer bug — skip this primitive's
+                        // draw instead of crashing the host in release.
                         if required > paletteCount {
-                            preconditionFailure(
-                                "[SKIN MISMATCH] Node '\(item.node.name ?? "?")' mesh '\(meshName)' prim \(meshPrimIndex):\n" +
-                                "  Primitive needs ≥\(required) joints (maxJoint=\(required-1))\n" +
-                                "  Bound skin \(skinIndex) '\(skin.name ?? "?")' has \(paletteCount) joints\n" +
-                                "  → Palette too small! Check node.skin assignment in VRM file."
-                            )
+                            if frameCounter < 2 {
+                                fputs("⚠️ [VRMRenderer] Skin palette too small — skipping draw. " +
+                                      "Node '\(item.node.name ?? "?")' mesh '\(meshName)' prim \(meshPrimIndex): " +
+                                      "needs ≥\(required) joints, bound skin \(skinIndex) '\(skin.name ?? "?")' has \(paletteCount). " +
+                                      "Check node.skin assignment in the VRM file.\n", stderr)
+                            }
+                            continue
                         }
 
                         // Condition 2: Sample vertices to double-check
@@ -3484,11 +3487,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             }
 
                             if Int(sampleMaxJoint) >= paletteCount {
-                                preconditionFailure(
-                                    "[SKIN MISMATCH] Node '\(item.node.name ?? "?")' mesh '\(meshName)' prim \(meshPrimIndex):\n" +
-                                    "  Sample vertices: maxJoint=\(sampleMaxJoint) >= paletteCount=\(paletteCount)\n" +
-                                    "  → Joint indices out of range for bound skin \(skinIndex)!"
-                                )
+                                if frameCounter < 2 {
+                                    fputs("⚠️ [VRMRenderer] Joint index out of palette range — skipping draw. " +
+                                          "Node '\(item.node.name ?? "?")' mesh '\(meshName)' prim \(meshPrimIndex): " +
+                                          "maxJoint=\(sampleMaxJoint) >= paletteCount=\(paletteCount) for bound skin \(skinIndex).\n", stderr)
+                                }
+                                continue
                             }
 
                             // Log success for first few frames

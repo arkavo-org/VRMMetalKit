@@ -194,11 +194,26 @@ public class GLTFDocumentBuilder {
             extensionsRequired: extensionsRequired.isEmpty ? nil : extensionsRequired
         )
 
-        return document.toGLTFDocument()
+        return try document.toGLTFDocument()
     }
 
-    enum BuilderError: Error {
+    enum BuilderError: Error, LocalizedError {
         case missingAsset
+        /// The assembled builder state could not be round-tripped through JSON
+        /// into a `GLTFDocument` (e.g. a non-finite number or non-encodable
+        /// value reached `JSONSerialization`/`JSONDecoder`).
+        case documentRoundTripFailed(underlying: Error)
+
+        var errorDescription: String? {
+            switch self {
+            case .missingAsset:
+                return "GLTFDocumentBuilder: setAsset(_:) must be called before build()."
+            case .documentRoundTripFailed(let underlying):
+                return "GLTFDocumentBuilder: failed to serialize the assembled document " +
+                       "(check for non-finite numbers or invalid values in accessors/materials). " +
+                       "Underlying error: \(underlying.localizedDescription)"
+            }
+        }
     }
 }
 
@@ -224,7 +239,7 @@ private struct MinimalGLTFDocument {
     let extensionsUsed: [String]?
     let extensionsRequired: [String]?
 
-    func toGLTFDocument() -> GLTFDocument {
+    func toGLTFDocument() throws -> GLTFDocument {
         // Encode to JSON, then decode back to GLTFDocument
         // This is a workaround since GLTFDocument uses Codable init
 
@@ -248,9 +263,12 @@ private struct MinimalGLTFDocument {
             "extensionsRequired": extensionsRequired as Any
         ].compactMapValues { $0 }
 
-        let jsonData = try! JSONSerialization.data(withJSONObject: dict)
-        let document = try! JSONDecoder().decode(GLTFDocument.self, from: jsonData)
-        return document
+        do {
+            let jsonData = try JSONSerialization.data(withJSONObject: dict)
+            return try JSONDecoder().decode(GLTFDocument.self, from: jsonData)
+        } catch {
+            throw GLTFDocumentBuilder.BuilderError.documentRoundTripFailed(underlying: error)
+        }
     }
 
     private func encodeAsset(_ asset: GLTFAsset) -> [String: Any] {

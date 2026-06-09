@@ -79,6 +79,26 @@ public final class GLTFRenderer: @unchecked Sendable {
             throw GLTFRendererError.environmentSetupFailed
         }
         self.environment = fallback
+
+        // Allocate samplers + 1×1 default textures eagerly so a Metal
+        // allocation failure surfaces here (as a thrown error) rather than as
+        // a fatalError deep in a later draw call.
+        let repeatLinear = MTLSamplerDescriptor()
+        repeatLinear.minFilter = .linear; repeatLinear.magFilter = .linear; repeatLinear.mipFilter = .linear
+        repeatLinear.sAddressMode = .repeat; repeatLinear.tAddressMode = .repeat
+        repeatLinear.maxAnisotropy = 16
+        self.colorSamplerState = try Self.makeSampler(device, repeatLinear, name: "color")
+        self.linearSamplerState = try Self.makeSampler(device, repeatLinear, name: "linear")
+
+        let clampLinear = MTLSamplerDescriptor()
+        clampLinear.minFilter = .linear; clampLinear.magFilter = .linear; clampLinear.mipFilter = .linear
+        clampLinear.sAddressMode = .clampToEdge; clampLinear.tAddressMode = .clampToEdge; clampLinear.rAddressMode = .clampToEdge
+        self.environmentSamplerState = try Self.makeSampler(device, clampLinear, name: "environment")
+
+        self.defaultWhiteTexture = try Self.makeSolidTexture(
+            device: device, rgba: SIMD4<UInt8>(255, 255, 255, 255), sRGB: true)
+        self.defaultLinearTexture = try Self.makeSolidTexture(
+            device: device, rgba: SIMD4<UInt8>(128, 128, 255, 255), sRGB: false)
     }
 
     /// Bundle of PBR pipeline states for one (color, depth, sample-count)
@@ -485,54 +505,27 @@ public final class GLTFRenderer: @unchecked Sendable {
         return upperLeft.inverse.transpose
     }
 
-    // MARK: - Lazy sampler / fallback-texture cache
+    // MARK: - Sampler / fallback-texture cache (allocated in init)
 
-    private lazy var colorSamplerState: MTLSamplerState = {
-        let d = MTLSamplerDescriptor()
-        d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
-        d.sAddressMode = .repeat; d.tAddressMode = .repeat
-        d.maxAnisotropy = 16
-        guard let s = device.makeSamplerState(descriptor: d) else {
-            fatalError("GLTFRenderer: MTLDevice.makeSamplerState returned nil for the color sampler — Metal allocation failure")
+    // `defaultLinearTexture` is the default for MR / normal / AO. Linear
+    // (0.5, 0.5, 1.0, 1.0) reads as “no metallic, mid-roughness, +Z normal,
+    // full AO” when sampled by shaders that gate via the material flags —
+    // never actually consumed because the flags clear those bits when no
+    // texture is bound, but a sensible byte pattern keeps GPU validation happy.
+    private let colorSamplerState: MTLSamplerState
+    private let linearSamplerState: MTLSamplerState
+    private let environmentSamplerState: MTLSamplerState
+    private let defaultWhiteTexture: MTLTexture
+    private let defaultLinearTexture: MTLTexture
+
+    private static func makeSampler(_ device: MTLDevice, _ descriptor: MTLSamplerDescriptor, name: String) throws -> MTLSamplerState {
+        guard let s = device.makeSamplerState(descriptor: descriptor) else {
+            throw GLTFRendererError.metalAllocationFailed(resource: "the \(name) sampler")
         }
         return s
-    }()
+    }
 
-    private lazy var linearSamplerState: MTLSamplerState = {
-        let d = MTLSamplerDescriptor()
-        d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
-        d.sAddressMode = .repeat; d.tAddressMode = .repeat
-        d.maxAnisotropy = 16
-        guard let s = device.makeSamplerState(descriptor: d) else {
-            fatalError("GLTFRenderer: MTLDevice.makeSamplerState returned nil for the linear sampler — Metal allocation failure")
-        }
-        return s
-    }()
-
-    private lazy var environmentSamplerState: MTLSamplerState = {
-        let d = MTLSamplerDescriptor()
-        d.minFilter = .linear; d.magFilter = .linear; d.mipFilter = .linear
-        d.sAddressMode = .clampToEdge; d.tAddressMode = .clampToEdge; d.rAddressMode = .clampToEdge
-        guard let s = device.makeSamplerState(descriptor: d) else {
-            fatalError("GLTFRenderer: MTLDevice.makeSamplerState returned nil for the environment sampler — Metal allocation failure")
-        }
-        return s
-    }()
-
-    private lazy var defaultWhiteTexture: MTLTexture = {
-        return Self.makeSolidTexture(device: device, rgba: SIMD4<UInt8>(255, 255, 255, 255), sRGB: true)
-    }()
-
-    private lazy var defaultLinearTexture: MTLTexture = {
-        // Default for MR / normal / AO. Linear (0.5, 0.5, 1.0, 1.0) reads as
-        // “no metallic, mid-roughness, +Z normal, full AO” when sampled by
-        // shaders that gate via the material flags — never actually consumed
-        // because the flags clear those bits when no texture is bound, but
-        // a sensible byte pattern keeps GPU validation layers happy.
-        return Self.makeSolidTexture(device: device, rgba: SIMD4<UInt8>(128, 128, 255, 255), sRGB: false)
-    }()
-
-    private static func makeSolidTexture(device: MTLDevice, rgba: SIMD4<UInt8>, sRGB: Bool) -> MTLTexture {
+    private static func makeSolidTexture(device: MTLDevice, rgba: SIMD4<UInt8>, sRGB: Bool) throws -> MTLTexture {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: sRGB ? .rgba8Unorm_srgb : .rgba8Unorm,
             width: 1, height: 1, mipmapped: false
@@ -540,7 +533,7 @@ public final class GLTFRenderer: @unchecked Sendable {
         descriptor.usage = [.shaderRead]
         descriptor.storageMode = .shared
         guard let texture = device.makeTexture(descriptor: descriptor) else {
-            fatalError("GLTFRenderer: MTLDevice.makeTexture returned nil for a 1×1 default texture — Metal allocation failure")
+            throw GLTFRendererError.metalAllocationFailed(resource: "a 1×1 default texture")
         }
         var bytes: [UInt8] = [rgba.x, rgba.y, rgba.z, rgba.w]
         texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &bytes, bytesPerRow: 4)
@@ -556,6 +549,10 @@ public enum GLTFRendererError: Error, LocalizedError {
     case missingShaderFunction(name: String)
     /// The fallback IBL environment could not be allocated. Indicates a deeper Metal-allocation problem.
     case environmentSetupFailed
+    /// A required Metal resource (sampler / default texture) could not be
+    /// allocated. The associated name identifies which one. Surfaced at
+    /// construction instead of crashing on first draw.
+    case metalAllocationFailed(resource: String)
 
     public var errorDescription: String? {
         switch self {
@@ -582,6 +579,14 @@ public enum GLTFRendererError: Error, LocalizedError {
             The fallback 1×1 neutral-gray IBL environment could not be allocated.
 
             Suggestion: This usually indicates a deeper Metal allocation problem — verify the supplied MTLDevice is valid and the system has enough free GPU memory.
+            """
+        case .metalAllocationFailed(let resource):
+            return """
+            ❌ Metal Allocation Failed: \(resource)
+
+            `MTLDevice` returned nil when allocating \(resource).
+
+            Suggestion: This indicates GPU memory pressure or a lost device. Verify the supplied MTLDevice is valid and free GPU memory before constructing GLTFRenderer.
             """
         }
     }
