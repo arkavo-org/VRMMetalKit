@@ -46,10 +46,19 @@ import simd
 /// - `VRMPipelineCache` — NSLock-protected pipeline state cache
 /// - `VRMModel` — NSLock-protected via `withLock`
 /// - `AnimationPlayer` — playerLock-protected mutable state
+/// - `ARFaceSource` / `ARBodySource` — `Mutex<State>`-protected snapshots
+/// - `ARKitCoordinateConverter` — `Mutex`-protected process-wide T-pose calibration
+/// - `ARKitBodyDriver` — NSLock-protected mutable state; `priority` /
+///   `stalenessThreshold` are `let` (config, read lock-free)
 ///
 /// Types deliberately NOT covered (different contract):
 /// - `VRMExpressionController` — single-writer (main thread); racing it is UB
 ///   by design. Documented in its docstring.
+/// - `ARKitFaceDriver` — single-writer by design (no internal lock); `@unchecked
+///   Sendable` only enables actor storage, not concurrent calls. Same contract
+///   as `VRMExpressionController`; documented in its docstring.
+/// - `ConstraintSolver` — stateless; conforms to *checked* `Sendable` (no shared
+///   mutable state for a race to touch).
 /// - `SpringBoneBuffers` — init-then-immutable (allocateBuffers happens once,
 ///   then GPU-only writes).
 /// - `BufferLoader` — effectively immutable after init for the read paths.
@@ -152,6 +161,59 @@ final class ConcurrencyStressTests: XCTestCase {
         let t = source.lastUpdate
         XCTAssertFalse(t.isNaN, "lastUpdate must not be NaN after concurrent updates")
         XCTAssertFalse(t.isInfinite, "lastUpdate must not be Inf after concurrent updates")
+    }
+
+    // MARK: - ARKitCoordinateConverter calibration
+
+    /// The converter's T-pose calibration is process-wide mutable state read on
+    /// every joint conversion (potentially from a tracking queue) and written by
+    /// `calibrateTpose`/`clearCalibration` (app/UI). Before the `Mutex` fix it
+    /// was `nonisolated(unsafe)`: concurrent read of the `[ARKitJoint: simd_quatf]`
+    /// dictionary while another thread mutated it is a Swift exclusivity/COW
+    /// violation that crashes under contention. This hammers both sides.
+    func testStressARKitCoordinateConverter_CalibrationConcurrentReadWrite() {
+        let group = DispatchGroup()
+        let queue = DispatchQueue(label: "stress-converter", attributes: .concurrent)
+        let iterations = stressIterations
+        let skeleton = ARKitBodySkeleton(
+            timestamp: 0,
+            joints: [.hips: matrix_identity_float4x4, .leftShoulder: matrix_identity_float4x4],
+            isTracked: true)
+
+        // Writers: calibrate / clear the global state.
+        for i in 0..<stressThreadCount / 2 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                for j in 0..<iterations {
+                    if (i + j) % 2 == 0 {
+                        ARKitCoordinateConverter.calibrateTpose(skeleton)
+                    } else {
+                        ARKitCoordinateConverter.clearCalibration()
+                    }
+                }
+            }
+        }
+
+        // Readers: read the calibration dictionary + flags concurrently.
+        for _ in 0..<stressThreadCount / 2 {
+            group.enter()
+            queue.async {
+                defer { group.leave() }
+                for _ in 0..<iterations {
+                    _ = ARKitCoordinateConverter.isCalibrated
+                    _ = ARKitCoordinateConverter.calibratedTposeRotations
+                    _ = ARKitCoordinateConverter.restPoseCalibrationEnabled
+                }
+            }
+        }
+
+        group.wait()
+
+        // Restore clean global state for any other test that reads it.
+        ARKitCoordinateConverter.clearCalibration()
+        XCTAssertFalse(ARKitCoordinateConverter.isCalibrated,
+                       "Converter calibration must be clearable to a consistent state after contention.")
     }
 
     // MARK: - VRMPipelineCache

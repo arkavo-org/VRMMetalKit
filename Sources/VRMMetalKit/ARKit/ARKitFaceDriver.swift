@@ -63,10 +63,14 @@ public enum SourcePriorityStrategy: Sendable {
 ///
 /// ## Thread Safety
 ///
-/// **Not thread-safe.** No internal lock guards the mutating state (statistics, filter manager,
-/// `lastSourceID`, `perfectSyncCapability`). Call all methods from a single context — typically the
-/// main thread or the ARKit delegate's serial queue. Marked `@unchecked Sendable` to participate in
-/// `@MainActor` actors.
+/// **Single-writer by design — not internally synchronized.** No lock guards the mutating state
+/// (statistics, filter manager, `lastSourceID`, `perfectSyncCapability`). Call all methods from one
+/// context — typically the main thread or the ARKit delegate's serial queue. The `@unchecked Sendable`
+/// conformance exists *only* so the driver can be stored inside `@MainActor`/actor-isolated types; it is
+/// **not** a claim of concurrent-call safety. This matches the documented single-writer contract of
+/// `VRMExpressionController` (see ``ConcurrencyStressTests`` — both are deliberately excluded from the
+/// full-thread-safety stress suite). Racing `update(...)` from two threads is undefined behaviour; add an
+/// external lock if you must drive it from multiple queues.
 ///
 /// ## Usage
 ///
