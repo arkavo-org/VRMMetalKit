@@ -445,12 +445,13 @@ func runPipelineBaseline(device: MTLDevice, label: String, archiveDir: String?) 
     if let dir = archiveDir {
         let dirURL = URL(fileURLWithPath: dir)
         try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        let shaderHash = VRMPipelineCache.bundledShaderHash() ?? "bench"
         let archiveURL = PipelineBinaryArchive.cacheURL(
-            in: dirURL, deviceName: device.name, shaderHash: "bench")
+            in: dirURL, deviceName: device.name, shaderHash: shaderHash)
         archivePreloaded = FileManager.default.fileExists(atPath: archiveURL.path)
         do {
             try VRMPipelineCache.shared.enablePersistentArchive(
-                device: device, directory: dirURL, shaderHash: "bench")
+                device: device, directory: dirURL, shaderHash: shaderHash)
         } catch {
             print("WARNING: failed to enable persistent archive: \(error)")
         }

@@ -22,7 +22,7 @@ final class PipelineBinaryArchiveTests: XCTestCase {
     /// A shader-source change must route to a different archive file so a stale
     /// archive is never loaded against incompatible function signatures.
     func testArchiveURLChangesWithShaderHash() {
-        let dir = URL(fileURLWithPath: "/tmp/vmk-test")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vmk-test")
         let a = PipelineBinaryArchive.cacheURL(in: dir, deviceName: "Apple M4 Max", shaderHash: "aaa")
         let b = PipelineBinaryArchive.cacheURL(in: dir, deviceName: "Apple M4 Max", shaderHash: "bbb")
         XCTAssertNotEqual(a, b, "Different shader hashes must map to different archive files.")
@@ -31,7 +31,7 @@ final class PipelineBinaryArchiveTests: XCTestCase {
     /// Binary archives are GPU-family-specific; a different device must not load
     /// another device's archive (Metal would reject it at load time).
     func testArchiveURLChangesWithDevice() {
-        let dir = URL(fileURLWithPath: "/tmp/vmk-test")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vmk-test")
         let a = PipelineBinaryArchive.cacheURL(in: dir, deviceName: "Apple M4 Max", shaderHash: "aaa")
         let b = PipelineBinaryArchive.cacheURL(in: dir, deviceName: "Apple M1", shaderHash: "aaa")
         XCTAssertNotEqual(a, b, "Different devices must map to different archive files.")
@@ -110,6 +110,41 @@ final class PipelineBinaryArchiveTests: XCTestCase {
                 descriptor: try makeMToonOpaqueDescriptor(device: device),
                 key: "mtoon_opaque_archive_test"),
             "A cache reloading a serialized archive must still build pipelines.")
+    }
+
+    /// A warm relaunch (archive preloaded from disk) must not re-serialize the
+    /// archive — the pipelines are already on disk, so the flush is a no-op.
+    /// Guards the dirty-flag optimization from being defeated by re-recording
+    /// every key on enable. (Gitar review #334, finding 1.)
+    func testWarmReloadDoesNotRewriteArchive() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no GPU") }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vmk-warm-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let cold = VRMPipelineCache()
+        try cold.enablePersistentArchive(device: device, directory: dir, shaderHash: "warmtest")
+        _ = try cold.getPipelineState(
+            device: device, descriptor: try makeMToonOpaqueDescriptor(device: device), key: "k")
+        XCTAssertTrue(try cold.flushPersistentArchive(), "Cold flush must write the archive.")
+
+        let warm = VRMPipelineCache()
+        try warm.enablePersistentArchive(device: device, directory: dir, shaderHash: "warmtest")
+        _ = try warm.getPipelineState(
+            device: device, descriptor: try makeMToonOpaqueDescriptor(device: device), key: "k")
+        XCTAssertFalse(
+            try warm.flushPersistentArchive(),
+            "A warm relaunch must not re-serialize an already-complete preloaded archive.")
+    }
+
+    /// The benchmark and any host keying its own archive need a stable, non-nil
+    /// shader hash so the archive invalidates when shaders change. (Finding 3.)
+    func testBundledShaderHashIsStableAndNonNil() {
+        let a = VRMPipelineCache.bundledShaderHash()
+        let b = VRMPipelineCache.bundledShaderHash()
+        XCTAssertNotNil(a, "Bundled shader hash must resolve from the package metallib.")
+        XCTAssertEqual(a, b, "Bundled shader hash must be stable across calls.")
     }
 
     // MARK: - Helpers

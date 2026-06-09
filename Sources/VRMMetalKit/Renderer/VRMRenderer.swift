@@ -884,6 +884,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         if pipelineArchiveEnabled {
             try? VRMPipelineCache.shared.flushPersistentArchive()
+            // Don't leave the process-wide cache pinned to this renderer's
+            // device + archive: later renderers (other GPUs, or flag off) must
+            // not record into it, and concurrent inits must not race on it.
+            VRMPipelineCache.shared.disablePersistentArchive()
         }
 
         // Issue #147: Auto-configure 3-point lighting so hands-off consumers

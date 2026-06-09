@@ -51,6 +51,27 @@ final class VRMRendererPipelineArchiveTests: XCTestCase {
             "Renderer with enablePipelineArchive must write a pipeline archive; found \(files)")
     }
 
+    /// After init, the renderer must not leave the archive enabled on the
+    /// process-wide shared cache — otherwise later renderers (incl. on other
+    /// GPUs, or with the flag off) keep recording into the first renderer's
+    /// archive. (Gitar review #334, finding 2.)
+    func testRendererDisablesArchiveOnSharedAfterInit() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vmk-rend-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        var config = RendererConfig()
+        config.strict = .off
+        config.enablePipelineArchive = true
+        config.pipelineArchiveDirectory = dir
+        _ = VRMRenderer(device: device, config: config)
+
+        XCTAssertFalse(
+            VRMPipelineCache.shared.getStatistics().persistentArchiveEnabled,
+            "VRMRenderer must disable persistence on the shared cache after the init-time flush.")
+    }
+
     /// With the flag off (default), constructing a renderer must not write any
     /// archive into the configured dir.
     func testRendererWritesNothingWhenFlagDisabled() throws {

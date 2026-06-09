@@ -65,6 +65,10 @@ public final class VRMPipelineCache: Sendable {
         /// Pipeline keys already harvested into the current `archive`, so each
         /// is recorded at most once per archive session.
         var archivedKeys: Set<String> = []
+        /// `true` when `archive` was loaded from an existing file. A preloaded
+        /// archive is treated as complete, so builds are served from it without
+        /// re-recording or re-serializing on a warm relaunch.
+        var archivePreloaded: Bool = false
     }
 
     private let _state: Mutex<State>
@@ -156,9 +160,12 @@ public final class VRMPipelineCache: Sendable {
 
             // Harvest into the archive once per key — even on an in-memory cache
             // hit. Without this, a pipeline already compiled before the archive
-            // was enabled (e.g. a non-first renderer) would never reach disk. A
-            // record failure must never break rendering — degrade silently.
-            if state.archive != nil, !state.archivedKeys.contains(key) {
+            // was enabled (e.g. a non-first renderer) would never reach disk.
+            // Skipped when the archive was preloaded from disk: it already holds
+            // these pipelines, so re-recording would only force a redundant
+            // re-serialize on every warm relaunch. A record failure must never
+            // break rendering — degrade silently.
+            if state.archive != nil, !state.archivePreloaded, !state.archivedKeys.contains(key) {
                 do {
                     try state.archive?.record(descriptor)
                     state.archivedKeys.insert(key)
@@ -195,20 +202,25 @@ public final class VRMPipelineCache: Sendable {
         _state.withLock { state in
             state.archive = archive
             state.archiveDirty = false
+            state.archivePreloaded = archive.wasPreloaded
             state.archivedKeys.removeAll(keepingCapacity: true)
         }
     }
 
     /// Writes the in-memory archive to disk when new pipelines have been
-    /// recorded since the last flush. No-op when persistence is disabled or
-    /// nothing new was built.
+    /// recorded since the last flush. No-op when persistence is disabled, the
+    /// archive was preloaded unchanged, or nothing new was built.
     ///
+    /// - Returns: `true` if the archive was actually serialized, `false` if the
+    ///   flush was a no-op.
     /// - Throws: the underlying Metal error if serialisation fails.
-    public func flushPersistentArchive() throws {
+    @discardableResult
+    public func flushPersistentArchive() throws -> Bool {
         try _state.withLock { state in
-            guard let archive = state.archive, state.archiveDirty else { return }
+            guard let archive = state.archive, state.archiveDirty else { return false }
             try archive.serialize()
             state.archiveDirty = false
+            return true
         }
     }
 
@@ -220,8 +232,16 @@ public final class VRMPipelineCache: Sendable {
         _state.withLock { state in
             state.archive = nil
             state.archiveDirty = false
+            state.archivePreloaded = false
             state.archivedKeys.removeAll(keepingCapacity: true)
         }
+    }
+
+    /// A stable hash of the bundled shader library, suitable as the
+    /// `shaderHash` key for ``enablePersistentArchive(device:directory:shaderHash:)``.
+    /// Returns `nil` if the bundled metallib slice cannot be read.
+    public static func bundledShaderHash() -> String? {
+        VRMShaderLibraryLoader.bundledLibraryHash()
     }
 
     /// Drops every cached shader library and pipeline state.
@@ -246,7 +266,8 @@ public final class VRMPipelineCache: Sendable {
         return _state.withLock { state in
             CacheStatistics(
                 libraryCount: state.libraries.count,
-                pipelineStateCount: state.pipelineStates.count
+                pipelineStateCount: state.pipelineStates.count,
+                persistentArchiveEnabled: state.archive != nil
             )
         }
     }
@@ -257,6 +278,8 @@ public final class VRMPipelineCache: Sendable {
         public let libraryCount: Int
         /// Number of distinct compiled `MTLRenderPipelineState` instances retained by the cache.
         public let pipelineStateCount: Int
+        /// Whether on-disk pipeline persistence is currently enabled.
+        public let persistentArchiveEnabled: Bool
     }
 }
 

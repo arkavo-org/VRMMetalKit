@@ -29,6 +29,11 @@ public final class PipelineBinaryArchive: @unchecked Sendable {
 
     /// Backing file the archive serialises to and loads from.
     public let url: URL
+    /// Whether the backing file already existed when this archive was opened.
+    /// A preloaded archive is treated as complete for its key, so callers can
+    /// skip re-recording every pipeline (and the redundant re-serialize) on a
+    /// warm relaunch.
+    public let wasPreloaded: Bool
     private let archive: any MTLBinaryArchive
 
     /// Opens the archive at `url`, loading existing contents when the file is
@@ -38,8 +43,10 @@ public final class PipelineBinaryArchive: @unchecked Sendable {
     ///   existing file (e.g. wrong GPU family or corrupt archive).
     init(device: MTLDevice, url: URL) throws {
         self.url = url
+        let preloaded = FileManager.default.fileExists(atPath: url.path)
+        self.wasPreloaded = preloaded
         let descriptor = MTLBinaryArchiveDescriptor()
-        if FileManager.default.fileExists(atPath: url.path) {
+        if preloaded {
             descriptor.url = url
         }
         self.archive = try device.makeBinaryArchive(descriptor: descriptor)
