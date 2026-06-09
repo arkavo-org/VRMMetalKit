@@ -29,7 +29,7 @@ final class SparseAccessorTests: XCTestCase {
     /// Sparse: 3 overrides at indices [1, 5, 10] with values [42, 99, 7]
     private func makeSparseDocument() -> (GLTFDocument, Data) {
         // indices buffer: 3 x UInt8 = [1, 5, 10]
-        var indicesBytes = Data([1, 5, 10])
+        let indicesBytes = Data([1, 5, 10])
 
         // values buffer: 3 x UInt32 = [42, 99, 7]
         var valuesBytes = Data(count: 12)

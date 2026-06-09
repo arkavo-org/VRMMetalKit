@@ -78,7 +78,7 @@ final class GLTFRendererDrawTests: XCTestCase {
             XCTFail("Could not create vertex buffer"); return
         }
 
-        var materialUniforms = GLTFMaterialUniforms(
+        let materialUniforms = GLTFMaterialUniforms(
             baseColorFactor: SIMD4<Float>(0.9, 0.6, 0.3, 1.0),  // warm tan — easy to distinguish from black
             emissiveFactor: SIMD3<Float>(0, 0, 0),
             metallicFactor: 0.0,
