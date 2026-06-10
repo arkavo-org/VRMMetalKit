@@ -21,9 +21,12 @@ public struct VRMAClipEditor {
               bvIndex >= 0, bvIndex < bvs.count
         else { throw VRMAClipInspector.InspectError.badAccessor }
         let base = (bvs[bvIndex]["byteOffset"] as? Int ?? 0) + (accessors[outputAcc]["byteOffset"] as? Int ?? 0)
-        // Fix 1: count >= 1 so the unconditional first-frame reads at base/base+8 are in range.
-        // Fix 2: enforce float32 VEC3 (same constraints the read path already checks).
-        // Fix 3: base % 4 == 0 ensures storeBytes(of:toByteOffset:as:) alignment (glTF spec guarantees this).
+        // count >= 1: the first-frame reads at base/base+8 must be in range.
+        // float32 VEC3 required — the write path enforces the same accessor
+        // shape the read path (floats(accessor:)) does, so a malformed hips
+        // accessor throws instead of being silently stomped.
+        // base % 4 == 0: storeBytes(of:toByteOffset:as:) requires Float
+        // alignment (glTF guarantees it for float accessors).
         guard base >= 0, count >= 1,
               accessors[outputAcc]["componentType"] as? Int == 5126,
               accessors[outputAcc]["type"] as? String == "VEC3",
