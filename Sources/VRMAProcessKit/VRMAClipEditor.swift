@@ -87,7 +87,17 @@ public struct VRMAClipEditor {
               var samplers = anims[0]["samplers"] as? [[String: Any]]
         else { throw VRMAClipInspector.InspectError.noAnimation }
 
-        // N4 — guarded casts for accessors and bufferViews
+        // Every kept channel is sliced on the same [s...e] key window, so
+        // ALL of them — rotations and the hips translation alike — must
+        // share one keyframe timeline. Validate before any accessor math.
+        var channelInputs: [Int] = []
+        for ch in channels {
+            guard let si = ch["sampler"] as? Int, si >= 0, si < samplers.count,
+                  let input = samplers[si]["input"] as? Int else { continue }
+            channelInputs.append(input)
+        }
+        guard Set(channelInputs).count <= 1 else { throw EditError.unalignedKeyframes }
+
         guard let accessors0 = container.json["accessors"] as? [[String: Any]] else {
             throw VRMAClipInspector.InspectError.badAccessor
         }
@@ -95,8 +105,7 @@ public struct VRMAClipEditor {
             throw VRMAClipInspector.InspectError.badAccessor
         }
 
-        // FIX C1 — collect rotation channels, record their input accessors,
-        // then validate they all share a single timeline.
+        // Collect rotation outputs for the seam metric.
         var rotationOutputs: [[Float]] = []
         var rotationInputs: [Int] = []
         for ch in channels {
@@ -110,11 +119,8 @@ public struct VRMAClipEditor {
             rotationInputs.append(input)
         }
 
-        // FIX C1 — all rotation channels must share one input accessor
-        guard Set(rotationInputs).count <= 1 else { throw EditError.unalignedKeyframes }
-
-        // FIX C1 — derive keyCount from the shared input accessor's count field
-        // (not from output element count, which would be wrong if there's a bad accessor).
+        // keyCount comes from the shared input accessor — the one timeline
+        // every channel was just validated against.
         let keyCount: Int
         if let sharedInput = rotationInputs.first {
             guard sharedInput >= 0, sharedInput < accessors0.count,
@@ -127,12 +133,13 @@ public struct VRMAClipEditor {
 
         guard keyCount > 4 else { return }  // nothing meaningful to trim
 
-        // FIX C1 — guard each rotation output's count == keyCount * 4
+        // Each rotation output must be exactly one quat per key.
         for q in rotationOutputs {
             guard q.count == keyCount * 4 else { throw VRMAClipInspector.InspectError.badAccessor }
         }
 
-        // FIX I2 — collect hipsY for seam quality (every 3rd+1 float of hips translation output)
+        // Hips Y joins the seam metric: idle rotations are near-flat, so
+        // without the bob term the seam lands arbitrarily and pops vertically.
         var hipsY: [Float] = []
         if let (_, hipsOutputAcc) = try? inspector.hipsTranslationSampler() {
             let hipsVals = try inspector.floats(accessor: hipsOutputAcc)
@@ -144,7 +151,7 @@ public struct VRMAClipEditor {
                 throw VRMAClipInspector.InspectError.badAccessor
             }
         }
-        // FIX I2 — guard hipsY.count == keyCount when non-empty
+        // Bob samples must align with the shared timeline.
         if !hipsY.isEmpty {
             guard hipsY.count == keyCount else { throw VRMAClipInspector.InspectError.badAccessor }
         }
@@ -157,7 +164,7 @@ public struct VRMAClipEditor {
                 for k in 0..<4 { dot += q[a * 4 + k] * q[b * 4 + k] }
                 d += 1 - min(1, abs(dot))
             }
-            // FIX I2 — include hipsY bob in pose distance
+            // ~1 cm of bob mismatch weighs like a few degrees of joint error.
             if !hipsY.isEmpty {
                 d += wY * abs(hipsY[a] - hipsY[b])
             }
@@ -177,23 +184,18 @@ public struct VRMAClipEditor {
         var bufferViews = bufferViews0
         var bin = container.bin
 
-        // FIX I1(a) — build set of sampler indices referenced by current channels
         let usedSamplers = Set(channels.compactMap { $0["sampler"] as? Int })
 
-        // N2 — key `rewritten` by a composite string encoding index/comps/rebase
         var rewritten: [String: Int] = [:]
 
-        // FIX I1(b) — strict component map; no silent fallback
         let compsByType: [String: Int] = ["SCALAR": 1, "VEC3": 3, "VEC4": 4]
 
         func sliced(_ accessorIndex: Int, comps: Int, rebase: Bool) throws -> Int {
             // rebase only ever true for SCALAR inputs (comps==1)
             precondition(!rebase || comps == 1)
-            // N2 — composite key
             let key = "\(accessorIndex)/\(comps)/\(rebase)"
             if let existing = rewritten[key] { return existing }
             let vals = try inspector.floats(accessor: accessorIndex)
-            // FIX I1(b) — strict count guard (replaces the weaker >= guard)
             guard vals.count == keyCount * comps else { throw VRMAClipInspector.InspectError.badAccessor }
             let t0 = rebase ? vals[best.s] : 0
             var slice: [Float] = []
@@ -201,7 +203,6 @@ public struct VRMAClipEditor {
             for i in best.s...best.e {
                 for c in 0..<comps { slice.append(vals[i * comps + c] - (rebase && c == 0 ? t0 : 0)) }
             }
-            // N3 — 4-byte alignment before append
             while bin.count % 4 != 0 { bin.append(0) }
             let off = bin.count
             slice.withUnsafeBytes { bin.append(contentsOf: $0) }
@@ -218,11 +219,8 @@ public struct VRMAClipEditor {
         }
 
         for (i, s) in samplers.enumerated() {
-            // FIX I1(a) — skip orphaned samplers (not referenced by any channel)
             guard usedSamplers.contains(i) else { continue }
-            // N4 — guarded casts instead of as!
             guard let input = s["input"] as? Int, let output = s["output"] as? Int else { continue }
-            // FIX I1(b) — strict type-to-comps via the strict map
             guard output >= 0, output < accessors.count,
                   let typeStr = accessors[output]["type"] as? String,
                   let outComps = compsByType[typeStr]
