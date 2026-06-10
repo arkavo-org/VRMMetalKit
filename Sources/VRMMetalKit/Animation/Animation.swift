@@ -18,6 +18,25 @@
 import Foundation
 import simd
 
+/// The locomotion clip contract — written by VRMAProcess into glTF
+/// `extras.arkavo` (see the GameOfMods locomotion design, 2026-06-10, §4).
+public struct LocomotionMetadata: Sendable, Equatable {
+    public let version: Int
+    /// Mean hips ground speed (m/s) of the source capture. 0 = explicit idle.
+    public let strideSpeed: Float
+    /// True when hips XZ translation has been stripped (root stays code-owned).
+    public let inPlace: Bool
+    /// Source rig's rest hips height (m), for future height normalization.
+    public let sourceHipsHeight: Float
+
+    public init(version: Int, strideSpeed: Float, inPlace: Bool, sourceHipsHeight: Float) {
+        self.version = version
+        self.strideSpeed = strideSpeed
+        self.inPlace = inPlace
+        self.sourceHipsHeight = sourceHipsHeight
+    }
+}
+
 /// Time-keyed clip of joint, node, morph, and expression samplers driven by an ``AnimationPlayer``.
 ///
 /// ## Discussion
@@ -55,6 +74,13 @@ public struct AnimationClip {
     /// source VRMA file did not contain a `lookAt` block (per VRMC_vrm_animation-1.0).
     /// (internal: B1 spec compliance)
     public var lookAtTargetSampler: ((Float) -> SIMD3<Float>)?
+
+    /// Locomotion metadata parsed from glTF `extras.arkavo` on the source
+    /// animation (written by VRMAProcess). `strideSpeed == 0` is an explicit
+    /// idle; `nil` means the clip is not a locomotion clip and the
+    /// locomotion blend layer will refuse it. Only contract version 1
+    /// parses; unknown versions read as nil, same semantics as absence.
+    public var locomotion: LocomotionMetadata?
 
     /// Creates an empty clip with the given duration in seconds.
     public init(duration: Float) {
