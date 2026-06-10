@@ -4,6 +4,9 @@ import Foundation
 /// `strideSpeed: 0` is the explicit idle value; ABSENCE of the block means
 /// "not a locomotion clip". `version` hedges the one cross-repo contract.
 public struct LocomotionExtras: Equatable {
+    /// Error thrown by ``write(into:)``.
+    public enum WriteError: Error { case noAnimation }
+
     public var version: Int = 1
     public var strideSpeed: Float
     public var inPlace: Bool
@@ -26,7 +29,7 @@ public struct LocomotionExtras: Equatable {
               let inPlace = arkavo["inPlace"] as? Bool,
               let hipsH = (arkavo["sourceHipsHeight"] as? NSNumber)?.floatValue
         else { return nil }
-        // I3 — unknown version = not a locomotion clip we understand
+        // Only version 1 is understood; any other version reads as absent.
         guard version == 1 else { return nil }
         var m = LocomotionExtras(strideSpeed: stride, inPlace: inPlace, sourceHipsHeight: hipsH)
         m.version = version
@@ -35,7 +38,7 @@ public struct LocomotionExtras: Equatable {
 
     public func write(into container: inout GLBContainer) throws {
         guard var anims = container.json["animations"] as? [[String: Any]], !anims.isEmpty else {
-            throw VRMAClipInspector.InspectError.noAnimation
+            throw WriteError.noAnimation
         }
         var extras = anims[0]["extras"] as? [String: Any] ?? [:]
         extras["arkavo"] = [

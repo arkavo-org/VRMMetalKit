@@ -30,7 +30,7 @@ final class GLBContainerTests: XCTestCase {
         XCTAssertThrowsError(try GLBContainer(data: Data([0, 1, 2, 3])))
     }
 
-    // FIX 2 — slice-safe init
+    /// GLBContainer must parse a Data slice (non-zero startIndex) without misreading the header.
     func testParsesDataSlice() throws {
         var prefixed = Data([0xFF, 0xFF, 0xFF, 0xFF])
         prefixed.append(try makeMinimalGLB())
@@ -39,7 +39,7 @@ final class GLBContainerTests: XCTestCase {
         XCTAssertEqual(container.bin, Data([1, 2, 3, 4, 5, 6, 7, 8]))
     }
 
-    // FIX 3 — honest byte-preservation contract tests
+    /// serialize → parse → serialize must produce byte-identical output.
     func testSerializeParseSerializeIsIdempotent() throws {
         let first = try makeMinimalGLB()
         let second = try GLBContainer(data: first).serialize()

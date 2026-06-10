@@ -28,7 +28,7 @@ final class StrideAndExtrasTests: XCTestCase {
         XCTAssertNil(LocomotionExtras.read(from: container))
     }
 
-    // C1 — oversized count must throw instead of reading out-of-bounds memory
+    /// An accessor whose count would extend the byte read beyond the bin buffer must throw, not read out-of-bounds memory.
     func testOversizedAccessorCountThrowsInsteadOfOverreading() throws {
         var container = try GLBContainer(data: try SyntheticVRMA.make())
         var accessors = container.json["accessors"] as! [[String: Any]]
@@ -38,7 +38,7 @@ final class StrideAndExtrasTests: XCTestCase {
         XCTAssertThrowsError(try inspector.meanHipsXZSpeed())
     }
 
-    // C2 — a cycle in the node hierarchy must throw instead of hanging
+    /// A cycle in the node hierarchy must throw `malformedNodes`, not hang.
     func testNodeCycleThrowsInsteadOfHanging() throws {
         var container = try GLBContainer(data: try SyntheticVRMA.make())
         var nodes = container.json["nodes"] as! [[String: Any]]
@@ -48,7 +48,7 @@ final class StrideAndExtrasTests: XCTestCase {
         XCTAssertThrowsError(try inspector.hipsRestHeight())
     }
 
-    // I1 — non-float componentType must throw instead of silently returning garbage
+    /// Non-float componentType (e.g. ushort 5123) must throw `badAccessor`, not return garbage floats.
     func testNonFloatComponentTypeThrows() throws {
         var container = try GLBContainer(data: try SyntheticVRMA.make())
         var accessors = container.json["accessors"] as! [[String: Any]]
@@ -65,7 +65,7 @@ final class StrideAndExtrasTests: XCTestCase {
         XCTAssertEqual(try inspector.meanHipsXZSpeed(), 0, accuracy: 1e-4)
     }
 
-    // I3 — unknown version must read as nil
+    /// An extras block with an unrecognised version must read as nil (treated as absent).
     func testUnknownExtrasVersionReadsNil() throws {
         var container = try GLBContainer(data: try SyntheticVRMA.make())
         var meta = LocomotionExtras(strideSpeed: 1.0, inPlace: true, sourceHipsHeight: 0.85)

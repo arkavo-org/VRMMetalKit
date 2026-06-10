@@ -48,13 +48,13 @@ public struct VRMAClipInspector {
               let bvs = container.json["bufferViews"] as? [[String: Any]],
               bvIndex < bvs.count
         else { throw InspectError.badAccessor }
-        // I1 — require float32 and a known vector width; no silent fallback
+        // componentType 5126 (Float32) and a recognised vector width are required; any other type throws.
         guard componentType == 5126,
               let comps = ["SCALAR": 1, "VEC3": 3, "VEC4": 4][type]
         else { throw InspectError.badAccessor }
         let byteOffset = (bvs[bvIndex]["byteOffset"] as? Int ?? 0) + (accessors[index]["byteOffset"] as? Int ?? 0)
         let n = count * comps
-        // C1 — bounds-check before any memory read
+        // Byte range must lie within the bin buffer before any unsafe memory access.
         guard byteOffset >= 0, n >= 0,
               byteOffset + n * 4 <= container.bin.count
         else { throw InspectError.badAccessor }
@@ -104,7 +104,7 @@ public struct VRMAClipInspector {
         guard let nodes = container.json["nodes"] as? [[String: Any]] else { throw InspectError.badAccessor }
         var parent: [Int: Int] = [:]
         for (i, n) in nodes.enumerated() {
-            // C2 — skip children entries that are out of range or negative
+            // Children indices that are out of range or negative are silently skipped.
             for c in (n["children"] as? [Int]) ?? [] {
                 guard c >= 0, c < nodes.count else { continue }
                 parent[c] = i
@@ -114,7 +114,7 @@ public struct VRMAClipInspector {
         var cur: Int? = hipsNode
         var visited = Set<Int>()
         while let c = cur {
-            // C2 — detect cycles and out-of-range indices during walk
+            // Out-of-range or repeated node indices indicate a malformed hierarchy.
             guard c >= 0, c < nodes.count else { throw InspectError.malformedNodes }
             guard visited.insert(c).inserted else { throw InspectError.malformedNodes }
             if let t = nodes[c]["translation"] as? [Any], t.count == 3 {
