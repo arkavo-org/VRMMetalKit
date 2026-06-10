@@ -19,7 +19,11 @@ final class LoopTrimTests: XCTestCase {
         container.json = json
         var editor = VRMAClipEditor(container: container)
         try editor.stripNonHumanoidChannels()
-        XCTAssertThrowsError(try editor.loopTrim())
+        XCTAssertThrowsError(try editor.loopTrim()) { error in
+            guard case EditError.unalignedKeyframes = error else {
+                return XCTFail("expected unalignedKeyframes, got \(error) — the timeline validation must fire before any accessor math")
+            }
+        }
     }
 
     func testOrphanedSamplersAreLeftUntouched() throws {
