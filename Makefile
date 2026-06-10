@@ -27,6 +27,14 @@ help:
 # them to hard errors so the CI Shaders job (and local `make shaders`)
 # catches issues like unused functions, writable-buffer aliasing, and
 # sign-compare bugs before they become harder to fix later.
+# -std=metal4.0 pins the Metal language version to the macOS 26 / iOS 26
+# deployment floor: a beta toolchain's default (e.g. metal4.1 from the
+# Xcode 27 beta) produces slices MTLDevice.makeLibrary rejects on release
+# OSes ("language version 4.1 is not supported on this OS" — issue #336).
+# The -m*-version-min flags do NOT constrain the language version, so the
+# explicit -std pin is the only protection. Bump it deliberately, together
+# with the platforms floor in Package.swift.
+MSL_STD := -std=metal4.0
 shaders: shaders-macos shaders-ios shaders-iossim
 	@echo "✅ All shader slices built"
 
@@ -35,8 +43,8 @@ shaders-macos:
 	@mkdir -p /tmp/vrm-shaders-macos
 	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
 		echo "  Compiling $$file..."; \
-		xcrun -sdk macosx metal -Wall -Wextra -Werror \
-			-DMTOON_USE_HALF_PRECISION=1 \
+		xcrun -sdk macosx metal -Wall -Wextra -Werror $(MSL_STD) \
+			-mmacos-version-min=26.0 -DMTOON_USE_HALF_PRECISION=1 \
 			-c $$file -o /tmp/vrm-shaders-macos/$$(basename $$file .metal).air || exit 1; \
 	done
 	@xcrun -sdk macosx metallib /tmp/vrm-shaders-macos/*.air \
@@ -49,7 +57,7 @@ shaders-ios:
 	@mkdir -p /tmp/vrm-shaders-ios
 	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
 		echo "  Compiling $$file..."; \
-		xcrun -sdk iphoneos metal -Wall -Wextra -Werror \
+		xcrun -sdk iphoneos metal -Wall -Wextra -Werror $(MSL_STD) \
 			-mios-version-min=26.0 -DMTOON_USE_HALF_PRECISION=1 \
 			-c $$file -o /tmp/vrm-shaders-ios/$$(basename $$file .metal).air || exit 1; \
 	done
@@ -63,7 +71,7 @@ shaders-iossim:
 	@mkdir -p /tmp/vrm-shaders-iossim
 	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
 		echo "  Compiling $$file..."; \
-		xcrun -sdk iphonesimulator metal -Wall -Wextra -Werror \
+		xcrun -sdk iphonesimulator metal -Wall -Wextra -Werror $(MSL_STD) \
 			-mios-simulator-version-min=26.0 -DMTOON_USE_HALF_PRECISION=1 \
 			-c $$file -o /tmp/vrm-shaders-iossim/$$(basename $$file .metal).air || exit 1; \
 	done
@@ -81,7 +89,9 @@ gltf-shaders:
 	@mkdir -p /tmp/gltf-shaders
 	@for file in Sources/GLTFMetalKit/Shaders/*.metal; do \
 		echo "  Compiling $$file..."; \
-		xcrun metal -Wall -Wextra -Werror -c $$file -o /tmp/gltf-shaders/$$(basename $$file .metal).air; \
+		xcrun -sdk macosx metal -Wall -Wextra -Werror $(MSL_STD) \
+			-mmacos-version-min=26.0 \
+			-c $$file -o /tmp/gltf-shaders/$$(basename $$file .metal).air; \
 	done
 	@xcrun metallib /tmp/gltf-shaders/*.air -o Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
 	@echo "✅ GLTFMetalKit shaders compiled"

@@ -645,6 +645,28 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
     private static let zeroMorphWeights = [Float](repeating: 0, count: 8)
     private var hasLoggedSpringBone = false
+    private var hasLoggedPipelinesUnavailable = false
+
+    /// Pre-flight for non-strict draws: `false` when the pipeline state a
+    /// frame requires is missing — i.e. `setupPipeline()` failed and, with
+    /// `strict: .off`, swallowed the error. Logs the condition once per
+    /// renderer through the always-on error log so an undrawable renderer is
+    /// diagnosable without `VRM_METALKIT_ENABLE_LOGS` (issue #336).
+    func pipelinesReadyForDraw() -> Bool {
+        if opaquePipelineState != nil && !uniformsBuffers.isEmpty {
+            return true
+        }
+        if !hasLoggedPipelinesUnavailable {
+            hasLoggedPipelinesUnavailable = true
+            vrmLogError(
+                "[VRMRenderer] Draw skipped: required render pipeline state is missing, so this renderer can never draw. " +
+                "Pipeline setup failed during init — check the preceding VRMMetalKit fault log for the cause " +
+                "(commonly an unloadable bundled metallib; rebuild with `make shaders`). " +
+                "See https://github.com/arkavo-org/VRMMetalKit/issues/336"
+            )
+        }
+        return false
+    }
 
     /// When `true` (the default), the renderer ignores ``animationState`` and clears it on the first frame.
     /// Prefer ``AnimationPlayer`` for new code; set this to `false` only when restoring the legacy path.
@@ -1389,15 +1411,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if config.strict == .fail {
                     inflightSemaphore.signal()
                     vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
+                    // The slot is released; encoding the frame anyway would
+                    // double-signal once the command buffer completes.
+                    return
                 } else {
                     vrmLog("⚠️ [VRMRenderer] Draw validation warning: \(error)")
                 }
             }
         } else {
-            // Legacy asserts for non-strict mode
-            assert(opaquePipelineState != nil, "[VRMRenderer] Opaque pipeline state is nil")
-            assert(!uniformsBuffers.isEmpty, "[VRMRenderer] Uniforms buffers are empty")
-            assert(morphTargetSystem?.morphAccumulatePipelineState != nil, "[VRMRenderer] Compute pipeline state is nil")
+            // Non-strict: a missing pipeline means setup failed earlier (e.g.
+            // the bundled metallib didn't load — issue #336). Skip the frame
+            // loudly instead of wedging the host in an assert at first draw.
+            guard pipelinesReadyForDraw() else {
+                inflightSemaphore.signal()
+                return
+            }
         }
 
         // Run compute pass for morphs BEFORE render encoder
