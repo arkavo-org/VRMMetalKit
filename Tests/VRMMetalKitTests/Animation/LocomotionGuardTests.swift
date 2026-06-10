@@ -1,4 +1,6 @@
 import XCTest
+import Metal
+import simd
 import VRMAProcessKit
 @testable import VRMMetalKit
 
@@ -43,6 +45,44 @@ final class LocomotionGuardTests: XCTestCase {
                                "\(rel) must not use \(token) — caller-dt purity (locomotion design §7)")
             }
         }
+    }
+
+    /// The compositor applies `base * delta`; the locomotion layer emits
+    /// rest-relative deltas. Together they must reproduce the clip rotation
+    /// exactly — this is the seam no per-task test covered.
+    func testCompositorProducesClipPoseThroughLocomotionLayer() async throws {
+        let modelURL = URL(fileURLWithPath: getTestVRM10ModelPath())
+        guard FileManager.default.fileExists(atPath: modelURL.path) else {
+            throw XCTSkip("AvatarSample_A_1.0.vrm.glb fixture not present")
+        }
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal device not available")
+        }
+        let model = try await VRMModel.load(from: modelURL, device: device)
+
+        var walk = AnimationClip(duration: 1.0)
+        walk.locomotion = LocomotionMetadata(version: 1, strideSpeed: 1.5, inPlace: true, sourceHipsHeight: 0.85)
+        let fixedQ = simd_quatf(angle: 0.35, axis: SIMD3<Float>(1, 0, 0))
+        walk.addJointTrack(JointTrack(bone: .rightUpperLeg, rotationSampler: { _ in fixedQ }))
+        var idle = AnimationClip(duration: 1.0)
+        idle.locomotion = LocomotionMetadata(version: 1, strideSpeed: 0, inPlace: true, sourceHipsHeight: 0.85)
+        idle.addJointTrack(JointTrack(bone: .rightUpperLeg, rotationSampler: { _ in fixedQ }))
+
+        let compositor = AnimationLayerCompositor()
+        compositor.setup(model: model)
+        let layer = LocomotionBlendLayer()
+        layer.setup(model: model)
+        try layer.setClips(idle: idle, walk: walk)
+        layer.targetSpeed = 1.5
+        compositor.addLayer(layer)
+        compositor.update(deltaTime: 1.0 / 60.0, context: AnimationContext())
+
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let idx = try XCTUnwrap(humanoid.getBoneNode(.rightUpperLeg))
+        let applied = model.nodes[idx].rotation
+        let dot = abs(simd_dot(applied.vector, fixedQ.vector))
+        XCTAssertEqual(dot, 1.0, accuracy: 1e-4,
+                       "compositor(base * layerDelta) must reproduce the clip rotation")
     }
 
     /// The extras.arkavo block is the one cross-repo contract (design §4):

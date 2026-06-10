@@ -6,6 +6,15 @@ import simd
 /// Owns the full 0→max base pose; `IdleBreathingLayer` composes additively
 /// above it and `IKLayer` (priority 4) corrects foot plant after everything.
 ///
+/// Output contract: this layer emits **rest-relative deltas** — each bone
+/// rotation is `restRotation.inverse * blendedClipRotation`. The
+/// `AnimationLayerCompositor` applies `base * delta`, which reproduces the
+/// clip rotation exactly when `base == rest` (i.e. when `setup(model:)` and
+/// `AnimationLayerCompositor.setup(model:)` are both called on the same rest
+/// pose). When no model is bound (unit tests), `restRotations` is empty and
+/// delta == clip rotation (identity rest), so existing unit tests remain
+/// unchanged.
+///
 /// Purity contract: output is a function of (targetSpeed, accumulated
 /// sim dt, phaseOffset, clips). No clocks, no smoothing, no velocity
 /// dynamics — the host's controller owns those (design §6).
@@ -24,6 +33,7 @@ public final class LocomotionBlendLayer: AnimationLayer {
     /// Speed in m/s, set by the host controller. No internal smoothing.
     public var targetSpeed: Float = 0
     /// Normalized [0,1) cycle offset, seeded per-entity by the host.
+    /// Any value is safe — it is normalised internally to [0,1) via `floorf`.
     public var phaseOffset: Float = 0
 
     private var idleClip: AnimationClip?
@@ -32,7 +42,26 @@ public final class LocomotionBlendLayer: AnimationLayer {
     private var idlePhase: Float = 0  // seconds into idle clip
     private var walkPhase: Float = 0  // seconds into walk clip
 
+    /// Per-bone rest rotations captured at `setup(model:)`. Empty when no
+    /// model has been bound; in that case deltas equal clip rotations.
+    private var restRotations: [VRMHumanoidBone: simd_quatf] = [:]
+
     public init() {}
+
+    /// Captures the model's current per-bone rotations as the rest pose the
+    /// layer's deltas are expressed against. Call at the same rest moment as
+    /// `AnimationLayerCompositor.setup(model:)` — the compositor pre-multiplies
+    /// its own captured base, so both captures must see the same pose for
+    /// `base * delta` to reproduce the clip rotation exactly.
+    public func setup(model: VRMModel) {
+        restRotations.removeAll()
+        guard let humanoid = model.humanoid else { return }
+        for bone in VRMHumanoidBone.allCases {
+            if let idx = humanoid.getBoneNode(bone), idx < model.nodes.count {
+                restRotations[bone] = model.nodes[idx].rotation
+            }
+        }
+    }
 
     public func setClips(idle: AnimationClip, walk: AnimationClip) throws {
         guard idle.locomotion != nil, let walkMeta = walk.locomotion else {
@@ -65,7 +94,9 @@ public final class LocomotionBlendLayer: AnimationLayer {
         func sample(_ clip: AnimationClip, phase: Float) -> [VRMHumanoidBone: simd_quatf] {
             var out: [VRMHumanoidBone: simd_quatf] = [:]
             let duration = max(clip.duration, 1e-5)
-            let t = fmodf(phase + phaseOffset * duration, duration)
+            // normalise phaseOffset to [0,1) so any caller-supplied value is safe
+            let normalizedOffset = phaseOffset - floorf(phaseOffset)
+            let t = fmodf(phase + normalizedOffset * duration, duration)
             for track in clip.jointTracks {
                 if let q = track.rotationSampler?(t) { out[track.bone] = q }
             }
@@ -78,10 +109,14 @@ public final class LocomotionBlendLayer: AnimationLayer {
         for bone in affectedBones {
             let qi = idlePose[bone] ?? identity
             let qw = walkPose[bone] ?? identity
-            let q = simd_slerp(qi, qw, blend.walkWeight)
-            bones[bone] = ProceduralBoneTransform(rotation: q)
+            let blended = simd_slerp(qi, qw, blend.walkWeight)
+            // Emit a rest-relative delta: compositor applies base * delta.
+            // With no model bound, rest is identity so delta == clip rotation.
+            let rest = restRotations[bone] ?? identity
+            let delta = rest.inverse * blended
+            bones[bone] = ProceduralBoneTransform(rotation: delta)
         }
-        // This layer IS the base pose for the bones it drives; additive
+        // This layer IS the base-pose delta for the bones it drives; additive
         // layers (breathing) stack on top of the compositor's result.
         return LayerOutput(bones: bones, morphWeights: [:], blendMode: .replace)
     }
