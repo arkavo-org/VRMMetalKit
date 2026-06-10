@@ -1229,6 +1229,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             centerDeltaBuffer = device.makeBuffer(length: totalBytes,
                                                    options: [.storageModeShared])
             centerDeltaBuffer?.label = "SpringBone CenterDelta"
+            // makeBuffer(length:) does not zero recycled heap pages, and the
+            // apply kernel trusts each record's boneStart/boneCount. Any
+            // dispatch that precedes the per-frame fill must read
+            // boneCount == 0 (no-op) rather than garbage — a garbage
+            // boneCount walks bonePosCurr/Prev out of bounds.
+            if let buffer = centerDeltaBuffer {
+                memset(buffer.contents(), 0, totalBytes)
+            }
         } else {
             centerDeltaBuffer = nil
         }
@@ -2281,6 +2289,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Step 3: Also reset interpolation state to match
         resetInterpolationState()
 
+        // Step 3.5: Fill the substep-0 center-delta slice with identity
+        // deltas. executeXPBDStep dispatches springBoneApplyCenterDelta
+        // whenever centerSpringRecords is non-empty, but the per-frame fill
+        // lives in update(), which warmup bypasses — without this the kernel
+        // reads whatever memory the allocation recycled. Zero pages happen
+        // to no-op (boneCount == 0), recycled heap shifts arbitrary bone
+        // ranges by garbage matrices, making the settled pose differ on
+        // every in-process reload. Centers are static during warmup, so
+        // prev == target yields the correct identity delta per record.
+        if !centerSpringRecords.isEmpty {
+            captureTargetCenterWorldMatrices(model: model)
+            for record in centerSpringRecords {
+                if let target = targetCenterWorldMatrices[record.centerNodeIndex] {
+                    previousCenterWorldMatrices[record.centerNodeIndex] = target
+                }
+            }
+            fillCenterDeltaBufferForFrame(substepCount: 1)
+        }
+
         // Step 4: Run silent physics steps to let bones settle into natural hanging positions.
         // This happens BEFORE the first render, so there's no visual bounce.
         //
@@ -2312,6 +2339,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             // Execute XPBD pipeline
             executeXPBDStep(buffers: buffers, globalParams: params, substepIndex: 0)
+
+            // executeXPBDStep commits its self-owned command buffer without
+            // waiting, but the next loop iteration rewrites the shared
+            // buffers the in-flight step reads (globalParams, collider and
+            // root positions). Unsynchronized, each GPU step races the CPU
+            // writes for the following one and may consume either step's
+            // values — the settled pose then varies run to run. Warmup is a
+            // one-time load cost, so drain every step.
+            waitForPendingFrame()
         }
 
         // VMK#292 (regression of VMK#240): force `settlingFrames` to 0 at
