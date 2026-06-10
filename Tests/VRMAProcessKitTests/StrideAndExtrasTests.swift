@@ -73,4 +73,13 @@ final class StrideAndExtrasTests: XCTestCase {
         try meta.write(into: &container)
         XCTAssertNil(LocomotionExtras.read(from: container))
     }
+
+    func testNearIntMaxAccessorCountThrowsInsteadOfTrapping() throws {
+        var container = try GLBContainer(data: try SyntheticVRMA.make())
+        var accessors = container.json["accessors"] as! [[String: Any]]
+        accessors[1]["count"] = Int.max / 2
+        container.json["accessors"] = accessors
+        let inspector = try VRMAClipInspector(container: container)
+        XCTAssertThrowsError(try inspector.meanHipsXZSpeed())
+    }
 }

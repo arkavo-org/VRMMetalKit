@@ -69,11 +69,13 @@ public struct VRMAClipInspector {
               let comps = ["SCALAR": 1, "VEC3": 3, "VEC4": 4][type]
         else { throw InspectError.badAccessor }
         let byteOffset = (bvs[bvIndex]["byteOffset"] as? Int ?? 0) + (accessors[index]["byteOffset"] as? Int ?? 0)
-        let n = count * comps
-        // Byte range must lie within the bin buffer before any unsafe memory access.
-        guard byteOffset >= 0, n >= 0,
-              byteOffset + n * 4 <= container.bin.count
-        else { throw InspectError.badAccessor }
+        // Overflow-safe bounds math: hostile accessor counts must throw, not trap.
+        let (n, nOverflow) = count.multipliedReportingOverflow(by: comps)
+        guard !nOverflow, n >= 0 else { throw InspectError.badAccessor }
+        let (nBytes, bOverflow) = n.multipliedReportingOverflow(by: 4)
+        guard !bOverflow else { throw InspectError.badAccessor }
+        let (end, eOverflow) = byteOffset.addingReportingOverflow(nBytes)
+        guard !eOverflow, byteOffset >= 0, end <= container.bin.count else { throw InspectError.badAccessor }
         return container.bin.withUnsafeBytes { raw in
             (0..<n).map { raw.loadUnaligned(fromByteOffset: byteOffset + $0 * 4, as: Float.self) }
         }

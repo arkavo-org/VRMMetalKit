@@ -54,11 +54,15 @@ public struct VRMAClipEditor {
         // accessor throws instead of being silently stomped.
         // base % 4 == 0: storeBytes(of:toByteOffset:as:) requires Float
         // alignment (glTF guarantees it for float accessors).
+        // Overflow-safe: base + count * 12 must not trap on hostile counts.
+        let (stride12, s12Overflow) = count.multipliedReportingOverflow(by: 12)
+        guard !s12Overflow else { throw VRMAClipInspector.InspectError.badAccessor }
+        let (endOff, endOverflow) = base.addingReportingOverflow(stride12)
         guard base >= 0, count >= 1,
               accessors[outputAcc]["componentType"] as? Int == 5126,
               accessors[outputAcc]["type"] as? String == "VEC3",
               base % 4 == 0,
-              base + count * 12 <= container.bin.count
+              !endOverflow, endOff <= container.bin.count
         else { throw VRMAClipInspector.InspectError.badAccessor }
         var bin = container.bin
         let x0 = bin.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: base, as: Float.self) }
