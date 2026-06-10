@@ -78,7 +78,7 @@ gpudebug --terminate <id>                  # when done
 ```
 Add `--json` for machine-readable output (agent-friendly). Sessions persist between invocations — create once, reuse with `-s` (a fresh `--oneshot` reloads the trace each time, which is slow). Capture any other render path by wrapping it like `GPUTraceCaptureTests` does with `MTLCaptureManager`.
 
-**Constraint:** GPU capture is incompatible with shader logging (`MTLLogState`). `MetalQueueFactory.makeCommandQueue` therefore skips log-state attachment when `METAL_CAPTURE_ENABLED` is set; all command queues must be created through it.
+**Constraint:** GPU capture is incompatible with shader logging (`MTLLogState`). `MetalQueueFactory.makeCommandQueue` therefore skips log-state attachment when `METAL_CAPTURE_ENABLED` is set; command queues inside the VRMMetalKit module must be created through it. (Other targets — GLTFMetalKit, the CLI executables — create plain queues without log state, which capture tolerates; they just don't surface shader `os_log` output.)
 
 ## Architecture & Design Patterns
 

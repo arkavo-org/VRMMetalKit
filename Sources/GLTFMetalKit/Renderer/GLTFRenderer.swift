@@ -395,7 +395,7 @@ public final class GLTFRenderer: @unchecked Sendable {
         // `setRenderPipelineState` calls when consecutive draws share it.
         var currentPipeline: MTLRenderPipelineState? = nil
 
-        // Samplers — built lazily on first use and cached on the renderer.
+        // Samplers — allocated once in `init` and cached on the renderer.
         let colorSampler = colorSamplerState
         let linearSampler = linearSamplerState
         let environmentSampler = environmentSamplerState

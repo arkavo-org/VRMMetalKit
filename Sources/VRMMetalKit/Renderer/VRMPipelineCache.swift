@@ -62,13 +62,25 @@ public final class VRMPipelineCache: Sendable {
         /// Set when a new pipeline is recorded into `archive`, so
         /// ``flushPersistentArchive()`` only writes when there is new content.
         var archiveDirty: Bool = false
-        /// Pipeline keys already harvested into the current `archive`, so each
-        /// is recorded at most once per archive session.
+        /// Pipeline keys whose archive membership has been settled this
+        /// session (either probed as already present, or freshly recorded),
+        /// so each key is probed/recorded at most once per archive session.
         var archivedKeys: Set<String> = []
-        /// `true` when `archive` was loaded from an existing file. A preloaded
-        /// archive is treated as complete, so builds are served from it without
-        /// re-recording or re-serializing on a warm relaunch.
-        var archivePreloaded: Bool = false
+        /// Clean copies (no `binaryArchives`) of every descriptor requested
+        /// this archive session, keyed like `archivedKeys`. A partial
+        /// *preloaded* archive cannot be appended to in place, so
+        /// ``flushPersistentArchive()`` heals it by rebuilding a fresh archive
+        /// from these.
+        var sessionDescriptors: [String: SessionDescriptor] = [:]
+    }
+
+    /// `MTLRenderPipelineDescriptor` is not `Sendable`; these are private
+    /// copies created and consumed exclusively inside the `_state` Mutex
+    /// critical sections (stored in `getPipelineState`, read in
+    /// `flushPersistentArchive`), so the Mutex itself provides the
+    /// serialization the compiler cannot see.
+    private struct SessionDescriptor: @unchecked Sendable {
+        let value: MTLRenderPipelineDescriptor
     }
 
     private let _state: Mutex<State>
@@ -161,17 +173,38 @@ public final class VRMPipelineCache: Sendable {
             // Harvest into the archive once per key — even on an in-memory cache
             // hit. Without this, a pipeline already compiled before the archive
             // was enabled (e.g. a non-first renderer) would never reach disk.
-            // Skipped when the archive was preloaded from disk: it already holds
-            // these pipelines, so re-recording would only force a redundant
-            // re-serialize on every warm relaunch. A record failure must never
-            // break rendering — degrade silently.
-            if state.archive != nil, !state.archivePreloaded, !state.archivedKeys.contains(key) {
-                do {
-                    try state.archive?.record(descriptor)
-                    state.archivedKeys.insert(key)
-                    state.archiveDirty = true
-                } catch {
-                    vrmLog("[VRMPipelineCache] ⚠️ Archive record failed for \(key): \(error)")
+            //
+            // A probe build with `.failOnBinaryArchiveMiss` distinguishes the
+            // two cases that previously fought each other: an archive hit
+            // records nothing and stays clean (a complete preloaded archive is
+            // never redundantly re-serialized on warm relaunch), while a miss
+            // dirties the archive — so a *partial* preloaded archive (a failed
+            // record, or an interrupted cold run) self-heals at flush instead
+            // of recompiling its missing variants cold on every launch.
+            // Preloaded archives cannot be appended to in place (see
+            // `PipelineBinaryArchive.wasPreloaded`), so for them the miss is
+            // only marked here and the heal happens in
+            // `flushPersistentArchive()` via rebuild. A record failure must
+            // never break rendering — degrade silently.
+            if let archive = state.archive, !state.archivedKeys.contains(key) {
+                state.archivedKeys.insert(key)
+                archive.prepare(descriptor)
+                let cleanCopy = descriptor.copy() as! MTLRenderPipelineDescriptor
+                cleanCopy.binaryArchives = nil
+                state.sessionDescriptors[key] = SessionDescriptor(value: cleanCopy)
+                let alreadyArchived = (try? device.makeRenderPipelineState(
+                    descriptor: descriptor, options: [.failOnBinaryArchiveMiss], reflection: nil)) != nil
+                if !alreadyArchived {
+                    if archive.wasPreloaded {
+                        state.archiveDirty = true
+                    } else {
+                        do {
+                            try archive.record(descriptor)
+                            state.archiveDirty = true
+                        } catch {
+                            vrmLog("[VRMPipelineCache] ⚠️ Archive record failed for \(key): \(error)")
+                        }
+                    }
                 }
             }
 
@@ -202,8 +235,8 @@ public final class VRMPipelineCache: Sendable {
         _state.withLock { state in
             state.archive = archive
             state.archiveDirty = false
-            state.archivePreloaded = archive.wasPreloaded
             state.archivedKeys.removeAll(keepingCapacity: true)
+            state.sessionDescriptors.removeAll(keepingCapacity: true)
         }
     }
 
@@ -218,7 +251,16 @@ public final class VRMPipelineCache: Sendable {
     public func flushPersistentArchive() throws -> Bool {
         try _state.withLock { state in
             guard let archive = state.archive, state.archiveDirty else { return false }
-            try archive.serialize()
+            if archive.wasPreloaded {
+                // Heal path: a preloaded archive with missing variants cannot
+                // be appended + re-serialized in place, so rewrite it from the
+                // session's descriptors (hits and misses alike — already-built
+                // pipelines record from the Metal compiler cache).
+                try archive.rebuildAndSerialize(
+                    descriptors: state.sessionDescriptors.values.map(\.value))
+            } else {
+                try archive.serialize()
+            }
             state.archiveDirty = false
             return true
         }
@@ -232,8 +274,8 @@ public final class VRMPipelineCache: Sendable {
         _state.withLock { state in
             state.archive = nil
             state.archiveDirty = false
-            state.archivePreloaded = false
             state.archivedKeys.removeAll(keepingCapacity: true)
+            state.sessionDescriptors.removeAll(keepingCapacity: true)
         }
     }
 

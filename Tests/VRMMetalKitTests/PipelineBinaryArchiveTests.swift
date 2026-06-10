@@ -138,6 +138,58 @@ final class PipelineBinaryArchiveTests: XCTestCase {
             "A warm relaunch must not re-serialize an already-complete preloaded archive.")
     }
 
+    /// A preloaded archive that is missing a variant (a failed record, or an
+    /// interrupted cold run) must complete itself: the miss is recorded and
+    /// flushed, and the now-complete archive stays clean on the next reload.
+    func testPartialPreloadedArchiveSelfHeals() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no GPU") }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vmk-heal-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // Cold run archives only variant A.
+        let cold = VRMPipelineCache()
+        try cold.enablePersistentArchive(device: device, directory: dir, shaderHash: "healtest")
+        _ = try cold.getPipelineState(
+            device: device,
+            descriptor: try makeMToonOpaqueDescriptor(device: device),
+            key: "a")
+        XCTAssertTrue(try cold.flushPersistentArchive())
+
+        // Warm run requests both variants; B (different pixel format →
+        // distinct archive entry) is missing from the preloaded archive.
+        // The heal rebuilds the file from the session's full descriptor set.
+        let healing = VRMPipelineCache()
+        try healing.enablePersistentArchive(device: device, directory: dir, shaderHash: "healtest")
+        _ = try healing.getPipelineState(
+            device: device,
+            descriptor: try makeMToonOpaqueDescriptor(device: device),
+            key: "a")
+        _ = try healing.getPipelineState(
+            device: device,
+            descriptor: try makeMToonOpaqueDescriptor(device: device, colorPixelFormat: .rgba8Unorm_srgb),
+            key: "b")
+        XCTAssertTrue(
+            try healing.flushPersistentArchive(),
+            "A preloaded archive missing a variant must rewrite itself on flush — partial archives self-heal.")
+
+        // Next reload holds both variants: nothing new, no rewrite.
+        let complete = VRMPipelineCache()
+        try complete.enablePersistentArchive(device: device, directory: dir, shaderHash: "healtest")
+        _ = try complete.getPipelineState(
+            device: device,
+            descriptor: try makeMToonOpaqueDescriptor(device: device),
+            key: "a")
+        _ = try complete.getPipelineState(
+            device: device,
+            descriptor: try makeMToonOpaqueDescriptor(device: device, colorPixelFormat: .rgba8Unorm_srgb),
+            key: "b")
+        XCTAssertFalse(
+            try complete.flushPersistentArchive(),
+            "A healed, complete archive must not re-serialize on subsequent reloads.")
+    }
+
     /// The benchmark and any host keying its own archive need a stable, non-nil
     /// shader hash so the archive invalidates when shaders change. (Finding 3.)
     func testBundledShaderHashIsStableAndNonNil() {
@@ -152,7 +204,10 @@ final class PipelineBinaryArchiveTests: XCTestCase {
     /// Builds a valid MToon opaque pipeline descriptor mirroring the renderer's
     /// own (`VRMRenderer+Pipeline`) so `makeRenderPipelineState` actually
     /// compiles and the archive has a real function to record.
-    private func makeMToonOpaqueDescriptor(device: MTLDevice) throws -> MTLRenderPipelineDescriptor {
+    private func makeMToonOpaqueDescriptor(
+        device: MTLDevice,
+        colorPixelFormat: MTLPixelFormat = .bgra8Unorm
+    ) throws -> MTLRenderPipelineDescriptor {
         let library = try VRMPipelineCache.shared.getLibrary(device: device)
         guard let vfn = library.makeFunction(name: "mtoon_vertex"),
               let ffn = library.makeFunction(name: "mtoon_fragment_v2") else {
@@ -178,7 +233,7 @@ final class PipelineBinaryArchiveTests: XCTestCase {
         d.fragmentFunction = ffn
         d.vertexDescriptor = vd
         d.depthAttachmentPixelFormat = .depth32Float
-        d.colorAttachments[0].pixelFormat = .bgra8Unorm
+        d.colorAttachments[0].pixelFormat = colorPixelFormat
         return d
     }
 }

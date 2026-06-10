@@ -30,10 +30,14 @@ public final class PipelineBinaryArchive: @unchecked Sendable {
     /// Backing file the archive serialises to and loads from.
     public let url: URL
     /// Whether the backing file already existed when this archive was opened.
-    /// A preloaded archive is treated as complete for its key, so callers can
-    /// skip re-recording every pipeline (and the redundant re-serialize) on a
-    /// warm relaunch.
+    /// A preloaded archive serves lookups but cannot be appended to and
+    /// re-serialized in place — the gpuarchiver packer rejects the combined
+    /// archive ("expecting 'fragment' stage in pipeline no. N") whenever the
+    /// loaded entries were recorded in a process that also built them, which
+    /// is every archive this cache writes. Callers heal a partial preloaded
+    /// archive via ``rebuildAndSerialize(descriptors:)`` instead.
     public let wasPreloaded: Bool
+    private let device: MTLDevice
     private let archive: any MTLBinaryArchive
 
     /// Opens the archive at `url`, loading existing contents when the file is
@@ -43,6 +47,7 @@ public final class PipelineBinaryArchive: @unchecked Sendable {
     ///   existing file (e.g. wrong GPU family or corrupt archive).
     init(device: MTLDevice, url: URL) throws {
         self.url = url
+        self.device = device
         let preloaded = FileManager.default.fileExists(atPath: url.path)
         self.wasPreloaded = preloaded
         let descriptor = MTLBinaryArchiveDescriptor()
@@ -68,6 +73,21 @@ public final class PipelineBinaryArchive: @unchecked Sendable {
     /// Writes the archive to its backing ``url``.
     func serialize() throws {
         try archive.serialize(to: url)
+    }
+
+    /// Replaces the on-disk file with a fresh archive containing exactly
+    /// `descriptors` — the heal path for a partial *preloaded* archive, which
+    /// cannot be appended to and re-serialized in place (see ``wasPreloaded``).
+    /// Variants present in the old file but absent from `descriptors` are
+    /// dropped; the archive converges to the variants actually requested.
+    /// Recording descriptors whose pipelines were already built this session
+    /// is served from the Metal compiler cache, not recompiled.
+    func rebuildAndSerialize(descriptors: [MTLRenderPipelineDescriptor]) throws {
+        let fresh = try device.makeBinaryArchive(descriptor: MTLBinaryArchiveDescriptor())
+        for descriptor in descriptors {
+            try fresh.addRenderPipelineFunctions(descriptor: descriptor)
+        }
+        try fresh.serialize(to: url)
     }
 
     // MARK: - Cache key
