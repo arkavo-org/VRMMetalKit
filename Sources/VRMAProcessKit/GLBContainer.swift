@@ -2,8 +2,13 @@ import Foundation
 
 /// Minimal glb (binary glTF 2.0) container: one JSON chunk + optional BIN
 /// chunk. Edits happen on the parsed `json` dictionary and raw `bin` data;
-/// `serialize()` re-emits with correct 4-byte alignment. Bytes we do not
-/// touch are preserved (producer truth).
+/// `serialize()` re-emits with correct 4-byte alignment.
+///
+/// Contract: BIN bytes are preserved except for trailing zero padding added
+/// when the length is not 4-byte aligned (re-parsing returns the padded
+/// bytes). The JSON chunk is value-preserving but NORMALIZED on every
+/// serialize (re-emitted via JSONSerialization with sorted keys), so JSON
+/// byte layout is deterministic, not producer-identical.
 public struct GLBContainer {
     public var json: [String: Any]
     public var bin: Data
@@ -15,7 +20,8 @@ public struct GLBContainer {
         self.bin = bin
     }
 
-    public init(data: Data) throws {
+    public init(data input: Data) throws {
+        let data = input.startIndex == 0 ? input : Data(input)
         guard data.count >= 12, data.prefix(4) == Data("glTF".utf8) else { throw GLBError.notGLB }
         var offset = 12
         var jsonDict: [String: Any]?
@@ -37,7 +43,7 @@ public struct GLBContainer {
         self.bin = binData
     }
 
-    public mutating func serialize() throws -> Data {
+    public func serialize() throws -> Data {
         var jsonData = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
         while jsonData.count % 4 != 0 { jsonData.append(0x20) }  // pad with spaces
         var paddedBin = bin
