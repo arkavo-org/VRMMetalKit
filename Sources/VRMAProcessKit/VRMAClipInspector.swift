@@ -7,7 +7,7 @@ public struct VRMAClipInspector {
     public let hipsNode: Int
     public let humanBoneNodes: Set<Int>
 
-    public enum InspectError: Error { case noAnimation, noHumanoidMap, noHipsTranslation, badAccessor }
+    public enum InspectError: Error { case noAnimation, noHumanoidMap, noHipsTranslation, badAccessor, malformedNodes }
 
     public init(container: GLBContainer) throws {
         self.container = container
@@ -35,18 +35,29 @@ public struct VRMAClipInspector {
     }
 
     /// Decodes the float array backing accessor `index`.
+    /// Throws `badAccessor` if componentType is not 5126 (Float), type is not SCALAR/VEC3/VEC4,
+    /// any index is out of range, or the byte range exceeds the bin buffer.
     public func floats(accessor index: Int) throws -> [Float] {
         guard let accessors = container.json["accessors"] as? [[String: Any]],
-              index < accessors.count,
+              index >= 0, index < accessors.count,
               let bvIndex = accessors[index]["bufferView"] as? Int,
+              bvIndex >= 0,
               let count = accessors[index]["count"] as? Int,
+              let componentType = accessors[index]["componentType"] as? Int,
               let type = accessors[index]["type"] as? String,
               let bvs = container.json["bufferViews"] as? [[String: Any]],
               bvIndex < bvs.count
         else { throw InspectError.badAccessor }
-        let comps = ["SCALAR": 1, "VEC3": 3, "VEC4": 4][type] ?? 1
+        // I1 — require float32 and a known vector width; no silent fallback
+        guard componentType == 5126,
+              let comps = ["SCALAR": 1, "VEC3": 3, "VEC4": 4][type]
+        else { throw InspectError.badAccessor }
         let byteOffset = (bvs[bvIndex]["byteOffset"] as? Int ?? 0) + (accessors[index]["byteOffset"] as? Int ?? 0)
         let n = count * comps
+        // C1 — bounds-check before any memory read
+        guard byteOffset >= 0, n >= 0,
+              byteOffset + n * 4 <= container.bin.count
+        else { throw InspectError.badAccessor }
         return container.bin.withUnsafeBytes { raw in
             (0..<n).map { raw.loadUnaligned(fromByteOffset: byteOffset + $0 * 4, as: Float.self) }
         }
@@ -62,9 +73,9 @@ public struct VRMAClipInspector {
             guard let target = ch["target"] as? [String: Any],
                   target["node"] as? Int == hipsNode,
                   target["path"] as? String == "translation",
-                  let si = ch["sampler"] as? Int, si < samplers.count,
-                  let input = samplers[si]["input"] as? Int,
-                  let output = samplers[si]["output"] as? Int
+                  let si = ch["sampler"] as? Int, si >= 0, si < samplers.count,
+                  let input = samplers[si]["input"] as? Int, input >= 0,
+                  let output = samplers[si]["output"] as? Int, output >= 0
             else { continue }
             return (input, output)
         }
@@ -88,15 +99,24 @@ public struct VRMAClipInspector {
     }
 
     /// Rest hips world height from the node hierarchy (sum of ancestor Y translations).
+    /// Throws `malformedNodes` if a cycle is detected in the parent chain.
     public func hipsRestHeight() throws -> Float {
         guard let nodes = container.json["nodes"] as? [[String: Any]] else { throw InspectError.badAccessor }
         var parent: [Int: Int] = [:]
         for (i, n) in nodes.enumerated() {
-            for c in (n["children"] as? [Int]) ?? [] { parent[c] = i }
+            // C2 — skip children entries that are out of range or negative
+            for c in (n["children"] as? [Int]) ?? [] {
+                guard c >= 0, c < nodes.count else { continue }
+                parent[c] = i
+            }
         }
         var y: Float = 0
         var cur: Int? = hipsNode
+        var visited = Set<Int>()
         while let c = cur {
+            // C2 — detect cycles and out-of-range indices during walk
+            guard c >= 0, c < nodes.count else { throw InspectError.malformedNodes }
+            guard visited.insert(c).inserted else { throw InspectError.malformedNodes }
             if let t = nodes[c]["translation"] as? [Any], t.count == 3 {
                 y += Float((t[1] as? NSNumber)?.doubleValue ?? 0)
             }

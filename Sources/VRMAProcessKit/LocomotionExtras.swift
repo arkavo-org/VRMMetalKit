@@ -15,6 +15,8 @@ public struct LocomotionExtras: Equatable {
         self.sourceHipsHeight = sourceHipsHeight
     }
 
+    /// Reads locomotion metadata from `animations[0].extras.arkavo`.
+    /// Unknown versions read as nil — same semantics as absence.
     public static func read(from container: GLBContainer) -> LocomotionExtras? {
         guard let anims = container.json["animations"] as? [[String: Any]],
               let extras = anims.first?["extras"] as? [String: Any],
@@ -24,6 +26,8 @@ public struct LocomotionExtras: Equatable {
               let inPlace = arkavo["inPlace"] as? Bool,
               let hipsH = (arkavo["sourceHipsHeight"] as? NSNumber)?.floatValue
         else { return nil }
+        // I3 — unknown version = not a locomotion clip we understand
+        guard version == 1 else { return nil }
         var m = LocomotionExtras(strideSpeed: stride, inPlace: inPlace, sourceHipsHeight: hipsH)
         m.version = version
         return m
