@@ -17,7 +17,9 @@ public struct GLBContainer {
 
     public init(json: [String: Any], bin: Data) {
         self.json = json
-        self.bin = bin
+        // Mirror the slice-safe pattern of init(data:): ensure startIndex == 0 so
+        // byte-offset arithmetic in read/write helpers is index-space correct.
+        self.bin = bin.startIndex == 0 ? bin : Data(bin)
     }
 
     public init(data input: Data) throws {

@@ -21,19 +21,23 @@ public struct VRMAClipEditor {
               bvIndex >= 0, bvIndex < bvs.count
         else { throw VRMAClipInspector.InspectError.badAccessor }
         let base = (bvs[bvIndex]["byteOffset"] as? Int ?? 0) + (accessors[outputAcc]["byteOffset"] as? Int ?? 0)
-        guard base >= 0, count >= 0, base + count * 12 <= container.bin.count
+        // Fix 1: count >= 1 so the unconditional first-frame reads at base/base+8 are in range.
+        // Fix 2: enforce float32 VEC3 (same constraints the read path already checks).
+        // Fix 3: base % 4 == 0 ensures storeBytes(of:toByteOffset:as:) alignment (glTF spec guarantees this).
+        guard base >= 0, count >= 1,
+              accessors[outputAcc]["componentType"] as? Int == 5126,
+              accessors[outputAcc]["type"] as? String == "VEC3",
+              base % 4 == 0,
+              base + count * 12 <= container.bin.count
         else { throw VRMAClipInspector.InspectError.badAccessor }
         var bin = container.bin
-        func read(_ floatIndex: Int) -> Float {
-            bin.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: base + floatIndex * 4, as: Float.self) }
-        }
-        func write(_ floatIndex: Int, _ v: Float) {
-            withUnsafeBytes(of: v) { bin.replaceSubrange((base + floatIndex * 4)..<(base + floatIndex * 4 + 4), with: $0) }
-        }
-        let x0 = read(0), z0 = read(2)
-        for i in 0..<count {
-            write(i * 3, x0)
-            write(i * 3 + 2, z0)
+        let x0 = bin.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: base, as: Float.self) }
+        let z0 = bin.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: base + 8, as: Float.self) }
+        bin.withUnsafeMutableBytes { raw in
+            for i in 0..<count {
+                raw.storeBytes(of: x0, toByteOffset: base + i * 12, as: Float.self)
+                raw.storeBytes(of: z0, toByteOffset: base + i * 12 + 8, as: Float.self)
+            }
         }
         container.bin = bin
     }

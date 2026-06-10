@@ -17,7 +17,7 @@ enum SyntheticVRMA {
         for i in 0..<n {
             let t = Float(i) / 30.0
             times.append(t)
-            hipsT.append(contentsOf: [vx * t, 0.85 + 0.02 * sin(t * 4), 0])
+            hipsT.append(contentsOf: [0.1 + vx * t, 0.85 + 0.02 * sin(t * 4), 0.05])
             let a = 0.3 * sin(t * 6)
             legR.append(contentsOf: [sin(a / 2), 0, 0, cos(a / 2)])
             hairR.append(contentsOf: [0, sin(a / 4), 0, cos(a / 4)])
