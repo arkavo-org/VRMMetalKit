@@ -190,8 +190,10 @@ final class VRMAValidationTests: XCTestCase {
                 let rotation = node.rotation
 
                 // Output in format: bone: quat(x, y, z, w)
-                print(String(format: "  %-20s quat(% .6f, % .6f, % .6f, % .6f)",
-                            "\(bone):",
+                // Pad in Swift: %s expects a C string and crashes on a
+                // bridged Swift String (strlen on an NSString pointer).
+                let label = "\(bone):".padding(toLength: 20, withPad: " ", startingAt: 0)
+                print("  " + label + String(format: " quat(% .6f, % .6f, % .6f, % .6f)",
                             rotation.imag.x,
                             rotation.imag.y,
                             rotation.imag.z,
