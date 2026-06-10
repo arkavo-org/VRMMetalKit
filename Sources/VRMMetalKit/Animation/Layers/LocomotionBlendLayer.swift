@@ -65,10 +65,7 @@ public final class LocomotionBlendLayer: AnimationLayer {
         func sample(_ clip: AnimationClip, phase: Float) -> [VRMHumanoidBone: simd_quatf] {
             var out: [VRMHumanoidBone: simd_quatf] = [:]
             let duration = max(clip.duration, 1e-5)
-            // phaseOffset is a normalized [0,1) entity seed; scaling by 0.5*duration
-            // maps phaseOffset=0.5 to the quarter-cycle peak (maximum decorrelation
-            // on a sine-based clip) rather than the half-cycle antipodal point.
-            let t = fmodf(phase + phaseOffset * duration * 0.5, duration)
+            let t = fmodf(phase + phaseOffset * duration, duration)
             for track in clip.jointTracks {
                 if let q = track.rotationSampler?(t) { out[track.bone] = q }
             }

@@ -55,9 +55,12 @@ final class LocomotionBlendLayerTests: XCTestCase {
             layer.update(deltaTime: 1.0 / 60.0, context: AnimationContext())
             return layer.evaluate().bones[.rightUpperLeg]!.rotation
         }
-        let q0 = try leg(at: 0), qHalf = try leg(at: 0.5)
-        XCTAssertLessThan(abs(simd_dot(q0.vector, qHalf.vector)), 0.999,
-                          "half-cycle phase offset must change the pose")
+        // Quarter-cycle offset gives maximum angular separation on the
+        // sine-driven fixture (a half-cycle offset is antipodal in TIME but
+        // nearly symmetric in ANGLE this early in the cycle).
+        let q0 = try leg(at: 0), qQuarter = try leg(at: 0.25)
+        XCTAssertLessThan(abs(simd_dot(q0.vector, qQuarter.vector)), 0.999,
+                          "quarter-cycle phase offset must change the pose")
     }
 
     func testZeroSpeedHoldsIdlePose() throws {
