@@ -76,6 +76,18 @@ let package = Package(
             name: "VRMAValidator",
             dependencies: ["VRMMetalKit"]
         ),
+        .target(
+            name: "VRMAProcessKit",
+            dependencies: []
+        ),
+        .executableTarget(
+            name: "VRMAProcess",
+            dependencies: ["VRMAProcessKit"]
+        ),
+        .testTarget(
+            name: "VRMAProcessKitTests",
+            dependencies: ["VRMAProcessKit"]
+        ),
         .executableTarget(
             name: "VRMRender",
             dependencies: ["VRMMetalKit"]
