@@ -79,6 +79,11 @@ public final class LocomotionBlendLayer: AnimationLayer {
         }
     }
 
+    /// Test seam: inject rest rotations without binding a model.
+    func setRestRotationsForTesting(_ rests: [VRMHumanoidBone: simd_quatf]) {
+        restRotations = rests
+    }
+
     public func setClips(idle: AnimationClip, walk: AnimationClip) throws {
         guard idle.locomotion != nil, let walkMeta = walk.locomotion else {
             throw LocomotionError.missingMetadata
@@ -87,7 +92,13 @@ public final class LocomotionBlendLayer: AnimationLayer {
         idleClip = idle
         walkClip = walk
         math = LocomotionBlendMath(walkStrideSpeed: walkMeta.strideSpeed)
-        affectedBones = Set(idle.jointTracks.map(\.bone)).union(walk.jointTracks.map(\.bone))
+        // Only bones that have a rotationSampler enter affectedBones.
+        // Translation-only tracks (e.g. hips Y-bob after ingest) must not be
+        // rotation-driven by this layer: sampling them returns nil, the old
+        // fallback to identity would emit `rest.inverse * identity` which snaps
+        // the bone to world-identity through the compositor.
+        affectedBones = Set(idle.jointTracks.filter { $0.rotationSampler != nil }.map(\.bone))
+            .union(walk.jointTracks.filter { $0.rotationSampler != nil }.map(\.bone))
     }
 
     public func update(deltaTime: Float, context: AnimationContext) {
@@ -123,12 +134,17 @@ public final class LocomotionBlendLayer: AnimationLayer {
 
         let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         for bone in affectedBones {
-            let qi = idlePose[bone] ?? identity
-            let qw = walkPose[bone] ?? identity
+            // Default missing per-pose rotations to REST, not identity.
+            // Using identity here would emit `rest.inverse * identity` which
+            // snaps the bone to world-identity through the compositor when rest
+            // is non-trivial. Using rest means the delta for the missing side
+            // is `rest.inverse * rest == identity` (stay at rest) — correct.
+            let rest = restRotations[bone] ?? identity
+            let qi = idlePose[bone] ?? rest
+            let qw = walkPose[bone] ?? rest
             let blended = simd_slerp(qi, qw, blend.walkWeight)
             // Emit a rest-relative delta: compositor applies base * delta.
             // With no model bound, rest is identity so delta == clip rotation.
-            let rest = restRotations[bone] ?? identity
             let delta = rest.inverse * blended
             bones[bone] = ProceduralBoneTransform(rotation: delta)
         }

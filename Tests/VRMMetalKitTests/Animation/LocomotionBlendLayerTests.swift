@@ -75,4 +75,36 @@ final class LocomotionBlendLayerTests: XCTestCase {
     func testPriorityIsBelowAllExistingLayers() {
         XCTAssertLessThan(LocomotionBlendLayer().priority, IdleBreathingLayer().priority)
     }
+
+    func testTranslationOnlyTrackDoesNotEnterAffectedBones() throws {
+        var idle = makeClip(stride: 0, legAmplitude: 0.05)
+        // hips Y-bob: translation-only track, the post-ingest shape
+        idle.addJointTrack(JointTrack(bone: .hips, translationSampler: { _ in SIMD3<Float>(0, 0.85, 0) }))
+        let layer = LocomotionBlendLayer()
+        try layer.setClips(idle: idle, walk: makeClip(stride: 1.5))
+        XCTAssertFalse(layer.affectedBones.contains(.hips),
+                       "translation-only bones must not be rotation-driven by the blend")
+        layer.targetSpeed = 0.75
+        layer.update(deltaTime: 1.0 / 60.0, context: AnimationContext())
+        XCTAssertNil(layer.evaluate().bones[.hips])
+    }
+
+    func testBoneMissingFromOneClipBlendsTowardRestNotIdentity() throws {
+        // walk animates rightLowerLeg; idle does not. With a non-identity
+        // rest, the idle side of the blend must contribute REST (delta
+        // identity), never world-identity.
+        var walk = makeClip(stride: 1.5)
+        let q = simd_quatf(angle: 0.5, axis: SIMD3<Float>(1, 0, 0))
+        walk.addJointTrack(JointTrack(bone: .rightLowerLeg, rotationSampler: { _ in q }))
+        let layer = LocomotionBlendLayer()
+        // Simulate a captured non-identity rest without a model:
+        layer.setRestRotationsForTesting([.rightLowerLeg: simd_quatf(angle: 0.2, axis: SIMD3<Float>(1, 0, 0))])
+        try layer.setClips(idle: makeClip(stride: 0, legAmplitude: 0.05), walk: walk)
+        layer.targetSpeed = 0  // pure idle: bone absent from idle pose
+        layer.update(deltaTime: 1.0 / 60.0, context: AnimationContext())
+        let delta = try XCTUnwrap(layer.evaluate().bones[.rightLowerLeg]).rotation
+        let identity = simd_quatf(angle: 0, axis: SIMD3<Float>(1, 0, 0))
+        XCTAssertEqual(abs(simd_dot(delta.vector, identity.vector)), 1.0, accuracy: 1e-4,
+                       "missing-from-idle bone at speed 0 must emit an identity DELTA (stay at rest)")
+    }
 }
