@@ -1,7 +1,15 @@
 import Foundation
 
 /// All animation samplers must share one keyframe timeline; resample before trimming.
-public enum EditError: Error { case unalignedKeyframes }
+public enum EditError: Error, CustomStringConvertible {
+    case unalignedKeyframes
+    public var description: String {
+        switch self {
+        case .unalignedKeyframes:
+            return "animation channels carry genuinely different keyframe timelines — resample to a shared timeline before trimming"
+        }
+    }
+}
 
 /// Write-side glb surgery for locomotion ingest. All edits are minimal and
 /// in-place: the bin chunk is only modified where values change.
@@ -78,8 +86,10 @@ public struct VRMAClipEditor {
     /// Trimmed data is APPENDED as new bufferViews/accessors and samplers
     /// are repointed — existing bytes stay untouched.
     ///
-    /// Throws `EditError.unalignedKeyframes` if rotation channels do not all
-    /// share a single input accessor. Resample before calling if needed.
+    /// Timelines may live in distinct accessors as long as their values are
+    /// identical (the common exporter pattern); genuinely divergent timelines
+    /// throw unalignedKeyframes. When values match, all kept samplers' "input"
+    /// is repointed to ONE shared new canonical accessor (not 91 identical copies).
     public mutating func loopTrim() throws {
         let inspector = try VRMAClipInspector(container: container)
         guard var anims = container.json["animations"] as? [[String: Any]], !anims.isEmpty,
@@ -87,16 +97,31 @@ public struct VRMAClipEditor {
               var samplers = anims[0]["samplers"] as? [[String: Any]]
         else { throw VRMAClipInspector.InspectError.noAnimation }
 
-        // Every kept channel is sliced on the same [s...e] key window, so
-        // ALL of them — rotations and the hips translation alike — must
-        // share one keyframe timeline. Validate before any accessor math.
+        // Every kept channel is sliced on the same [s...e] key window, so ALL of
+        // them — rotations and the hips translation alike — must share one keyframe
+        // timeline. Exporters commonly emit N distinct accessor objects that are
+        // byte-identical (one per channel), so we first collect distinct accessor
+        // indices and then verify their VALUES are elementwise equal before accepting.
         var channelInputs: [Int] = []
         for ch in channels {
             guard let si = ch["sampler"] as? Int, si >= 0, si < samplers.count,
                   let input = samplers[si]["input"] as? Int else { continue }
             channelInputs.append(input)
         }
-        guard Set(channelInputs).count <= 1 else { throw EditError.unalignedKeyframes }
+        let distinctInputs = Array(Set(channelInputs))
+        if distinctInputs.count > 1 {
+            // Decode the first and compare every other accessor elementwise.
+            let canonical = try inspector.floats(accessor: distinctInputs[0])
+            for i in 1..<distinctInputs.count {
+                let other = try inspector.floats(accessor: distinctInputs[i])
+                guard other.count == canonical.count,
+                      zip(other, canonical).allSatisfy({ $0 == $1 })
+                else { throw EditError.unalignedKeyframes }
+            }
+        }
+        // All timelines are value-identical; use the first distinct input as the
+        // canonical accessor index for slicing.
+        let canonicalInputIndex = distinctInputs.first
 
         guard let accessors0 = container.json["accessors"] as? [[String: Any]] else {
             throw VRMAClipInspector.InspectError.badAccessor
@@ -107,29 +132,26 @@ public struct VRMAClipEditor {
 
         // Collect rotation outputs for the seam metric.
         var rotationOutputs: [[Float]] = []
-        var rotationInputs: [Int] = []
         for ch in channels {
             guard let target = ch["target"] as? [String: Any],
                   target["path"] as? String == "rotation",
                   let si = ch["sampler"] as? Int, si >= 0, si < samplers.count,
-                  let input = samplers[si]["input"] as? Int,
                   let out = samplers[si]["output"] as? Int else { continue }
             let q = try inspector.floats(accessor: out)
             rotationOutputs.append(q)
-            rotationInputs.append(input)
         }
 
-        // keyCount comes from the shared input accessor — the one timeline
-        // every channel was just validated against.
-        let keyCount: Int
-        if let sharedInput = rotationInputs.first {
-            guard sharedInput >= 0, sharedInput < accessors0.count,
-                  let kc = accessors0[sharedInput]["count"] as? Int
-            else { throw VRMAClipInspector.InspectError.badAccessor }
-            keyCount = kc
-        } else {
-            return  // no rotation channels, nothing to trim
+        // keyCount comes from the canonical input accessor — the one timeline
+        // every channel was just validated against (by value).
+        guard let canonicalInput = canonicalInputIndex else {
+            return  // no channels at all, nothing to trim
         }
+        let keyCount: Int
+        guard canonicalInput >= 0, canonicalInput < accessors0.count,
+              let kc = accessors0[canonicalInput]["count"] as? Int
+        else { throw VRMAClipInspector.InspectError.badAccessor }
+        keyCount = kc
+        guard !rotationOutputs.isEmpty else { return }  // no rotation channels, nothing to trim
 
         guard keyCount > 4 else { return }  // nothing meaningful to trim
 
@@ -180,6 +202,8 @@ public struct VRMAClipEditor {
         }
 
         // Rewrite only channel-referenced samplers to [best.s ... best.e] via appended views.
+        // All kept samplers share ONE sliced input accessor (the canonical timeline);
+        // outputs are still sliced per-accessor as each channel has its own data.
         var accessors = accessors0
         var bufferViews = bufferViews0
         var bin = container.bin
@@ -218,14 +242,17 @@ public struct VRMAClipEditor {
             return accessors.count - 1
         }
 
+        // Slice the canonical input ONCE; every kept sampler repoints to it.
+        let sharedInputNew = try sliced(canonicalInput, comps: 1, rebase: true)
+
         for (i, s) in samplers.enumerated() {
             guard usedSamplers.contains(i) else { continue }
-            guard let input = s["input"] as? Int, let output = s["output"] as? Int else { continue }
+            guard let output = s["output"] as? Int else { continue }
             guard output >= 0, output < accessors.count,
                   let typeStr = accessors[output]["type"] as? String,
                   let outComps = compsByType[typeStr]
             else { throw VRMAClipInspector.InspectError.badAccessor }
-            samplers[i]["input"] = try sliced(input, comps: 1, rebase: true)
+            samplers[i]["input"] = sharedInputNew
             samplers[i]["output"] = try sliced(output, comps: outComps, rebase: false)
         }
         anims[0]["samplers"] = samplers
