@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import os
 
 // MARK: - Source Priority Strategy
 
@@ -470,3 +471,15 @@ func vrmLog(_ message: String) {
 @inline(__always)
 func vrmLog(_ message: String) { }
 #endif
+
+// MARK: - Always-On Error Logging
+
+private let vrmErrorLogger = os.Logger(subsystem: "org.arkavo.VRMMetalKit", category: "VRMMetalKit")
+
+/// Unconditional fault logging for failures that leave the renderer unusable.
+/// Unlike `vrmLog`, these must reach the unified log in consumer builds that
+/// don't compile with `VRM_METALKIT_ENABLE_LOGS` — a renderer that can never
+/// draw is worth one loud os_log even with `strict: .off` (issue #336).
+func vrmLogError(_ message: String) {
+    vrmErrorLogger.fault("\(message, privacy: .public)")
+}

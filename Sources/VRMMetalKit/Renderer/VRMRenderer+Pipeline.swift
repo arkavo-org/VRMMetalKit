@@ -364,16 +364,19 @@ extension VRMRenderer {
             }
 
         } catch {
+            vrmLogError(
+                "[VRMRenderer] MToon pipeline setup failed — this renderer will not draw. " +
+                "Underlying error: \(error.localizedDescription) " +
+                "If the bundled shader library failed to load, rebuild the metallib slices with the release toolchain (`make shaders`). " +
+                "See https://github.com/arkavo-org/VRMMetalKit/issues/336"
+            )
             if config.strict == .fail {
-                vrmLog("❌ [VRMRenderer] Failed to setup pipeline: \(error)")
                 // In strict mode, propagate the error through validator
                 do {
                     try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))
                 } catch {
                     vrmLog("❌ [VRMRenderer] StrictMode validation failed: \(error)")
                 }
-            } else {
-                vrmLog("Failed to setup pipeline: \(error)")
             }
         }
     }
@@ -550,16 +553,19 @@ extension VRMRenderer {
                 vrmLog("[SKINNED PSO] Skinned MToon outline shaders not found - outlines will be disabled for skinned meshes")
             }
         } catch {
+            vrmLogError(
+                "[VRMRenderer] Skinned MToon pipeline setup failed — skinned meshes will not draw. " +
+                "Underlying error: \(error.localizedDescription) " +
+                "If the bundled shader library failed to load, rebuild the metallib slices with the release toolchain (`make shaders`). " +
+                "See https://github.com/arkavo-org/VRMMetalKit/issues/336"
+            )
             if config.strict == .fail {
-                vrmLog("❌ [VRMRenderer] Failed to setup skinned pipeline: \(error)")
                 // In strict mode, propagate the error through validator
                 do {
                     try strictValidator?.handle(.pipelineCreationFailed(error.localizedDescription))
                 } catch {
                     vrmLog("❌ [VRMRenderer] StrictMode validation failed: \(error)")
                 }
-            } else {
-                vrmLog("Failed to setup skinned pipeline: \(error)")
             }
         }
     }
@@ -635,7 +641,10 @@ extension VRMRenderer {
             }
 
         } catch {
-            vrmLog("[VRMRenderer] Failed to setup sprite pipeline: \(error)")
+            vrmLogError(
+                "[VRMRenderer] Sprite pipeline setup failed — sprite rendering is disabled. " +
+                "Underlying error: \(error.localizedDescription)"
+            )
             if config.strict == .fail {
                 // In strict mode, propagate the error through validator
                 do {
