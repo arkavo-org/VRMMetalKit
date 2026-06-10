@@ -4,25 +4,22 @@ import Foundation
 /// §5). Stateless and clock-free by construction: a function from speed to
 /// weights/rate.
 ///
-/// Low-speed policy: below `kneeFraction` of the walk entry's stride speed,
-/// speed is expressed by idle↔walk WEIGHT blending with walk at its
-/// authored rate; above the knee, weight continues to saturate while
-/// playback RATE stays authored until full walk weight, then rate scales
-/// speed/strideSpeed clamped to [minRate, maxRate] so neither moonwalk nor
-/// benny-hill is reachable.
+/// Curve: weight expresses speed linearly up to the walk entry's stride speed
+/// (walkWeight = speed / strideSpeed, walkRate = 1.0 = authored). At or
+/// above stride speed the walk weight saturates at 1 and playback rate scales
+/// speed / strideSpeed, clamped to [minRate, maxRate] so neither moonwalk
+/// nor benny-hill is reachable.
+///
+/// Curve shaping (knee tunables) lands with M3 tuning.
 public struct LocomotionBlendMath: Sendable {
     public static let minRate: Float = 0.75
     public static let maxRate: Float = 1.3
-    /// Fraction of stride speed where weight blending hands over to rate
-    /// scaling. Tunable (design §5).
-    public var kneeFraction: Float = 0.5
 
     public let walkStrideSpeed: Float
 
-    public init(walkStrideSpeed: Float, kneeFraction: Float = 0.5) {
+    public init(walkStrideSpeed: Float) {
         precondition(walkStrideSpeed > 0, "walk entry must have strideSpeed > 0; idle is the speed-0 entry")
         self.walkStrideSpeed = walkStrideSpeed
-        self.kneeFraction = kneeFraction
     }
 
     public struct Blend: Sendable, Equatable {

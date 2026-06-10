@@ -25,7 +25,6 @@ final class LoopTrimTests: XCTestCase {
         var editor = VRMAClipEditor(container: container)
         try editor.stripNonHumanoidChannels()
         // Must NOT throw — value-identical timelines are accepted.
-        XCTAssertNoThrow(try editor.loopTrim())
         try editor.loopTrim()
 
         // After trim, all kept samplers must point at ONE shared new input accessor.
