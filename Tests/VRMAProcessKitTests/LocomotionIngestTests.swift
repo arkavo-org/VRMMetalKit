@@ -2,6 +2,14 @@ import XCTest
 @testable import VRMAProcessKit
 
 final class LocomotionIngestTests: XCTestCase {
+    func testWalkModeRefusesStationaryClip() throws {
+        XCTAssertThrowsError(try LocomotionIngest.process(glb: try SyntheticVRMA.make(vx: 0.0), mode: .walk)) { error in
+            guard case LocomotionIngest.IngestError.walkClipMeasuresStationary = error else {
+                return XCTFail("expected walkClipMeasuresStationary, got \(error)")
+            }
+        }
+    }
+
     func testWalkPipelineSinglePassOrder() throws {
         let out = try LocomotionIngest.process(glb: try SyntheticVRMA.make(vx: 1.5), mode: .auto)
         let container = try GLBContainer(data: out)
