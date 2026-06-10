@@ -176,7 +176,8 @@ func printUsage() {
     DEBUG MODES:
     """)
     for mode in debugModes {
-        print(String(format: "        %2d: %-20s - %@", mode.id, mode.name, mode.description))
+        let name = mode.name.padding(toLength: 20, withPad: " ", startingAt: 0)
+        print(String(format: "        %2d: ", mode.id) + name + " - " + mode.description)
     }
     print("""
     
@@ -206,7 +207,8 @@ func parseArguments() -> RenderOptions? {
     if args.contains("--list-debug") {
         print("Available debug modes:")
         for mode in debugModes {
-            print(String(format: "  %2d: %-20s - %@", mode.id, mode.name, mode.description))
+            let name = mode.name.padding(toLength: 20, withPad: " ", startingAt: 0)
+            print(String(format: "  %2d: ", mode.id) + name + " - " + mode.description)
         }
         return nil
     }

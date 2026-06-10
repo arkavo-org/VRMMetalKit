@@ -223,8 +223,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     init(device: MTLDevice) throws {
         self.device = device
-        self.commandQueue = device.makeCommandQueue()!
-
+        self.commandQueue = MetalQueueFactory.makeCommandQueue(device: device)!
 
         // Load compute shaders from pre-compiled .metallib
         var library: MTLLibrary?
@@ -271,6 +270,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             throw SpringBoneError.failedToLoadShaders
         }
 
+        #if DEBUG
+        let makePipeline: (any MTLFunction) throws -> any MTLComputePipelineState = { fn in
+            let desc = MTLComputePipelineDescriptor()
+            desc.computeFunction = fn
+            desc.shaderValidation = .enabled
+            return try device.makeComputePipelineState(descriptor: desc, options: [], reflection: nil)
+        }
+        kinematicPipeline = try makePipeline(kinematicFunction)
+        predictPipeline = try makePipeline(predictFunction)
+        distancePipeline = try makePipeline(distanceFunction)
+        collideSpheresPipeline = try makePipeline(collideSpheresFunction)
+        collideCapsulesPipeline = try makePipeline(collideCapsulesFunction)
+        collidePlanesPipeline = try makePipeline(collidePlanesFunction)
+        centerDeltaPipeline = try makePipeline(centerDeltaFunction)
+        #else
         kinematicPipeline = try device.makeComputePipelineState(function: kinematicFunction)
         predictPipeline = try device.makeComputePipelineState(function: predictFunction)
         distancePipeline = try device.makeComputePipelineState(function: distanceFunction)
@@ -278,9 +292,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         collideCapsulesPipeline = try device.makeComputePipelineState(function: collideCapsulesFunction)
         collidePlanesPipeline = try device.makeComputePipelineState(function: collidePlanesFunction)
         centerDeltaPipeline = try device.makeComputePipelineState(function: centerDeltaFunction)
+        #endif
 
         // Create global params buffer
         globalParamsBuffer = device.makeBuffer(length: MemoryLayout<SpringBoneGlobalParams>.stride, options: [.storageModeShared])
+        globalParamsBuffer?.label = "SpringBone GlobalParams"
     }
 
     private var updateCounter = 0
@@ -523,7 +539,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if let shared = sharedCommandBuffer {
             commandBuffer = shared
         } else {
+            #if DEBUG
+            let cbDesc = MTLCommandBufferDescriptor()
+            cbDesc.errorOptions = .encoderExecutionStatus
+            guard let made = commandQueue.makeCommandBuffer(descriptor: cbDesc) else { return }
+            #else
             guard let made = commandQueue.makeCommandBuffer() else { return }
+            #endif
+            made.label = "SpringBone Substep"
             commandBuffer = made
         }
 
@@ -535,6 +558,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return
         }
+        computeEncoder.label = "SpringBone Compute"
 
         // Set buffers
         computeEncoder.setBuffer(buffers.bonePosPrev, offset: 0, index: 0)
@@ -677,6 +701,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 if buffer.status == .error {
                     if let error = buffer.error {
                         vrmLogPhysics("[SpringBone] GPU command buffer failed: \(error.localizedDescription)")
+                        #if DEBUG
+                        let nsError = error as NSError
+                        if let encoderInfos = nsError.userInfo[MTLCommandBufferEncoderInfoErrorKey] as? [MTLCommandBufferEncoderInfo] {
+                            for info in encoderInfos {
+                                vrmLogPhysics("[SpringBone] ❌ Encoder '\(info.label)'")
+                            }
+                        }
+                        #endif
                     }
                     return
                 }
@@ -1134,19 +1166,23 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             
             animatedRootPositionsBuffer = device.makeBuffer(length: positionsLength,
                                                            options: [.storageModeShared])
+            animatedRootPositionsBuffer?.label = "SpringBone AnimatedRootPositions"
             // Mirror buffer holding the previous frame's animated positions —
             // copied from animatedRootPositionsBuffer at frame boundaries (see
             // update()). The kinematic kernel reads previousPos from here so
             // velocity history isn't tied to bonePosCurr.
             animatedRootPositionsPrevBuffer = device.makeBuffer(length: singleStepLength,
                                                                 options: [.storageModeShared])
+            animatedRootPositionsPrevBuffer?.label = "SpringBone AnimatedRootPositions Prev"
             rootBoneIndicesBuffer = device.makeBuffer(bytes: rootBoneIndices,
                                                      length: MemoryLayout<UInt32>.stride * numRootBones,
                                                      options: [.storageModeShared])
+            rootBoneIndicesBuffer?.label = "SpringBone RootBoneIndices"
             var numRootBonesUInt = UInt32(numRootBones)
             numRootBonesBuffer = device.makeBuffer(bytes: &numRootBonesUInt,
                                                   length: MemoryLayout<UInt32>.stride,
                                                   options: [.storageModeShared])
+            numRootBonesBuffer?.label = "SpringBone NumRootBones"
             
             // Seed the initial root positions to prevent first-frame phantom inertia
             var initialRootPositions: [SIMD3<Float>] = []
@@ -1192,6 +1228,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let totalBytes = stride * numRecords * maxSubsteps
             centerDeltaBuffer = device.makeBuffer(length: totalBytes,
                                                    options: [.storageModeShared])
+            centerDeltaBuffer?.label = "SpringBone CenterDelta"
+            // makeBuffer(length:) does not zero recycled heap pages, and the
+            // apply kernel trusts each record's boneStart/boneCount. Any
+            // dispatch that precedes the per-frame fill must read
+            // boneCount == 0 (no-op) rather than garbage — a garbage
+            // boneCount walks bonePosCurr/Prev out of bounds.
+            if let buffer = centerDeltaBuffer {
+                memset(buffer.contents(), 0, totalBytes)
+            }
         } else {
             centerDeltaBuffer = nil
         }
@@ -2244,6 +2289,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Step 3: Also reset interpolation state to match
         resetInterpolationState()
 
+        // Step 3.5: Fill the substep-0 center-delta slice with identity
+        // deltas. executeXPBDStep dispatches springBoneApplyCenterDelta
+        // whenever centerSpringRecords is non-empty, but the per-frame fill
+        // lives in update(), which warmup bypasses — without this the kernel
+        // reads whatever memory the allocation recycled. Zero pages happen
+        // to no-op (boneCount == 0), recycled heap shifts arbitrary bone
+        // ranges by garbage matrices, making the settled pose differ on
+        // every in-process reload. Centers are static during warmup, so
+        // prev == target yields the correct identity delta per record.
+        if !centerSpringRecords.isEmpty {
+            captureTargetCenterWorldMatrices(model: model)
+            for record in centerSpringRecords {
+                if let target = targetCenterWorldMatrices[record.centerNodeIndex] {
+                    previousCenterWorldMatrices[record.centerNodeIndex] = target
+                }
+            }
+            fillCenterDeltaBufferForFrame(substepCount: 1)
+        }
+
         // Step 4: Run silent physics steps to let bones settle into natural hanging positions.
         // This happens BEFORE the first render, so there's no visual bounce.
         //
@@ -2275,6 +2339,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             // Execute XPBD pipeline
             executeXPBDStep(buffers: buffers, globalParams: params, substepIndex: 0)
+
+            // executeXPBDStep commits its self-owned command buffer without
+            // waiting, but the next loop iteration rewrites the shared
+            // buffers the in-flight step reads (globalParams, collider and
+            // root positions). Unsynchronized, each GPU step races the CPU
+            // writes for the following one and may consume either step's
+            // values — the settled pose then varies run to run. Warmup is a
+            // one-time load cost, so drain every step.
+            waitForPendingFrame()
         }
 
         // VMK#292 (regression of VMK#240): force `settlingFrames` to 0 at
@@ -2300,6 +2373,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Wait for all GPU work to complete before proceeding
         // This ensures warmup physics is fully computed before first render
         if let finalCommandBuffer = commandQueue.makeCommandBuffer() {
+            finalCommandBuffer.label = "SpringBone Warmup Drain"
             finalCommandBuffer.commit()
             finalCommandBuffer.waitUntilCompleted()
         }

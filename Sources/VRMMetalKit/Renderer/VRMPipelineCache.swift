@@ -18,6 +18,7 @@
 import Foundation
 import Metal
 import QuartzCore
+import Synchronization
 
 /// Process-wide cache for compiled Metal shader libraries and pipeline states shared by every ``VRMRenderer``.
 ///
@@ -44,21 +45,51 @@ import QuartzCore
 ///   other discriminator that would change the compiled pipeline.
 ///
 /// ## Thread Safety
-/// `@unchecked Sendable`. Backed by an `NSLock` that protects the internal
-/// `libraries` and `pipelineStates` dictionaries. The Metal objects stored in
-/// those dictionaries (`MTLLibrary`, `MTLRenderPipelineState`) are immutable
-/// after creation, so concurrent reads of returned values are safe. Callers
-/// may invoke any method from any thread.
-public final class VRMPipelineCache: @unchecked Sendable {
+/// All mutable state (`libraries`, `pipelineStates`) is bundled in a single `Mutex`-protected
+/// `State` struct. `Mutex` serialises access from any thread; Metal objects stored there
+/// (`MTLLibrary`, `MTLRenderPipelineState`) are immutable after creation. Callers may invoke
+/// any method from any thread.
+public final class VRMPipelineCache: Sendable {
     /// Process-wide shared instance. ``VRMRenderer`` routes all pipeline lookups through this singleton.
     public static let shared = VRMPipelineCache()
 
-    private let lock = NSLock()
-    private var libraries: [String: MTLLibrary] = [:]
-    private var pipelineStates: [String: MTLRenderPipelineState] = [:]
+    private struct State {
+        var libraries: [String: MTLLibrary] = [:]
+        var pipelineStates: [String: MTLRenderPipelineState] = [:]
+        /// Optional on-disk archive; when present, pipeline builds are served
+        /// from / recorded into it so compiled states survive process restarts.
+        var archive: PipelineBinaryArchive?
+        /// Set when a new pipeline is recorded into `archive`, so
+        /// ``flushPersistentArchive()`` only writes when there is new content.
+        var archiveDirty: Bool = false
+        /// Pipeline keys whose archive membership has been settled this
+        /// session (either probed as already present, or freshly recorded),
+        /// so each key is probed/recorded at most once per archive session.
+        var archivedKeys: Set<String> = []
+        /// Clean copies (no `binaryArchives`) of every descriptor requested
+        /// this archive session, keyed like `archivedKeys`. A partial
+        /// *preloaded* archive cannot be appended to in place, so
+        /// ``flushPersistentArchive()`` heals it by rebuilding a fresh archive
+        /// from these.
+        var sessionDescriptors: [String: SessionDescriptor] = [:]
+    }
 
-    private init() {
-        lock.name = "com.arkavo.VRMMetalKit.PipelineCache"
+    /// `MTLRenderPipelineDescriptor` is not `Sendable`; these are private
+    /// copies created and consumed exclusively inside the `_state` Mutex
+    /// critical sections (stored in `getPipelineState`, read in
+    /// `flushPersistentArchive`), so the Mutex itself provides the
+    /// serialization the compiler cannot see.
+    private struct SessionDescriptor: @unchecked Sendable {
+        let value: MTLRenderPipelineDescriptor
+    }
+
+    private let _state: Mutex<State>
+
+    /// Creates an isolated cache. Production code uses the ``shared`` singleton;
+    /// this initialiser exists so tests (and hosts wanting a private cache) can
+    /// own cache state without polluting the process-wide instance.
+    init() {
+        self._state = Mutex(State())
     }
 
     /// Returns the bundled MToon/SpringBone `MTLLibrary`, loading it from the package resources on first call.
@@ -74,21 +105,19 @@ public final class VRMPipelineCache: @unchecked Sendable {
     ///   metallib is missing, or ``PipelineCacheError/shaderLibraryLoadFailed(_:)``
     ///   wrapping the underlying Metal error.
     public func getLibrary(device: MTLDevice) throws -> MTLLibrary {
-        return try lock.withLock {
+        return try _state.withLock { state in
             // The bundled library is platform-specific; key the cache on the
             // resolved slice name so the entry is self-documenting.
             let key = VRMShaderLibraryLoader.bundledLibraryName
 
-            // Return cached library if available
-            if let cached = libraries[key] {
+            if let cached = state.libraries[key] {
                 vrmLog("[VRMPipelineCache] ✅ Using cached shader library")
                 return cached
             }
 
-            // Load the platform-appropriate metallib slice via the shared loader.
             do {
                 let library = try VRMShaderLibraryLoader.loadBundledLibrary(device: device)
-                libraries[key] = library
+                state.libraries[key] = library
                 return library
             } catch VRMShaderLibraryLoaderError.shaderLibraryMissing(let name) {
                 vrmLog("[VRMPipelineCache] ❌ \(name).metallib not found in package resources")
@@ -119,25 +148,142 @@ public final class VRMPipelineCache: @unchecked Sendable {
         descriptor: MTLRenderPipelineDescriptor,
         key: String
     ) throws -> MTLRenderPipelineState {
-        return try lock.withLock {
-            // Return cached pipeline state if available
-            if let cached = pipelineStates[key] {
+        return try _state.withLock { state in
+            let pipelineState: MTLRenderPipelineState
+            if let cached = state.pipelineStates[key] {
                 vrmLog("[VRMPipelineCache] ✅ Using cached pipeline state: \(key)")
-                return cached
+                pipelineState = cached
+            } else {
+                vrmLog("[VRMPipelineCache] 🔨 Creating new pipeline state: \(key)")
+                let startTime = CACurrentMediaTime()
+
+                #if DEBUG
+                descriptor.shaderValidation = .enabled
+                #endif
+                // When a persistent archive is active, point the descriptor at it
+                // so the build is a lookup if the function set is already harvested.
+                state.archive?.prepare(descriptor)
+                pipelineState = try device.makeRenderPipelineState(descriptor: descriptor)
+
+                let elapsed = (CACurrentMediaTime() - startTime) * 1000
+                vrmLog("[VRMPipelineCache] ✅ Pipeline state created in \(String(format: "%.2f", elapsed))ms")
+                state.pipelineStates[key] = pipelineState
             }
 
-            // Create new pipeline state
-            vrmLog("[VRMPipelineCache] 🔨 Creating new pipeline state: \(key)")
-            let startTime = CACurrentMediaTime()
+            // Harvest into the archive once per key — even on an in-memory cache
+            // hit. Without this, a pipeline already compiled before the archive
+            // was enabled (e.g. a non-first renderer) would never reach disk.
+            //
+            // A probe build with `.failOnBinaryArchiveMiss` distinguishes the
+            // two cases that previously fought each other: an archive hit
+            // records nothing and stays clean (a complete preloaded archive is
+            // never redundantly re-serialized on warm relaunch), while a miss
+            // dirties the archive — so a *partial* preloaded archive (a failed
+            // record, or an interrupted cold run) self-heals at flush instead
+            // of recompiling its missing variants cold on every launch.
+            // Preloaded archives cannot be appended to in place (see
+            // `PipelineBinaryArchive.wasPreloaded`), so for them the miss is
+            // only marked here and the heal happens in
+            // `flushPersistentArchive()` via rebuild. A record failure must
+            // never break rendering — degrade silently.
+            if let archive = state.archive, !state.archivedKeys.contains(key) {
+                state.archivedKeys.insert(key)
+                archive.prepare(descriptor)
+                let cleanCopy = descriptor.copy() as! MTLRenderPipelineDescriptor
+                cleanCopy.binaryArchives = nil
+                state.sessionDescriptors[key] = SessionDescriptor(value: cleanCopy)
+                let alreadyArchived = (try? device.makeRenderPipelineState(
+                    descriptor: descriptor, options: [.failOnBinaryArchiveMiss], reflection: nil)) != nil
+                if !alreadyArchived {
+                    if archive.wasPreloaded {
+                        state.archiveDirty = true
+                    } else {
+                        do {
+                            try archive.record(descriptor)
+                            state.archiveDirty = true
+                        } catch {
+                            vrmLog("[VRMPipelineCache] ⚠️ Archive record failed for \(key): \(error)")
+                        }
+                    }
+                }
+            }
 
-            let state = try device.makeRenderPipelineState(descriptor: descriptor)
-
-            let elapsed = (CACurrentMediaTime() - startTime) * 1000
-            vrmLog("[VRMPipelineCache] ✅ Pipeline state created in \(String(format: "%.2f", elapsed))ms")
-
-            pipelineStates[key] = state
-            return state
+            return pipelineState
         }
+    }
+
+    /// Enables on-disk pipeline persistence, loading any archive already cached
+    /// for this device + shader build.
+    ///
+    /// After enabling, ``getPipelineState(device:descriptor:key:)`` serves
+    /// builds from the archive when the matching function set is present and
+    /// records new builds into it; call ``flushPersistentArchive()`` to write
+    /// the accumulated archive back to disk (e.g. after first-model load).
+    ///
+    /// - Parameters:
+    ///   - device: The `MTLDevice` the archive is built against.
+    ///   - directory: Directory holding the archive file. The filename is
+    ///     derived from `device.name` and `shaderHash`.
+    ///   - shaderHash: Hash of the compiled `.metallib`; a change routes to a
+    ///     fresh archive so stale function signatures are never loaded.
+    /// - Throws: the underlying Metal error if an existing archive file is
+    ///   incompatible (wrong GPU family) or corrupt.
+    public func enablePersistentArchive(device: MTLDevice, directory: URL, shaderHash: String) throws {
+        let url = PipelineBinaryArchive.cacheURL(
+            in: directory, deviceName: device.name, shaderHash: shaderHash)
+        let archive = try PipelineBinaryArchive(device: device, url: url)
+        _state.withLock { state in
+            state.archive = archive
+            state.archiveDirty = false
+            state.archivedKeys.removeAll(keepingCapacity: true)
+            state.sessionDescriptors.removeAll(keepingCapacity: true)
+        }
+    }
+
+    /// Writes the in-memory archive to disk when new pipelines have been
+    /// recorded since the last flush. No-op when persistence is disabled, the
+    /// archive was preloaded unchanged, or nothing new was built.
+    ///
+    /// - Returns: `true` if the archive was actually serialized, `false` if the
+    ///   flush was a no-op.
+    /// - Throws: the underlying Metal error if serialisation fails.
+    @discardableResult
+    public func flushPersistentArchive() throws -> Bool {
+        try _state.withLock { state in
+            guard let archive = state.archive, state.archiveDirty else { return false }
+            if archive.wasPreloaded {
+                // Heal path: a preloaded archive with missing variants cannot
+                // be appended + re-serialized in place, so rewrite it from the
+                // session's descriptors (hits and misses alike — already-built
+                // pipelines record from the Metal compiler cache).
+                try archive.rebuildAndSerialize(
+                    descriptors: state.sessionDescriptors.values.map(\.value))
+            } else {
+                try archive.serialize()
+            }
+            state.archiveDirty = false
+            return true
+        }
+    }
+
+    /// Turns off on-disk pipeline persistence, dropping the in-memory archive
+    /// handle. Subsequent builds neither read from nor record to an archive
+    /// until ``enablePersistentArchive(device:directory:shaderHash:)`` is called
+    /// again. The on-disk file is left intact.
+    public func disablePersistentArchive() {
+        _state.withLock { state in
+            state.archive = nil
+            state.archiveDirty = false
+            state.archivedKeys.removeAll(keepingCapacity: true)
+            state.sessionDescriptors.removeAll(keepingCapacity: true)
+        }
+    }
+
+    /// A stable hash of the bundled shader library, suitable as the
+    /// `shaderHash` key for ``enablePersistentArchive(device:directory:shaderHash:)``.
+    /// Returns `nil` if the bundled metallib slice cannot be read.
+    public static func bundledShaderHash() -> String? {
+        VRMShaderLibraryLoader.bundledLibraryHash()
     }
 
     /// Drops every cached shader library and pipeline state.
@@ -146,12 +292,12 @@ public final class VRMPipelineCache: @unchecked Sendable {
     /// will rebuild from scratch. Useful for memory pressure response,
     /// test isolation, and forcing a shader reload during development.
     public func clearCache() {
-        lock.withLock {
-            let libraryCount = libraries.count
-            let pipelineCount = pipelineStates.count
+        _state.withLock { state in
+            let libraryCount = state.libraries.count
+            let pipelineCount = state.pipelineStates.count
 
-            libraries.removeAll()
-            pipelineStates.removeAll()
+            state.libraries.removeAll()
+            state.pipelineStates.removeAll()
 
             vrmLog("[VRMPipelineCache] 🗑️ Cache cleared: \(libraryCount) libraries, \(pipelineCount) pipeline states")
         }
@@ -159,10 +305,11 @@ public final class VRMPipelineCache: @unchecked Sendable {
 
     /// Returns a snapshot of current cache occupancy. Useful for diagnostics dashboards.
     public func getStatistics() -> CacheStatistics {
-        return lock.withLock {
+        return _state.withLock { state in
             CacheStatistics(
-                libraryCount: libraries.count,
-                pipelineStateCount: pipelineStates.count
+                libraryCount: state.libraries.count,
+                pipelineStateCount: state.pipelineStates.count,
+                persistentArchiveEnabled: state.archive != nil
             )
         }
     }
@@ -173,6 +320,8 @@ public final class VRMPipelineCache: @unchecked Sendable {
         public let libraryCount: Int
         /// Number of distinct compiled `MTLRenderPipelineState` instances retained by the cache.
         public let pipelineStateCount: Int
+        /// Whether on-disk pipeline persistence is currently enabled.
+        public let persistentArchiveEnabled: Bool
     }
 }
 

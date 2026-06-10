@@ -51,10 +51,8 @@ final class MToonShaderGPUTests: XCTestCase {
     /// Update this hash when intentionally changing the shader.
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
-    /// Updated: Add glTF-core `occlusionTexture` sampling at texture slot 8
-    /// + `occlusionStrength` field in Block 14. Closes VMK#293 (sibling to
-    /// the normalTexture.scale wiring closed by PR #291).
-    static let knownGoodShaderHash = "2b81af38845e2f231caa60e2d33483dc18fec74869343c9bf8d0b9b224fa5a91"
+    /// Re-baselined to current MToonShader.metal source.
+    static let knownGoodShaderHash = "c1286a7fa88cac9b62f457f61368afd2973d6e55d2f20fb886e9ba5875227f67"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.

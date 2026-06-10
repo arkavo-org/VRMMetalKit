@@ -813,7 +813,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// after init to override the defaults.
     public init(device: MTLDevice, config: RendererConfig = RendererConfig(strict: .off)) {
         self.device = device
-        self.commandQueue = device.makeCommandQueue()!
+        self.commandQueue = MetalQueueFactory.makeCommandQueue(device: device)!
         self.config = config
         self.strictValidator = StrictValidator(config: config)
         self.skinningSystem = VRMSkinningSystem(device: device)
@@ -859,6 +859,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             vrmLog("⚠️ [VRMRenderer] Morph target system unavailable, expressions may be limited")
         }
 
+        // Opt-in pipeline persistence: route the pipeline builds below through
+        // an on-disk MTLBinaryArchive so the next launch reloads them instead
+        // of recompiling (large win on mobile GPUs). Enabled before the builds,
+        // flushed after. Failures degrade silently to plain in-memory caching.
+        let pipelineArchiveEnabled = Self.enablePipelineArchiveIfRequested(device: device, config: config)
+
         setupPipeline()
         vrmLog("[VRMRenderer] About to setup skinned pipeline...")
         setupSkinnedPipeline()
@@ -866,6 +872,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[VRMRenderer] About to setup sprite pipeline...")
         setupSpritePipeline()
         vrmLog("[VRMRenderer] Finished setup sprite pipeline")
+
+        if pipelineArchiveEnabled {
+            try? VRMPipelineCache.shared.flushPersistentArchive()
+            // Don't leave the process-wide cache pinned to this renderer's
+            // device + archive: later renderers (other GPUs, or flag off) must
+            // not record into it, and concurrent inits must not race on it.
+            VRMPipelineCache.shared.disablePersistentArchive()
+        }
 
         // Issue #147: Auto-configure 3-point lighting so hands-off consumers
         // get a usable image immediately. Apps that want different lighting
@@ -3439,14 +3453,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         let paletteCount = skin.joints.count
                         let required = prim.requiredPaletteSize
 
-                        // Condition 1: Required palette fits
+                        // Condition 1: Required palette fits. A mismatch is bad
+                        // model data, not a renderer bug — skip this primitive's
+                        // draw instead of crashing the host in release.
                         if required > paletteCount {
-                            preconditionFailure(
-                                "[SKIN MISMATCH] Node '\(item.node.name ?? "?")' mesh '\(meshName)' prim \(meshPrimIndex):\n" +
-                                "  Primitive needs ≥\(required) joints (maxJoint=\(required-1))\n" +
-                                "  Bound skin \(skinIndex) '\(skin.name ?? "?")' has \(paletteCount) joints\n" +
-                                "  → Palette too small! Check node.skin assignment in VRM file."
-                            )
+                            if frameCounter < 2 {
+                                fputs("⚠️ [VRMRenderer] Skin palette too small — skipping draw. " +
+                                      "Node '\(item.node.name ?? "?")' mesh '\(meshName)' prim \(meshPrimIndex): " +
+                                      "needs ≥\(required) joints, bound skin \(skinIndex) '\(skin.name ?? "?")' has \(paletteCount). " +
+                                      "Check node.skin assignment in the VRM file.\n", stderr)
+                            }
+                            continue
                         }
 
                         // Condition 2: Sample vertices to double-check
@@ -3461,11 +3478,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             }
 
                             if Int(sampleMaxJoint) >= paletteCount {
-                                preconditionFailure(
-                                    "[SKIN MISMATCH] Node '\(item.node.name ?? "?")' mesh '\(meshName)' prim \(meshPrimIndex):\n" +
-                                    "  Sample vertices: maxJoint=\(sampleMaxJoint) >= paletteCount=\(paletteCount)\n" +
-                                    "  → Joint indices out of range for bound skin \(skinIndex)!"
-                                )
+                                if frameCounter < 2 {
+                                    fputs("⚠️ [VRMRenderer] Joint index out of palette range — skipping draw. " +
+                                          "Node '\(item.node.name ?? "?")' mesh '\(meshName)' prim \(meshPrimIndex): " +
+                                          "maxJoint=\(sampleMaxJoint) >= paletteCount=\(paletteCount) for bound skin \(skinIndex).\n", stderr)
+                                }
+                                continue
                             }
 
                             // Log success for first few frames

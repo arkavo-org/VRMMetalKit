@@ -39,6 +39,38 @@ extension VRMRenderer {
         return "\(name)|fmt=\(config.colorPixelFormat.rawValue)|samples=\(config.sampleCount)"
     }
 
+    /// Enables the process-wide pipeline binary archive when
+    /// ``RendererConfig/enablePipelineArchive`` is set, so the pipeline builds
+    /// that follow are served from / recorded into an on-disk archive. Resolves
+    /// the archive directory (config override or the caches dir) and the
+    /// shader-hash invalidation key. Returns whether persistence was enabled;
+    /// any failure degrades silently to plain in-memory caching.
+    static func enablePipelineArchiveIfRequested(device: MTLDevice, config: RendererConfig) -> Bool {
+        guard config.enablePipelineArchive else { return false }
+        guard let shaderHash = VRMShaderLibraryLoader.bundledLibraryHash() else {
+            vrmLog("[VRMRenderer] Pipeline archive requested but the bundled shader hash is unavailable; skipping persistence.")
+            return false
+        }
+        let directory: URL
+        if let dir = config.pipelineArchiveDirectory {
+            directory = dir
+        } else if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            directory = caches.appendingPathComponent("VRMMetalKitPipelineArchive", isDirectory: true)
+        } else {
+            vrmLog("[VRMRenderer] Pipeline archive requested but no caches directory is available; skipping persistence.")
+            return false
+        }
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try VRMPipelineCache.shared.enablePersistentArchive(
+                device: device, directory: directory, shaderHash: shaderHash)
+            return true
+        } catch {
+            vrmLog("[VRMRenderer] Failed to enable pipeline archive: \(error); falling back to in-memory cache.")
+            return false
+        }
+    }
+
     func validateMaterialUniformAlignment() {
         // Calculate Swift struct size and stride
         let swiftSize = MemoryLayout<MToonMaterialUniforms>.size

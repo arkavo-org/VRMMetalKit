@@ -952,7 +952,11 @@ final class RenderSafetyTests: XCTestCase {
             "Found \(explosions.count) meshes that explode in rest pose - IBM/Node mismatch!")
     }
 
-    /// Same rest pose stability test for AliciaSolid model
+    /// Same rest pose stability test for AliciaSolid model.
+    ///
+    /// AliciaSolid is VRM 0.x: the loader's facing conversion makes the
+    /// rest-pose skin matrix `vrm0Ry180`, so skinned positions are compared
+    /// against the rotated raw positions (see `vrm0Ry180` in TestHelpers).
     func testRestPoseSkinningStability_AliciaSolid() async throws {
         let model = try await loadTestModel()
 
@@ -1018,7 +1022,9 @@ final class RenderSafetyTests: XCTestCase {
                         p_skinned += (jointMatrices[Int(j.w)] * p_vec4) * w.w
                     }
 
-                    let displacement = simd_length(SIMD3(p_skinned.x, p_skinned.y, p_skinned.z) - p_raw)
+                    let p_expected4 = model.isVRM0 ? vrm0Ry180 * p_vec4 : p_vec4
+                    let p_expected = SIMD3(p_expected4.x, p_expected4.y, p_expected4.z)
+                    let displacement = simd_length(SIMD3(p_skinned.x, p_skinned.y, p_skinned.z) - p_expected)
                     if displacement > maxDisplacement {
                         maxDisplacement = displacement
                         worstVertex = i
@@ -1042,7 +1048,10 @@ final class RenderSafetyTests: XCTestCase {
             "Found \(explosions.count) meshes that explode in rest pose - IBM/Node mismatch!")
     }
 
-    /// Rest pose stability test for AvatarSample_C (may have shorts/separate clothing meshes)
+    /// Rest pose stability test for AvatarSample_C (may have shorts/separate clothing meshes).
+    ///
+    /// AvatarSample_C is VRM 0.x: the rest-pose skin matrix is `vrm0Ry180`
+    /// after the loader's facing conversion (see `vrm0Ry180` in TestHelpers).
     func testRestPoseSkinningStability_AvatarSampleC() async throws {
         let model = try await loadAvatarSampleC()
 
@@ -1136,7 +1145,9 @@ final class RenderSafetyTests: XCTestCase {
                         p_skinned += (jointMatrices[Int(j.w)] * p_vec4) * w.w
                     }
 
-                    let displacement = simd_length(SIMD3(p_skinned.x, p_skinned.y, p_skinned.z) - p_raw)
+                    let p_expected4 = model.isVRM0 ? vrm0Ry180 * p_vec4 : p_vec4
+                    let p_expected = SIMD3(p_expected4.x, p_expected4.y, p_expected4.z)
+                    let displacement = simd_length(SIMD3(p_skinned.x, p_skinned.y, p_skinned.z) - p_expected)
                     if displacement > maxDisplacement {
                         maxDisplacement = displacement
                         worstVertex = i

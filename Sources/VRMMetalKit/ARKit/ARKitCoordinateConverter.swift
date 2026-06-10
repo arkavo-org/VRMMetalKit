@@ -16,6 +16,7 @@
 
 import Foundation
 import simd
+import Synchronization
 
 /// Shared coordinate conversion utilities for ARKit to VRM/glTF transformation
 ///
@@ -140,13 +141,22 @@ public struct ARKitCoordinateConverter {
         ]
     }()
 
-    /// Whether rest pose calibration is enabled
+    /// Mutable global calibration state, guarded by a `Mutex` so the converter
+    /// can be read from a tracking queue while the app calibrates from another.
+    private struct CalibrationState {
+        var restPoseCalibrationEnabled = true
+        var calibratedTposeRotations: [ARKitJoint: simd_quatf]?
+    }
+    private static let _calibration = Mutex(CalibrationState())
+
+    /// Whether rest pose calibration is enabled.
     ///
     /// When true, the converter subtracts ARKit's rest pose from measured
     /// rotations to produce T-pose-relative deltas for VRM.
-    ///
-    /// Note: This is safe as it's only toggled for testing purposes.
-    nonisolated(unsafe) public static var restPoseCalibrationEnabled: Bool = true
+    public static var restPoseCalibrationEnabled: Bool {
+        get { _calibration.withLock { $0.restPoseCalibrationEnabled } }
+        set { _calibration.withLock { $0.restPoseCalibrationEnabled = newValue } }
+    }
 
     // MARK: - Root Rotation Correction
 
@@ -213,16 +223,16 @@ public struct ARKitCoordinateConverter {
     ///
     /// If nil, falls back to default A-pose offsets.
     /// Thread-safe: Use `calibrateTpose(_:)` and `clearCalibration()` to modify.
-    nonisolated(unsafe) private static var _calibratedTposeRotations: [ARKitJoint: simd_quatf]?
+    /// Backing storage lives in the `Mutex`-guarded ``CalibrationState``.
 
     /// Whether T-pose calibration is active
     public static var isCalibrated: Bool {
-        return _calibratedTposeRotations != nil
+        return _calibration.withLock { $0.calibratedTposeRotations != nil }
     }
 
     /// Get the current calibration (nil if not calibrated)
     public static var calibratedTposeRotations: [ARKitJoint: simd_quatf]? {
-        return _calibratedTposeRotations
+        return _calibration.withLock { $0.calibratedTposeRotations }
     }
 
     /// Calibrate T-pose from a skeleton captured while user stands in T-pose
@@ -251,7 +261,7 @@ public struct ARKitCoordinateConverter {
             }
         }
 
-        _calibratedTposeRotations = calibration
+        _calibration.withLock { $0.calibratedTposeRotations = calibration }
 
         #if DEBUG
         print("[ARKitCoordinateConverter] T-pose calibrated with \(calibration.count) joints")
@@ -260,7 +270,7 @@ public struct ARKitCoordinateConverter {
 
     /// Clear T-pose calibration, reverting to default A-pose offsets
     public static func clearCalibration() {
-        _calibratedTposeRotations = nil
+        _calibration.withLock { $0.calibratedTposeRotations = nil }
         #if DEBUG
         print("[ARKitCoordinateConverter] T-pose calibration cleared")
         #endif
@@ -311,7 +321,7 @@ public struct ARKitCoordinateConverter {
     /// If calibrated, returns the inverse of the calibrated T-pose rotation.
     /// Otherwise, returns the default A-pose offset.
     private static func getRestPoseOffset(for joint: ARKitJoint) -> simd_quatf? {
-        if let calibration = _calibratedTposeRotations,
+        if let calibration = _calibration.withLock({ $0.calibratedTposeRotations }),
            let tposeRot = calibration[joint] {
             // When calibrated: offset = inverse of T-pose rotation
             // This makes T-pose input → identity output

@@ -16,6 +16,7 @@
 
 import Foundation
 import Metal
+import CryptoKit
 
 /// Failures raised by ``VRMShaderLibraryLoader`` when locating or loading the bundled shader library.
 enum VRMShaderLibraryLoaderError: Error, LocalizedError {
@@ -57,6 +58,18 @@ enum VRMShaderLibraryLoader {
         // macOS, visionOS, tvOS, macCatalyst — all use the macOS (FP32) slice.
         return "VRMMetalKitShaders"
         #endif
+    }
+
+    /// A stable hash of the bundled `.metallib` slice, used to key the pipeline
+    /// binary archive so a shader change invalidates a stale archive. Returns a
+    /// short hex digest of the metallib bytes, or `nil` if the slice is absent.
+    static func bundledLibraryHash() -> String? {
+        guard let url = Bundle.module.url(forResource: bundledLibraryName, withExtension: "metallib"),
+              let data = try? Data(contentsOf: url) else {
+            return nil
+        }
+        let digest = SHA256.hash(data: data)
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Loads the bundled shader library for the current platform from the package resource bundle.

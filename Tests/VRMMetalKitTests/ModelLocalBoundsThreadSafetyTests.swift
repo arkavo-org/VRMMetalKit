@@ -12,6 +12,14 @@ import XCTest
 import simd
 @testable import VRMMetalKit
 
+/// Carries the two result buffers into `concurrentPerform`'s `@Sendable`
+/// closure. `@unchecked Sendable` is sound here: each concurrent iteration
+/// writes only its own disjoint index, so there is no overlapping access.
+private struct DisjointResultBuffers: @unchecked Sendable {
+    let mins: UnsafeMutableBufferPointer<SIMD3<Float>>
+    let maxs: UnsafeMutableBufferPointer<SIMD3<Float>>
+}
+
 /// Tests for `VRMModel.modelLocalBounds` thread safety + eager-compute (#153).
 ///
 /// `VRMModel` is `@unchecked Sendable`, so its public read-only properties must
@@ -59,10 +67,15 @@ final class ModelLocalBoundsThreadSafetyTests: XCTestCase {
         let maxs = UnsafeMutableBufferPointer<SIMD3<Float>>.allocate(capacity: iterations)
         defer { mins.deallocate(); maxs.deallocate() }
 
+        // `concurrentPerform`'s closure is `@Sendable`, but the result buffers
+        // are `UnsafeMutableBufferPointer` (non-Sendable). Each iteration `i`
+        // writes only its own disjoint slot `[i]`, so the sharing is data-race
+        // free; the box makes that promise explicit to the compiler.
+        let out = DisjointResultBuffers(mins: mins, maxs: maxs)
         DispatchQueue.concurrentPerform(iterations: iterations) { i in
             let b = model.modelLocalBounds
-            mins[i] = b.min
-            maxs[i] = b.max
+            out.mins[i] = b.min
+            out.maxs[i] = b.max
         }
 
         for i in 0..<iterations {

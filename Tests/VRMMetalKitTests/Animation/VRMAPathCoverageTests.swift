@@ -248,10 +248,14 @@ final class VRMAPathCoverageTests: XCTestCase {
             throw XCTSkip("VRMA doesn't have hips track")
         }
         
-        // Act: Apply animation with root motion enabled
+        // Act: Apply animation with root motion enabled.
+        // isLooping must be off: with looping, advancing by exactly
+        // clip.duration wraps localTime to fmodf(duration, duration) == 0 and
+        // the final pose samples the first frame again (zero movement).
         let player = AnimationPlayer()
         player.load(clip)
         player.applyRootMotion = true
+        player.isLooping = false
         player.update(deltaTime: 0, model: vrm0Model)
         
         // Get initial hips world position
@@ -281,17 +285,17 @@ final class VRMAPathCoverageTests: XCTestCase {
         let movement = finalPosition - initialPosition
         let distance = simd_length(movement)
         
-        // Sample translation from track to verify it matches
+        // Sample the track at both ends: clip tracks store the final node
+        // translation (model rest + retargeted delta), so the node's world
+        // movement must match the track's own start→end displacement.
+        let (_, translationAtStart, _) = hipsTrack.sample(at: 0)
         let (_, translationAtEnd, _) = hipsTrack.sample(at: clip.duration)
-        
-        if let trans = translationAtEnd {
-            // Root motion distance should approximately match translation magnitude
-            // (accounting for coordinate conversion for VRM 0.0)
-            let expectedDistance = simd_length(trans)
-            
-            // 🔴 RED: This will fail if root motion extraction isn't properly implemented
+
+        if let transStart = translationAtStart, let transEnd = translationAtEnd {
+            let expectedDistance = simd_length(transEnd - transStart)
+
             XCTAssertEqual(distance, expectedDistance, accuracy: 0.1,
-                "Root motion distance (\(distance)) should match translation magnitude (\(expectedDistance))")
+                "Root motion distance (\(distance)) should match the hips track's start→end displacement (\(expectedDistance))")
         }
     }
     

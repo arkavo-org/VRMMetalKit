@@ -401,7 +401,7 @@ final class ZFightingFrameAnalysisTests: XCTestCase {
                 riskLevel = "High"
             }
 
-            print(String(format: "%12.1f | %20.4f | %s", distance, precision * 1000, riskLevel))
+            print(String(format: "%12.1f | %20.4f | ", distance, precision * 1000) + riskLevel)
         }
     }
 

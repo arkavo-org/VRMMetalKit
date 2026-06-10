@@ -32,7 +32,11 @@ import simd
 /// let solver = ConstraintSolver()
 /// solver.solve(constraints: model.nodeConstraints, nodes: model.nodes)
 /// ```
-public final class ConstraintSolver: @unchecked Sendable {
+/// Thread-safety: the solver holds **no stored state** — every working value in
+/// ``solve(constraints:nodes:)`` is a function local. It therefore conforms to
+/// checked `Sendable` (no `@unchecked` needed); the compiler verifies the
+/// absence of shared mutable state.
+public final class ConstraintSolver: Sendable {
 
     /// Creates a constraint solver. The solver is stateless and safe to reuse across frames and models.
     public init() {}

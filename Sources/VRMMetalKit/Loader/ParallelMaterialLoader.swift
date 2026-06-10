@@ -37,9 +37,9 @@
 /// ``ParallelTextureLoader/loadTexturesParallel(indices:normalMapIndices:progressCallback:)``
 /// first.
 ///
-/// The class is `@unchecked Sendable`; result aggregation uses an internal
-/// `NSLock`. Tasks are dispatched in input order, but completion order is
-/// indeterminate. The returned `[Int: VRMMaterial]` is keyed by source index.
+/// The class is `@unchecked Sendable`. Tasks are dispatched in input order,
+/// but completion order is indeterminate. The returned `[Int: VRMMaterial]` is
+/// keyed by source index.
 public final class ParallelMaterialLoader: @unchecked Sendable {
     private let document: GLTFDocument
     private let textures: [VRMTexture]
@@ -75,77 +75,41 @@ public final class ParallelMaterialLoader: @unchecked Sendable {
         indices: [Int],
         progressCallback: (@Sendable (Int, Int) -> Void)? = nil
     ) async -> [Int: VRMMaterial] {
-        let results = UncheckedMaterialDictionary()
         let totalCount = indices.count
-        let progressBox = UncheckedProgressBox()
-        
-        await withTaskGroup(of: Void.self) { group in
+        var results: [Int: VRMMaterial] = [:]
+        var loaded = 0
+
+        await withTaskGroup(of: (Int, VRMMaterial?).self) { group in
             for materialIndex in indices {
                 group.addTask { [unowned self] in
-                    guard let gltfMaterial = self.document.materials?[safe: materialIndex] else { return }
-                    
-                    let vrm0Prop = materialIndex < self.vrm0MaterialProperties.count 
-                        ? self.vrm0MaterialProperties[materialIndex] 
+                    guard let gltfMaterial = self.document.materials?[safe: materialIndex] else {
+                        return (materialIndex, nil)
+                    }
+                    let vrm0Prop = materialIndex < self.vrm0MaterialProperties.count
+                        ? self.vrm0MaterialProperties[materialIndex]
                         : nil
-                    
                     let material = VRMMaterial(
                         from: gltfMaterial,
                         textures: self.textures,
                         vrm0MaterialProperty: vrm0Prop,
                         vrmVersion: self.vrmVersion
                     )
-                    
-                    results.set(material, for: materialIndex)
-                    
-                    progressBox.increment()
-                    let current = progressBox.countValue
-                    await MainActor.run {
-                        progressCallback?(current, totalCount)
-                    }
+                    return (materialIndex, material)
                 }
             }
-            
-            await group.waitForAll()
+
+            for await (index, material) in group {
+                loaded += 1
+                if let material {
+                    results[index] = material
+                }
+                await MainActor.run {
+                    progressCallback?(loaded, totalCount)
+                }
+            }
         }
-        
-        return results.getAll()
+
+        return results
     }
 }
 
-// MARK: - Helper Types
-
-/// Thread-safe dictionary for material results
-private final class UncheckedMaterialDictionary: @unchecked Sendable {
-    private var dict: [Int: VRMMaterial] = [:]
-    private let lock = NSLock()
-    
-    func set(_ material: VRMMaterial, for index: Int) {
-        lock.lock()
-        dict[index] = material
-        lock.unlock()
-    }
-    
-    func getAll() -> [Int: VRMMaterial] {
-        lock.lock()
-        defer { lock.unlock() }
-        return dict
-    }
-}
-
-/// Thread-safe progress counter
-private final class UncheckedProgressBox: @unchecked Sendable {
-    private var count: Int = 0
-    private let lock = NSLock()
-    
-    var countValue: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return count
-    }
-    
-    func increment() {
-        lock.lock()
-        count += 1
-        lock.unlock()
-    }
-}

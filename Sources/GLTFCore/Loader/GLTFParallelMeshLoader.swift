@@ -24,9 +24,8 @@
 /// future GLTFMetalKit) plugs in its own runtime mesh type without copying the
 /// orchestration boilerplate.
 ///
-/// `device` is optional: pass `nil` for CPU-only loading. Result aggregation
-/// uses an internal `NSLock`. Completion order is indeterminate; the returned
-/// map is keyed by source mesh index.
+/// `device` is optional: pass `nil` for CPU-only loading. Completion order is
+/// indeterminate; the returned map is keyed by source mesh index.
 public final class GLTFParallelMeshLoader<Mesh: Sendable>: @unchecked Sendable {
     public typealias LoadFunction = @Sendable (Int, GLTFMesh, GLTFDocument, MTLDevice?, BufferLoader) async throws -> Mesh
 
@@ -66,70 +65,38 @@ public final class GLTFParallelMeshLoader<Mesh: Sendable>: @unchecked Sendable {
         indices: [Int],
         progressCallback: (@Sendable (Int, Int) -> Void)? = nil
     ) async -> [Int: Mesh] {
-        let results = MeshResultsBox<Mesh>()
         let totalCount = indices.count
-        let progressBox = ProgressCounterBox()
+        var results: [Int: Mesh] = [:]
+        var loaded = 0
 
-        await withTaskGroup(of: Void.self) { group in
+        await withTaskGroup(of: (Int, Mesh?).self) { group in
             for meshIndex in indices {
-                let task: @Sendable () async -> Void = { [unowned self] in
-                    guard let gltfMesh = self.document.meshes?[safe: meshIndex] else { return }
-
+                group.addTask { [unowned self] in
+                    guard let gltfMesh = self.document.meshes?[safe: meshIndex] else {
+                        return (meshIndex, nil)
+                    }
                     do {
                         let mesh = try await self.load(meshIndex, gltfMesh, self.document, self.device, self.bufferLoader)
-                        results.set(mesh, for: meshIndex)
+                        return (meshIndex, mesh)
                     } catch {
                         vrmLog("[GLTFParallelMeshLoader] Failed to load mesh \(meshIndex): \(error)")
-                    }
-
-                    progressBox.increment()
-                    let current = progressBox.countValue
-                    await MainActor.run {
-                        progressCallback?(current, totalCount)
+                        return (meshIndex, nil)
                     }
                 }
-                group.addTask(operation: task)
             }
 
-            await group.waitForAll()
+            for await (index, mesh) in group {
+                loaded += 1
+                if let mesh {
+                    results[index] = mesh
+                }
+                await MainActor.run {
+                    progressCallback?(loaded, totalCount)
+                }
+            }
         }
 
-        return results.getAll()
+        return results
     }
 }
 
-// MARK: - Helper Boxes
-
-private final class MeshResultsBox<Mesh: Sendable>: @unchecked Sendable {
-    private var dict: [Int: Mesh] = [:]
-    private let lock = NSLock()
-
-    func set(_ mesh: Mesh, for index: Int) {
-        lock.lock()
-        dict[index] = mesh
-        lock.unlock()
-    }
-
-    func getAll() -> [Int: Mesh] {
-        lock.lock()
-        defer { lock.unlock() }
-        return dict
-    }
-}
-
-private final class ProgressCounterBox: @unchecked Sendable {
-    private var count: Int = 0
-    private let lock = NSLock()
-
-    var countValue: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return count
-    }
-
-    func increment() {
-        lock.lock()
-        count += 1
-        lock.unlock()
-    }
-}

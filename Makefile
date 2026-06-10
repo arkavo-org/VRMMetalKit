@@ -1,22 +1,26 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static gputrace
 
 help:
 	@echo "VRMMetalKit Build Targets:"
 	@echo "  make shaders       - Compile all three VRMMetalKit metallib slices (macOS / iOS / iOS Simulator)"
-	@echo "  make shaders-macos - Compile only the macOS slice (FP32)"
+	@echo "  make shaders-macos - Compile only the macOS slice (FP16)"
 	@echo "  make shaders-ios   - Compile only the iOS device slice (FP16)"
 	@echo "  make shaders-iossim- Compile only the iOS Simulator slice (FP16)"
 	@echo "  make gltf-shaders  - Compile GLTFMetalKit (PBR) shaders into metallib"
 	@echo "  make clean         - Remove temporary build files"
 	@echo "  make test          - Run Swift tests"
+	@echo "  make gputrace      - Capture a .gputrace of the bundled avatar render (inspect with gpudebug)"
 	@echo "  make docs          - Preview documentation locally"
 	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
 
 # Compile all VRM Metal shaders into three SDK-specific metallibs:
-#   - macosx          (FP32, baseline; preserves PR #279's safe-default)
+#   - macosx          (FP16; supersedes PR #279's FP32 safe-default — measured
+#                      via gpudebug on M4: -5.8% encoder time and fragment
+#                      occupancy 21%→71% at 2048px, with the full MToon
+#                      conformance battery pixel-clean)
 #   - iphoneos        (FP16, mobile double-rate payoff)
 #   - iphonesimulator (FP16, simulator-native; fixes nil-pipeline error)
 # -Wall -Wextra enables the common clang warning classes; -Werror promotes
@@ -27,12 +31,13 @@ shaders: shaders-macos shaders-ios shaders-iossim
 	@echo "✅ All shader slices built"
 
 shaders-macos:
-	@echo "🔨 Compiling macOS shaders (FP32)..."
+	@echo "🔨 Compiling macOS shaders (FP16)..."
 	@mkdir -p /tmp/vrm-shaders-macos
 	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
 		echo "  Compiling $$file..."; \
 		xcrun -sdk macosx metal -Wall -Wextra -Werror \
-			-c $$file -o /tmp/vrm-shaders-macos/$$(basename $$file .metal).air; \
+			-DMTOON_USE_HALF_PRECISION=1 \
+			-c $$file -o /tmp/vrm-shaders-macos/$$(basename $$file .metal).air || exit 1; \
 	done
 	@xcrun -sdk macosx metallib /tmp/vrm-shaders-macos/*.air \
 		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
@@ -46,7 +51,7 @@ shaders-ios:
 		echo "  Compiling $$file..."; \
 		xcrun -sdk iphoneos metal -Wall -Wextra -Werror \
 			-mios-version-min=26.0 -DMTOON_USE_HALF_PRECISION=1 \
-			-c $$file -o /tmp/vrm-shaders-ios/$$(basename $$file .metal).air; \
+			-c $$file -o /tmp/vrm-shaders-ios/$$(basename $$file .metal).air || exit 1; \
 	done
 	@xcrun -sdk iphoneos metallib /tmp/vrm-shaders-ios/*.air \
 		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOS.metallib
@@ -60,7 +65,7 @@ shaders-iossim:
 		echo "  Compiling $$file..."; \
 		xcrun -sdk iphonesimulator metal -Wall -Wextra -Werror \
 			-mios-simulator-version-min=26.0 -DMTOON_USE_HALF_PRECISION=1 \
-			-c $$file -o /tmp/vrm-shaders-iossim/$$(basename $$file .metal).air; \
+			-c $$file -o /tmp/vrm-shaders-iossim/$$(basename $$file .metal).air || exit 1; \
 	done
 	@xcrun -sdk iphonesimulator metallib /tmp/vrm-shaders-iossim/*.air \
 		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
@@ -98,6 +103,18 @@ clean:
 test:
 	@echo "🧪 Running tests..."
 	@swift test
+
+# Capture a GPU trace of the bundled avatar render for offline debugging.
+# Override the output path with GPUTRACE_OUT=/path/to/out.gputrace and the
+# fixture with GPUTRACE_MODEL=vrm0 (default renders the VRM 1.0 fixture).
+GPUTRACE_OUT ?= /tmp/vrmmetalkit/avatar.gputrace
+GPUTRACE_MODEL ?= vrm1
+GPUTRACE_SIZE ?= 512
+gputrace:
+	@echo "🎞️  Capturing GPU trace ($(GPUTRACE_MODEL), $(GPUTRACE_SIZE)px) to $(GPUTRACE_OUT)..."
+	@METAL_CAPTURE_ENABLED=1 VRM_GPUTRACE_OUT=$(GPUTRACE_OUT) VRM_GPUTRACE_MODEL=$(GPUTRACE_MODEL) VRM_GPUTRACE_SIZE=$(GPUTRACE_SIZE) \
+		swift test --filter GPUTraceCaptureTests --disable-sandbox
+	@echo "✅ Inspect with: gpudebug -t $(GPUTRACE_OUT)"
 
 # Build the package
 build:

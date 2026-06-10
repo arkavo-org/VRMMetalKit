@@ -117,11 +117,12 @@ public final class ARKitBodyDriver: @unchecked Sendable {
     /// Filter manager for smoothing (lazy initialized)
     private var filterManager: SkeletonFilterManager?
 
-    /// Multi-source priority strategy
-    public var priority: SourcePriority
+    /// Multi-source priority strategy. Immutable after init so it can be read
+    /// from the update path without the lock (it is configuration, not state).
+    public let priority: SourcePriority
 
-    /// Staleness threshold (seconds)
-    public var stalenessThreshold: TimeInterval
+    /// Staleness threshold (seconds). Immutable after init — see ``priority``.
+    public let stalenessThreshold: TimeInterval
 
     /// Statistics
     private var updateCount: Int = 0

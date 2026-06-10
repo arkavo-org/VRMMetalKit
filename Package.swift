@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 //
 // Copyright 2025 Arkavo
@@ -38,10 +38,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "GLTFCore",
-            swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
-            ]
+            name: "GLTFCore"
         ),
         .target(
             name: "GLTFMetalKit",
@@ -52,9 +49,6 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/GLTFMetalKitShaders.metallib")
-            ],
-            swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
             ]
         ),
         .target(
@@ -76,13 +70,6 @@ let package = Package(
                 .copy("Resources/VRMMetalKitShaders.metallib"),
                 .copy("Resources/VRMMetalKitShaders_iOS.metallib"),
                 .copy("Resources/VRMMetalKitShaders_iOSSimulator.metallib")
-            ],
-            swiftSettings: [
-                // Debug flags (VRM_METALKIT_ENABLE_LOGS / _DEBUG_ANIMATION /
-                // _DEBUG_PHYSICS / _DEBUG_LOADER) are opt-in at build time via
-                // `-Xswiftc -D<FLAG>`. Leaving them off by default keeps the
-                // hot path clean of string-building and validation work.
-                .enableExperimentalFeature("StrictConcurrency")
             ]
         ),
         .executableTarget(

@@ -125,6 +125,22 @@ public struct RendererConfig {
     /// non-uniform scale).
     public var dualQuaternionSkinning: Bool = false
 
+    /// Opt-in on-disk pipeline persistence. When `true`, ``VRMRenderer``
+    /// persists its compiled pipeline states to an `MTLBinaryArchive` and
+    /// reloads them on the next launch, eliminating cold first-launch pipeline
+    /// compilation. The win is large on mobile GPUs (≈275 ms → ≈9 ms for the
+    /// MToon variant set on A18 Pro) and negligible on desktop, where the Metal
+    /// driver already caches aggressively. Default `false`.
+    ///
+    /// The archive auto-invalidates when the bundled shaders change and is
+    /// keyed per GPU, so a stale or wrong-device archive is never loaded.
+    public var enablePipelineArchive: Bool = false
+
+    /// Directory for the persistent pipeline archive when
+    /// ``enablePipelineArchive`` is `true`. `nil` (default) uses the user
+    /// caches directory.
+    public var pipelineArchiveDirectory: URL? = nil
+
     /// Creates a renderer configuration. Defaults match the production baseline.
     public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false, dualQuaternionSkinning: Bool = false) {
         self.strict = strict

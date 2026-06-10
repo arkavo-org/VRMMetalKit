@@ -78,21 +78,29 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         let planeColliderSize = MemoryLayout<PlaneCollider>.stride * numPlanes
 
         bonePosPrev = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])
+        bonePosPrev?.label = "SpringBone BonePos Prev"
         bonePosCurr = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])
+        bonePosCurr?.label = "SpringBone BonePos Curr"
         boneParams = device.makeBuffer(length: boneParamsSize, options: [.storageModeShared])
+        boneParams?.label = "SpringBone BoneParams"
         restLengths = device.makeBuffer(length: restLengthSize, options: [.storageModeShared])
+        restLengths?.label = "SpringBone RestLengths"
         bindDirections = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])  // SIMD3<Float> per bone
+        bindDirections?.label = "SpringBone BindDirections"
 
         if numSpheres > 0 {
             sphereColliders = device.makeBuffer(length: sphereColliderSize, options: [.storageModeShared])
+            sphereColliders?.label = "SpringBone SphereColliders"
         }
 
         if numCapsules > 0 {
             capsuleColliders = device.makeBuffer(length: capsuleColliderSize, options: [.storageModeShared])
+            capsuleColliders?.label = "SpringBone CapsuleColliders"
         }
 
         if numPlanes > 0 {
             planeColliders = device.makeBuffer(length: planeColliderSize, options: [.storageModeShared])
+            planeColliders?.label = "SpringBone PlaneColliders"
         }
     }
 
@@ -187,6 +195,7 @@ public final class SpringBoneBuffers: @unchecked Sendable {
             if newCount > 0 {
                 let size = MemoryLayout<PlaneCollider>.stride * newCount
                 planeColliders = device.makeBuffer(length: size, options: [.storageModeShared])
+                planeColliders?.label = "SpringBone PlaneColliders (dynamic)"
             } else {
                 planeColliders = nil
             }

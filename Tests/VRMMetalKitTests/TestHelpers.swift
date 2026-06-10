@@ -232,6 +232,20 @@ func getProjectRoot(filePath: String = #filePath) -> String {
     return fileManager.currentDirectoryPath
 }
 
+/// The 180° Y rotation the loader applies to VRM 0.x models at load time so
+/// they face +Z like VRM 1.0 (`VRMModel.buildNodeHierarchy` conjugates node
+/// transforms; `applyVRM0InverseBindMatrixConjugation` left-multiplies IBMs).
+/// After that conversion the rest-pose skin matrix `world * IBM` equals this
+/// rotation — not identity — while raw vertex buffers stay in authored
+/// (-Z facing) space. Tests that check rest-pose skinning against vertex
+/// buffers must compare against `vrm0Ry180 * position` for VRM 0.x models.
+let vrm0Ry180 = float4x4(
+    SIMD4<Float>(-1, 0, 0, 0),
+    SIMD4<Float>(0, 1, 0, 0),
+    SIMD4<Float>(0, 0, -1, 0),
+    SIMD4<Float>(0, 0, 0, 1)
+)
+
 /// Get path to a test model file
 /// Checks VRM_TEST_MODELS_PATH environment variable first, then falls back to project root
 func getTestModelPath(_ filename: String) -> String {

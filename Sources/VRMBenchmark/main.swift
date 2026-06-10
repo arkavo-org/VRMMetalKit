@@ -46,6 +46,7 @@ struct BenchmarkOptions {
     var baselinePath: String? = nil          // --baseline FILE
     var thresholdMedianPct: Double = 10.0    // --threshold MEDIAN:P95
     var thresholdP95Pct: Double = 15.0
+    var archiveDir: String? = nil            // --archive-dir DIR (pipeline mode)
 }
 
 func usage() {
@@ -59,8 +60,9 @@ func usage() {
       --vrma PATH      Optional VRMA animation file; enables per-frame
                        animation playback so skinning and spring physics
                        do real work each frame (recommended).
-      --mode NAME      Benchmark mode: render, animation, transforms, load
-                       (default render).
+      --mode NAME      Benchmark mode: render, animation, transforms, load,
+                       pipeline (default render). 'pipeline' needs no input
+                       model — it times cold vs warm pipeline-state builds.
       --loading NAME   Loading options preset: default, safe, or max
                        (default default).
       --frames N       Number of measured frames (default 500)
@@ -85,6 +87,9 @@ func usage() {
                        metric regresses past --threshold.
       --threshold M:P  Regression thresholds as "MEDIAN:P95" percent
                        (default 10:15 → median +10 %, p95 +15 %).
+      --archive-dir D  (pipeline mode) Persist compiled pipelines to an on-disk
+                       binary archive in D. Run twice with the same D to compare
+                       a cold first launch against a warm archive-loaded relaunch.
 
     Recommended invocation:
       swift run -c release VRMBenchmark <vrm-path> --vrma <vrma-path> --frames 500
@@ -177,6 +182,9 @@ func parseArguments() -> BenchmarkOptions? {
         case "--baseline":
             guard let v = nextValue(for: a) else { return nil }
             opts.baselinePath = v
+        case "--archive-dir":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.archiveDir = v
         case "--threshold":
             guard let v = nextValue(for: a) else { return nil }
             let parts = v.split(separator: ":").map(String.init)
@@ -195,7 +203,7 @@ func parseArguments() -> BenchmarkOptions? {
         i += 1
     }
 
-    if opts.inputPath.isEmpty {
+    if opts.inputPath.isEmpty && opts.mode != "pipeline" {
         if let envPath = ProcessInfo.processInfo.environment["AVATAR_SAMPLE_A"] {
             opts.inputPath = envPath
         } else {
@@ -418,20 +426,97 @@ func loadingOptions(for preset: String) -> VRMLoadingOptions {
 
 // MARK: - Main
 
+/// Measures the cost the on-disk pipeline binary archive is meant to remove:
+/// building every MToon render-pipeline variant from a cold cache in a fresh
+/// process. Reports the cold build (first renderer, cache empty) against a warm
+/// build (second renderer, in-memory cache hit) so the compile component is
+/// isolated from fixed renderer-construction overhead.
+@MainActor
+func runPipelineBaseline(device: MTLDevice, label: String, archiveDir: String?) {
+    var config = RendererConfig()
+    config.colorPixelFormat = .bgra8Unorm
+    config.sampleCount = 1
+    config.strict = .off
+
+    // When an archive directory is supplied, route builds through the on-disk
+    // archive. Run the same command twice with one --archive-dir to compare a
+    // cold first launch (writes the archive) against a warm relaunch (loads it).
+    var archivePreloaded = false
+    if let dir = archiveDir {
+        let dirURL = URL(fileURLWithPath: dir)
+        try? FileManager.default.createDirectory(at: dirURL, withIntermediateDirectories: true)
+        let shaderHash = VRMPipelineCache.bundledShaderHash() ?? "bench"
+        let archiveURL = PipelineBinaryArchive.cacheURL(
+            in: dirURL, deviceName: device.name, shaderHash: shaderHash)
+        archivePreloaded = FileManager.default.fileExists(atPath: archiveURL.path)
+        do {
+            try VRMPipelineCache.shared.enablePersistentArchive(
+                device: device, directory: dirURL, shaderHash: shaderHash)
+        } catch {
+            print("WARNING: failed to enable persistent archive: \(error)")
+        }
+    }
+
+    VRMPipelineCache.shared.clearCache()
+
+    let coldStart = CACurrentMediaTime()
+    _ = VRMRenderer(device: device, config: config)
+    let coldMs = (CACurrentMediaTime() - coldStart) * 1000.0
+    let coldStats = VRMPipelineCache.shared.getStatistics()
+
+    let warmStart = CACurrentMediaTime()
+    _ = VRMRenderer(device: device, config: config)
+    let warmMs = (CACurrentMediaTime() - warmStart) * 1000.0
+
+    if archiveDir != nil {
+        try? VRMPipelineCache.shared.flushPersistentArchive()
+    }
+
+    let archiveLine: String
+    if archiveDir == nil {
+        archiveLine = "      archive:            (disabled)\n"
+    } else if archivePreloaded {
+        archiveLine = "      archive:            LOADED from disk (warm relaunch)\n"
+    } else {
+        archiveLine = "      archive:            written this run (cold first launch)\n"
+    }
+
+    print("""
+
+    VRMMetalKit Pipeline Compile Baseline
+      label:            \(label)
+      device:           \(device.name)
+      pipeline variants: \(coldStats.pipelineStateCount)
+    \(archiveLine)  cold build (cache empty):   \(String(format: "%8.2f ms", coldMs))
+      warm build (in-memory hit): \(String(format: "%8.2f ms", warmMs))
+      compile component:          \(String(format: "%8.2f ms", coldMs - warmMs))
+    """)
+}
+
 struct VRMBenchmarkCLI {
     @MainActor
     static func main() async {
         guard let opts = parseArguments() else { exit(0) }
 
-        guard FileManager.default.fileExists(atPath: opts.inputPath) else {
-            print("ERROR: file not found: \(opts.inputPath)")
-            exit(1)
+        // The pipeline-compile baseline measures only shader/pipeline build cost,
+        // so it needs no input model.
+        if opts.mode != "pipeline" {
+            guard FileManager.default.fileExists(atPath: opts.inputPath) else {
+                print("ERROR: file not found: \(opts.inputPath)")
+                exit(1)
+            }
         }
 
         guard let device = MTLCreateSystemDefaultDevice() else {
             print("ERROR: Metal device not available")
             exit(1)
         }
+
+        if opts.mode == "pipeline" {
+            runPipelineBaseline(device: device, label: opts.label, archiveDir: opts.archiveDir)
+            exit(0)
+        }
+
         guard let commandQueue = device.makeCommandQueue() else {
             print("ERROR: failed to create command queue")
             exit(1)

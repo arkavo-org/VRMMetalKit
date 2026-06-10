@@ -47,7 +47,14 @@ extension VRMRenderer: MTKViewDelegate {
     ///
     /// - Parameter view: The `MTKView` driving the render loop.
     public func draw(in view: MTKView) {
-        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+        #if DEBUG
+        let cbDesc = MTLCommandBufferDescriptor()
+        cbDesc.errorOptions = .encoderExecutionStatus
+        let commandBuffer = commandQueue.makeCommandBuffer(descriptor: cbDesc)
+        #else
+        let commandBuffer = commandQueue.makeCommandBuffer()
+        #endif
+        guard let commandBuffer,
               let descriptor = view.currentRenderPassDescriptor else {
             return
         }
@@ -64,6 +71,14 @@ extension VRMRenderer: MTKViewDelegate {
                 vrmLog("[VRMRenderer] ❌ METAL ERROR: Command buffer failed!")
                 if let error = cb.error {
                     vrmLog("[VRMRenderer] ❌ Error details: \(error)")
+                    #if DEBUG
+                    let nsError = error as NSError
+                    if let encoderInfos = nsError.userInfo[MTLCommandBufferEncoderInfoErrorKey] as? [MTLCommandBufferEncoderInfo] {
+                        for info in encoderInfos {
+                            vrmLog("[VRMRenderer] ❌ Encoder '\(info.label)'")
+                        }
+                    }
+                    #endif
                 }
                 // Log additional debug info
                 if let model = self?.model {

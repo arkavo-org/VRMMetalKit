@@ -264,8 +264,12 @@ final class SkinningTests: XCTestCase {
                 let skinMatrix = computeSkinMatrix(worldMatrix: worldMatrix, inverseBindMatrix: inverseBindMatrix)
 
                 // In bind pose, skinMatrix should be close to identity
-                // (worldMatrix * inverseBindMatrix ≈ I when world == bind)
-                if isCloseToIdentity(skinMatrix, tolerance: 0.5) {
+                // (worldMatrix * inverseBindMatrix ≈ I when world == bind).
+                // For VRM 0.x the loader's facing conversion makes the
+                // rest-pose skin matrix vrm0Ry180 instead, so undo it before
+                // the identity check (Ry180 · Ry180 = I).
+                let restMatrix = model.isVRM0 ? vrm0Ry180 * skinMatrix : skinMatrix
+                if isCloseToIdentity(restMatrix, tolerance: 0.5) {
                     nearIdentityCount += 1
                 } else if jointIndex < 10 {
                     // Print first few non-identity matrices for debugging
