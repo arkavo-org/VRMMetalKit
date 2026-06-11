@@ -150,6 +150,25 @@ public enum VRMAnimationLoader {
 
         var clip = AnimationClip(duration: duration)
 
+        // Parse locomotion metadata from extras.arkavo on animations[0].
+        //
+        // GLTFAnimation is a Codable struct without an `extras` field, so
+        // JSONDecoder.decode(GLTFDocument.self, ...) silently drops per-animation
+        // extras. We re-parse the raw `data` bytes with JSONSerialization here
+        // (zero extra I/O — `data` is already in memory) to reach the extras dict.
+        // Only version 1 is understood; unknown version or absent block → nil.
+        if let glbJson = try? JSONSerialization.jsonObject(with: glbJsonChunk(from: data)) as? [String: Any],
+           let animations = glbJson["animations"] as? [[String: Any]],
+           let firstAnimation = animations.first,
+           let extras = firstAnimation["extras"] as? [String: Any],
+           let arkavo = extras["arkavo"] as? [String: Any],
+           let version = arkavo["version"] as? Int, version == 1,
+           let stride = (arkavo["strideSpeed"] as? NSNumber)?.floatValue,
+           let inPlace = arkavo["inPlace"] as? Bool,
+           let hipsH = (arkavo["sourceHipsHeight"] as? NSNumber)?.floatValue {
+            clip.locomotion = LocomotionMetadata(version: version, strideSpeed: stride, inPlace: inPlace, sourceHipsHeight: hipsH)
+        }
+
         // Build tracks grouped by node and path
         var nodeTracks: [Int: [String: KeyTrack]] = [:]
 
@@ -581,6 +600,28 @@ public enum VRMAnimationLoader {
 }
 
 // MARK: - Helpers
+
+/// Extracts the JSON chunk bytes from a GLB container for supplementary raw
+/// parsing (e.g. per-animation `extras` fields not surfaced by `GLTFDocument`).
+/// Returns an empty `Data` on any format error so callers can `try?`-elide it.
+private func glbJsonChunk(from data: Data) -> Data {
+    guard data.count >= 12 else { return Data() }
+    let magic = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 0, as: UInt32.self) }
+    guard magic == 0x46546C67 else { return Data() } // "glTF"
+    var offset = 12
+    while offset + 8 <= data.count {
+        let chunkLength = Int(data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self) })
+        let chunkType = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset + 4, as: UInt32.self) }
+        let start = offset + 8
+        let end = start + chunkLength
+        guard end <= data.count else { break }
+        if chunkType == 0x4E4F534A { // "JSON"
+            return data.subdata(in: start..<end)
+        }
+        offset = end
+    }
+    return Data()
+}
 
 private func mix(_ a: SIMD3<Float>, _ b: SIMD3<Float>, t: Float) -> SIMD3<Float> {
     return a + (b - a) * t

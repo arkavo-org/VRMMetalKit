@@ -66,7 +66,9 @@ public class IdleBreathingLayer: AnimationLayer {
     private let noiseOffset: Float
 
     // Pre-allocated output to avoid per-frame allocations
-    private var cachedOutput = LayerOutput(blendMode: .blend(1.0))
+    // Additive: breathing is a small delta over whatever base layer (locomotion)
+    // produced — .blend(1.0) would replace the base outright on shared bones.
+    private var cachedOutput = LayerOutput(blendMode: .additive)
 
     // MARK: - Initialization
 
