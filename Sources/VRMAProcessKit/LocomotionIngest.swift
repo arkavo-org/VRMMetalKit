@@ -26,12 +26,15 @@ public enum LocomotionIngest {
     public enum IngestError: Error, CustomStringConvertible {
         case walkClipMeasuresStationary(measured: Float)
         case strideOverrideMustBePositive(supplied: Float)
+        case strideOverrideConflictsWithIdle
         public var description: String {
             switch self {
             case .strideOverrideMustBePositive(let v):
             return "stride override must be positive, got \(v)"
+        case .strideOverrideConflictsWithIdle:
+            return "a stride override is meaningless for an idle (idle is the explicit strideSpeed-0 entry) — drop --stride or use --walk"
         case .walkClipMeasuresStationary(let m):
-                return "walk clip measures \(m) m/s hips travel — below the idle threshold (\(LocomotionIngest.idleThreshold)). An already-in-place walk needs an authored stride speed; a --stride override is not implemented yet."
+                return "walk clip measures \(m) m/s hips travel — below the idle threshold (\(LocomotionIngest.idleThreshold)). An already-in-place walk needs an authored stride speed; re-run with --stride <m/s>."
             }
         }
     }
@@ -48,6 +51,7 @@ public enum LocomotionIngest {
         let measured = try inspector.meanHipsXZSpeed()
         if let override = strideOverride {
             guard override > 0 else { throw IngestError.strideOverrideMustBePositive(supplied: override) }
+            guard mode != .idle else { throw IngestError.strideOverrideConflictsWithIdle }
         }
         if mode == .walk, strideOverride == nil, measured < idleThreshold {
             throw IngestError.walkClipMeasuresStationary(measured: measured)

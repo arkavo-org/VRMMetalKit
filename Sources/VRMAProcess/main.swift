@@ -58,6 +58,11 @@ if let i = extraArgs.firstIndex(of: "--stride") {
 }
 let unknownArgs = extraArgs.filter { $0 != "--idle" && $0 != "--walk" }
 
+if hasIdle, strideOverride != nil {
+    FileHandle.standardError.write(Data("VRMAProcess: ERROR --stride is meaningless with --idle (idle is the explicit strideSpeed-0 entry)\n".utf8))
+    usage()
+    exit(2)
+}
 if hasIdle && hasWalk {
     FileHandle.standardError.write(Data("VRMAProcess: ERROR --idle and --walk are mutually exclusive\n".utf8))
     usage()
