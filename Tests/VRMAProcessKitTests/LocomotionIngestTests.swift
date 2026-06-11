@@ -28,6 +28,28 @@ final class LocomotionIngestTests: XCTestCase {
         XCTAssertEqual(meta.strideSpeed, 0)
     }
 
+    func testStrideOverrideStampsAuthoredValueOnInPlaceWalk() throws {
+        // The common case for licensed packs: an already-in-place walk
+        // (hips travel ~0) with a known authored stride speed.
+        let out = try LocomotionIngest.process(glb: try SyntheticVRMA.make(vx: 0.0), mode: .walk, strideOverride: 1.4)
+        let meta = try XCTUnwrap(LocomotionExtras.read(from: try GLBContainer(data: out)))
+        XCTAssertEqual(meta.strideSpeed, 1.4, accuracy: 1e-5)
+        XCTAssertTrue(meta.inPlace)
+    }
+
+    func testNonFiniteStrideOverrideThrows() {
+        XCTAssertThrowsError(try LocomotionIngest.process(glb: try! SyntheticVRMA.make(vx: 0.0), mode: .walk, strideOverride: .infinity))
+        XCTAssertThrowsError(try LocomotionIngest.process(glb: try! SyntheticVRMA.make(vx: 0.0), mode: .walk, strideOverride: .nan))
+    }
+
+    func testStrideOverrideWithIdleModeThrows() {
+        XCTAssertThrowsError(try LocomotionIngest.process(glb: try! SyntheticVRMA.make(vx: 0.0), mode: .idle, strideOverride: 1.4))
+    }
+
+    func testStrideOverrideMustBePositive() {
+        XCTAssertThrowsError(try LocomotionIngest.process(glb: try! SyntheticVRMA.make(vx: 0.0), mode: .walk, strideOverride: 0))
+    }
+
     func testForcedIdleModeOverridesMeasurement() throws {
         let out = try LocomotionIngest.process(glb: try SyntheticVRMA.make(vx: 1.5), mode: .idle)
         let meta = try XCTUnwrap(LocomotionExtras.read(from: try GLBContainer(data: out)))
