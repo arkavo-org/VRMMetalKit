@@ -37,6 +37,11 @@ final class LocomotionIngestTests: XCTestCase {
         XCTAssertTrue(meta.inPlace)
     }
 
+    func testNonFiniteStrideOverrideThrows() {
+        XCTAssertThrowsError(try LocomotionIngest.process(glb: try! SyntheticVRMA.make(vx: 0.0), mode: .walk, strideOverride: .infinity))
+        XCTAssertThrowsError(try LocomotionIngest.process(glb: try! SyntheticVRMA.make(vx: 0.0), mode: .walk, strideOverride: .nan))
+    }
+
     func testStrideOverrideWithIdleModeThrows() {
         XCTAssertThrowsError(try LocomotionIngest.process(glb: try! SyntheticVRMA.make(vx: 0.0), mode: .idle, strideOverride: 1.4))
     }

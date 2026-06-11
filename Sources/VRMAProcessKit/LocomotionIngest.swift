@@ -50,7 +50,7 @@ public enum LocomotionIngest {
         // Measure FIRST — the strip below erases exactly what we measure.
         let measured = try inspector.meanHipsXZSpeed()
         if let override = strideOverride {
-            guard override > 0 else { throw IngestError.strideOverrideMustBePositive(supplied: override) }
+            guard override > 0, override.isFinite else { throw IngestError.strideOverrideMustBePositive(supplied: override) }
             guard mode != .idle else { throw IngestError.strideOverrideConflictsWithIdle }
         }
         if mode == .walk, strideOverride == nil, measured < idleThreshold {

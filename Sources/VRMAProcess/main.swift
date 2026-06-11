@@ -48,8 +48,8 @@ let hasIdle = extraArgs.contains("--idle")
 let hasWalk = extraArgs.contains("--walk")
 var strideOverride: Float?
 if let i = extraArgs.firstIndex(of: "--stride") {
-    guard i + 1 < extraArgs.count, let v = Float(extraArgs[i + 1]) else {
-        FileHandle.standardError.write(Data("VRMAProcess: ERROR --stride requires a numeric m/s value\n".utf8))
+    guard i + 1 < extraArgs.count, let v = Float(extraArgs[i + 1]), v.isFinite else {
+        FileHandle.standardError.write(Data("VRMAProcess: ERROR --stride requires a finite numeric m/s value\n".utf8))
         usage()
         exit(2)
     }
