@@ -25,26 +25,36 @@ public enum LocomotionIngest {
 
     public enum IngestError: Error, CustomStringConvertible {
         case walkClipMeasuresStationary(measured: Float)
+        case strideOverrideMustBePositive(supplied: Float)
         public var description: String {
             switch self {
-            case .walkClipMeasuresStationary(let m):
+            case .strideOverrideMustBePositive(let v):
+            return "stride override must be positive, got \(v)"
+        case .walkClipMeasuresStationary(let m):
                 return "walk clip measures \(m) m/s hips travel — below the idle threshold (\(LocomotionIngest.idleThreshold)). An already-in-place walk needs an authored stride speed; a --stride override is not implemented yet."
             }
         }
     }
 
-    public static func process(glb: Data, mode: Mode) throws -> Data {
+    /// `strideOverride` supplies an authored stride speed (m/s) for clips
+    /// whose hips travel was already stripped at the source — the common
+    /// shape for licensed in-place packs. Only meaningful with `.walk`;
+    /// must be positive. Without it, `.walk` refuses near-stationary input.
+    public static func process(glb: Data, mode: Mode, strideOverride: Float? = nil) throws -> Data {
         var container = try GLBContainer(data: glb)
         let inspector = try VRMAClipInspector(container: container)
 
         // Measure FIRST — the strip below erases exactly what we measure.
         let measured = try inspector.meanHipsXZSpeed()
-        if mode == .walk, measured < idleThreshold {
+        if let override = strideOverride {
+            guard override > 0 else { throw IngestError.strideOverrideMustBePositive(supplied: override) }
+        }
+        if mode == .walk, strideOverride == nil, measured < idleThreshold {
             throw IngestError.walkClipMeasuresStationary(measured: measured)
         }
-        let isIdle = mode == .idle || (mode == .auto && measured < idleThreshold)
+        let isIdle = mode == .idle || (mode == .auto && strideOverride == nil && measured < idleThreshold)
         let meta = LocomotionExtras(
-            strideSpeed: isIdle ? 0 : measured,
+            strideSpeed: isIdle ? 0 : (strideOverride ?? measured),
             inPlace: true,
             sourceHipsHeight: try inspector.hipsRestHeight()
         )

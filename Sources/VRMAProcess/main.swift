@@ -22,11 +22,12 @@ import VRMAProcessKit
 
 func usage() {
     let msg = """
-    Usage: VRMAProcess <input.vrma> <output.vrma> [--idle|--walk]
+    Usage: VRMAProcess <input.vrma> <output.vrma> [--idle|--walk] [--stride <m/s>]
       Measures stride speed, writes extras.arkavo (version 1), strips hips
       XZ (in-place clips), strips non-humanoid baked tracks, loop-trims by
       pose similarity. --idle/--walk force classification (default: auto,
-      idle below \(LocomotionIngest.idleThreshold) m/s).
+      idle below \(LocomotionIngest.idleThreshold) m/s). --stride supplies
+      an authored stride speed for already-in-place walks (licensed packs).
 
     """
     FileHandle.standardError.write(Data(msg.utf8))
@@ -41,10 +42,20 @@ guard args.count >= 3 else {
 let inputPath  = args[1]
 let outputPath = args[2]
 
-// Validate extra arguments: only --idle or --walk are allowed; not both.
-let extraArgs = args.dropFirst(3)
+// Validate extra arguments: --idle or --walk (not both), optional --stride <m/s>.
+var extraArgs = Array(args.dropFirst(3))
 let hasIdle = extraArgs.contains("--idle")
 let hasWalk = extraArgs.contains("--walk")
+var strideOverride: Float?
+if let i = extraArgs.firstIndex(of: "--stride") {
+    guard i + 1 < extraArgs.count, let v = Float(extraArgs[i + 1]) else {
+        FileHandle.standardError.write(Data("VRMAProcess: ERROR --stride requires a numeric m/s value\n".utf8))
+        usage()
+        exit(2)
+    }
+    strideOverride = v
+    extraArgs.removeSubrange(i...(i + 1))
+}
 let unknownArgs = extraArgs.filter { $0 != "--idle" && $0 != "--walk" }
 
 if hasIdle && hasWalk {
@@ -70,7 +81,7 @@ let mode: LocomotionIngest.Mode = hasIdle ? .idle : (hasWalk ? .walk : .auto)
 
 do {
     let input = try Data(contentsOf: resolvedInput)
-    let output = try LocomotionIngest.process(glb: input, mode: mode)
+    let output = try LocomotionIngest.process(glb: input, mode: mode, strideOverride: strideOverride)
     try output.write(to: resolvedOutput)
     if let meta = LocomotionExtras.read(from: try GLBContainer(data: output)) {
         print("VRMAProcess: \(resolvedOutput.path) strideSpeed=\(meta.strideSpeed) inPlace=\(meta.inPlace) sourceHipsHeight=\(meta.sourceHipsHeight)")
