@@ -21,13 +21,22 @@ final class LocomotionGuardTests: XCTestCase {
     /// Locomotion design §7: clock APIs are forbidden in locomotion code paths.
     func testNoClockAPIsInLocomotionSources() throws {
         let thisFile = URL(fileURLWithPath: #filePath)
-        // Path: Tests/VRMMetalKitTests/Animation/LocomotionGuardTests.swift
-        // 4x deletingLastPathComponent: Animation → VRMMetalKitTests → Tests → repo root
-        let repoRoot = thisFile
-            .deletingLastPathComponent()  // Animation/
-            .deletingLastPathComponent()  // VRMMetalKitTests/
-            .deletingLastPathComponent()  // Tests/
-            .deletingLastPathComponent()  // repo root
+        // Locate the repo root by marker (Package.swift), not fixed depth, so
+        // moving this file can't silently misroute the grep. No marker within
+        // 8 levels ⇒ no source checkout (CI runner) ⇒ skip. Marker found but a
+        // banned-list source missing ⇒ loud failure (structure regression).
+        var probe = thisFile.deletingLastPathComponent()
+        var foundRoot: URL?
+        for _ in 0..<8 {
+            if FileManager.default.fileExists(atPath: probe.appendingPathComponent("Package.swift").path) {
+                foundRoot = probe
+                break
+            }
+            probe.deleteLastPathComponent()
+        }
+        guard let repoRoot = foundRoot else {
+            throw XCTSkip("no Package.swift above \(thisFile.path) — source checkout not reachable; the lint workflow greps sources as the CI backstop")
+        }
         let sources = [
             "Sources/VRMMetalKit/Animation/Layers/LocomotionBlendLayer.swift",
             "Sources/VRMMetalKit/Animation/Layers/LocomotionBlendMath.swift",
@@ -35,13 +44,12 @@ final class LocomotionGuardTests: XCTestCase {
         let banned = ["CACurrentMediaTime", "Date(", "DispatchTime.now", "ProcessInfo.processInfo.systemUptime"]
         for rel in sources {
             let fileURL = repoRoot.appendingPathComponent(rel)
-            // CI test runners (Xcode Cloud) may not have the source checkout
-            // at the path #filePath was compiled with. The grep only means
-            // something against sources, so skip there — the lint workflow's
-            // source grep is the CI backstop for this same ban.
-            guard FileManager.default.fileExists(atPath: fileURL.path) else {
-                throw XCTSkip("source checkout not reachable at \(fileURL.path) — clock-ban grep runs in source environments only")
-            }
+            // The checkout exists (marker found) — a missing source file here
+            // is a real structure regression, not an environment gap.
+            XCTAssertTrue(
+                FileManager.default.fileExists(atPath: fileURL.path),
+                "\(rel) missing under \(repoRoot.path) — banned-list paths out of date?"
+            )
             let text = try String(contentsOf: fileURL, encoding: .utf8)
             for token in banned {
                 XCTAssertFalse(text.contains(token),
