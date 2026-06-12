@@ -942,7 +942,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // (#301): each frame the inflated rest bounds are translated by the
         // hips' displacement from this position, so a character that moves
         // away from its load position keeps a valid cull volume.
-        if let hipsIndex = model.humanoid?.getBoneNode(.hips), hipsIndex < model.nodes.count {
+        if let hipsIndex = model.humanoid?.getBoneNode(.hips), hipsIndex >= 0, hipsIndex < model.nodes.count {
             restHipsWorldPosition = model.nodes[hipsIndex].worldPosition
         } else {
             restHipsWorldPosition = nil
@@ -1675,7 +1675,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // translation tracks the hips joint; pose variance is absorbed by
         // the inflation above.
         let skinnedCullMatrix: matrix_float4x4
-        if let hipsIndex = model.humanoid?.getBoneNode(.hips), hipsIndex < model.nodes.count {
+        if let hipsIndex = model.humanoid?.getBoneNode(.hips), hipsIndex >= 0, hipsIndex < model.nodes.count {
             skinnedCullMatrix = SkinnedCullBounds.cullModelMatrix(
                 hipsWorldPosition: model.nodes[hipsIndex].worldPosition,
                 restHipsWorldPosition: restHipsWorldPosition)
