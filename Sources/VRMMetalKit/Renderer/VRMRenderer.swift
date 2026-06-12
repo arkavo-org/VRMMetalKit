@@ -741,6 +741,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var cachedRenderItems: [RenderItem]?
     private var cacheNeedsRebuild = true
 
+    /// Hips world position captured at `loadModel` (rest pose). Anchors the
+    /// skinned-primitive cull volume — see `SkinnedCullBounds.cullModelMatrix`.
+    private var restHipsWorldPosition: SIMD3<Float>?
+
     // Scratch dictionary reused by the transparency-sort pass to avoid a
     // per-frame dictionary allocation. Keys are primitiveIndex.
     private var viewZByIndex: [Int: Float] = [:]
@@ -933,6 +937,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // PERFORMANCE: Invalidate cached render items when model changes
         cacheNeedsRebuild = true
         cachedRenderItems = nil
+
+        // Rest-pose hips anchor for the skinned-primitive frustum cull
+        // (#301): each frame the inflated rest bounds are translated by the
+        // hips' displacement from this position, so a character that moves
+        // away from its load position keeps a valid cull volume.
+        if let hipsIndex = model.humanoid?.getBoneNode(.hips), hipsIndex < model.nodes.count {
+            restHipsWorldPosition = model.nodes[hipsIndex].worldPosition
+        } else {
+            restHipsWorldPosition = nil
+        }
 
         // Initialize skinning system with all skins for proper offset allocation
         if !model.skins.isEmpty {
@@ -1654,6 +1668,20 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let inflatedHalfExtent = (modelLocalBounds.max - modelLocalBounds.min) * 0.25
         let inflatedModelMin = modelLocalBounds.min - inflatedHalfExtent
         let inflatedModelMax = modelLocalBounds.max + inflatedHalfExtent
+        // Skinned vertices are posed by the joint palette, not the mesh
+        // node's worldMatrix, so the rest-pose bounds must follow the
+        // skeleton — a character that walks away from its load position
+        // would otherwise be culled while visibly on screen (#301). The
+        // translation tracks the hips joint; pose variance is absorbed by
+        // the inflation above.
+        let skinnedCullMatrix: matrix_float4x4
+        if let hipsIndex = model.humanoid?.getBoneNode(.hips), hipsIndex < model.nodes.count {
+            skinnedCullMatrix = SkinnedCullBounds.cullModelMatrix(
+                hipsWorldPosition: model.nodes[hipsIndex].worldPosition,
+                restHipsWorldPosition: restHipsWorldPosition)
+        } else {
+            skinnedCullMatrix = matrix_identity_float4x4
+        }
         var culledThisFrame = 0
 
         // Use stored light directions directly (world-space lighting)
@@ -2392,7 +2420,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let cullLocalMax: SIMD3<Float>
             let isSkinnedForCull = (item.node.skin != nil || (item.primitive.hasJoints && item.primitive.hasWeights)) && hasSkinning
             if isSkinnedForCull {
-                cullModelMatrix = matrix_identity_float4x4
+                cullModelMatrix = skinnedCullMatrix
                 cullLocalMin = inflatedModelMin
                 cullLocalMax = inflatedModelMax
             } else {
@@ -3740,7 +3768,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             model: model,
             frustum: frameFrustum,
             inflatedModelMin: inflatedModelMin,
-            inflatedModelMax: inflatedModelMax
+            inflatedModelMax: inflatedModelMax,
+            skinnedCullMatrix: skinnedCullMatrix
         )
 
         encoder.endEncoding()
@@ -3793,7 +3822,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         model: VRMModel,
         frustum: Frustum,
         inflatedModelMin: SIMD3<Float>,
-        inflatedModelMax: SIMD3<Float>
+        inflatedModelMax: SIMD3<Float>,
+        skinnedCullMatrix: matrix_float4x4
     ) {
         // Only render outlines if we have a pipeline and global outline width is non-zero
         guard mtoonOutlinePipelineState != nil || mtoonSkinnedOutlinePipelineState != nil else {
@@ -3856,7 +3886,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let outlineCullMin: SIMD3<Float>
             let outlineCullMax: SIMD3<Float>
             if isSkinned {
-                outlineCullModel = matrix_identity_float4x4
+                outlineCullModel = skinnedCullMatrix
                 outlineCullMin = inflatedModelMin
                 outlineCullMax = inflatedModelMax
             } else {

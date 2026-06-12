@@ -132,3 +132,101 @@ final class FrustumCullingTests: XCTestCase {
         XCTAssertEqual(world.max.z, sqrtf(2), accuracy: 1e-4)
     }
 }
+
+// MARK: - #301: avatars rejected at distance
+
+extension FrustumCullingTests {
+
+    /// The unit repro #301 asks for: camera looking on-axis at an avatar-sized
+    /// AABB ~25 m ahead, well inside the FOV and far plane. The pure plane
+    /// math must accept it — if this fails, `Frustum`/`cullsAABB` itself is
+    /// broken for distant boxes.
+    func testOnAxisDistantAvatarIsNotCulled() {
+        let projection = metalPerspective(fovy: .pi / 3, aspect: 16.0 / 9.0, near: 0.1, far: 100)
+        // Over-the-shoulder-ish camera at the #301 geometry: avatar ~25 m away.
+        let view = lookAt(
+            eye: SIMD3<Float>(7.2, 1.7, -4.0),
+            center: SIMD3<Float>(7.4, 0.9, 20.8),
+            up: SIMD3<Float>(0, 1, 0))
+        let frustum = Frustum(viewProjection: simd_mul(projection, view))
+        // Avatar-sized box (1 × 2 × 1 m) centered at the logged reject position.
+        let lo = SIMD3<Float>(6.9, -0.1, 20.3)
+        let hi = SIMD3<Float>(7.9,  1.9, 21.3)
+        XCTAssertFalse(frustum.cullsAABB(min: lo, max: hi),
+                       "on-screen avatar 25 m ahead must not be culled")
+    }
+
+    /// The live #301 mechanism in the renderer: skinned primitives were culled
+    /// against the inflated rest-pose bounds with an IDENTITY model matrix, so
+    /// the cull volume stayed at the model's load position forever. A
+    /// character that walks 20 m away — camera following — left the stale box
+    /// behind and vanished. `SkinnedCullBounds.cullModelMatrix` translates the
+    /// box by the hips' displacement so it follows the skeleton.
+    func testSkinnedCullVolumeFollowsSkeleton() {
+        let projection = metalPerspective(fovy: .pi / 3, aspect: 16.0 / 9.0, near: 0.1, far: 100)
+        // Camera 6 m behind the walked-to position, looking at the character.
+        let view = lookAt(
+            eye: SIMD3<Float>(20, 1.6, 6),
+            center: SIMD3<Float>(20, 1.0, 0),
+            up: SIMD3<Float>(0, 1, 0))
+        let frustum = Frustum(viewProjection: simd_mul(projection, view))
+
+        // Inflated rest-pose bounds of a ~1.7 m humanoid loaded at the origin.
+        let inflatedMin = SIMD3<Float>(-0.6, -0.2, -0.5)
+        let inflatedMax = SIMD3<Float>( 0.6,  2.0,  0.5)
+        let restHips = SIMD3<Float>(0, 0.8, 0)
+        let walkedHips = SIMD3<Float>(20, 0.8, 0)  // walked 20 m down +X
+
+        // Old behavior (identity): the stale box at the origin is out of view
+        // even though the character is dead-center on screen.
+        let staleAABB = AABBTransform.worldAABB(
+            localMin: inflatedMin, localMax: inflatedMax,
+            modelMatrix: matrix_identity_float4x4)
+        XCTAssertTrue(frustum.cullsAABB(min: staleAABB.min, max: staleAABB.max),
+                      "precondition: the stale rest box at origin is off-screen for this camera")
+
+        // Fixed behavior: the box follows the hips and is accepted.
+        let followMatrix = SkinnedCullBounds.cullModelMatrix(
+            hipsWorldPosition: walkedHips,
+            restHipsWorldPosition: restHips)
+        let followedAABB = AABBTransform.worldAABB(
+            localMin: inflatedMin, localMax: inflatedMax,
+            modelMatrix: followMatrix)
+        XCTAssertFalse(frustum.cullsAABB(min: followedAABB.min, max: followedAABB.max),
+                       "cull volume must follow the walked character")
+    }
+
+    /// Camera still at the spawn point looking where the character USED to
+    /// be: once the character walks away, the followed volume should cull
+    /// (the character is genuinely off-screen) — guards against the fix
+    /// accidentally making skinned primitives never-culled.
+    func testWalkedAwayCharacterStillCullsWhenOffScreen() {
+        let projection = metalPerspective(fovy: .pi / 3, aspect: 16.0 / 9.0, near: 0.1, far: 100)
+        // Camera looking down -Z at the spawn point; character walked +X out of frame.
+        let view = lookAt(
+            eye: SIMD3<Float>(0, 1.6, 6),
+            center: SIMD3<Float>(0, 1.0, 0),
+            up: SIMD3<Float>(0, 1, 0))
+        let frustum = Frustum(viewProjection: simd_mul(projection, view))
+
+        let inflatedMin = SIMD3<Float>(-0.6, -0.2, -0.5)
+        let inflatedMax = SIMD3<Float>( 0.6,  2.0,  0.5)
+        let followMatrix = SkinnedCullBounds.cullModelMatrix(
+            hipsWorldPosition: SIMD3<Float>(40, 0.8, 0),
+            restHipsWorldPosition: SIMD3<Float>(0, 0.8, 0))
+        let followedAABB = AABBTransform.worldAABB(
+            localMin: inflatedMin, localMax: inflatedMax,
+            modelMatrix: followMatrix)
+        XCTAssertTrue(frustum.cullsAABB(min: followedAABB.min, max: followedAABB.max))
+    }
+
+    /// Non-humanoid models have no hips anchor — the matrix degrades to
+    /// identity (rest box at load position), the pre-fix behavior.
+    func testCullMatrixIdentityWithoutHips() {
+        let m = SkinnedCullBounds.cullModelMatrix(hipsWorldPosition: nil, restHipsWorldPosition: nil)
+        XCTAssertEqual(m, matrix_identity_float4x4)
+        let m2 = SkinnedCullBounds.cullModelMatrix(
+            hipsWorldPosition: SIMD3<Float>(1, 2, 3), restHipsWorldPosition: nil)
+        XCTAssertEqual(m2, matrix_identity_float4x4)
+    }
+}
