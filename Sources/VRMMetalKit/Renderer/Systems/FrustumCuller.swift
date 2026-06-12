@@ -87,6 +87,37 @@ public struct Frustum {
     }
 }
 
+/// Culling support for skinned primitives, whose vertices are posed by the
+/// joint palette rather than the mesh node's `worldMatrix`.
+public enum SkinnedCullBounds {
+    /// Model matrix that positions a model's rest-pose bounds for a skinned
+    /// frustum test: a pure translation by the hips joint's displacement from
+    /// its rest-pose world position.
+    ///
+    /// Skinned vertices follow the joint palette, so the mesh node's
+    /// `worldMatrix` says nothing about where the body is. Testing the
+    /// rest-pose bounds untranslated (the pre-#301 behavior) pins the cull
+    /// volume at the model's load position — a character that walks away is
+    /// culled while visibly on screen. Pose variance (raised arms, crouches)
+    /// is absorbed by the caller's bounds inflation; this matrix only needs
+    /// to track gross displacement, for which the hips joint is the anchor.
+    ///
+    /// Returns identity when either position is unavailable (non-humanoid
+    /// glTF) — the rest-pose box at the load position is the best available
+    /// estimate there.
+    public static func cullModelMatrix(
+        hipsWorldPosition: SIMD3<Float>?,
+        restHipsWorldPosition: SIMD3<Float>?
+    ) -> matrix_float4x4 {
+        guard let now = hipsWorldPosition, let rest = restHipsWorldPosition else {
+            return matrix_identity_float4x4
+        }
+        var m = matrix_identity_float4x4
+        m.columns.3 = SIMD4<Float>(now.x - rest.x, now.y - rest.y, now.z - rest.z, 1)
+        return m
+    }
+}
+
 /// Helpers for transforming axis-aligned bounding boxes between coordinate spaces.
 public enum AABBTransform {
     /// Transforms a local-space AABB by a model matrix into a (conservative) world-space AABB.
