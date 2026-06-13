@@ -87,4 +87,40 @@ final class PerformanceTrackerTests: XCTestCase {
         XCTAssertEqual(metrics.drawCalls, 0)
         XCTAssertEqual(metrics.triangleCount, 0)
     }
+
+    /// Each begin/endPhase pair records one per-call sample, retained so
+    /// VRMBenchmark can build a full distribution (not just the average) per
+    /// sub-phase. An empty phase yields an empty array, not a crash.
+    func testPhaseSamplesAccumulatePerCall() {
+        let tracker = PerformanceTracker()
+        XCTAssertTrue(tracker.samples(for: .morphSetup).isEmpty,
+            "a phase that never ran should report no samples")
+
+        for _ in 0..<5 {
+            tracker.beginPhase(.morphSetup)
+            tracker.endPhase(.morphSetup)
+        }
+        XCTAssertEqual(tracker.samples(for: .morphSetup).count, 5,
+            "one sample per begin/endPhase pair")
+        XCTAssertTrue(tracker.samples(for: .springBone).isEmpty,
+            "phases are tracked independently")
+    }
+
+    /// generateMetrics() drains the running averages but must NOT drain the
+    /// sample windows — VRMBenchmark reads samples AFTER calling generateMetrics()
+    /// and would otherwise lose the sub-phase distributions. reset() clears both.
+    func testPhaseSamplesSurviveGenerateMetricsButNotReset() {
+        let tracker = PerformanceTracker()
+        for _ in 0..<3 {
+            tracker.beginPhase(.commandEncode)
+            tracker.endPhase(.commandEncode)
+        }
+        _ = tracker.generateMetrics()
+        XCTAssertEqual(tracker.samples(for: .commandEncode).count, 3,
+            "generateMetrics() must not drain phase sample windows")
+
+        tracker.reset()
+        XCTAssertTrue(tracker.samples(for: .commandEncode).isEmpty,
+            "reset() should clear phase sample windows")
+    }
 }

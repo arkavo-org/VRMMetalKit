@@ -214,6 +214,9 @@ public class PerformanceTracker {
     }
     private var phaseTimers: [Phase: CFTimeInterval] = [:]
     private var phaseAccumulators: [Phase: (totalMs: Double, count: Int)] = [:]
+    // Per-call sample windows (bounded like the frame-time windows) so consumers
+    // can compute full distributions per phase, not just the running average.
+    private var phaseSamples: [Phase: [Double]] = [:]
 
     // Per-frame counters
     private var currentFrameMetrics = FrameMetrics()
@@ -409,6 +412,7 @@ public class PerformanceTracker {
         totalPipelineChanges = 0
         phaseTimers.removeAll()
         phaseAccumulators.removeAll()
+        phaseSamples.removeAll()
     }
 
     private func percentile(_ sortedArray: [Double], _ percentile: Double) -> Double {
@@ -481,10 +485,25 @@ public class PerformanceTracker {
         acc.totalMs += ms
         acc.count += 1
         phaseAccumulators[phase] = acc
+
+        var samples = phaseSamples[phase] ?? []
+        if samples.count >= maxFrameSamples {
+            samples.removeFirst()
+        }
+        samples.append(ms)
+        phaseSamples[phase] = samples
     }
 
     private func averagePhase(_ phase: Phase) -> Double {
         guard let acc = phaseAccumulators[phase], acc.count > 0 else { return 0 }
         return acc.totalMs / Double(acc.count)
+    }
+
+    /// Per-call elapsed-time samples (milliseconds) recorded for `phase`, oldest
+    /// first, bounded to the most recent ~10 s. Empty when the phase never ran.
+    /// Like the frame-time windows, this is cleared only by ``reset()`` —
+    /// ``generateMetrics()`` does not drain it.
+    public func samples(for phase: Phase) -> [Double] {
+        phaseSamples[phase] ?? []
     }
 }
