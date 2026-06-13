@@ -672,6 +672,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Prefer ``AnimationPlayer`` for new code; set this to `false` only when restoring the legacy path.
     public var disableLegacyAnimation: Bool = true
 
+    /// When `true` (the default), the renderer assumes the avatar's joints may be animated each frame
+    /// and marks all skin palettes dirty before updating them. Set to `false` for a static avatar to
+    /// skip joint-matrix recomputation after the first frame.
+    public var isAnimationActive: Bool = true
+
     // Triple-buffered uniforms for avoiding CPU-GPU sync
     static let maxBufferedFrames = VRMConstants.Rendering.maxBufferedFrames
     var uniformsBuffers: [MTLBuffer] = []
@@ -1047,19 +1052,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Decide if compute path is needed (presence of any morphs > 0 or >8 targets anywhere)
         var needsComputePath = false
 
-        // Check if any primitive has active morphs with non-zero weights
+        // Check if any primitive has active morphs with non-zero weights.
+        // Compute the per-mesh weights once and reuse the cached array for every primitive in the mesh.
         var hasActiveMorphs = false
         if let controller = expressionController {
             for (meshIndex, mesh) in model.meshes.enumerated() {
-                for primitive in mesh.primitives where !primitive.morphTargets.isEmpty {
-                    let weights = controller.weightsForMesh(meshIndex, morphCount: primitive.morphTargets.count)
-                    let hasNonZero = weights.contains { $0 > 0.001 }
-                    if hasNonZero {
-                        hasActiveMorphs = true
-                        break
-                    }
+                let meshMaxMorphCount = mesh.primitives.reduce(0) { max($0, $1.morphTargets.count) }
+                guard meshMaxMorphCount > 0 else { continue }
+                let meshWeights = controller.weightsForMesh(meshIndex, morphCount: meshMaxMorphCount)
+                let hasNonZero = meshWeights.contains { $0 > 0.001 }
+                if hasNonZero {
+                    hasActiveMorphs = true
+                    break
                 }
-                if hasActiveMorphs { break }
             }
         }
 
@@ -1100,6 +1105,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         var morphedBuffers: [MorphKey: MTLBuffer] = [:]  // Key: (meshIndex << 32) | primitiveIndex
 
         for (meshIndex, mesh) in model.meshes.enumerated() {
+            let meshMaxMorphCount = mesh.primitives.reduce(0) { max($0, $1.morphTargets.count) }
+            let meshWeights = expressionController?.weightsForMesh(meshIndex, morphCount: meshMaxMorphCount) ?? []
+
             for (primitiveIndex, primitive) in mesh.primitives.enumerated() where !primitive.morphTargets.isEmpty {
                 // Ensure SoA buffers exist
                 if primitive.morphTargets.count > 8 {
@@ -1124,8 +1132,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     continue
                 }
 
-                // Build weights for THIS mesh/primitive
-                let localWeights = expressionController?.weightsForMesh(meshIndex, morphCount: primitive.morphTargets.count) ?? []
+                // Build weights for this primitive from the per-mesh cached weights.
+                let morphCount = primitive.morphTargets.count
+                let localWeights = meshWeights[0..<morphCount]
 
                 // Build active set for this primitive (MUST be done before applyMorphsCompute!)
                 let primitiveActiveSet = morphTargetSystem.buildActiveSet(weights: localWeights)
@@ -1172,12 +1181,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         vrmLog("[VRMRenderer] Applied compute morphs: mesh=\(meshIndex) prim=\(primitiveIndex) key=\(stableKey)")
 
                         // Log active morph weights
-                        if let controller = expressionController {
-                            let weights = controller.weightsForMesh(meshIndex, morphCount: primitive.morphTargets.count)
-                            let nonZero = weights.enumerated().filter { $0.element > 0.001 }
-                            if !nonZero.isEmpty {
-                                vrmLog("   Active weights: \(nonZero.map { "[\($0.offset)]=\(String(format: "%.3f", $0.element))" }.joined(separator: ", "))")
-                            }
+                        let nonZero = localWeights.enumerated().filter { $0.element > 0.001 }
+                        if !nonZero.isEmpty {
+                            vrmLog("   Active weights: \(nonZero.map { "[\($0.offset)]=\(String(format: "%.3f", $0.element))" }.joined(separator: ", "))")
                         }
                     }
 
@@ -1443,7 +1449,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Run compute pass for morphs BEFORE render encoder
+        performanceTracker?.beginPhase(.morphSetup)
         let morphedBuffers = applyMorphTargetsCompute(commandBuffer: commandBuffer)
+        performanceTracker?.endPhase(.morphSetup)
         if !morphedBuffers.isEmpty {
             performanceTracker?.recordMorphCompute()
         }
@@ -1466,6 +1474,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // fix), so its compute encoder must be opened+closed before any other encoder
         // (compute or render) is active on the same buffer — Metal forbids overlap.
         if enableSpringBone, model.springBone != nil {
+            performanceTracker?.beginPhase(.springBone)
 
             // Calculate actual deltaTime. `simulationDeltaTime` is the
             // explicit offline-rendering escape: when set, use it directly
@@ -1539,6 +1548,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLogPhysics("❌ [SpringBone] ERROR: GPU system is nil despite Spring Bone data present")
                 }
             }
+            performanceTracker?.endPhase(.springBone)
         }
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
@@ -1610,16 +1620,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Reset skinning cache at frame boundary
             skinningSystem?.beginFrame()
 
+            // When animation is active, joints may have changed; mark all skins dirty.
+            if isAnimationActive || animationState != nil {
+                skinningSystem?.markAllSkinsDirty()
+            }
+
             // Update joint matrices for ALL skins
             for (skinIndex, skin) in model.skins.enumerated() {
                 vrmLog("[SKINNING] Updating \(skin.joints.count) joint matrices for skin \(skinIndex) at offset \(skin.matrixOffset)")
                 skinningSystem?.updateJointMatrices(for: skin, skinIndex: skinIndex)
 
                 // PHASE 1 VALIDATION: GPU readback check (every 60 frames)
+                #if DEBUG
                 if frameCounter % 60 == 0 && skinIndex == 0 {
                     vrmLog("\n═══ PHASE 1: GPU VALIDATION ═══")
                     skinningSystem?.validateJointMatricesGPU(for: skin, skinIndex: skinIndex, expectNonIdentity: animationState != nil)
                 }
+                #endif
             }
 
             // PHASE 1 VALIDATION: Vertex attributes check (once at start)
@@ -1758,6 +1775,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // ALPHA MODE QUEUING: Collect all primitives and sort by alpha mode
         // PERFORMANCE OPTIMIZATION: Use cached render items if available
+        performanceTracker?.beginPhase(.renderItemBuild)
         var allItems: [RenderItem]
 
         if let cached = cachedRenderItems, !cacheNeedsRebuild {
@@ -2115,6 +2133,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("[VRMRenderer] ✅ Cached \(allItems.count) render items for reuse")
             }
         } // End of cache rebuild block
+        performanceTracker?.endPhase(.renderItemBuild)
 
         // DEBUG SINGLE MESH MODE: Only render the first item for systematic testing
         // CRITICAL DEBUG: Log execution path to understand why workaround isn't triggered
@@ -2137,6 +2156,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[WORKAROUND LOOP] Starting render loop with \(itemsToRender.count) items")
 
         // DRAW LIST BISECT: Filter by draw index if requested
+        performanceTracker?.beginPhase(.commandEncode)
         var drawIndex = 0
 
         vrmLog("[LOOP DEBUG] About to iterate over \(itemsToRender.count) items")
@@ -3772,6 +3792,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             skinnedCullMatrix: skinnedCullMatrix
         )
 
+        performanceTracker?.endPhase(.commandEncode)
         encoder.endEncoding()
 
         // End performance tracking

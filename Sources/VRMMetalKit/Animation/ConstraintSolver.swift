@@ -32,14 +32,44 @@ import simd
 /// let solver = ConstraintSolver()
 /// solver.solve(constraints: model.nodeConstraints, nodes: model.nodes)
 /// ```
-/// Thread-safety: the solver holds **no stored state** — every working value in
-/// ``solve(constraints:nodes:)`` is a function local. It therefore conforms to
-/// checked `Sendable` (no `@unchecked` needed); the compiler verifies the
-/// absence of shared mutable state.
-public final class ConstraintSolver: Sendable {
+/// Thread-safety: the solver caches the topological sort of the most recently
+/// seen constraint array. The cached arrays are immutable after assignment, so
+/// `Sendable` conformance is preserved via `@unchecked Sendable`; the cache is
+/// only mutated during `solve(constraints:nodes:)` and the solver instance is
+/// not shared across concurrency domains.
+public final class ConstraintSolver: @unchecked Sendable {
 
-    /// Creates a constraint solver. The solver is stateless and safe to reuse across frames and models.
+    /// Cached constraint array used to detect when the topological sort can be reused.
+    private var cachedConstraints: [VRMNodeConstraint]?
+
+    /// Cached topological sort result. Immutable after assignment.
+    private var cachedSorted: [VRMNodeConstraint]?
+
+    /// Creates a constraint solver. The solver is safe to reuse across frames and models.
     public init() {}
+
+    /// Compares two constraint arrays element-wise.
+    ///
+    /// `VRMNodeConstraint` does not conform to `Equatable`, so the cache check
+    /// uses this explicit comparison to avoid depending on the public API of
+    /// the loader types.
+    private func constraintsEqual(_ lhs: [VRMNodeConstraint], _ rhs: [VRMNodeConstraint]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for (l, r) in zip(lhs, rhs) {
+            guard l.targetNode == r.targetNode else { return false }
+            switch (l.constraint, r.constraint) {
+            case (.roll(let ls, let la, let lw), .roll(let rs, let ra, let rw)):
+                guard ls == rs, la == ra, lw == rw else { return false }
+            case (.aim(let ls, let la, let lw), .aim(let rs, let ra, let rw)):
+                guard ls == rs, la == ra, lw == rw else { return false }
+            case (.rotation(let ls, let lw), .rotation(let rs, let rw)):
+                guard ls == rs, lw == rw else { return false }
+            default:
+                return false
+            }
+        }
+        return true
+    }
 
     /// Solve all constraints for the given nodes.
     ///
@@ -47,11 +77,22 @@ public final class ConstraintSolver: Sendable {
     /// rotation is finalised before any target that reads from it. Cycles are detected
     /// and skipped (with a compile-flag-gated warning).
     ///
+    /// The topological sort is cached and reused when the constraints array matches
+    /// the previous call, avoiding an O(n log n) re-sort every frame for models whose
+    /// constraint graph does not change.
+    ///
     /// - Parameters:
     ///   - constraints: The constraints to solve
     ///   - nodes: The model's nodes (will be modified)
     public func solve(constraints: [VRMNodeConstraint], nodes: [VRMNode]) {
-        let sorted = topologicalSort(constraints: constraints, nodeCount: nodes.count)
+        let sorted: [VRMNodeConstraint]
+        if let cached = cachedConstraints, constraintsEqual(cached, constraints) {
+            sorted = cachedSorted ?? []
+        } else {
+            sorted = topologicalSort(constraints: constraints, nodeCount: nodes.count)
+            cachedConstraints = constraints
+            cachedSorted = sorted
+        }
 
         for constraint in sorted {
             guard constraint.targetNode < nodes.count else { continue }

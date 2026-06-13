@@ -105,6 +105,8 @@ public class VRMMorphTargetSystem {
     public static let morphEpsilon = VRMConstants.Physics.morphEpsilon
     private var activeSet: [ActiveMorph] = []
     private var activeSetBuffer: MTLBuffer?
+    private var lastActiveSetWeights: [Float]?
+    private var candidatesBuffer: [ActiveMorph] = []
 
     // Morphed output buffers (per primitive)
     private var morphedPositionBuffers: [Int: MTLBuffer] = [:] // primitiveID -> buffer
@@ -227,20 +229,50 @@ public class VRMMorphTargetSystem {
     /// in place; returns the resulting array for callers that want to
     /// inspect it.
     public func buildActiveSet(weights: [Float]) -> [ActiveMorph] {
-        // Collect non-zero weights above epsilon
-        var candidates: [ActiveMorph] = []
-        for (index, weight) in weights.enumerated() {
-            if abs(weight) > VRMMorphTargetSystem.morphEpsilon {
-                candidates.append(ActiveMorph(index: UInt32(index), weight: weight))
+        return buildActiveSetImpl(weights)
+    }
+
+    internal func buildActiveSet(weights: ArraySlice<Float>) -> [ActiveMorph] {
+        return buildActiveSetImpl(weights)
+    }
+
+    private func buildActiveSetImpl<C: Collection>(_ weights: C) -> [ActiveMorph] where C.Element == Float {
+        let epsilon = VRMMorphTargetSystem.morphEpsilon
+
+        // Fast path when the weights are empty or all effectively zero.
+        if weights.isEmpty || weights.allSatisfy({ abs($0) <= epsilon }) {
+            activeSet = []
+            lastActiveSetWeights = []
+            return []
+        }
+
+        // Cache a concrete copy of the weights for cheap equality checks.
+        let weightsArray: [Float] = (weights as? [Float]) ?? Array(weights)
+
+        // Reuse the previously-built active set if the weights haven't changed.
+        if let last = lastActiveSetWeights,
+           last.count == weightsArray.count,
+           !zip(last, weightsArray).contains(where: { abs($0 - $1) > epsilon }) {
+            return activeSet
+        }
+
+        // Reuse the pre-sized scratch buffer instead of allocating each frame.
+        candidatesBuffer.removeAll(keepingCapacity: true)
+        for (index, weight) in weightsArray.enumerated() {
+            if abs(weight) > epsilon {
+                candidatesBuffer.append(ActiveMorph(index: UInt32(index), weight: weight))
             }
         }
 
         // Sort by absolute weight descending
-        candidates.sort { abs($0.weight) > abs($1.weight) }
+        candidatesBuffer.sort { abs($0.weight) > abs($1.weight) }
 
         // Take top K morphs
-        let activeCount = min(candidates.count, VRMMorphTargetSystem.maxActiveMorphs)
-        activeSet = Array(candidates.prefix(activeCount))
+        let activeCount = min(candidatesBuffer.count, VRMMorphTargetSystem.maxActiveMorphs)
+        activeSet.removeAll(keepingCapacity: true)
+        for i in 0..<activeCount {
+            activeSet.append(candidatesBuffer[i])
+        }
 
         // Update active set buffer
         if let buffer = activeSetBuffer, !activeSet.isEmpty {
@@ -250,6 +282,7 @@ public class VRMMorphTargetSystem {
             }
         }
 
+        lastActiveSetWeights = weightsArray
         return activeSet
     }
 
@@ -478,6 +511,8 @@ public class VRMExpressionController: @unchecked Sendable {
 
     // Track morph weights per mesh
     private var meshMorphWeights: [Int: [Float]] = [:]  // meshIndex -> morph weights for that mesh
+    private var cachedMeshMorphWeights: [Int: [Float]] = [:]
+    private var weightsDirty = true
 
     // Material color override tracking for expression-driven material colors
     private var materialColorOverrides: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
@@ -539,14 +574,14 @@ public class VRMExpressionController: @unchecked Sendable {
     public func setExpressionWeight(_ preset: VRMExpressionPreset, weight: Float) {
         let clampedWeight = clamp(weight, min: 0, max: 1)
         currentWeights[preset] = clampedWeight
-        updateMorphTargets()
+        weightsDirty = true
     }
 
     /// Sets the weight of a previously registered custom expression by name. No-op if `name` was not registered via ``registerCustomExpression(_:name:)``.
     public func setCustomExpressionWeight(_ name: String, weight: Float) {
         guard customExpressions[name] != nil else { return }
         customCurrentWeights[name] = clamp(weight, min: 0, max: 1)
-        updateMorphTargets()
+        weightsDirty = true
     }
 
     /// Set multiple custom expression weights at once (more efficient for Perfect Sync).
@@ -560,7 +595,7 @@ public class VRMExpressionController: @unchecked Sendable {
         for (name, weight) in weights where customExpressions[name] != nil {
             customCurrentWeights[name] = clamp(weight, min: 0, max: 1)
         }
-        updateMorphTargets()
+        weightsDirty = true
     }
 
     /// Current weight of a preset expression. Returns 0 when the preset
@@ -651,6 +686,7 @@ public class VRMExpressionController: @unchecked Sendable {
     private func updateMorphTargets() {
         // Rebuild per-mesh weights dynamically from active expressions
         meshMorphWeights.removeAll()
+        cachedMeshMorphWeights.removeAll()
 
         // Clear material color overrides for fresh blending
         materialColorOverrides.removeAll()
@@ -689,7 +725,20 @@ public class VRMExpressionController: @unchecked Sendable {
         if activeCount > 0 {
             vrmLog("[VRMExpressionController] Updated morph weights for \(activeCount) active expressions across \(meshMorphWeights.keys.count) meshes")
         }
+
+        // Deep-copy final weights into the cache so reads can avoid recomputation.
+        for (meshIndex, weights) in meshMorphWeights {
+            cachedMeshMorphWeights[meshIndex] = weights
+        }
+
         // Note: Renderer will push per-primitive weights; no global push here
+    }
+
+    /// Recomputes per-mesh weights only when expression weights have changed since the last read.
+    private func ensureWeightsUpdated() {
+        guard weightsDirty else { return }
+        updateMorphTargets()
+        weightsDirty = false
     }
 
     /// Applies isBinary quantization and expression-group override semantics in-place.
@@ -848,9 +897,14 @@ public class VRMExpressionController: @unchecked Sendable {
     /// primitive without knowing the underlying mesh's morph layout.
     public func weightsForMesh(_ meshIndex: Int, morphCount: Int) -> [Float] {
         guard morphCount > 0 else { return [] }
-        let arr = meshMorphWeights[meshIndex] ?? []
-        if arr.count >= morphCount { return Array(arr.prefix(morphCount)) }
-        return arr + Array(repeating: 0.0, count: morphCount - arr.count)
+        ensureWeightsUpdated()
+        let source = cachedMeshMorphWeights[meshIndex] ?? []
+        var result = [Float](repeating: 0.0, count: morphCount)
+        let copyCount = min(source.count, morphCount)
+        for i in 0..<copyCount {
+            result[i] = source[i]
+        }
+        return result
     }
 
 
