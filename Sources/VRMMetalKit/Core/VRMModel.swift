@@ -786,17 +786,24 @@ public class VRMModel: @unchecked Sendable {
         }
         
         let useParallelMeshLoading = context?.options.optimizations.contains(.parallelMeshLoading) ?? false
-        
+
+        // One limiter shared by every primitive decode across all meshes gives a
+        // true global cap on concurrent decodes (and thus peak live decode memory),
+        // independent of how the across-mesh and intra-mesh task groups multiply.
+        // Sized to the running machine's cores; only leaf decodes acquire it.
+        let decodeLimiter = AsyncConcurrencyLimiter(limit: ProcessInfo.processInfo.activeProcessorCount)
+
         if useParallelMeshLoading && meshCount > 1 {
             // Use parallel mesh loading for better performance
             if !skipLogging {
                 vrmLog("[VRMModel] Using parallel mesh loading (\(meshCount) meshes)")
             }
-            
+
             let parallelLoader = ParallelMeshLoader(
                 device: device,
                 document: gltf,
-                bufferLoader: bufferLoader
+                bufferLoader: bufferLoader,
+                concurrencyLimiter: decodeLimiter
             )
             
             let indices = Array(0..<meshCount)
@@ -830,7 +837,7 @@ public class VRMModel: @unchecked Sendable {
                 await context?.updateProgress(itemsCompleted: meshIndex, totalItems: meshCount)
                 
                 if let gltfMesh = gltf.meshes?[safe: meshIndex] {
-                    let mesh = try await VRMMesh.load(from: gltfMesh, document: gltf, device: device, bufferLoader: bufferLoader)
+                    let mesh = try await VRMMesh.load(from: gltfMesh, document: gltf, device: device, bufferLoader: bufferLoader, concurrencyLimiter: decodeLimiter)
                     meshes.append(mesh)
                 }
             }

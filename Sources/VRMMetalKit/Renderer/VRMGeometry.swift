@@ -66,7 +66,8 @@ public class VRMMesh: @unchecked Sendable {
     public static func load(from gltfMesh: GLTFMesh,
                            document: GLTFDocument,
                            device: MTLDevice?,
-                           bufferLoader: BufferLoader) async throws -> VRMMesh {
+                           bufferLoader: BufferLoader,
+                           concurrencyLimiter: AsyncConcurrencyLimiter? = nil) async throws -> VRMMesh {
         let mesh = VRMMesh(name: gltfMesh.name)
         let primitiveCount = gltfMesh.primitives.count
         vrmLog("[VRMMesh] Loading mesh \(gltfMesh.name ?? "unnamed") with \(primitiveCount) primitives")
@@ -84,26 +85,38 @@ public class VRMMesh: @unchecked Sendable {
             PrimitiveLoadJob(index: index, primitive: gltfPrimitive,
                              document: document, device: device, bufferLoader: bufferLoader)
         }
-        // Decode primitives through a sliding window sized to the running machine
-        // (its active core count). This is NOT an arbitrary throttle: Swift's
-        // cooperative pool already executes only core-count tasks in parallel, so a
-        // core-count window preserves full decode throughput while preventing this
-        // group — which is itself run per-mesh inside ParallelMeshLoader's group, so
-        // the levels multiply (meshes × primitives) — from holding every primitive's
-        // intermediate accessor arrays + MTLBuffers live at once on a many-primitive
-        // mesh. Scales up automatically on machines with more cores.
+        // Two complementary, machine-scaled bounds (neither is an arbitrary cap):
+        //   1. A per-mesh sliding window sizes how many decode tasks are *created*
+        //      at once for this mesh (so a many-primitive mesh doesn't spawn
+        //      thousands of tasks). Sized to the core count; Swift's cooperative
+        //      pool already runs only core-count tasks in parallel, so this
+        //      preserves full throughput.
+        //   2. The optional `concurrencyLimiter`, shared across ALL meshes, caps how
+        //      many primitive decodes *execute* at once globally. Because this group
+        //      is itself run per-mesh inside ParallelMeshLoader's group, the levels
+        //      multiply (meshes × primitives); the shared limiter is the true global
+        //      bound on peak live memory (intermediate accessor arrays + MTLBuffers).
+        //      Only the leaf decode acquires a permit — mesh-orchestration tasks
+        //      never do — so the nesting cannot deadlock.
         let maxInFlight = max(1, min(primitiveCount, ProcessInfo.processInfo.activeProcessorCount))
         let ordered = try await withThrowingTaskGroup(of: (Int, VRMPrimitive).self) { group in
             var nextJob = 0
             func addJob(_ job: PrimitiveLoadJob) {
                 group.addTask {
-                    let primitive = try await VRMPrimitive.load(
-                        from: job.primitive,
-                        document: job.document,
-                        device: job.device,
-                        bufferLoader: job.bufferLoader
-                    )
-                    return (job.index, primitive)
+                    await concurrencyLimiter?.acquire()
+                    do {
+                        let primitive = try await VRMPrimitive.load(
+                            from: job.primitive,
+                            document: job.document,
+                            device: job.device,
+                            bufferLoader: job.bufferLoader
+                        )
+                        await concurrencyLimiter?.release()
+                        return (job.index, primitive)
+                    } catch {
+                        await concurrencyLimiter?.release()
+                        throw error
+                    }
                 }
             }
             while nextJob < jobs.count && nextJob < maxInFlight {
