@@ -33,7 +33,7 @@ is **advisory only**.
 | 4 | MToon shader specialisation via `[[function_constant]]` | [#193](https://github.com/arkavo-org/VRMMetalKit/issues/193) | ✅ landed (PR #344) | |
 | 5 | Mask-dispatch morph targets | [#194](https://github.com/arkavo-org/VRMMetalKit/issues/194) | ✅ landed (PR #344) | orthogonal to [#150](https://github.com/arkavo-org/VRMMetalKit/issues/150) |
 | 6 | Vertex layout: position-only + attribute split | [#195](https://github.com/arkavo-org/VRMMetalKit/issues/195) | open | |
-| 7 | Half-precision MToon fragment math | [#196](https://github.com/arkavo-org/VRMMetalKit/issues/196) | open | metallibs are FP16-compiled, but demoting fragment *intermediates* to `half` is still open |
+| 7 | Half-precision MToon fragment math | [#196](https://github.com/arkavo-org/VRMMetalKit/issues/196) | ✅ done (close issue) | shipped: shaders build with `-DMTOON_USE_HALF_PRECISION=1`, so both texture returns *and* lighting intermediates (`mtoon_float`) are `half`; verified the committed metallib is the half build |
 | 8 | Tile-memory pass merge | folded into [#192](https://github.com/arkavo-org/VRMMetalKit/issues/192) | open | |
 | 9 | MPS-backed Kalman face smoothing | [#198](https://github.com/arkavo-org/VRMMetalKit/issues/198) | wontfix | measured net-negative: ~52–280 B/frame, ~15 µs CPU; a GPU roundtrip matches/exceeds it and there is no `MTLDevice` in the face driver |
 | 10 | Dual-quaternion joint palette | [#197](https://github.com/arkavo-org/VRMMetalKit/issues/197) | open | |
