@@ -141,8 +141,15 @@ public struct RendererConfig {
     /// caches directory.
     public var pipelineArchiveDirectory: URL? = nil
 
+    /// Performance: when `true` (default), ``VRMRenderer`` builds per-material
+    /// MToon fragment-shader variants using Metal function constants. This
+    /// dead-strips unused texture samples and alpha-mode branches for each
+    /// material. Disable to force the dynamic fallback path that reads feature
+    /// flags from the uniform buffer at runtime.
+    public var enableMToonFunctionConstants: Bool = true
+
     /// Creates a renderer configuration. Defaults match the production baseline.
-    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false, dualQuaternionSkinning: Bool = false) {
+    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false, dualQuaternionSkinning: Bool = false, enableMToonFunctionConstants: Bool = true) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
         self.renderFilter = renderFilter
@@ -154,6 +161,7 @@ public struct RendererConfig {
         self.alphaToCoverageForMASK = alphaToCoverageForMASK
         self.synchronousSpringBone = synchronousSpringBone
         self.dualQuaternionSkinning = dualQuaternionSkinning
+        self.enableMToonFunctionConstants = enableMToonFunctionConstants
     }
 }
 

@@ -303,6 +303,92 @@ public class VRMMorphTargetSystem {
 
     // MARK: - SoA Morph Accumulation with Active Set
 
+    /// Encodes the morph-accumulation compute dispatch for one primitive into an
+    /// existing `MTLComputeCommandEncoder`.
+    ///
+    /// Use this overload when batching multiple primitives into a single compute
+    /// pass. The caller is responsible for creating/ending the encoder and for
+    /// skipping primitives whose active set is empty (the renderer binds the base
+    /// vertex buffer in that case).
+    ///
+    /// - Parameters:
+    ///   - encoder: The compute encoder to receive the dispatch.
+    ///   - basePositions: Per-vertex base positions (read).
+    ///   - deltaPositions: SoA delta buffer
+    ///     `[morph0[v0..vN], morph1[v0..vN], …]` sized at least
+    ///     `morphCount * vertexCount * sizeof(SIMD3<Float>)`.
+    ///   - outputPositions: Per-vertex output buffer (write).
+    ///   - vertexCount: Number of vertices in this primitive.
+    ///   - morphCount: Total morph targets in `deltaPositions` (not the
+    ///     active count).
+    /// - Returns: `true` when the dispatch was encoded; `false` when the active
+    ///   set is empty, the active-set buffer or pipeline state is missing, or
+    ///   (DEBUG builds only) the delta buffer is smaller than
+    ///   `morphCount * vertexCount` requires.
+    public func applyMorphsCompute(
+        encoder: MTLComputeCommandEncoder,
+        basePositions: MTLBuffer,
+        deltaPositions: MTLBuffer,  // SoA layout: [morph0[v0..vN], morph1[v0..vN], ...]
+        outputPositions: MTLBuffer,
+        vertexCount: Int,
+        morphCount: Int
+    ) -> Bool {
+        guard !activeSet.isEmpty else {
+            vrmLog("⚠️ [VRMMorphTargetSystem] Active set is empty, skipping batched morph compute")
+            return false
+        }
+
+        guard let activeSetBuffer = activeSetBuffer else {
+            vrmLog("⚠️ [VRMMorphTargetSystem] Active set buffer not initialized, skipping morph compute")
+            return false
+        }
+
+        // Verify delta buffer size matches expected T*V (in DEBUG only)
+        #if DEBUG
+        let expectedDeltaSize = morphCount * vertexCount * MemoryLayout<SIMD3<Float>>.stride
+        if deltaPositions.length < expectedDeltaSize {
+            vrmLog("❌ [VRMMorphTargetSystem] DeltaPos buffer size mismatch")
+            vrmLog("  Expected: \(expectedDeltaSize) bytes for T=\(morphCount) V=\(vertexCount)")
+            vrmLog("  Actual: \(deltaPositions.length) bytes")
+            // Return false to skip compute dispatch and fall back to CPU path
+            return false
+        }
+        #endif
+
+        guard let pipelineState = morphAccumulatePipelineState else {
+            return false
+        }
+
+        encoder.setComputePipelineState(pipelineState)
+
+        // Set buffers
+        encoder.setBuffer(basePositions, offset: 0, index: 0)
+        encoder.setBuffer(deltaPositions, offset: 0, index: 1)
+        encoder.setBuffer(activeSetBuffer, offset: 0, index: 2)
+
+        // Set constants
+        var vCount = UInt32(vertexCount)
+        var mCount = UInt32(morphCount)
+        var aCount = UInt32(activeSet.count)
+
+        encoder.setBytes(&vCount, length: MemoryLayout<UInt32>.size, index: 3)
+        encoder.setBytes(&mCount, length: MemoryLayout<UInt32>.size, index: 4)
+        encoder.setBytes(&aCount, length: MemoryLayout<UInt32>.size, index: 5)
+        encoder.setBuffer(outputPositions, offset: 0, index: 6)
+
+        // Dispatch threads
+        let threadsPerThreadgroup = MTLSize(width: 256, height: 1, depth: 1)
+        let threadgroupsPerGrid = MTLSize(
+            width: (vertexCount + 255) / 256,
+            height: 1,
+            depth: 1
+        )
+
+        encoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
+
+        return true
+    }
+
     /// Encodes the morph-accumulation compute pass for one primitive into `commandBuffer`.
     ///
     /// When the active set is empty, encodes a blit that copies
@@ -351,61 +437,22 @@ public class VRMMorphTargetSystem {
             return true
         }
 
-        guard let activeSetBuffer = activeSetBuffer else {
-            vrmLog("⚠️ [VRMMorphTargetSystem] Active set buffer not initialized, skipping morph compute")
-            return false
-        }
-
-        // Verify delta buffer size matches expected T*V (in DEBUG only)
-        #if DEBUG
-        let expectedDeltaSize = morphCount * vertexCount * MemoryLayout<SIMD3<Float>>.stride
-        if deltaPositions.length < expectedDeltaSize {
-            vrmLog("❌ [VRMMorphTargetSystem] DeltaPos buffer size mismatch")
-            vrmLog("  Expected: \(expectedDeltaSize) bytes for T=\(morphCount) V=\(vertexCount)")
-            vrmLog("  Actual: \(deltaPositions.length) bytes")
-            // Return false to skip compute dispatch and fall back to CPU path
-            return false
-        }
-        #endif
-
-        guard let pipelineState = morphAccumulatePipelineState else {
-            return false
-        }
-
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return false
         }
         computeEncoder.label = "Morph Accumulate"
 
-        computeEncoder.setComputePipelineState(pipelineState)
-
-        // Set buffers
-        computeEncoder.setBuffer(basePositions, offset: 0, index: 0)
-        computeEncoder.setBuffer(deltaPositions, offset: 0, index: 1)
-        computeEncoder.setBuffer(activeSetBuffer, offset: 0, index: 2)
-
-        // Set constants
-        var vCount = UInt32(vertexCount)
-        var mCount = UInt32(morphCount)
-        var aCount = UInt32(activeSet.count)
-
-        computeEncoder.setBytes(&vCount, length: MemoryLayout<UInt32>.size, index: 3)
-        computeEncoder.setBytes(&mCount, length: MemoryLayout<UInt32>.size, index: 4)
-        computeEncoder.setBytes(&aCount, length: MemoryLayout<UInt32>.size, index: 5)
-        computeEncoder.setBuffer(outputPositions, offset: 0, index: 6)
-
-        // Dispatch threads
-        let threadsPerThreadgroup = MTLSize(width: 256, height: 1, depth: 1)
-        let threadgroupsPerGrid = MTLSize(
-            width: (vertexCount + 255) / 256,
-            height: 1,
-            depth: 1
+        let success = applyMorphsCompute(
+            encoder: computeEncoder,
+            basePositions: basePositions,
+            deltaPositions: deltaPositions,
+            outputPositions: outputPositions,
+            vertexCount: vertexCount,
+            morphCount: morphCount
         )
 
-        computeEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
         computeEncoder.endEncoding()
-
-        return true
+        return success
     }
 
     // Removed legacy GPU morph application - only compute path exists

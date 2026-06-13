@@ -38,6 +38,7 @@ public struct PerformanceMetrics: Codable {
         case culledDraws
         case stateChanges
         case morphComputes
+        case sleepingBones
         case triangleCount
         case vertexCount
         case textureBindings
@@ -69,6 +70,7 @@ public struct PerformanceMetrics: Codable {
         try container.encode(culledDraws, forKey: .culledDraws)
         try container.encode(stateChanges, forKey: .stateChanges)
         try container.encode(morphComputes, forKey: .morphComputes)
+        try container.encode(sleepingBones, forKey: .sleepingBones)
         try container.encode(triangleCount, forKey: .triangleCount)
         try container.encode(vertexCount, forKey: .vertexCount)
         try container.encode(textureBindings, forKey: .textureBindings)
@@ -96,6 +98,7 @@ public struct PerformanceMetrics: Codable {
         culledDraws = (try? container.decode(Int.self, forKey: .culledDraws)) ?? 0
         stateChanges = try container.decode(Int.self, forKey: .stateChanges)
         morphComputes = try container.decode(Int.self, forKey: .morphComputes)
+        sleepingBones = (try? container.decode(Int.self, forKey: .sleepingBones)) ?? 0
         triangleCount = try container.decode(Int.self, forKey: .triangleCount)
         vertexCount = try container.decode(Int.self, forKey: .vertexCount)
         textureBindings = try container.decode(Int.self, forKey: .textureBindings)
@@ -126,6 +129,8 @@ public struct PerformanceMetrics: Codable {
     public var stateChanges: Int = 0
     /// Average morph-target compute dispatches per frame.
     public var morphComputes: Int = 0
+    /// Average spring-bone joints asleep per frame.
+    public var sleepingBones: Int = 0
     /// Average triangles submitted per frame.
     public var triangleCount: Int = 0
     /// Average vertices submitted per frame.
@@ -177,6 +182,7 @@ public class PerformanceTracker {
     private var totalCulledDraws: Int = 0
     private var totalStateChanges: Int = 0
     private var totalMorphComputes: Int = 0
+    private var totalSleepingBones: Int = 0
     private var totalTriangles: Int = 0
     private var totalVertices: Int = 0
     private var totalTextureBindings: Int = 0
@@ -190,6 +196,7 @@ public class PerformanceTracker {
         var culledDraws: Int = 0
         var stateChanges: Int = 0
         var morphComputes: Int = 0
+        var sleepingBones: Int = 0
         var triangles: Int = 0
         var vertices: Int = 0
         var textureBindings: Int = 0
@@ -223,6 +230,7 @@ public class PerformanceTracker {
         totalCulledDraws += currentFrameMetrics.culledDraws
         totalStateChanges += currentFrameMetrics.stateChanges
         totalMorphComputes += currentFrameMetrics.morphComputes
+        totalSleepingBones += currentFrameMetrics.sleepingBones
         totalTriangles += currentFrameMetrics.triangles
         totalVertices += currentFrameMetrics.vertices
         totalTextureBindings += currentFrameMetrics.textureBindings
@@ -271,6 +279,11 @@ public class PerformanceTracker {
         currentFrameMetrics.morphComputes += 1
     }
 
+    /// Track the number of spring-bone joints considered asleep this frame.
+    public func recordSleepingBones(_ count: Int) {
+        currentFrameMetrics.sleepingBones = count
+    }
+
     /// Classification of state-change events recorded by ``PerformanceTracker/recordStateChange(type:)``.
     public enum StateChangeType {
         /// A render-pipeline state change.
@@ -314,6 +327,7 @@ public class PerformanceTracker {
             metrics.culledDraws = totalCulledDraws / frameCount
             metrics.stateChanges = totalStateChanges / frameCount
             metrics.morphComputes = totalMorphComputes / frameCount
+            metrics.sleepingBones = totalSleepingBones / frameCount
             metrics.triangleCount = totalTriangles / frameCount
             metrics.vertexCount = totalVertices / frameCount
             metrics.textureBindings = totalTextureBindings / frameCount
@@ -338,6 +352,7 @@ public class PerformanceTracker {
         totalCulledDraws = 0
         totalStateChanges = 0
         totalMorphComputes = 0
+        totalSleepingBones = 0
         totalTriangles = 0
         totalVertices = 0
         totalTextureBindings = 0

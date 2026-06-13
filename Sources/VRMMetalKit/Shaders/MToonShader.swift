@@ -390,3 +390,119 @@ public enum MToonOutlineWidthMode: String {
     /// Outline width is measured in screen units.
     case screenCoordinates = "screenCoordinates"
 }
+
+// MARK: - Function Constant Specialization
+
+/// Feature flags used to specialize the MToon fragment shader at pipeline
+/// creation time via Metal function constants.
+///
+/// Each unique combination produces a distinct compiled pipeline where unused
+/// texture samples and alpha-mode branches are dead-stripped. The
+/// ``useMaterialFlags`` sentinel selects the dynamic fallback path that reads
+/// feature flags from the uniform buffer at runtime, matching the historical
+/// behavior.
+public struct MToonFunctionConstantKey: Hashable, Sendable {
+    /// When `true`, the shader reads feature flags from the uniform buffer
+    /// instead of the function constants. This is the dynamic fallback path.
+    public var useMaterialFlags: Bool
+
+    public var hasBaseColorTexture: Bool
+    public var hasShadeMultiplyTexture: Bool
+    public var hasShadingShiftTexture: Bool
+    public var hasNormalTexture: Bool
+    public var hasMatcapTexture: Bool
+    public var hasRimMultiplyTexture: Bool
+    public var hasEmissiveTexture: Bool
+    public var hasOcclusionTexture: Bool
+    public var hasUvAnimationMaskTexture: Bool
+
+    /// 0=OPAQUE, 1=MASK, 2=BLEND, 3=MASK_A2C.
+    public var alphaMode: UInt8
+
+    public init(
+        useMaterialFlags: Bool = false,
+        hasBaseColorTexture: Bool = false,
+        hasShadeMultiplyTexture: Bool = false,
+        hasShadingShiftTexture: Bool = false,
+        hasNormalTexture: Bool = false,
+        hasMatcapTexture: Bool = false,
+        hasRimMultiplyTexture: Bool = false,
+        hasEmissiveTexture: Bool = false,
+        hasOcclusionTexture: Bool = false,
+        hasUvAnimationMaskTexture: Bool = false,
+        alphaMode: UInt8 = 0
+    ) {
+        self.useMaterialFlags = useMaterialFlags
+        self.hasBaseColorTexture = hasBaseColorTexture
+        self.hasShadeMultiplyTexture = hasShadeMultiplyTexture
+        self.hasShadingShiftTexture = hasShadingShiftTexture
+        self.hasNormalTexture = hasNormalTexture
+        self.hasMatcapTexture = hasMatcapTexture
+        self.hasRimMultiplyTexture = hasRimMultiplyTexture
+        self.hasEmissiveTexture = hasEmissiveTexture
+        self.hasOcclusionTexture = hasOcclusionTexture
+        self.hasUvAnimationMaskTexture = hasUvAnimationMaskTexture
+        self.alphaMode = alphaMode
+    }
+
+    /// The dynamic fallback key that preserves pre-specialization behavior.
+    public static let fallback = MToonFunctionConstantKey(useMaterialFlags: true)
+
+    /// A key derived from a material's actual feature flags and alpha mode.
+    public init(material: MToonMaterialUniforms) {
+        self.useMaterialFlags = false
+        self.hasBaseColorTexture = material.hasBaseColorTexture != 0
+        self.hasShadeMultiplyTexture = material.hasShadeMultiplyTexture != 0
+        self.hasShadingShiftTexture = material.hasShadingShiftTexture != 0
+        self.hasNormalTexture = material.hasNormalTexture != 0
+        self.hasMatcapTexture = material.hasMatcapTexture != 0
+        self.hasRimMultiplyTexture = material.hasRimMultiplyTexture != 0
+        self.hasEmissiveTexture = material.hasEmissiveTexture != 0
+        self.hasOcclusionTexture = material.hasOcclusionTexture != 0
+        self.hasUvAnimationMaskTexture = material.hasUvAnimationMaskTexture != 0
+        self.alphaMode = UInt8(material.alphaMode)
+    }
+
+    /// Builds the Metal function-constant payload for this key.
+    public func makeFunctionConstantValues() -> MTLFunctionConstantValues {
+        let values = MTLFunctionConstantValues()
+
+        var useMaterialFlags = self.useMaterialFlags
+        values.setConstantValue(&useMaterialFlags, type: .bool, index: 0)
+
+        var hasBaseColorTexture = self.hasBaseColorTexture
+        values.setConstantValue(&hasBaseColorTexture, type: .bool, index: 1)
+
+        var hasShadeMultiplyTexture = self.hasShadeMultiplyTexture
+        values.setConstantValue(&hasShadeMultiplyTexture, type: .bool, index: 2)
+
+        var hasShadingShiftTexture = self.hasShadingShiftTexture
+        values.setConstantValue(&hasShadingShiftTexture, type: .bool, index: 3)
+
+        var hasNormalTexture = self.hasNormalTexture
+        values.setConstantValue(&hasNormalTexture, type: .bool, index: 4)
+
+        var hasMatcapTexture = self.hasMatcapTexture
+        values.setConstantValue(&hasMatcapTexture, type: .bool, index: 5)
+
+        var hasRimMultiplyTexture = self.hasRimMultiplyTexture
+        values.setConstantValue(&hasRimMultiplyTexture, type: .bool, index: 6)
+
+        var hasEmissiveTexture = self.hasEmissiveTexture
+        values.setConstantValue(&hasEmissiveTexture, type: .bool, index: 7)
+
+        var hasOcclusionTexture = self.hasOcclusionTexture
+        values.setConstantValue(&hasOcclusionTexture, type: .bool, index: 8)
+
+        var hasUvAnimationMaskTexture = self.hasUvAnimationMaskTexture
+        values.setConstantValue(&hasUvAnimationMaskTexture, type: .bool, index: 9)
+
+        var alphaMode = UInt32(self.alphaMode)
+        values.setConstantValue(&alphaMode, type: .uint, index: 10)
+
+        var hasOutlineWidthMultiplyTexture: Bool = false
+        values.setConstantValue(&hasOutlineWidthMultiplyTexture, type: .bool, index: 11)
+
+        return values
+    }
+}
