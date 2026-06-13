@@ -1,7 +1,7 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static gputrace
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline
 
 help:
 	@echo "VRMMetalKit Build Targets:"
@@ -13,6 +13,7 @@ help:
 	@echo "  make clean         - Remove temporary build files"
 	@echo "  make test          - Run Swift tests"
 	@echo "  make gputrace      - Capture a .gputrace of the bundled avatar render (inspect with gpudebug)"
+	@echo "  make gputrace-baseline - Capture a .gputrace matching the VRMBenchmark baseline (animated + spring, 1024px)"
 	@echo "  make docs          - Preview documentation locally"
 	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
 
@@ -125,6 +126,27 @@ gputrace:
 	@METAL_CAPTURE_ENABLED=1 VRM_GPUTRACE_OUT=$(GPUTRACE_OUT) VRM_GPUTRACE_MODEL=$(GPUTRACE_MODEL) VRM_GPUTRACE_SIZE=$(GPUTRACE_SIZE) \
 		swift test --filter GPUTraceCaptureTests --disable-sandbox
 	@echo "✅ Inspect with: gpudebug -t $(GPUTRACE_OUT)"
+
+# Capture a GPU trace that matches the VRMBenchmark render baseline: the actual
+# AvatarSample_A model at 1024px, standard radiometric lighting, animated, with
+# spring-bone physics — so the trace's encoders (SpringBone compute + render) and
+# GPU time line up with the benchmark's gpu p95. Override any path/size/animation
+# via the GPUTRACE_BASELINE_* / GPUTRACE_VRM / GPUTRACE_VRMA variables.
+GPUTRACE_BASELINE_OUT  ?= /tmp/vrmmetalkit/baseline.gputrace
+GPUTRACE_BASELINE_SIZE ?= 1024
+GPUTRACE_VRM           ?= $(CURDIR)/AvatarSample_A.vrm.glb
+GPUTRACE_VRMA          ?= $(CURDIR)/VRMA_01.vrma
+gputrace-baseline:
+	@echo "🎞️  Capturing baseline GPU trace ($(GPUTRACE_BASELINE_SIZE)px, standard lighting, animated + spring) to $(GPUTRACE_BASELINE_OUT)..."
+	@METAL_CAPTURE_ENABLED=1 \
+		VRM_GPUTRACE_OUT=$(GPUTRACE_BASELINE_OUT) \
+		VRM_GPUTRACE_SIZE=$(GPUTRACE_BASELINE_SIZE) \
+		VRM_GPUTRACE_LIGHTING=standard \
+		VRM_GPUTRACE_SPRING=1 \
+		VRM_GPUTRACE_VRMA=$(GPUTRACE_VRMA) \
+		VRM_TEST_VRM1_PATH=$(GPUTRACE_VRM) \
+		swift test --filter GPUTraceCaptureTests --disable-sandbox
+	@echo "✅ Inspect with: gpudebug -t $(GPUTRACE_BASELINE_OUT)"
 
 # Build the package
 build:
