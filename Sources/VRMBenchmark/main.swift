@@ -37,6 +37,7 @@ struct BenchmarkOptions {
     var outlineWidth: Float = 0.02
     var enableSpringBone: Bool = false
     var wireframe: Bool = false
+    var depthPrepass: Bool = false
     var lighting: String = "standard"
     var debugUVs: Int32 = 0
     var cameraOffsetY: Float = 0  // Shift camera target/eye in Y to push avatar off-screen for cull tests
@@ -144,6 +145,8 @@ func parseArguments() -> BenchmarkOptions? {
             opts.enableSpringBone = true
         case "--wireframe":
             opts.wireframe = true
+        case "--depth-prepass":
+            opts.depthPrepass = true
         case "--lighting":
             guard let v = nextValue(for: a) else { return nil }
             opts.lighting = v.lowercased()
@@ -657,6 +660,7 @@ struct VRMBenchmarkCLI {
         var config = RendererConfig()
         config.sampleCount = opts.sampleCount
         config.strict = .off
+        config.enableDepthPrepass = opts.depthPrepass
         let renderer = VRMRenderer(device: device, config: config)
         renderer.performanceTracker = PerformanceTracker()
         renderer.loadModel(model)
