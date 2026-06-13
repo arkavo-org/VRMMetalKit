@@ -84,8 +84,18 @@ public class VRMMesh: @unchecked Sendable {
             PrimitiveLoadJob(index: index, primitive: gltfPrimitive,
                              document: document, device: device, bufferLoader: bufferLoader)
         }
+        // Decode primitives through a sliding window sized to the running machine
+        // (its active core count). This is NOT an arbitrary throttle: Swift's
+        // cooperative pool already executes only core-count tasks in parallel, so a
+        // core-count window preserves full decode throughput while preventing this
+        // group — which is itself run per-mesh inside ParallelMeshLoader's group, so
+        // the levels multiply (meshes × primitives) — from holding every primitive's
+        // intermediate accessor arrays + MTLBuffers live at once on a many-primitive
+        // mesh. Scales up automatically on machines with more cores.
+        let maxInFlight = max(1, min(primitiveCount, ProcessInfo.processInfo.activeProcessorCount))
         let ordered = try await withThrowingTaskGroup(of: (Int, VRMPrimitive).self) { group in
-            for job in jobs {
+            var nextJob = 0
+            func addJob(_ job: PrimitiveLoadJob) {
                 group.addTask {
                     let primitive = try await VRMPrimitive.load(
                         from: job.primitive,
@@ -96,9 +106,15 @@ public class VRMMesh: @unchecked Sendable {
                     return (job.index, primitive)
                 }
             }
+            while nextJob < jobs.count && nextJob < maxInFlight {
+                addJob(jobs[nextJob]); nextJob += 1
+            }
             var slots = [VRMPrimitive?](repeating: nil, count: primitiveCount)
             for try await (index, primitive) in group {
                 slots[index] = primitive
+                if nextJob < jobs.count {
+                    addJob(jobs[nextJob]); nextJob += 1
+                }
             }
             return slots.compactMap { $0 }
         }
