@@ -33,20 +33,21 @@ is **advisory only**.
 | 4 | MToon shader specialisation via `[[function_constant]]` | [#193](https://github.com/arkavo-org/VRMMetalKit/issues/193) | ✅ landed (PR #344) | |
 | 5 | Mask-dispatch morph targets | [#194](https://github.com/arkavo-org/VRMMetalKit/issues/194) | ✅ landed (PR #344) | orthogonal to [#150](https://github.com/arkavo-org/VRMMetalKit/issues/150) |
 | 6 | Vertex layout: position-only + attribute split | [#195](https://github.com/arkavo-org/VRMMetalKit/issues/195) | open | |
-| 7 | Half-precision MToon fragment math | [#196](https://github.com/arkavo-org/VRMMetalKit/issues/196) | ✅ landed (FP16 metallibs) | |
+| 7 | Half-precision MToon fragment math | [#196](https://github.com/arkavo-org/VRMMetalKit/issues/196) | open | metallibs are FP16-compiled, but demoting fragment *intermediates* to `half` is still open |
 | 8 | Tile-memory pass merge | folded into [#192](https://github.com/arkavo-org/VRMMetalKit/issues/192) | open | |
-| 9 | MPS-backed Kalman face smoothing | [#198](https://github.com/arkavo-org/VRMMetalKit/issues/198) | open | |
+| 9 | MPS-backed Kalman face smoothing | [#198](https://github.com/arkavo-org/VRMMetalKit/issues/198) | wontfix | measured net-negative: ~52–280 B/frame, ~15 µs CPU; a GPU roundtrip matches/exceeds it and there is no `MTLDevice` in the face driver |
 | 10 | Dual-quaternion joint palette | [#197](https://github.com/arkavo-org/VRMMetalKit/issues/197) | open | |
 | + | GPU occlusion queries for crowd avatars | [#199](https://github.com/arkavo-org/VRMMetalKit/issues/199) | open | extends [#91](https://github.com/arkavo-org/VRMMetalKit/issues/91) / [#154](https://github.com/arkavo-org/VRMMetalKit/issues/154) |
 
 ## Loading-pipeline wins (not yet filed)
 
-Orthogonal to the render-path items above; surfaced by the load-time review,
-no issues yet:
+Orthogonal to the render-path items above; surfaced by the load-time review.
+**All three landed** — measured ~49% load-time reduction (144 ms → 73 ms, max
+preset, `AvatarSample_A_1.0` via `VRMBenchmark --mode load`):
 
-- Parallel primitive decoding *within* each mesh (current parallelism is per-mesh).
-- Pre-sized accessor decode arrays (avoid reallocations during accessor decode).
-- Coalesced `MainActor` progress callbacks (batch hops instead of per-step).
+- ✅ Parallel primitive decoding *within* each mesh (was per-mesh only).
+- ✅ Pre-sized accessor decode arrays (`reserveCapacity` before the decode loop).
+- ✅ Coalesced `MainActor` progress callbacks (≤~20 hops instead of per-item).
 
 ## Why this lives in the repo as well as in issues
 

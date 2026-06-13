@@ -132,13 +132,20 @@ public final class ParallelTextureLoader: @unchecked Sendable {
                 }
             }
 
+            // Coalesce progress hops to the main actor: report at most ~20 times
+            // (every `batchSize` completions, plus a guaranteed final update)
+            // instead of once per texture.
+            let batchSize = max(1, totalCount / 20)
             for await (index, texture) in group {
                 loaded += 1
                 if let texture {
                     results[index] = texture
                 }
-                await MainActor.run {
-                    progressCallback?(loaded, totalCount)
+                if loaded % batchSize == 0 || loaded == totalCount {
+                    let snapshot = loaded
+                    await MainActor.run {
+                        progressCallback?(snapshot, totalCount)
+                    }
                 }
             }
         }

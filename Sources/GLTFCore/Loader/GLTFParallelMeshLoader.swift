@@ -85,13 +85,20 @@ public final class GLTFParallelMeshLoader<Mesh: Sendable>: @unchecked Sendable {
                 }
             }
 
+            // Coalesce progress hops to the main actor: report at most ~20 times
+            // (every `batchSize` completions, plus a guaranteed final update)
+            // instead of once per mesh, so a many-mesh load doesn't flood MainActor.
+            let batchSize = max(1, totalCount / 20)
             for await (index, mesh) in group {
                 loaded += 1
                 if let mesh {
                     results[index] = mesh
                 }
-                await MainActor.run {
-                    progressCallback?(loaded, totalCount)
+                if loaded % batchSize == 0 || loaded == totalCount {
+                    let snapshot = loaded
+                    await MainActor.run {
+                        progressCallback?(snapshot, totalCount)
+                    }
                 }
             }
         }

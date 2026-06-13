@@ -21,6 +21,19 @@ import simd
 
 // MARK: - VRM Mesh
 
+/// Read-only inputs for loading a single primitive, bundled so they can cross a
+/// task boundary. `@unchecked Sendable` is sound because the glTF document and
+/// buffer loader are immutable during loading and already shared concurrently by
+/// the across-mesh parallel path; the wrapper only launders their non-Sendable
+/// (cross-module) types past Swift 6 region isolation.
+private struct PrimitiveLoadJob: @unchecked Sendable {
+    let index: Int
+    let primitive: GLTFPrimitive
+    let document: GLTFDocument
+    let device: MTLDevice?
+    let bufferLoader: BufferLoader
+}
+
 /// A renderable mesh: a named container of ``VRMPrimitive`` draw calls.
 ///
 /// VRM meshes are loaded from glTF `meshes` entries. A node references one
@@ -55,18 +68,41 @@ public class VRMMesh: @unchecked Sendable {
                            device: MTLDevice?,
                            bufferLoader: BufferLoader) async throws -> VRMMesh {
         let mesh = VRMMesh(name: gltfMesh.name)
-        vrmLog("[VRMMesh] Loading mesh \(gltfMesh.name ?? "unnamed") with \(gltfMesh.primitives.count) primitives")
+        let primitiveCount = gltfMesh.primitives.count
+        vrmLog("[VRMMesh] Loading mesh \(gltfMesh.name ?? "unnamed") with \(primitiveCount) primitives")
 
-        for (primitiveIndex, gltfPrimitive) in gltfMesh.primitives.enumerated() {
-            vrmLog("[VRMMesh] Loading primitive \(primitiveIndex)")
-            let primitive = try await VRMPrimitive.load(
-                from: gltfPrimitive,
-                document: document,
-                device: device,
-                bufferLoader: bufferLoader
-            )
-            mesh.primitives.append(primitive)
+        // Decode primitives concurrently. Each VRMPrimitive owns independent CPU/GPU
+        // resources, and BufferLoader + the glTF document are already accessed
+        // concurrently (and read-only) by the across-mesh parallel path, so
+        // intra-mesh parallelism adds no new sharing hazard. The read-only load
+        // inputs are laundered through an `@unchecked Sendable` job holder (the same
+        // idiom ParallelMeshLoader uses) since GLTFDocument/GLTFPrimitive are not
+        // Sendable across modules. Results are reassembled in source order to keep
+        // loading deterministic (VRM models are commonly one mesh with many
+        // primitives, so this is the dominant load-time win).
+        let jobs = gltfMesh.primitives.enumerated().map { index, gltfPrimitive in
+            PrimitiveLoadJob(index: index, primitive: gltfPrimitive,
+                             document: document, device: device, bufferLoader: bufferLoader)
         }
+        let ordered = try await withThrowingTaskGroup(of: (Int, VRMPrimitive).self) { group in
+            for job in jobs {
+                group.addTask {
+                    let primitive = try await VRMPrimitive.load(
+                        from: job.primitive,
+                        document: job.document,
+                        device: job.device,
+                        bufferLoader: job.bufferLoader
+                    )
+                    return (job.index, primitive)
+                }
+            }
+            var slots = [VRMPrimitive?](repeating: nil, count: primitiveCount)
+            for try await (index, primitive) in group {
+                slots[index] = primitive
+            }
+            return slots.compactMap { $0 }
+        }
+        mesh.primitives = ordered
 
         return mesh
     }
@@ -89,7 +125,7 @@ public class VRMMesh: @unchecked Sendable {
 /// During load, joint indices are sanitised to remove sentinel values
 /// (see ``sanitizeJoints(maxJointIndex:)``), and the local-space AABB is
 /// captured into ``localMin``/``localMax`` for frustum culling.
-public class VRMPrimitive {
+public class VRMPrimitive: @unchecked Sendable {
     /// Interleaved vertex buffer in ``VRMVertex`` layout.
     public var vertexBuffer: MTLBuffer?
     /// Index buffer; `nil` for non-indexed primitives.
