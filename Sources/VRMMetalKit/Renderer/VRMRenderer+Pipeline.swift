@@ -195,9 +195,14 @@ extension VRMRenderer {
                 throw StrictModeError.missingVertexFunction(name: "mtoon_vertex")
             }
 
-            // Validate fragment function
+            // Validate fragment function. Use function constants in fallback mode
+            // so the same shader source supports both the dynamic path and future
+            // per-material specializations.
             vrmLog("[SHADER DEBUG] Looking for fragment function: mtoon_fragment_v2")
-            let fragmentFunction = library.makeFunction(name: "mtoon_fragment_v2")
+            let fragmentFunction = try? library.makeFunction(
+                name: "mtoon_fragment_v2",
+                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+            )
             vrmLog("[SHADER DEBUG] Fragment function found: \(fragmentFunction != nil)")
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
             guard let fragmentFunc = fragmentFunction else {
@@ -323,8 +328,13 @@ extension VRMRenderer {
             maskAlphaToCoveragePipelineState = maskA2CState
             vrmLog("[VRMRenderer] Created MASK alpha-to-coverage pipeline")
 
-            // Create MToon OUTLINE pipeline (inverted hull technique)
-            let outlineVertexFunction = library.makeFunction(name: "mtoon_outline_vertex")
+            // Create MToon OUTLINE pipeline (inverted hull technique).
+            // The outline vertex shader also references function constants, so
+            // build it with the fallback key to preserve the dynamic uniform path.
+            let outlineVertexFunction = try? library.makeFunction(
+                name: "mtoon_outline_vertex",
+                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+            )
             let outlineFragmentFunction = library.makeFunction(name: "mtoon_outline_fragment")
             if let outlineVertexFunc = outlineVertexFunction,
                let outlineFragmentFunc = outlineFragmentFunction {
@@ -401,8 +411,13 @@ extension VRMRenderer {
                 throw StrictModeError.missingVertexFunction(name: "skinned_mtoon_vertex")
             }
 
-            // Use MToon fragment shader for proper rendering (reuse library from above)
-            let fragmentFunction = library.makeFunction(name: "mtoon_fragment_v2")
+            // Use MToon fragment shader for proper rendering (reuse library from above).
+            // Build with fallback function constants so the dynamic path continues to
+            // read feature flags from the uniform buffer.
+            let fragmentFunction = try? library.makeFunction(
+                name: "mtoon_fragment_v2",
+                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+            )
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
             guard let fragmentFunc = fragmentFunction else {
                 if config.strict == .off {
@@ -525,8 +540,13 @@ extension VRMRenderer {
             skinnedMaskAlphaToCoveragePipelineState = skinnedMaskA2CState
             vrmLog("[SKINNED PSO] Created skinned MASK alpha-to-coverage pipeline")
 
-            // Create SKINNED MToon OUTLINE pipeline (inverted hull technique)
-            let skinnedOutlineVertexFunction = library.makeFunction(name: "skinned_mtoon_outline_vertex")
+            // Create SKINNED MToon OUTLINE pipeline (inverted hull technique).
+            // Use function-constant fallback so the outline vertex shader keeps
+            // reading feature flags from the uniform buffer.
+            let skinnedOutlineVertexFunction = try? library.makeFunction(
+                name: "skinned_mtoon_outline_vertex",
+                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+            )
             let skinnedOutlineFragmentFunction = library.makeFunction(name: "mtoon_outline_fragment")
             if let skinnedOutlineVertexFunc = skinnedOutlineVertexFunction,
                let skinnedOutlineFragmentFunc = skinnedOutlineFragmentFunction {
@@ -567,6 +587,130 @@ extension VRMRenderer {
                     vrmLog("❌ [VRMRenderer] StrictMode validation failed: \(error)")
                 }
             }
+        }
+    }
+
+    // MARK: - MToon Function-Constant Specialization
+
+    /// Creates a fresh MToon pipeline descriptor specialized for the given
+    /// material feature flags. The vertex function is shared with the fallback
+    /// pipeline; only the fragment function is specialized via Metal function
+    /// constants.
+    func makeMToonSpecializedDescriptor(
+        library: MTLLibrary,
+        isSkinned: Bool,
+        features: MToonFunctionConstantKey
+    ) throws -> MTLRenderPipelineDescriptor {
+        let vertexDescriptor = MTLVertexDescriptor()
+
+        // Position
+        vertexDescriptor.attributes[0].format = .float3
+        vertexDescriptor.attributes[0].offset = MemoryLayout<VRMVertex>.offset(of: \.position)!
+        vertexDescriptor.attributes[0].bufferIndex = 0
+
+        // Normal
+        vertexDescriptor.attributes[1].format = .float3
+        vertexDescriptor.attributes[1].offset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
+        vertexDescriptor.attributes[1].bufferIndex = 0
+
+        // TexCoord
+        vertexDescriptor.attributes[2].format = .float2
+        vertexDescriptor.attributes[2].offset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
+        vertexDescriptor.attributes[2].bufferIndex = 0
+
+        // Color
+        vertexDescriptor.attributes[3].format = .float4
+        vertexDescriptor.attributes[3].offset = MemoryLayout<VRMVertex>.offset(of: \.color)!
+        vertexDescriptor.attributes[3].bufferIndex = 0
+
+        if isSkinned {
+            // Joints
+            vertexDescriptor.attributes[4].format = .uint4
+            vertexDescriptor.attributes[4].offset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
+            vertexDescriptor.attributes[4].bufferIndex = 0
+
+            // Weights
+            vertexDescriptor.attributes[5].format = .float4
+            vertexDescriptor.attributes[5].offset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
+            vertexDescriptor.attributes[5].bufferIndex = 0
+        }
+
+        vertexDescriptor.layouts[0].stride = MemoryLayout<VRMVertex>.stride
+
+        let vertexFunctionName = isSkinned ? "skinned_mtoon_vertex" : "mtoon_vertex"
+        guard let vertexFunction = library.makeFunction(name: vertexFunctionName) else {
+            throw StrictModeError.missingVertexFunction(name: vertexFunctionName)
+        }
+
+        guard let fragmentFunction = try? library.makeFunction(
+            name: "mtoon_fragment_v2",
+            constantValues: features.makeFunctionConstantValues()
+        ) else {
+            throw StrictModeError.missingFragmentFunction(name: "mtoon_fragment_v2")
+        }
+
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.label = "mtoon_\(isSkinned ? "skinned" : "non_skinned")_fc_\(features.alphaMode)"
+        descriptor.vertexFunction = vertexFunction
+        descriptor.fragmentFunction = fragmentFunction
+        descriptor.vertexDescriptor = vertexDescriptor
+        descriptor.depthAttachmentPixelFormat = .depth32Float
+        descriptor.rasterSampleCount = config.sampleCount
+
+        let colorAttachment = descriptor.colorAttachments[0]
+        colorAttachment?.pixelFormat = config.colorPixelFormat
+
+        switch features.alphaMode {
+        case 2: // BLEND
+            colorAttachment?.isBlendingEnabled = true
+            colorAttachment?.sourceRGBBlendFactor = .sourceAlpha
+            colorAttachment?.destinationRGBBlendFactor = .oneMinusSourceAlpha
+            colorAttachment?.rgbBlendOperation = .add
+            colorAttachment?.sourceAlphaBlendFactor = .one
+            colorAttachment?.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+            colorAttachment?.alphaBlendOperation = .add
+        default: // OPAQUE / MASK
+            colorAttachment?.isBlendingEnabled = false
+        }
+
+        return descriptor
+    }
+
+    /// Returns a cached or freshly built MToon pipeline specialized for the
+    /// given material feature flags. Falls back to `nil` if specialization
+    /// fails, so callers can use the dynamic fallback pipeline.
+    func specializedMToonPipelineState(
+        isSkinned: Bool,
+        features: MToonFunctionConstantKey
+    ) -> MTLRenderPipelineState? {
+        let baseName = isSkinned ? "mtoon_skinned_fc" : "mtoon_fc"
+        let featureKey = "bc=\(features.hasBaseColorTexture ? 1 : 0)|" +
+                         "sm=\(features.hasShadeMultiplyTexture ? 1 : 0)|" +
+                         "ss=\(features.hasShadingShiftTexture ? 1 : 0)|" +
+                         "nm=\(features.hasNormalTexture ? 1 : 0)|" +
+                         "mc=\(features.hasMatcapTexture ? 1 : 0)|" +
+                         "rm=\(features.hasRimMultiplyTexture ? 1 : 0)|" +
+                         "em=\(features.hasEmissiveTexture ? 1 : 0)|" +
+                         "oc=\(features.hasOcclusionTexture ? 1 : 0)|" +
+                         "uv=\(features.hasUvAnimationMaskTexture ? 1 : 0)|" +
+                         "am=\(features.alphaMode)"
+        let key = pipelineKey("\(baseName)|\(featureKey)")
+
+        do {
+            let library = try VRMPipelineCache.shared.getLibrary(device: device)
+            let descriptor = try makeMToonSpecializedDescriptor(
+                library: library,
+                isSkinned: isSkinned,
+                features: features
+            )
+            return try VRMPipelineCache.shared.getPipelineState(
+                device: device,
+                descriptor: descriptor,
+                key: key
+            )
+        } catch {
+            vrmLog("[VRMRenderer] Failed to create specialized MToon pipeline, falling back: \(error)")
+            return nil
         }
     }
 
