@@ -135,7 +135,7 @@ jobs:
 
           # pull_request and push paths use the committed reference scene.
           echo "vrm_path=AvatarSample_A_1.0.vrm.glb" >> "$GITHUB_OUTPUT"
-          echo "vrma_path=VRMA_Locomotion_Pack/Idle.vrma" >> "$GITHUB_OUTPUT"
+          echo "vrma_path=VRMA_01.vrma" >> "$GITHUB_OUTPUT"
           echo "frames=300" >> "$GITHUB_OUTPUT"
           echo "warmup=30" >> "$GITHUB_OUTPUT"
           echo "mode=render" >> "$GITHUB_OUTPUT"
@@ -169,8 +169,12 @@ jobs:
           ARGS+=(--warmup "$BENCH_WARMUP")
           ARGS+=(--label "$BENCH_LABEL")
           ARGS+=(--json .bench-out/benchmark.json)
-          if [ -n "$VRMA_PATH" ]; then
+          # Degrade to a static-pose benchmark if the VRMA is absent rather than
+          # failing the job (VRMBenchmark exit(1)s on a missing --vrma file).
+          if [ -n "$VRMA_PATH" ] && [ -f "$VRMA_PATH" ]; then
             ARGS+=(--vrma "$VRMA_PATH")
+          elif [ -n "$VRMA_PATH" ]; then
+            echo "::warning::VRMA '$VRMA_PATH' not found; running static-pose benchmark"
           fi
           .build/release/VRMBenchmark "$VRM_PATH" "${ARGS[@]}"
 
@@ -223,8 +227,14 @@ jobs:
             echo "has_baseline=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Compare against baseline
+      # ADVISORY ONLY. GitHub-hosted runners use shared, variable hardware, so a
+      # perf-regression threshold gate produces false fails/passes here. This step
+      # annotates the PR but never blocks it (continue-on-error). The authoritative
+      # gate runs on the dedicated perf machine via `make bench-gate`, comparing
+      # against baselines/baseline.json committed from that same machine.
+      - name: Compare against baseline (advisory)
         if: steps.baseline.outputs.has_baseline == 'true'
+        continue-on-error: true
         env:
           VRM_PATH: ${{ steps.inputs.outputs.vrm_path }}
           VRMA_PATH: ${{ steps.inputs.outputs.vrma_path }}
@@ -241,7 +251,11 @@ jobs:
           ARGS+=(--label "$BENCH_LABEL")
           ARGS+=(--json .bench-out/benchmark.json)
           ARGS+=(--baseline .bench-out/baseline.json)
-          if [ -n "$VRMA_PATH" ]; then
+          # Degrade to a static-pose benchmark if the VRMA is absent rather than
+          # failing the job (VRMBenchmark exit(1)s on a missing --vrma file).
+          if [ -n "$VRMA_PATH" ] && [ -f "$VRMA_PATH" ]; then
             ARGS+=(--vrma "$VRMA_PATH")
+          elif [ -n "$VRMA_PATH" ]; then
+            echo "::warning::VRMA '$VRMA_PATH' not found; running static-pose benchmark"
           fi
           .build/release/VRMBenchmark "$VRM_PATH" "${ARGS[@]}"
