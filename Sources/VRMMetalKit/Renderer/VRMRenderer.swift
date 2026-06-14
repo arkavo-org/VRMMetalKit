@@ -4007,7 +4007,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 continue
             }
 
-            encoder.setRenderPipelineState(pipeline)
+            // Dedupe the pipeline bind: consecutive outline draws almost always
+            // share the same (skinned) pipeline, so route through the encoder state
+            // cache to skip redundant identical binds. The main draw loop also binds
+            // through this cache, so its tracked state is consistent here. Output is
+            // bit-identical — this only removes no-op state calls.
+            encoderStateCache.setRenderPipelineState(encoder, pipeline)
 
             // Set vertex buffer
             encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
