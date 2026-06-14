@@ -383,6 +383,44 @@ final class SpringBoneSettlingTests: XCTestCase {
         }
     }
 
+    // MARK: - Renderer Warmup API (#351 / PR #352)
+
+    /// Regression guard for #351: `VRMRenderer.loadModel(_:)` must warm up spring
+    /// physics, while `loadModelWithoutWarmup(_:)` must defer it so callers can pose
+    /// the skeleton first. A horizontal chain falls hard under gravity, so "settled"
+    /// is an unambiguous, non-flaky signal (unlike a real avatar's hair, which barely
+    /// moves from its artist-modeled bind pose).
+    func testLoadModelWarmsUpButWithoutWarmupDefers() throws {
+        // 1. loadModelWithoutWarmup must NOT settle: the chain stays at its
+        //    horizontal bind pose until warmup is explicitly requested.
+        let model = try buildHorizontalChain(boneCount: 5, gravityPower: 1.0, settlingFrames: 0)
+        let renderer = VRMRenderer(device: device)
+        renderer.loadModelWithoutWarmup(model)
+        let cold = readBonePositions(model: model)
+        try XCTSkipUnless(cold.count > 1, "spring bone buffers not populated; cannot evaluate warmup")
+        let tip = cold.count - 1
+
+        // 2. Explicit warmup settles the chain — the tip falls well below bind.
+        //    If this fails, either warmup is a no-op OR loadModelWithoutWarmup
+        //    already settled (the regression this guards against).
+        renderer.warmupPhysics(steps: 120)
+        Thread.sleep(forTimeInterval: 0.2)  // let the GPU compute finish (matches sibling tests)
+        let warmed = readBonePositions(model: model)
+        XCTAssertLessThan(warmed[tip].y, cold[tip].y - 0.05,
+            "warmupPhysics should settle the chain — tip Y \(cold[tip].y) → \(warmed[tip].y)")
+
+        // 3. The convenience loadModel(_:) must warm up by itself: a freshly loaded
+        //    chain is already settled, not at the cold bind pose.
+        let autoModel = try buildHorizontalChain(boneCount: 5, gravityPower: 1.0, settlingFrames: 0)
+        let autoRenderer = VRMRenderer(device: device)
+        autoRenderer.loadModel(autoModel)
+        Thread.sleep(forTimeInterval: 0.2)
+        let auto = readBonePositions(model: autoModel)
+        XCTAssertEqual(auto.count, cold.count)
+        XCTAssertLessThan(auto[tip].y, cold[tip].y - 0.01,
+            "loadModel should warm up spring physics (tip settled, not at bind)")
+    }
+
     // MARK: - Helper Methods
 
     private func createGLTFNode(name: String, translation: SIMD3<Float>) throws -> GLTFNode {

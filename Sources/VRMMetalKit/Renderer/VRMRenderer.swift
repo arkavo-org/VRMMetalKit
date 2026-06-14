@@ -941,10 +941,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         setupTripleBuffering()
     }
 
-    /// Loads a VRM model into the renderer and initializes all subsystems.
+    /// Loads a VRM model into the renderer and initializes all subsystems,
+    /// then warms up spring-bone physics against the current model pose.
     ///
-    /// This method sets up skinning, expressions, spring bone physics, and look-at controllers.
-    /// Call this after creating the renderer and before the first draw call.
+    /// This method sets up skinning, expressions, spring bone physics, and look-at controllers,
+    /// then runs 30 silent physics steps to settle the bones. If you need to apply a specific
+    /// pose (for example, the first frame of an animation) before physics settle, call
+    /// ``loadModelWithoutWarmup(_:)`` instead, set the pose, then call ``warmupPhysics(steps:)``.
     ///
     /// - Parameter model: The VRM model to render (loaded via `VRMModel.load(from:)`).
     ///
@@ -958,6 +961,30 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///
     /// - Note: Loading a new model invalidates cached render data and reinitializes all subsystems.
     public func loadModel(_ model: VRMModel) {
+        loadModelWithoutWarmup(model)
+        warmupPhysics(steps: 30)
+    }
+
+    /// Loads a VRM model into the renderer and initializes all subsystems
+    /// without running spring-bone physics warmup.
+    ///
+    /// Use this when you need to apply a pose or animation frame before physics
+    /// are settled. After setting the desired pose, call ``warmupPhysics(steps:)``
+    /// to prevent the initial bounce/oscillation that occurs with cold spring bones.
+    ///
+    /// - Parameter model: The VRM model to render (loaded via `VRMModel.load(from:)`).
+    ///
+    /// ## Example
+    /// ```swift
+    /// let renderer = VRMRenderer(device: device)
+    /// let model = try await VRMModel.load(from: modelURL, device: device)
+    /// renderer.loadModelWithoutWarmup(model)
+    /// animationPlayer.update(deltaTime: 0, model: model)  // apply first-frame pose
+    /// renderer.warmupPhysics(steps: 30)
+    /// ```
+    ///
+    /// - Note: Loading a new model invalidates cached render data and reinitializes all subsystems.
+    public func loadModelWithoutWarmup(_ model: VRMModel) {
         self.model = model
 
         // PERFORMANCE: Invalidate cached render items when model changes
@@ -1045,10 +1072,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("  - Total bones: \(model.springBoneBuffers?.numBones ?? 0)")
                 vrmLog("  - Sphere colliders: \(model.springBoneBuffers?.numSpheres ?? 0)")
                 vrmLog("  - Capsule colliders: \(model.springBoneBuffers?.numCapsules ?? 0)")
-
-                // Warm up physics to prevent initial bounce/oscillation
-                // This zeros velocity and runs silent physics steps to settle bones
-                springBoneComputeSystem?.warmupPhysics(model: model, steps: 30)
             } catch {
                 vrmLog("[VRMRenderer] Failed to initialize SpringBone GPU: \(error)")
             }

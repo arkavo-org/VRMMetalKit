@@ -387,7 +387,15 @@ struct VRMVideoRendererCLI {
         config.synchronousSpringBone = true  // offline render — no interactivity penalty (#267)
 
         let renderer = VRMRenderer(device: device, config: config)
-        renderer.loadModel(model)
+        renderer.loadModelWithoutWarmup(model)
+
+        // Apply the first animation frame BEFORE warming up SpringBone physics.
+        // VRMRenderer.loadModel calls warmupPhysics against the current skeleton
+        // pose; if the model is still in bind pose, the springs settle at rest and
+        // then snap when the first rendered frame jumps to frame 0. This causes
+        // hair/penetration artifacts on models like AvatarSample_A (see #351).
+        player.update(deltaTime: 0, model: model)
+        renderer.warmupPhysics(steps: 30)
         renderer.enableSpringBone = true
 
         // Set up lighting
