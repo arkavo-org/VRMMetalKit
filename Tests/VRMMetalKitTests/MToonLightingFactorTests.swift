@@ -506,10 +506,14 @@ final class LightingTestRenderer {
         // Create pipeline using VRMPipelineCache
         let library = try VRMPipelineCache.shared.getLibrary(device: device)
 
-        guard let vertexFunc = library.makeFunction(name: "mtoon_vertex"),
-              let fragmentFunc = library.makeFunction(name: "mtoon_fragment_v2") else {
+        guard let vertexFunc = library.makeFunction(name: "mtoon_vertex") else {
             throw LightingTestError.shaderFunctionNotFound
         }
+        // mtoon_fragment_v2 carries [[function_constant]] flags (#193), so it must
+        // be specialized with constant values before it can build a pipeline.
+        let fragmentFunc = try library.makeFunction(
+            name: "mtoon_fragment_v2",
+            constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues())
 
         let pipelineDesc = MTLRenderPipelineDescriptor()
         pipelineDesc.vertexFunction = vertexFunc

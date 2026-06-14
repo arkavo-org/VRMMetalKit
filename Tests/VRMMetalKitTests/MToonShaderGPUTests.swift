@@ -52,7 +52,7 @@ final class MToonShaderGPUTests: XCTestCase {
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
     /// Re-baselined to current MToonShader.metal source.
-    static let knownGoodShaderHash = "c1286a7fa88cac9b62f457f61368afd2973d6e55d2f20fb886e9ba5875227f67"
+    static let knownGoodShaderHash = "0472338166f269a84794dbf1c5a07e7ff5dbb34d89909b6f9aa54e20f7feb8af"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.
@@ -544,10 +544,14 @@ final class MToonTestRenderer {
         // Create pipeline using VRMPipelineCache
         let library = try VRMPipelineCache.shared.getLibrary(device: device)
 
-        guard let vertexFunc = library.makeFunction(name: "mtoon_vertex"),
-              let fragmentFunc = library.makeFunction(name: "mtoon_fragment_v2") else {
+        guard let vertexFunc = library.makeFunction(name: "mtoon_vertex") else {
             throw TestError.shaderFunctionNotFound
         }
+        // mtoon_fragment_v2 carries [[function_constant]] flags (#193), so it must
+        // be specialized with constant values before it can build a pipeline.
+        let fragmentFunc = try library.makeFunction(
+            name: "mtoon_fragment_v2",
+            constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues())
 
         let pipelineDesc = MTLRenderPipelineDescriptor()
         pipelineDesc.vertexFunction = vertexFunc
