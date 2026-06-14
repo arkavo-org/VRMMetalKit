@@ -53,7 +53,7 @@ Add VRMMetalKit to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/arkavo-org/VRMMetalKit", from: "0.1.0")
+    .package(url: "https://github.com/arkavo-org/VRMMetalKit", from: "1.0.0")
 ]
 ```
 
@@ -203,9 +203,9 @@ See [NOTICE](NOTICE) for complete attribution information.
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-### 0.1.0 (Current)
+### 1.0.0-rc.1 (Current)
 
-VRM 1.0 + VRMA support, MToon shading, GPU SpringBone physics, performance metrics, StrictMode validation, and the full DocC catalog.
+Release candidate for the 1.0 stable API. VRM 1.0 + VRMA support, MToon shading, GPU SpringBone physics, performance metrics, StrictMode validation, and the full DocC catalog. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ---
 
