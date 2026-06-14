@@ -103,7 +103,9 @@ public class VRMMesh: @unchecked Sendable {
             var nextJob = 0
             func addJob(_ job: PrimitiveLoadJob) {
                 group.addTask {
-                    await concurrencyLimiter?.acquire()
+                    // If acquire throws (cancellation), no permit was taken, so the
+                    // release-balancing do/catch below is intentionally NOT entered.
+                    try await concurrencyLimiter?.acquire()
                     do {
                         let primitive = try await VRMPrimitive.load(
                             from: job.primitive,

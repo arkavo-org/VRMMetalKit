@@ -32,7 +32,8 @@ import Foundation
 /// permit holders are the leaf decodes themselves, so progress is guaranteed.
 public actor AsyncConcurrencyLimiter {
     private var available: Int
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [(id: Int, continuation: CheckedContinuation<Void, Error>)] = []
+    private var nextWaiterID = 0
 
     /// - Parameter limit: Maximum number of permits held at once (clamped to >= 1).
     public init(limit: Int) {
@@ -40,22 +41,47 @@ public actor AsyncConcurrencyLimiter {
     }
 
     /// Suspends until a permit is available, then takes it. Pair with ``release()``.
-    public func acquire() async {
+    ///
+    /// Cancellation-aware: if the calling task is cancelled while waiting, the
+    /// wait is abandoned and `CancellationError` is thrown (no permit is taken, no
+    /// continuation is leaked). A permit IS taken only on a non-throwing return.
+    public func acquire() async throws {
+        try Task.checkCancellation()
         if available > 0 {
             available -= 1
             return
         }
-        await withCheckedContinuation { continuation in
-            waiters.append(continuation)
+        let id = nextWaiterID
+        nextWaiterID += 1
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                // Re-check under actor isolation: a cancel that lands between the
+                // top-of-function check and here (or whose onCancel ran before this
+                // closure) must resume immediately rather than enqueue a waiter that
+                // nothing will ever wake.
+                if Task.isCancelled {
+                    continuation.resume(throwing: CancellationError())
+                } else {
+                    waiters.append((id, continuation))
+                }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
         }
     }
 
-    /// Returns a permit, waking the longest-waiting acquirer if any.
+    private func cancelWaiter(_ id: Int) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        let continuation = waiters.remove(at: index).continuation
+        continuation.resume(throwing: CancellationError())
+    }
+
+    /// Returns a permit, waking the longest-waiting acquirer if any (FIFO).
     public func release() {
         if waiters.isEmpty {
             available += 1
         } else {
-            waiters.removeFirst().resume()
+            waiters.removeFirst().continuation.resume(returning: ())
         }
     }
 }

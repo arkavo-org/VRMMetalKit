@@ -25,7 +25,7 @@ final class AsyncConcurrencyLimiterTests: XCTestCase {
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<taskCount {
                 group.addTask {
-                    await limiter.acquire()
+                    try? await limiter.acquire()  // never cancelled here
                     await tracker.enter()
                     // Yield a few times so overlap actually has a chance to occur.
                     for _ in 0..<5 { await Task.yield() }
@@ -49,7 +49,7 @@ final class AsyncConcurrencyLimiterTests: XCTestCase {
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<16 {
                 group.addTask {
-                    await limiter.acquire()
+                    try? await limiter.acquire()  // never cancelled here
                     await tracker.enter()
                     await Task.yield()
                     await tracker.leave()
@@ -63,9 +63,50 @@ final class AsyncConcurrencyLimiterTests: XCTestCase {
 
     /// A non-positive limit is clamped to 1 rather than blocking forever: one
     /// acquire/release round-trip must complete.
-    func testLimiterClampsToAtLeastOne() async {
+    func testLimiterClampsToAtLeastOne() async throws {
         let limiter = AsyncConcurrencyLimiter(limit: 0)
-        await limiter.acquire()  // must not hang — at least one permit exists
+        try await limiter.acquire()  // must not hang — at least one permit exists
+        await limiter.release()
+    }
+
+    /// A task cancelled while waiting for a permit must unwind with
+    /// `CancellationError` rather than hang forever (the bug a non-cancellable
+    /// `withCheckedContinuation` would have). The permit holder never releases, so
+    /// the only way the waiter finishes is via cancellation.
+    func testAcquireUnwindsOnCancellation() async throws {
+        let limiter = AsyncConcurrencyLimiter(limit: 1)
+        try await limiter.acquire()  // take the only permit; never released
+
+        let waiter = Task {
+            try await limiter.acquire()  // no permit available → suspends
+        }
+        // Give the waiter time to register as a waiter before cancelling.
+        try await Task.sleep(nanoseconds: 20_000_000)
+        waiter.cancel()
+
+        do {
+            try await waiter.value
+            XCTFail("expected the cancelled waiter to throw")
+        } catch is CancellationError {
+            // success — unwound cleanly, no hang
+        }
+    }
+
+    /// After a waiter is cancelled, a subsequent release must still hand the permit
+    /// to a live waiter (the cancelled one was removed from the queue, not skipped).
+    func testReleaseAfterCancellationWakesLiveWaiter() async throws {
+        let limiter = AsyncConcurrencyLimiter(limit: 1)
+        try await limiter.acquire()  // hold the permit
+
+        let cancelled = Task { try await limiter.acquire() }
+        try await Task.sleep(nanoseconds: 10_000_000)
+        let live = Task { try await limiter.acquire() }
+        try await Task.sleep(nanoseconds: 10_000_000)
+
+        cancelled.cancel()
+        _ = try? await cancelled.value          // unwinds with CancellationError
+        await limiter.release()                 // must wake `live`, not no-op
+        try await live.value                    // must not hang
         await limiter.release()
     }
 }
