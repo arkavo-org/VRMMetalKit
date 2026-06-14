@@ -209,10 +209,14 @@ final class PipelineBinaryArchiveTests: XCTestCase {
         colorPixelFormat: MTLPixelFormat = .bgra8Unorm
     ) throws -> MTLRenderPipelineDescriptor {
         let library = try VRMPipelineCache.shared.getLibrary(device: device)
-        guard let vfn = library.makeFunction(name: "mtoon_vertex"),
-              let ffn = library.makeFunction(name: "mtoon_fragment_v2") else {
+        guard let vfn = library.makeFunction(name: "mtoon_vertex") else {
             throw XCTSkip("MToon shader functions not present in bundled library.")
         }
+        // mtoon_fragment_v2 carries [[function_constant]] flags (#193), so it must
+        // be specialized with constant values before it can build a pipeline.
+        let ffn = try library.makeFunction(
+            name: "mtoon_fragment_v2",
+            constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues())
         let vd = MTLVertexDescriptor()
         vd.attributes[0].format = .float3
         vd.attributes[0].offset = MemoryLayout<VRMVertex>.offset(of: \.position)!

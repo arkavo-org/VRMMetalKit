@@ -120,6 +120,7 @@ public class BufferLoader: @unchecked Sendable {
             let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
 
             result = []
+            result.reserveCapacity(accessor.count * components)
             for i in 0..<accessor.count {
                 let elementOffset = combinedOffset + (i * stride)
                 for j in 0..<components {
@@ -179,6 +180,7 @@ public class BufferLoader: @unchecked Sendable {
             let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
 
             result = []
+            result.reserveCapacity(accessor.count * components)
             for i in 0..<accessor.count {
                 let elementOffset = combinedOffset + (i * stride)
                 for j in 0..<components {
@@ -233,6 +235,7 @@ public class BufferLoader: @unchecked Sendable {
             let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
 
             result = []
+            result.reserveCapacity(accessor.count * components)
             for i in 0..<accessor.count {
                 let elementOffset = combinedOffset + (i * stride)
                 for j in 0..<components {

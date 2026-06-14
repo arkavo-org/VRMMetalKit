@@ -38,6 +38,7 @@ public struct PerformanceMetrics: Codable {
         case culledDraws
         case stateChanges
         case morphComputes
+        case sleepingBones
         case triangleCount
         case vertexCount
         case textureBindings
@@ -50,6 +51,11 @@ public struct PerformanceMetrics: Codable {
         case frameTimeP50Ms
         case frameTimeP95Ms
         case frameTimeP99Ms
+        case morphSetupMs
+        case springBoneMs
+        case renderItemBuildMs
+        case commandEncodeMs
+        case cpuFrameMs
         case allocatedMemoryMB
         case peakMemoryMB
     }
@@ -69,6 +75,7 @@ public struct PerformanceMetrics: Codable {
         try container.encode(culledDraws, forKey: .culledDraws)
         try container.encode(stateChanges, forKey: .stateChanges)
         try container.encode(morphComputes, forKey: .morphComputes)
+        try container.encode(sleepingBones, forKey: .sleepingBones)
         try container.encode(triangleCount, forKey: .triangleCount)
         try container.encode(vertexCount, forKey: .vertexCount)
         try container.encode(textureBindings, forKey: .textureBindings)
@@ -81,6 +88,11 @@ public struct PerformanceMetrics: Codable {
         try container.encode(frameTimeP50Ms.isFinite ? frameTimeP50Ms : 0, forKey: .frameTimeP50Ms)
         try container.encode(frameTimeP95Ms.isFinite ? frameTimeP95Ms : 0, forKey: .frameTimeP95Ms)
         try container.encode(frameTimeP99Ms.isFinite ? frameTimeP99Ms : 0, forKey: .frameTimeP99Ms)
+        try container.encode(morphSetupMs.isFinite ? morphSetupMs : 0, forKey: .morphSetupMs)
+        try container.encode(springBoneMs.isFinite ? springBoneMs : 0, forKey: .springBoneMs)
+        try container.encode(renderItemBuildMs.isFinite ? renderItemBuildMs : 0, forKey: .renderItemBuildMs)
+        try container.encode(commandEncodeMs.isFinite ? commandEncodeMs : 0, forKey: .commandEncodeMs)
+        try container.encode(cpuFrameMs.isFinite ? cpuFrameMs : 0, forKey: .cpuFrameMs)
         try container.encode(allocatedMemoryMB.isFinite ? allocatedMemoryMB : 0, forKey: .allocatedMemoryMB)
         try container.encode(peakMemoryMB.isFinite ? peakMemoryMB : 0, forKey: .peakMemoryMB)
     }
@@ -96,6 +108,7 @@ public struct PerformanceMetrics: Codable {
         culledDraws = (try? container.decode(Int.self, forKey: .culledDraws)) ?? 0
         stateChanges = try container.decode(Int.self, forKey: .stateChanges)
         morphComputes = try container.decode(Int.self, forKey: .morphComputes)
+        sleepingBones = (try? container.decode(Int.self, forKey: .sleepingBones)) ?? 0
         triangleCount = try container.decode(Int.self, forKey: .triangleCount)
         vertexCount = try container.decode(Int.self, forKey: .vertexCount)
         textureBindings = try container.decode(Int.self, forKey: .textureBindings)
@@ -108,6 +121,11 @@ public struct PerformanceMetrics: Codable {
         frameTimeP50Ms = try container.decode(Double.self, forKey: .frameTimeP50Ms)
         frameTimeP95Ms = try container.decode(Double.self, forKey: .frameTimeP95Ms)
         frameTimeP99Ms = try container.decode(Double.self, forKey: .frameTimeP99Ms)
+        morphSetupMs = (try? container.decode(Double.self, forKey: .morphSetupMs)) ?? 0
+        springBoneMs = (try? container.decode(Double.self, forKey: .springBoneMs)) ?? 0
+        renderItemBuildMs = (try? container.decode(Double.self, forKey: .renderItemBuildMs)) ?? 0
+        commandEncodeMs = (try? container.decode(Double.self, forKey: .commandEncodeMs)) ?? 0
+        cpuFrameMs = (try? container.decode(Double.self, forKey: .cpuFrameMs)) ?? 0
         allocatedMemoryMB = try container.decode(Double.self, forKey: .allocatedMemoryMB)
         peakMemoryMB = try container.decode(Double.self, forKey: .peakMemoryMB)
     }
@@ -126,6 +144,8 @@ public struct PerformanceMetrics: Codable {
     public var stateChanges: Int = 0
     /// Average morph-target compute dispatches per frame.
     public var morphComputes: Int = 0
+    /// Average spring-bone joints asleep per frame.
+    public var sleepingBones: Int = 0
     /// Average triangles submitted per frame.
     public var triangleCount: Int = 0
     /// Average vertices submitted per frame.
@@ -154,6 +174,19 @@ public struct PerformanceMetrics: Codable {
     /// 99th-percentile frame time in milliseconds.
     public var frameTimeP99Ms: Double = 0
 
+    // Sub-phase CPU timings (averaged over the recorded window)
+
+    /// Average morph-setup CPU time in milliseconds.
+    public var morphSetupMs: Double = 0
+    /// Average spring-bone CPU time in milliseconds.
+    public var springBoneMs: Double = 0
+    /// Average render-item-build CPU time in milliseconds.
+    public var renderItemBuildMs: Double = 0
+    /// Average command-encode CPU time in milliseconds.
+    public var commandEncodeMs: Double = 0
+    /// Average total per-frame CPU time in milliseconds.
+    public var cpuFrameMs: Double = 0
+
     // Memory stats
 
     /// Currently allocated memory in megabytes (reserved; not populated by the default tracker).
@@ -166,8 +199,29 @@ public struct PerformanceMetrics: Codable {
 public class PerformanceTracker {
     private var frameTimes: [Double] = []
     private var gpuTimes: [Double] = []
+    private var sortedFrameTimes: [Double] = []
+    private var sortedGPUTimes: [Double] = []
     private var lastFrameTime: CFTimeInterval = 0
+    private var frameStartTime: CFTimeInterval = 0
     private var frameCount: Int = 0
+
+    // Total frame CPU time window
+    private var cpuFrameTimes: [Double] = []
+    private var sortedCpuFrameTimes: [Double] = []
+
+    // Sub-phase CPU timers
+    public enum Phase {
+        case morphSetup
+        case springBone
+        case renderItemBuild
+        case commandEncode
+        case total
+    }
+    private var phaseTimers: [Phase: CFTimeInterval] = [:]
+    private var phaseAccumulators: [Phase: (totalMs: Double, count: Int)] = [:]
+    // Per-call sample windows (bounded like the frame-time windows) so consumers
+    // can compute full distributions per phase, not just the running average.
+    private var phaseSamples: [Phase: [Double]] = [:]
 
     // Per-frame counters
     private var currentFrameMetrics = FrameMetrics()
@@ -177,6 +231,7 @@ public class PerformanceTracker {
     private var totalCulledDraws: Int = 0
     private var totalStateChanges: Int = 0
     private var totalMorphComputes: Int = 0
+    private var totalSleepingBones: Int = 0
     private var totalTriangles: Int = 0
     private var totalVertices: Int = 0
     private var totalTextureBindings: Int = 0
@@ -190,6 +245,7 @@ public class PerformanceTracker {
         var culledDraws: Int = 0
         var stateChanges: Int = 0
         var morphComputes: Int = 0
+        var sleepingBones: Int = 0
         var triangles: Int = 0
         var vertices: Int = 0
         var textureBindings: Int = 0
@@ -205,12 +261,10 @@ public class PerformanceTracker {
         let currentTime = CACurrentMediaTime()
         if lastFrameTime > 0 {
             let frameTime = (currentTime - lastFrameTime) * 1000.0 // Convert to ms
-            frameTimes.append(frameTime)
-            if frameTimes.count > maxFrameSamples {
-                frameTimes.removeFirst()
-            }
+            appendFrameTime(frameTime)
         }
         lastFrameTime = currentTime
+        frameStartTime = currentTime
 
         // Reset per-frame counters
         currentFrameMetrics = FrameMetrics()
@@ -218,11 +272,17 @@ public class PerformanceTracker {
 
     /// End the current frame and update accumulated metrics
     public func endFrame() {
+        let currentTime = CACurrentMediaTime()
+        let cpuFrameTime = (currentTime - frameStartTime) * 1000.0
+        appendCpuFrameTime(cpuFrameTime)
+        accumulatePhase(.total, ms: cpuFrameTime)
+
         frameCount += 1
         totalDrawCalls += currentFrameMetrics.drawCalls
         totalCulledDraws += currentFrameMetrics.culledDraws
         totalStateChanges += currentFrameMetrics.stateChanges
         totalMorphComputes += currentFrameMetrics.morphComputes
+        totalSleepingBones += currentFrameMetrics.sleepingBones
         totalTriangles += currentFrameMetrics.triangles
         totalVertices += currentFrameMetrics.vertices
         totalTextureBindings += currentFrameMetrics.textureBindings
@@ -238,10 +298,7 @@ public class PerformanceTracker {
     /// Record a GPU timestamp (in seconds)
     public func recordGPUTime(_ time: Double) {
         let timeMs = time * 1000.0
-        gpuTimes.append(timeMs)
-        if gpuTimes.count > maxFrameSamples {
-            gpuTimes.removeFirst()
-        }
+        appendGPUTime(timeMs)
     }
 
     /// Track a draw call
@@ -271,6 +328,11 @@ public class PerformanceTracker {
         currentFrameMetrics.morphComputes += 1
     }
 
+    /// Track the number of spring-bone joints considered asleep this frame.
+    public func recordSleepingBones(_ count: Int) {
+        currentFrameMetrics.sleepingBones = count
+    }
+
     /// Classification of state-change events recorded by ``PerformanceTracker/recordStateChange(type:)``.
     public enum StateChangeType {
         /// A render-pipeline state change.
@@ -292,8 +354,6 @@ public class PerformanceTracker {
             let avgFrameTime = frameTimes.reduce(0, +) / Double(frameTimes.count)
             metrics.fps = avgFrameTime > 0 ? 1000.0 / avgFrameTime : 0
 
-            // Frame time statistics
-            let sortedFrameTimes = frameTimes.sorted()
             metrics.frameTimeAvgMs = avgFrameTime
             metrics.frameTimeMinMs = sortedFrameTimes.first ?? 0
             metrics.frameTimeMaxMs = sortedFrameTimes.last ?? 0
@@ -303,10 +363,21 @@ public class PerformanceTracker {
         }
 
         // GPU time statistics
-        if !gpuTimes.isEmpty {
-            let sortedGPUTimes = gpuTimes.sorted()
+        if !sortedGPUTimes.isEmpty {
             metrics.gpuTimeP95Ms = percentile(sortedGPUTimes, 0.95)
         }
+
+        // CPU frame time
+        if !cpuFrameTimes.isEmpty {
+            metrics.cpuTimeMs = cpuFrameTimes.reduce(0, +) / Double(cpuFrameTimes.count)
+        }
+
+        // Per-phase CPU averages
+        metrics.morphSetupMs = averagePhase(.morphSetup)
+        metrics.springBoneMs = averagePhase(.springBone)
+        metrics.renderItemBuildMs = averagePhase(.renderItemBuild)
+        metrics.commandEncodeMs = averagePhase(.commandEncode)
+        metrics.cpuFrameMs = averagePhase(.total)
 
         // Average per-frame metrics
         if frameCount > 0 {
@@ -314,6 +385,7 @@ public class PerformanceTracker {
             metrics.culledDraws = totalCulledDraws / frameCount
             metrics.stateChanges = totalStateChanges / frameCount
             metrics.morphComputes = totalMorphComputes / frameCount
+            metrics.sleepingBones = totalSleepingBones / frameCount
             metrics.triangleCount = totalTriangles / frameCount
             metrics.vertexCount = totalVertices / frameCount
             metrics.textureBindings = totalTextureBindings / frameCount
@@ -325,6 +397,10 @@ public class PerformanceTracker {
         let formatter = ISO8601DateFormatter()
         metrics.timestamp = formatter.string(from: Date())
 
+        // Reset phase accumulators so the next report reflects recent work
+        phaseAccumulators.removeAll()
+        phaseTimers.removeAll()
+
         return metrics
     }
 
@@ -332,22 +408,117 @@ public class PerformanceTracker {
     public func reset() {
         frameTimes.removeAll()
         gpuTimes.removeAll()
+        sortedFrameTimes.removeAll()
+        sortedGPUTimes.removeAll()
+        cpuFrameTimes.removeAll()
+        sortedCpuFrameTimes.removeAll()
         lastFrameTime = 0
+        frameStartTime = 0
         frameCount = 0
         totalDrawCalls = 0
         totalCulledDraws = 0
         totalStateChanges = 0
         totalMorphComputes = 0
+        totalSleepingBones = 0
         totalTriangles = 0
         totalVertices = 0
         totalTextureBindings = 0
         totalBufferBindings = 0
         totalPipelineChanges = 0
+        phaseTimers.removeAll()
+        phaseAccumulators.removeAll()
+        phaseSamples.removeAll()
     }
 
     private func percentile(_ sortedArray: [Double], _ percentile: Double) -> Double {
         guard !sortedArray.isEmpty else { return 0 }
-        let index = Int(Double(sortedArray.count - 1) * percentile)
-        return sortedArray[index]
+        let count = sortedArray.count
+        if count == 1 { return sortedArray[0] }
+        let position = Double(count - 1) * percentile
+        let lower = Int(position)
+        let upper = lower + 1
+        if upper >= count { return sortedArray[count - 1] }
+        let fraction = position - Double(lower)
+        return sortedArray[lower] * (1.0 - fraction) + sortedArray[upper] * fraction
+    }
+
+    // MARK: - Sorted window maintenance
+
+    private func appendFrameTime(_ time: Double) {
+        if frameTimes.count >= maxFrameSamples, let oldest = frameTimes.first {
+            frameTimes.removeFirst()
+            removeSorted(value: oldest, from: &sortedFrameTimes)
+        }
+        frameTimes.append(time)
+        insertSorted(value: time, into: &sortedFrameTimes)
+    }
+
+    private func appendGPUTime(_ time: Double) {
+        if gpuTimes.count >= maxFrameSamples, let oldest = gpuTimes.first {
+            gpuTimes.removeFirst()
+            removeSorted(value: oldest, from: &sortedGPUTimes)
+        }
+        gpuTimes.append(time)
+        insertSorted(value: time, into: &sortedGPUTimes)
+    }
+
+    private func appendCpuFrameTime(_ time: Double) {
+        if cpuFrameTimes.count >= maxFrameSamples, let oldest = cpuFrameTimes.first {
+            cpuFrameTimes.removeFirst()
+            removeSorted(value: oldest, from: &sortedCpuFrameTimes)
+        }
+        cpuFrameTimes.append(time)
+        insertSorted(value: time, into: &sortedCpuFrameTimes)
+    }
+
+    private func insertSorted(value: Double, into array: inout [Double]) {
+        let index = array.firstIndex(where: { $0 >= value }) ?? array.count
+        array.insert(value, at: index)
+    }
+
+    private func removeSorted(value: Double, from array: inout [Double]) {
+        if let index = array.firstIndex(of: value) {
+            array.remove(at: index)
+        }
+    }
+
+    // MARK: - Phase helpers
+
+    public func beginPhase(_ phase: Phase) {
+        phaseTimers[phase] = CACurrentMediaTime()
+    }
+
+    public func endPhase(_ phase: Phase) {
+        guard let startTime = phaseTimers[phase] else { return }
+        let elapsedMs = (CACurrentMediaTime() - startTime) * 1000.0
+        accumulatePhase(phase, ms: elapsedMs)
+        phaseTimers.removeValue(forKey: phase)
+    }
+
+    private func accumulatePhase(_ phase: Phase, ms: Double) {
+        var acc = phaseAccumulators[phase] ?? (totalMs: 0, count: 0)
+        acc.totalMs += ms
+        acc.count += 1
+        phaseAccumulators[phase] = acc
+
+        var samples = phaseSamples[phase] ?? []
+        if samples.count >= maxFrameSamples {
+            samples.removeFirst()
+        }
+        samples.append(ms)
+        phaseSamples[phase] = samples
+    }
+
+    private func averagePhase(_ phase: Phase) -> Double {
+        guard let acc = phaseAccumulators[phase], acc.count > 0 else { return 0 }
+        return acc.totalMs / Double(acc.count)
+    }
+
+    /// Per-call elapsed-time samples (milliseconds) recorded for `phase`, oldest
+    /// first, bounded to the most recent ~10 s. Empty when the phase never ran.
+    /// Like the frame-time windows, this is cleared only by ``reset()`` —
+    /// ``generateMetrics()`` does not drain it.
+    public func samples(for phase: Phase) -> [Double] {
+        phaseSamples[phase] ?? []
     }
 }

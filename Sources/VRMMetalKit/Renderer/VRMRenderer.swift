@@ -448,6 +448,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var mtoonOutlinePipelineState: MTLRenderPipelineState?
     var mtoonSkinnedOutlinePipelineState: MTLRenderPipelineState?
 
+    /// Depth-only prepass pipelines (position[+joints/weights] vertex, no fragment).
+    /// Used when ``RendererConfig/enableDepthPrepass`` is set.
+    var depthPrepassPipelineState: MTLRenderPipelineState?
+    var skinnedDepthPrepassPipelineState: MTLRenderPipelineState?
+
     /// Optional sprite cache used by hybrid multi-character rendering. Auto-instantiated in ``init(device:config:)``.
     /// See ``SpriteCacheSystem``.
     public var spriteCacheSystem: SpriteCacheSystem?
@@ -606,6 +611,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         springBoneComputeSystem?.requestPhysicsReset = true
     }
 
+    /// Force every spring-bone chain to wake on the next update.
+    ///
+    /// Call this after teleporting the avatar or applying any discontinuous change
+    /// that should not be treated as rest.
+    public func wakeAllBones() {
+        springBoneComputeSystem?.wakeAllBones()
+    }
+
+    /// Number of spring-bone joints currently considered asleep by the sleep gate.
+    ///
+    /// This is a performance readout; when it equals the total bone count the
+    /// XPBD pipeline and CPU readback are skipped for the frame.
+    public var sleepingBoneCount: Int {
+        return springBoneComputeSystem?.sleepingBoneCount ?? 0
+    }
+
     /// Sets a runtime radius override for a sphere collider.
     ///
     /// Use this to dynamically adjust collision boundaries at runtime, for example
@@ -671,6 +692,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// When `true` (the default), the renderer ignores ``animationState`` and clears it on the first frame.
     /// Prefer ``AnimationPlayer`` for new code; set this to `false` only when restoring the legacy path.
     public var disableLegacyAnimation: Bool = true
+
+    /// When `true` (the default), the renderer assumes the avatar's joints may be animated each frame
+    /// and marks all skin palettes dirty before updating them. Set to `false` for a static avatar to
+    /// skip joint-matrix recomputation after the first frame.
+    public var isAnimationActive: Bool = true
 
     // Triple-buffered uniforms for avoiding CPU-GPU sync
     static let maxBufferedFrames = VRMConstants.Rendering.maxBufferedFrames
@@ -1047,19 +1073,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Decide if compute path is needed (presence of any morphs > 0 or >8 targets anywhere)
         var needsComputePath = false
 
-        // Check if any primitive has active morphs with non-zero weights
+        // Check if any primitive has active morphs with non-zero weights.
+        // Compute the per-mesh weights once and reuse the cached array for every primitive in the mesh.
         var hasActiveMorphs = false
         if let controller = expressionController {
             for (meshIndex, mesh) in model.meshes.enumerated() {
-                for primitive in mesh.primitives where !primitive.morphTargets.isEmpty {
-                    let weights = controller.weightsForMesh(meshIndex, morphCount: primitive.morphTargets.count)
-                    let hasNonZero = weights.contains { $0 > 0.001 }
-                    if hasNonZero {
-                        hasActiveMorphs = true
-                        break
-                    }
+                let meshMaxMorphCount = mesh.primitives.reduce(0) { max($0, $1.morphTargets.count) }
+                guard meshMaxMorphCount > 0 else { continue }
+                let meshWeights = controller.weightsForMesh(meshIndex, morphCount: meshMaxMorphCount)
+                let hasNonZero = meshWeights.contains { $0 > 0.001 }
+                if hasNonZero {
+                    hasActiveMorphs = true
+                    break
                 }
-                if hasActiveMorphs { break }
             }
         }
 
@@ -1099,7 +1125,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Store morphed buffer references for render pass using STABLE KEYS
         var morphedBuffers: [MorphKey: MTLBuffer] = [:]  // Key: (meshIndex << 32) | primitiveIndex
 
+        // Batch all primitive morph dispatches into a single compute encoder (#194).
+        // Created lazily so we don't emit an empty compute pass when every primitive
+        // has an empty active set.
+        var morphComputeEncoder: MTLComputeCommandEncoder?
+
+        // Capture the single primitive that needs first-frame GPU validation so the
+        // readback blit can run after the batched compute encoder has ended.
+        var validationTarget: (meshIndex: Int, primitiveIndex: Int, primitive: VRMPrimitive, outputBuffer: MTLBuffer)?
+
         for (meshIndex, mesh) in model.meshes.enumerated() {
+            let meshMaxMorphCount = mesh.primitives.reduce(0) { max($0, $1.morphTargets.count) }
+            let meshWeights = expressionController?.weightsForMesh(meshIndex, morphCount: meshMaxMorphCount) ?? []
+
             for (primitiveIndex, primitive) in mesh.primitives.enumerated() where !primitive.morphTargets.isEmpty {
                 // Ensure SoA buffers exist
                 if primitive.morphTargets.count > 8 {
@@ -1124,8 +1162,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     continue
                 }
 
-                // Build weights for THIS mesh/primitive
-                let localWeights = expressionController?.weightsForMesh(meshIndex, morphCount: primitive.morphTargets.count) ?? []
+                // Build weights for this primitive from the per-mesh cached weights.
+                let morphCount = primitive.morphTargets.count
+                let localWeights = meshWeights[0..<morphCount]
 
                 // Build active set for this primitive (MUST be done before applyMorphsCompute!)
                 let primitiveActiveSet = morphTargetSystem.buildActiveSet(weights: localWeights)
@@ -1138,11 +1177,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                 }
 
-                // Skip GPU work when no morph weights are active. This avoids dispatching a
-                // blit/copy for primitives that currently render with their base pose, which
-                // otherwise costs a command encoder per primitive even though the output is
-                // identical to the input. In practice most meshes idle in that state, so
-                // bailing out here removes unnecessary GPU + driver overhead.
+                // Skip GPU work when no morph weights are active. The renderer binds
+                // the base vertex buffer and a dummy morphedPositionsBuffer with the
+                // hasMorphedPositionsFlag set to 0, so the output buffer does not need
+                // to be populated for inactive primitives (#194).
                 guard !primitiveActiveSet.isEmpty else {
                     if frameCounter <= 2 || frameCounter % 120 == 0 {
                         vrmLog("[VRMRenderer] Skipping morph compute: no active morphs for mesh=\(meshIndex) prim=\(primitiveIndex)")
@@ -1150,14 +1188,29 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     continue
                 }
 
-                // Run compute kernel
+                // Lazily create the shared compute encoder the first time we actually
+                // have morph work to dispatch.
+                if morphComputeEncoder == nil {
+                    guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+                        vrmLog("[VRMRenderer] ❌ Failed to create batched morph compute encoder")
+                        continue
+                    }
+                    encoder.label = "Morph Accumulate (batched)"
+                    morphComputeEncoder = encoder
+                }
+
+                guard let encoder = morphComputeEncoder else {
+                    continue
+                }
+
+                // Run compute kernel into the shared encoder
                 let success = morphTargetSystem.applyMorphsCompute(
+                    encoder: encoder,
                     basePositions: basePositions,
                     deltaPositions: deltaPositions,
                     outputPositions: outputBuffer,
                     vertexCount: primitive.vertexCount,
-                    morphCount: primitive.morphTargets.count,
-                    commandBuffer: commandBuffer
+                    morphCount: primitive.morphTargets.count
                 )
 
                 if success {
@@ -1172,116 +1225,121 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         vrmLog("[VRMRenderer] Applied compute morphs: mesh=\(meshIndex) prim=\(primitiveIndex) key=\(stableKey)")
 
                         // Log active morph weights
-                        if let controller = expressionController {
-                            let weights = controller.weightsForMesh(meshIndex, morphCount: primitive.morphTargets.count)
-                            let nonZero = weights.enumerated().filter { $0.element > 0.001 }
-                            if !nonZero.isEmpty {
-                                vrmLog("   Active weights: \(nonZero.map { "[\($0.offset)]=\(String(format: "%.3f", $0.element))" }.joined(separator: ", "))")
-                            }
+                        let nonZero = localWeights.enumerated().filter { $0.element > 0.001 }
+                        if !nonZero.isEmpty {
+                            vrmLog("   Active weights: \(nonZero.map { "[\($0.offset)]=\(String(format: "%.3f", $0.element))" }.joined(separator: ", "))")
                         }
                     }
 
                     // 🔍 DEBUG: Validate BOTH base and morphed positions for draw 14 (face.baked prim 0)
                     if frameCounter == 0 && meshIndex == 3 && primitiveIndex == 0 {
-                        // First validate BASE positions (input to compute shader)
-                        let basePosPointer = basePositions.contents().bindMemory(to: SIMD3<Float>.self, capacity: primitive.vertexCount)
-
-                        var baseExtremeCount = 0
-                        var baseMaxMag: Float = 0
-
-                        for i in 0..<primitive.vertexCount {
-                            let pos = basePosPointer[i]
-                            let mag = sqrt(pos.x*pos.x + pos.y*pos.y + pos.z*pos.z)
-                            baseMaxMag = max(baseMaxMag, mag)
-                            if mag > 10.0 || pos.x.isNaN {
-                                baseExtremeCount += 1
-                            }
-                        }
-
-                        vrmLog("")
-                        vrmLog("🔍 [BASE POSITIONS VALIDATION] mesh=\(meshIndex) prim=\(primitiveIndex)")
-                        vrmLog("   Vertex count: \(primitive.vertexCount)")
-                        vrmLog("   Max base position magnitude: \(baseMaxMag)")
-                        vrmLog("   Extreme base positions: \(baseExtremeCount)")
-                        if baseExtremeCount > 0 {
-                            vrmLog("   ❌ BASE POSITIONS CORRUPTED!")
-                        } else {
-                            vrmLog("   ✅ Base positions OK")
-                        }
-
-                        // Create a temporary shared buffer to read back the GPU data
-                        let readbackSize = primitive.vertexCount * MemoryLayout<SIMD3<Float>>.stride
-                        guard let readbackBuffer = device.makeBuffer(length: readbackSize, options: .storageModeShared) else {
-                            vrmLog("[MORPH VALIDATION] Failed to create readback buffer")
-                            continue
-                        }
-
-                        // Use blit encoder to copy from private GPU buffer to shared CPU-accessible buffer
-                guard let blitEncoder = commandBuffer.makeBlitCommandEncoder() else {
-                    vrmLog("[MORPH VALIDATION] Failed to create blit encoder")
-                    continue
-                }
-                blitEncoder.copy(from: outputBuffer, sourceOffset: 0,
-                                       to: readbackBuffer, destinationOffset: 0,
-                                       size: readbackSize)
-                blitEncoder.endEncoding()
-
-                        // OPTIMIZATION: GPU validation only in DEBUG mode, first frame only, async
-                        #if DEBUG
-                        if frameCounter == 0 {
-                            // Prepare thread-safe captures to avoid Sendable warnings
-                            let vertexCount = primitive.vertexCount
-                            let readback = SendableMTLBuffer(readbackBuffer)
-
-                            // Add completion handler to read data after GPU finishes
-                            // Run validation on background queue to avoid blocking render thread
-                            commandBuffer.addCompletedHandler { _ in
-                                DispatchQueue.global(qos: .utility).async {
-                                    // Bind the pointer inside the @Sendable closure
-                                    let positions = readback.buffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertexCount)
-
-                                    var extremeCount = 0
-                                    var maxMagnitude: Float = 0
-                                    var extremeIndices: [Int] = []
-
-                                    for i in 0..<vertexCount {
-                                        let pos = positions[i]
-                                        let mag = sqrt(pos.x*pos.x + pos.y*pos.y + pos.z*pos.z)
-                                        maxMagnitude = max(maxMagnitude, mag)
-
-                                        // Flag positions that are way outside normal range (>10 units from origin)
-                                        if mag > 10.0 || pos.x.isNaN || pos.y.isNaN || pos.z.isNaN {
-                                            extremeCount += 1
-                                            if extremeIndices.count < 10 {
-                                                extremeIndices.append(i)
-                                            }
-                                        }
-                                    }
-
-                                    vrmLog("")
-                                    vrmLog("🔍 [GPU MORPHED BUFFER VALIDATION] mesh=\(meshIndex) prim=\(primitiveIndex)")
-                                    vrmLog("   Vertex count: \(vertexCount)")
-                                    vrmLog("   Max position magnitude: \(maxMagnitude)")
-                                    vrmLog("   Extreme positions (>10 units): \(extremeCount)")
-
-                                    if extremeCount > 0 {
-                                        vrmLog("   ❌ FOUND EXTREME POSITIONS IN MORPHED BUFFER!")
-                                        vrmLog("   First few extreme vertex indices: \(extremeIndices)")
-                                        for idx in extremeIndices.prefix(5) {
-                                            let pos = positions[idx]
-                                            vrmLog("      v[\(idx)]: (\(pos.x), \(pos.y), \(pos.z)) mag=\(sqrt(pos.x*pos.x + pos.y*pos.y + pos.z*pos.z))")
-                                        }
-                                        vrmLog("   → This is the source of the wedge artifact!")
-                                    } else {
-                                        vrmLog("   ✅ All morphed positions within normal range")
-                                    }
-                                }
-                            }
-                        }
-                        #endif
+                        validationTarget = (meshIndex: meshIndex, primitiveIndex: primitiveIndex, primitive: primitive, outputBuffer: outputBuffer)
                     }
                 } else {
                     vrmLog("[VRMRenderer] ❌ FAILED to apply compute morphs for primitive with \(primitive.morphTargets.count) morphs")
+                }
+            }
+        }
+
+        // End the batched compute pass before any downstream blit/render encoders.
+        morphComputeEncoder?.endEncoding()
+
+        // Run first-frame validation readback after the compute encoder has ended.
+        if let target = validationTarget,
+           let basePositions = target.primitive.basePositionsBuffer {
+            let meshIndex = target.meshIndex
+            let primitiveIndex = target.primitiveIndex
+            let primitive = target.primitive
+
+            // First validate BASE positions (input to compute shader)
+            let basePosPointer = basePositions.contents().bindMemory(to: SIMD3<Float>.self, capacity: primitive.vertexCount)
+
+            var baseExtremeCount = 0
+            var baseMaxMag: Float = 0
+
+            for i in 0..<primitive.vertexCount {
+                let pos = basePosPointer[i]
+                let mag = sqrt(pos.x*pos.x + pos.y*pos.y + pos.z*pos.z)
+                baseMaxMag = max(baseMaxMag, mag)
+                if mag > 10.0 || pos.x.isNaN {
+                    baseExtremeCount += 1
+                }
+            }
+
+            vrmLog("")
+            vrmLog("🔍 [BASE POSITIONS VALIDATION] mesh=\(meshIndex) prim=\(primitiveIndex)")
+            vrmLog("   Vertex count: \(primitive.vertexCount)")
+            vrmLog("   Max base position magnitude: \(baseMaxMag)")
+            vrmLog("   Extreme base positions: \(baseExtremeCount)")
+            if baseExtremeCount > 0 {
+                vrmLog("   ❌ BASE POSITIONS CORRUPTED!")
+            } else {
+                vrmLog("   ✅ Base positions OK")
+            }
+
+            // Create a temporary shared buffer to read back the GPU data
+            let readbackSize = primitive.vertexCount * MemoryLayout<SIMD3<Float>>.stride
+            if let readbackBuffer = device.makeBuffer(length: readbackSize, options: .storageModeShared) {
+                // Use blit encoder to copy from private GPU buffer to shared CPU-accessible buffer
+                if let blitEncoder = commandBuffer.makeBlitCommandEncoder() {
+                    blitEncoder.copy(from: target.outputBuffer, sourceOffset: 0,
+                                     to: readbackBuffer, destinationOffset: 0,
+                                     size: readbackSize)
+                    blitEncoder.endEncoding()
+
+                    // OPTIMIZATION: GPU validation only in DEBUG mode, first frame only, async
+                    #if DEBUG
+                    if frameCounter == 0 {
+                        // Prepare thread-safe captures to avoid Sendable warnings
+                        let vertexCount = primitive.vertexCount
+                        let readback = SendableMTLBuffer(readbackBuffer)
+
+                        // Add completion handler to read data after GPU finishes
+                        // Run validation on background queue to avoid blocking render thread
+                        commandBuffer.addCompletedHandler { _ in
+                            DispatchQueue.global(qos: .utility).async {
+                                // Bind the pointer inside the @Sendable closure
+                                let positions = readback.buffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertexCount)
+
+                                var extremeCount = 0
+                                var maxMagnitude: Float = 0
+                                var extremeIndices: [Int] = []
+
+                                for i in 0..<vertexCount {
+                                    let pos = positions[i]
+                                    let mag = sqrt(pos.x*pos.x + pos.y*pos.y + pos.z*pos.z)
+                                    maxMagnitude = max(maxMagnitude, mag)
+
+                                    // Flag positions that are way outside normal range (>10 units from origin)
+                                    if mag > 10.0 || pos.x.isNaN || pos.y.isNaN || pos.z.isNaN {
+                                        extremeCount += 1
+                                        if extremeIndices.count < 10 {
+                                            extremeIndices.append(i)
+                                        }
+                                    }
+                                }
+
+                                vrmLog("")
+                                vrmLog("🔍 [GPU MORPHED BUFFER VALIDATION] mesh=\(meshIndex) prim=\(primitiveIndex)")
+                                vrmLog("   Vertex count: \(vertexCount)")
+                                vrmLog("   Max position magnitude: \(maxMagnitude)")
+                                vrmLog("   Extreme positions (>10 units): \(extremeCount)")
+
+                                if extremeCount > 0 {
+                                    vrmLog("   ❌ FOUND EXTREME POSITIONS IN MORPHED BUFFER!")
+                                    vrmLog("   First few extreme vertex indices: \(extremeIndices)")
+                                    for idx in extremeIndices.prefix(5) {
+                                        let pos = positions[idx]
+                                        vrmLog("      v[\(idx)]: (\(pos.x), \(pos.y), \(pos.z)) mag=\(sqrt(pos.x*pos.x + pos.y*pos.y + pos.z*pos.z))")
+                                    }
+                                    vrmLog("   → This is the source of the wedge artifact!")
+                                } else {
+                                    vrmLog("   ✅ All morphed positions within normal range")
+                                }
+                            }
+                        }
+                    }
+                    #endif
                 }
             }
         }
@@ -1443,7 +1501,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Run compute pass for morphs BEFORE render encoder
+        performanceTracker?.beginPhase(.morphSetup)
         let morphedBuffers = applyMorphTargetsCompute(commandBuffer: commandBuffer)
+        performanceTracker?.endPhase(.morphSetup)
         if !morphedBuffers.isEmpty {
             performanceTracker?.recordMorphCompute()
         }
@@ -1466,6 +1526,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // fix), so its compute encoder must be opened+closed before any other encoder
         // (compute or render) is active on the same buffer — Metal forbids overlap.
         if enableSpringBone, model.springBone != nil {
+            performanceTracker?.beginPhase(.springBone)
 
             // Calculate actual deltaTime. `simulationDeltaTime` is the
             // explicit offline-rendering escape: when set, use it directly
@@ -1529,9 +1590,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 // CRITICAL: Propagate spring bone transforms through entire hierarchy before skinning
                 model.updateNodeTransforms()
 
+                // Report sleep-gate stats to the performance tracker.
+                performanceTracker?.recordSleepingBones(springBoneCompute.sleepingBoneCount)
+
                 // Periodic status logging
                 if frameCounter % 120 == 1 {  // Every 2 seconds at 60fps
-                    vrmLogPhysics("[SpringBone] GPU physics running: \(model.springBoneBuffers?.numBones ?? 0) bones simulated")
+                    vrmLogPhysics("[SpringBone] GPU physics running: \(model.springBoneBuffers?.numBones ?? 0) bones simulated, \(springBoneCompute.sleepingBoneCount) asleep")
                 }
             } else {
                 vrmLogPhysics("⚠️ [VRMRenderer] Warning: SpringBone GPU system is nil despite having SpringBone data")
@@ -1539,6 +1603,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLogPhysics("❌ [SpringBone] ERROR: GPU system is nil despite Spring Bone data present")
                 }
             }
+            performanceTracker?.endPhase(.springBone)
         }
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
@@ -1610,16 +1675,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Reset skinning cache at frame boundary
             skinningSystem?.beginFrame()
 
+            // When animation is active, joints may have changed; mark all skins dirty.
+            if isAnimationActive || animationState != nil {
+                skinningSystem?.markAllSkinsDirty()
+            }
+
             // Update joint matrices for ALL skins
             for (skinIndex, skin) in model.skins.enumerated() {
                 vrmLog("[SKINNING] Updating \(skin.joints.count) joint matrices for skin \(skinIndex) at offset \(skin.matrixOffset)")
                 skinningSystem?.updateJointMatrices(for: skin, skinIndex: skinIndex)
 
                 // PHASE 1 VALIDATION: GPU readback check (every 60 frames)
+                #if DEBUG
                 if frameCounter % 60 == 0 && skinIndex == 0 {
                     vrmLog("\n═══ PHASE 1: GPU VALIDATION ═══")
                     skinningSystem?.validateJointMatricesGPU(for: skin, skinIndex: skinIndex, expectNonIdentity: animationState != nil)
                 }
+                #endif
             }
 
             // PHASE 1 VALIDATION: Vertex attributes check (once at start)
@@ -1758,6 +1830,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // ALPHA MODE QUEUING: Collect all primitives and sort by alpha mode
         // PERFORMANCE OPTIMIZATION: Use cached render items if available
+        performanceTracker?.beginPhase(.renderItemBuild)
         var allItems: [RenderItem]
 
         if let cached = cachedRenderItems, !cacheNeedsRebuild {
@@ -2115,6 +2188,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("[VRMRenderer] ✅ Cached \(allItems.count) render items for reuse")
             }
         } // End of cache rebuild block
+        performanceTracker?.endPhase(.renderItemBuild)
 
         // DEBUG SINGLE MESH MODE: Only render the first item for systematic testing
         // CRITICAL DEBUG: Log execution path to understand why workaround isn't triggered
@@ -2137,7 +2211,25 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[WORKAROUND LOOP] Starting render loop with \(itemsToRender.count) items")
 
         // DRAW LIST BISECT: Filter by draw index if requested
+        performanceTracker?.beginPhase(.commandEncode)
         var drawIndex = 0
+
+        // Experimental opaque depth prepass (default off). When it runs, the
+        // non-face opaque main draws switch to `.lessEqual` + no-write so early-Z
+        // rejects occluded fragments instead of re-writing depth.
+        var depthPrepassRan = false
+        if config.enableDepthPrepass {
+            depthPrepassRan = renderDepthPrepass(
+                encoder: encoder,
+                itemsToRender: itemsToRender,
+                morphedBuffers: morphedBuffers,
+                model: model,
+                frustum: frameFrustum,
+                inflatedModelMin: inflatedModelMin,
+                inflatedModelMax: inflatedModelMax,
+                skinnedCullMatrix: skinnedCullMatrix,
+                hasSkinning: hasSkinning)
+        }
 
         vrmLog("[LOOP DEBUG] About to iterate over \(itemsToRender.count) items")
         for (index, item) in itemsToRender.enumerated() {
@@ -3234,7 +3326,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 
                 switch materialAlphaMode {
                 case "opaque":
-                    encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
+                    // After a depth prepass, opaque depth is already written: test
+                    // `.lessEqual` and don't re-write (early-Z). Otherwise the
+                    // standard `.less` + write.
+                    let opaqueState = (depthPrepassRan ? depthStencilStates["opaqueEqual"] : nil) ?? depthStencilStates["opaque"]
+                    encoderStateCache.setDepthStencilState(encoder, opaqueState)
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
@@ -3284,6 +3380,27 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 // Check if joint buffer is set
                 if isSkinned && hasSkinning {
                     vrmLog("  - Joint buffer will be set for skin index: \(item.node.skin ?? 0)")
+                }
+            }
+
+            // If function-constant specialization is enabled, try to switch
+            // to a per-material compiled variant before the draw. This is done
+            // before the A2C alpha-mode remap so the feature key still sees
+            // MASK as alphaMode == 1; the helper itself skips A2C draws.
+            // Wireframe mode forces the fallback wireframe PSO, so leave it alone.
+            if !debugWireframe,
+               let specializedPipeline = specializedMToonPipelineIfAvailable(
+                isSkinned: isSkinned,
+                materialAlphaMode: materialAlphaMode,
+                mtoonUniforms: mtoonUniforms
+            ) {
+                if frameCounter < 2 {
+                    vrmLog("[PSO] Switching to specialized MToon pipeline: \(specializedPipeline.label ?? "UNKNOWN")")
+                }
+                encoderStateCache.setRenderPipelineState(encoder, specializedPipeline)
+                if lastPipelineState !== specializedPipeline {
+                    performanceTracker?.recordStateChange(type: .pipeline)
+                    lastPipelineState = specializedPipeline
                 }
             }
 
@@ -3772,6 +3889,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             skinnedCullMatrix: skinnedCullMatrix
         )
 
+        performanceTracker?.endPhase(.commandEncode)
         encoder.endEncoding()
 
         // End performance tracking
@@ -3815,6 +3933,112 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     // MARK: - MToon Outline Rendering
+
+    /// Opaque-only depth prepass (experimental, gated by ``RendererConfig/enableDepthPrepass``).
+    /// Writes depth for opaque, non-face geometry using the position-only depth
+    /// pipelines so the fragment-bound main pass can early-Z reject occluded
+    /// fragments. Uses raw encoder calls and resets the encoder state cache on
+    /// exit so the main loop re-binds cleanly. Returns true if it issued draws.
+    @discardableResult
+    private func renderDepthPrepass(
+        encoder: MTLRenderCommandEncoder,
+        itemsToRender: [RenderItem],
+        morphedBuffers: [MorphKey: MTLBuffer],
+        model: VRMModel,
+        frustum: Frustum,
+        inflatedModelMin: SIMD3<Float>,
+        inflatedModelMax: SIMD3<Float>,
+        skinnedCullMatrix: matrix_float4x4,
+        hasSkinning: Bool
+    ) -> Bool {
+        guard depthPrepassPipelineState != nil || skinnedDepthPrepassPipelineState != nil,
+              let prepassDepthState = depthStencilStates["prepass"] else { return false }
+
+        encoder.setDepthStencilState(prepassDepthState)
+        encoder.setCullMode(.back)
+        encoder.setFrontFacing(.counterClockwise)
+        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+
+        var issued = false
+        for item in itemsToRender {
+            // v1: opaque, non-face only. Blend/mask/face keep current behavior.
+            guard item.effectiveAlphaMode == "opaque", !item.isFaceMaterial else { continue }
+            let primitive = item.primitive
+            guard let vertexBuffer = primitive.vertexBuffer,
+                  let indexBuffer = primitive.indexBuffer else { continue }
+
+            let nodeHasSkin = item.node.skin != nil && hasSkinning
+            let meshUsesSkinning = primitive.hasJoints && primitive.hasWeights
+            let isSkinned = (nodeHasSkin || meshUsesSkinning) && hasSkinning
+
+            // Frustum cull identically to the main pass.
+            let cullModel: matrix_float4x4
+            let cullMin: SIMD3<Float>
+            let cullMax: SIMD3<Float>
+            if isSkinned {
+                cullModel = skinnedCullMatrix; cullMin = inflatedModelMin; cullMax = inflatedModelMax
+            } else {
+                cullModel = item.node.worldMatrix; cullMin = primitive.localMin; cullMax = primitive.localMax
+            }
+            let aabb = AABBTransform.worldAABB(localMin: cullMin, localMax: cullMax, modelMatrix: cullModel)
+            if frustum.cullsAABB(min: aabb.min, max: aabb.max) { continue }
+
+            let pipeline = isSkinned ? skinnedDepthPrepassPipelineState : depthPrepassPipelineState
+            guard let pipeline else { continue }
+            encoder.setRenderPipelineState(pipeline)
+
+            // modelMatrix: identity for skinned (baked into joints), world for rigid.
+            uniforms.modelMatrix = isSkinned ? matrix_identity_float4x4 : item.node.worldMatrix
+
+            encoder.setVertexBuffer(vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
+
+            let stableKey: MorphKey = (UInt64(item.meshIndex) << 32) | UInt64(item.primIdxInMesh)
+            if let morphedPosBuffer = morphedBuffers[stableKey] {
+                encoder.setVertexBuffer(morphedPosBuffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
+                var flag: UInt32 = 1
+                encoder.setVertexBytes(&flag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+            } else {
+                if emptyFloat3Buffer == nil {
+                    emptyFloat3Buffer = device.makeBuffer(length: MemoryLayout<SIMD3<Float>>.stride, options: .storageModeShared)
+                }
+                encoder.setVertexBuffer(emptyFloat3Buffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
+                var flag: UInt32 = 0
+                encoder.setVertexBytes(&flag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+            }
+
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
+
+            if isSkinned {
+                let skinIndex = item.node.skin ?? (meshUsesSkinning ? 0 : -1)
+                if skinIndex >= 0, skinIndex < model.skins.count,
+                   let jointBuffer = skinningSystem?.getJointMatricesBuffer() {
+                    let byteOffset = model.skins[skinIndex].matrixOffset * MemoryLayout<float4x4>.stride
+                    encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
+                }
+                if primitive.firstPersonHiddenFlagsBuffer == nil && primitive.vertexCount > 0 {
+                    let zeros = [UInt8](repeating: 0, count: primitive.vertexCount)
+                    primitive.firstPersonHiddenFlagsBuffer = device.makeBuffer(bytes: zeros, length: zeros.count, options: .storageModeShared)
+                }
+                if let fpBuffer = primitive.firstPersonHiddenFlagsBuffer {
+                    encoder.setVertexBuffer(fpBuffer, offset: 0, index: ResourceIndices.firstPersonHiddenFlagsBuffer)
+                }
+            }
+
+            encoder.drawIndexedPrimitives(
+                type: primitive.primitiveType,
+                indexCount: primitive.indexCount,
+                indexType: primitive.indexType,
+                indexBuffer: indexBuffer,
+                indexBufferOffset: primitive.indexBufferOffset
+            )
+            issued = true
+        }
+
+        // The prepass bypassed the encoder state cache; reset it so the main loop
+        // re-binds pipeline/depth/cull/buffers from a known-empty state.
+        encoderStateCache.reset()
+        return issued
+    }
 
     private func renderMToonOutlines(
         encoder: MTLRenderCommandEncoder,
@@ -3915,7 +4139,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 continue
             }
 
-            encoder.setRenderPipelineState(pipeline)
+            // Dedupe the pipeline bind: consecutive outline draws almost always
+            // share the same (skinned) pipeline, so route through the encoder state
+            // cache to skip redundant identical binds. The main draw loop also binds
+            // through this cache, so its tracked state is consistent here. Output is
+            // bit-identical — this only removes no-op state calls.
+            encoderStateCache.setRenderPipelineState(encoder, pipeline)
 
             // Set vertex buffer
             encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
@@ -4193,10 +4422,30 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return descriptor
     }
     
+    /// Returns a function-constant-specialized MToon pipeline for the given
+    /// material configuration, or `nil` to keep the fallback dynamic pipeline.
+    ///
+    /// Specialization is skipped for MASK materials that are routed to the
+    /// alpha-to-coverage pipeline, and for any alpha-mode value outside the
+    /// OPAQUE/MASK/BLEND range, so those paths continue to use the existing
+    /// fallback PSOs.
+    func specializedMToonPipelineIfAvailable(
+        isSkinned: Bool,
+        materialAlphaMode: String,
+        mtoonUniforms: MToonMaterialUniforms
+    ) -> MTLRenderPipelineState? {
+        guard config.enableMToonFunctionConstants else { return nil }
+
+        let usingA2C = materialAlphaMode == "mask" && config.alphaToCoverageForMASK && usesMultisampling
+        guard !usingA2C, mtoonUniforms.alphaMode <= 2 else { return nil }
+
+        let features = MToonFunctionConstantKey(material: mtoonUniforms)
+        return specializedMToonPipelineState(isSkinned: isSkinned, features: features)
+    }
+
     /// Returns the render-pipeline state that the draw loop should bind for a
     /// given material's alpha mode and skinning state.
     ///
-    /// Default behavior matches the VRM 1.0 spec / UniVRM reference:
     /// `OPAQUE` and `MASK` both use the opaque PSO (alpha-test in the shader),
     /// `BLEND` uses the blend PSO. When `RendererConfig.alphaToCoverageForMASK`
     /// is set AND MSAA is active, MASK opts into the hardware

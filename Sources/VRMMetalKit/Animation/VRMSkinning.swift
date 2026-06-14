@@ -68,6 +68,10 @@ public class VRMSkinningSystem {
     private var currentFrameNumber: Int = 0
     private var skinLastUpdatedFrame: [Int: Int] = [:]  // skinIndex -> frameNumber
 
+    // Dirty tracking: only recompute joint matrices when a skin's joints may have changed.
+    private var skinDirty: [Int: Bool] = [:]
+    private var skinCount: Int = 0
+
     /// A/B test hook: when set to a skin index, ``updateJointMatrices(for:skinIndex:)`` writes identity matrices for that skin instead of the computed palette.
     public var testIdentityPalette: Int? = nil
 
@@ -101,6 +105,10 @@ public class VRMSkinningSystem {
         }
 
         totalMatrixCount = currentOffset
+        skinCount = skins.count
+        for index in skins.indices {
+            skinDirty[index] = true
+        }
 
         // Allocate the large buffer for all skins
         // CRITICAL: Pad to at least 256 matrices so shader clamp to 255 is always safe
@@ -149,6 +157,12 @@ public class VRMSkinningSystem {
     public func updateJointMatrices(for skin: VRMSkin, skinIndex: Int) {
         guard let buffer = jointMatricesBuffer else { return }
 
+        // Skip recomputation when the skin's joints have not changed.
+        guard isSkinDirty(skinIndex: skinIndex) else {
+            markSkinUpdated(skinIndex: skinIndex)
+            return
+        }
+
         let pointer = buffer.contents()
             .advanced(by: skin.bufferByteOffset)
             .bindMemory(to: float4x4.self, capacity: skin.joints.count)
@@ -164,6 +178,7 @@ public class VRMSkinningSystem {
         lastUpdatedSkinIndex = skinIndex
         markSkinUpdated(skinIndex: skinIndex)
         debugFrameCount += 1
+        clearSkinDirty(skinIndex: skinIndex)
 
         // Iterate via unsafe buffer pointers so the hot loop doesn't
         // retain/release each VRMNode reference or the array containers on
@@ -216,6 +231,28 @@ public class VRMSkinningSystem {
     /// Stamps a single skin as fresh for the current frame.
     public func markSkinUpdated(skinIndex: Int) {
         skinLastUpdatedFrame[skinIndex] = currentFrameNumber
+    }
+
+    /// Marks a single skin as needing joint-matrix recomputation.
+    public func markSkinDirty(skinIndex: Int) {
+        skinDirty[skinIndex] = true
+    }
+
+    /// Clears the dirty flag for a single skin after it has been recomputed.
+    public func clearSkinDirty(skinIndex: Int) {
+        skinDirty[skinIndex] = false
+    }
+
+    /// Returns `true` if the skin should have its joint matrices recomputed this frame.
+    public func isSkinDirty(skinIndex: Int) -> Bool {
+        return skinDirty[skinIndex] ?? true
+    }
+
+    /// Marks every configured skin as needing joint-matrix recomputation.
+    public func markAllSkinsDirty() {
+        for index in 0..<skinCount {
+            skinDirty[index] = true
+        }
     }
 
     /// Logs a warning if `skinIndex` was not updated for `frameNumber`.

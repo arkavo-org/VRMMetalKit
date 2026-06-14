@@ -37,6 +37,7 @@ struct BenchmarkOptions {
     var outlineWidth: Float = 0.02
     var enableSpringBone: Bool = false
     var wireframe: Bool = false
+    var depthPrepass: Bool = false
     var lighting: String = "standard"
     var debugUVs: Int32 = 0
     var cameraOffsetY: Float = 0  // Shift camera target/eye in Y to push avatar off-screen for cull tests
@@ -144,6 +145,8 @@ func parseArguments() -> BenchmarkOptions? {
             opts.enableSpringBone = true
         case "--wireframe":
             opts.wireframe = true
+        case "--depth-prepass":
+            opts.depthPrepass = true
         case "--lighting":
             guard let v = nextValue(for: a) else { return nil }
             opts.lighting = v.lowercased()
@@ -657,6 +660,7 @@ struct VRMBenchmarkCLI {
         var config = RendererConfig()
         config.sampleCount = opts.sampleCount
         config.strict = .off
+        config.enableDepthPrepass = opts.depthPrepass
         let renderer = VRMRenderer(device: device, config: config)
         renderer.performanceTracker = PerformanceTracker()
         renderer.loadModel(model)
@@ -859,6 +863,33 @@ struct VRMBenchmarkCLI {
         printCompactStats(label: "encode", samples: samples.map(\.encodeMs))
         printCompactStats(label: "gpu wait", samples: samples.map(\.waitMs))
 
+        // Sub-phase CPU breakdown captured inside drawOffscreenHeadless by the
+        // PerformanceTracker. These attribute the `encode` span to morph setup,
+        // spring-bone dispatch, render-item build, and command encoding. A phase
+        // with no samples (e.g. spring bone when disabled) is omitted.
+        // (jsonKey, displayLabel, phase) — jsonKey is persisted/gated; label is
+        // the short human-report column.
+        let subPhases: [(key: String, label: String, phase: PerformanceTracker.Phase)] = [
+            ("morphSetup", "morphSetup", .morphSetup),
+            ("springBone", "springBone", .springBone),
+            ("renderItemBuild", "renderItem", .renderItemBuild),
+            ("commandEncode", "cmdEncode", .commandEncode),
+        ]
+        let subPhaseSamples: [(key: String, label: String, samples: [Double])] = subPhases.compactMap {
+            guard let s = renderer.performanceTracker?.samples(for: $0.phase), !s.isEmpty else { return nil }
+            return (key: $0.key, label: $0.label, samples: s)
+        }
+        if !subPhaseSamples.isEmpty {
+            print("""
+
+            Sub-phase CPU breakdown (inside encode, per frame)
+            ----------------------------------------------------------------------
+            """)
+            for entry in subPhaseSamples {
+                printCompactStats(label: entry.label, samples: entry.samples)
+            }
+        }
+
         if let m = rendererMetrics {
             // PerformanceTracker returns counters averaged per frame.
             let perFrame: (Int) -> String = { value in
@@ -882,12 +913,16 @@ struct VRMBenchmarkCLI {
         }
         print("======================================================================\n")
 
-        let report = makeReport(opts: opts, stats: [
+        var statsDict: [String: BenchmarkReport.FrameStatsSnapshot] = [
             "render":    snapshot(stats),
             "animation": snapshot(FrameStats.compute(samples.map(\.animationMs))),
             "encode":    snapshot(FrameStats.compute(samples.map(\.encodeMs))),
             "wait":      snapshot(FrameStats.compute(samples.map(\.waitMs))),
-        ])
+        ]
+        for entry in subPhaseSamples {
+            statsDict[entry.key] = snapshot(FrameStats.compute(entry.samples))
+        }
+        let report = makeReport(opts: opts, stats: statsDict)
         exit(finalizeReport(opts: opts, report: report))
     }
 }

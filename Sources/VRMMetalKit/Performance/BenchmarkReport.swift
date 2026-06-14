@@ -34,8 +34,12 @@ public struct BenchmarkReport: Codable, Equatable, Sendable {
     public let input: Input
     public let config: Config
     public let system: System
-    /// Per-phase frame-time statistics keyed by phase name
-    /// (`render`, `animation`, `encode`, `wait`, `load`, `transforms`).
+    /// Per-phase frame-time statistics keyed by phase name. Top-level phases:
+    /// `render`, `animation`, `encode`, `wait`, `load`, `transforms`. Render mode
+    /// also emits sub-phases measured inside `encode` by `PerformanceTracker`:
+    /// `morphSetup`, `springBone`, `renderItemBuild`, `commandEncode`. Adding new
+    /// phase keys is backward-compatible (the comparator gates the intersection),
+    /// so it does not require a schema bump.
     public let stats: [String: FrameStatsSnapshot]
 
     public struct Input: Codable, Equatable, Sendable {

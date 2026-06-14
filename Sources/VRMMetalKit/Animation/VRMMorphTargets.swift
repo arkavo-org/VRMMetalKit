@@ -105,6 +105,8 @@ public class VRMMorphTargetSystem {
     public static let morphEpsilon = VRMConstants.Physics.morphEpsilon
     private var activeSet: [ActiveMorph] = []
     private var activeSetBuffer: MTLBuffer?
+    private var lastActiveSetWeights: [Float]?
+    private var candidatesBuffer: [ActiveMorph] = []
 
     // Morphed output buffers (per primitive)
     private var morphedPositionBuffers: [Int: MTLBuffer] = [:] // primitiveID -> buffer
@@ -227,20 +229,50 @@ public class VRMMorphTargetSystem {
     /// in place; returns the resulting array for callers that want to
     /// inspect it.
     public func buildActiveSet(weights: [Float]) -> [ActiveMorph] {
-        // Collect non-zero weights above epsilon
-        var candidates: [ActiveMorph] = []
-        for (index, weight) in weights.enumerated() {
-            if abs(weight) > VRMMorphTargetSystem.morphEpsilon {
-                candidates.append(ActiveMorph(index: UInt32(index), weight: weight))
+        return buildActiveSetImpl(weights)
+    }
+
+    internal func buildActiveSet(weights: ArraySlice<Float>) -> [ActiveMorph] {
+        return buildActiveSetImpl(weights)
+    }
+
+    private func buildActiveSetImpl<C: Collection>(_ weights: C) -> [ActiveMorph] where C.Element == Float {
+        let epsilon = VRMMorphTargetSystem.morphEpsilon
+
+        // Fast path when the weights are empty or all effectively zero.
+        if weights.isEmpty || weights.allSatisfy({ abs($0) <= epsilon }) {
+            activeSet = []
+            lastActiveSetWeights = []
+            return []
+        }
+
+        // Cache a concrete copy of the weights for cheap equality checks.
+        let weightsArray: [Float] = (weights as? [Float]) ?? Array(weights)
+
+        // Reuse the previously-built active set if the weights haven't changed.
+        if let last = lastActiveSetWeights,
+           last.count == weightsArray.count,
+           !zip(last, weightsArray).contains(where: { abs($0 - $1) > epsilon }) {
+            return activeSet
+        }
+
+        // Reuse the pre-sized scratch buffer instead of allocating each frame.
+        candidatesBuffer.removeAll(keepingCapacity: true)
+        for (index, weight) in weightsArray.enumerated() {
+            if abs(weight) > epsilon {
+                candidatesBuffer.append(ActiveMorph(index: UInt32(index), weight: weight))
             }
         }
 
         // Sort by absolute weight descending
-        candidates.sort { abs($0.weight) > abs($1.weight) }
+        candidatesBuffer.sort { abs($0.weight) > abs($1.weight) }
 
         // Take top K morphs
-        let activeCount = min(candidates.count, VRMMorphTargetSystem.maxActiveMorphs)
-        activeSet = Array(candidates.prefix(activeCount))
+        let activeCount = min(candidatesBuffer.count, VRMMorphTargetSystem.maxActiveMorphs)
+        activeSet.removeAll(keepingCapacity: true)
+        for i in 0..<activeCount {
+            activeSet.append(candidatesBuffer[i])
+        }
 
         // Update active set buffer
         if let buffer = activeSetBuffer, !activeSet.isEmpty {
@@ -250,6 +282,7 @@ public class VRMMorphTargetSystem {
             }
         }
 
+        lastActiveSetWeights = weightsArray
         return activeSet
     }
 
@@ -303,6 +336,92 @@ public class VRMMorphTargetSystem {
 
     // MARK: - SoA Morph Accumulation with Active Set
 
+    /// Encodes the morph-accumulation compute dispatch for one primitive into an
+    /// existing `MTLComputeCommandEncoder`.
+    ///
+    /// Use this overload when batching multiple primitives into a single compute
+    /// pass. The caller is responsible for creating/ending the encoder and for
+    /// skipping primitives whose active set is empty (the renderer binds the base
+    /// vertex buffer in that case).
+    ///
+    /// - Parameters:
+    ///   - encoder: The compute encoder to receive the dispatch.
+    ///   - basePositions: Per-vertex base positions (read).
+    ///   - deltaPositions: SoA delta buffer
+    ///     `[morph0[v0..vN], morph1[v0..vN], …]` sized at least
+    ///     `morphCount * vertexCount * sizeof(SIMD3<Float>)`.
+    ///   - outputPositions: Per-vertex output buffer (write).
+    ///   - vertexCount: Number of vertices in this primitive.
+    ///   - morphCount: Total morph targets in `deltaPositions` (not the
+    ///     active count).
+    /// - Returns: `true` when the dispatch was encoded; `false` when the active
+    ///   set is empty, the active-set buffer or pipeline state is missing, or
+    ///   (DEBUG builds only) the delta buffer is smaller than
+    ///   `morphCount * vertexCount` requires.
+    public func applyMorphsCompute(
+        encoder: MTLComputeCommandEncoder,
+        basePositions: MTLBuffer,
+        deltaPositions: MTLBuffer,  // SoA layout: [morph0[v0..vN], morph1[v0..vN], ...]
+        outputPositions: MTLBuffer,
+        vertexCount: Int,
+        morphCount: Int
+    ) -> Bool {
+        guard !activeSet.isEmpty else {
+            vrmLog("⚠️ [VRMMorphTargetSystem] Active set is empty, skipping batched morph compute")
+            return false
+        }
+
+        guard let activeSetBuffer = activeSetBuffer else {
+            vrmLog("⚠️ [VRMMorphTargetSystem] Active set buffer not initialized, skipping morph compute")
+            return false
+        }
+
+        // Verify delta buffer size matches expected T*V (in DEBUG only)
+        #if DEBUG
+        let expectedDeltaSize = morphCount * vertexCount * MemoryLayout<SIMD3<Float>>.stride
+        if deltaPositions.length < expectedDeltaSize {
+            vrmLog("❌ [VRMMorphTargetSystem] DeltaPos buffer size mismatch")
+            vrmLog("  Expected: \(expectedDeltaSize) bytes for T=\(morphCount) V=\(vertexCount)")
+            vrmLog("  Actual: \(deltaPositions.length) bytes")
+            // Return false to skip compute dispatch and fall back to CPU path
+            return false
+        }
+        #endif
+
+        guard let pipelineState = morphAccumulatePipelineState else {
+            return false
+        }
+
+        encoder.setComputePipelineState(pipelineState)
+
+        // Set buffers
+        encoder.setBuffer(basePositions, offset: 0, index: 0)
+        encoder.setBuffer(deltaPositions, offset: 0, index: 1)
+        encoder.setBuffer(activeSetBuffer, offset: 0, index: 2)
+
+        // Set constants
+        var vCount = UInt32(vertexCount)
+        var mCount = UInt32(morphCount)
+        var aCount = UInt32(activeSet.count)
+
+        encoder.setBytes(&vCount, length: MemoryLayout<UInt32>.size, index: 3)
+        encoder.setBytes(&mCount, length: MemoryLayout<UInt32>.size, index: 4)
+        encoder.setBytes(&aCount, length: MemoryLayout<UInt32>.size, index: 5)
+        encoder.setBuffer(outputPositions, offset: 0, index: 6)
+
+        // Dispatch threads
+        let threadsPerThreadgroup = MTLSize(width: 256, height: 1, depth: 1)
+        let threadgroupsPerGrid = MTLSize(
+            width: (vertexCount + 255) / 256,
+            height: 1,
+            depth: 1
+        )
+
+        encoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
+
+        return true
+    }
+
     /// Encodes the morph-accumulation compute pass for one primitive into `commandBuffer`.
     ///
     /// When the active set is empty, encodes a blit that copies
@@ -351,61 +470,22 @@ public class VRMMorphTargetSystem {
             return true
         }
 
-        guard let activeSetBuffer = activeSetBuffer else {
-            vrmLog("⚠️ [VRMMorphTargetSystem] Active set buffer not initialized, skipping morph compute")
-            return false
-        }
-
-        // Verify delta buffer size matches expected T*V (in DEBUG only)
-        #if DEBUG
-        let expectedDeltaSize = morphCount * vertexCount * MemoryLayout<SIMD3<Float>>.stride
-        if deltaPositions.length < expectedDeltaSize {
-            vrmLog("❌ [VRMMorphTargetSystem] DeltaPos buffer size mismatch")
-            vrmLog("  Expected: \(expectedDeltaSize) bytes for T=\(morphCount) V=\(vertexCount)")
-            vrmLog("  Actual: \(deltaPositions.length) bytes")
-            // Return false to skip compute dispatch and fall back to CPU path
-            return false
-        }
-        #endif
-
-        guard let pipelineState = morphAccumulatePipelineState else {
-            return false
-        }
-
         guard let computeEncoder = commandBuffer.makeComputeCommandEncoder() else {
             return false
         }
         computeEncoder.label = "Morph Accumulate"
 
-        computeEncoder.setComputePipelineState(pipelineState)
-
-        // Set buffers
-        computeEncoder.setBuffer(basePositions, offset: 0, index: 0)
-        computeEncoder.setBuffer(deltaPositions, offset: 0, index: 1)
-        computeEncoder.setBuffer(activeSetBuffer, offset: 0, index: 2)
-
-        // Set constants
-        var vCount = UInt32(vertexCount)
-        var mCount = UInt32(morphCount)
-        var aCount = UInt32(activeSet.count)
-
-        computeEncoder.setBytes(&vCount, length: MemoryLayout<UInt32>.size, index: 3)
-        computeEncoder.setBytes(&mCount, length: MemoryLayout<UInt32>.size, index: 4)
-        computeEncoder.setBytes(&aCount, length: MemoryLayout<UInt32>.size, index: 5)
-        computeEncoder.setBuffer(outputPositions, offset: 0, index: 6)
-
-        // Dispatch threads
-        let threadsPerThreadgroup = MTLSize(width: 256, height: 1, depth: 1)
-        let threadgroupsPerGrid = MTLSize(
-            width: (vertexCount + 255) / 256,
-            height: 1,
-            depth: 1
+        let success = applyMorphsCompute(
+            encoder: computeEncoder,
+            basePositions: basePositions,
+            deltaPositions: deltaPositions,
+            outputPositions: outputPositions,
+            vertexCount: vertexCount,
+            morphCount: morphCount
         )
 
-        computeEncoder.dispatchThreadgroups(threadgroupsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
         computeEncoder.endEncoding()
-
-        return true
+        return success
     }
 
     // Removed legacy GPU morph application - only compute path exists
@@ -478,6 +558,8 @@ public class VRMExpressionController: @unchecked Sendable {
 
     // Track morph weights per mesh
     private var meshMorphWeights: [Int: [Float]] = [:]  // meshIndex -> morph weights for that mesh
+    private var cachedMeshMorphWeights: [Int: [Float]] = [:]
+    private var weightsDirty = true
 
     // Material color override tracking for expression-driven material colors
     private var materialColorOverrides: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
@@ -539,14 +621,14 @@ public class VRMExpressionController: @unchecked Sendable {
     public func setExpressionWeight(_ preset: VRMExpressionPreset, weight: Float) {
         let clampedWeight = clamp(weight, min: 0, max: 1)
         currentWeights[preset] = clampedWeight
-        updateMorphTargets()
+        weightsDirty = true
     }
 
     /// Sets the weight of a previously registered custom expression by name. No-op if `name` was not registered via ``registerCustomExpression(_:name:)``.
     public func setCustomExpressionWeight(_ name: String, weight: Float) {
         guard customExpressions[name] != nil else { return }
         customCurrentWeights[name] = clamp(weight, min: 0, max: 1)
-        updateMorphTargets()
+        weightsDirty = true
     }
 
     /// Set multiple custom expression weights at once (more efficient for Perfect Sync).
@@ -560,7 +642,7 @@ public class VRMExpressionController: @unchecked Sendable {
         for (name, weight) in weights where customExpressions[name] != nil {
             customCurrentWeights[name] = clamp(weight, min: 0, max: 1)
         }
-        updateMorphTargets()
+        weightsDirty = true
     }
 
     /// Current weight of a preset expression. Returns 0 when the preset
@@ -651,6 +733,7 @@ public class VRMExpressionController: @unchecked Sendable {
     private func updateMorphTargets() {
         // Rebuild per-mesh weights dynamically from active expressions
         meshMorphWeights.removeAll()
+        cachedMeshMorphWeights.removeAll()
 
         // Clear material color overrides for fresh blending
         materialColorOverrides.removeAll()
@@ -689,7 +772,20 @@ public class VRMExpressionController: @unchecked Sendable {
         if activeCount > 0 {
             vrmLog("[VRMExpressionController] Updated morph weights for \(activeCount) active expressions across \(meshMorphWeights.keys.count) meshes")
         }
+
+        // Deep-copy final weights into the cache so reads can avoid recomputation.
+        for (meshIndex, weights) in meshMorphWeights {
+            cachedMeshMorphWeights[meshIndex] = weights
+        }
+
         // Note: Renderer will push per-primitive weights; no global push here
+    }
+
+    /// Recomputes per-mesh weights only when expression weights have changed since the last read.
+    private func ensureWeightsUpdated() {
+        guard weightsDirty else { return }
+        updateMorphTargets()
+        weightsDirty = false
     }
 
     /// Applies isBinary quantization and expression-group override semantics in-place.
@@ -848,9 +944,14 @@ public class VRMExpressionController: @unchecked Sendable {
     /// primitive without knowing the underlying mesh's morph layout.
     public func weightsForMesh(_ meshIndex: Int, morphCount: Int) -> [Float] {
         guard morphCount > 0 else { return [] }
-        let arr = meshMorphWeights[meshIndex] ?? []
-        if arr.count >= morphCount { return Array(arr.prefix(morphCount)) }
-        return arr + Array(repeating: 0.0, count: morphCount - arr.count)
+        ensureWeightsUpdated()
+        let source = cachedMeshMorphWeights[meshIndex] ?? []
+        var result = [Float](repeating: 0.0, count: morphCount)
+        let copyCount = min(source.count, morphCount)
+        for i in 0..<copyCount {
+            result[i] = source[i]
+        }
+        return result
     }
 
 

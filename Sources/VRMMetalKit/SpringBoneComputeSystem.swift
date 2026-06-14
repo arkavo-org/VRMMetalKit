@@ -134,6 +134,32 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // across frames so springs don't each allocate their own tuple array.
     private var chainNodePositions: [(VRMNode, SIMD3<Float>, Int)] = []
 
+    // MARK: - Sleep gate state
+    /// Per-chain contiguous bone ranges derived from `rootBoneIndices`. Used to
+    /// attribute motion to individual spring chains for per-chain sleep decisions.
+    private var chainRanges: [Range<Int>] = []
+    /// Per-chain sleep flags. A chain sleeps when its bones have remained below
+    /// `sleepThreshold` for `sleepDelayFrames` consecutive frames.
+    private var chainSleepState: [Bool] = []
+    /// Consecutive frames below threshold for each chain.
+    private var chainSleepCounter: [Int] = []
+    /// Velocity threshold in units/sec below which a chain may fall asleep.
+    private var sleepThreshold: Float = 0.001
+    /// Number of consecutive frames below threshold required before sleeping.
+    private var sleepDelayFrames: Int = 5
+    /// Number of bones currently considered asleep.
+    public private(set) var sleepingBoneCount: Int = 0
+    /// Previous-frame target transforms for wake-on-motion detection.
+    private var previousRootPositionsForSleep: [SIMD3<Float>] = []
+    private var previousSphereCollidersForSleep: [SphereCollider] = []
+    private var previousCapsuleCollidersForSleep: [CapsuleCollider] = []
+    private var previousPlaneCollidersForSleep: [PlaneCollider] = []
+    /// Previous-frame global params for wake-on-force-change detection.
+    private var previousGlobalParamsForSleep: SpringBoneGlobalParams?
+    private var previousQualityForSleep: VRMConstants.SpringBoneQuality?
+    /// True when an explicit wake has been requested and not yet processed.
+    private var forceWakePending: Bool = false
+
     // MARK: - Center-space simulation (VRMC_springBone-1.0 §5.1)
     // Each entry records the center node index, the contiguous bone-buffer range occupied
     // by that spring's joints, and the center's world matrix from the previous frame.
@@ -349,10 +375,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         frameSubstepCount = min(Int(timeAccumulator / fixedDeltaTime), maxSubsteps)
         currentSubstepIndex = 0
 
-        // Capture all target transforms where animation wants to go this frame
-        // This is called ONCE per frame, not per substep
-        // Captures: root positions, world bind directions, collider transforms
-        if VRMConstants.Physics.enableRootInterpolation && frameSubstepCount > 0 {
+        // Capture all target transforms where animation wants to go this frame.
+        // This is called ONCE per frame, not per substep.
+        // Captures: root positions, world bind directions, collider transforms.
+        // Always capture when interpolation is enabled so the sleep gate can
+        // detect root/collider motion even on frames with zero substeps.
+        if VRMConstants.Physics.enableRootInterpolation {
             captureTargetTransforms(model: model)
 
             // Check for teleportation BEFORE entering substep loop
@@ -396,9 +424,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             fillCenterDeltaBufferForFrame(substepCount: frameSubstepCount)
         }
 
+        // Sleep gate: decide whether the XPBD pipeline can be skipped this frame.
+        // Only enabled on the shared-command-buffer (async runtime) path; the
+        // self-owned-buffer path is used for offline/conformance rendering where
+        // bit-determinism matters, and reading GPU buffers on the CPU before
+        // encoding each frame can perturb dispatch timing enough to break it.
+        let sleepGateEnabled = commandBuffer != nil
+        if sleepGateEnabled {
+            let chainVelocities = computeChainMaxVelocities(buffers: buffers)
+            let wakeDetected = detectWakeConditions(model: model,
+                                                    buffers: buffers,
+                                                    globalParams: globalParams)
+            updateSleepState(velocities: chainVelocities, wakeDetected: wakeDetected)
+        } else {
+            // Offline/sync path: keep everything awake and don't touch GPU buffers
+            // for heuristic reads.
+            for i in chainSleepState.indices {
+                chainSleepState[i] = false
+            }
+            sleepingBoneCount = 0
+        }
+
+        let allChainsAsleep = sleepGateEnabled && !chainSleepState.isEmpty && chainSleepState.allSatisfy { $0 }
+
         var stepsThisFrame = 0
 
-        // Process fixed steps (clamped to avoid spiral-of-death)
+        // Process fixed steps (clamped to avoid spiral-of-death).
+        // When every chain is asleep and no wake condition fired, skip the
+        // substep loop entirely to avoid dispatching the XPBD pipeline.
+        if allChainsAsleep {
+            timeAccumulator = 0
+        }
+
         while timeAccumulator >= fixedDeltaTime && stepsThisFrame < maxSubsteps {
             timeAccumulator -= fixedDeltaTime
             stepsThisFrame += 1
@@ -503,19 +560,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             vrmLogPhysics("⚠️ [SpringBone] Hit max substeps (\(maxSubsteps)) this frame. Dropping \(droppedSteps) pending step(s) to stay real-time.")
         }
 
-        // Commit all target transforms as previous for next frame's interpolation
-        if VRMConstants.Physics.enableRootInterpolation && stepsThisFrame > 0 {
+        // Commit all target transforms as previous for next frame's interpolation.
+        // Also commit when asleep so interpolation state stays current while the
+        // simulation is skipped.
+        if VRMConstants.Physics.enableRootInterpolation && (stepsThisFrame > 0 || allChainsAsleep) {
             commitAllTransforms()
         }
 
-        // Update center world matrices for the next frame's delta computation
-        if stepsThisFrame > 0 {
+        // Update center world matrices for the next frame's delta computation.
+        if stepsThisFrame > 0 || allChainsAsleep {
             commitCenterWorldMatrices(model: model)
         }
 
-        if frameSubstepCount > 0 {
-            lastFrameSubstepCount = frameSubstepCount
+        if frameSubstepCount > 0 || allChainsAsleep {
+            lastFrameSubstepCount = max(1, frameSubstepCount)
         }
+
+        // Snapshot targets and params for next frame's wake-condition checks.
+        captureSleepSnapshots(model: model, globalParams: globalParams)
+
         lastUpdateTime = CACurrentMediaTime()
     }
 
@@ -739,6 +802,201 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         pendingSnapshotSemaphore?.wait()
         pendingSelfOwnedCommandBuffer = nil
         pendingSnapshotSemaphore = nil
+    }
+
+    // MARK: - Sleep gate
+
+    /// Force every spring-bone chain to wake on the next update.
+    /// Callers should use this after teleporting the avatar or applying any
+    /// other discontinuous change that should not be treated as rest.
+    public func wakeAllBones() {
+        forceWakePending = true
+    }
+
+    private func wakeAllChains() {
+        forceWakePending = false
+        for i in chainSleepState.indices {
+            chainSleepState[i] = false
+        }
+        for i in chainSleepCounter.indices {
+            chainSleepCounter[i] = 0
+        }
+        sleepingBoneCount = 0
+    }
+
+    private func computeChainRanges(numBones: Int) -> [Range<Int>] {
+        var ranges: [Range<Int>] = []
+        for i in 0..<rootBoneIndices.count {
+            let start = Int(rootBoneIndices[i])
+            let end = (i + 1 < rootBoneIndices.count) ? Int(rootBoneIndices[i + 1]) : numBones
+            ranges.append(start..<end)
+        }
+        return ranges
+    }
+
+    private func computeChainMaxVelocities(buffers: SpringBoneBuffers) -> [Float] {
+        guard let bonePosCurr = buffers.bonePosCurr,
+              let bonePosPrev = buffers.bonePosPrev,
+              buffers.numBones > 0,
+              !chainRanges.isEmpty,
+              quality.substepRateHz > 0 else {
+            return Array(repeating: Float.greatestFiniteMagnitude, count: chainRanges.count)
+        }
+
+        // `bonePosCurr` holds the position at the end of the last substep and
+        // `bonePosPrev` holds the position at its start, so the displacement
+        // between them is over one substep. Convert to units/sec for the gate.
+        let substepDt = Float(1.0 / quality.substepRateHz)
+        let invSubstepDt = 1.0 / substepDt
+
+        let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+        let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+
+        var maxVelocities = [Float](repeating: 0, count: chainRanges.count)
+        for (index, range) in chainRanges.enumerated() {
+            var maxVel: Float = 0
+            for i in range {
+                guard i < buffers.numBones else { break }
+                let displacement = simd_length(currPtr[i] - prevPtr[i])
+                maxVel = max(maxVel, displacement * invSubstepDt)
+            }
+            maxVelocities[index] = maxVel
+        }
+        return maxVelocities
+    }
+
+    private func detectWakeConditions(model: VRMModel,
+                                      buffers: SpringBoneBuffers,
+                                      globalParams: SpringBoneGlobalParams) -> Bool {
+        if forceWakePending {
+            return true
+        }
+
+        // Still in startup settling period - don't sleep yet.
+        if globalParams.settlingFrames > 0 {
+            return true
+        }
+
+        // Quality preset change forces a wake so the new substep rate/iterations
+        // take effect immediately.
+        if let prevQuality = previousQualityForSleep, prevQuality != quality {
+            return true
+        }
+
+        let motionThreshold = sleepThreshold * max(cachedModelScale, VRMConstants.Physics.minScaleForThreshold)
+
+        // Root bone motion above threshold wakes every chain.
+        if !previousRootPositionsForSleep.isEmpty,
+           previousRootPositionsForSleep.count == targetRootPositions.count {
+            for i in 0..<targetRootPositions.count {
+                if simd_distance(targetRootPositions[i], previousRootPositionsForSleep[i]) > motionThreshold {
+                    return true
+                }
+            }
+        }
+
+        // Collider motion/scale changes wake physics.
+        if collidersMoved(previous: previousSphereCollidersForSleep,
+                          current: targetSphereColliders,
+                          threshold: motionThreshold) {
+            return true
+        }
+        if collidersMoved(previous: previousCapsuleCollidersForSleep,
+                          current: targetCapsuleColliders,
+                          threshold: motionThreshold) {
+            return true
+        }
+        if planesMoved(previous: previousPlaneCollidersForSleep,
+                       current: targetPlaneColliders,
+                       threshold: motionThreshold) {
+            return true
+        }
+
+        // External force / wind / character-velocity / drag changes wake physics.
+        if let prev = previousGlobalParamsForSleep {
+            if simd_distance(prev.gravity, globalParams.gravity) > 0.001 ||
+               abs(prev.windAmplitude - globalParams.windAmplitude) > 0.001 ||
+               simd_distance(prev.windDirection, globalParams.windDirection) > 0.01 ||
+               simd_distance(prev.externalVelocity, globalParams.externalVelocity) > 0.001 ||
+               abs(prev.dragMultiplier - globalParams.dragMultiplier) > 0.001 {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private func collidersMoved(previous: [SphereCollider], current: [SphereCollider], threshold: Float) -> Bool {
+        guard previous.count == current.count, !previous.isEmpty else { return false }
+        for i in 0..<previous.count {
+            if simd_distance(previous[i].center, current[i].center) > threshold ||
+               abs(previous[i].radius - current[i].radius) > threshold {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func collidersMoved(previous: [CapsuleCollider], current: [CapsuleCollider], threshold: Float) -> Bool {
+        guard previous.count == current.count, !previous.isEmpty else { return false }
+        for i in 0..<previous.count {
+            if simd_distance(previous[i].p0, current[i].p0) > threshold ||
+               simd_distance(previous[i].p1, current[i].p1) > threshold ||
+               abs(previous[i].radius - current[i].radius) > threshold {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func planesMoved(previous: [PlaneCollider], current: [PlaneCollider], threshold: Float) -> Bool {
+        guard previous.count == current.count, !previous.isEmpty else { return false }
+        for i in 0..<previous.count {
+            if simd_distance(previous[i].point, current[i].point) > threshold ||
+               simd_distance(previous[i].normal, current[i].normal) > 0.01 {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func updateSleepState(velocities: [Float], wakeDetected: Bool) {
+        guard velocities.count == chainRanges.count else { return }
+
+        if wakeDetected {
+            wakeAllChains()
+            return
+        }
+
+        var asleepCount = 0
+        for i in 0..<velocities.count {
+            if chainSleepState[i] {
+                let range = chainRanges[i]
+                asleepCount += range.count
+                continue
+            }
+
+            if velocities[i] < sleepThreshold {
+                chainSleepCounter[i] += 1
+                if chainSleepCounter[i] >= sleepDelayFrames {
+                    chainSleepState[i] = true
+                    let range = chainRanges[i]
+                    asleepCount += range.count
+                }
+            } else {
+                chainSleepCounter[i] = 0
+            }
+        }
+        sleepingBoneCount = asleepCount
+    }
+
+    private func captureSleepSnapshots(model: VRMModel, globalParams: SpringBoneGlobalParams) {
+        previousRootPositionsForSleep = targetRootPositions
+        previousSphereCollidersForSleep = targetSphereColliders
+        previousCapsuleCollidersForSleep = targetCapsuleColliders
+        previousPlaneCollidersForSleep = targetPlaneColliders
+        previousGlobalParamsForSleep = globalParams
+        previousQualityForSleep = quality
     }
 
     /// Transforms additive synthetic colliders (issue #309) into world space and
@@ -968,6 +1226,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             chainGravityPowers.append(chainGravityPower)
         }
+
+        // Build contiguous per-chain bone ranges from root indices for sleep-gate tracking.
+        chainRanges = computeChainRanges(numBones: boneIndex)
+        chainSleepState = Array(repeating: false, count: chainRanges.count)
+        chainSleepCounter = Array(repeating: 0, count: chainRanges.count)
+        sleepingBoneCount = 0
 
         // NOTE: Auto-fix for zero gravityPower removed - it was overriding intentional zero gravity
         // Real VRM files with broken physics should be fixed at the source or use a dedicated flag
@@ -1414,6 +1678,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             resetPhysicsState(model: model, buffers: buffers, animatedPositions: targetRootPositions)
             // Also reset all interpolation state to prevent lerping from old positions
             resetInterpolationState()
+            wakeAllChains()
             vrmLog("⚠️ [SpringBone] Teleportation detected - physics state reset")
         }
 
@@ -1422,6 +1687,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             resetPhysicsState(model: model, buffers: buffers, animatedPositions: targetRootPositions)
             resetInterpolationState()
             requestPhysicsReset = false
+            wakeAllChains()
         }
 
         // Update last root positions for next frame's teleportation check
@@ -1482,6 +1748,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return
         }
 
+        // When every chain is asleep the GPU positions are unchanged from the
+        // previous applied frame, so skip the CPU readback and node writeback.
+        let allChainsAsleep = !chainSleepState.isEmpty && chainSleepState.allSatisfy { $0 }
+        if allChainsAsleep {
+            return
+        }
+
         snapshotLock.lock()
         let readyFrame = latestCompletedFrame
         let positions = latestPositionsSnapshot
@@ -1505,8 +1778,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // spring per frame; springs typically hold 5-30 joints.
         var globalBoneIndex = 0
         chainNodePositions.reserveCapacity(32)
-        for spring in springBone.springs {
+        for (chainIndex, spring) in springBone.springs.enumerated() {
             guard globalBoneIndex < positions.count else { break }
+
+            // Skip the CPU writeback for chains that are fully asleep; their
+            // node transforms are unchanged from the previous frame.
+            if chainIndex < chainSleepState.count && chainSleepState[chainIndex] {
+                globalBoneIndex += spring.joints.count
+                continue
+            }
 
             chainNodePositions.removeAll(keepingCapacity: true)
             for joint in spring.joints {

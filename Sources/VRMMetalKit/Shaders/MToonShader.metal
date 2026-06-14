@@ -178,6 +178,32 @@ struct VertexOut {
  float3 viewNormal; // For MatCap sampling
 };
 
+// MARK: - Function constants for per-material MToon specialization
+//
+// These specialization constants let the compiler dead-strip unused texture
+// samples and alpha-mode branches for each material variant. The dynamic
+// fallback path sets `fc_useMaterialFlags` to true so the shader reads feature
+// flags from the uniform buffer exactly as before.
+
+constant bool fc_useMaterialFlags [[function_constant(0)]];
+
+// Texture presence flags (ids 1-9)
+constant bool fc_hasBaseColorTexture [[function_constant(1)]];
+constant bool fc_hasShadeMultiplyTexture [[function_constant(2)]];
+constant bool fc_hasShadingShiftTexture [[function_constant(3)]];
+constant bool fc_hasNormalTexture [[function_constant(4)]];
+constant bool fc_hasMatcapTexture [[function_constant(5)]];
+constant bool fc_hasRimMultiplyTexture [[function_constant(6)]];
+constant bool fc_hasEmissiveTexture [[function_constant(7)]];
+constant bool fc_hasOcclusionTexture [[function_constant(8)]];
+constant bool fc_hasUvAnimationMaskTexture [[function_constant(9)]];
+
+// Alpha mode (0=OPAQUE, 1=MASK, 2=BLEND, 3=MASK_A2C)
+constant uint fc_alphaMode [[function_constant(10)]];
+
+// Outline width multiplier texture presence
+constant bool fc_hasOutlineWidthMultiplyTexture [[function_constant(11)]];
+
 // KHR_texture_transform: apply static scale, rotation and offset to UV
 // Must be applied BEFORE animateUV (transform is static; UV animation is dynamic on top)
 static inline float2 applyTextureTransform(float2 uv, constant MToonMaterial& material) {
@@ -262,6 +288,24 @@ static inline half linearstep(half a, half b, half t) {
 // Vertex shader with optional morphed positions buffer
 // When morphs are active: morphed positions at buffer(20), original vertex at stage_in
 // When no morphs: only original vertex at stage_in
+// Position-only stage_in for the non-skinned depth prepass.
+struct DepthVertexIn {
+    float3 position [[attribute(0)]];
+};
+
+// Non-skinned depth-prepass vertex shader: emits clip position only, matching
+// mtoon_vertex's position transform exactly so the prepass writes the same Z the
+// main pass tests against.
+vertex float4 mtoon_depth_vertex(DepthVertexIn in [[stage_in]],
+                       constant Uniforms& uniforms [[buffer(1)]],
+                       device const float3* morphedPositions [[buffer(20)]],
+                       constant uint& hasMorphed [[buffer(22)]],
+                       uint vertexID [[vertex_id]]) {
+ float3 morphedPosition = (hasMorphed > 0) ? float3(morphedPositions[vertexID]) : in.position;
+ float4 worldPosition = uniforms.modelMatrix * float4(morphedPosition, 1.0);
+ return uniforms.projectionMatrix * uniforms.viewMatrix * worldPosition;
+}
+
 vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
                        constant Uniforms& uniforms [[buffer(1)]],
                        constant MToonMaterial& material [[buffer(8)]],
@@ -531,6 +575,22 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  }
  }
 
+ // Resolve effective feature flags for the main shading path. When
+ // `fc_useMaterialFlags` is true (fallback/dynamic path) the shader reads the
+ // flags from the uniform buffer, preserving the historical behavior. When
+ // false, the function constants specialize the compiled pipeline so the
+ // compiler can dead-strip unused texture samples and alpha-mode branches.
+ bool effectiveHasBaseColorTexture = fc_useMaterialFlags ? (material.hasBaseColorTexture > 0) : fc_hasBaseColorTexture;
+ bool effectiveHasShadeMultiplyTexture = fc_useMaterialFlags ? (material.hasShadeMultiplyTexture > 0) : fc_hasShadeMultiplyTexture;
+ bool effectiveHasShadingShiftTexture = fc_useMaterialFlags ? (material.hasShadingShiftTexture > 0) : fc_hasShadingShiftTexture;
+ bool effectiveHasNormalTexture = fc_useMaterialFlags ? (material.hasNormalTexture > 0) : fc_hasNormalTexture;
+ bool effectiveHasMatcapTexture = fc_useMaterialFlags ? (material.hasMatcapTexture > 0) : fc_hasMatcapTexture;
+ bool effectiveHasRimMultiplyTexture = fc_useMaterialFlags ? (material.hasRimMultiplyTexture > 0) : fc_hasRimMultiplyTexture;
+ bool effectiveHasEmissiveTexture = fc_useMaterialFlags ? (material.hasEmissiveTexture > 0) : fc_hasEmissiveTexture;
+ bool effectiveHasOcclusionTexture = fc_useMaterialFlags ? (material.hasOcclusionTexture > 0) : fc_hasOcclusionTexture;
+ bool effectiveHasUvAnimationMaskTexture = fc_useMaterialFlags ? (material.hasUvAnimationMaskTexture > 0) : fc_hasUvAnimationMaskTexture;
+ uint effectiveAlphaMode = fc_useMaterialFlags ? material.alphaMode : fc_alphaMode;
+
  // Choose UV coordinates (animated or static)
  float2 uv = in.texCoord;
  
@@ -539,7 +599,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
      uv = uv * material.uvScale + float2(material.uvOffsetX, material.uvOffsetY);
  }
  
- if (material.hasUvAnimationMaskTexture > 0) {
+ if (effectiveHasUvAnimationMaskTexture) {
  float animationMask = uvAnimationMaskTexture.sample(textureSampler, in.texCoord).r;
  uv = mix(in.texCoord, in.animatedTexCoord, animationMask);
  } else if (material.uvAnimationScrollXSpeedFactor != 0.0 ||
@@ -550,7 +610,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
 
  // Sample base color
  mtoon_float4 baseColor = mtoon_float4(material.baseColorFactor);
- if (material.hasBaseColorTexture > 0) {
+ if (effectiveHasBaseColorTexture) {
      mtoon_float4 texColor = mtoon_float4(baseColorTexture.sample(textureSampler, uv));
 
  #if 0  // DEBUG: Output raw texture value (before material factor multiplication) - DISABLED
@@ -562,20 +622,20 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
 
  // Force full opacity for OPAQUE mode materials
  // This fixes materials that were converted from MASK to OPAQUE
- if (material.alphaMode == 0) {
+ if (effectiveAlphaMode == 0) {
      baseColor.a = 1.0;
  }
 
  // Alpha test for MASK mode - do this early before expensive lighting calculations
  // We copy to an explicit float to guarantee single-precision comparison for crisp cutout edges
  float alphaVal = float(baseColor.a);
- if (material.alphaMode == 1 && alphaVal < material.alphaCutoff) {
+ if (effectiveAlphaMode == 1 && alphaVal < material.alphaCutoff) {
      discard_fragment();
  }
 
  // Calculate shade color
  mtoon_float3 shadeColor = mtoon_float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
- if (material.hasShadeMultiplyTexture > 0) {
+ if (effectiveHasShadeMultiplyTexture) {
      mtoon_float3 shadeTexColor = mtoon_float3(shadeMultiplyTexture.sample(textureSampler, uv).rgb);
      shadeColor *= shadeTexColor;
  }
@@ -592,7 +652,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
      normalWasFlipped = true;
  }
 
- if (material.hasNormalTexture > 0) {
+ if (effectiveHasNormalTexture) {
      // Tangent-space normal map. Models without baked TANGENT vertex attributes
      // (which is most VRM 1.0 content — see validator
      // MESH_PRIMITIVE_GENERATED_TANGENT_SPACE) require synthesizing a TBN basis.
@@ -628,7 +688,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
 
  // Shading shift calculation
  mtoon_float shadingShift = mtoon_float(material.shadingShiftFactor);
- if (material.hasShadingShiftTexture > 0) {
+ if (effectiveHasShadingShiftTexture) {
      mtoon_float shiftTexValue = mtoon_float(shadingShiftTexture.sample(textureSampler, uv).r);
      shadingShift += (shiftTexValue - 0.5) * mtoon_float(material.shadingShiftTextureScale);
  }
@@ -737,7 +797,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
  // carries the occlusion value and `occlusionTextureInfo.strength` remaps
  // it as `1 + strength * (sample - 1)`.
  mtoon_float occlusionFactor = mtoon_float(1.0);
- if (material.hasOcclusionTexture > 0) {
+ if (effectiveHasOcclusionTexture) {
      mtoon_float ao = mtoon_float(occlusionTexture.sample(textureSampler, uv).r);
      occlusionFactor = mtoon_float(1.0) + mtoon_float(material.occlusionStrength) * (ao - mtoon_float(1.0));
  }
@@ -755,14 +815,14 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
 
  // Emissive
  mtoon_float3 emissive = mtoon_float3(material.emissiveR, material.emissiveG, material.emissiveB);
- if (material.hasEmissiveTexture > 0) {
+ if (effectiveHasEmissiveTexture) {
      mtoon_float3 emissiveTexColor = mtoon_float3(emissiveTexture.sample(textureSampler, uv).rgb);
      emissive *= emissiveTexColor;
  }
  litColor += emissive;
 
  // MatCap (use flipped viewNormal for back faces)
- if (material.hasMatcapTexture > 0) {
+ if (effectiveHasMatcapTexture) {
      mtoon_float2 matcapUV = mtoon_float2(calculateMatCapUV(float3(viewNormal)));
      mtoon_float3 matcapColor = mtoon_float3(matcapTexture.sample(textureSampler, float2(matcapUV)).rgb);
      litColor += matcapColor * mtoon_float3(material.matcapR, material.matcapG, material.matcapB);
@@ -798,7 +858,7 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
      rimColor = parametricRimColorFactor * mtoon_float(rimF);
 
      // Apply rim multiply texture for masking
-     if (material.hasRimMultiplyTexture > 0) {
+     if (effectiveHasRimMultiplyTexture) {
          mtoon_float rimMask = saturate(mtoon_float(rimMultiplyTexture.sample(textureSampler, uv).r));
          rimColor *= rimMask;
      }
@@ -884,6 +944,11 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
                                sampler textureSampler [[sampler(0)]]) {
  VertexOut out;
 
+ // Resolve effective feature flags (see the equivalent block in the
+ // fragment shader). For the fallback path the uniform-buffer flags are
+ // used, preserving the historical behavior.
+ bool effectiveHasOutlineWidthMultiplyTexture = fc_useMaterialFlags ? (material.hasOutlineWidthMultiplyTexture > 0) : fc_hasOutlineWidthMultiplyTexture;
+
  // Calculate outline width
  //
  // VRMC_materials_mtoon-1.0 §outlineWidthMultiplyTexture: "The G
@@ -891,7 +956,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  // pull the wrong channel and produce per-vertex modulation that
  // doesn't match the spec / three-vrm / UniVRM. VMK#289.
  float outlineWidth = material.outlineWidthFactor;
- if (material.hasOutlineWidthMultiplyTexture > 0) {
+ if (effectiveHasOutlineWidthMultiplyTexture) {
  float widthMultiplier = outlineWidthMultiplyTexture.sample(textureSampler, in.texCoord).g;
  outlineWidth *= widthMultiplier;
  }
