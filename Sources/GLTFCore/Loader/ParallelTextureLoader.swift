@@ -132,14 +132,14 @@ public final class ParallelTextureLoader: @unchecked Sendable {
                 }
             }
 
+            // Coalesce progress hops to the main actor instead of one per texture.
+            let reporter = CoalescedProgressReporter(total: totalCount, callback: progressCallback)
             for await (index, texture) in group {
                 loaded += 1
                 if let texture {
                     results[index] = texture
                 }
-                await MainActor.run {
-                    progressCallback?(loaded, totalCount)
-                }
+                await reporter.reportIfNeeded(completed: loaded)
             }
         }
 

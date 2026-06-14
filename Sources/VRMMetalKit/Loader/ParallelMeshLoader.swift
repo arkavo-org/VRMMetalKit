@@ -36,18 +36,23 @@ public final class ParallelMeshLoader: @unchecked Sendable {
     public init(
         device: MTLDevice?,
         document: GLTFDocument,
-        bufferLoader: BufferLoader
+        bufferLoader: BufferLoader,
+        concurrencyLimiter: AsyncConcurrencyLimiter? = nil
     ) {
         self.inner = GLTFParallelMeshLoader<VRMMesh>(
             device: device,
             document: document,
             bufferLoader: bufferLoader,
             load: { _, gltfMesh, document, device, bufferLoader in
+                // Per-mesh tasks never hold a limiter permit (only the leaf
+                // primitive decode inside VRMMesh.load does), so the across-mesh ×
+                // intra-mesh nesting cannot deadlock.
                 try await VRMMesh.load(
                     from: gltfMesh,
                     document: document,
                     device: device,
-                    bufferLoader: bufferLoader
+                    bufferLoader: bufferLoader,
+                    concurrencyLimiter: concurrencyLimiter
                 )
             }
         )

@@ -85,14 +85,14 @@ public final class GLTFParallelMeshLoader<Mesh: Sendable>: @unchecked Sendable {
                 }
             }
 
+            // Coalesce progress hops to the main actor instead of one per mesh.
+            let reporter = CoalescedProgressReporter(total: totalCount, callback: progressCallback)
             for await (index, mesh) in group {
                 loaded += 1
                 if let mesh {
                     results[index] = mesh
                 }
-                await MainActor.run {
-                    progressCallback?(loaded, totalCount)
-                }
+                await reporter.reportIfNeeded(completed: loaded)
             }
         }
 

@@ -21,6 +21,19 @@ import simd
 
 // MARK: - VRM Mesh
 
+/// Read-only inputs for loading a single primitive, bundled so they can cross a
+/// task boundary. `@unchecked Sendable` is sound because the glTF document and
+/// buffer loader are immutable during loading and already shared concurrently by
+/// the across-mesh parallel path; the wrapper only launders their non-Sendable
+/// (cross-module) types past Swift 6 region isolation.
+private struct PrimitiveLoadJob: @unchecked Sendable {
+    let index: Int
+    let primitive: GLTFPrimitive
+    let document: GLTFDocument
+    let device: MTLDevice?
+    let bufferLoader: BufferLoader
+}
+
 /// A renderable mesh: a named container of ``VRMPrimitive`` draw calls.
 ///
 /// VRM meshes are loaded from glTF `meshes` entries. A node references one
@@ -53,20 +66,74 @@ public class VRMMesh: @unchecked Sendable {
     public static func load(from gltfMesh: GLTFMesh,
                            document: GLTFDocument,
                            device: MTLDevice?,
-                           bufferLoader: BufferLoader) async throws -> VRMMesh {
+                           bufferLoader: BufferLoader,
+                           concurrencyLimiter: AsyncConcurrencyLimiter? = nil) async throws -> VRMMesh {
         let mesh = VRMMesh(name: gltfMesh.name)
-        vrmLog("[VRMMesh] Loading mesh \(gltfMesh.name ?? "unnamed") with \(gltfMesh.primitives.count) primitives")
+        let primitiveCount = gltfMesh.primitives.count
+        vrmLog("[VRMMesh] Loading mesh \(gltfMesh.name ?? "unnamed") with \(primitiveCount) primitives")
 
-        for (primitiveIndex, gltfPrimitive) in gltfMesh.primitives.enumerated() {
-            vrmLog("[VRMMesh] Loading primitive \(primitiveIndex)")
-            let primitive = try await VRMPrimitive.load(
-                from: gltfPrimitive,
-                document: document,
-                device: device,
-                bufferLoader: bufferLoader
-            )
-            mesh.primitives.append(primitive)
+        // Decode primitives concurrently. Each VRMPrimitive owns independent CPU/GPU
+        // resources, and BufferLoader + the glTF document are already accessed
+        // concurrently (and read-only) by the across-mesh parallel path, so
+        // intra-mesh parallelism adds no new sharing hazard. The read-only load
+        // inputs are laundered through an `@unchecked Sendable` job holder (the same
+        // idiom ParallelMeshLoader uses) since GLTFDocument/GLTFPrimitive are not
+        // Sendable across modules. Results are reassembled in source order to keep
+        // loading deterministic (VRM models are commonly one mesh with many
+        // primitives, so this is the dominant load-time win).
+        let jobs = gltfMesh.primitives.enumerated().map { index, gltfPrimitive in
+            PrimitiveLoadJob(index: index, primitive: gltfPrimitive,
+                             document: document, device: device, bufferLoader: bufferLoader)
         }
+        // Two complementary, machine-scaled bounds (neither is an arbitrary cap):
+        //   1. A per-mesh sliding window sizes how many decode tasks are *created*
+        //      at once for this mesh (so a many-primitive mesh doesn't spawn
+        //      thousands of tasks). Sized to the core count; Swift's cooperative
+        //      pool already runs only core-count tasks in parallel, so this
+        //      preserves full throughput.
+        //   2. The optional `concurrencyLimiter`, shared across ALL meshes, caps how
+        //      many primitive decodes *execute* at once globally. Because this group
+        //      is itself run per-mesh inside ParallelMeshLoader's group, the levels
+        //      multiply (meshes × primitives); the shared limiter is the true global
+        //      bound on peak live memory (intermediate accessor arrays + MTLBuffers).
+        //      Only the leaf decode acquires a permit — mesh-orchestration tasks
+        //      never do — so the nesting cannot deadlock.
+        let maxInFlight = max(1, min(primitiveCount, ProcessInfo.processInfo.activeProcessorCount))
+        let ordered = try await withThrowingTaskGroup(of: (Int, VRMPrimitive).self) { group in
+            var nextJob = 0
+            func addJob(_ job: PrimitiveLoadJob) {
+                group.addTask {
+                    // If acquire throws (cancellation), no permit was taken, so the
+                    // release-balancing do/catch below is intentionally NOT entered.
+                    try await concurrencyLimiter?.acquire()
+                    do {
+                        let primitive = try await VRMPrimitive.load(
+                            from: job.primitive,
+                            document: job.document,
+                            device: job.device,
+                            bufferLoader: job.bufferLoader
+                        )
+                        await concurrencyLimiter?.release()
+                        return (job.index, primitive)
+                    } catch {
+                        await concurrencyLimiter?.release()
+                        throw error
+                    }
+                }
+            }
+            while nextJob < jobs.count && nextJob < maxInFlight {
+                addJob(jobs[nextJob]); nextJob += 1
+            }
+            var slots = [VRMPrimitive?](repeating: nil, count: primitiveCount)
+            for try await (index, primitive) in group {
+                slots[index] = primitive
+                if nextJob < jobs.count {
+                    addJob(jobs[nextJob]); nextJob += 1
+                }
+            }
+            return slots.compactMap { $0 }
+        }
+        mesh.primitives = ordered
 
         return mesh
     }
@@ -89,7 +156,7 @@ public class VRMMesh: @unchecked Sendable {
 /// During load, joint indices are sanitised to remove sentinel values
 /// (see ``sanitizeJoints(maxJointIndex:)``), and the local-space AABB is
 /// captured into ``localMin``/``localMax`` for frustum culling.
-public class VRMPrimitive {
+public class VRMPrimitive: @unchecked Sendable {
     /// Interleaved vertex buffer in ``VRMVertex`` layout.
     public var vertexBuffer: MTLBuffer?
     /// Index buffer; `nil` for non-indexed primitives.
