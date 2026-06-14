@@ -448,6 +448,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var mtoonOutlinePipelineState: MTLRenderPipelineState?
     var mtoonSkinnedOutlinePipelineState: MTLRenderPipelineState?
 
+    /// Depth-only prepass pipelines (position[+joints/weights] vertex, no fragment).
+    /// Used when ``RendererConfig/enableDepthPrepass`` is set.
+    var depthPrepassPipelineState: MTLRenderPipelineState?
+    var skinnedDepthPrepassPipelineState: MTLRenderPipelineState?
+
     /// Optional sprite cache used by hybrid multi-character rendering. Auto-instantiated in ``init(device:config:)``.
     /// See ``SpriteCacheSystem``.
     public var spriteCacheSystem: SpriteCacheSystem?
@@ -2209,6 +2214,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         performanceTracker?.beginPhase(.commandEncode)
         var drawIndex = 0
 
+        // Experimental opaque depth prepass (default off). When it runs, the
+        // non-face opaque main draws switch to `.lessEqual` + no-write so early-Z
+        // rejects occluded fragments instead of re-writing depth.
+        var depthPrepassRan = false
+        if config.enableDepthPrepass {
+            depthPrepassRan = renderDepthPrepass(
+                encoder: encoder,
+                itemsToRender: itemsToRender,
+                morphedBuffers: morphedBuffers,
+                model: model,
+                frustum: frameFrustum,
+                inflatedModelMin: inflatedModelMin,
+                inflatedModelMax: inflatedModelMax,
+                skinnedCullMatrix: skinnedCullMatrix,
+                hasSkinning: hasSkinning)
+        }
+
         vrmLog("[LOOP DEBUG] About to iterate over \(itemsToRender.count) items")
         for (index, item) in itemsToRender.enumerated() {
             vrmLog("[LOOP DEBUG] Entering iteration \(index)")
@@ -3304,7 +3326,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 
                 switch materialAlphaMode {
                 case "opaque":
-                    encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
+                    // After a depth prepass, opaque depth is already written: test
+                    // `.lessEqual` and don't re-write (early-Z). Otherwise the
+                    // standard `.less` + write.
+                    let opaqueState = (depthPrepassRan ? depthStencilStates["opaqueEqual"] : nil) ?? depthStencilStates["opaque"]
+                    encoderStateCache.setDepthStencilState(encoder, opaqueState)
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
@@ -3907,6 +3933,112 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     // MARK: - MToon Outline Rendering
+
+    /// Opaque-only depth prepass (experimental, gated by ``RendererConfig/enableDepthPrepass``).
+    /// Writes depth for opaque, non-face geometry using the position-only depth
+    /// pipelines so the fragment-bound main pass can early-Z reject occluded
+    /// fragments. Uses raw encoder calls and resets the encoder state cache on
+    /// exit so the main loop re-binds cleanly. Returns true if it issued draws.
+    @discardableResult
+    private func renderDepthPrepass(
+        encoder: MTLRenderCommandEncoder,
+        itemsToRender: [RenderItem],
+        morphedBuffers: [MorphKey: MTLBuffer],
+        model: VRMModel,
+        frustum: Frustum,
+        inflatedModelMin: SIMD3<Float>,
+        inflatedModelMax: SIMD3<Float>,
+        skinnedCullMatrix: matrix_float4x4,
+        hasSkinning: Bool
+    ) -> Bool {
+        guard depthPrepassPipelineState != nil || skinnedDepthPrepassPipelineState != nil,
+              let prepassDepthState = depthStencilStates["prepass"] else { return false }
+
+        encoder.setDepthStencilState(prepassDepthState)
+        encoder.setCullMode(.back)
+        encoder.setFrontFacing(.counterClockwise)
+        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+
+        var issued = false
+        for item in itemsToRender {
+            // v1: opaque, non-face only. Blend/mask/face keep current behavior.
+            guard item.effectiveAlphaMode == "opaque", !item.isFaceMaterial else { continue }
+            let primitive = item.primitive
+            guard let vertexBuffer = primitive.vertexBuffer,
+                  let indexBuffer = primitive.indexBuffer else { continue }
+
+            let nodeHasSkin = item.node.skin != nil && hasSkinning
+            let meshUsesSkinning = primitive.hasJoints && primitive.hasWeights
+            let isSkinned = (nodeHasSkin || meshUsesSkinning) && hasSkinning
+
+            // Frustum cull identically to the main pass.
+            let cullModel: matrix_float4x4
+            let cullMin: SIMD3<Float>
+            let cullMax: SIMD3<Float>
+            if isSkinned {
+                cullModel = skinnedCullMatrix; cullMin = inflatedModelMin; cullMax = inflatedModelMax
+            } else {
+                cullModel = item.node.worldMatrix; cullMin = primitive.localMin; cullMax = primitive.localMax
+            }
+            let aabb = AABBTransform.worldAABB(localMin: cullMin, localMax: cullMax, modelMatrix: cullModel)
+            if frustum.cullsAABB(min: aabb.min, max: aabb.max) { continue }
+
+            let pipeline = isSkinned ? skinnedDepthPrepassPipelineState : depthPrepassPipelineState
+            guard let pipeline else { continue }
+            encoder.setRenderPipelineState(pipeline)
+
+            // modelMatrix: identity for skinned (baked into joints), world for rigid.
+            uniforms.modelMatrix = isSkinned ? matrix_identity_float4x4 : item.node.worldMatrix
+
+            encoder.setVertexBuffer(vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
+
+            let stableKey: MorphKey = (UInt64(item.meshIndex) << 32) | UInt64(item.primIdxInMesh)
+            if let morphedPosBuffer = morphedBuffers[stableKey] {
+                encoder.setVertexBuffer(morphedPosBuffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
+                var flag: UInt32 = 1
+                encoder.setVertexBytes(&flag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+            } else {
+                if emptyFloat3Buffer == nil {
+                    emptyFloat3Buffer = device.makeBuffer(length: MemoryLayout<SIMD3<Float>>.stride, options: .storageModeShared)
+                }
+                encoder.setVertexBuffer(emptyFloat3Buffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
+                var flag: UInt32 = 0
+                encoder.setVertexBytes(&flag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+            }
+
+            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
+
+            if isSkinned {
+                let skinIndex = item.node.skin ?? (meshUsesSkinning ? 0 : -1)
+                if skinIndex >= 0, skinIndex < model.skins.count,
+                   let jointBuffer = skinningSystem?.getJointMatricesBuffer() {
+                    let byteOffset = model.skins[skinIndex].matrixOffset * MemoryLayout<float4x4>.stride
+                    encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
+                }
+                if primitive.firstPersonHiddenFlagsBuffer == nil && primitive.vertexCount > 0 {
+                    let zeros = [UInt8](repeating: 0, count: primitive.vertexCount)
+                    primitive.firstPersonHiddenFlagsBuffer = device.makeBuffer(bytes: zeros, length: zeros.count, options: .storageModeShared)
+                }
+                if let fpBuffer = primitive.firstPersonHiddenFlagsBuffer {
+                    encoder.setVertexBuffer(fpBuffer, offset: 0, index: ResourceIndices.firstPersonHiddenFlagsBuffer)
+                }
+            }
+
+            encoder.drawIndexedPrimitives(
+                type: primitive.primitiveType,
+                indexCount: primitive.indexCount,
+                indexType: primitive.indexType,
+                indexBuffer: indexBuffer,
+                indexBufferOffset: primitive.indexBufferOffset
+            )
+            issued = true
+        }
+
+        // The prepass bypassed the encoder state cache; reset it so the main loop
+        // re-binds pipeline/depth/cull/buffers from a known-empty state.
+        encoderStateCache.reset()
+        return issued
+    }
 
     private func renderMToonOutlines(
         encoder: MTLRenderCommandEncoder,

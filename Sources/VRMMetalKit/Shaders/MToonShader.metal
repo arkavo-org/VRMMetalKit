@@ -288,6 +288,24 @@ static inline half linearstep(half a, half b, half t) {
 // Vertex shader with optional morphed positions buffer
 // When morphs are active: morphed positions at buffer(20), original vertex at stage_in
 // When no morphs: only original vertex at stage_in
+// Position-only stage_in for the non-skinned depth prepass.
+struct DepthVertexIn {
+    float3 position [[attribute(0)]];
+};
+
+// Non-skinned depth-prepass vertex shader: emits clip position only, matching
+// mtoon_vertex's position transform exactly so the prepass writes the same Z the
+// main pass tests against.
+vertex float4 mtoon_depth_vertex(DepthVertexIn in [[stage_in]],
+                       constant Uniforms& uniforms [[buffer(1)]],
+                       device const float3* morphedPositions [[buffer(20)]],
+                       constant uint& hasMorphed [[buffer(22)]],
+                       uint vertexID [[vertex_id]]) {
+ float3 morphedPosition = (hasMorphed > 0) ? float3(morphedPositions[vertexID]) : in.position;
+ float4 worldPosition = uniforms.modelMatrix * float4(morphedPosition, 1.0);
+ return uniforms.projectionMatrix * uniforms.viewMatrix * worldPosition;
+}
+
 vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
                        constant Uniforms& uniforms [[buffer(1)]],
                        constant MToonMaterial& material [[buffer(8)]],

@@ -246,6 +246,111 @@ static inline bool needsViewDirection(constant MToonMaterial& material, constant
  return hasParametricRim(material) || uniforms.debugUVs == 10;
 }
 
+// Shared skinning: morph fetch + weight normalisation/gating + LBS/DQS blend +
+// NaN/extreme fallback. The SINGLE source of truth for skinned object-space
+// position, called by both the full vertex shader and the depth-prepass vertex
+// shader so their clip depth is bit-identical (the depth prepass relies on this
+// to write the same Z the main pass tests against). `outNormal` is ignored by
+// the depth path (its position output is independent of the input normal).
+static inline void vrm_skin(float3 basePosition,
+                            float3 baseNormal,
+                            uint4 joints,
+                            float4 weights,
+                            constant float4x4* jointMatrices,
+                            bool useDQS,
+                            thread float4& outPosition,
+                            thread float3& outNormal) {
+ // Store RAW weights for threshold check (before normalization)
+ float4 rawWeights = weights;
+
+ // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
+ float4 normWeights = rawWeights;
+ float weightSum = dot(normWeights, float4(1.0));
+ if (weightSum > 1e-6) {
+ normWeights = normWeights / weightSum;
+ } else {
+ normWeights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
+ }
+
+ float threshold = WEIGHT_THRESHOLD;
+
+ // Safe buffer limit: clamp to 255 to prevent reading garbage memory
+ uint maxJoint = 255;
+ uint4 safeJoints = min(joints, uint4(maxJoint));
+
+ // Threshold-gate the (normalized) weights using RAW weights.
+ float4 gatedWeights = float4(
+     rawWeights[0] > threshold ? normWeights[0] : 0.0,
+     rawWeights[1] > threshold ? normWeights[1] : 0.0,
+     rawWeights[2] > threshold ? normWeights[2] : 0.0,
+     rawWeights[3] > threshold ? normWeights[3] : 0.0);
+
+ float4 skinnedPosition;
+ float3 skinnedNormal;
+ if (useDQS) {
+ float3 dqPos = basePosition;
+ float3 dqNrm = baseNormal;
+ dqsSkin(jointMatrices[safeJoints[0]], jointMatrices[safeJoints[1]],
+         jointMatrices[safeJoints[2]], jointMatrices[safeJoints[3]],
+         gatedWeights, dqPos, dqNrm);
+ skinnedPosition = float4(dqPos, 1.0);
+ skinnedNormal = dqNrm;
+ } else {
+ float4x4 skinMatrix = float4x4(0.0);
+ skinMatrix += jointMatrices[safeJoints[0]] * gatedWeights[0];
+ skinMatrix += jointMatrices[safeJoints[1]] * gatedWeights[1];
+ skinMatrix += jointMatrices[safeJoints[2]] * gatedWeights[2];
+ skinMatrix += jointMatrices[safeJoints[3]] * gatedWeights[3];
+ if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
+ skinMatrix = jointMatrices[safeJoints[0]];
+ }
+ skinnedPosition = skinMatrix * float4(basePosition, 1.0);
+ skinnedNormal = (skinMatrix * float4(baseNormal, 0.0)).xyz;
+ }
+
+ // Detect NaN/Inf or extreme skinned positions and fall back to original.
+ bool posHasNaN = any(isnan(skinnedPosition.xyz)) || any(isinf(skinnedPosition.xyz));
+ bool posHasExtreme = length(skinnedPosition.xyz) > 50.0;
+ bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
+ if (posHasNaN || posHasExtreme || normalHasNaN) {
+ skinnedPosition = float4(basePosition, 1.0);
+ skinnedNormal = baseNormal;
+ }
+ outPosition = skinnedPosition;
+ outNormal = normalize(skinnedNormal);
+}
+
+// Depth-only stage_in for the prepass: position + skinning attributes only
+// (normal/uv/color dropped). Joint indices/weights are still required to skin.
+struct DepthVertexInSkinned {
+    float3 position [[attribute(0)]];
+    uint4  joints   [[attribute(4)]];
+    float4 weights  [[attribute(5)]];
+};
+
+// Skinned depth-prepass vertex shader: emits clip position only, reusing the
+// shared vrm_skin helper so the written Z matches skinned_mtoon_vertex exactly.
+vertex float4 skinned_mtoon_depth_vertex(DepthVertexInSkinned in [[stage_in]],
+                               constant Uniforms& uniforms [[buffer(1)]],
+                               constant float4x4* jointMatrices [[buffer(25)]],
+                               device const float3* morphedPositions [[buffer(20)]],
+                               constant uint& hasMorphed [[buffer(22)]],
+                               device const uint8_t* firstPersonHiddenFlags [[buffer(26)]],
+                               uint vertexID [[vertex_id]]) {
+ float3 basePosition = (hasMorphed > 0) ? float3(morphedPositions[vertexID]) : in.position;
+ float4 skinnedPosition;
+ float3 skinnedNormal;
+ vrm_skin(basePosition, float3(0.0, 0.0, 1.0), in.joints, in.weights,
+          jointMatrices, uniforms.useDualQuaternionSkinning > 0.5,
+          skinnedPosition, skinnedNormal);
+ float4 worldPos = uniforms.modelMatrix * skinnedPosition;
+ float4 clip = uniforms.projectionMatrix * (uniforms.viewMatrix * worldPos);
+ if (uniforms.cameraMode == 1u && firstPersonHiddenFlags[vertexID] != 0u) {
+     clip = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped
+ }
+ return clip;
+}
+
 // Skinned vertex shader with MToon support
 vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                constant Uniforms& uniforms [[buffer(1)]],
@@ -267,73 +372,13 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  basePosition = in.position;
  }
 
- // Store RAW weights for threshold check (before normalization)
- // This prevents accessing garbage joint indices that have zero/tiny weights
- float4 rawWeights = in.weights;
-
- // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
- float4 weights = rawWeights;
- float weightSum = dot(weights, float4(1.0));
- if (weightSum > 1e-6) {
- weights = weights / weightSum;
- } else {
- weights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
- }
-
- // Apply skeletal skinning with normalized weights
- // CRITICAL: Use RAW weights for threshold check to avoid accessing garbage joint indices
- float threshold = WEIGHT_THRESHOLD;
-
- // Safe buffer limit: clamp to 255 to prevent reading garbage memory
- // This allows valid indices (0-90+) while blocking garbage indices (65535, etc.)
- uint maxJoint = 255;
- uint4 safeJoints = min(in.joints, uint4(maxJoint));
-
- // Threshold-gate the (normalized) weights: zero out any joint whose RAW weight
- // is below threshold so neither path blends a garbage joint index.
- float4 gatedWeights = float4(
-     rawWeights[0] > threshold ? weights[0] : 0.0,
-     rawWeights[1] > threshold ? weights[1] : 0.0,
-     rawWeights[2] > threshold ? weights[2] : 0.0,
-     rawWeights[3] > threshold ? weights[3] : 0.0);
-
+ // Skinning (morph already applied above): shared with the depth prepass so the
+ // written clip Z is identical between the two passes.
  float4 skinnedPosition;
  float3 skinnedNormal;
- if (uniforms.useDualQuaternionSkinning > 0.5) {
- // #197 DQS — volume-preserving blend (opt-in, quality-above-reference).
- float3 dqPos = basePosition;
- float3 dqNrm = in.normal;
- dqsSkin(jointMatrices[safeJoints[0]], jointMatrices[safeJoints[1]],
-         jointMatrices[safeJoints[2]], jointMatrices[safeJoints[3]],
-         gatedWeights, dqPos, dqNrm);
- skinnedPosition = float4(dqPos, 1.0);
- skinnedNormal = dqNrm;
- } else {
- // LBS — default, glTF-standard reference behaviour.
- float4x4 skinMatrix = float4x4(0.0);
- skinMatrix += jointMatrices[safeJoints[0]] * gatedWeights[0];
- skinMatrix += jointMatrices[safeJoints[1]] * gatedWeights[1];
- skinMatrix += jointMatrices[safeJoints[2]] * gatedWeights[2];
- skinMatrix += jointMatrices[safeJoints[3]] * gatedWeights[3];
- // Fallback: if skinMatrix is zero (no weights passed threshold), use first joint
- if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
- skinMatrix = jointMatrices[safeJoints[0]];
- }
- skinnedPosition = skinMatrix * float4(basePosition, 1.0);
- skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
- }
-
- // SANITY CHECK: Detect NaN/Inf or extreme skinned positions and fall back to original
- // This catches cases where joint indices point to garbage memory or matrix is corrupted
- bool posHasNaN = any(isnan(skinnedPosition.xyz)) || any(isinf(skinnedPosition.xyz));
- bool posHasExtreme = length(skinnedPosition.xyz) > 50.0;  // Reasonable limit for humanoid (within 50 units of origin)
- bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
- if (posHasNaN || posHasExtreme || normalHasNaN) {
- // Fall back to original position (no skinning)
- skinnedPosition = float4(basePosition, 1.0);
- skinnedNormal = in.normal;
- }
- skinnedNormal = normalize(skinnedNormal);
+ vrm_skin(basePosition, in.normal, in.joints, in.weights,
+          jointMatrices, uniforms.useDualQuaternionSkinning > 0.5,
+          skinnedPosition, skinnedNormal);
 
  // Transform to world space
  float4 worldPos = uniforms.modelMatrix * skinnedPosition;

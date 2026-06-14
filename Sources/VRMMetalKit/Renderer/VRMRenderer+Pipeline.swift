@@ -164,6 +164,25 @@ extension VRMRenderer {
             depthStencilStates["faceOverlay"] = state
         }
 
+        // Depth prepass: write opaque depth ahead of the main pass (same as opaque).
+        let prepassDescriptor = MTLDepthStencilDescriptor()
+        prepassDescriptor.depthCompareFunction = .less
+        prepassDescriptor.isDepthWriteEnabled = true
+        if let state = device.makeDepthStencilState(descriptor: prepassDescriptor) {
+            depthStencilStates["prepass"] = state
+        }
+
+        // Opaque main pass AFTER a depth prepass: test `.lessEqual` against the
+        // prepass-written depth and do NOT write (early-Z rejects occluded
+        // fragments). `.lessEqual` (not `.equal`) tolerates depth-bias / tiny
+        // differences without dropping visible fragments.
+        let opaqueEqualDescriptor = MTLDepthStencilDescriptor()
+        opaqueEqualDescriptor.depthCompareFunction = .lessEqual
+        opaqueEqualDescriptor.isDepthWriteEnabled = false
+        if let state = device.makeDepthStencilState(descriptor: opaqueEqualDescriptor) {
+            depthStencilStates["opaqueEqual"] = state
+        }
+
         // Pre-create sampler states
         let samplerDescriptor = MTLSamplerDescriptor()
         samplerDescriptor.minFilter = .linear
@@ -359,6 +378,31 @@ extension VRMRenderer {
                 vrmLog("[VRMRenderer] Created MToon outline pipeline successfully")
             } else {
                 vrmLog("[VRMRenderer] MToon outline shaders not found - outlines will be disabled")
+            }
+
+            // Non-skinned depth-prepass pipeline: position-only, no fragment.
+            if let depthVertexFunc = library.makeFunction(name: "mtoon_depth_vertex") {
+                let depthVD = MTLVertexDescriptor()
+                depthVD.attributes[0].format = .float3
+                depthVD.attributes[0].offset = MemoryLayout<VRMVertex>.offset(of: \.position)!
+                depthVD.attributes[0].bufferIndex = 0
+                depthVD.layouts[0].stride = MemoryLayout<VRMVertex>.stride
+
+                let depthDescriptor = MTLRenderPipelineDescriptor()
+                depthDescriptor.label = "mtoon_depth_prepass"
+                depthDescriptor.vertexFunction = depthVertexFunc
+                depthDescriptor.fragmentFunction = nil  // depth-only
+                depthDescriptor.vertexDescriptor = depthVD
+                depthDescriptor.depthAttachmentPixelFormat = .depth32Float
+                depthDescriptor.rasterSampleCount = config.sampleCount
+
+                let state = try VRMPipelineCache.shared.getPipelineState(
+                    device: device,
+                    descriptor: depthDescriptor,
+                    key: pipelineKey("mtoon_depth_prepass")
+                )
+                depthPrepassPipelineState = state
+                vrmLog("[VRMRenderer] Created depth-prepass pipeline successfully")
             }
 
             // Note: Depth stencil states are created in setupCachedStates()
@@ -571,6 +615,38 @@ extension VRMRenderer {
                 vrmLog("[SKINNED PSO] Created skinned MToon outline pipeline successfully")
             } else {
                 vrmLog("[SKINNED PSO] Skinned MToon outline shaders not found - outlines will be disabled for skinned meshes")
+            }
+
+            // Skinned depth-prepass pipeline: position + joints + weights only
+            // (drops normal/uv/color), no fragment, depth attachment only.
+            if let depthVertexFunc = library.makeFunction(name: "skinned_mtoon_depth_vertex") {
+                let depthVD = MTLVertexDescriptor()
+                depthVD.attributes[0].format = .float3
+                depthVD.attributes[0].offset = posOffset
+                depthVD.attributes[0].bufferIndex = 0
+                depthVD.attributes[4].format = .uint4
+                depthVD.attributes[4].offset = jointsOffset
+                depthVD.attributes[4].bufferIndex = 0
+                depthVD.attributes[5].format = .float4
+                depthVD.attributes[5].offset = weightsOffset
+                depthVD.attributes[5].bufferIndex = 0
+                depthVD.layouts[0].stride = stride
+
+                let depthDescriptor = MTLRenderPipelineDescriptor()
+                depthDescriptor.label = "mtoon_skinned_depth_prepass"
+                depthDescriptor.vertexFunction = depthVertexFunc
+                depthDescriptor.fragmentFunction = nil  // depth-only
+                depthDescriptor.vertexDescriptor = depthVD
+                depthDescriptor.depthAttachmentPixelFormat = .depth32Float
+                depthDescriptor.rasterSampleCount = config.sampleCount
+
+                let state = try VRMPipelineCache.shared.getPipelineState(
+                    device: device,
+                    descriptor: depthDescriptor,
+                    key: pipelineKey("mtoon_skinned_depth_prepass")
+                )
+                skinnedDepthPrepassPipelineState = state
+                vrmLog("[SKINNED PSO] Created skinned depth-prepass pipeline successfully")
             }
         } catch {
             vrmLogError(
