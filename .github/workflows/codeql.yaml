@@ -80,6 +80,14 @@ jobs:
           echo "Selected: $XCODE"
           swift --version
 
+      - name: Work around unsupported Swift 6.3 on GitHub runners
+        run: |
+          # CodeQL/the runner does not yet support Swift 6.3, so temporarily
+          # downgrade the tools version for this job only. This change is not
+          # committed; it is a local workaround in the runner.
+          sed -i '' 's/swift-tools-version: 6.3/swift-tools-version: 6.2/' Package.swift
+          head -1 Package.swift
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
