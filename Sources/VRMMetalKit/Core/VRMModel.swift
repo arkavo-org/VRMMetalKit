@@ -876,16 +876,17 @@ public class VRMModel: @unchecked Sendable {
 
     /// VRM 0.0 → 1.0: rotate every skin's `inverseBindMatrix` by `Ry180` (left-multiply).
     ///
-    /// `buildNodeHierarchy()` conjugates each node's local TRS so joint world
-    /// matrices end up as `Ry180 · M_old · Ry180⁻¹`. `inverseBindMatrices` are
-    /// loaded later from the glTF accessor in the original VRM 0.x frame, so
-    /// `jointMatrix = joint.worldMatrix · IBM` would expand to
-    /// `Ry180 · M_old · Ry180⁻¹ · M_old⁻¹` — a non-trivial per-joint translation
-    /// (`Ry180·p − p` for a joint at position `p` with identity rotation) rather
-    /// than the intended `Ry180`.  Left-multiplying every IBM by `Ry180` cancels
-    /// the stray `Ry180⁻¹` so the skinning result is `Ry180 · vertex_world_old`
-    /// at every pose, matching the render-time Y-axis rotation this load-time
-    /// pass replaces.
+    /// Companion to the deliberate VRM 0.x → +Z-facing deviation in
+    /// `buildNodeHierarchy()` (see #299, closed as not planned). That pass conjugates each node's local
+    /// TRS so joint world matrices end up as `Ry180 · M_old · Ry180⁻¹`.
+    /// `inverseBindMatrices` are loaded later from the glTF accessor in the
+    /// original VRM 0.x frame, so `jointMatrix = joint.worldMatrix · IBM` would
+    /// expand to `Ry180 · M_old · Ry180⁻¹ · M_old⁻¹` — a non-trivial per-joint
+    /// translation (`Ry180·p − p` for a joint at position `p` with identity
+    /// rotation) rather than the intended `Ry180`.  Left-multiplying every IBM by
+    /// `Ry180` cancels the stray `Ry180⁻¹` so the skinning result is
+    /// `Ry180 · vertex_world_old` at every pose, matching the render-time Y-axis
+    /// rotation this load-time pass replaces.
     private func applyVRM0InverseBindMatrixConjugation() {
         guard isVRM0 else { return }
         // 180° rotation about Y as a 4x4: negate the X and Z components of every
@@ -986,13 +987,27 @@ public class VRMModel: @unchecked Sendable {
         }
 
         // VRM 0.0 → VRM 1.0 coordinate conversion.
-        // Unity left-handed (model faces -Z) → glTF right-handed (model faces +Z).
-        // A 180° rotation around Y aligns facing direction AND makes node.worldPosition
-        // consistent with VRM 1.0 (left limbs positive X).  Applied once at load time
-        // so physics, animation, and culling all see the same coordinate space.
-        // The matching `inverseBindMatrices` pass runs after skins are loaded — see
-        // `applyVRM0InverseBindMatrixConjugation()`; without it skinning at rest
-        // would displace vertices by `Ry180·p − p` for each joint.
+        //
+        // DELIBERATE DEVIATION from the VRM 0.x specification (#299, closed as not planned).
+        // The VRM 0.x spec says the model faces -Z in glTF coordinates. VRMMetalKit
+        // instead rotates every VRM 0.x model 180° around Y at load time so that it
+        // faces +Z, matching the VRM 1.0 convention.
+        //
+        // Rationale:
+        //   1. Most VRM 0.x content was authored in Unity and previewed in viewers
+        //      that also apply a Z-axis flip; rendering in the raw -Z orientation
+        //      produces a back-of-head view under a standard +Z-facing camera.
+        //   2. A single consistent +Z-facing coordinate space lets physics, animation,
+        //      culling, ARKit body tracking, and client camera code share one convention
+        //      regardless of whether the source file is VRM 0.x or VRM 1.0.
+        //   3. Left limbs end up at positive X, matching VRM 1.0 humanoid layout.
+        //
+        // Consequence: VRM 0.x models load visually consistent with VRM 1.0 models and
+        // with typical Unity-origin previews, but they do not strictly preserve the
+        // spec-mandated -Z forward direction. The matching `inverseBindMatrices` pass
+        // runs after skins are loaded — see `applyVRM0InverseBindMatrixConjugation()`;
+        // without it skinning at rest would displace vertices by `Ry180·p − p` for each
+        // joint.
         if isVRM0 {
             for node in nodes {
                 // Conjugate local rotation by 180° Y: (x, y, z, w) → (-x, y, -z, w)
