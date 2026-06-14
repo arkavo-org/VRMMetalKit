@@ -379,6 +379,13 @@ struct VRMVideoRendererCLI {
         
         print("   🎬 Animation: rootMotion=\(options.rootMotion)")
         
+        // Apply the first animation frame BEFORE the renderer warms up SpringBone
+        // physics. VRMRenderer.loadModel calls warmupPhysics against the current
+        // skeleton pose; if the model is still in bind pose, the springs settle at
+        // rest and then snap when the first rendered frame jumps to frame 0. This
+        // causes hair/penetration artifacts on models like AvatarSample_A (see #351).
+        player.update(deltaTime: 0, model: model)
+        
         // Setup renderer
         print("🎨 Setting up renderer...")
         var config = RendererConfig()
