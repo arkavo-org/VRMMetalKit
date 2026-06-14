@@ -201,11 +201,11 @@ See [NOTICE](NOTICE) for complete attribution information.
 
 ## Version History
 
-See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
+See [GitHub Releases](https://github.com/arkavo-org/VRMMetalKit/releases) for detailed version history.
 
 ### 1.0.0-rc.1 (Current)
 
-Release candidate for the 1.0 stable API. VRM 1.0 + VRMA support, MToon shading, GPU SpringBone physics, performance metrics, StrictMode validation, and the full DocC catalog. See [CHANGELOG.md](CHANGELOG.md) for details.
+Release candidate for the 1.0 stable API. VRM 1.0 + VRMA support, MToon shading, GPU SpringBone physics, performance metrics, StrictMode validation, and the full DocC catalog.
 
 ---
 
