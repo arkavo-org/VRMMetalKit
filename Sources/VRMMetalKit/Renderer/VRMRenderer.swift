@@ -4252,6 +4252,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 indexBufferOffset: 0
             )
 
+            // Count the outline pass in the performance tracker. The main
+            // geometry loop records its own draws; the MToon outline is a
+            // separate GPU draw and must be counted too, otherwise benchmark
+            // draw_call / triangle metrics silently omit the outline pass.
+            // (vrm-conformance docs/findings.md 2026-06-14: VMK rendered the
+            // outline but under-counted it because this call was missing.)
+            performanceTracker?.recordDrawCall(triangles: primitive.indexCount / 3, vertices: primitive.vertexCount)
+
             outlinesRendered += 1
         }
 
