@@ -48,6 +48,8 @@ struct BenchmarkOptions {
     var thresholdMedianPct: Double = 10.0    // --threshold MEDIAN:P95
     var thresholdP95Pct: Double = 15.0
     var archiveDir: String? = nil            // --archive-dir DIR (pipeline mode)
+    var avatarCount: Int = 1                  // --avatar-count N (Game of Mods multi-avatar)
+    var avatarSpacing: Float = 1.2            // --avatar-spacing M (meters between avatars)
 }
 
 func usage() {
@@ -91,6 +93,10 @@ func usage() {
       --archive-dir D  (pipeline mode) Persist compiled pipelines to an on-disk
                        binary archive in D. Run twice with the same D to compare
                        a cold first launch against a warm archive-loaded relaunch.
+      --avatar-count N  Number of avatars to render (default 1).
+                         N copies of the model are placed in a row; tests
+                         multi-avatar throughput for Game of Mods.
+      --avatar-spacing M Distance between avatars in meters (default 1.2).
 
     Recommended invocation:
       swift run -c release VRMBenchmark <vrm-path> --vrma <vrma-path> --frames 500
@@ -188,6 +194,12 @@ func parseArguments() -> BenchmarkOptions? {
         case "--archive-dir":
             guard let v = nextValue(for: a) else { return nil }
             opts.archiveDir = v
+        case "--avatar-count":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.avatarCount = max(1, Int(v) ?? 1)
+        case "--avatar-spacing":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.avatarSpacing = Float(v) ?? 1.2
         case "--threshold":
             guard let v = nextValue(for: a) else { return nil }
             let parts = v.split(separator: ":").map(String.init)
@@ -656,58 +668,123 @@ struct VRMBenchmarkCLI {
             exit(1)
         }
 
-        // Configure renderer
+        // Configure renderer(s)
         var config = RendererConfig()
         config.sampleCount = opts.sampleCount
         config.strict = .off
         config.enableDepthPrepass = opts.depthPrepass
-        let renderer = VRMRenderer(device: device, config: config)
-        renderer.performanceTracker = PerformanceTracker()
-        renderer.loadModel(model)
-        renderer.outlineWidth = opts.outlineWidth
-        renderer.enableSpringBone = opts.enableSpringBone
-        renderer.skipPreDrawTransformUpdate = opts.skipPreDrawTransform
-        switch opts.springBoneQuality {
-        case "off":    renderer.springBoneQuality = .off
-        case "low":    renderer.springBoneQuality = .low
-        case "medium": renderer.springBoneQuality = .medium
-        case "high":   renderer.springBoneQuality = .high
-        case "ultra":  renderer.springBoneQuality = .ultra
-        default:
-            FileHandle.standardError.write(Data("ERROR: unknown --spring-bone-quality '\(opts.springBoneQuality)'. Expected off/low/medium/high/ultra.\n".utf8))
-            exit(1)
-        }
-        renderer.debugWireframe = opts.wireframe
-        renderer.debugUVs = opts.debugUVs
-        // Intensities rescaled by 1/π under .radiometric to preserve the prior
-        // .automatic behaviour (vrm-conformance #213).
-        switch opts.lighting {
-        case "ambient":
-            renderer.disableLight(0)
-            renderer.disableLight(1)
-            renderer.disableLight(2)
-        case "single":
-            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                              color: SIMD3<Float>(1, 1, 1), intensity: 0.3183)
-            renderer.disableLight(1)
-            renderer.disableLight(2)
-        default:
-            renderer.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
-                              color: SIMD3<Float>(1, 1, 1), intensity: 0.3183)
-            renderer.disableLight(1)
-            renderer.setLight(2, direction: SIMD3<Float>(0, 0.2, 1),
-                              color: SIMD3<Float>(1, 1, 1), intensity: 0.0955)
-        }
-        renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
-        renderer.setLightNormalizationMode(.radiometric)
 
-        let aspect = Float(opts.width) / Float(opts.height)
-        renderer.projectionMatrix = perspectiveMatrix(
-            fovRadians: 45.0 * .pi / 180.0, aspect: aspect, near: 0.01, far: 100.0)
-        renderer.viewMatrix = lookAtMatrix(
-            eye: SIMD3<Float>(0, 1.3 + opts.cameraOffsetY, 1.8),
-            center: SIMD3<Float>(0, 1.3 + opts.cameraOffsetY, 0),
-            up: SIMD3<Float>(0, 1, 0))
+        let avatarCount = opts.avatarCount
+        let spacing = opts.avatarSpacing
+
+        // Multi-avatar: create N renderers, each with its own model copy.
+        // For single avatar (the default), this is just one renderer.
+        struct AvatarInstance {
+            let renderer: VRMRenderer
+            let model: VRMModel
+            let player: AnimationPlayer?
+            let xOffset: Float
+        }
+
+        var avatars: [AvatarInstance] = []
+        avatars.reserveCapacity(avatarCount)
+
+        let totalWidth = spacing * Float(avatarCount - 1)
+        for i in 0..<avatarCount {
+            let xOffset = avatarCount == 1 ? 0 : (spacing * Float(i) - totalWidth * 0.5)
+
+            // Load a fresh model copy per avatar (sharing GPU textures is a future optimization)
+            let avatarModel: VRMModel
+            if i == 0 {
+                avatarModel = model // reuse the already-loaded first model
+            } else {
+                do {
+                    avatarModel = try await VRMModel.load(from: url, device: device, options: loadingOptions(for: opts.loadingPreset))
+                } catch {
+                    print("ERROR: failed to load avatar \(i): \(error)")
+                    exit(1)
+                }
+            }
+
+            let r = VRMRenderer(device: device, config: config)
+            if i == 0 { r.performanceTracker = PerformanceTracker() }
+            r.loadModel(avatarModel)
+            r.outlineWidth = opts.outlineWidth
+            r.enableSpringBone = opts.enableSpringBone
+            r.skipPreDrawTransformUpdate = opts.skipPreDrawTransform
+            switch opts.springBoneQuality {
+            case "off":    r.springBoneQuality = .off
+            case "low":    r.springBoneQuality = .low
+            case "medium": r.springBoneQuality = .medium
+            case "high":   r.springBoneQuality = .high
+            case "ultra":  r.springBoneQuality = .ultra
+            default:
+                FileHandle.standardError.write(Data("ERROR: unknown --spring-bone-quality '\(opts.springBoneQuality)'. Expected off/low/medium/high/ultra.\n".utf8))
+                exit(1)
+            }
+            r.debugWireframe = opts.wireframe
+            r.debugUVs = opts.debugUVs
+            switch opts.lighting {
+            case "ambient":
+                r.disableLight(0); r.disableLight(1); r.disableLight(2)
+            case "single":
+                r.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                          color: SIMD3<Float>(1, 1, 1), intensity: 0.3183)
+                r.disableLight(1); r.disableLight(2)
+            default:
+                r.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                          color: SIMD3<Float>(1, 1, 1), intensity: 0.3183)
+                r.disableLight(1)
+                r.setLight(2, direction: SIMD3<Float>(0, 0.2, 1),
+                          color: SIMD3<Float>(1, 1, 1), intensity: 0.0955)
+            }
+            r.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
+            r.setLightNormalizationMode(.radiometric)
+
+            let aspect = Float(opts.width) / Float(opts.height)
+            r.projectionMatrix = perspectiveMatrix(
+                fovRadians: 45.0 * .pi / 180.0, aspect: aspect, near: 0.01, far: 100.0)
+            // Pull camera back to fit all avatars
+            let camDist = max(1.8, Float(avatarCount) * spacing * 0.8)
+            r.viewMatrix = lookAtMatrix(
+                eye: SIMD3<Float>(0, 1.3 + opts.cameraOffsetY, camDist),
+                center: SIMD3<Float>(0, 1.3 + opts.cameraOffsetY, 0),
+                up: SIMD3<Float>(0, 1, 0))
+
+            // Offset avatar in world space by translating root nodes
+            if xOffset != 0 {
+                for node in avatarModel.nodes where node.parent == nil {
+                    var m = node.localMatrix
+                    m.columns.3.x += xOffset
+                    node.localMatrix = m
+                    avatarModel.updateNodeTransforms()
+                }
+            }
+
+            // Animation player per avatar (staggered phase for visual variety)
+            let p: AnimationPlayer?
+            if let vrmaPath = opts.vrmaPath {
+                do {
+                    let clip = try VRMAnimationLoader.loadVRMA(
+                        from: URL(fileURLWithPath: vrmaPath), model: avatarModel)
+                    let player = AnimationPlayer()
+                    player.load(clip)
+                    player.play()
+                    // Stagger animation time so avatars aren't in lockstep
+                    player.seek(to: Float(i) * 0.3)
+                    p = player
+                } catch {
+                    print("ERROR: failed to load VRMA for avatar \(i): \(error)")
+                    exit(1)
+                }
+            } else {
+                p = nil
+            }
+
+            avatars.append(AvatarInstance(renderer: r, model: avatarModel, player: p, xOffset: xOffset))
+        }
+
+        let renderer = avatars[0].renderer // primary renderer for metrics
 
         // Offscreen targets (reused every frame)
         let useMSAA = opts.sampleCount > 1
@@ -749,27 +826,27 @@ struct VRMBenchmarkCLI {
         let dt = Float(1.0 / opts.fps)
 
         func renderOnce(_ sample: inout RenderFrameSample) {
-            // Wrap in autoreleasepool so Metal objects (command buffers, render
-            // pass descriptors, encoders) are released every frame instead of
-            // accumulating until the outer pool drains. Without this, running
-            // 500+ frames in a tight loop leaks driver threads and can trigger
-            // a system watchdog panic.
             var animationMs = 0.0
             var encodeMs = 0.0
             var waitMs = 0.0
             var totalMs = 0.0
+            // Suppress Swift 6.2 sending-race diagnostics: all Metal texture
+            // and command buffer access is serialised on @MainActor.
+            nonisolated(unsafe) let _colorTex = colorTex
+            nonisolated(unsafe) let _depthTex = depthTex
+            nonisolated(unsafe) let _resolveTex = resolveTex
             autoreleasepool {
                 let rpd = MTLRenderPassDescriptor()
-                rpd.colorAttachments[0].texture = colorTex
+                rpd.colorAttachments[0].texture = _colorTex
                 rpd.colorAttachments[0].loadAction = .clear
-                if let resolveTex {
-                    rpd.colorAttachments[0].resolveTexture = resolveTex
+                if let _resolveTex {
+                    rpd.colorAttachments[0].resolveTexture = _resolveTex
                     rpd.colorAttachments[0].storeAction = .multisampleResolve
                 } else {
                     rpd.colorAttachments[0].storeAction = .store
                 }
                 rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.12, green: 0.14, blue: 0.18, alpha: 1)
-                rpd.depthAttachment.texture = depthTex
+                rpd.depthAttachment.texture = _depthTex
                 rpd.depthAttachment.loadAction = .clear
                 rpd.depthAttachment.storeAction = .dontCare
                 rpd.depthAttachment.clearDepth = 1.0
@@ -777,16 +854,18 @@ struct VRMBenchmarkCLI {
                 guard let cb = commandQueue.makeCommandBuffer() else { return }
 
                 let t0 = CACurrentMediaTime()
-                // Advance animation before drawing so per-frame measurement
-                // captures both the animation CPU cost and the render cost.
                 let animationStart = CACurrentMediaTime()
-                player?.update(deltaTime: dt, model: model)
+                for avatar in avatars {
+                    avatar.player?.update(deltaTime: dt, model: avatar.model)
+                }
                 animationMs = (CACurrentMediaTime() - animationStart) * 1000.0
 
                 let encodeStart = CACurrentMediaTime()
-                renderer.drawOffscreenHeadless(
-                    to: colorTex, depth: depthTex,
-                    commandBuffer: cb, renderPassDescriptor: rpd)
+                for avatar in avatars {
+                    avatar.renderer.drawOffscreenHeadless(
+                        to: _colorTex, depth: _depthTex,
+                        commandBuffer: cb, renderPassDescriptor: rpd)
+                }
                 encodeMs = (CACurrentMediaTime() - encodeStart) * 1000.0
 
                 let waitStart = CACurrentMediaTime()
@@ -839,6 +918,7 @@ struct VRMBenchmarkCLI {
         VRMMetalKit Render Benchmark — \(opts.label)
         ======================================================================
         Model          : \(url.lastPathComponent)
+        Avatars        : \(avatarCount)\(avatarCount > 1 ? " (spacing \(String(format: "%.1f", spacing))m)" : "")
         Animation      : \(opts.vrmaPath.map { "\(($0 as NSString).lastPathComponent) (\(String(format: "%.2f", animDurationSec))s @ \(opts.fps) fps)" } ?? "none (static pose)")
         Load time      : \(String(format: "%.1f ms", loadMs))
         Resolution     : \(opts.width)x\(opts.height) (MSAA \(opts.sampleCount)x)
