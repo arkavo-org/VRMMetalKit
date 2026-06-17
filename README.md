@@ -129,6 +129,16 @@ make docs        # local preview server
 make docs-static # static site under .build/docs
 ```
 
+## Used by
+
+VRMMetalKit renders the avatars in [Arkavo](https://arkavo.com)'s apps — real products putting the loader, MToon shading, expressions, and SpringBone physics through their paces:
+
+- **[Avatar Muse](https://apps.apple.com/us/app/avatar-muse/id6755342276)** — *out now on iOS.* An AI companion whose avatar reacts to the conversation with real-time facial expressions and lookAt gaze — exercising VRMMetalKit's expression and ARKit-driver paths.
+- **[Arkavo Creator](https://apps.apple.com/us/app/arkavo-creator/id6738845556?mt=12)** — *coming soon on macOS.* A streaming and content-creation studio; VRMMetalKit drives the on-screen avatar for live broadcast and screen recording.
+- **[Game of Mods](https://store.steampowered.com/app/4029870/Game_of_Mods/)** — *coming soon on Steam.* A contemplative mod-creation platform with AI dialogue running **locally** — VRMMetalKit handles multi-avatar rendering while deliberately keeping CPU headroom free for on-device inference (the motivation behind the per-draw encode optimizations in recent releases).
+
+Building something with VRMMetalKit? Open a PR adding it here.
+
 ## Contributing
 
 Contributions are welcome! Please read our [Contributing Guidelines](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md).
