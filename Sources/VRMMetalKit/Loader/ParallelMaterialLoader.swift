@@ -81,8 +81,9 @@ public final class ParallelMaterialLoader: @unchecked Sendable {
 
         await withTaskGroup(of: (Int, VRMMaterial?).self) { group in
             for materialIndex in indices {
-                group.addTask { [unowned self] in
-                    guard let gltfMaterial = self.document.materials?[safe: materialIndex] else {
+                group.addTask { [weak self] in
+                    guard let self,
+                          let gltfMaterial = self.document.materials?[safe: materialIndex] else {
                         return (materialIndex, nil)
                     }
                     let vrm0Prop = materialIndex < self.vrm0MaterialProperties.count

@@ -926,7 +926,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[VRMRenderer] Finished setup sprite pipeline")
 
         if pipelineArchiveEnabled {
-            try? VRMPipelineCache.shared.flushPersistentArchive()
+            _ = try? VRMPipelineCache.shared.flushPersistentArchive()
             // Don't leave the process-wide cache pinned to this renderer's
             // device + archive: later renderers (other GPUs, or flag off) must
             // not record into it, and concurrent inits must not race on it.
@@ -1544,42 +1544,42 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             hasLoggedSpringBone = true
         }
 
+        // Calculate actual deltaTime. `simulationDeltaTime` is the
+        // explicit offline-rendering escape: when set, use it directly
+        // so tests / video extractors / conformance harnesses get a
+        // deterministic physics timestep independent of wall-clock.
+        //
+        // `config.synchronousSpringBone` is the documented offline-render
+        // mode (see RendererConfig.synchronousSpringBone). Offline rendering
+        // and wall-clock pacing are incompatible: the XPBD substep
+        // accumulator picks up a different substep count each frame as
+        // wall-clock pacing varies, and long chains diverge run-to-run
+        // on the same input (#283 conformance reproducer). When sync
+        // mode is on but no explicit `simulationDeltaTime` was supplied,
+        // fall back to a 60Hz fixed step so callers that opt into the
+        // offline mode get reproducibility without also having to know
+        // about `simulationDeltaTime`.
+        let clampedDeltaTime: Float
+        if let override = simulationDeltaTime {
+            clampedDeltaTime = Float(override)
+            lastUpdateTime = CACurrentMediaTime()
+        } else if config.synchronousSpringBone {
+            clampedDeltaTime = 1.0 / 60.0
+            lastUpdateTime = CACurrentMediaTime()
+        } else {
+            let currentTime = CACurrentMediaTime()
+            let deltaTime = lastUpdateTime > 0 ? Float(currentTime - lastUpdateTime) : 1.0 / 60.0
+            lastUpdateTime = currentTime
+            // Clamp deltaTime to reasonable values (prevent huge jumps)
+            clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
+        }
+
         // Update SpringBone GPU physics BEFORE the render encoder is created.
         // Spring-bone now shares the renderer's command buffer (audit's #2 bottleneck
         // fix), so its compute encoder must be opened+closed before any other encoder
         // (compute or render) is active on the same buffer — Metal forbids overlap.
         if enableSpringBone, model.springBone != nil {
             performanceTracker?.beginPhase(.springBone)
-
-            // Calculate actual deltaTime. `simulationDeltaTime` is the
-            // explicit offline-rendering escape: when set, use it directly
-            // so tests / video extractors / conformance harnesses get a
-            // deterministic physics timestep independent of wall-clock.
-            //
-            // `config.synchronousSpringBone` is the documented offline-render
-            // mode (see RendererConfig.synchronousSpringBone). Offline rendering
-            // and wall-clock pacing are incompatible: the XPBD substep
-            // accumulator picks up a different substep count each frame as
-            // wall-clock pacing varies, and long chains diverge run-to-run
-            // on the same input (#283 conformance reproducer). When sync
-            // mode is on but no explicit `simulationDeltaTime` was supplied,
-            // fall back to a 60Hz fixed step so callers that opt into the
-            // offline mode get reproducibility without also having to know
-            // about `simulationDeltaTime`.
-            let clampedDeltaTime: Float
-            if let override = simulationDeltaTime {
-                clampedDeltaTime = Float(override)
-                lastUpdateTime = CACurrentMediaTime()
-            } else if config.synchronousSpringBone {
-                clampedDeltaTime = 1.0 / 60.0
-                lastUpdateTime = CACurrentMediaTime()
-            } else {
-                let currentTime = CACurrentMediaTime()
-                let deltaTime = lastUpdateTime > 0 ? Float(currentTime - lastUpdateTime) : 1.0 / 60.0
-                lastUpdateTime = currentTime
-                // Clamp deltaTime to reasonable values (prevent huge jumps)
-                clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
-            }
 
             // Update temporary forces if any
             updateSpringBoneForces(deltaTime: clampedDeltaTime)
@@ -1658,11 +1658,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 viewMatrixInv[3][2]
             )
 
-            // DEBUG: Log camera position occasionally
-            // TODO: Add proper frame counting later
-
             lookAtController.cameraPosition = cameraPos
-            lookAtController.update(deltaTime: 1.0 / 60.0) // Assume 60 FPS for now
+            lookAtController.update(deltaTime: clampedDeltaTime)
 
             // Apply LookAt to animation state if in bone mode
             if let animationState = animationState,
