@@ -773,7 +773,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     // Scratch dictionary reused by the transparency-sort pass to avoid a
     // per-frame dictionary allocation. Keys are primitiveIndex.
-    private var viewZByIndex: [Int: Float] = [:]
+    private var viewZByIndex: [Float] = []
+    private var morphedBuffers: [MorphKey: MTLBuffer] = [:]
 
     /// Render-order slot for a NON-face material, from its alpha mode and VRM
     /// `renderQueue`. Lower sorts (and draws) earlier.
@@ -816,6 +817,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let meshNameLower: String
         let isFaceMaterial: Bool
         let isEyeMaterial: Bool
+        let isBodyMaterial: Bool
 
         // OPTIMIZATION: Render order for single-array sorting (avoids concatenation)
         var renderOrder: Int  // 0=opaque, 1=faceSkin, 2=faceEyebrow, 3=faceEyeline, 4=mask, 5=faceEye, 6=faceHighlight, 7=blend
@@ -1096,18 +1098,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Decide if compute path is needed (presence of any morphs > 0 or >8 targets anywhere)
         var needsComputePath = false
 
-        // Check if any primitive has active morphs with non-zero weights.
-        // Compute the per-mesh weights once and reuse the cached array for every primitive in the mesh.
+        // Pre-compute per-mesh morph weights once (avoids double allocation in detection + dispatch)
+        var cachedMeshWeights: [Int: [Float]] = [:]
         var hasActiveMorphs = false
         if let controller = expressionController {
             for (meshIndex, mesh) in model.meshes.enumerated() {
                 let meshMaxMorphCount = mesh.primitives.reduce(0) { max($0, $1.morphTargets.count) }
                 guard meshMaxMorphCount > 0 else { continue }
                 let meshWeights = controller.weightsForMesh(meshIndex, morphCount: meshMaxMorphCount)
-                let hasNonZero = meshWeights.contains { $0 > 0.001 }
-                if hasNonZero {
+                cachedMeshWeights[meshIndex] = meshWeights
+                if !hasActiveMorphs && meshWeights.contains(where: { $0 > 0.001 }) {
                     hasActiveMorphs = true
-                    break
                 }
             }
         }
@@ -1146,7 +1147,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Apply morphs to each primitive that has morph targets
         // Store morphed buffer references for render pass using STABLE KEYS
-        var morphedBuffers: [MorphKey: MTLBuffer] = [:]  // Key: (meshIndex << 32) | primitiveIndex
+        morphedBuffers.removeAll(keepingCapacity: true)
 
         // Batch all primitive morph dispatches into a single compute encoder (#194).
         // Created lazily so we don't emit an empty compute pass when every primitive
@@ -1158,8 +1159,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         var validationTarget: (meshIndex: Int, primitiveIndex: Int, primitive: VRMPrimitive, outputBuffer: MTLBuffer)?
 
         for (meshIndex, mesh) in model.meshes.enumerated() {
-            let meshMaxMorphCount = mesh.primitives.reduce(0) { max($0, $1.morphTargets.count) }
-            let meshWeights = expressionController?.weightsForMesh(meshIndex, morphCount: meshMaxMorphCount) ?? []
+            let meshWeights = cachedMeshWeights[meshIndex] ?? []
 
             for (primitiveIndex, primitive) in mesh.primitives.enumerated() where !primitive.morphTargets.isEmpty {
                 // Ensure SoA buffers exist
@@ -1986,6 +1986,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                     materialNameLower.contains("ribbon") || materialNameLower.contains("frill") ||
                                     materialNameLower.contains("ruffle")
                 let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
+                let isBodyMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin") ||
+                                     nodeNameLower.contains("body") || meshNameLower.contains("body")
                 let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
                                       meshNameLower.contains("face") || meshNameLower.contains("eye")
                 var item = RenderItem(
@@ -2004,6 +2006,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     meshNameLower: meshNameLower,
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
+                    isBodyMaterial: isBodyMaterial,
                     renderOrder: 0,  // Will be set based on category
                     materialRenderQueue: materialRenderQueue,
                     primitiveIndex: globalPrimitiveIndex,
@@ -2151,9 +2154,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
 
-        // Pre-compute view-space Z for transparent items to avoid redundant matrix multiplies in comparator
-        viewZByIndex.removeAll(keepingCapacity: true)
-        viewZByIndex.reserveCapacity(blendCount)
+        // Pre-compute view-space Z for transparent items (flat array indexed by primitiveIndex)
+        let totalPrimitives = allItems.count
+        viewZByIndex = [Float](repeating: .infinity, count: totalPrimitives)
         for item in allItems where item.materialRenderQueue >= 2500 {
             let worldPos = item.node.worldMatrix.columns.3
             viewZByIndex[item.primitiveIndex] = (viewMatrix * worldPos).z
@@ -2176,9 +2179,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // 3. Tertiary: Transparent materials (queue >= 2500): back-to-front Z-sorting
             // This threshold covers TransparentWithZWrite (2450+) and Transparent (3000+)
             if a.materialRenderQueue >= 2500 {
-                let aViewZ = viewZByIndex[a.primitiveIndex] ?? 0
-                let bViewZ = viewZByIndex[b.primitiveIndex] ?? 0
-                return aViewZ < bViewZ  // Far to near (Painter's Algorithm)
+                return viewZByIndex[a.primitiveIndex] < viewZByIndex[b.primitiveIndex]
             }
 
             // 4. Quaternary: stable definition order for tie-breaking
@@ -2834,15 +2835,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)  // White base
                 var textureCount = 0
 
-                // Use pre-cached flags from RenderItem instead of rescanning strings per draw
-                let materialNameLower = item.materialNameLower
-                let nodeName = item.nodeNameLower
-                let meshNameLower = item.meshNameLower
-
                 let isFaceMaterial = item.isFaceMaterial
-                let isFaceOrBodyMaterial = isFaceMaterial ||
-                    materialNameLower.contains("body") || materialNameLower.contains("skin") ||
-                    nodeName.contains("body") || meshNameLower.contains("body")
+                let isFaceOrBodyMaterial = isFaceMaterial || item.isBodyMaterial
 
                 // Log material processing for debugging
                 if frameCounter <= 2 || (frameCounter % 60 == 0 && isFaceMaterial) {
@@ -3113,10 +3107,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Enhanced face/body material detection - check both material names AND mesh/node names
             // Variables already declared above, reuse them
 
-            let isBodyMaterial = materialNameLower.contains("body") ||
-                               materialNameLower.contains("skin") ||
-                               nodeName.contains("body") ||
-                               meshNameLower.contains("body")
+            let isBodyMaterial = item.isBodyMaterial
 
             // PHASE 4: Log MToon uniforms for face materials
             if isFaceMaterial && frameCounter % 60 == 0 {
