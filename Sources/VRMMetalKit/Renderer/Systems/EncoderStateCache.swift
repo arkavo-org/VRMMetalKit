@@ -33,6 +33,7 @@ final class EncoderStateCache {
     private var cullMode: MTLCullMode?
     private var frontFacing: MTLWinding?
     private var triangleFillMode: MTLTriangleFillMode?
+    private var depthBias: (bias: Float, slope: Float, clamp: Float)?
 
     private var vertexBuffers: [(buffer: MTLBuffer, offset: Int)?] = Array(repeating: nil, count: slotCount)
     private var fragmentBuffers: [(buffer: MTLBuffer, offset: Int)?] = Array(repeating: nil, count: slotCount)
@@ -47,6 +48,7 @@ final class EncoderStateCache {
         cullMode = nil
         frontFacing = nil
         triangleFillMode = nil
+        depthBias = nil
         for i in 0..<vertexBuffers.count { vertexBuffers[i] = nil }
         for i in 0..<fragmentBuffers.count { fragmentBuffers[i] = nil }
         for i in 0..<fragmentTextures.count { fragmentTextures[i] = nil }
@@ -105,6 +107,16 @@ final class EncoderStateCache {
         }
         encoder.setTriangleFillMode(mode)
         triangleFillMode = mode
+        emittedCalls &+= 1
+    }
+
+    func setDepthBias(_ encoder: MTLRenderCommandEncoder, _ bias: Float, slopeScale: Float, clamp: Float) {
+        if let prev = depthBias, prev.bias == bias, prev.slope == slopeScale, prev.clamp == clamp {
+            skippedCalls &+= 1
+            return
+        }
+        encoder.setDepthBias(bias, slopeScale: slopeScale, clamp: clamp)
+        depthBias = (bias, slopeScale, clamp)
         emittedCalls &+= 1
     }
 

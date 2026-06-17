@@ -121,7 +121,7 @@ struct MToonMaterial {
  float outlineLightingMixFactor;            // 4 bytes
  float outlineMode;                         // 4 bytes (0: None, 1: World, 2: Screen)
  int hasOutlineWidthMultiplyTexture;        // 4 bytes
- float _padding2;                           // 4 bytes padding
+ int shadeUsesBaseColor;                    // 4 bytes (non-zero = reuse baseColor sample for shade)
 
  // Block 9: 16 bytes - UV Animation
  float uvAnimationScrollXSpeedFactor;       // 4 bytes
@@ -371,6 +371,159 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  return out;
 }
 
+// Debug visualization helper — isolated in its own function so the main
+// fragment shader's register count and instruction footprint stay lean
+// in production (debugUVs == 0 means this is never called).
+static float4 mtoon_debug_visualize(
+    VertexOut in,
+    bool isFrontFace,
+    constant MToonMaterial& material,
+    constant Uniforms& uniforms,
+    texture2d<half> baseColorTexture,
+    texture2d<half> shadeMultiplyTexture,
+    texture2d<half> matcapTexture,
+    sampler textureSampler) {
+    if (uniforms.debugUVs == 1) {
+        return float4(in.texCoord.x, in.texCoord.y, 0.0, 1.0);
+    } else if (uniforms.debugUVs == 2) {
+        return float4(material.hasBaseColorTexture > 0 ? 0.0 : 1.0,
+                      material.hasBaseColorTexture > 0 ? 1.0 : 0.0, 0.0, 1.0);
+    } else if (uniforms.debugUVs == 3) {
+        return material.baseColorFactor;
+    } else if (uniforms.debugUVs == 4) {
+        float4 texColor = float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        return float4(texColor.rgb, 1.0);
+    } else if (uniforms.debugUVs == 5) {
+        return float4(normalize(in.worldNormal) * 0.5 + 0.5, 1.0);
+    } else if (uniforms.debugUVs == 6) {
+        return float4(uniforms.lightColor.xyz, 1.0);
+    } else if (uniforms.debugUVs == 7) {
+        float3 normal = normalize(in.worldNormal);
+        float NdotL = dot(normal, -uniforms.lightDirection.xyz);
+        float mapped = NdotL * 0.5 + 0.5;
+        return float4(mapped, mapped, mapped, 1.0);
+    } else if (uniforms.debugUVs == 8) {
+        return float4(uniforms.lightDirection.xyz * 0.5 + 0.5, 1.0);
+    } else if (uniforms.debugUVs == 9) {
+        return float4(isFrontFace ? 0.0 : 1.0, isFrontFace ? 1.0 : 0.0, 0.0, 1.0);
+    } else if (uniforms.debugUVs == 10) {
+        return float4(normalize(in.viewDirection) * 0.5 + 0.5, 1.0);
+    } else if (uniforms.debugUVs == 12) {
+        float4 debugBaseColor = material.baseColorFactor;
+        if (material.hasBaseColorTexture > 0) {
+            debugBaseColor *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        }
+        return float4(debugBaseColor.rgb, 1.0);
+    } else if (uniforms.debugUVs == 13) {
+        return float4(in.color.rgb, 1.0);
+    } else if (uniforms.debugUVs == 14 || uniforms.debugUVs == 15) {
+        float3 normal = normalize(in.worldNormal);
+        float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
+        float NdotL = (uniforms.vrmVersion == 1) ? rawNdotL : rawNdotL * 0.5 + 0.5;
+        float shadingShift = material.shadingShiftFactor;
+        float toony = material.shadingToonyFactor;
+        float shading = NdotL + shadingShift;
+        float lightingFactor = linearstep(-1.0 + toony, 1.0 - toony, shading);
+        return float4(lightingFactor, lightingFactor, lightingFactor, 1.0);
+    } else if (uniforms.debugUVs == 16) {
+        float3 normal = normalize(in.worldNormal);
+        float NdotL = dot(normal, -uniforms.lightDirection.xyz);
+        if (NdotL >= 0.0) {
+            return float4(0.0, NdotL, 0.0, 1.0);
+        } else {
+            return float4(-NdotL, 0.0, 0.0, 1.0);
+        }
+    } else if (uniforms.debugUVs == 24) {
+        if (material.alphaMode == 0) return float4(1.0, 0.0, 0.0, 1.0);
+        if (material.alphaMode == 1) return float4(0.0, 1.0, 0.0, 1.0);
+        return float4(0.0, 0.0, 1.0, 1.0);
+    } else if (uniforms.debugUVs == 25) {
+        float4 texSample(1.0);
+        if (material.hasBaseColorTexture > 0) {
+            texSample = float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        }
+        float4 dbgBase25 = material.baseColorFactor * texSample;
+        if (material.alphaMode == 1 && dbgBase25.a < material.alphaCutoff) {
+            discard_fragment();
+        }
+        return float4(texSample.r, texSample.g, texSample.a, 1.0);
+    } else if (uniforms.debugUVs == 26) {
+        float4 dbgBase26 = material.baseColorFactor;
+        if (material.hasBaseColorTexture > 0) {
+            dbgBase26 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        }
+        if (material.alphaMode == 1 && dbgBase26.a < material.alphaCutoff) {
+            discard_fragment();
+        }
+        return float4(dbgBase26.a, dbgBase26.a, dbgBase26.a, 1.0);
+    } else if (uniforms.debugUVs == 27) {
+        float4 dbgBase27 = material.baseColorFactor;
+        if (material.hasBaseColorTexture > 0) {
+            dbgBase27 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        }
+        if (material.alphaMode == 1 && dbgBase27.a < material.alphaCutoff) {
+            discard_fragment();
+        }
+        return float4(material.shadeColorR, material.shadeColorG, material.shadeColorB, 1.0);
+    } else if (uniforms.debugUVs == 28) {
+        float4 dbgBase28 = material.baseColorFactor;
+        if (material.hasBaseColorTexture > 0) {
+            dbgBase28 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        }
+        if (material.alphaMode == 1 && dbgBase28.a < material.alphaCutoff) {
+            discard_fragment();
+        }
+        if (material.alphaMode == 0) return float4(1.0, 0.0, 0.0, 1.0);
+        if (material.alphaMode == 1) return float4(0.0, 1.0, 0.0, 1.0);
+        return float4(0.0, 0.0, 1.0, 1.0);
+    } else if (uniforms.debugUVs == 30) {
+        float4 dbgBase30 = material.baseColorFactor;
+        if (material.hasBaseColorTexture > 0) {
+            dbgBase30 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        }
+        if (material.alphaMode == 1 && dbgBase30.a < material.alphaCutoff) {
+            discard_fragment();
+        }
+        return float4(dbgBase30.rgb, 1.0);
+    } else if (uniforms.debugUVs == 31) {
+        float4 dbgBase31 = material.baseColorFactor;
+        if (material.hasBaseColorTexture > 0) {
+            dbgBase31 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        }
+        if (material.alphaMode == 1 && dbgBase31.a < material.alphaCutoff) {
+            discard_fragment();
+        }
+        if (material.hasShadeMultiplyTexture > 0) {
+            return float4(float3(shadeMultiplyTexture.sample(textureSampler, in.texCoord).rgb), 1.0);
+        }
+        return float4(0.5, 0.5, 0.5, 1.0);
+    } else if (uniforms.debugUVs == 32) {
+        float4 dbgBase32 = material.baseColorFactor;
+        if (material.hasBaseColorTexture > 0) {
+            dbgBase32 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        }
+        if (material.alphaMode == 1 && dbgBase32.a < material.alphaCutoff) {
+            discard_fragment();
+        }
+        if (material.hasMatcapTexture > 0) {
+            float3 vn = normalize(in.viewNormal);
+            float2 mcUV = vn.xy * 0.5 + 0.5;
+            return float4(float3(matcapTexture.sample(textureSampler, mcUV).rgb), 1.0);
+        }
+        return float4(0.0, 0.0, 0.0, 1.0);
+    } else if (uniforms.debugUVs == 33) {
+        float3 sc(material.shadeColorR, material.shadeColorG, material.shadeColorB);
+        return float4(sc, 1.0);
+    } else if (uniforms.debugUVs == 34) {
+        if (material.hasShadeMultiplyTexture > 0) {
+            return float4(1.0, 0.0, 0.0, 1.0);
+        } else {
+            return float4(0.0, 0.0, 0.0, 1.0);
+        }
+    }
+    return float4(1.0, 0.0, 1.0, 1.0); // magenta = unknown debug mode
+}
+
 // Fragment shader with complete MToon 1.0 shading
 // VERSION 2: Fixed white textures
 fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
@@ -395,184 +548,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  // Debug modes are cold in production; keep the normal path to one branch.
  if (uniforms.debugUVs != 0) {
- if (uniforms.debugUVs == 1) {
- // UV debug - red/green gradient
- return float4(in.texCoord.x, in.texCoord.y, 0.0, 1.0);
- } else if (uniforms.debugUVs == 2) {
- // Show hasBaseColorTexture flag: red=0, green=1
- return float4(material.hasBaseColorTexture > 0 ? 0.0 : 1.0,
-               material.hasBaseColorTexture > 0 ? 1.0 : 0.0, 0.0, 1.0);
- } else if (uniforms.debugUVs == 3) {
- // Show baseColorFactor directly
- return material.baseColorFactor;
- } else if (uniforms.debugUVs == 4) {
- // Show sampled texture RGB directly
- float4 texColor = float4(baseColorTexture.sample(textureSampler, in.texCoord));
- return float4(texColor.rgb, 1.0);
- } else if (uniforms.debugUVs == 5) {
- // Show normal direction as color
- return float4(normalize(in.worldNormal) * 0.5 + 0.5, 1.0);
- } else if (uniforms.debugUVs == 6) {
- // Show light color
- return float4(uniforms.lightColor.xyz, 1.0);
- } else if (uniforms.debugUVs == 7) {
- // Show NdotL (diffuse lighting term)
- float3 normal = normalize(in.worldNormal);
- float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
- // Map from [-1,1] to [0,1] for visualization
- float mapped = NdotL * 0.5 + 0.5;
- return float4(mapped, mapped, mapped, 1.0);
- } else if (uniforms.debugUVs == 8) {
- // Show light direction
- return float4(uniforms.lightDirection.xyz * 0.5 + 0.5, 1.0);
- } else if (uniforms.debugUVs == 9) {
- // Show front/back face: RED = back face, GREEN = front face
- return float4(isFrontFace ? 0.0 : 1.0, isFrontFace ? 1.0 : 0.0, 0.0, 1.0);
- } else if (uniforms.debugUVs == 10) {
- // Show view direction (should point from vertex toward camera)
- return float4(normalize(in.viewDirection) * 0.5 + 0.5, 1.0);
- } else if (uniforms.debugUVs == 12) {
- // Show raw base color (texture * factor, no lighting) - debug black triangles
- float4 debugBaseColor = material.baseColorFactor;
- if (material.hasBaseColorTexture > 0) {
-     debugBaseColor *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
- }
- return float4(debugBaseColor.rgb, 1.0);
- } else if (uniforms.debugUVs == 13) {
- // Show vertex color only
- return float4(in.color.rgb, 1.0);
- } else if (uniforms.debugUVs == 14) {
- // Debug mode 14: Output shadowStep as grayscale for sunburn diagnosis
- float3 normal = normalize(in.worldNormal);
- float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
- float NdotL = (uniforms.vrmVersion == 1) ? rawNdotL : rawNdotL * 0.5 + 0.5;
- float shadingShift = material.shadingShiftFactor;
- float toony = material.shadingToonyFactor;
- float shading = NdotL + shadingShift;
- float shadowStep = linearstep(-1.0 + toony, 1.0 - toony, shading);
- return float4(shadowStep, shadowStep, shadowStep, 1.0);
- } else if (uniforms.debugUVs == 24) {
-// Debug mode 24: Show alpha mode (RED=OPAQUE, GREEN=MASK, BLUE=BLEND)
-if (material.alphaMode == 0) return float4(1.0, 0.0, 0.0, 1.0);
-if (material.alphaMode == 1) return float4(0.0, 1.0, 0.0, 1.0);
-return float4(0.0, 0.0, 1.0, 1.0);
- } else if (uniforms.debugUVs == 25) {
-// Debug mode 25: Raw texture RGBA channels: R=texR, G=texG, B=texAlpha (with MASK discard)
-float4 texSample = float4(1.0);
-if (material.hasBaseColorTexture > 0) {
-    texSample = float4(baseColorTexture.sample(textureSampler, in.texCoord));
-}
-float4 dbgBase25 = material.baseColorFactor * texSample;
-if (material.alphaMode == 1 && dbgBase25.a < material.alphaCutoff) {
-    discard_fragment();
-}
-return float4(texSample.r, texSample.g, texSample.a, 1.0);
- } else if (uniforms.debugUVs == 26) {
-// Debug mode 26: Texture alpha WITH MASK discard (grayscale)
-float4 dbgBase26 = material.baseColorFactor;
-if (material.hasBaseColorTexture > 0) {
-    dbgBase26 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
-}
-if (material.alphaMode == 1 && dbgBase26.a < material.alphaCutoff) {
-    discard_fragment();
-}
-return float4(dbgBase26.a, dbgBase26.a, dbgBase26.a, 1.0);
- } else if (uniforms.debugUVs == 27) {
-// Debug mode 27: Shade color factor (identifies material by unique shade color)
-float4 dbgBase27 = material.baseColorFactor;
-if (material.hasBaseColorTexture > 0) {
-    dbgBase27 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
-}
-if (material.alphaMode == 1 && dbgBase27.a < material.alphaCutoff) {
-    discard_fragment();
-}
-return float4(material.shadeColorR, material.shadeColorG, material.shadeColorB, 1.0);
- } else if (uniforms.debugUVs == 28) {
-// Debug mode 28: Alpha mode with correct discard (RED=OPAQUE, GREEN=MASK, BLUE=BLEND)
-float4 dbgBase28 = material.baseColorFactor;
-if (material.hasBaseColorTexture > 0) {
-    dbgBase28 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
-}
-if (material.alphaMode == 1 && dbgBase28.a < material.alphaCutoff) {
-    discard_fragment();
-}
-if (material.alphaMode == 0) return float4(1.0, 0.0, 0.0, 1.0);
-if (material.alphaMode == 1) return float4(0.0, 1.0, 0.0, 1.0);
-return float4(0.0, 0.0, 1.0, 1.0);
- } else if (uniforms.debugUVs == 30) {
-// Debug 30: Base color texture RGB after MASK discard (no lighting)
-float4 dbgBase30 = material.baseColorFactor;
-if (material.hasBaseColorTexture > 0) {
-    dbgBase30 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
-}
-if (material.alphaMode == 1 && dbgBase30.a < material.alphaCutoff) {
-    discard_fragment();
-}
-return float4(dbgBase30.rgb, 1.0);
- } else if (uniforms.debugUVs == 31) {
-// Debug 31: Raw shade texture sample after MASK discard
-float4 dbgBase31 = material.baseColorFactor;
-if (material.hasBaseColorTexture > 0) {
-    dbgBase31 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
-}
-if (material.alphaMode == 1 && dbgBase31.a < material.alphaCutoff) {
-    discard_fragment();
-}
-if (material.hasShadeMultiplyTexture > 0) {
-    return float4(float3(shadeMultiplyTexture.sample(textureSampler, in.texCoord).rgb), 1.0);
-}
-return float4(0.5, 0.5, 0.5, 1.0); // Gray = no shade texture
- } else if (uniforms.debugUVs == 33) {
-// Debug 33: Shade color value (shadeColorR/G/B from material)
-float3 sc = float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
-return float4(sc, 1.0);
- } else if (uniforms.debugUVs == 34) {
-// Debug 34: Show hasShadeMultiplyTexture (RED=has texture, BLACK=no texture)
-if (material.hasShadeMultiplyTexture > 0) {
-    return float4(1.0, 0.0, 0.0, 1.0);  // RED = has shade texture
-} else {
-    return float4(0.0, 0.0, 0.0, 1.0);  // BLACK = no shade texture
-}
- } else if (uniforms.debugUVs == 32) {
-// Debug 32: Matcap contribution after MASK discard
-float4 dbgBase32 = material.baseColorFactor;
-if (material.hasBaseColorTexture > 0) {
-    dbgBase32 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
-}
-if (material.alphaMode == 1 && dbgBase32.a < material.alphaCutoff) {
-    discard_fragment();
-}
-if (material.hasMatcapTexture > 0) {
-    float3 vn = normalize(in.viewNormal);
-    float2 mcUV = vn.xy * 0.5 + 0.5;
-    return float4(float3(matcapTexture.sample(textureSampler, mcUV).rgb), 1.0);
-}
-return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
- } else if (uniforms.debugUVs == 15) {
- // Debug mode 15: Visualize lightingFactor (the lit/shadow interpolation)
- // WHITE = fully lit (baseColor), BLACK = fully shadow (shadeColor)
- // This is identical to mode 14 but named for clarity in sunburn diagnosis
- float3 normal = normalize(in.worldNormal);
- float rawNdotL = dot(normal, -uniforms.lightDirection.xyz);
- float NdotL = (uniforms.vrmVersion == 1) ? rawNdotL : rawNdotL * 0.5 + 0.5;
- float shadingShift = material.shadingShiftFactor;
- float toony = material.shadingToonyFactor;
- float shading = NdotL + shadingShift;
- // VRM 0.x params are already converted to VRM 1.0 space by toMToonMaterial()
- float lightingFactor = linearstep(-1.0 + toony, 1.0 - toony, shading);
- return float4(lightingFactor, lightingFactor, lightingFactor, 1.0);
- } else if (uniforms.debugUVs == 16) {
- // Debug mode 16: Show raw NdotL as color
- // GREEN = positive NdotL (lit), RED = negative NdotL (shadow)
- // Intensity shows magnitude
- float3 normal = normalize(in.worldNormal);
- float NdotL = dot(normal, -uniforms.lightDirection.xyz);  // Negate for correct convention
- if (NdotL >= 0.0) {
-     return float4(0.0, NdotL, 0.0, 1.0);  // Green = positive (correct for front-lit)
- } else {
-     return float4(-NdotL, 0.0, 0.0, 1.0); // Red = negative (WRONG for front-lit)
- }
- }
+     return mtoon_debug_visualize(in, isFrontFace, material, uniforms,
+                                  baseColorTexture, shadeMultiplyTexture,
+                                  matcapTexture, textureSampler);
  }
 
  // Resolve effective feature flags for the main shading path. When
@@ -610,8 +588,9 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
 
  // Sample base color
  mtoon_float4 baseColor = mtoon_float4(material.baseColorFactor);
+ mtoon_float4 texColor(1.0, 1.0, 1.0, 1.0);
  if (effectiveHasBaseColorTexture) {
-     mtoon_float4 texColor = mtoon_float4(baseColorTexture.sample(textureSampler, uv));
+     texColor = mtoon_float4(baseColorTexture.sample(textureSampler, uv));
 
  #if 0  // DEBUG: Output raw texture value (before material factor multiplication) - DISABLED
  return float4(texColor.rgb, 1.0);
@@ -635,12 +614,14 @@ return float4(0.0, 0.0, 0.0, 1.0); // Black = no matcap
 
  // Calculate shade color
  mtoon_float3 shadeColor = mtoon_float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
- if (effectiveHasShadeMultiplyTexture) {
+ if (material.shadeUsesBaseColor != 0 && effectiveHasBaseColorTexture) {
+     // shadeMultiplyTexture is the same image as baseColorTexture — reuse the
+     // sample already in registers instead of fetching tex[1] again.
+     shadeColor *= mtoon_float3(texColor.rgb);
+ } else if (effectiveHasShadeMultiplyTexture) {
      mtoon_float3 shadeTexColor = mtoon_float3(shadeMultiplyTexture.sample(textureSampler, uv).rgb);
      shadeColor *= shadeTexColor;
  }
- // Note: When _ShadeTexture == _MainTex (VRM 0.0), we skip shadeMultiplyTexture
- // assignment in VRMTypes.swift. shadeColor uses shadeColorFactor directly.
 
  mtoon_float3 normal = mtoon_float3(normalize(in.worldNormal));
  mtoon_float3 viewNormal = mtoon_float3(in.viewNormal);

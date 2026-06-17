@@ -29,6 +29,9 @@ import simd
 /// - `VRM_GPUTRACE_WARMUP` warmup frames before capture (default 30 when
 ///   animation or spring is active, else 0). `VRM_GPUTRACE_FPS` sets the
 ///   animation/sim step rate (default 60).
+/// - `VRM_GPUTRACE_DEPTH_PREPASS=1` enables the opaque depth prepass
+///   (`RendererConfig.enableDepthPrepass`), adding the depth-only draws to the
+///   trace so its GPU-side early-Z effect can be A/B'd against a default capture.
 ///
 /// Typical use:
 ///
@@ -79,6 +82,7 @@ final class GPUTraceCaptureTests: XCTestCase {
         config.sampleCount = 1
         config.strict = .off
         config.colorPixelFormat = .rgba8Unorm_srgb
+        config.enableDepthPrepass = ["1", "true", "yes"].contains((env["VRM_GPUTRACE_DEPTH_PREPASS"] ?? "").lowercased())
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
 

@@ -773,7 +773,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     // Scratch dictionary reused by the transparency-sort pass to avoid a
     // per-frame dictionary allocation. Keys are primitiveIndex.
-    private var viewZByIndex: [Int: Float] = [:]
+    private var viewZByIndex: [Float] = []
+    private var morphedBuffers: [MorphKey: MTLBuffer] = [:]
 
     /// Render-order slot for a NON-face material, from its alpha mode and VRM
     /// `renderQueue`. Lower sorts (and draws) earlier.
@@ -816,6 +817,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let meshNameLower: String
         let isFaceMaterial: Bool
         let isEyeMaterial: Bool
+        let isBodyMaterial: Bool
 
         // OPTIMIZATION: Render order for single-array sorting (avoids concatenation)
         var renderOrder: Int  // 0=opaque, 1=faceSkin, 2=faceEyebrow, 3=faceEyeline, 4=mask, 5=faceEye, 6=faceHighlight, 7=blend
@@ -1096,18 +1098,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Decide if compute path is needed (presence of any morphs > 0 or >8 targets anywhere)
         var needsComputePath = false
 
-        // Check if any primitive has active morphs with non-zero weights.
-        // Compute the per-mesh weights once and reuse the cached array for every primitive in the mesh.
+        // Pre-compute per-mesh morph weights once (avoids double allocation in detection + dispatch)
+        var cachedMeshWeights: [Int: [Float]] = [:]
         var hasActiveMorphs = false
         if let controller = expressionController {
             for (meshIndex, mesh) in model.meshes.enumerated() {
                 let meshMaxMorphCount = mesh.primitives.reduce(0) { max($0, $1.morphTargets.count) }
                 guard meshMaxMorphCount > 0 else { continue }
                 let meshWeights = controller.weightsForMesh(meshIndex, morphCount: meshMaxMorphCount)
-                let hasNonZero = meshWeights.contains { $0 > 0.001 }
-                if hasNonZero {
+                cachedMeshWeights[meshIndex] = meshWeights
+                if !hasActiveMorphs && meshWeights.contains(where: { $0 > 0.001 }) {
                     hasActiveMorphs = true
-                    break
                 }
             }
         }
@@ -1146,7 +1147,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Apply morphs to each primitive that has morph targets
         // Store morphed buffer references for render pass using STABLE KEYS
-        var morphedBuffers: [MorphKey: MTLBuffer] = [:]  // Key: (meshIndex << 32) | primitiveIndex
+        morphedBuffers.removeAll(keepingCapacity: true)
 
         // Batch all primitive morph dispatches into a single compute encoder (#194).
         // Created lazily so we don't emit an empty compute pass when every primitive
@@ -1158,8 +1159,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         var validationTarget: (meshIndex: Int, primitiveIndex: Int, primitive: VRMPrimitive, outputBuffer: MTLBuffer)?
 
         for (meshIndex, mesh) in model.meshes.enumerated() {
-            let meshMaxMorphCount = mesh.primitives.reduce(0) { max($0, $1.morphTargets.count) }
-            let meshWeights = expressionController?.weightsForMesh(meshIndex, morphCount: meshMaxMorphCount) ?? []
+            let meshWeights = cachedMeshWeights[meshIndex] ?? []
 
             for (primitiveIndex, primitive) in mesh.primitives.enumerated() where !primitive.morphTargets.isEmpty {
                 // Ensure SoA buffers exist
@@ -1983,6 +1983,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                     materialNameLower.contains("ribbon") || materialNameLower.contains("frill") ||
                                     materialNameLower.contains("ruffle")
                 let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
+                let isBodyMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin") ||
+                                     nodeNameLower.contains("body") || meshNameLower.contains("body")
                 let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
                                       meshNameLower.contains("face") || meshNameLower.contains("eye")
                 var item = RenderItem(
@@ -2001,6 +2003,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     meshNameLower: meshNameLower,
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
+                    isBodyMaterial: isBodyMaterial,
                     renderOrder: 0,  // Will be set based on category
                     materialRenderQueue: materialRenderQueue,
                     primitiveIndex: globalPrimitiveIndex,
@@ -2148,9 +2151,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
 
-        // Pre-compute view-space Z for transparent items to avoid redundant matrix multiplies in comparator
-        viewZByIndex.removeAll(keepingCapacity: true)
-        viewZByIndex.reserveCapacity(blendCount)
+        // Pre-compute view-space Z for transparent items (flat array indexed by primitiveIndex)
+        // primitiveIndex comes from globalPrimitiveIndex which counts ALL primitives including
+        // first-person-filtered ones that were skipped, so size to globalPrimitiveIndex not allItems.count
+        viewZByIndex = [Float](repeating: .infinity, count: globalPrimitiveIndex)
         for item in allItems where item.materialRenderQueue >= 2500 {
             let worldPos = item.node.worldMatrix.columns.3
             viewZByIndex[item.primitiveIndex] = (viewMatrix * worldPos).z
@@ -2173,9 +2177,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // 3. Tertiary: Transparent materials (queue >= 2500): back-to-front Z-sorting
             // This threshold covers TransparentWithZWrite (2450+) and Transparent (3000+)
             if a.materialRenderQueue >= 2500 {
-                let aViewZ = viewZByIndex[a.primitiveIndex] ?? 0
-                let bViewZ = viewZByIndex[b.primitiveIndex] ?? 0
-                return aViewZ < bViewZ  // Far to near (Painter's Algorithm)
+                return viewZByIndex[a.primitiveIndex] < viewZByIndex[b.primitiveIndex]
             }
 
             // 4. Quaternary: stable definition order for tie-breaking
@@ -2251,14 +2253,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 hasSkinning: hasSkinning)
         }
 
-        vrmLog("[LOOP DEBUG] About to iterate over \(itemsToRender.count) items")
+        // Set sampler state once before the draw loop (never changes between draws)
+        if let cachedSampler = samplerStates["default"] {
+            encoder.setFragmentSamplerState(cachedSampler, index: 0)
+        }
+
         for (index, item) in itemsToRender.enumerated() {
-            vrmLog("[LOOP DEBUG] Entering iteration \(index)")
             let meshName = item.mesh.name ?? "unnamed"
             let materialName = item.materialName
-
-            // DEBUG: Log EVERY item unconditionally to catch filtering issues
-            vrmLog("[RENDER CHECK] Item \(index): mesh='\(meshName)', material='\(materialName)')")
 
             // RENDER FILTER: Skip items that don't match the filter
             if let filter = config.renderFilter {
@@ -2370,51 +2372,38 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             }
 
-            // PER-DRAW LOGGING: Comprehensive state dump
             let prim = item.primitive
             let meshPrimIndex = item.primIdxInMesh
 
-            // Get skinning info
-            var skinIdxStr = "none"
-            var paletteCountStr = "0"
-            let paletteVersionStr = "0"
-            if let skinIndex = item.node.skin {
-                skinIdxStr = "\(skinIndex)"
-                if skinIndex < model.skins.count {
-                    let skin = model.skins[skinIndex]
-                    paletteCountStr = "\(skin.joints.count)"
+            if frameCounter < 2 {
+                var skinIdxStr = "none"
+                var paletteCountStr = "0"
+                if let skinIndex = item.node.skin {
+                    skinIdxStr = "\(skinIndex)"
+                    if skinIndex < model.skins.count {
+                        paletteCountStr = "\(model.skins[skinIndex].joints.count)"
+                    }
                 }
+                let positionSlot = prim.morphTargets.isEmpty ? 0 : 20
+                let modeStr: String
+                switch prim.primitiveType {
+                case .point: modeStr = "POINTS"
+                case .line: modeStr = "LINES"
+                case .lineStrip: modeStr = "LINE_STRIP"
+                case .triangle: modeStr = "TRIANGLES"
+                case .triangleStrip: modeStr = "TRIANGLE_STRIP"
+                @unknown default: modeStr = "UNKNOWN"
+                }
+                let indexTypeStr = prim.indexType == .uint16 ? "u16" : "u32"
+                let psoLabel: String
+                switch item.effectiveAlphaMode {
+                case "opaque": psoLabel = "opaque"
+                case "mask": psoLabel = "mask"
+                case "blend": psoLabel = "blend"
+                default: psoLabel = "unknown"
+                }
+                vrmLog("[DRAW] i=\(drawIndex) mesh='\(meshName)' prim=\(meshPrimIndex) mat='\(materialName)' mode=\(modeStr) idx=\(indexTypeStr)/\(prim.indexBufferOffset)/\(prim.indexCount) skin=\(skinIdxStr)/\(paletteCountStr)/0 pso=\(psoLabel) pos_slot=\(positionSlot)")
             }
-
-            // Get position slot (0 for base, 20 for morphed)
-            let positionSlot = prim.morphTargets.isEmpty ? 0 : 20
-
-            // Mode string
-            let modeStr: String
-            switch prim.primitiveType {
-            case .point: modeStr = "POINTS"
-            case .line: modeStr = "LINES"
-            case .lineStrip: modeStr = "LINE_STRIP"
-            case .triangle: modeStr = "TRIANGLES"
-            case .triangleStrip: modeStr = "TRIANGLE_STRIP"
-            @unknown default: modeStr = "UNKNOWN"
-            }
-
-            // Index type string
-            let indexTypeStr = prim.indexType == .uint16 ? "u16" : "u32"
-
-            // PSO label (based on alpha mode)
-            let psoLabel: String
-            switch item.effectiveAlphaMode {
-            case "opaque": psoLabel = "opaque"
-            case "mask": psoLabel = "mask"
-            case "blend": psoLabel = "blend"
-            default: psoLabel = "unknown"
-            }
-
-            vrmLog("[DRAW] i=\(drawIndex) mesh='\(meshName)' prim=\(meshPrimIndex) mat='\(materialName)' mode=\(modeStr) idx=\(indexTypeStr)/\(prim.indexBufferOffset)/\(prim.indexCount) skin=\(skinIdxStr)/\(paletteCountStr)/\(paletteVersionStr) pso=\(psoLabel) pos_slot=\(positionSlot)")
-
-            // 🔵 WEDGE DEBUG: Make ALL flonthair primitives render BLUE to identify the wedge
 
             // 🎯 DECISIVE CHECK: For draw index 14 (face.baked prim 0 - the WEDGE primitive), validate INDEX BUFFER
             if drawIndex == 14 && frameCounter <= 2 {
@@ -2605,7 +2594,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             if frameCounter < 2 {
                 vrmLog("[PSO] Setting pipeline: \(pipeline.label ?? "UNKNOWN")")
             }
-            encoderStateCache.setRenderPipelineState(encoder, pipeline)
+            // Defer base PSO bind when function-constant specialization may override it.
+            // This avoids a wasted Metal driver call for ~15/20 draws that switch to
+            // a specialized PSO at line ~3389, saving CPU time that competes with
+            // concurrent LLM inference on shared CPU cores.
+            let willTrySpecialize = config.enableMToonFunctionConstants && !debugWireframe
+            if !willTrySpecialize {
+                encoderStateCache.setRenderPipelineState(encoder, pipeline)
+            }
 
             // Set triangle fill mode for wireframe debug
             #if os(macOS)
@@ -2614,14 +2610,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
             #endif
 
-            // Track pipeline state change
-            if lastPipelineState !== pipeline {
+            // Track pipeline state change (only when we actually set the base PSO)
+            if !willTrySpecialize && lastPipelineState !== pipeline {
                 performanceTracker?.recordStateChange(type: .pipeline)
                 lastPipelineState = pipeline
             }
 
             // DEBUG: Log render pass info for diagnosis
-            if frameCounter <= 2 || (frameCounter % 180 == 0 && item.materialName.lowercased().contains("body")) {
+            if frameCounter <= 2 || (frameCounter % 180 == 0 && item.materialNameLower.contains("body")) {
                 let psoType: String
                 if isSkinned {
                     psoType = materialAlphaMode == "blend" ? "SKINNED_BLEND_PSO" : "SKINNED_OPAQUE_PSO"
@@ -2844,22 +2840,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)  // White base
                 var textureCount = 0
 
-                // Check if this is a face or body material EARLY for alpha mode override
-                // OPTIMIZATION: Use cached lowercased strings from RenderItem
-                let materialNameLower = item.materialNameLower
-                let nodeName = item.nodeNameLower
-                let meshNameLower = item.meshNameLower
-
-                let isFaceOrBodyMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
-                                          materialNameLower.contains("body") || materialNameLower.contains("skin") ||
-                                          nodeName.contains("face") || nodeName.contains("eye") ||
-                                          nodeName.contains("body") || meshNameLower.contains("face") ||
-                                          meshNameLower.contains("eye") || meshNameLower.contains("body")
-
-                // PHASE 4: Enhanced face material debug logging
-                let isFaceMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
-                                    nodeName.contains("face") || nodeName.contains("eye") ||
-                                    meshNameLower.contains("face") || meshNameLower.contains("eye")
+                let isFaceMaterial = item.isFaceMaterial
+                let isFaceOrBodyMaterial = isFaceMaterial || item.isBodyMaterial
 
                 // Log material processing for debugging
                 if frameCounter <= 2 || (frameCounter % 60 == 0 && isFaceMaterial) {
@@ -3043,17 +3025,29 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // Index 1: Shade multiply texture (from MToon)
+                    // When shadeMultiply is the same texture as baseColor, set shadeUsesBaseColor
+                    // so the shader reuses the already-sampled baseColor (zero extra fetch)
+                    // instead of binding tex[1] and sampling it separately.
                     if let mtoon = material.mtoon {
                         if let textureIndex = mtoon.shadeMultiplyTexture {
                             if textureIndex < model.textures.count,
                                let mtlTexture = model.textures[textureIndex].mtlTexture {
-                                encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 1)
-                                mtoonUniforms.hasShadeMultiplyTexture = 1
-                                textureCount += 1
+                                let isSameAsBaseColor = material.baseColorTexture?.mtlTexture === mtlTexture
+                                if isSameAsBaseColor {
+                                    encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
+                                    mtoonUniforms.hasShadeMultiplyTexture = 0
+                                    mtoonUniforms.shadeUsesBaseColor = 1
+                                } else {
+                                    encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 1)
+                                    mtoonUniforms.hasShadeMultiplyTexture = 1
+                                    mtoonUniforms.shadeUsesBaseColor = 0
+                                    textureCount += 1
+                                }
                             }
                         } else {
                             encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
                             mtoonUniforms.hasShadeMultiplyTexture = 0
+                            mtoonUniforms.shadeUsesBaseColor = 0
                         }
                     }
 
@@ -3123,11 +3117,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         textureCount += 1
                     }
 
-                    // Set sampler for all texture indices (cached in setupCachedStates)
-                    if let cachedSampler = samplerStates["default"] {
-                        encoder.setFragmentSamplerState(cachedSampler, index: 0)
-                    }
-
                     // Log texture binding only once per material
                     // Removed per-primitive logging to reduce noise
                 }
@@ -3135,10 +3124,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Enhanced face/body material detection - check both material names AND mesh/node names
             // Variables already declared above, reuse them
 
-            let isBodyMaterial = materialNameLower.contains("body") ||
-                               materialNameLower.contains("skin") ||
-                               nodeName.contains("body") ||
-                               meshNameLower.contains("body")
+            let isBodyMaterial = item.isBodyMaterial
 
             // PHASE 4: Log MToon uniforms for face materials
             if isFaceMaterial && frameCounter % 60 == 0 {
@@ -3193,7 +3179,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Z-FIGHTING FIX: Body renders first but pushed back in depth
                     // Negative bias pushes away from camera, allowing overlays to win
-                    encoder.setDepthBias(-0.1, slopeScale: 4.0, clamp: 1.0)
+                    encoderStateCache.setDepthBias(encoder, -0.1, slopeScale: 4.0, clamp: 1.0)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=body  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3209,7 +3195,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for clothing (overlay layer)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=clothing  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3244,7 +3230,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         for: item.materialName,
                         isOverlay: isOverlay
                     )
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=skin  z=\(viewZ)  mat=\(item.materialName)  overlay=\(isOverlay)")
@@ -3262,7 +3248,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for mouth/lip overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     // Face overlays use MASK mode for proper alpha cutout
                     // This allows mouth/lip shapes to be properly masked without
                     // edge artifacts from OPAQUE mode blending
@@ -3278,7 +3264,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for eyebrow/eyeline overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=\(faceCategory)  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3295,7 +3281,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for eye overlays (highest priority)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=eye  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3310,7 +3296,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for highlight overlays (highest bias)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=highlight  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3328,7 +3314,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for transparent overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=transparentZWrite  pso=face(.lessEqual+depthWrite)  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3353,14 +3339,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setDepthStencilState(encoder, opaqueState)
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
-                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "mask":
                     encoderStateCache.setDepthStencilState(encoder,depthStencilStates["mask"])
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply base depth bias for MASK materials
-                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "blend":
                     if let blendDepthState = depthStencilStates["blend"] {
@@ -3370,12 +3356,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     // Apply base depth bias for BLEND materials
-                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 default:
                     encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
-                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                 }
             }
 
@@ -3421,6 +3407,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if lastPipelineState !== specializedPipeline {
                     performanceTracker?.recordStateChange(type: .pipeline)
                     lastPipelineState = specializedPipeline
+                }
+            } else if willTrySpecialize {
+                // Specialization not available for this material — use the base PSO
+                encoderStateCache.setRenderPipelineState(encoder, pipeline)
+                if lastPipelineState !== pipeline {
+                    performanceTracker?.recordStateChange(type: .pipeline)
+                    lastPipelineState = pipeline
                 }
             }
 
@@ -3622,25 +3615,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
                     }
 
-                    // Bind MToon material uniforms to fragment shader (CRITICAL - was missing!)
-                    var materialUniforms = mtoonUniforms
-                    encoder.setFragmentBytes(&materialUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
+                    // CPU GUARDRAIL: Validate index buffer bounds (first frames only)
+                    if frameCounter < 2 {
+                        let indexBufferSize = indexBuffer.length
+                        let indexTypeSize = primitive.indexType == MTLIndexType.uint16 ? 2 : 4
+                        let requiredSize = primitive.indexBufferOffset + (primitive.indexCount * indexTypeSize)
 
-                    // CPU GUARDRAIL: Assert indexType + indexBufferOffset are correct and in-range
-                    let indexBufferSize = indexBuffer.length
-                    let indexTypeSize = primitive.indexType == MTLIndexType.uint16 ? 2 : 4
-                    let requiredSize = primitive.indexBufferOffset + (primitive.indexCount * indexTypeSize)
+                        precondition(primitive.indexBufferOffset < indexBufferSize,
+                                   "[INDEX GUARDRAIL] indexBufferOffset \(primitive.indexBufferOffset) >= buffer size \(indexBufferSize)")
+                        precondition(requiredSize <= indexBufferSize,
+                                   "[INDEX GUARDRAIL] Required size \(requiredSize) > buffer size \(indexBufferSize) (offset=\(primitive.indexBufferOffset), count=\(primitive.indexCount), typeSize=\(indexTypeSize))")
+                        precondition(primitive.indexCount > 0,
+                                   "[INDEX GUARDRAIL] indexCount must be > 0, got \(primitive.indexCount)")
+                        precondition(primitive.indexBufferOffset % indexTypeSize == 0,
+                                   "[INDEX GUARDRAIL] indexBufferOffset \(primitive.indexBufferOffset) not aligned to \(indexTypeSize) bytes")
+                    }
 
-                    precondition(primitive.indexBufferOffset < indexBufferSize,
-                               "[INDEX GUARDRAIL] indexBufferOffset \(primitive.indexBufferOffset) >= buffer size \(indexBufferSize)")
-                    precondition(requiredSize <= indexBufferSize,
-                               "[INDEX GUARDRAIL] Required size \(requiredSize) > buffer size \(indexBufferSize) (offset=\(primitive.indexBufferOffset), count=\(primitive.indexCount), typeSize=\(indexTypeSize))")
-                    precondition(primitive.indexCount > 0,
-                               "[INDEX GUARDRAIL] indexCount must be > 0, got \(primitive.indexCount)")
-                    precondition(primitive.indexBufferOffset % indexTypeSize == 0,
-                               "[INDEX GUARDRAIL] indexBufferOffset \(primitive.indexBufferOffset) not aligned to \(indexTypeSize) bytes")
-
-                    // 🎯 CRITICAL VALIDATION: Skin/palette compatibility check
+                    // CRITICAL VALIDATION: Skin/palette compatibility check
                     if let skinIndex = item.node.skin, skinIndex < model.skins.count {
                         let skin = model.skins[skinIndex]
                         let paletteCount = skin.joints.count
@@ -3659,7 +3650,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             continue
                         }
 
-                        // Condition 2: Sample vertices to double-check
+                        // Condition 2: Sample vertices to verify joint indices are in palette range.
+                        // The vertex joint data is static, so the check result is deterministic —
+                        // but this guardrail prevents out-of-bounds GPU joint-palette reads on
+                        // malformed models, so the validation must run every frame. Only the
+                        // diagnostic logging is gated behind frameCounter < 2.
                         if let vertexBuffer = prim.vertexBuffer, prim.hasJoints {
                             let verts = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: min(10, prim.vertexCount))
                             var sampleMaxJoint: UInt32 = 0
@@ -3694,7 +3689,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // 🎯 FACE DEBUG: Dump vertex/index data for face meshes
-                    if item.materialName.lowercased().contains("face") && frameCounter < 2 {
+                    if item.materialNameLower.contains("face") && frameCounter < 2 {
                         vrmLog("\n[FACE DATA DUMP] Material: '\(item.materialName)'")
                         vrmLog("[FACE DATA DUMP] Primitive: vertices=\(primitive.vertexCount), indices=\(primitive.indexCount), indexType=\(primitive.indexType)")
 
@@ -3730,92 +3725,83 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         vrmLog("[FACE DATA DUMP] Complete\n")
                     }
 
-                    // 🎯 WEDGE TRIANGLE DEBUG: Comprehensive index buffer validation
-                    let elemSize = primitive.indexType == .uint32 ? 4 : 2
-                    let offset = primitive.indexBufferOffset
-                    let length = indexBuffer.length
-                    let count = primitive.indexCount
+                    // WEDGE/INDEX BUFFER DEBUG: Comprehensive validation (first frames only)
+                    if frameCounter < 2 {
+                        let elemSize = primitive.indexType == .uint32 ? 4 : 2
+                        let offset = primitive.indexBufferOffset
+                        let length = indexBuffer.length
+                        let count = primitive.indexCount
 
-                    // Critical validations
-                    if offset != 0 {
-                        vrmLog("[OFFSET WARNING] Non-zero offset! mesh='\(meshName)' offset=\(offset)")
-                    }
-                    if offset % elemSize != 0 {
-                        vrmLog("[INDEX ERROR] Misaligned offset! offset=\(offset) elemSize=\(elemSize)")
-                    }
-                    if offset + count * elemSize > length {
-                        vrmLog("[INDEX ERROR] Out of bounds! offset=\(offset) + count*elemSize=\(count*elemSize) > length=\(length)")
+                        if offset != 0 {
+                            vrmLog("[OFFSET WARNING] Non-zero offset! mesh='\(meshName)' offset=\(offset)")
+                        }
+                        if offset % elemSize != 0 {
+                            vrmLog("[INDEX ERROR] Misaligned offset! offset=\(offset) elemSize=\(elemSize)")
+                        }
+                        if offset + count * elemSize > length {
+                            vrmLog("[INDEX ERROR] Out of bounds! offset=\(offset) + count*elemSize=\(count*elemSize) > length=\(length)")
+                        }
+
+                        if primitive.primitiveType == MTLPrimitiveType.triangleStrip {
+                            vrmLog("[DRAW] ⚠️ Drawing TRIANGLE_STRIP with \(primitive.indexCount) indices - mesh='\(meshName)'")
+                        }
+
+                        if primitive.indexType == .uint16 {
+                            let base = indexBuffer.contents().advanced(by: primitive.indexBufferOffset)
+                            let ptr = base.bindMemory(to: UInt16.self, capacity: primitive.indexCount)
+                            let samplesToCheck = min(24, primitive.indexCount)
+                            var maxIdx: UInt16 = 0
+                            for i in 0..<samplesToCheck {
+                                let idx = ptr[i]
+                                maxIdx = max(maxIdx, idx)
+                                if idx >= primitive.vertexCount {
+                                    vrmLog("[WEDGE FOUND] Out-of-bounds index! mesh='\(meshName)' index[\(i)]=\(idx) >= vertexCount=\(primitive.vertexCount)")
+                                }
+                            }
+                            if meshName.lowercased().contains("other") || meshName.lowercased().contains("hair") {
+                                vrmLog("[INDEX SAMPLE] mesh='\(meshName)' material='\(materialName)' meshIndex=\(item.meshIndex) primitiveIndex=\(meshPrimIndex)")
+                                vrmLog("  - First 12 indices: \((0..<min(12, primitive.indexCount)).map { ptr[$0] })")
+                                vrmLog("  - Max index in sample: \(maxIdx), vertexCount: \(primitive.vertexCount)")
+                                vrmLog("  - Index count: \(primitive.indexCount), triangles: \(primitive.indexCount/3)")
+                                vrmLog("  - Index buffer GPU address: 0x\(String(indexBuffer.gpuAddress, radix: 16))")
+                                vrmLog("  - Index buffer length: \(indexBuffer.length) bytes")
+                                vrmLog("  - Index buffer offset: \(primitive.indexBufferOffset)")
+                                if let vertexBuffer = primitive.vertexBuffer {
+                                    vrmLog("  - Vertex buffer GPU address: 0x\(String(vertexBuffer.gpuAddress, radix: 16))")
+                                    vrmLog("  - Vertex buffer length: \(vertexBuffer.length) bytes")
+                                }
+                            }
+                        } else {
+                            let base = indexBuffer.contents().advanced(by: primitive.indexBufferOffset)
+                            let ptr = base.bindMemory(to: UInt32.self, capacity: primitive.indexCount)
+                            let samplesToCheck = min(24, primitive.indexCount)
+                            var maxIdx: UInt32 = 0
+                            for i in 0..<samplesToCheck {
+                                let idx = ptr[i]
+                                maxIdx = max(maxIdx, idx)
+                                if idx >= primitive.vertexCount {
+                                    vrmLog("[WEDGE FOUND] Out-of-bounds index! mesh='\(meshName)' index[\(i)]=\(idx) >= vertexCount=\(primitive.vertexCount)")
+                                }
+                            }
+                            if meshName.lowercased().contains("other") || meshName.lowercased().contains("hair") {
+                                vrmLog("[INDEX SAMPLE] mesh='\(meshName)' material='\(materialName)' meshIndex=\(item.meshIndex) primitiveIndex=\(meshPrimIndex)")
+                                vrmLog("  - First 12 indices: \((0..<min(12, primitive.indexCount)).map { ptr[$0] })")
+                                vrmLog("  - Max index: \(maxIdx), vertexCount: \(primitive.vertexCount)")
+                                vrmLog("  - Index count: \(primitive.indexCount), triangles: \(primitive.indexCount/3)")
+                                vrmLog("  - Index buffer GPU address: 0x\(String(indexBuffer.gpuAddress, radix: 16))")
+                                vrmLog("  - Index buffer length: \(indexBuffer.length) bytes")
+                                vrmLog("  - Index buffer offset: \(primitive.indexBufferOffset)")
+                                if let vertexBuffer = primitive.vertexBuffer {
+                                    vrmLog("  - Vertex buffer GPU address: 0x\(String(vertexBuffer.gpuAddress, radix: 16))")
+                                    vrmLog("  - Vertex buffer length: \(vertexBuffer.length) bytes")
+                                }
+                            }
+                        }
                     }
 
-                    // Offset must be 0 for newly created buffers
                     precondition(primitive.indexBufferOffset == 0,
                                "[INDEX BUG] Primitive has its own buffer but a non-zero offset! Offset: \(primitive.indexBufferOffset)")
 
-                    // Check primitive mode
-                    if primitive.primitiveType == MTLPrimitiveType.triangleStrip {
-                        vrmLog("[DRAW] ⚠️ Drawing TRIANGLE_STRIP with \(primitive.indexCount) indices - mesh='\(meshName)'")
-                    }
-
-                    // Sample first few indices to check for out-of-bounds - MUST use offset!
-                    if primitive.indexType == .uint16 {
-                        let base = indexBuffer.contents().advanced(by: primitive.indexBufferOffset)
-                        let ptr = base.bindMemory(to: UInt16.self, capacity: primitive.indexCount)
-                        let samplesToCheck = min(24, primitive.indexCount)
-                        var maxIdx: UInt16 = 0
-                        for i in 0..<samplesToCheck {
-                            let idx = ptr[i]
-                            maxIdx = max(maxIdx, idx)
-                            if idx >= primitive.vertexCount {
-                                vrmLog("[WEDGE FOUND] Out-of-bounds index! mesh='\(meshName)' index[\(i)]=\(idx) >= vertexCount=\(primitive.vertexCount)")
-                            }
-                        }
-                        // Always log for suspicious meshes
-                        if meshName.lowercased().contains("other") || meshName.lowercased().contains("hair") {
-                            vrmLog("[INDEX SAMPLE] mesh='\(meshName)' material='\(materialName)' meshIndex=\(item.meshIndex) primitiveIndex=\(meshPrimIndex)")
-                            vrmLog("  - First 12 indices: \((0..<min(12, primitive.indexCount)).map { ptr[$0] })")
-                            vrmLog("  - Max index in sample: \(maxIdx), vertexCount: \(primitive.vertexCount)")
-                            vrmLog("  - Index count: \(primitive.indexCount), triangles: \(primitive.indexCount/3)")
-
-                            // 🔍 BUFFER IDENTITY CHECK: Verify each primitive has unique buffers
-                            vrmLog("  - Index buffer GPU address: 0x\(String(indexBuffer.gpuAddress, radix: 16))")
-                            vrmLog("  - Index buffer length: \(indexBuffer.length) bytes")
-                            vrmLog("  - Index buffer offset: \(primitive.indexBufferOffset)")
-                            if let vertexBuffer = primitive.vertexBuffer {
-                                vrmLog("  - Vertex buffer GPU address: 0x\(String(vertexBuffer.gpuAddress, radix: 16))")
-                                vrmLog("  - Vertex buffer length: \(vertexBuffer.length) bytes")
-                            }
-                        }
-                    } else {
-                        let base = indexBuffer.contents().advanced(by: primitive.indexBufferOffset)
-                        let ptr = base.bindMemory(to: UInt32.self, capacity: primitive.indexCount)
-                        let samplesToCheck = min(24, primitive.indexCount)
-                        var maxIdx: UInt32 = 0
-                        for i in 0..<samplesToCheck {
-                            let idx = ptr[i]
-                            maxIdx = max(maxIdx, idx)
-                            if idx >= primitive.vertexCount {
-                                vrmLog("[WEDGE FOUND] Out-of-bounds index! mesh='\(meshName)' index[\(i)]=\(idx) >= vertexCount=\(primitive.vertexCount)")
-                            }
-                        }
-                        // Also log for suspicious meshes with UInt32 indices
-                        if meshName.lowercased().contains("other") || meshName.lowercased().contains("hair") {
-                            vrmLog("[INDEX SAMPLE] mesh='\(meshName)' material='\(materialName)' meshIndex=\(item.meshIndex) primitiveIndex=\(meshPrimIndex)")
-                            vrmLog("  - First 12 indices: \((0..<min(12, primitive.indexCount)).map { ptr[$0] })")
-                            vrmLog("  - Max index: \(maxIdx), vertexCount: \(primitive.vertexCount)")
-                            vrmLog("  - Index count: \(primitive.indexCount), triangles: \(primitive.indexCount/3)")
-
-                            // 🔍 BUFFER IDENTITY CHECK: Verify each primitive has unique buffers
-                            vrmLog("  - Index buffer GPU address: 0x\(String(indexBuffer.gpuAddress, radix: 16))")
-                            vrmLog("  - Index buffer length: \(indexBuffer.length) bytes")
-                            vrmLog("  - Index buffer offset: \(primitive.indexBufferOffset)")
-                            if let vertexBuffer = primitive.vertexBuffer {
-                                vrmLog("  - Vertex buffer GPU address: 0x\(String(vertexBuffer.gpuAddress, radix: 16))")
-                                vrmLog("  - Vertex buffer length: \(vertexBuffer.length) bytes")
-                            }
-                        }
-                    }
-
-                    // 🛡️ PRECONDITION: Validate buffer identity for hair meshes (frame 0-2 only)
                     if meshName.lowercased().contains("hair") && frameCounter <= 2 {
                         precondition(indexBuffer.gpuAddress != 0,
                                    "[BUFFER GUARD] Invalid index buffer GPU address for \(meshName) prim \(meshPrimIndex)")
@@ -3977,7 +3963,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         encoder.setDepthStencilState(prepassDepthState)
         encoder.setCullMode(.back)
         encoder.setFrontFacing(.counterClockwise)
-        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+        encoderStateCache.setDepthBias(encoder, 0.0, slopeScale: 0.0, clamp: 0.0)
 
         var issued = false
         for item in itemsToRender {
@@ -4092,7 +4078,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Minimal depth bias for outlines - the real fix is proper vertex skinning
-        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+        encoderStateCache.setDepthBias(encoder, 0.0, slopeScale: 0.0, clamp: 0.0)
 
         var outlinesRendered = 0
 
@@ -4264,7 +4250,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         encoderStateCache.setCullMode(encoder,.back)
 
         // Reset depth bias for subsequent render passes
-        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+        encoderStateCache.setDepthBias(encoder, 0.0, slopeScale: 0.0, clamp: 0.0)
 
         // Restore depth state for subsequent render passes
         if let opaqueState = depthStencilStates["opaque"] {
@@ -4552,10 +4538,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         alphaMode: String,
         isSkinned: Bool
     ) -> UInt32 {
-        switch alphaMode.lowercased() {
-        case "blend":
+        // Fast path: canonical tokens; fall back to lowercasing once for non-standard inputs.
+        switch alphaMode {
+        case "blend", "Blend", "BLEND":
             return 2
-        case "mask":
+        case "mask", "Mask", "MASK":
             let usingA2CPipeline =
                 config.alphaToCoverageForMASK && usesMultisampling &&
                 (isSkinned
@@ -4563,7 +4550,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     : maskAlphaToCoveragePipelineState != nil)
             return usingA2CPipeline ? 3 : 1
         default:
-            return 0
+            switch alphaMode.lowercased() {
+            case "blend":
+                return 2
+            case "mask":
+                let usingA2CPipeline =
+                    config.alphaToCoverageForMASK && usesMultisampling &&
+                    (isSkinned
+                        ? skinnedMaskAlphaToCoveragePipelineState != nil
+                        : maskAlphaToCoveragePipelineState != nil)
+                return usingA2CPipeline ? 3 : 1
+            default:
+                return 0
+            }
         }
     }
 
