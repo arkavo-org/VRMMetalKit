@@ -4510,26 +4510,31 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         alphaMode: String,
         isSkinned: Bool
     ) -> UInt32 {
-        // Fast path: the three canonical glTF modes are already lowercase.
-        // Only fall back to case-insensitive comparison for non-standard inputs.
+        // Fast path: canonical tokens; fall back to lowercasing once for non-standard inputs.
         switch alphaMode {
-        case "blend":
+        case "blend", "Blend", "BLEND":
             return 2
-        case "mask":
+        case "mask", "Mask", "MASK":
             let usingA2CPipeline =
                 config.alphaToCoverageForMASK && usesMultisampling &&
                 (isSkinned
                     ? skinnedMaskAlphaToCoveragePipelineState != nil
                     : maskAlphaToCoveragePipelineState != nil)
             return usingA2CPipeline ? 3 : 1
-        case "Blend", "BLEND":
-            return 2
-        case "Mask", "MASK":
-            return 1
         default:
-            if alphaMode.lowercased() == "blend" { return 2 }
-            if alphaMode.lowercased() == "mask" { return 1 }
-            return 0
+            switch alphaMode.lowercased() {
+            case "blend":
+                return 2
+            case "mask":
+                let usingA2CPipeline =
+                    config.alphaToCoverageForMASK && usesMultisampling &&
+                    (isSkinned
+                        ? skinnedMaskAlphaToCoveragePipelineState != nil
+                        : maskAlphaToCoveragePipelineState != nil)
+                return usingA2CPipeline ? 3 : 1
+            default:
+                return 0
+            }
         }
     }
 
