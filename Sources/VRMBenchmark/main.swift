@@ -472,7 +472,7 @@ func runPipelineBaseline(device: MTLDevice, label: String, archiveDir: String?) 
     let warmMs = (CACurrentMediaTime() - warmStart) * 1000.0
 
     if archiveDir != nil {
-        try? VRMPipelineCache.shared.flushPersistentArchive()
+        _ = try? VRMPipelineCache.shared.flushPersistentArchive()
     }
 
     let archiveLine: String
@@ -825,6 +825,14 @@ struct VRMBenchmarkCLI {
         let stats = FrameStats.compute(totalSamples)
         let rendererMetrics = renderer.getPerformanceMetrics()
 
+        // CPU budget = animation + encode (excludes GPU wait).
+        // This is the time that competes with concurrent LLM inference on the
+        // same CPU cores, and directly correlates with battery drain on iOS.
+        let cpuBudgetSamples = samples.map { $0.animationMs + $0.encodeMs }
+        let cpuStats = FrameStats.compute(cpuBudgetSamples)
+        let frameBudget60 = 16.67
+        let cpuBudgetPct = cpuStats.medianMs / frameBudget60 * 100.0
+
         print("""
 
         ======================================================================
@@ -852,6 +860,13 @@ struct VRMBenchmarkCLI {
           p99    : \(String(format: "%7.3f ms", stats.p99Ms))
           max    : \(String(format: "%7.3f ms", stats.maxMs))
           eff FPS: \(String(format: "%.1f", 1000.0 / max(stats.meanMs, 0.0001)))
+
+        CPU budget (animation + encode, excludes GPU wait)
+        ----------------------------------------------------------------------
+          median : \(String(format: "%7.3f ms", cpuStats.medianMs))  (\(String(format: "%.1f", cpuBudgetPct))% of \(String(format: "%.2f", frameBudget60))ms 60fps frame)
+          mean   : \(String(format: "%7.3f ms", cpuStats.meanMs))
+          p95    : \(String(format: "%7.3f ms", cpuStats.p95Ms))
+          Remaining for LLM/system at 60fps: \(String(format: "%.2f", frameBudget60 - cpuStats.medianMs)) ms/frame
         """)
 
         print("""
@@ -918,6 +933,7 @@ struct VRMBenchmarkCLI {
             "animation": snapshot(FrameStats.compute(samples.map(\.animationMs))),
             "encode":    snapshot(FrameStats.compute(samples.map(\.encodeMs))),
             "wait":      snapshot(FrameStats.compute(samples.map(\.waitMs))),
+            "cpuBudget": snapshot(cpuStats),
         ]
         for entry in subPhaseSamples {
             statsDict[entry.key] = snapshot(FrameStats.compute(entry.samples))

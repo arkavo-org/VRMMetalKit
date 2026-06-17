@@ -2596,7 +2596,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             if frameCounter < 2 {
                 vrmLog("[PSO] Setting pipeline: \(pipeline.label ?? "UNKNOWN")")
             }
-            encoderStateCache.setRenderPipelineState(encoder, pipeline)
+            // Defer base PSO bind when function-constant specialization may override it.
+            // This avoids a wasted Metal driver call for ~15/20 draws that switch to
+            // a specialized PSO at line ~3389, saving CPU time that competes with
+            // concurrent LLM inference on shared CPU cores.
+            let willTrySpecialize = config.enableMToonFunctionConstants && !debugWireframe
+            if !willTrySpecialize {
+                encoderStateCache.setRenderPipelineState(encoder, pipeline)
+            }
 
             // Set triangle fill mode for wireframe debug
             #if os(macOS)
@@ -2605,8 +2612,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
             #endif
 
-            // Track pipeline state change
-            if lastPipelineState !== pipeline {
+            // Track pipeline state change (only when we actually set the base PSO)
+            if !willTrySpecialize && lastPipelineState !== pipeline {
                 performanceTracker?.recordStateChange(type: .pipeline)
                 lastPipelineState = pipeline
             }
@@ -3390,6 +3397,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if lastPipelineState !== specializedPipeline {
                     performanceTracker?.recordStateChange(type: .pipeline)
                     lastPipelineState = specializedPipeline
+                }
+            } else if willTrySpecialize {
+                // Specialization not available for this material — use the base PSO
+                encoderStateCache.setRenderPipelineState(encoder, pipeline)
+                if lastPipelineState !== pipeline {
+                    performanceTracker?.recordStateChange(type: .pipeline)
+                    lastPipelineState = pipeline
                 }
             }
 
