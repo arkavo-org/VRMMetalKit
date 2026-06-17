@@ -139,7 +139,9 @@ public struct MToonMaterialUniforms {
     public var outlineMode: Float = 0.0
     /// Non-zero if an outline-width-multiply texture is bound for this material.
     public var hasOutlineWidthMultiplyTexture: Int32 = 0
-    private var _padding2: Float = 0.0
+    /// Non-zero when shadeMultiplyTexture is the same image as baseColorTexture.
+    /// The shader reuses the already-sampled baseColor instead of fetching tex[1].
+    public var shadeUsesBaseColor: Int32 = 0
 
     // Block 9: 16 bytes - UV Animation
 

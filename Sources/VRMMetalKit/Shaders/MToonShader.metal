@@ -121,7 +121,7 @@ struct MToonMaterial {
  float outlineLightingMixFactor;            // 4 bytes
  float outlineMode;                         // 4 bytes (0: None, 1: World, 2: Screen)
  int hasOutlineWidthMultiplyTexture;        // 4 bytes
- float _padding2;                           // 4 bytes padding
+ int shadeUsesBaseColor;                    // 4 bytes (non-zero = reuse baseColor sample for shade)
 
  // Block 9: 16 bytes - UV Animation
  float uvAnimationScrollXSpeedFactor;       // 4 bytes
@@ -588,8 +588,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  // Sample base color
  mtoon_float4 baseColor = mtoon_float4(material.baseColorFactor);
+ mtoon_float4 texColor(1.0, 1.0, 1.0, 1.0);
  if (effectiveHasBaseColorTexture) {
-     mtoon_float4 texColor = mtoon_float4(baseColorTexture.sample(textureSampler, uv));
+     texColor = mtoon_float4(baseColorTexture.sample(textureSampler, uv));
 
  #if 0  // DEBUG: Output raw texture value (before material factor multiplication) - DISABLED
  return float4(texColor.rgb, 1.0);
@@ -613,12 +614,14 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
  // Calculate shade color
  mtoon_float3 shadeColor = mtoon_float3(material.shadeColorR, material.shadeColorG, material.shadeColorB);
- if (effectiveHasShadeMultiplyTexture) {
+ if (material.shadeUsesBaseColor != 0 && effectiveHasBaseColorTexture) {
+     // shadeMultiplyTexture is the same image as baseColorTexture — reuse the
+     // sample already in registers instead of fetching tex[1] again.
+     shadeColor *= mtoon_float3(texColor.rgb);
+ } else if (effectiveHasShadeMultiplyTexture) {
      mtoon_float3 shadeTexColor = mtoon_float3(shadeMultiplyTexture.sample(textureSampler, uv).rgb);
      shadeColor *= shadeTexColor;
  }
- // Note: When _ShadeTexture == _MainTex (VRM 0.0), we skip shadeMultiplyTexture
- // assignment in VRMTypes.swift. shadeColor uses shadeColorFactor directly.
 
  mtoon_float3 normal = mtoon_float3(normalize(in.worldNormal));
  mtoon_float3 viewNormal = mtoon_float3(in.viewNormal);
