@@ -2254,14 +2254,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 hasSkinning: hasSkinning)
         }
 
-        vrmLog("[LOOP DEBUG] About to iterate over \(itemsToRender.count) items")
+        // Set sampler state once before the draw loop (never changes between draws)
+        if let cachedSampler = samplerStates["default"] {
+            encoder.setFragmentSamplerState(cachedSampler, index: 0)
+        }
+
         for (index, item) in itemsToRender.enumerated() {
-            vrmLog("[LOOP DEBUG] Entering iteration \(index)")
             let meshName = item.mesh.name ?? "unnamed"
             let materialName = item.materialName
-
-            // DEBUG: Log EVERY item unconditionally to catch filtering issues
-            vrmLog("[RENDER CHECK] Item \(index): mesh='\(meshName)', material='\(materialName)')")
 
             // RENDER FILTER: Skip items that don't match the filter
             if let filter = config.renderFilter {
@@ -2373,51 +2373,38 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             }
 
-            // PER-DRAW LOGGING: Comprehensive state dump
             let prim = item.primitive
             let meshPrimIndex = item.primIdxInMesh
 
-            // Get skinning info
-            var skinIdxStr = "none"
-            var paletteCountStr = "0"
-            let paletteVersionStr = "0"
-            if let skinIndex = item.node.skin {
-                skinIdxStr = "\(skinIndex)"
-                if skinIndex < model.skins.count {
-                    let skin = model.skins[skinIndex]
-                    paletteCountStr = "\(skin.joints.count)"
+            if frameCounter < 2 {
+                var skinIdxStr = "none"
+                var paletteCountStr = "0"
+                if let skinIndex = item.node.skin {
+                    skinIdxStr = "\(skinIndex)"
+                    if skinIndex < model.skins.count {
+                        paletteCountStr = "\(model.skins[skinIndex].joints.count)"
+                    }
                 }
+                let positionSlot = prim.morphTargets.isEmpty ? 0 : 20
+                let modeStr: String
+                switch prim.primitiveType {
+                case .point: modeStr = "POINTS"
+                case .line: modeStr = "LINES"
+                case .lineStrip: modeStr = "LINE_STRIP"
+                case .triangle: modeStr = "TRIANGLES"
+                case .triangleStrip: modeStr = "TRIANGLE_STRIP"
+                @unknown default: modeStr = "UNKNOWN"
+                }
+                let indexTypeStr = prim.indexType == .uint16 ? "u16" : "u32"
+                let psoLabel: String
+                switch item.effectiveAlphaMode {
+                case "opaque": psoLabel = "opaque"
+                case "mask": psoLabel = "mask"
+                case "blend": psoLabel = "blend"
+                default: psoLabel = "unknown"
+                }
+                vrmLog("[DRAW] i=\(drawIndex) mesh='\(meshName)' prim=\(meshPrimIndex) mat='\(materialName)' mode=\(modeStr) idx=\(indexTypeStr)/\(prim.indexBufferOffset)/\(prim.indexCount) skin=\(skinIdxStr)/\(paletteCountStr)/0 pso=\(psoLabel) pos_slot=\(positionSlot)")
             }
-
-            // Get position slot (0 for base, 20 for morphed)
-            let positionSlot = prim.morphTargets.isEmpty ? 0 : 20
-
-            // Mode string
-            let modeStr: String
-            switch prim.primitiveType {
-            case .point: modeStr = "POINTS"
-            case .line: modeStr = "LINES"
-            case .lineStrip: modeStr = "LINE_STRIP"
-            case .triangle: modeStr = "TRIANGLES"
-            case .triangleStrip: modeStr = "TRIANGLE_STRIP"
-            @unknown default: modeStr = "UNKNOWN"
-            }
-
-            // Index type string
-            let indexTypeStr = prim.indexType == .uint16 ? "u16" : "u32"
-
-            // PSO label (based on alpha mode)
-            let psoLabel: String
-            switch item.effectiveAlphaMode {
-            case "opaque": psoLabel = "opaque"
-            case "mask": psoLabel = "mask"
-            case "blend": psoLabel = "blend"
-            default: psoLabel = "unknown"
-            }
-
-            vrmLog("[DRAW] i=\(drawIndex) mesh='\(meshName)' prim=\(meshPrimIndex) mat='\(materialName)' mode=\(modeStr) idx=\(indexTypeStr)/\(prim.indexBufferOffset)/\(prim.indexCount) skin=\(skinIdxStr)/\(paletteCountStr)/\(paletteVersionStr) pso=\(psoLabel) pos_slot=\(positionSlot)")
-
-            // 🔵 WEDGE DEBUG: Make ALL flonthair primitives render BLUE to identify the wedge
 
             // 🎯 DECISIVE CHECK: For draw index 14 (face.baked prim 0 - the WEDGE primitive), validate INDEX BUFFER
             if drawIndex == 14 && frameCounter <= 2 {
@@ -3126,11 +3113,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         textureCount += 1
                     }
 
-                    // Set sampler for all texture indices (cached in setupCachedStates)
-                    if let cachedSampler = samplerStates["default"] {
-                        encoder.setFragmentSamplerState(cachedSampler, index: 0)
-                    }
-
                     // Log texture binding only once per material
                     // Removed per-primitive logging to reduce noise
                 }
@@ -3625,25 +3607,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         }
                     }
 
-                    // Bind MToon material uniforms to fragment shader (CRITICAL - was missing!)
-                    var materialUniforms = mtoonUniforms
-                    encoder.setFragmentBytes(&materialUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
+                    // CPU GUARDRAIL: Validate index buffer bounds (first frames only)
+                    if frameCounter < 2 {
+                        let indexBufferSize = indexBuffer.length
+                        let indexTypeSize = primitive.indexType == MTLIndexType.uint16 ? 2 : 4
+                        let requiredSize = primitive.indexBufferOffset + (primitive.indexCount * indexTypeSize)
 
-                    // CPU GUARDRAIL: Assert indexType + indexBufferOffset are correct and in-range
-                    let indexBufferSize = indexBuffer.length
-                    let indexTypeSize = primitive.indexType == MTLIndexType.uint16 ? 2 : 4
-                    let requiredSize = primitive.indexBufferOffset + (primitive.indexCount * indexTypeSize)
+                        precondition(primitive.indexBufferOffset < indexBufferSize,
+                                   "[INDEX GUARDRAIL] indexBufferOffset \(primitive.indexBufferOffset) >= buffer size \(indexBufferSize)")
+                        precondition(requiredSize <= indexBufferSize,
+                                   "[INDEX GUARDRAIL] Required size \(requiredSize) > buffer size \(indexBufferSize) (offset=\(primitive.indexBufferOffset), count=\(primitive.indexCount), typeSize=\(indexTypeSize))")
+                        precondition(primitive.indexCount > 0,
+                                   "[INDEX GUARDRAIL] indexCount must be > 0, got \(primitive.indexCount)")
+                        precondition(primitive.indexBufferOffset % indexTypeSize == 0,
+                                   "[INDEX GUARDRAIL] indexBufferOffset \(primitive.indexBufferOffset) not aligned to \(indexTypeSize) bytes")
+                    }
 
-                    precondition(primitive.indexBufferOffset < indexBufferSize,
-                               "[INDEX GUARDRAIL] indexBufferOffset \(primitive.indexBufferOffset) >= buffer size \(indexBufferSize)")
-                    precondition(requiredSize <= indexBufferSize,
-                               "[INDEX GUARDRAIL] Required size \(requiredSize) > buffer size \(indexBufferSize) (offset=\(primitive.indexBufferOffset), count=\(primitive.indexCount), typeSize=\(indexTypeSize))")
-                    precondition(primitive.indexCount > 0,
-                               "[INDEX GUARDRAIL] indexCount must be > 0, got \(primitive.indexCount)")
-                    precondition(primitive.indexBufferOffset % indexTypeSize == 0,
-                               "[INDEX GUARDRAIL] indexBufferOffset \(primitive.indexBufferOffset) not aligned to \(indexTypeSize) bytes")
-
-                    // 🎯 CRITICAL VALIDATION: Skin/palette compatibility check
+                    // CRITICAL VALIDATION: Skin/palette compatibility check
                     if let skinIndex = item.node.skin, skinIndex < model.skins.count {
                         let skin = model.skins[skinIndex]
                         let paletteCount = skin.joints.count
@@ -3662,8 +3642,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             continue
                         }
 
-                        // Condition 2: Sample vertices to double-check
-                        if let vertexBuffer = prim.vertexBuffer, prim.hasJoints {
+                        // Condition 2: Sample vertices to double-check (first frames only)
+                        if frameCounter < 2, let vertexBuffer = prim.vertexBuffer, prim.hasJoints {
                             let verts = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: min(10, prim.vertexCount))
                             var sampleMaxJoint: UInt32 = 0
                             let samplesToCheck = min(10, prim.vertexCount)
@@ -3733,92 +3713,83 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         vrmLog("[FACE DATA DUMP] Complete\n")
                     }
 
-                    // 🎯 WEDGE TRIANGLE DEBUG: Comprehensive index buffer validation
-                    let elemSize = primitive.indexType == .uint32 ? 4 : 2
-                    let offset = primitive.indexBufferOffset
-                    let length = indexBuffer.length
-                    let count = primitive.indexCount
+                    // WEDGE/INDEX BUFFER DEBUG: Comprehensive validation (first frames only)
+                    if frameCounter < 2 {
+                        let elemSize = primitive.indexType == .uint32 ? 4 : 2
+                        let offset = primitive.indexBufferOffset
+                        let length = indexBuffer.length
+                        let count = primitive.indexCount
 
-                    // Critical validations
-                    if offset != 0 {
-                        vrmLog("[OFFSET WARNING] Non-zero offset! mesh='\(meshName)' offset=\(offset)")
-                    }
-                    if offset % elemSize != 0 {
-                        vrmLog("[INDEX ERROR] Misaligned offset! offset=\(offset) elemSize=\(elemSize)")
-                    }
-                    if offset + count * elemSize > length {
-                        vrmLog("[INDEX ERROR] Out of bounds! offset=\(offset) + count*elemSize=\(count*elemSize) > length=\(length)")
+                        if offset != 0 {
+                            vrmLog("[OFFSET WARNING] Non-zero offset! mesh='\(meshName)' offset=\(offset)")
+                        }
+                        if offset % elemSize != 0 {
+                            vrmLog("[INDEX ERROR] Misaligned offset! offset=\(offset) elemSize=\(elemSize)")
+                        }
+                        if offset + count * elemSize > length {
+                            vrmLog("[INDEX ERROR] Out of bounds! offset=\(offset) + count*elemSize=\(count*elemSize) > length=\(length)")
+                        }
+
+                        if primitive.primitiveType == MTLPrimitiveType.triangleStrip {
+                            vrmLog("[DRAW] ⚠️ Drawing TRIANGLE_STRIP with \(primitive.indexCount) indices - mesh='\(meshName)'")
+                        }
+
+                        if primitive.indexType == .uint16 {
+                            let base = indexBuffer.contents().advanced(by: primitive.indexBufferOffset)
+                            let ptr = base.bindMemory(to: UInt16.self, capacity: primitive.indexCount)
+                            let samplesToCheck = min(24, primitive.indexCount)
+                            var maxIdx: UInt16 = 0
+                            for i in 0..<samplesToCheck {
+                                let idx = ptr[i]
+                                maxIdx = max(maxIdx, idx)
+                                if idx >= primitive.vertexCount {
+                                    vrmLog("[WEDGE FOUND] Out-of-bounds index! mesh='\(meshName)' index[\(i)]=\(idx) >= vertexCount=\(primitive.vertexCount)")
+                                }
+                            }
+                            if meshName.lowercased().contains("other") || meshName.lowercased().contains("hair") {
+                                vrmLog("[INDEX SAMPLE] mesh='\(meshName)' material='\(materialName)' meshIndex=\(item.meshIndex) primitiveIndex=\(meshPrimIndex)")
+                                vrmLog("  - First 12 indices: \((0..<min(12, primitive.indexCount)).map { ptr[$0] })")
+                                vrmLog("  - Max index in sample: \(maxIdx), vertexCount: \(primitive.vertexCount)")
+                                vrmLog("  - Index count: \(primitive.indexCount), triangles: \(primitive.indexCount/3)")
+                                vrmLog("  - Index buffer GPU address: 0x\(String(indexBuffer.gpuAddress, radix: 16))")
+                                vrmLog("  - Index buffer length: \(indexBuffer.length) bytes")
+                                vrmLog("  - Index buffer offset: \(primitive.indexBufferOffset)")
+                                if let vertexBuffer = primitive.vertexBuffer {
+                                    vrmLog("  - Vertex buffer GPU address: 0x\(String(vertexBuffer.gpuAddress, radix: 16))")
+                                    vrmLog("  - Vertex buffer length: \(vertexBuffer.length) bytes")
+                                }
+                            }
+                        } else {
+                            let base = indexBuffer.contents().advanced(by: primitive.indexBufferOffset)
+                            let ptr = base.bindMemory(to: UInt32.self, capacity: primitive.indexCount)
+                            let samplesToCheck = min(24, primitive.indexCount)
+                            var maxIdx: UInt32 = 0
+                            for i in 0..<samplesToCheck {
+                                let idx = ptr[i]
+                                maxIdx = max(maxIdx, idx)
+                                if idx >= primitive.vertexCount {
+                                    vrmLog("[WEDGE FOUND] Out-of-bounds index! mesh='\(meshName)' index[\(i)]=\(idx) >= vertexCount=\(primitive.vertexCount)")
+                                }
+                            }
+                            if meshName.lowercased().contains("other") || meshName.lowercased().contains("hair") {
+                                vrmLog("[INDEX SAMPLE] mesh='\(meshName)' material='\(materialName)' meshIndex=\(item.meshIndex) primitiveIndex=\(meshPrimIndex)")
+                                vrmLog("  - First 12 indices: \((0..<min(12, primitive.indexCount)).map { ptr[$0] })")
+                                vrmLog("  - Max index: \(maxIdx), vertexCount: \(primitive.vertexCount)")
+                                vrmLog("  - Index count: \(primitive.indexCount), triangles: \(primitive.indexCount/3)")
+                                vrmLog("  - Index buffer GPU address: 0x\(String(indexBuffer.gpuAddress, radix: 16))")
+                                vrmLog("  - Index buffer length: \(indexBuffer.length) bytes")
+                                vrmLog("  - Index buffer offset: \(primitive.indexBufferOffset)")
+                                if let vertexBuffer = primitive.vertexBuffer {
+                                    vrmLog("  - Vertex buffer GPU address: 0x\(String(vertexBuffer.gpuAddress, radix: 16))")
+                                    vrmLog("  - Vertex buffer length: \(vertexBuffer.length) bytes")
+                                }
+                            }
+                        }
                     }
 
-                    // Offset must be 0 for newly created buffers
                     precondition(primitive.indexBufferOffset == 0,
                                "[INDEX BUG] Primitive has its own buffer but a non-zero offset! Offset: \(primitive.indexBufferOffset)")
 
-                    // Check primitive mode
-                    if primitive.primitiveType == MTLPrimitiveType.triangleStrip {
-                        vrmLog("[DRAW] ⚠️ Drawing TRIANGLE_STRIP with \(primitive.indexCount) indices - mesh='\(meshName)'")
-                    }
-
-                    // Sample first few indices to check for out-of-bounds - MUST use offset!
-                    if primitive.indexType == .uint16 {
-                        let base = indexBuffer.contents().advanced(by: primitive.indexBufferOffset)
-                        let ptr = base.bindMemory(to: UInt16.self, capacity: primitive.indexCount)
-                        let samplesToCheck = min(24, primitive.indexCount)
-                        var maxIdx: UInt16 = 0
-                        for i in 0..<samplesToCheck {
-                            let idx = ptr[i]
-                            maxIdx = max(maxIdx, idx)
-                            if idx >= primitive.vertexCount {
-                                vrmLog("[WEDGE FOUND] Out-of-bounds index! mesh='\(meshName)' index[\(i)]=\(idx) >= vertexCount=\(primitive.vertexCount)")
-                            }
-                        }
-                        // Always log for suspicious meshes
-                        if meshName.lowercased().contains("other") || meshName.lowercased().contains("hair") {
-                            vrmLog("[INDEX SAMPLE] mesh='\(meshName)' material='\(materialName)' meshIndex=\(item.meshIndex) primitiveIndex=\(meshPrimIndex)")
-                            vrmLog("  - First 12 indices: \((0..<min(12, primitive.indexCount)).map { ptr[$0] })")
-                            vrmLog("  - Max index in sample: \(maxIdx), vertexCount: \(primitive.vertexCount)")
-                            vrmLog("  - Index count: \(primitive.indexCount), triangles: \(primitive.indexCount/3)")
-
-                            // 🔍 BUFFER IDENTITY CHECK: Verify each primitive has unique buffers
-                            vrmLog("  - Index buffer GPU address: 0x\(String(indexBuffer.gpuAddress, radix: 16))")
-                            vrmLog("  - Index buffer length: \(indexBuffer.length) bytes")
-                            vrmLog("  - Index buffer offset: \(primitive.indexBufferOffset)")
-                            if let vertexBuffer = primitive.vertexBuffer {
-                                vrmLog("  - Vertex buffer GPU address: 0x\(String(vertexBuffer.gpuAddress, radix: 16))")
-                                vrmLog("  - Vertex buffer length: \(vertexBuffer.length) bytes")
-                            }
-                        }
-                    } else {
-                        let base = indexBuffer.contents().advanced(by: primitive.indexBufferOffset)
-                        let ptr = base.bindMemory(to: UInt32.self, capacity: primitive.indexCount)
-                        let samplesToCheck = min(24, primitive.indexCount)
-                        var maxIdx: UInt32 = 0
-                        for i in 0..<samplesToCheck {
-                            let idx = ptr[i]
-                            maxIdx = max(maxIdx, idx)
-                            if idx >= primitive.vertexCount {
-                                vrmLog("[WEDGE FOUND] Out-of-bounds index! mesh='\(meshName)' index[\(i)]=\(idx) >= vertexCount=\(primitive.vertexCount)")
-                            }
-                        }
-                        // Also log for suspicious meshes with UInt32 indices
-                        if meshName.lowercased().contains("other") || meshName.lowercased().contains("hair") {
-                            vrmLog("[INDEX SAMPLE] mesh='\(meshName)' material='\(materialName)' meshIndex=\(item.meshIndex) primitiveIndex=\(meshPrimIndex)")
-                            vrmLog("  - First 12 indices: \((0..<min(12, primitive.indexCount)).map { ptr[$0] })")
-                            vrmLog("  - Max index: \(maxIdx), vertexCount: \(primitive.vertexCount)")
-                            vrmLog("  - Index count: \(primitive.indexCount), triangles: \(primitive.indexCount/3)")
-
-                            // 🔍 BUFFER IDENTITY CHECK: Verify each primitive has unique buffers
-                            vrmLog("  - Index buffer GPU address: 0x\(String(indexBuffer.gpuAddress, radix: 16))")
-                            vrmLog("  - Index buffer length: \(indexBuffer.length) bytes")
-                            vrmLog("  - Index buffer offset: \(primitive.indexBufferOffset)")
-                            if let vertexBuffer = primitive.vertexBuffer {
-                                vrmLog("  - Vertex buffer GPU address: 0x\(String(vertexBuffer.gpuAddress, radix: 16))")
-                                vrmLog("  - Vertex buffer length: \(vertexBuffer.length) bytes")
-                            }
-                        }
-                    }
-
-                    // 🛡️ PRECONDITION: Validate buffer identity for hair meshes (frame 0-2 only)
                     if meshName.lowercased().contains("hair") && frameCounter <= 2 {
                         precondition(indexBuffer.gpuAddress != 0,
                                    "[BUFFER GUARD] Invalid index buffer GPU address for \(meshName) prim \(meshPrimIndex)")
