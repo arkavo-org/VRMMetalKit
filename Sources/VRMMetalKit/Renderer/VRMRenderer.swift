@@ -2611,7 +2611,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
 
             // DEBUG: Log render pass info for diagnosis
-            if frameCounter <= 2 || (frameCounter % 180 == 0 && item.materialName.lowercased().contains("body")) {
+            if frameCounter <= 2 || (frameCounter % 180 == 0 && item.materialNameLower.contains("body")) {
                 let psoType: String
                 if isSkinned {
                     psoType = materialAlphaMode == "blend" ? "SKINNED_BLEND_PSO" : "SKINNED_OPAQUE_PSO"
@@ -2834,22 +2834,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)  // White base
                 var textureCount = 0
 
-                // Check if this is a face or body material EARLY for alpha mode override
-                // OPTIMIZATION: Use cached lowercased strings from RenderItem
+                // Use pre-cached flags from RenderItem instead of rescanning strings per draw
                 let materialNameLower = item.materialNameLower
                 let nodeName = item.nodeNameLower
                 let meshNameLower = item.meshNameLower
 
-                let isFaceOrBodyMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
-                                          materialNameLower.contains("body") || materialNameLower.contains("skin") ||
-                                          nodeName.contains("face") || nodeName.contains("eye") ||
-                                          nodeName.contains("body") || meshNameLower.contains("face") ||
-                                          meshNameLower.contains("eye") || meshNameLower.contains("body")
-
-                // PHASE 4: Enhanced face material debug logging
-                let isFaceMaterial = materialNameLower.contains("face") || materialNameLower.contains("eye") ||
-                                    nodeName.contains("face") || nodeName.contains("eye") ||
-                                    meshNameLower.contains("face") || meshNameLower.contains("eye")
+                let isFaceMaterial = item.isFaceMaterial
+                let isFaceOrBodyMaterial = isFaceMaterial ||
+                    materialNameLower.contains("body") || materialNameLower.contains("skin") ||
+                    nodeName.contains("body") || meshNameLower.contains("body")
 
                 // Log material processing for debugging
                 if frameCounter <= 2 || (frameCounter % 60 == 0 && isFaceMaterial) {
@@ -3178,7 +3171,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Z-FIGHTING FIX: Body renders first but pushed back in depth
                     // Negative bias pushes away from camera, allowing overlays to win
-                    encoder.setDepthBias(-0.1, slopeScale: 4.0, clamp: 1.0)
+                    encoderStateCache.setDepthBias(encoder, -0.1, slopeScale: 4.0, clamp: 1.0)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=body  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3194,7 +3187,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for clothing (overlay layer)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=clothing  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3229,7 +3222,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         for: item.materialName,
                         isOverlay: isOverlay
                     )
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=skin  z=\(viewZ)  mat=\(item.materialName)  overlay=\(isOverlay)")
@@ -3247,7 +3240,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for mouth/lip overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     // Face overlays use MASK mode for proper alpha cutout
                     // This allows mouth/lip shapes to be properly masked without
                     // edge artifacts from OPAQUE mode blending
@@ -3263,7 +3256,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for eyebrow/eyeline overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=\(faceCategory)  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3280,7 +3273,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for eye overlays (highest priority)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=eye  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3295,7 +3288,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for highlight overlays (highest bias)
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=highlight  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3313,7 +3306,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply depth bias for transparent overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
-                    encoder.setDepthBias(bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=transparentZWrite  pso=face(.lessEqual+depthWrite)  z=\(viewZ)  mat=\(item.materialName)")
                     }
@@ -3338,14 +3331,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     encoderStateCache.setDepthStencilState(encoder, opaqueState)
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
-                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "mask":
                     encoderStateCache.setDepthStencilState(encoder,depthStencilStates["mask"])
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
                     // Apply base depth bias for MASK materials
-                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "blend":
                     if let blendDepthState = depthStencilStates["blend"] {
@@ -3355,12 +3348,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     // Apply base depth bias for BLEND materials
-                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 default:
                     encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
-                    encoder.setDepthBias(baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
+                    encoderStateCache.setDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                 }
             }
 
@@ -3951,7 +3944,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         encoder.setDepthStencilState(prepassDepthState)
         encoder.setCullMode(.back)
         encoder.setFrontFacing(.counterClockwise)
-        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+        encoderStateCache.setDepthBias(encoder, 0.0, slopeScale: 0.0, clamp: 0.0)
 
         var issued = false
         for item in itemsToRender {
@@ -4066,7 +4059,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Minimal depth bias for outlines - the real fix is proper vertex skinning
-        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+        encoderStateCache.setDepthBias(encoder, 0.0, slopeScale: 0.0, clamp: 0.0)
 
         var outlinesRendered = 0
 
@@ -4238,7 +4231,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         encoderStateCache.setCullMode(encoder,.back)
 
         // Reset depth bias for subsequent render passes
-        encoder.setDepthBias(0.0, slopeScale: 0.0, clamp: 0.0)
+        encoderStateCache.setDepthBias(encoder, 0.0, slopeScale: 0.0, clamp: 0.0)
 
         // Restore depth state for subsequent render passes
         if let opaqueState = depthStencilStates["opaque"] {
@@ -4526,7 +4519,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         alphaMode: String,
         isSkinned: Bool
     ) -> UInt32 {
-        switch alphaMode.lowercased() {
+        // Fast path: the three canonical glTF modes are already lowercase.
+        // Only fall back to case-insensitive comparison for non-standard inputs.
+        switch alphaMode {
         case "blend":
             return 2
         case "mask":
@@ -4536,7 +4531,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     ? skinnedMaskAlphaToCoveragePipelineState != nil
                     : maskAlphaToCoveragePipelineState != nil)
             return usingA2CPipeline ? 3 : 1
+        case "Blend", "BLEND":
+            return 2
+        case "Mask", "MASK":
+            return 1
         default:
+            if alphaMode.lowercased() == "blend" { return 2 }
+            if alphaMode.lowercased() == "mask" { return 1 }
             return 0
         }
     }

@@ -72,18 +72,21 @@ public struct Frustum {
     ///   - lo: World-space AABB minimum corner.
     ///   - hi: World-space AABB maximum corner.
     public func cullsAABB(min lo: SIMD3<Float>, max hi: SIMD3<Float>) -> Bool {
-        let planes = [left, right, bottom, top, near, far]
-        for plane in planes {
-            // Pick the corner that's farthest in the inward-normal direction.
-            let p = SIMD3<Float>(
-                plane.x >= 0 ? hi.x : lo.x,
-                plane.y >= 0 ? hi.y : lo.y,
-                plane.z >= 0 ? hi.z : lo.z)
-            if simd_dot(SIMD3<Float>(plane.x, plane.y, plane.z), p) + plane.w < 0 {
-                return true
-            }
-        }
-        return false
+        return cullsByPlane(left, lo, hi)
+            || cullsByPlane(right, lo, hi)
+            || cullsByPlane(bottom, lo, hi)
+            || cullsByPlane(top, lo, hi)
+            || cullsByPlane(near, lo, hi)
+            || cullsByPlane(far, lo, hi)
+    }
+
+    @inline(__always)
+    private func cullsByPlane(_ plane: SIMD4<Float>, _ lo: SIMD3<Float>, _ hi: SIMD3<Float>) -> Bool {
+        let p = SIMD3<Float>(
+            plane.x >= 0 ? hi.x : lo.x,
+            plane.y >= 0 ? hi.y : lo.y,
+            plane.z >= 0 ? hi.z : lo.z)
+        return simd_dot(SIMD3<Float>(plane.x, plane.y, plane.z), p) + plane.w < 0
     }
 }
 
