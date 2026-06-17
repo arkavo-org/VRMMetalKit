@@ -2155,8 +2155,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         vrmLog("[VRMRenderer] 🎨 Alpha queuing: opaque=\(opaqueCount), mask=\(maskCount), blend=\(blendCount)")
 
         // Pre-compute view-space Z for transparent items (flat array indexed by primitiveIndex)
-        let totalPrimitives = allItems.count
-        viewZByIndex = [Float](repeating: .infinity, count: totalPrimitives)
+        // primitiveIndex comes from globalPrimitiveIndex which counts ALL primitives including
+        // first-person-filtered ones that were skipped, so size to globalPrimitiveIndex not allItems.count
+        viewZByIndex = [Float](repeating: .infinity, count: globalPrimitiveIndex)
         for item in allItems where item.materialRenderQueue >= 2500 {
             let worldPos = item.node.worldMatrix.columns.3
             viewZByIndex[item.primitiveIndex] = (viewMatrix * worldPos).z
@@ -3640,8 +3641,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             continue
                         }
 
-                        // Condition 2: Sample vertices to double-check (first frames only)
-                        if frameCounter < 2, let vertexBuffer = prim.vertexBuffer, prim.hasJoints {
+                        // Condition 2: Sample vertices to verify joint indices are in palette range.
+                        // The vertex joint data is static, so the check result is deterministic —
+                        // but this guardrail prevents out-of-bounds GPU joint-palette reads on
+                        // malformed models, so the validation must run every frame. Only the
+                        // diagnostic logging is gated behind frameCounter < 2.
+                        if let vertexBuffer = prim.vertexBuffer, prim.hasJoints {
                             let verts = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: min(10, prim.vertexCount))
                             var sampleMaxJoint: UInt32 = 0
                             let samplesToCheck = min(10, prim.vertexCount)
@@ -3675,7 +3680,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // 🎯 FACE DEBUG: Dump vertex/index data for face meshes
-                    if item.materialName.lowercased().contains("face") && frameCounter < 2 {
+                    if item.materialNameLower.contains("face") && frameCounter < 2 {
                         vrmLog("\n[FACE DATA DUMP] Material: '\(item.materialName)'")
                         vrmLog("[FACE DATA DUMP] Primitive: vertices=\(primitive.vertexCount), indices=\(primitive.indexCount), indexType=\(primitive.indexType)")
 
