@@ -3028,13 +3028,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // Index 1: Shade multiply texture (from MToon)
+                    // Skip when it points to the same texture as baseColor (common VRM pattern:
+                    // _ShadeTexture == _MainTex). Setting hasShadeMultiplyTexture=0 saves one
+                    // texture fetch per pixel — the shader multiplies by 1.0 instead.
                     if let mtoon = material.mtoon {
                         if let textureIndex = mtoon.shadeMultiplyTexture {
                             if textureIndex < model.textures.count,
                                let mtlTexture = model.textures[textureIndex].mtlTexture {
-                                encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 1)
-                                mtoonUniforms.hasShadeMultiplyTexture = 1
-                                textureCount += 1
+                                // Check if shadeMultiply is the same texture as baseColor
+                                let isSameAsBaseColor = material.baseColorTexture?.mtlTexture === mtlTexture
+                                if isSameAsBaseColor {
+                                    encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
+                                    mtoonUniforms.hasShadeMultiplyTexture = 0
+                                } else {
+                                    encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 1)
+                                    mtoonUniforms.hasShadeMultiplyTexture = 1
+                                    textureCount += 1
+                                }
                             }
                         } else {
                             encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
