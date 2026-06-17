@@ -71,8 +71,9 @@ public final class GLTFParallelMeshLoader<Mesh: Sendable>: @unchecked Sendable {
 
         await withTaskGroup(of: (Int, Mesh?).self) { group in
             for meshIndex in indices {
-                group.addTask { [unowned self] in
-                    guard let gltfMesh = self.document.meshes?[safe: meshIndex] else {
+                group.addTask { [weak self] in
+                    guard let self,
+                          let gltfMesh = self.document.meshes?[safe: meshIndex] else {
                         return (meshIndex, nil)
                     }
                     do {

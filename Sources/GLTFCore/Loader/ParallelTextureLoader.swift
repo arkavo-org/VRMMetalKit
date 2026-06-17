@@ -125,7 +125,8 @@ public final class ParallelTextureLoader: @unchecked Sendable {
 
         await withTaskGroup(of: (Int, MTLTexture?).self) { group in
             for textureIndex in indices {
-                group.addTask { [unowned self] in
+                group.addTask { [weak self] in
+                    guard let self else { return (textureIndex, nil) }
                     let isLinear = linearTextureIndices.contains(textureIndex)
                     let texture = try? await self.loadTexture(at: textureIndex, sRGB: !isLinear)
                     return (textureIndex, texture)
