@@ -757,8 +757,8 @@ struct VRMBenchmarkCLI {
                     var m = node.localMatrix
                     m.columns.3.x += xOffset
                     node.localMatrix = m
-                    avatarModel.updateNodeTransforms()
                 }
+                avatarModel.updateNodeTransforms()
             }
 
             // Animation player per avatar (staggered phase for visual variety)
@@ -861,7 +861,13 @@ struct VRMBenchmarkCLI {
                 animationMs = (CACurrentMediaTime() - animationStart) * 1000.0
 
                 let encodeStart = CACurrentMediaTime()
-                for avatar in avatars {
+                for (idx, avatar) in avatars.enumerated() {
+                    // First avatar clears the frame; subsequent avatars load
+                    // existing color/depth so all N remain composited.
+                    if idx > 0 {
+                        rpd.colorAttachments[0].loadAction = .load
+                        rpd.depthAttachment.loadAction = .load
+                    }
                     avatar.renderer.drawOffscreenHeadless(
                         to: _colorTex, depth: _depthTex,
                         commandBuffer: cb, renderPassDescriptor: rpd)
