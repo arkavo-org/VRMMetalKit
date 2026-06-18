@@ -418,6 +418,11 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
     public var hasOcclusionTexture: Bool
     public var hasUvAnimationMaskTexture: Bool
 
+    /// True when the material has a non-zero parametric rim color. When false,
+    /// the parametric rim Fresnel math is dead-stripped from the specialized
+    /// fragment shader. Pixel-identical for zero-rim materials.
+    public var hasParametricRim: Bool
+
     /// 0=OPAQUE, 1=MASK, 2=BLEND, 3=MASK_A2C.
     public var alphaMode: UInt8
 
@@ -432,6 +437,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         hasEmissiveTexture: Bool = false,
         hasOcclusionTexture: Bool = false,
         hasUvAnimationMaskTexture: Bool = false,
+        hasParametricRim: Bool = false,
         alphaMode: UInt8 = 0
     ) {
         self.useMaterialFlags = useMaterialFlags
@@ -444,6 +450,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.hasEmissiveTexture = hasEmissiveTexture
         self.hasOcclusionTexture = hasOcclusionTexture
         self.hasUvAnimationMaskTexture = hasUvAnimationMaskTexture
+        self.hasParametricRim = hasParametricRim
         self.alphaMode = alphaMode
     }
 
@@ -462,6 +469,8 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.hasEmissiveTexture = material.hasEmissiveTexture != 0
         self.hasOcclusionTexture = material.hasOcclusionTexture != 0
         self.hasUvAnimationMaskTexture = material.hasUvAnimationMaskTexture != 0
+        let rim = material.parametricRimColorFactor
+        self.hasParametricRim = rim.x != 0.0 || rim.y != 0.0 || rim.z != 0.0
         self.alphaMode = UInt8(material.alphaMode)
     }
 
@@ -504,6 +513,9 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
 
         var hasOutlineWidthMultiplyTexture: Bool = false
         values.setConstantValue(&hasOutlineWidthMultiplyTexture, type: .bool, index: 11)
+
+        var hasParametricRim = self.hasParametricRim
+        values.setConstantValue(&hasParametricRim, type: .bool, index: 12)
 
         return values
     }
