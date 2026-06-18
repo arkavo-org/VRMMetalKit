@@ -19,7 +19,7 @@
 using namespace metal;
 
 #ifndef MTOON_USE_HALF_PRECISION
-#define MTOON_USE_HALF_PRECISION 0
+#define MTOON_USE_HALF_PRECISION 1
 #endif
 
 #if MTOON_USE_HALF_PRECISION
