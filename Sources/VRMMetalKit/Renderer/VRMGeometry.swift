@@ -1172,6 +1172,9 @@ public class VRMNode {
     public var localMatrix: float4x4 = matrix_identity_float4x4
     /// `parent.worldMatrix * localMatrix`, recomputed by ``updateWorldTransform()``.
     public var worldMatrix: float4x4 = matrix_identity_float4x4
+    /// `worldMatrix.inverse.transpose`, cached here so the renderer does not
+    /// recompute it for every primitive drawn from this node.
+    public var normalMatrix: float4x4 = matrix_identity_float4x4
 
     /// World-space position of this node's origin, extracted from ``worldMatrix``. Used by spring-bone colliders.
     public var worldPosition: SIMD3<Float> {
@@ -1309,6 +1312,7 @@ public class VRMNode {
         } else {
             worldMatrix = localMatrix
         }
+        normalMatrix = worldMatrix.inverse.transpose
 
         for child in children {
             child.updateWorldTransform()
