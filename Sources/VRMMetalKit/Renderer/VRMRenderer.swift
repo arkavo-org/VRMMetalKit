@@ -663,8 +663,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         springBoneComputeSystem?.warmupPhysics(model: model, steps: steps)
     }
 
-    // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
-    private static let zeroMorphWeights = [Float](repeating: 0, count: 8)
     private var hasLoggedSpringBone = false
     private var hasLoggedPipelinesUnavailable = false
 
@@ -2644,7 +2642,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             } else {
                 uniforms.modelMatrix = simd_mul(vrmRotation, item.node.worldMatrix)
-                uniforms.normalMatrix = uniforms.modelMatrix.inverse.transpose
+                uniforms.normalMatrix = item.node.normalMatrix
                 if frameCounter % 60 == 0 {
                     vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=false, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation * WORLD matrix")
                 }
@@ -2819,17 +2817,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Morphed positions are already set at the primary vertex buffer slot above
             // No need to pass them again at a different index
 
-                // GPU compute has already applied morphs - no need for vertex shader morphing
-                // OPTIMIZATION: Use static zero weights array
-                if !primitive.morphTargets.isEmpty {
-                    encoder.setVertexBytes(Self.zeroMorphWeights,
-                                           length: Self.zeroMorphWeights.count * MemoryLayout<Float>.size,
-                                           index: ResourceIndices.morphWeightsBuffer)
-
-                    // Morph deltas are no longer used (GPU compute path handles morphs)
-                    // Do NOT clear buffer indices here - it would overwrite jointCount (4),
-                    // morphedPositions (20), and other active bindings
-                }
+                // GPU compute has already applied morphs - no need for vertex shader morphing.
+                // The legacy morphWeightsBuffer vertex slot is no longer read by any shader,
+                // so we skip binding it entirely.
 
                 // Pass vertex offset for proper morph buffer indexing
                 encoder.setVertexBytes(&currentVertexOffset, length: MemoryLayout<UInt32>.size, index: ResourceIndices.vertexOffsetBuffer)
@@ -3459,8 +3449,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLog("[VRMRenderer] Drawing mesh \(item.meshIndex): indexCount=\(primitive.indexCount), vertexCount=\(primitive.vertexCount)")
                 }
 
-                // Apply expression-driven material color overrides
-                if let materialIndex = primitive.materialIndex {
+                // Apply expression-driven material color overrides. Short-circuit
+                // the per-draw dictionary probes when no overrides are active.
+                if let materialIndex = primitive.materialIndex,
+                   expressionController?.hasMaterialColorOverrides == true {
                     if let colorOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .color) {
                         mtoonUniforms.baseColorFactor = colorOverride
                     }
@@ -4170,7 +4162,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 uniforms.normalMatrix = outlineRotation
             } else {
                 uniforms.modelMatrix = simd_mul(outlineRotation, item.node.worldMatrix)
-                uniforms.normalMatrix = uniforms.modelMatrix.inverse.transpose
+                uniforms.normalMatrix = item.node.normalMatrix
             }
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
 
@@ -4191,7 +4183,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
 
             // Apply expression-driven material color overrides for outlines
-            if let outlineOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .outlineColor) {
+            if expressionController?.hasMaterialColorOverrides == true,
+               let outlineOverride = expressionController?.getMaterialColorOverride(materialIndex: materialIndex, type: .outlineColor) {
                 mtoonUniforms.outlineColorFactor = SIMD3<Float>(outlineOverride.x, outlineOverride.y, outlineOverride.z)
             }
 

@@ -565,6 +565,12 @@ public class VRMExpressionController: @unchecked Sendable {
     private var materialColorOverrides: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
     private var baseMaterialColors: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
 
+    /// True when at least one material color override is currently active.
+    /// Renderers can use this to short-circuit per-draw override lookups.
+    public var hasMaterialColorOverrides: Bool {
+        return !materialColorOverrides.isEmpty
+    }
+
     /// Creates an empty controller with all preset weights at `0`. Attach a morph-target system via ``setMorphTargetSystem(_:)`` before rendering.
     public init() {
         // Initialize all preset weights to 0
