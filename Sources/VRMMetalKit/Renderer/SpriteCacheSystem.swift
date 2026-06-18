@@ -202,7 +202,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
             hasher.combine(qz)
         }
 
-        return UInt64(hasher.finalize())
+        return UInt64(truncatingIfNeeded: hasher.finalize())
     }
 
     // MARK: - Cache Lookup

@@ -154,8 +154,24 @@ public struct RendererConfig {
     /// flags from the uniform buffer at runtime.
     public var enableMToonFunctionConstants: Bool = true
 
+    /// Crowd-impostor prototype (default `false`). When `true`, ``VRMRenderer``
+    /// may draw a cached sprite quad instead of the full 3D avatar, depending on
+    /// ``VRMRenderer/detailLevel``. Currently opt-in only; no default behavior
+    /// changes when `false`.
+    public var enableCrowdImpostors: Bool = false
+
+    /// Resolution of cached impostor sprites. Lower values reduce cache memory
+    /// and fragment cost; higher values retain fidelity. Only used when
+    /// ``enableCrowdImpostors`` is `true`.
+    public var impostorSpriteResolution: Int = 256
+
+    /// Maximum number of avatars to render in full 3D when ``detailLevel`` is
+    /// `.hybrid`; remaining eligible avatars become cached sprites. Only used
+    /// when ``enableCrowdImpostors`` is `true`.
+    public var impostorMaxFull3D: Int = 3
+
     /// Creates a renderer configuration. Defaults match the production baseline.
-    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false, dualQuaternionSkinning: Bool = false, enableMToonFunctionConstants: Bool = true) {
+    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false, dualQuaternionSkinning: Bool = false, enableMToonFunctionConstants: Bool = true, enableCrowdImpostors: Bool = false, impostorSpriteResolution: Int = 256, impostorMaxFull3D: Int = 3) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
         self.renderFilter = renderFilter
@@ -168,6 +184,9 @@ public struct RendererConfig {
         self.synchronousSpringBone = synchronousSpringBone
         self.dualQuaternionSkinning = dualQuaternionSkinning
         self.enableMToonFunctionConstants = enableMToonFunctionConstants
+        self.enableCrowdImpostors = enableCrowdImpostors
+        self.impostorSpriteResolution = impostorSpriteResolution
+        self.impostorMaxFull3D = impostorMaxFull3D
     }
 }
 
