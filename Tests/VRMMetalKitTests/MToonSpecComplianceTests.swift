@@ -428,10 +428,3 @@ final class MToonSpecComplianceTests: XCTestCase {
         return glbData
     }
 }
-
-private extension UInt32 {
-    var data: Data {
-        var value = self
-        return Data(bytes: &value, count: MemoryLayout<UInt32>.size)
-    }
-}

@@ -327,12 +327,3 @@ final class VRMMetaSpecTests: XCTestCase {
         return glb
     }
 }
-
-// MARK: - UInt32 Data helpers
-
-private extension UInt32 {
-    var data: Data {
-        var value = self
-        return Data(bytes: &value, count: MemoryLayout<UInt32>.size)
-    }
-}

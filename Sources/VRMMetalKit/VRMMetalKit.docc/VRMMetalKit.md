@@ -41,20 +41,6 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``ParallelMaterialLoader``
 - <doc:LoadingVRMModels>
 
-### Building
-
-- ``VRMBuilder``
-- ``SkeletonPreset``
-- ``SkeletonDefinition``
-- ``BoneData``
-- ``GLTFDocumentBuilder``
-- ``CharacterRecipe``
-- ``MaterialConfig``
-- ``AccessoryConfig``
-- ``RecipeError``
-- ``SkeletonPresetMapper``
-- ``ExpressionMapper``
-
 ### glTF Internals
 
 - ``GLTFDocument``
