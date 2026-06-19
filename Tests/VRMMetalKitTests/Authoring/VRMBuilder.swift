@@ -17,6 +17,7 @@
 
 import Foundation
 import simd
+@testable import VRMMetalKit
 
 /// Fluent builder that authors a ``VRMModel`` in-memory and pairs with
 /// `VRMModel.serialize(to:)` to write the model out as a `.vrm` file.

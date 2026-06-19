@@ -16,6 +16,7 @@
 
 
 import Foundation
+@testable import VRMMetalKit
 
 /// Extension for serializing VRM models to .vrm files
 extension VRMModel {
