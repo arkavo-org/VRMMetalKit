@@ -479,6 +479,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var spriteIndexBuffer: MTLBuffer?
     let spriteIndexCount: Int = 6
 
+    /// Stable identifier used when registering this renderer with ``prioritySystem``
+    /// and as the ``SpriteCacheSystem`` character key.
+    private let impostorCharacterID: String = UUID().uuidString
+
+    /// Tracks whether this renderer has already registered itself with ``prioritySystem``.
+    private var impostorRegisteredInPrioritySystem: Bool = false
+
     // Skinning
     private var skinningSystem: VRMSkinningSystem?
     /// Legacy per-frame animation state. Newer code should use ``AnimationPlayer``;
@@ -1523,28 +1530,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
         }
 
-        // Run compute pass for morphs BEFORE render encoder
-        performanceTracker?.beginPhase(.morphSetup)
-        let morphedBuffers = applyMorphTargetsCompute(commandBuffer: commandBuffer)
-        performanceTracker?.endPhase(.morphSetup)
-        if !morphedBuffers.isEmpty {
-            performanceTracker?.recordMorphCompute()
-        }
-
-        // Debug: Log morphed buffer count
-        if frameCounter == 1 || frameCounter % 60 == 0 {
-            if !morphedBuffers.isEmpty {
-                vrmLog("[VRMRenderer] Frame \(frameCounter): \(morphedBuffers.count) primitives have morphed positions")
-            }
-        }
-
-        // Debug SpringBone status once
-        if !hasLoggedSpringBone {
-            vrmLog("[VRMRenderer] Draw called: enableSpringBone=\(enableSpringBone), springBone=\(model.springBone != nil ? "exists" : "nil"), springBoneComputeSystem=\(springBoneComputeSystem != nil ? "exists" : "nil")")
-            hasLoggedSpringBone = true
-        }
-
-        // Calculate actual deltaTime. `simulationDeltaTime` is the
+        // Calculate actual deltaTime once per frame. `simulationDeltaTime` is the
         // explicit offline-rendering escape: when set, use it directly
         // so tests / video extractors / conformance harnesses get a
         // deterministic physics timestep independent of wall-clock.
@@ -1572,6 +1558,57 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             lastUpdateTime = currentTime
             // Clamp deltaTime to reasonable values (prevent huge jumps)
             clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
+        }
+
+        // Crowd-impostor fast path: if this renderer is allowed to draw as a
+        // cached sprite and the pose is already in the sprite cache, skip the
+        // expensive morph / spring-bone / skinning / full-3D work entirely.
+        if config.enableCrowdImpostors,
+           detailLevel != .full3D,
+           let spriteCache = spriteCacheSystem,
+           let poseHash = computeImpostorPoseHash(),
+           shouldRenderAsImpostor(cameraPosition: cameraPosition(from: viewMatrix), deltaTime: TimeInterval(clampedDeltaTime)) {
+            if let cachedPose = spriteCache.getCachedPose(poseHash: poseHash) {
+                guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+                    if config.strict != .off {
+                        do {
+                            try strictValidator?.handle(.encoderCreationFailed(type: "render"))
+                        } catch {
+                            vrmLog("❌ [VRMRenderer] Failed to create render encoder: \(error)")
+                        }
+                    }
+                    inflightSemaphore.signal()
+                    return
+                }
+                encoderStateCache.reset()
+                drawImpostorSprite(encoder: encoder, poseTexture: cachedPose.texture, view: view)
+                encoder.endEncoding()
+                frameCounter += 1
+                performanceTracker?.recordDrawCall(triangles: 2, vertices: 4)
+                completeFrame(commandBuffer: commandBuffer)
+                return
+            }
+        }
+
+        // Run compute pass for morphs BEFORE render encoder
+        performanceTracker?.beginPhase(.morphSetup)
+        let morphedBuffers = applyMorphTargetsCompute(commandBuffer: commandBuffer)
+        performanceTracker?.endPhase(.morphSetup)
+        if !morphedBuffers.isEmpty {
+            performanceTracker?.recordMorphCompute()
+        }
+
+        // Debug: Log morphed buffer count
+        if frameCounter == 1 || frameCounter % 60 == 0 {
+            if !morphedBuffers.isEmpty {
+                vrmLog("[VRMRenderer] Frame \(frameCounter): \(morphedBuffers.count) primitives have morphed positions")
+            }
+        }
+
+        // Debug SpringBone status once
+        if !hasLoggedSpringBone {
+            vrmLog("[VRMRenderer] Draw called: enableSpringBone=\(enableSpringBone), springBone=\(model.springBone != nil ? "exists" : "nil"), springBoneComputeSystem=\(springBoneComputeSystem != nil ? "exists" : "nil")")
+            hasLoggedSpringBone = true
         }
 
         // Update SpringBone GPU physics BEFORE the render encoder is created.
@@ -3897,11 +3934,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         performanceTracker?.endPhase(.commandEncode)
         encoder.endEncoding()
+        completeFrame(commandBuffer: commandBuffer)
 
-        // End performance tracking
+    }
+
+    // MARK: - Frame Completion
+
+    /// Shared end-of-frame bookkeeping: strict validation, performance tracking,
+    /// and command-buffer completion/semaphore signalling.
+    private func completeFrame(commandBuffer: MTLCommandBuffer) {
         performanceTracker?.endFrame()
 
-        // End frame validation
         if config.strict != .off {
             do {
                 try strictValidator?.endFrame()
@@ -3914,25 +3957,20 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
         }
 
-        // Add command buffer completion handler for error checking and semaphore signaling
         commandBuffer.addCompletedHandler { [weak self] buffer in
-            // Signal that this frame's uniform buffer is available again
             self?.inflightSemaphore.signal()
 
-            // Record GPU timing if performance tracking is enabled
             if let tracker = self?.performanceTracker {
                 let gpuTime = buffer.gpuEndTime - buffer.gpuStartTime
                 tracker.recordGPUTime(gpuTime)
             }
 
-            if self?.config.checkCommandBufferErrors == true {
-                if buffer.status == .error {
-                    let error = buffer.error
-                    if self?.config.strict == .fail {
-                        vrmLog("❌ [VRMRenderer] Command buffer failed: \(error?.localizedDescription ?? "unknown error")")
-                    } else if self?.config.strict == .warn {
-                        vrmLog("⚠️ [StrictMode] Command buffer error: \(error?.localizedDescription ?? "unknown")")
-                    }
+            if self?.config.checkCommandBufferErrors == true, buffer.status == .error {
+                let error = buffer.error
+                if self?.config.strict == .fail {
+                    vrmLog("❌ [VRMRenderer] Command buffer failed: \(error?.localizedDescription ?? "unknown error")")
+                } else if self?.config.strict == .warn {
+                    vrmLog("⚠️ [StrictMode] Command buffer error: \(error?.localizedDescription ?? "unknown")")
                 }
             }
         }
@@ -4580,4 +4618,224 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Current debug mode (0 = normal, 1-16 = various debug visualizations)
     private var currentDebugMode: Int = 0
 
+    // MARK: - Crowd Impostor Helpers
+
+    private struct SpriteUniforms {
+        var viewProjectionMatrix: simd_float4x4
+        var viewportSize: SIMD2<Float>
+        var padding1: Float = 0
+        var padding2: Float = 0
+    }
+
+    private struct SpriteInstance {
+        var modelMatrix: simd_float4x4
+        var tintColor: SIMD4<Float>
+        var texOffset: SIMD2<Float>
+        var texScale: SIMD2<Float>
+    }
+
+    /// Extracts the camera world-space position from the current view matrix.
+    private func cameraPosition(from viewMatrix: simd_float4x4) -> SIMD3<Float> {
+        let inv = viewMatrix.inverse
+        return SIMD3<Float>(inv.columns.3.x, inv.columns.3.y, inv.columns.3.z)
+    }
+
+    /// Computes a deterministic pose hash for the current frame.
+    private func computeImpostorPoseHash() -> UInt64? {
+        guard let spriteCache = spriteCacheSystem,
+              let expressionController = expressionController else {
+            return nil
+        }
+        let expressionWeights = expressionController.allExpressionWeights()
+        return spriteCache.computePoseHash(
+            characterID: impostorCharacterID,
+            expressionWeights: expressionWeights
+        )
+    }
+
+    /// Determines whether this renderer's avatar should draw as a cached sprite this frame.
+    private func shouldRenderAsImpostor(cameraPosition: SIMD3<Float>, deltaTime: TimeInterval) -> Bool {
+        switch detailLevel {
+        case .full3D:
+            return false
+        case .cachedSprite:
+            return true
+        case .hybrid:
+            guard let prioritySystem = prioritySystem,
+                  model != nil else { return false }
+            // The benchmark/host is expected to register characters explicitly.
+            // If this renderer has not been registered yet, treat it as a background
+            // character so the prototype works out of the box for single-avatar tests.
+            if !impostorRegisteredInPrioritySystem {
+                prioritySystem.registerCharacter(
+                    characterID: impostorCharacterID,
+                    displayName: "VRMRenderer Avatar",
+                    position: avatarWorldPosition() ?? SIMD3<Float>(0, 0, 0)
+                )
+                impostorRegisteredInPrioritySystem = true
+            }
+            let decisions = prioritySystem.computeRenderingDecisions(
+                cameraPosition: cameraPosition,
+                deltaTime: deltaTime
+            )
+            return decisions[impostorCharacterID] == .cached
+        }
+    }
+
+    /// World-space position of the avatar, used for sprite placement and priority registration.
+    private func avatarWorldPosition() -> SIMD3<Float>? {
+        guard let model = model else { return nil }
+        if let humanoid = model.humanoid,
+           let hipsIndex = humanoid.getBoneNode(.hips),
+           hipsIndex < model.nodes.count {
+            let hips = model.nodes[hipsIndex]
+            return SIMD3<Float>(hips.worldMatrix.columns.3.x,
+                                hips.worldMatrix.columns.3.y,
+                                hips.worldMatrix.columns.3.z)
+        }
+        if let root = model.nodes.first {
+            return SIMD3<Float>(root.worldMatrix.columns.3.x,
+                                root.worldMatrix.columns.3.y,
+                                root.worldMatrix.columns.3.z)
+        }
+        return nil
+    }
+
+    /// Computes a billboard transform that places the cached sprite at the avatar's
+    /// world position and orients it to face the camera.
+    private func impostorWorldTransform() -> simd_float4x4? {
+        guard let model = model,
+              let position = avatarWorldPosition() else { return nil }
+
+        let bounds = model.calculateSkinnedBoundingBox()
+        let height = max(bounds.size.y, 0.01)
+        let width = max(bounds.size.x, 0.01)
+        // Preserve the avatar's aspect ratio; sprites are 1:1 by default so scale
+        // the quad to match the AABB proportions.
+        let size = SIMD2<Float>(width, height)
+
+        // Face the camera: rotate so the sprite's +Z aligns with the camera's view direction.
+        let invView = viewMatrix.inverse
+        let forward = normalize(SIMD3<Float>(-invView.columns.2.x,
+                                             -invView.columns.2.y,
+                                             -invView.columns.2.z))
+        let up = SIMD3<Float>(0, 1, 0)
+        let right = normalize(cross(up, forward))
+        let actualUp = cross(forward, right)
+
+        var m = matrix_identity_float4x4
+        m.columns.0 = SIMD4<Float>(right * (size.x * 0.5), 0)
+        m.columns.1 = SIMD4<Float>(actualUp * (size.y * 0.5), 0)
+        m.columns.2 = SIMD4<Float>(forward, 0)
+        m.columns.3 = SIMD4<Float>(position, 1)
+        return m
+    }
+
+    /// Draws a cached sprite quad using the existing sprite pipeline.
+    private func drawImpostorSprite(
+        encoder: MTLRenderCommandEncoder,
+        poseTexture: MTLTexture,
+        view: MTKView
+    ) {
+        guard let pipeline = spritePipelineState,
+              let vertexBuffer = spriteVertexBuffer,
+              let indexBuffer = spriteIndexBuffer,
+              let depthState = depthStencilStates["sprite"] else {
+            vrmLog("⚠️ [VRMRenderer] Sprite pipeline not ready; skipping impostor draw")
+            return
+        }
+
+        let drawableSize = MainActor.assumeIsolated { view.drawableSize }
+        var uniforms = SpriteUniforms(
+            viewProjectionMatrix: projectionMatrix * viewMatrix,
+            viewportSize: SIMD2<Float>(Float(drawableSize.width), Float(drawableSize.height))
+        )
+        guard let instanceMatrix = impostorWorldTransform() else { return }
+        var instance = SpriteInstance(
+            modelMatrix: instanceMatrix,
+            tintColor: SIMD4<Float>(1, 1, 1, 1),
+            texOffset: SIMD2<Float>(0, 0),
+            texScale: SIMD2<Float>(1, 1)
+        )
+
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setDepthStencilState(depthState)
+        encoder.setCullMode(.none)
+        encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<SpriteUniforms>.stride, index: 1)
+        encoder.setVertexBytes(&instance, length: MemoryLayout<SpriteInstance>.stride, index: 2)
+        encoder.setFragmentTexture(poseTexture, index: 0)
+        if let sampler = samplerStates["default"] {
+            encoder.setFragmentSamplerState(sampler, index: 0)
+        }
+        encoder.drawIndexedPrimitives(
+            type: .triangle,
+            indexCount: spriteIndexCount,
+            indexType: .uint16,
+            indexBuffer: indexBuffer,
+            indexBufferOffset: 0
+        )
+    }
+
+    /// Renders the current pose to the sprite cache so subsequent frames can use
+    /// the impostor fast path. The host should call this after animation has been
+    /// applied and before entering the measured cached-sprite phase.
+    @MainActor
+    public func warmImpostorCache(commandBuffer: MTLCommandBuffer) {
+        guard config.enableCrowdImpostors,
+              detailLevel != .full3D,
+              let spriteCache = spriteCacheSystem,
+              let poseHash = computeImpostorPoseHash() else { return }
+
+        if spriteCache.isCached(poseHash: poseHash) { return }
+
+        let resolution = CGSize(
+            width: config.impostorSpriteResolution,
+            height: config.impostorSpriteResolution
+        )
+
+        let colorTexture: MTLTexture
+        let depthTexture: MTLTexture
+        let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: config.colorPixelFormat,
+            width: Int(resolution.width),
+            height: Int(resolution.height),
+            mipmapped: false
+        )
+        colorDesc.usage = [.renderTarget, .shaderRead]
+        colorDesc.storageMode = .private
+        guard let ct = device.makeTexture(descriptor: colorDesc) else { return }
+        colorTexture = ct
+
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float,
+            width: Int(resolution.width),
+            height: Int(resolution.height),
+            mipmapped: false
+        )
+        depthDesc.usage = .renderTarget
+        depthDesc.storageMode = .private
+        guard let dt = device.makeTexture(descriptor: depthDesc) else { return }
+        depthTexture = dt
+
+        let renderPassDescriptor = MTLRenderPassDescriptor()
+        renderPassDescriptor.colorAttachments[0].texture = colorTexture
+        renderPassDescriptor.colorAttachments[0].loadAction = .clear
+        renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        renderPassDescriptor.colorAttachments[0].storeAction = .store
+        renderPassDescriptor.depthAttachment.texture = depthTexture
+        renderPassDescriptor.depthAttachment.loadAction = .clear
+        renderPassDescriptor.depthAttachment.clearDepth = 1.0
+        renderPassDescriptor.depthAttachment.storeAction = .dontCare
+
+        drawOffscreenHeadless(
+            to: colorTexture,
+            depth: depthTexture,
+            commandBuffer: commandBuffer,
+            renderPassDescriptor: renderPassDescriptor
+        )
+
+        spriteCache.cachePose(texture: colorTexture, poseHash: poseHash, characterID: impostorCharacterID)
+        vrmLog("[VRMRenderer] Warmed impostor cache for character \(impostorCharacterID), pose \(poseHash)")
+    }
 }

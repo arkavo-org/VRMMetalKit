@@ -183,6 +183,15 @@ extension VRMRenderer {
             depthStencilStates["opaqueEqual"] = state
         }
 
+        // Cached sprite impostor: alpha-blended quad that tests against the
+        // scene depth but does not write depth (sprites are composited, not solid).
+        let spriteDepthDescriptor = MTLDepthStencilDescriptor()
+        spriteDepthDescriptor.depthCompareFunction = .lessEqual
+        spriteDepthDescriptor.isDepthWriteEnabled = false
+        if let state = device.makeDepthStencilState(descriptor: spriteDepthDescriptor) {
+            depthStencilStates["sprite"] = state
+        }
+
         // Pre-create sampler states
         let samplerDescriptor = MTLSamplerDescriptor()
         samplerDescriptor.minFilter = .linear
@@ -832,8 +841,9 @@ extension VRMRenderer {
             pipelineDescriptor.vertexDescriptor = vertexDescriptor
             pipelineDescriptor.rasterSampleCount = config.sampleCount
 
-            // Color attachment (BGRA8)
-            pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+            // Color attachment (match the renderer's configured target so the
+            // cached-sprite pipeline can be used regardless of view format).
+            pipelineDescriptor.colorAttachments[0].pixelFormat = config.colorPixelFormat
             pipelineDescriptor.colorAttachments[0].isBlendingEnabled = true
             pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
             pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
@@ -842,7 +852,7 @@ extension VRMRenderer {
             pipelineDescriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
             pipelineDescriptor.colorAttachments[0].alphaBlendOperation = .add
 
-            // Depth attachment
+            // Depth attachment (fixed 32-bit float for now; matches the main render pass)
             pipelineDescriptor.depthAttachmentPixelFormat = .depth32Float
 
             // Create pipeline state
