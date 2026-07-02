@@ -380,9 +380,15 @@ VRM 0.0 stores spring bone data in `secondaryAnimation` instead of the `VRMC_spr
 |---------|---------------|----------|-------|
 | MToon `giEqualizationFactor` spec compliance | MToon 1.0 | Low (artistic mix proxy in place) | See `docs/MTOON_GI_SPEC.md`. Current shader is a non-spec lit/shade mix; spec implementation requires IBL/SH plumbing. Tracked by #328. |
 
+### 8.3 Deliberate Deviations
+
+| Feature | Specification | Status | Notes |
+|---------|---------------|--------|-------|
+| VRM 0.x model forward direction | VRM 0.x (`-Z` forward) | Deviation by design | VRMMetalKit rotates VRM 0.x models 180° around Y at load time so they face `+Z`, matching the VRM 1.0 convention. This unifies physics, animation, culling, ARKit tracking, and camera code across versions. See #299 (closed as not planned). |
+
 `lookAt` in VRMA (#165, #286), `VRMC_node_constraint` aim + rotation solvers (#166), `renderQueueOffsetNumber`, and the `custom` expression preset enum — formerly listed here — are implemented (see §7.1 / §5.2 / §3 respectively).
 
-### 8.3 Conclusion
+### 8.4 Conclusion
 
 **VRMMetalKit is fully compliant** with the core VRM 1.0 and glTF 2.0 specifications. The implementation correctly:
 

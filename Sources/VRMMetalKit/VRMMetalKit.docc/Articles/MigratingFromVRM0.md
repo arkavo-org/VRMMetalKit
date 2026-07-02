@@ -28,6 +28,7 @@ The practical implication is that there is no *performance* reason to upgrade a 
 
 ## Known divergences
 
+- **VRM 0.x models are rotated to face +Z.** The VRM 0.x specification says the model faces -Z in glTF coordinates. VRMMetalKit applies a 180° Y rotation at load time so VRM 0.x models face +Z, matching the VRM 1.0 convention. This keeps physics, animation, culling, ARKit tracking, and client camera code on a single coordinate system regardless of source version. It also matches the orientation most users see in Unity-origin preview tools. If you need the raw -Z orientation, load the file as glTF 2.0 and build the VRM structures yourself.
 - **MASK is demoted to OPAQUE for body/skin materials.** When a material's name matches "body" or "skin", its alpha mode is forced to OPAQUE. VRM 0.x skin textures frequently include alpha=0 padding regions; with MASK mode active those regions would punch holes through the avatar's skin. OPAQUE is the safer default.
 - **Shade-texture index deduplication.** VRM 0.x assets often set `_ShadeTexture == _MainTex` — the shade texture entry points at the same slot as the main color texture. The loader skips this duplicate bind to avoid blue padding artifacts that would otherwise appear on faces and limbs.
 - **`shadeColorFactor` white default.** VRM 0.x defaults `shadeColorFactor` to `[0, 0, 0]` (black) when the field is omitted; VRM 1.0 specifies `[1, 1, 1]` (white). The loader explicitly sets the factor to white when the source field is missing so 0.x models match VRM 1.0 spec semantics.
