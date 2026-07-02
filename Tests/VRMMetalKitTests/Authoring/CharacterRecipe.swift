@@ -17,6 +17,7 @@
 
 import Foundation
 import simd
+@testable import VRMMetalKit
 
 /// Character recipe - declarative format for VRM character creation
 ///
