@@ -1062,6 +1062,38 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
     }
 
+    /// Pure world-space snapshot of this avatar's skeleton-derived body contact
+    /// set (torso + upper arms + head). Reuses the world-transform idiom of
+    /// `appendSyntheticColliders` but mutates NOTHING — it does not read or write
+    /// the interpolation mirror, so the coordinator can call it before this
+    /// system's integrate without perturbing the subsequent frame (design §2.2).
+    /// `groupIndex` is left 0; the receiving sink assigns the foreign group.
+    func contactColliderSnapshot(model: VRMModel) -> ForeignColliderSnapshot {
+        let local = SpringBoneContactColliderSet.synthesize(model: model)
+        var spheres: [SphereCollider] = []
+        var capsules: [CapsuleCollider] = []
+        for collider in local {
+            guard let node = model.nodes[safe: collider.node] else { continue }
+            let wm = node.worldMatrix
+            let rot = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2]))
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                spheres.append(SphereCollider(center: node.worldPosition + rot * offset,
+                                              radius: radius, groupIndex: 0))
+            case .capsule(let offset, let radius, let tail):
+                let p0 = node.worldPosition + rot * offset
+                let p1 = p0 + rot * tail
+                capsules.append(CapsuleCollider(p0: p0, p1: p1, radius: radius, groupIndex: 0))
+            default:
+                continue
+            }
+        }
+        return ForeignColliderSnapshot(spheres: spheres, capsules: capsules)
+    }
+
     func populateSpringBoneData(model: VRMModel) throws {
         guard let springBone = model.springBone,
               let buffers = model.springBoneBuffers,

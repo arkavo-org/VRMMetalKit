@@ -261,7 +261,7 @@ public struct BoneParams {
 /// Sphere collider used by the SpringBone compute kernel.
 ///
 /// Layout must match the `SphereCollider` struct in the Metal shader source.
-public struct SphereCollider {
+public struct SphereCollider: Sendable {
     /// Sphere centre in world space (metres).
     public var center: SIMD3<Float>
     /// Sphere radius in world space (metres).
@@ -297,7 +297,7 @@ public struct SphereCollider {
 ///
 /// A capsule is a swept sphere along the segment `p0`-`p1`. Layout must match
 /// the `CapsuleCollider` struct in the Metal shader source.
-public struct CapsuleCollider {
+public struct CapsuleCollider: Sendable {
     /// First endpoint of the capsule's centre segment.
     public var p0: SIMD3<Float>
     /// Second endpoint of the capsule's centre segment.
@@ -327,6 +327,19 @@ public struct CapsuleCollider {
         self.radius = radius
         self.groupIndex = groupIndex
         self.inside = inside ? 1 : 0
+    }
+}
+
+/// A world-space snapshot of one avatar's body contact set, handed across the
+/// avatar boundary by `SpringBoneContactGroup`. `groupIndex` is unset here (0);
+/// the receiving avatar's injection sink assigns its own reserved foreign group
+/// index when writing these into its buffer tail (design §2.2, §7).
+public struct ForeignColliderSnapshot: Sendable {
+    public var spheres: [SphereCollider]
+    public var capsules: [CapsuleCollider]
+    public init(spheres: [SphereCollider] = [], capsules: [CapsuleCollider] = []) {
+        self.spheres = spheres
+        self.capsules = capsules
     }
 }
 
