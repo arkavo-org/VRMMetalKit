@@ -51,7 +51,9 @@ The world-space collider computation is **already separable** from kernel dispat
 
 - **`contactColliderSnapshot(model:) -> [ForeignCollider]`** — a **pure** recompute of this avatar's world-space body contact set (§5). Reuses the transform math of `captureTargetColliderTransforms` but **must not** perform the first-frame `previousSphereColliders`/`previousCapsuleColliders` init or mutate any interpolation mirror. This purity is a **correctness requirement, not cleanliness**: the coordinator calls it before this system's integrate, so any side effect on the interpolation mirror would perturb the very state the subsequent integrate depends on — reintroducing authored-path contamination through the snapshot door instead of the injection door (gap-2).
 
-- **Foreign-collider injection sink** — accepts the coordinator's per-frame foreign array and appends it, tagged with the reserved foreign group bit, to a **reserved fixed tail** of the sphere/capsule buffers *after* `interpolateColliders` runs. Foreign colliders therefore never enter the `previousSphereColliders.count == targetSphereColliders.count` invariant (`SpringBoneComputeSystem.swift:2244`), so the authored path's interpolation is structurally unreachable from the foreign path. Sink contract detailed in §4.
+- **Foreign-collider injection sink** — accepts the coordinator's per-frame foreign array and writes it, tagged with the reserved foreign group bit, to a **reserved fixed tail** of the sphere/capsule buffers, once per frame (§4.2). Foreign colliders never enter the `previousSphereColliders.count == targetSphereColliders.count` invariant (`SpringBoneComputeSystem.swift:2244`), so the authored path's interpolation is structurally unreachable from the foreign path. Sink contract detailed in §4.
+
+Both capabilities read node world matrices. The snapshot's purity guarantee (no *write* to the interpolation mirror) is necessary but not sufficient for correctness — the matrices it *reads* must be in a well-defined state at call time. Under option (b) those matrices are last frame's committed result, which imposes an ordering precondition on `exchange()` stated in §3.2. (Note the snapshot compute region near `:2092` and the interpolation invariant guard at `:2244` are in the same file; the implementer should read that whole span, since the foreign tail write sits outside the interpolation write-range rather than adjacent to either.)
 
 ### 2.3 Contact-set generator (new — a system capability, not a #309 byproduct)
 
@@ -100,6 +102,8 @@ The property is **not** option (a)'s "every snapshot before every integrate agai
 
 This is a genuinely different, **weaker-but-sufficient** guarantee than (a): (a) gives same-frame mutual resolution with zero lag; (b) gives consistent-prior-frame mutual resolution with uniform one-frame lag. (b) trades zero lag for zero render restructuring, and the one-frame lag (i) stacks cleanly with the spring system's *existing* one-frame readback lag (`VRMRenderer.swift:1590`), and (ii) is within the staleness tolerance already accepted for snap: staleness error scales with the *partner's* per-frame displacement, which is smallest exactly in the contemplative register.
 
+**Ordering precondition (multi-renderer — the `exchange()` sequencing that makes the guarantee hold).** "Consistent-prior-frame" requires that at `exchange()` time every participant's node transforms are in their *last-frame-committed* state. With two renderers and two command buffers, "after last frame's commit" is ambiguous about *whose* commit — and the guarantee breaks *silently* (subtly-wrong contact, not a crash) if `exchange()` reads a half-committed pose. So the precondition is precise: **`exchange()` must be sequenced after *all* participants' render commits, not merely after "a" commit.** If any participant defers matrix writes (async render), `exchange()` waits on that participant before snapshotting. This is the multi-renderer form of the snapshot's read-state requirement (§2.2).
+
 **Stated so a future debugger reads it correctly:** a reader chasing a convergence issue must not look for a start-of-frame animation lift — there isn't one under (b). The escape hatch to (a) is legible as "remove the uniform lag by lifting animation ahead of `exchange()`."
 
 ### 3.3 The three-rung convergence upgrade ladder
@@ -111,6 +115,8 @@ Convergence-if-needed is **two hops from v1, not one**. Each rung is localized t
 3. **(a)+lockstep — remove the phase lag.** Phase 3 becomes per-substep interleaved (advance all one substep → re-snapshot → re-inject → repeat). This targets the residual sustained-contact risk: a drag-damped **anti-phase limit cycle** where two one-frame-lagged push-outs pump a slow oscillation. **Only reachable after rung 2**, because per-substep interleaving requires the animation-ahead-of-integrate seam that (b) deliberately lacks.
 
 The honest cost of convergence is therefore: rung 1→2 is the deferred render restructuring; rung 2→3 is the substep interleave. Both at the same seam, no coordinator rewrite — but a ladder, not a single hop.
+
+**Escalation order, not a direct jump.** If the anti-phase limit cycle appears, lockstep (rung 3) is the *last* resort, not the first response. The cycle is drag-damped, so the first lever is **drag/compliance tuning** — increasing damping on the postural/contact bones to kill the oscillation at its energy source (§8.3). Only if tuning cannot damp it without making the contact read stiff do you climb to rung 3. Stated here so the ladder doesn't read as "oscillation → jump to lockstep."
 
 ### 3.4 Driver API sketch
 
@@ -136,16 +142,29 @@ The stored foreign array is **replaced every frame if present and cleared every 
 
 Concretely: `exchange()` calls the sink on **every** participant every frame — with an empty array when a system has no partners this frame — and the sink writes exactly that frame's foreign set (possibly empty) to the tail, zeroing the unused tail slots. There is no "no call = keep last." The sink's contract is total over frames.
 
-### 4.2 Tail write
+### 4.2 Tail write — once per frame, not per substep
 
-- Foreign colliders occupy sphere/capsule buffer indices `[authored+synthetic .. authored+synthetic+N)`.
+The foreign write happens **once per frame**, not per substep. This is provable from the code, not a convenience: `interpolateColliders` rewrites only the prefix `[0, previousSphereColliders.count)` = `[0, authored+synthetic)` (`SpringBoneComputeSystem.swift:2247-2248`) and never touches the reserved tail. So a foreign tail written once at the top of the frame **persists across all that frame's substeps**, untouched by interpolation. Because the foreign set is snap (fixed per frame), there is nothing to rewrite per substep.
+
+- Foreign colliders occupy sphere/capsule buffer indices `[authored+synthetic .. authored+synthetic+activeForeign)`, contiguous immediately after the synthetic region (no gap — the kernel's linear `0..<numSpheres` loop must hit exactly the active set).
 - Each foreign collider is written with `groupIndex = foreignGroupIndex` (§7).
-- Written **after** `interpolateColliders` each substep, so authored/synthetic colliders interpolate as today and foreign colliders snap to the frame's injected value.
-- `globalParams.numSpheres`/`numCapsules` for the dispatch cover authored+synthetic+active-foreign; inactive tail slots are excluded from the active count (not merely zeroed geometry) so the kernel never tests dead slots.
+- Written once per frame, after `exchange()` has injected the frame's foreign array and **before the first substep's collision dispatch** (top of `update()`'s substep processing). Foreign colliders snap; authored/synthetic interpolate per substep as today.
+
+**Three quantities that currently coincide must be deliberately separated** (they are all "the sphere count" today):
+
+| Quantity | Today | Under this design |
+|----------|-------|-------------------|
+| **Allocation capacity** (`allocateBuffers` size) | `authored+synthetic` | `authored+synthetic+N` (§6) |
+| **Count-guard reference** (`buffers.numSpheres`, guards `updateSphereColliders`) | `= allocation` | must equal the **active** count for the load-time authored-only upload, so the initial `populateSpringBoneData` upload isn't rejected by the `count == numSpheres` guard (`SpringBoneBuffers.swift:155`) |
+| **Kernel active count** (`globalParams.numSpheres`, bounds `for i in 0..<numSpheres`) | set **once at init** (`VRMModel.swift:1235`) | set **per frame** to `authored+synthetic+activeForeign`; constant across that frame's substeps because the foreign set is fixed per frame |
+
+Inactive reserved slots sit at indices `≥ globalParams.numSpheres`, so the kernel's `0..<numSpheres` loop **never reaches them** — they are excluded from the active count, not merely zeroed geometry. (A zeroed sphere still has a center and radius; gating on the count, not the geometry, is the difference between "dead slots ignored" and "dead slots colliding at the origin.") Making `globalParams.numSpheres` per-frame is a real new write point — the sink updates it before the substep loop. The §8.1 bit-identical non-interference test pins this: with zero active foreign, `globalParams.numSpheres` must equal the pre-design value exactly.
 
 ### 4.3 Interaction with the fallback path
 
 `updateAnimatedPositions` (`SpringBoneComputeSystem.swift:1515`) is the non-interpolation fallback. **v1 requires interpolation-on** (`VRMConstants.Physics.enableRootInterpolation == true`) for contact-group participants; foreign injection hooks only the interpolation path. Because foreign colliders snap (never interpolate), the fallback's interpolation concerns don't apply to them anyway — but v1 scopes cross-avatar contact to interpolation-on participants explicitly rather than dual-hooking both paths. Stated as a scope decision, not discovered.
+
+**Loud precondition, not silent no-contact.** Per the no-silent-caps principle governing this design, adding a participant whose `enableRootInterpolation` is off must **fail loudly** at `SpringBoneContactGroup.add()` — assert in debug and log in release — not silently produce no contact. A participant that yields to no one because of an unmet precondition is exactly the invisible coverage gap the design rejects elsewhere.
 
 ---
 
@@ -157,7 +176,7 @@ Skeleton-derived body colliders, from spec-standard humanoid bones (guaranteed p
 
 - **Torso:** a spine→chest capsule (**new geometry** — see §5.3).
 - **Upper arms:** capsules (reuse #309's arm segment generation).
-- **Head:** sphere/capsule (reuse #309's head generation).
+- **Head:** a brow capsule **and** a lateral skull sphere — both, exactly as #309 emits (`SpringBoneColliderAugmentor.swift:34`), so "reuse #309's head generation" is literal, not an either/or the generator must resolve.
 
 Bounded cardinality (~5–9 shapes), which is what makes the reserved-tail constant `N` a constant (§6) rather than a per-model unknown.
 
@@ -189,7 +208,8 @@ Its architectural footprint is one shape from the generator; its **risk is regis
 - The bit is OR'd into **every receiving spring bone's `colliderGroupMask`** at load (`populateSpringBoneData`).
 - **Safe when idle:** with no foreign colliders injected (empty tail, §4.1), the foreign bit matches nothing, so a non-participating avatar — or a participant with zero partners this frame — is unaffected.
 - **Single bit, all partners:** all injected foreign colliders carry the same foreign bit regardless of source partner. Per-partner *presence* is decided by coordinator membership (which partners' sets get unioned into this system), not by the bit. Per-partner *response* is a non-goal (§1) and unimplementable in the uniform-push kernel regardless of bits.
-- Ceiling note: two reserved bits total (synthetic + foreign) against a per-avatar 32-group ceiling that only binds at ≥31 *authored* groups — which no real VRM approaches.
+- Ceiling note: two reserved bits total (synthetic + foreign) against a per-avatar 32-group ceiling. The real headroom is `32 − authored − 1 (synthetic) − 1 (foreign)`; it only binds at ≥30 *authored* groups, which no real VRM approaches.
+- **The both-at-once avatar reserves both bits distinctly — they do not share.** An avatar that is *simultaneously* a #309 cloth user (its own springs collide with its own synthetic body colliders) *and* a contact-group participant (its springs collide with a partner's foreign body colliders) keeps the synthetic and foreign bits **separate**, so the total is genuinely 2 even in this composite case, not 3 and not a shared 1. The reason they must not share is behavioral, not just bookkeeping: swept (continuous) CCD is scoped to the synthetic group *only* (`sweptColliderGroupIndex`, #313 / CLAUDE invariant). Foreign contact colliders are discrete (snap, no sweep). If foreign shared the synthetic group index, foreign colliders would inherit swept CCD — deflecting contact chains the way authored CCD deflects the sleeve→arm chain. Distinct bits keep foreign in the discrete-collision regime where it belongs. The shared bone→capsule *generator* (§2.3) shares geometry; it does **not** imply a shared collision *group*.
 
 ---
 
@@ -215,7 +235,8 @@ Its architectural footprint is one shape from the generator; its **risk is regis
 
 ### 8.4 Determinism
 
-- Cross-avatar tests run on the synchronous/offline path (`config.synchronousSpringBone`) for bit-determinism, consistent with existing SpringBone conformance tests. Note the arm-swing guard's known flakiness under parallel execution.
+- Cross-avatar tests run on the synchronous/offline path (`config.synchronousSpringBone`) for bit-determinism, consistent with existing SpringBone conformance tests.
+- The new suite must **not** depend on the arm-swing guard (known-flaky under parallel execution) and must run single-threaded where determinism is asserted, so a pre-existing flaky guard never gates the cross-avatar suite.
 
 ---
 
