@@ -195,121 +195,31 @@ public enum SpringBoneColliderAugmentor {
         return out
     }
 
-    /// Derives the head reference radius `rHead` oracle-blind: the largest
-    /// authored sphere/insideSphere radius parented to the head node (the
-    /// author's own skull-scale hint), else `0.9 *` the head→neck length. Returns
-    /// `nil` when the head bone does not resolve or no radius can be derived.
-    private static func headReferenceRadius(
-        humanoid: VRMHumanoid,
-        model: VRMModel
-    ) -> (headNode: Int, rHead: Float)? {
-        guard let headNode = humanoid.getBoneNode(.head),
-              headNode >= 0, headNode < model.nodes.count else {
-            return nil
-        }
-        var rHead: Float = 0
-        if let colliders = model.springBone?.colliders {
-            for collider in colliders where collider.node == headNode {
-                switch collider.shape {
-                case .sphere(_, let radius), .insideSphere(_, let radius):
-                    if radius > rHead { rHead = radius }
-                default:
-                    continue
-                }
-            }
-        }
-        if rHead <= 0,
-           let neckNode = humanoid.getBoneNode(.neck), neckNode >= 0, neckNode < model.nodes.count {
-            let headPos = model.nodes[headNode].worldPosition
-            let neckPos = model.nodes[neckNode].worldPosition
-            rHead = 0.9 * simd_length(headPos - neckPos)
-        }
-        guard rHead > 0 else { return nil }
-        return (headNode, rHead)
-    }
-
-    /// Appends one synthetic skull SPHERE centered on the cranium to catch
-    /// lateral/temple hair strands that a midline forward brow capsule cannot
-    /// reach (#309 manifestation-1 lateral residual). Oracle-blind: center and
-    /// radius are fractions of `rHead` (the author's own skull estimate), never
-    /// of any oracle. Emitted as `.sphere` so it lands in the SEPARATE sphere
-    /// buffer and never disturbs the validated leg/head capsule buffer order. The
-    /// `offset` is head-local; the upload path re-applies the head world transform.
-    private static func appendHeadSkullSphere(
-        humanoid: VRMHumanoid,
-        model: VRMModel,
-        ratios: Ratios,
-        into out: inout [VRMCollider]
-    ) {
-        guard let (headNode, rHead) = headReferenceRadius(humanoid: humanoid, model: model) else {
-            return
-        }
-        // Center: head node + (head-local +Y up) × upFraction × rHead. Radius: a
-        // fraction of rHead. Both are pure ratios — no raw metres.
-        let offset = SIMD3<Float>(0, ratios.headSkullUpFraction * rHead, 0)
-        let radius = ratios.headSkullRadiusFraction * rHead
-        out.append(VRMCollider(node: headNode, shape: .sphere(offset: offset, radius: radius)))
-    }
-
-    /// Appends one forward head/brow capsule if the head bone resolves and a
-    /// reference radius can be derived. Oracle-blind: the reference radius is the
-    /// largest authored head sphere radius, else `0.9 *` the head→neck length.
     private static func appendHeadCapsule(
-        humanoid: VRMHumanoid,
-        model: VRMModel,
-        ratios: Ratios,
-        into out: inout [VRMCollider]
+        humanoid: VRMHumanoid, model: VRMModel, ratios: Ratios, into out: inout [VRMCollider]
     ) {
-        guard let (headNode, rHead) = headReferenceRadius(humanoid: humanoid, model: model) else {
-            return
+        if let c = SpringBoneBoneGeometry.headBrowCapsule(humanoid: humanoid, model: model, ratios: ratios) {
+            out.append(c)
         }
-
-        // Head-local axes: +Z forward (the parser normalizes VRM0 -Z facing to
-        // +Z), -Y down. Sweep from the upper-face forward to the brow.
-        let offset = SIMD3<Float>(0, ratios.headOffsetUpFraction * rHead, ratios.headOffsetFwdFraction * rHead)
-        let tail = SIMD3<Float>(0, -ratios.headDownFraction * rHead, ratios.headForwardFraction * rHead)
-        let radius = ratios.headRadiusFraction * rHead
-        out.append(VRMCollider(node: headNode, shape: .capsule(offset: offset, radius: radius, tail: tail)))
     }
 
-    /// Appends one end-to-end capsule for `segment` if both bones resolve.
-    private static func appendLimbCapsule(
-        _ segment: LimbSegment,
-        humanoid: VRMHumanoid,
-        model: VRMModel,
-        radiusFraction: Float,
-        into out: inout [VRMCollider]
+    private static func appendHeadSkullSphere(
+        humanoid: VRMHumanoid, model: VRMModel, ratios: Ratios, into out: inout [VRMCollider]
     ) {
-        guard let fromNode = humanoid.getBoneNode(segment.from),
-              fromNode >= 0, fromNode < model.nodes.count,
-              let toNode = humanoid.getBoneNode(segment.to),
-              toNode >= 0, toNode < model.nodes.count else {
-            return
+        if let c = SpringBoneBoneGeometry.headSkullSphere(humanoid: humanoid, model: model, ratios: ratios) {
+            out.append(c)
         }
+    }
 
-        let fromPos = model.nodes[fromNode].worldPosition
-        let toPos = model.nodes[toNode].worldPosition
-        let segWorld = toPos - fromPos
-        let length = simd_length(segWorld)
-        guard length > 1e-4 else { return }
-
-        // World delta → from-bone local frame, so the capsule tail tracks the
-        // bone under animation once the upload path re-applies the world rotation.
-        // Mirror the upload path's rotation extraction (upper-left 3x3 of
-        // worldMatrix); use the true inverse so the round-trip is exact even if
-        // the node carries scale.
-        let fromRot = upperLeft3x3(model.nodes[fromNode].worldMatrix)
-        // Skip degenerate bones: a zero/near-zero-scale node yields a singular
-        // rotation matrix, and `simd_inverse` of a singular matrix produces
-        // NaN/Inf — which would propagate a NaN capsule tail into the GPU spring
-        // sim. The length guard above only rules out zero-length segments, not a
-        // singular frame (a collapsed/hidden bone can still have a non-zero
-        // segment to its child via parent transforms).
-        guard abs(simd_determinant(fromRot)) > 1e-6 else { return }
-        let tailLocal = simd_inverse(fromRot) * segWorld
-
-        let radius = radiusFor(length: length, fromNode: fromNode, model: model, fraction: radiusFraction)
-        out.append(VRMCollider(node: fromNode, shape: .capsule(offset: .zero, radius: radius, tail: tailLocal)))
+    private static func appendLimbCapsule(
+        _ segment: LimbSegment, humanoid: VRMHumanoid, model: VRMModel,
+        radiusFraction: Float, into out: inout [VRMCollider]
+    ) {
+        if let c = SpringBoneBoneGeometry.limbCapsule(
+            fromBone: segment.from, toBone: segment.to, radiusFraction: radiusFraction,
+            humanoid: humanoid, model: model) {
+            out.append(c)
+        }
     }
 
     /// Appends one synthetic palm SPHERE per hand (left/right) if the hand and
@@ -341,53 +251,12 @@ public enum SpringBoneColliderAugmentor {
             // Forward (toward fingers) = the lower-arm→hand direction expressed in
             // the hand bone's local frame, so the offset rides over the palm under
             // animation once the upload path re-applies the hand's world rotation.
-            let handRot = upperLeft3x3(model.nodes[handNode].worldMatrix)
+            let handRot = SpringBoneBoneGeometry.upperLeft3x3(model.nodes[handNode].worldMatrix)
             guard abs(simd_determinant(handRot)) > 1e-6 else { continue }
             let forwardLocal = simd_normalize(simd_inverse(handRot) * segWorld)
             let offset = forwardLocal * (ratios.handSphereForwardFraction * length)
             let radius = ratios.handSphereRadiusFraction * length
             out.append(VRMCollider(node: handNode, shape: .sphere(offset: offset, radius: radius)))
         }
-    }
-
-    /// Derives the capsule radius oracle-blind: the larger of the author's scale
-    /// hint (largest authored sphere/insideSphere radius parented to `fromNode`)
-    /// and a fraction-of-length floor that guarantees the capsule encloses the
-    /// limb skin.
-    private static func radiusFor(
-        length: Float,
-        fromNode: Int,
-        model: VRMModel,
-        fraction: Float
-    ) -> Float {
-        let fractionFloor = length * fraction
-        let authoredHint = maxAuthoredSphereRadius(parentedTo: fromNode, model: model)
-        return max(authoredHint, fractionFloor)
-    }
-
-    /// Largest authored sphere/insideSphere radius among authored colliders
-    /// parented to `node`. Returns 0 when none exist.
-    private static func maxAuthoredSphereRadius(parentedTo node: Int, model: VRMModel) -> Float {
-        guard let colliders = model.springBone?.colliders else { return 0 }
-        var best: Float = 0
-        for collider in colliders where collider.node == node {
-            switch collider.shape {
-            case .sphere(_, let radius), .insideSphere(_, let radius):
-                if radius > best { best = radius }
-            default:
-                continue
-            }
-        }
-        return best
-    }
-
-    /// Extracts the upper-left 3x3 rotation/scale block of a 4x4 world matrix,
-    /// mirroring the upload path in `SpringBoneComputeSystem`.
-    private static func upperLeft3x3(_ m: float4x4) -> simd_float3x3 {
-        return simd_float3x3(
-            SIMD3<Float>(m[0][0], m[0][1], m[0][2]),
-            SIMD3<Float>(m[1][0], m[1][1], m[1][2]),
-            SIMD3<Float>(m[2][0], m[2][1], m[2][2])
-        )
     }
 }
