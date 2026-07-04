@@ -60,10 +60,35 @@ final class SpringBoneContactColliderSetTests: XCTestCase {
         let humanoid = try XCTUnwrap(model.humanoid)
         let ratios = SpringBoneColliderAugmentor.Ratios()
         let brow = try XCTUnwrap(SpringBoneBoneGeometry.headBrowCapsule(humanoid: humanoid, model: model, ratios: ratios))
+        let skull = try XCTUnwrap(SpringBoneBoneGeometry.headSkullSphere(humanoid: humanoid, model: model, ratios: ratios))
+        guard case let .capsule(browOffset, browRadius, browTail) = brow.shape else {
+            return XCTFail("augmentor brow primitive is not a capsule")
+        }
+        guard case let .sphere(skullOffset, skullRadius) = skull.shape else {
+            return XCTFail("augmentor skull primitive is not a sphere")
+        }
+
         let set = SpringBoneContactColliderSet.synthesize(model: model)
         let setBrow = set.first {
             if case .capsule = $0.shape, $0.node == brow.node { return true } else { return false }
         }
-        XCTAssertNotNil(setBrow, "contact set includes the same brow capsule the augmentor emits")
+        let setSkull = set.first {
+            if case .sphere = $0.shape, $0.node == skull.node { return true } else { return false }
+        }
+        let browCollider = try XCTUnwrap(setBrow, "contact set includes the same brow capsule the augmentor emits")
+        let skullCollider = try XCTUnwrap(setSkull, "contact set includes the same skull sphere the augmentor emits")
+
+        guard case let .capsule(setBrowOffset, setBrowRadius, setBrowTail) = browCollider.shape else {
+            return XCTFail("contact-set brow primitive is not a capsule")
+        }
+        XCTAssertEqual(setBrowOffset, browOffset, "brow capsule offset must match the augmentor's geometry")
+        XCTAssertEqual(setBrowRadius, browRadius, "brow capsule radius must match the augmentor's geometry")
+        XCTAssertEqual(setBrowTail, browTail, "brow capsule tail must match the augmentor's geometry")
+
+        guard case let .sphere(setSkullOffset, setSkullRadius) = skullCollider.shape else {
+            return XCTFail("contact-set skull primitive is not a sphere")
+        }
+        XCTAssertEqual(setSkullOffset, skullOffset, "skull sphere offset must match the augmentor's geometry")
+        XCTAssertEqual(setSkullRadius, skullRadius, "skull sphere radius must match the augmentor's geometry")
     }
 }
