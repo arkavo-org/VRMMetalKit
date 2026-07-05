@@ -173,6 +173,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Previous-frame global params for wake-on-force-change detection.
     private var previousGlobalParamsForSleep: SpringBoneGlobalParams?
     private var previousQualityForSleep: VRMConstants.SpringBoneQuality?
+    /// Previous-frame foreign (cross-avatar) collider set, for wake-on-foreign
+    /// detection (F1). A moving or newly-appeared partner body wakes settled
+    /// chains that the own-motion heuristics would otherwise leave asleep.
+    private var previousForeignForSleep: ForeignColliderSnapshot = ForeignColliderSnapshot()
     /// True when an explicit wake has been requested and not yet processed.
     private var forceWakePending: Bool = false
 
@@ -999,6 +1003,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return true
         }
 
+        // Foreign (cross-avatar) colliders wake physics too: a settled avatar
+        // must react to a partner leaning in — the own-motion checks above never
+        // see the partner's body (F1, cross-avatar collision final review).
+        if foreignCollidersChanged(previous: previousForeignForSleep,
+                                   current: pendingForeignSnapshot,
+                                   threshold: motionThreshold) {
+            return true
+        }
+
         // External force / wind / character-velocity / drag changes wake physics.
         if let prev = previousGlobalParamsForSleep {
             if simd_distance(prev.gravity, globalParams.gravity) > 0.001 ||
@@ -1032,6 +1045,27 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                abs(previous[i].radius - current[i].radius) > threshold {
                 return true
             }
+        }
+        return false
+    }
+
+    /// Foreign (cross-avatar) colliders wake physics like authored colliders do:
+    /// a changed count (partner appears/leaves) or motion beyond `threshold`
+    /// (partner moving relative to this avatar) wakes settled chains (F1). A
+    /// static, unchanging foreign set does NOT wake — chains that already
+    /// deflected against it may sleep, so sustained contact doesn't pin the
+    /// whole crowd awake.
+    private func foreignCollidersChanged(previous: ForeignColliderSnapshot,
+                                         current: ForeignColliderSnapshot,
+                                         threshold: Float) -> Bool {
+        if previous.spheres.count != current.spheres.count { return true }
+        if previous.capsules.count != current.capsules.count { return true }
+        for i in current.spheres.indices {
+            if simd_distance(previous.spheres[i].center, current.spheres[i].center) > threshold { return true }
+        }
+        for i in current.capsules.indices {
+            if simd_distance(previous.capsules[i].p0, current.capsules[i].p0) > threshold ||
+               simd_distance(previous.capsules[i].p1, current.capsules[i].p1) > threshold { return true }
         }
         return false
     }
@@ -1084,6 +1118,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         previousPlaneCollidersForSleep = targetPlaneColliders
         previousGlobalParamsForSleep = globalParams
         previousQualityForSleep = quality
+        previousForeignForSleep = pendingForeignSnapshot
     }
 
     /// Transforms additive synthetic colliders (issue #309) into world space and
