@@ -32,6 +32,7 @@ enum VideoRenderError: Error {
     case videoEncodingFailed
     case missingArguments
     case fileNotFound(String)
+    case commandBufferFailed(frame: Int, message: String)
 }
 
 // MARK: - Matrix Utilities
@@ -835,6 +836,15 @@ struct VRMVideoRendererCLI {
             // Wait for completion (can't use waitUntilCompleted in async context)
             while commandBuffer.status != .completed && commandBuffer.status != .error {
                 await Task.yield()
+            }
+
+            // A GPU error means the resolve texture holds garbage; don't append a
+            // corrupt frame — fail loudly rather than silently encode it. The pixel
+            // buffer is not locked until copyTextureToPixelBuffer below, so nothing
+            // to release here.
+            if commandBuffer.status == .error {
+                throw VideoRenderError.commandBufferFailed(frame: frameIndex,
+                    message: commandBuffer.error?.localizedDescription ?? "unknown GPU error")
             }
 
             copyTextureToPixelBuffer(pipeline.resolveTexture, to: pixelBuffer, device: device, commandBuffer: commandBuffer)

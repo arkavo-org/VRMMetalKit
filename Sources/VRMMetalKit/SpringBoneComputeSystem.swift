@@ -363,6 +363,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// rewrites the [0, active) prefix, so the tail persists across the frame's
     /// substeps (design §4.2).
     private func writeForeignTail(buffers: SpringBoneBuffers) {
+        // No valid foreign group was reserved: `foreignColliderGroupIndex` is the
+        // 0xFFFFFFFF sentinel (model has >=30 authored collider groups, so the
+        // group-bit carve-out zeroed the bone-side foreign bit). Foreign colliders
+        // cannot be safely tagged here — the shader's `1u << groupIndex` on the
+        // sentinel is undefined (reduces to bit 31, aliasing an authored/synthetic
+        // group). Drop them: that model simply receives no cross-avatar contact,
+        // consistent with the zeroed foreign bit.
+        guard foreignColliderGroupIndex != 0xFFFFFFFF else {
+            activeForeignSpheres = 0
+            activeForeignCapsules = 0
+            return
+        }
         let sphereRoom = max(buffers.sphereCapacity - buffers.numSpheres, 0)
         let capsuleRoom = max(buffers.capsuleCapacity - buffers.numCapsules, 0)
 
