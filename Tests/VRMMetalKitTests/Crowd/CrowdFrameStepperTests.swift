@@ -20,11 +20,11 @@ import simd
 @testable import VRMMetalKit
 
 final class CrowdFrameStepperTests: XCTestCase {
-    @MainActor private func avatar(_ device: MTLDevice, index: Int) async throws -> CrowdFrameStepper.Avatar {
+    @MainActor private func avatar(_ device: MTLDevice, index: Int, sampleCount: Int = 1) async throws -> CrowdFrameStepper.Avatar {
         let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
             options: VRMLoadingOptions(augmentSpringBoneColliders: true))
-        var config = RendererConfig(); config.synchronousSpringBone = true
+        var config = RendererConfig(); config.synchronousSpringBone = true; config.sampleCount = sampleCount
         let r = VRMRenderer(device: device, config: config)
         r.loadModel(model); r.enableSpringBone = true
         // Minimal no-op player (no VRMA needed for headless pose/exchange checks).
@@ -137,6 +137,121 @@ final class CrowdFrameStepperTests: XCTestCase {
             }
         }
         XCTAssertTrue(drew, "composite must render at least one avatar (non-clear pixels)")
+    }
+
+    /// Real MSAA+resolve path (design's actual executable shape, unlike the
+    /// single-sample smoke test above): two avatars placed on opposite sides of
+    /// the frame must BOTH survive compositing into a shared 4x MSAA target that
+    /// resolves once at the end. Before the storeAction fix, the first avatar's
+    /// pass only had `storeAction = .multisampleResolve` (never `.store`), so its
+    /// MSAA color/depth samples were never written back; the second avatar's
+    /// `.load` then read undefined backing memory (commonly zero-filled, i.e.
+    /// black — NOT the clear-gray background), and its own resolve pass
+    /// overwrote the ENTIRE resolve texture with [undefined + avatar B], erasing
+    /// avatar A. A naive "differs from clear-gray" pixel check does not catch
+    /// this: undefined/black content already differs from gray, so it passes
+    /// even when avatar A is missing. Instead this test compares each half of
+    /// the composite against a SOLO render of that avatar alone (the N=1 path,
+    /// correct under both old and new code, since first==last there) — an exact
+    /// match proves the pair composite actually preserved that avatar's pixels
+    /// rather than merely showing "something non-gray."
+    @MainActor func testMSAACompositeRendersBothAvatarsAcrossFrameHalves() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0, sampleCount: 4)
+        let b = try await avatar(device, index: 1, sampleCount: 4)
+        for av in [a, b] {
+            // Spring bones tick on wall-clock time inside each draw call, which
+            // would make repeated re-renders (solo references vs. pair
+            // composite, below) diverge by a few hair-jitter pixels for reasons
+            // unrelated to compositing. Disable so all renders below are
+            // pixel-reproducible and any diff is attributable to the store
+            // action bug under test, not physics timing.
+            av.renderer.enableSpringBone = false
+            av.renderer.projectionMatrix = perspectiveTest(aspect: 1)
+            av.renderer.viewMatrix = lookAtTest(eye: SIMD3<Float>(0, 1.3, 3.5),
+                                                center: SIMD3<Float>(0, 1.3, 0), up: SIMD3<Float>(0, 1, 0))
+        }
+        // Hold at wide half-separation (~0.6m each side) so each avatar occupies
+        // a distinct half of the frame.
+        let driver = CrowdMotionDriver(startSep: 0.6, holdSep: 0.6,
+            approachStart: 0.0, approachEnd: 0.1, holdEnd: 0.9, partEnd: 1.0)
+        let pairStepper = CrowdFrameStepper(avatars: [a, b], driver: driver, group: nil, fps: 60)
+        // Pose both avatars once; solo reference renders below reuse this exact
+        // pose (they draw, not step, so no re-posing/animation drift occurs).
+        pairStepper.step(frameTime: 0.5)
+
+        let w = 128, h = 128
+        let queue = device.makeCommandQueue()!
+
+        func makeTargets() -> (msaaColor: MTLTexture, msaaDepth: MTLTexture, resolve: MTLTexture, rpd: MTLRenderPassDescriptor) {
+            let msaaColorDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+            msaaColorDesc.textureType = .type2DMultisample
+            msaaColorDesc.sampleCount = 4
+            msaaColorDesc.usage = [.renderTarget]
+            msaaColorDesc.storageMode = .private
+            let msaaColor = device.makeTexture(descriptor: msaaColorDesc)!
+
+            let msaaDepthDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .depth32Float, width: w, height: h, mipmapped: false)
+            msaaDepthDesc.textureType = .type2DMultisample
+            msaaDepthDesc.sampleCount = 4
+            msaaDepthDesc.usage = [.renderTarget]
+            msaaDepthDesc.storageMode = .private
+            let msaaDepth = device.makeTexture(descriptor: msaaDepthDesc)!
+
+            let resolveDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h, mipmapped: false)
+            resolveDesc.usage = [.renderTarget, .shaderRead]
+            resolveDesc.storageMode = .shared
+            let resolve = device.makeTexture(descriptor: resolveDesc)!
+
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = msaaColor
+            rpd.colorAttachments[0].resolveTexture = resolve
+            rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1)
+            rpd.colorAttachments[0].storeAction = .multisampleResolve
+            rpd.depthAttachment.texture = msaaDepth
+            rpd.depthAttachment.clearDepth = 1.0
+            rpd.depthAttachment.storeAction = .dontCare
+            return (msaaColor, msaaDepth, resolve, rpd)
+        }
+
+        func renderAndReadback(_ stepper: CrowdFrameStepper) async -> [UInt8] {
+            let targets = makeTargets()
+            let cb = queue.makeCommandBuffer()!
+            stepper.drawComposite(color: targets.msaaColor, depth: targets.msaaDepth,
+                                  commandBuffer: cb, renderPassDescriptor: targets.rpd)
+            await withCheckedContinuation { continuation in
+                cb.addCompletedHandler { _ in continuation.resume() }
+                cb.commit()
+            }
+            var pixels = [UInt8](repeating: 0, count: w * h * 4)
+            targets.resolve.getBytes(&pixels, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+            return pixels
+        }
+
+        // Solo references (N=1: first == last, identical old/new code path) at
+        // the SAME already-posed transforms as the pair composite above.
+        let refA = await renderAndReadback(CrowdFrameStepper(avatars: [a], driver: driver, group: nil, fps: 60))
+        let refB = await renderAndReadback(CrowdFrameStepper(avatars: [b], driver: driver, group: nil, fps: 60))
+        // Actual: both avatars composited into one shared MSAA target — the
+        // code path under test.
+        let pairPixels = await renderAndReadback(pairStepper)
+
+        func halfMatchesReference(_ actual: [UInt8], _ reference: [UInt8], xRange: Range<Int>) -> Bool {
+            for y in 0..<h {
+                for x in xRange {
+                    let i = (y * w + x) * 4
+                    for c in 0..<3 {
+                        if abs(Int(actual[i + c]) - Int(reference[i + c])) > 4 { return false }
+                    }
+                }
+            }
+            return true
+        }
+
+        XCTAssertTrue(halfMatchesReference(pairPixels, refA, xRange: 0..<(w / 2)),
+            "left half (avatar A, drawn FIRST/non-last) must match its solo render — composite must not lose/corrupt it")
+        XCTAssertTrue(halfMatchesReference(pairPixels, refB, xRange: (w / 2)..<w),
+            "right half (avatar B, drawn LAST) must match its solo render")
     }
 
     // Local camera helpers (avoid depending on the executable's private helpers).

@@ -824,8 +824,9 @@ struct VRMVideoRendererCLI {
             rpd.depthAttachment.clearDepth = 1.0
             rpd.depthAttachment.storeAction = .dontCare
 
-            // drawComposite sets loadAction per avatar (clear on the first, load on
-            // the rest) so all N avatars accumulate in one frame.
+            // drawComposite overrides loadAction/storeAction per avatar (clear+load
+            // for load, store+resolve for store) so all N avatars accumulate in one
+            // frame before the final pass resolves into resolveTexture.
             stepper.drawComposite(color: pipeline.msaaColorTexture, depth: pipeline.msaaDepthTexture,
                                   commandBuffer: commandBuffer, renderPassDescriptor: rpd)
 

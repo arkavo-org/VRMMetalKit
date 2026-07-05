@@ -86,19 +86,26 @@ public final class CrowdFrameStepper {
         group?.exchange()
     }
 
-    /// Phase 3: composite every avatar into `color`/`depth`. First avatar clears,
-    /// the rest load, so all N accumulate in one frame (design §3).
+    /// Phase 3: composite every avatar into `color`/`depth`. Each avatar is a
+    /// separate render pass into the SAME MSAA `color`/`depth` textures, so the
+    /// store-action contract matters as much as the load-action one: an
+    /// intermediate pass's `.load` only sees a prior avatar's pixels if that
+    /// prior pass actually stored the MSAA color+depth (not just resolved or
+    /// discarded them). First avatar clears, the rest load; every avatar except
+    /// the last stores MSAA color+depth so the next pass's `.load` is valid; only
+    /// the last pass resolves color into the caller's resolve texture and
+    /// discards MSAA depth, since nothing reads either after the frame (design
+    /// §3).
     @MainActor
     public func drawComposite(color: MTLTexture, depth: MTLTexture,
                               commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
         for (i, avatar) in avatars.enumerated() {
-            if i == 0 {
-                renderPassDescriptor.colorAttachments[0].loadAction = .clear
-                renderPassDescriptor.depthAttachment.loadAction = .clear
-            } else {
-                renderPassDescriptor.colorAttachments[0].loadAction = .load
-                renderPassDescriptor.depthAttachment.loadAction = .load
-            }
+            let isFirst = i == 0
+            let isLast = i == avatars.count - 1
+            renderPassDescriptor.colorAttachments[0].loadAction = isFirst ? .clear : .load
+            renderPassDescriptor.depthAttachment.loadAction = isFirst ? .clear : .load
+            renderPassDescriptor.colorAttachments[0].storeAction = isLast ? .multisampleResolve : .store
+            renderPassDescriptor.depthAttachment.storeAction = isLast ? .dontCare : .store
             avatar.renderer.drawOffscreenHeadless(
                 to: color, depth: depth, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
         }
