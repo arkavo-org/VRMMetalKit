@@ -29,6 +29,9 @@ public final class SpringBoneContactGroup {
     private struct Member {
         let system: SpringBoneComputeSystem
         let model: VRMModel
+        /// Per-source firmness (subsystem 4): how firmly THIS avatar's body
+        /// pushes others' spring bones. 1.0 = full (default), 0.0 = ghost.
+        var responseScale: Float = 1.0
     }
     private var members: [Member] = []
 
@@ -60,6 +63,16 @@ public final class SpringBoneContactGroup {
         system.setForeignColliders(ForeignColliderSnapshot())
     }
 
+    /// Sets how firmly `system`'s avatar body pushes OTHER participants' spring
+    /// bones (subsystem 4, per-source): 1.0 = full (default), 0.5 = gentle,
+    /// 0.0 = ghost. Not `public` (takes the internal system); app code calls it
+    /// through `VRMRenderer.setContactResponseScale(_:in:)`.
+    func setResponseScale(_ scale: Float, for system: SpringBoneComputeSystem) {
+        for i in members.indices where members[i].system === system {
+            members[i].responseScale = max(0, min(scale, 1))
+        }
+    }
+
     /// Phase 1 (snapshot all) + Phase 2 (inject union-minus-self). Precondition
     /// (design §3.2): call after ALL participants' node transforms are in their
     /// last-frame-committed state — the caller sequences this after every
@@ -80,8 +93,12 @@ public final class SpringBoneContactGroup {
             var spheres: [SphereCollider] = []
             var capsules: [CapsuleCollider] = []
             for j in Self.nearestPartnerIndices(positions: positions, for: i, count: k) {
-                spheres.append(contentsOf: snapshots[j].spheres)
-                capsules.append(contentsOf: snapshots[j].capsules)
+                // Tag each partner's colliders with THAT partner's firmness
+                // (per-source), so avatar i yields to a gentle partner softly and
+                // a firm partner firmly (subsystem 4).
+                let scale = members[j].responseScale
+                spheres.append(contentsOf: snapshots[j].spheres.map { var s = $0; s.responseScale = scale; return s })
+                capsules.append(contentsOf: snapshots[j].capsules.map { var c = $0; c.responseScale = scale; return c })
             }
             member.system.setForeignColliders(ForeignColliderSnapshot(spheres: spheres, capsules: capsules))
         }

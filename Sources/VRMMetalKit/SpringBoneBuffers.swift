@@ -281,6 +281,12 @@ public struct SphereCollider: Sendable {
     /// (joints pushed *inside* the sphere — from
     /// `VRMC_springBone_extended_collider.shape.sphere.inside = true`).
     public var inside: UInt32
+    /// Per-partner response scale (subsystem 4): scales how firmly this collider
+    /// pushes a joint out. `1.0` = full push (default), `0.5` = gentle, `0.0` =
+    /// ghost (no push). The cross-avatar coordinator sets it per partner; authored
+    /// and synthetic colliders keep the default `1.0`, so the layout's former
+    /// padding word now carries it without changing the struct stride.
+    public var responseScale: Float = 1.0
 
     /// Creates an outside-collision sphere collider at the given centre and radius.
     public init(center: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
@@ -318,6 +324,10 @@ public struct CapsuleCollider: Sendable {
     /// (joints pushed *inside* the capsule — from
     /// `VRMC_springBone_extended_collider.shape.capsule.inside = true`).
     public var inside: UInt32
+    /// Per-partner response scale (subsystem 4): scales how firmly this collider
+    /// pushes a joint out. `1.0` = full (default), `0.0` = ghost. Set per partner
+    /// by the cross-avatar coordinator; fills the struct's former padding word.
+    public var responseScale: Float = 1.0
 
     /// Creates an outside-collision capsule collider.
     public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {

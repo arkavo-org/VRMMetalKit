@@ -23,6 +23,7 @@ struct SphereCollider {
     float radius;
     uint groupIndex;  // Index of collision group this collider belongs to
     uint inside;      // 0 = outside-collision (default), 1 = containment (joint pushed inside)
+    float responseScale; // subsystem 4: per-partner push scale (1=full, 0=ghost)
 };
 
 struct CapsuleCollider {
@@ -31,6 +32,7 @@ struct CapsuleCollider {
     float radius;
     uint groupIndex;  // Index of collision group this collider belongs to
     uint inside;      // 0 = outside-collision (default), 1 = containment (joint pushed inside)
+    float responseScale; // subsystem 4: per-partner push scale (1=full, 0=ghost)
 };
 
 struct PlaneCollider {
@@ -118,7 +120,7 @@ float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadi
             // surface instead of being snapped back to its entry point.
             float penetration = R - distance;
             float3 outward = toCenter / max(distance, epsilon);
-            result += outward * penetration;
+            result += outward * penetration * sphere.responseScale;
         } else {
             // Endpoint is OUTSIDE — discrete collision would see nothing. Sweep
             // the segment prevPos → result and, only if it TUNNELED through
@@ -315,7 +317,7 @@ float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRad
             // normal. Identical to the pre-CCD behaviour (sliding preserved).
             float penetration = R - distance;
             float3 outward = toClosest / max(distance, epsilon);
-            result += outward * penetration;
+            result += outward * penetration * capsule.responseScale;
         } else if (capsule.groupIndex == sweptGroupIndex) {
             // Endpoint OUTSIDE — discrete sees nothing. Sweep prevPos → result
             // against the inflated capsule (synthetic group only) and, if it

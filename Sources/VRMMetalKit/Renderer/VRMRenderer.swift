@@ -686,6 +686,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         group.remove(system: system)
     }
 
+    /// Sets how firmly this avatar's body pushes OTHER participants' hair/cloth in
+    /// a contact group (subsystem 4, per-source): 1.0 = full (default), 0.5 =
+    /// gentle, 0.0 = ghost (present but no push). Call after `joinContactGroup`.
+    public func setContactResponseScale(_ scale: Float, in group: SpringBoneContactGroup) {
+        guard let system = springBoneComputeSystem else { return }
+        group.setResponseScale(scale, for: system)
+    }
+
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
     private static let zeroMorphWeights = [Float](repeating: 0, count: 8)
     private var hasLoggedSpringBone = false

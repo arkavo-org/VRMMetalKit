@@ -396,17 +396,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if let buf = buffers.sphereColliders, !spheres.isEmpty {
             let ptr = buf.contents().bindMemory(to: SphereCollider.self, capacity: buffers.sphereCapacity)
             for (i, s) in spheres.enumerated() {
-                ptr[buffers.numSpheres + i] = SphereCollider(center: s.center, radius: s.radius,
-                                                             groupIndex: foreignColliderGroupIndex,
-                                                             inside: s.inside != 0)
+                // Re-tag the foreign group in place, preserving every other field
+                // (radius, inside, and the per-partner responseScale — subsystem 4).
+                var tagged = s
+                tagged.groupIndex = foreignColliderGroupIndex
+                ptr[buffers.numSpheres + i] = tagged
             }
         }
         if let buf = buffers.capsuleColliders, !capsules.isEmpty {
             let ptr = buf.contents().bindMemory(to: CapsuleCollider.self, capacity: buffers.capsuleCapacity)
             for (i, c) in capsules.enumerated() {
-                ptr[buffers.numCapsules + i] = CapsuleCollider(p0: c.p0, p1: c.p1, radius: c.radius,
-                                                              groupIndex: foreignColliderGroupIndex,
-                                                              inside: c.inside != 0)
+                var tagged = c
+                tagged.groupIndex = foreignColliderGroupIndex
+                ptr[buffers.numCapsules + i] = tagged
             }
         }
         activeForeignSpheres = spheres.count
