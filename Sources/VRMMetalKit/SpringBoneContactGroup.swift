@@ -49,9 +49,15 @@ public final class SpringBoneContactGroup {
         members.append(Member(system: system, model: model))
     }
 
-    /// Not `public`: see `add(system:model:)`.
+    /// Not `public`: see `add(system:model:)`. Clears the departing system's
+    /// injected foreign colliders (`setForeignColliders` docs: "a departed
+    /// partner leaves no ghost") — `exchange()` never revisits a removed
+    /// member, so without this the last-injected tail would persist
+    /// indefinitely. Every removal path goes through here, so this is the
+    /// coordinator's contract, not the caller's (design §4.1, §8.1).
     func remove(system: SpringBoneComputeSystem) {
         members.removeAll { $0.system === system }
+        system.setForeignColliders(ForeignColliderSnapshot())
     }
 
     /// Phase 1 (snapshot all) + Phase 2 (inject union-minus-self). Precondition

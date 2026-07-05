@@ -68,5 +68,6 @@ final class CrowdContactSeamTests: XCTestCase {
             r.springBoneComputeSystem?.waitForPendingFrame()
         }
         XCTAssertEqual(a.springBoneComputeSystem?.activeForeignCapsules, 0, "left group => no foreign")
+        XCTAssertEqual(b.springBoneComputeSystem?.activeForeignCapsules, 0, "left group => no foreign (b)")
     }
 }

@@ -669,7 +669,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///
     /// The internal `SpringBoneComputeSystem` (per-model simulation state) is
     /// never exposed; this seam hands the coordinator only the membership handle.
-    /// Validated against offline-synchronous single-caller usage
+    /// Intended for offline-synchronous single-caller use
     /// (`VRMVideoRenderer --crowd`); real-time / async multi-caller ordering is
     /// unproven — see the crowd-collision design §2.2.
     public func joinContactGroup(_ group: SpringBoneContactGroup) {
@@ -677,15 +677,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         group.add(system: system, model: model)
     }
 
-    /// Removes this renderer's spring-bone system from a contact group. Also
-    /// clears any previously-injected foreign colliders on this system
-    /// (`setForeignColliders` docs: "a departed partner leaves no ghost") —
-    /// `exchange()` never revisits a removed member, so without this the last
-    /// injected tail would persist indefinitely.
+    /// Removes this renderer's spring-bone system from a contact group.
+    /// `SpringBoneContactGroup.remove(system:)` clears any previously-injected
+    /// foreign colliders on this system as part of its own contract.
     public func leaveContactGroup(_ group: SpringBoneContactGroup) {
         guard let system = springBoneComputeSystem else { return }
         group.remove(system: system)
-        system.setForeignColliders(ForeignColliderSnapshot())
     }
 
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
