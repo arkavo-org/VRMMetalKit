@@ -115,6 +115,11 @@ func printUsage() {
                                 with an additive directional rim
         --rim-power <float>     Fresnel exponent for silhouette rim
                                 (typical 4..12, default: 5)
+        --crowd                 Render multiple avatars approaching/touching
+        --avatar-count N        Avatars in the crowd (default 2)
+        --crowd-start-sep M     Start half-separation in meters (default 1.0)
+        --crowd-hold-sep M      Hold half-separation in meters (default 0.18)
+        --crowd-no-contact      Disable cross-avatar collision (before/after baseline)
         --help                  Show this help message
 
     EXAMPLES:
@@ -172,6 +177,11 @@ struct RenderOptions {
     var heroLighting: Bool = false
     var silhouette: Bool = false
     var rimPower: Float = 5.0
+    var crowd: Bool = false
+    var avatarCount: Int = 2
+    var crowdStartSep: Float = 1.0      // half-separation at start (meters)
+    var crowdHoldSep: Float = 0.18      // half-separation at hold (the tunable half of the coupled pair)
+    var crowdNoContact: Bool = false
 }
 
 func parseArguments() -> RenderOptions? {
@@ -253,6 +263,19 @@ func parseArguments() -> RenderOptions? {
             if i < args.count, let val = Float(args[i]) {
                 options.rimPower = max(0, val)
             }
+        case "--crowd":
+            options.crowd = true
+        case "--avatar-count":
+            i += 1; guard i < args.count else { return nil }
+            options.avatarCount = max(2, Int(args[i]) ?? 2)
+        case "--crowd-start-sep":
+            i += 1; guard i < args.count else { return nil }
+            options.crowdStartSep = Float(args[i]) ?? options.crowdStartSep
+        case "--crowd-hold-sep":
+            i += 1; guard i < args.count else { return nil }
+            options.crowdHoldSep = Float(args[i]) ?? options.crowdHoldSep
+        case "--crowd-no-contact":
+            options.crowdNoContact = true
         default:
             break
         }
@@ -301,6 +324,172 @@ func copyTextureToPixelBuffer(_ texture: MTLTexture, to pixelBuffer: CVPixelBuff
     )
 }
 
+// MARK: - Video Pipeline
+
+/// The MSAA render targets, AVAssetWriter, and command queue shared by both
+/// the single-avatar and crowd render loops.
+struct VideoPipeline {
+    let resolveTexture: MTLTexture
+    let msaaColorTexture: MTLTexture
+    let msaaDepthTexture: MTLTexture
+    let videoWriter: AVAssetWriter
+    let writerInput: AVAssetWriterInput
+    let adaptor: AVAssetWriterInputPixelBufferAdaptor
+    let sharedCommandQueue: MTLCommandQueue
+    let frameDuration: CMTime
+    let totalFrames: Int
+}
+
+func makeVideoPipeline(options: RenderOptions, device: MTLDevice, sampleCount: Int) throws -> VideoPipeline {
+    // Create resolve texture (final output, non-multisampled)
+    // Use BGRA format to match AVFoundation's pixel buffer format (kCVPixelFormatType_32BGRA)
+    let resolveDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .bgra8Unorm,
+        width: options.width,
+        height: options.height,
+        mipmapped: false
+    )
+    resolveDescriptor.usage = [.renderTarget, .shaderRead]
+    resolveDescriptor.storageMode = .managed
+
+    guard let resolveTexture = device.makeTexture(descriptor: resolveDescriptor) else {
+        throw VideoRenderError.failedToCreateTexture
+    }
+
+    // Create multisample color texture for MSAA rendering
+    let msaaColorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .bgra8Unorm,
+        width: options.width,
+        height: options.height,
+        mipmapped: false
+    )
+    msaaColorDescriptor.textureType = .type2DMultisample
+    msaaColorDescriptor.sampleCount = sampleCount
+    msaaColorDescriptor.usage = .renderTarget
+    msaaColorDescriptor.storageMode = .private
+
+    guard let msaaColorTexture = device.makeTexture(descriptor: msaaColorDescriptor) else {
+        throw VideoRenderError.failedToCreateTexture
+    }
+
+    // Create multisample depth texture
+    let msaaDepthDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .depth32Float,
+        width: options.width,
+        height: options.height,
+        mipmapped: false
+    )
+    msaaDepthDescriptor.textureType = .type2DMultisample
+    msaaDepthDescriptor.sampleCount = sampleCount
+    msaaDepthDescriptor.usage = .renderTarget
+    msaaDepthDescriptor.storageMode = .private
+
+    guard let msaaDepthTexture = device.makeTexture(descriptor: msaaDepthDescriptor) else {
+        throw VideoRenderError.failedToCreateTexture
+    }
+
+    // Setup video writer
+    print("📝 Setting up video encoder...")
+    let outputURL = URL(fileURLWithPath: options.outputPath)
+    // AVAssetWriter.init throws if the path already exists; remove first.
+    if FileManager.default.fileExists(atPath: options.outputPath) {
+        try FileManager.default.removeItem(at: outputURL)
+    }
+    let videoWriter = try AVAssetWriter(url: outputURL, fileType: .mov)
+
+    let videoSettings: [String: Any] = [
+        AVVideoCodecKey: options.hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
+        AVVideoWidthKey: options.width,
+        AVVideoHeightKey: options.height,
+        AVVideoCompressionPropertiesKey: [
+            AVVideoAverageBitRateKey: options.width * options.height * 4,
+            AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+        ]
+    ]
+
+    let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+    writerInput.expectsMediaDataInRealTime = false
+
+    let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+        assetWriterInput: writerInput,
+        sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+            kCVPixelBufferWidthKey as String: options.width,
+            kCVPixelBufferHeightKey as String: options.height
+        ]
+    )
+
+    videoWriter.add(writerInput)
+    guard videoWriter.startWriting() else {
+        throw VideoRenderError.videoEncodingFailed
+    }
+    videoWriter.startSession(atSourceTime: .zero)
+
+    let frameDuration = CMTime(value: 1, timescale: CMTimeScale(options.fps))
+    let totalFrames = Int(options.duration * Double(options.fps))
+
+    // Reuse a single command queue across the whole run. Creating one per
+    // frame spawns a Metal driver thread per iteration, which accumulates
+    // until the OS watchdog kills the process on long videos.
+    guard let sharedCommandQueue = device.makeCommandQueue() else {
+        throw VideoRenderError.failedToCreateCommandQueue
+    }
+
+    return VideoPipeline(
+        resolveTexture: resolveTexture,
+        msaaColorTexture: msaaColorTexture,
+        msaaDepthTexture: msaaDepthTexture,
+        videoWriter: videoWriter,
+        writerInput: writerInput,
+        adaptor: adaptor,
+        sharedCommandQueue: sharedCommandQueue,
+        frameDuration: frameDuration,
+        totalFrames: totalFrames
+    )
+}
+
+// MARK: - Crowd Setup
+
+/// Build N avatars, wire a contact group, and drive `CrowdFrameStepper` into the
+/// existing MSAA -> pixelBuffer -> AVAssetWriter pipeline.
+func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
+                options: RenderOptions) async throws -> (CrowdFrameStepper, SpringBoneContactGroup?) {
+    var config = RendererConfig()
+    config.synchronousSpringBone = true
+    config.sampleCount = 4
+
+    let group: SpringBoneContactGroup? = options.crowdNoContact ? nil : SpringBoneContactGroup()
+    var avatars: [CrowdFrameStepper.Avatar] = []
+    let aspect = Float(options.width) / Float(options.height)
+
+    for index in 0..<options.avatarCount {
+        let model = try await VRMModel.load(from: modelURL, device: device, options: VRMLoadingOptions())
+        // Bake inward facing once (design §4.1) via T/R/S — never localMatrix.
+        for root in model.nodes where root.parent == nil {
+            root.rotation = CrowdPlacement.facing(avatarIndex: index, avatarCount: options.avatarCount)
+        }
+        model.updateNodeTransforms()
+
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.loadModel(model)
+        renderer.enableSpringBone = true
+        renderer.projectionMatrix = options.orthographic
+            ? orthographic(height: 2.0, aspect: aspect, near: 0.1, far: 100)
+            : perspective(fovRadians: Float.pi / 4, aspect: aspect, near: 0.1, far: 100)
+
+        let clip = try VRMAnimationLoader.loadVRMA(from: animURL, model: model)
+        let player = AnimationPlayer(); player.load(clip); player.play()
+
+        if let group { renderer.joinContactGroup(group) }
+        avatars.append(CrowdFrameStepper.Avatar(renderer: renderer, model: model, player: player, index: index))
+    }
+
+    let driver = CrowdMotionDriver(
+        startSep: options.crowdStartSep, holdSep: options.crowdHoldSep,
+        approachStart: 0.1, approachEnd: 0.4, holdEnd: 0.7, partEnd: 0.95)
+    return (CrowdFrameStepper(avatars: avatars, driver: driver, group: group, fps: Float(options.fps)), group)
+}
+
 // MARK: - Main
 
 struct VRMVideoRendererCLI {
@@ -343,7 +532,12 @@ struct VRMVideoRendererCLI {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw VideoRenderError.failedToCreateDevice
         }
-        
+
+        if options.crowd {
+            try await renderCrowd(options: options, device: device)
+            return
+        }
+
         // Load VRM model
         print("📦 Loading VRM model...")
         let modelURL = URL(fileURLWithPath: options.vrmPath)
@@ -431,102 +625,20 @@ struct VRMVideoRendererCLI {
             renderer.setLightNormalizationMode(.radiometric)
         }
 
-        // Create resolve texture (final output, non-multisampled)
-        // Use BGRA format to match AVFoundation's pixel buffer format (kCVPixelFormatType_32BGRA)
-        let resolveDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: options.width,
-            height: options.height,
-            mipmapped: false
-        )
-        resolveDescriptor.usage = [.renderTarget, .shaderRead]
-        resolveDescriptor.storageMode = .managed
+        let pipeline = try makeVideoPipeline(options: options, device: device, sampleCount: config.sampleCount)
+        let resolveTexture = pipeline.resolveTexture
+        let msaaColorTexture = pipeline.msaaColorTexture
+        let msaaDepthTexture = pipeline.msaaDepthTexture
+        let videoWriter = pipeline.videoWriter
+        let writerInput = pipeline.writerInput
+        let adaptor = pipeline.adaptor
+        let sharedCommandQueue = pipeline.sharedCommandQueue
+        let frameDuration = pipeline.frameDuration
+        let totalFrames = pipeline.totalFrames
 
-        guard let resolveTexture = device.makeTexture(descriptor: resolveDescriptor) else {
-            throw VideoRenderError.failedToCreateTexture
-        }
-
-        // Create multisample color texture for MSAA rendering
-        let msaaColorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: options.width,
-            height: options.height,
-            mipmapped: false
-        )
-        msaaColorDescriptor.textureType = .type2DMultisample
-        msaaColorDescriptor.sampleCount = config.sampleCount
-        msaaColorDescriptor.usage = .renderTarget
-        msaaColorDescriptor.storageMode = .private
-
-        guard let msaaColorTexture = device.makeTexture(descriptor: msaaColorDescriptor) else {
-            throw VideoRenderError.failedToCreateTexture
-        }
-
-        // Create multisample depth texture
-        let msaaDepthDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .depth32Float,
-            width: options.width,
-            height: options.height,
-            mipmapped: false
-        )
-        msaaDepthDescriptor.textureType = .type2DMultisample
-        msaaDepthDescriptor.sampleCount = config.sampleCount
-        msaaDepthDescriptor.usage = .renderTarget
-        msaaDepthDescriptor.storageMode = .private
-
-        guard let msaaDepthTexture = device.makeTexture(descriptor: msaaDepthDescriptor) else {
-            throw VideoRenderError.failedToCreateTexture
-        }
-        
-        // Setup video writer
-        print("📝 Setting up video encoder...")
-        let outputURL = URL(fileURLWithPath: options.outputPath)
-        // AVAssetWriter.init throws if the path already exists; remove first.
-        if FileManager.default.fileExists(atPath: options.outputPath) {
-            try FileManager.default.removeItem(at: outputURL)
-        }
-        let videoWriter = try AVAssetWriter(url: outputURL, fileType: .mov)
-
-        let videoSettings: [String: Any] = [
-            AVVideoCodecKey: options.hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
-            AVVideoWidthKey: options.width,
-            AVVideoHeightKey: options.height,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: options.width * options.height * 4,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
-            ]
-        ]
-
-        let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
-        writerInput.expectsMediaDataInRealTime = false
-
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
-            assetWriterInput: writerInput,
-            sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
-                kCVPixelBufferWidthKey as String: options.width,
-                kCVPixelBufferHeightKey as String: options.height
-            ]
-        )
-
-        videoWriter.add(writerInput)
-        guard videoWriter.startWriting() else {
-            throw VideoRenderError.videoEncodingFailed
-        }
-        videoWriter.startSession(atSourceTime: .zero)
-        
         // Render loop
         print("⏳ Rendering...")
         let startTime = Date()
-        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(options.fps))
-        let totalFrames = Int(options.duration * Double(options.fps))
-
-        // Reuse a single command queue across the whole run. Creating one per
-        // frame spawns a Metal driver thread per iteration, which accumulates
-        // until the OS watchdog kills the process on long videos.
-        guard let sharedCommandQueue = device.makeCommandQueue() else {
-            throw VideoRenderError.failedToCreateCommandQueue
-        }
 
         // Optional bone trajectory CSV dumper for physics-verification tests.
         let boneDumper: BoneTrajectoryDumper?
@@ -645,6 +757,104 @@ struct VRMVideoRendererCLI {
         let totalTime = Date().timeIntervalSince(startTime)
         print("")
         print("✅ Render complete!")
+        print("   📁 Output: \(options.outputPath)")
+        print("   ⏱️  Time: \(String(format: "%.2f", totalTime))s")
+        print("   🎬 Average: \(String(format: "%.1f", Double(totalFrames) / totalTime)) fps")
+    }
+
+    @MainActor
+    static func renderCrowd(options: RenderOptions, device: MTLDevice) async throws {
+        print("👥 Crowd mode: \(options.avatarCount) avatars, contact=\(!options.crowdNoContact)")
+        print("   Model: \(options.vrmPath)")
+        print("   Animation: \(options.vrmaPath)")
+        print("   Output: \(options.outputPath)")
+        print("   Resolution: \(options.width)x\(options.height) @ \(options.fps)fps for \(options.duration)s")
+        print("")
+
+        let modelURL = URL(fileURLWithPath: options.vrmPath)
+        let animURL = URL(fileURLWithPath: options.vrmaPath)
+
+        print("📦 Loading \(options.avatarCount) avatar instances...")
+        let (stepper, group) = try await buildCrowd(modelURL: modelURL, animURL: animURL, device: device, options: options)
+        print("   ✅ Crowd built (\(group == nil ? "no contact group" : "joined contact group"))")
+
+        print("🎨 Setting up video pipeline...")
+        let pipeline = try makeVideoPipeline(options: options, device: device, sampleCount: 4)
+
+        // Render loop
+        print("⏳ Rendering crowd...")
+        let startTime = Date()
+        let totalFrames = pipeline.totalFrames
+
+        for frameIndex in 0..<totalFrames {
+            let t = totalFrames > 1 ? Float(frameIndex) / Float(totalFrames - 1) : 0
+
+            // Shared camera for all avatars (orbit or fixed), applied before stepping.
+            let view: float4x4
+            if options.orbitCamera {
+                let angle = Float(frameIndex) / Float(totalFrames) * 2.0 * Float.pi
+                let radius = max(options.orbitTarget.radius, Float(options.avatarCount) * options.crowdStartSep * 0.9)
+                let cy = options.orbitTarget.centerY
+                view = lookAt(eye: SIMD3<Float>(sin(angle) * radius, cy, cos(angle) * radius),
+                              center: SIMD3<Float>(0, cy, 0), up: SIMD3<Float>(0, 1, 0))
+            } else {
+                let dist = max(2.5, Float(options.avatarCount) * options.crowdStartSep * 1.1)
+                view = lookAt(eye: SIMD3<Float>(0, 1.3, dist), center: SIMD3<Float>(0, 1.3, 0), up: SIMD3<Float>(0, 1, 0))
+            }
+            for av in stepper.avatarsForCamera { av.renderer.viewMatrix = view }
+
+            stepper.step(frameTime: t)
+
+            guard let pixelBuffer = createPixelBuffer(width: options.width, height: options.height),
+                  let commandBuffer = pipeline.sharedCommandQueue.makeCommandBuffer() else { continue }
+
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = pipeline.msaaColorTexture
+            rpd.colorAttachments[0].resolveTexture = pipeline.resolveTexture
+            rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1.0)
+            rpd.colorAttachments[0].storeAction = .multisampleResolve
+            rpd.depthAttachment.texture = pipeline.msaaDepthTexture
+            rpd.depthAttachment.clearDepth = 1.0
+            rpd.depthAttachment.storeAction = .dontCare
+
+            // drawComposite sets loadAction per avatar (clear on the first, load on
+            // the rest) so all N avatars accumulate in one frame.
+            stepper.drawComposite(color: pipeline.msaaColorTexture, depth: pipeline.msaaDepthTexture,
+                                  commandBuffer: commandBuffer, renderPassDescriptor: rpd)
+
+            commandBuffer.commit()
+
+            // Wait for completion (can't use waitUntilCompleted in async context)
+            while commandBuffer.status != .completed && commandBuffer.status != .error {
+                await Task.yield()
+            }
+
+            copyTextureToPixelBuffer(pipeline.resolveTexture, to: pixelBuffer, device: device, commandBuffer: commandBuffer)
+
+            let presentationTime = CMTimeMultiply(pipeline.frameDuration, multiplier: Int32(frameIndex))
+
+            while !pipeline.writerInput.isReadyForMoreMediaData {
+                await Task.yield()
+            }
+
+            pipeline.adaptor.append(pixelBuffer, withPresentationTime: presentationTime)
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+
+            // Progress
+            if frameIndex % 30 == 0 || frameIndex == totalFrames - 1 {
+                let progress = Double(frameIndex + 1) / Double(totalFrames) * 100
+                let elapsed = Date().timeIntervalSince(startTime)
+                let currentFps = Double(frameIndex + 1) / elapsed
+                print("   📊 Progress: \(String(format: "%.1f", progress))% (\(frameIndex + 1)/\(totalFrames) frames, \(String(format: "%.1f", currentFps)) fps)")
+            }
+        }
+
+        pipeline.writerInput.markAsFinished()
+        await pipeline.videoWriter.finishWriting()
+
+        let totalTime = Date().timeIntervalSince(startTime)
+        print("")
+        print("✅ Crowd render complete!")
         print("   📁 Output: \(options.outputPath)")
         print("   ⏱️  Time: \(String(format: "%.2f", totalTime))s")
         print("   🎬 Average: \(String(format: "%.1f", Double(totalFrames) / totalTime)) fps")

@@ -44,6 +44,9 @@ public final class CrowdFrameStepper {
     private let dt: Float
     private let baseTranslations: [Int: [ObjectIdentifier: SIMD3<Float>]]
 
+    /// The avatars, exposed so a host can set a shared camera on each renderer.
+    public var avatarsForCamera: [Avatar] { avatars }
+
     public init(avatars: [Avatar], driver: CrowdMotionDriver, group: SpringBoneContactGroup?, fps: Float) {
         self.avatars = avatars
         self.driver = driver
