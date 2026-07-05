@@ -140,7 +140,7 @@ The sink receives the coordinator's per-frame foreign array and writes it to the
 
 The stored foreign array is **replaced every frame if present and cleared every frame if absent** — it must never accumulate or persist across a membership change. This is the same class of bug the coordinator's review gate guards against, one level down in the *system*: a foreign array from a partner who left, still occupying the tail because injection replaced-if-present but did not clear-if-absent, would leave the departed partner's body colliding as a ghost.
 
-Concretely: `exchange()` calls the sink on **every** participant every frame — with an empty array when a system has no partners this frame — and the sink writes exactly that frame's foreign set (possibly empty) to the tail, zeroing the unused tail slots. There is no "no call = keep last." The sink's contract is total over frames.
+Concretely: `exchange()` calls the sink on **every** participant every frame — with an empty array when a system has no partners this frame — and the sink writes exactly that frame's foreign set (possibly empty) to the tail and sets the per-frame active-foreign count to match. Unused tail slots are **excluded by the active count, not zero-filled**: the kernel's `0..<numSpheres` loop (where `numSpheres = active + activeForeign`) never reaches them, so their stale bytes are inert (this is the same count-gating §4.2 relies on — gate on the count, not the geometry). There is no "no call = keep last." The sink's contract is total over frames.
 
 ### 4.2 Tail write — once per frame, not per substep
 
