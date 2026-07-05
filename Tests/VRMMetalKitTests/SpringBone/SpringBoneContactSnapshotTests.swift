@@ -28,10 +28,10 @@ final class SpringBoneContactSnapshotTests: XCTestCase {
         model.updateNodeTransforms()
         let system = try SpringBoneComputeSystem(device: device)
         let snap = system.contactColliderSnapshot(model: model)
-        // Skeleton floor: >= 4 capsules (torso + 2 arms + brow) and >= 1 sphere
-        // (skull). Authored body colliders (subsystem 3) may fold in more; all
-        // must be finite world-space.
-        XCTAssertGreaterThanOrEqual(snap.capsules.count, 4)
+        // Skeleton floor: >= 6 capsules (torso + 2 arms + brow + 2 thighs) and
+        // >= 1 sphere (skull). Authored body colliders may fold in more; all must
+        // be finite world-space.
+        XCTAssertGreaterThanOrEqual(snap.capsules.count, 6)
         XCTAssertGreaterThanOrEqual(snap.spheres.count, 1)
         for s in snap.spheres {
             XCTAssertTrue(s.center.x.isFinite && s.center.y.isFinite && s.center.z.isFinite)

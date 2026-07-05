@@ -38,7 +38,7 @@ final class SpringBoneContactColliderSetTests: XCTestCase {
         // skull sphere = 1 sphere. Bounded contact-set cardinality (design §6).
         let capsules = set.filter { if case .capsule = $0.shape { return true } else { return false } }
         let spheres = set.filter { if case .sphere = $0.shape { return true } else { return false } }
-        XCTAssertEqual(capsules.count, 4, "torso + 2 arms + brow")
+        XCTAssertEqual(capsules.count, 6, "torso + 2 arms + brow + 2 thighs")
         XCTAssertEqual(spheres.count, 1, "skull sphere")
         for c in set {
             switch c.shape {

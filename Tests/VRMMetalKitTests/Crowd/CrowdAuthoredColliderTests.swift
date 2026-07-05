@@ -92,7 +92,7 @@ final class CrowdAuthoredColliderTests: XCTestCase {
                 "authored body collider on node \(authored.node) is folded into the contact set")
         }
         // Bounded and clean: no containment/plane shapes ever reach the contact set.
-        XCTAssertLessThanOrEqual(set.count, 5 + SpringBoneContactColliderSet.maxAuthoredContactColliders)
+        XCTAssertLessThanOrEqual(set.count, 7 + SpringBoneContactColliderSet.maxAuthoredContactColliders)
         for c in set {
             switch c.shape {
             case .insideSphere, .insideCapsule, .plane:

@@ -38,6 +38,13 @@ enum SpringBoneContactColliderSet {
     /// Upper-arm capsule radius as a fraction of the upperArm->lowerArm length.
     static let upperArmRadiusFractionOfLength: Float = 0.22
 
+    /// Thigh (upperLeg->lowerLeg) capsule radius as a fraction of that length.
+    /// This is the surface a SKIRT deflects off; sized larger than the #309 leg
+    /// floor (0.24) so a partner's thigh visibly engages the skirt panels during
+    /// close contact rather than only grazing them. (Measured: at 0.24 the skirt
+    /// already deflects up to ~10cm — this widens it to read clearly.)
+    static let thighRadiusFractionOfLength: Float = 0.34
+
     /// Max authored body colliders folded into the contact set per avatar
     /// (subsystem 3). Bounds the contact set so the reserved foreign tail stays
     /// fixed for any avatar; most avatars author fewer than this. Largest-radius
@@ -72,6 +79,18 @@ enum SpringBoneContactColliderSet {
                 fromBone: from, toBone: to, radiusFraction: upperArmRadiusFractionOfLength,
                 humanoid: humanoid, model: model) {
                 out.append(arm)
+            }
+        }
+
+        // Thighs: the lower-body surface a SKIRT deflects off during close
+        // contact — the torso capsule sits at chest height and leaves the
+        // hip/thigh skirt region uncovered otherwise.
+        for (from, to) in [(VRMHumanoidBone.leftUpperLeg, VRMHumanoidBone.leftLowerLeg),
+                           (VRMHumanoidBone.rightUpperLeg, VRMHumanoidBone.rightLowerLeg)] {
+            if let thigh = SpringBoneBoneGeometry.limbCapsule(
+                fromBone: from, toBone: to, radiusFraction: thighRadiusFractionOfLength,
+                humanoid: humanoid, model: model) {
+                out.append(thigh)
             }
         }
 
