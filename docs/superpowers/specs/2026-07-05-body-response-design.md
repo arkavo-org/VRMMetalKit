@@ -1,7 +1,7 @@
 # Cross-Avatar Body Response — Design
 
 **Date:** 2026-07-05
-**Status:** Design ratified (all sections approved).
+**Status:** Design ratified; revised 2026-07-05 after a code-verification pass surfaced three implementation prerequisites not present in the tree (see §3.1): the crowd path runs no layer stack, the postural apply is not the stock compositor compose, and the partner torso capsule is not addressable in the snapshot.
 **Scope:** Reduce body-on-body clip-through between avatars and make the rig visibly *yield* to contact — without a rigid-body/ragdoll engine. Two levers: contact-aware motion (bodies press to controlled contact instead of driving through) and a postural yield (the upper body leans away on contact).
 
 **Depends on:** the shipped cross-avatar collision feature (`SpringBoneContactGroup`, `contactColliderSnapshot` world-space body colliders, `CrowdFrameStepper`/`CrowdMotionDriver`) and the animation-layer stack (`AnimationLayer`, `IKLayer`).
@@ -28,17 +28,17 @@ VRM humanoid bones (hips/spine/chest/neck) are **kinematic anchors** — motion 
 
 In `CrowdFrameStepper.step()`, before applying the driver's translation offset, clamp the approach by body contact:
 
-1. For each avatar, take its torso capsule and the **nearest partner's** torso capsule (from the last `contactColliderSnapshot`).
-2. Compute the current body separation along the approach axis.
-3. The driver *proposes* a half-separation (`CrowdMotionDriver.halfSeparation`); the stepper **clamps** the applied offset so the two torso capsules overlap by **at most `bodyContactMargin`** — bodies press to controlled contact, never to the driver's raw deep-overlap distance.
+1. For each avatar, take its torso capsule and the **nearest partner's** torso capsule. **Prerequisite (see §3.1):** `contactColliderSnapshot` returns an *unlabeled bag* of capsules (torso + upper arms + head + thighs + authored colliders) — the torso is not individually addressable today. Component A depends on the same new torso-capsule accessor Component B needs.
+2. Compute the current body separation along the approach axis. Note the only snapshot available at placement time is the **previous frame's** (`exchange()` runs after Phase 0 placement), so this clamp is one-frame-stale — acceptable at contemplative velocities, same as §4.
+3. The driver *proposes* a half-separation (`CrowdMotionDriver.halfSeparation`). Placement is **center-symmetric off that single `halfSep`** (`CrowdPlacement.rootTranslation` maps it to each avatar's translation), so the clamp operates on the shared `halfSep` quantity, **not** two independent per-avatar offsets: the stepper raises the effective half-separation floor so the two torso capsules overlap by **at most `bodyContactMargin`**. Bodies press to controlled contact, never to the driver's raw deep-overlap distance.
 
-So the driver still choreographs approach/hold/part, but the stepper enforces "no deep clip-through." This lives in the crowd demo (`CrowdFrameStepper` + a new `bodyContactMargin` on the crowd path); it needs no rig or library changes.
+So the driver still choreographs approach/hold/part, but the stepper enforces "no deep clip-through." This lives in the crowd demo (`CrowdFrameStepper` + a new `bodyContactMargin` on the crowd path); beyond the shared torso-capsule accessor it needs no rig or library changes.
 
 ---
 
 ## 3. Component B — `PosturalContactLayer` (lever 2, library)
 
-A new `public final class PosturalContactLayer: AnimationLayer` — same stack slot and pattern as the foot-`IKLayer`, `affectedBones = [.spine, .chest]`. Each frame it runs this deterministic, O(1) algorithm (the ratified spec):
+A new `public final class PosturalContactLayer: AnimationLayer`, `affectedBones = [.spine, .chest]`, following the `AnimationLayer` protocol (`update(deltaTime:context:)` + `evaluate() -> LayerOutput`). **Two pieces of the surrounding infrastructure it needs do not exist in the crowd path yet — see §3.1 before implementing.** Each frame it runs this deterministic, O(1) algorithm (the ratified spec):
 
 **A. Penetration detection.** Given the partner's torso capsule (fed per frame, §4) and this avatar's chest bone world position:
 - `d` = penetration depth (overlap of this avatar's chest against the partner's torso capsule; `0` when not overlapping).
@@ -53,20 +53,29 @@ A new `public final class PosturalContactLayer: AnimationLayer` — same stack s
 - `q_active = slerp(q_active, q_target, min(stiffness · dt, 1))`
 - `q_active` is layer state carried across frames; it eases toward `q_target` on contact and back to identity when `d → 0`.
 
-**D. Apply in the kinematic phase.** Distribute `q_active` across `spine` and `chest` (each takes a fraction, so it reads as a natural bend rather than a single hinge) and compose onto the animated rotation:
+**D. Apply in the kinematic phase.** Distribute `q_active` across `spine` and `chest` (each takes a fraction, so it reads as a natural bend rather than a single hinge) and **post-multiply onto the current animated rotation** — the yield must compose onto the clip's live per-frame spine pose:
 - `bone.localRotation = animRotation × q_activeShare`
 
-Because the layer emits `ProceduralBoneTransform` rotations into the animation stack (before the spring solver), the chest's spring bones inherit the lean automatically.
+⚠️ **This is *not* the stock `AnimationLayerCompositor` compose.** The compositor writes `node.rotation = baseRotation × delta` where `baseRotation` is captured **once at `setup()`** (`ProceduralAnimation.swift:215,353`). Run naively over clip playback it would *overwrite* the clip's spine/chest motion with `setupPose × delta` every frame, not multiply the yield onto the animated pose — and clip-playback + compositor coexistence is not an exercised path (the `IKLayer` tests run the compositor *without* concurrent clip playback). See §3.1 for the required apply path.
 
-**Reusable:** as a standard `AnimationLayer`, any app gets postural yield by adding it to a model's stack and feeding it a partner collider — it is the durable library surface. Component A is demo glue.
+Because the layer writes the leaned spine rotation **before** `drawComposite` runs the spring compute (the whole pose phase precedes `drawComposite` in `step()`), the chest's spring bones inherit the lean automatically.
+
+**Reusable:** as a standard `AnimationLayer`, any app that already runs a compositor gets postural yield by adding it to the stack and feeding it a partner collider — it is the durable library surface. Component A is demo glue.
+
+### 3.1 Required wiring (does not exist in the crowd path today)
+
+Two prerequisites the earlier spec assumed as pre-existing but that are **not** in the tree:
+
+1. **No layer stack runs in the crowd path.** `IKLayer` runs through `AnimationLayerCompositor` (`ProceduralAnimation.swift:186`), a subsystem *separate* from clip playback. `CrowdFrameStepper.step()` only calls `player.update(...)` (`CrowdFrameStepper.swift:73`), and `AnimationPlayer.update` invokes **no** compositor or layer; `Sources/VRMVideoRenderer/main.swift` constructs neither a compositor nor an `IKLayer`. So there is no "stack slot" to drop into. **Implementation must add a compositor (or a direct post-multiply hook) to the crowd path**, run after `player.update` and after `CrowdPlacement` root motion, but **before** `updateNodeTransforms()` + `exchange()`. Given the apply-semantics mismatch above, the simplest v1 is a **direct post-multiply** in `step()` — read each affected bone's current animated `localRotation` and write `animRotation × q_activeShare` — rather than routing through `AnimationLayerCompositor`. The `AnimationLayer` conformance is retained for the library surface (apps that re-capture base pose per frame, or don't run clips on the spine, can use the compositor path).
+2. **The partner torso capsule is not addressable.** `contactColliderSnapshot` returns a `ForeignColliderSnapshot` of unlabeled `spheres`/`capsules` (`SpringBoneComputeSystem.swift:1195-1218`); the set is torso + upper arms + head + thighs (927fd1d) + authored colliders (36a3b6a), and `CapsuleCollider` has no role field. **Add a torso-capsule accessor** — a tagged field on the snapshot, or a documented convention (the torso is the first capsule `synthesize` emits) — consumed by both Component A and B.
 
 ---
 
 ## 4. Wiring & ordering (the one-frame lag)
 
-The `PosturalContactLayer` needs the partner's torso capsule each frame. The coordinator already produces every avatar's world-space torso capsule via `contactColliderSnapshot`, and `exchange()` runs the union-minus-self selection. The stepper feeds each avatar's layer its **nearest partner's torso capsule** (`layer.partnerTorso = …`) before `player.update` runs the animation stack.
+The `PosturalContactLayer` needs the partner's torso capsule each frame. The coordinator produces every avatar's world-space contact set via `contactColliderSnapshot` (the torso extracted per §3.1), and `exchange()` runs the union-minus-self selection. The stepper feeds each avatar its **nearest partner's torso capsule** (`layer.partnerTorso = …`) before the postural apply runs.
 
-Because `exchange()` currently runs *after* `player.update` in `step()`, the layer reads the **previous frame's** partner pose — a **one-frame lag**, consistent with the (b) scheme used across the collision feature. This is accepted (staleness ∝ partner velocity, small in the contemplative register). A zero-lag two-pass reorder is a documented future option, not v1.
+**This reintroduces a one-frame lag the spring-contact path specifically avoids** — be precise about it. `CrowdFrameStepper` is deliberately structured so Phase 0 poses *every* avatar and *then* `exchange()` snapshots (`CrowdFrameStepper.swift:21-27,85-86`), so the spring solver reads a **fresh, same-frame** partner pose. The postural apply, running inside the pose phase, can only read the **previous frame's** snapshot — it is therefore **strictly staler than the spring path**, not "consistent" with it. This is accepted for v1 (staleness ∝ partner velocity, small in the contemplative register). A zero-lag two-pass reorder — pose all → snapshot all → postural apply → re-pose — is a documented future option, not v1.
 
 ---
 
@@ -88,7 +97,9 @@ Because `exchange()` currently runs *after* `player.update` in `step()`, the lay
 
 - **Postural math (pure unit tests):** `θ = clamp(kGain·d, 0, θ_max)` monotonic in `d`, clamps at `θ_max`, identity at `d=0`; axis `cross(spineUp, v̂)` has the correct sign (leans *away* from the partner); critically-damped slerp approaches the target smoothly/monotonically and recovers to identity when penetration clears.
 - **Layer applies (headless):** a penetrating partner torso capsule changes the spine/chest rotations (lean away); separation recovers them. `blendWeight = 0` or disabled ⇒ **exact no-op** (animation bit-unchanged).
-- **Kinematic-phase inheritance (load-bearing):** the layer runs *before* the spring solver, so chest hair follows the *leaned* chest, not the un-leaned animated chest. Assert a chest-anchored spring bone's world position reflects the lean.
+- **Kinematic-phase inheritance (load-bearing):** the postural apply runs *before* the spring solver, so chest hair follows the *leaned* chest, not the un-leaned animated chest. Assert a chest-anchored spring bone's world position reflects the lean. *This test presumes the §3.1 wiring (a compositor/post-multiply hook added to the crowd path) — it cannot be written against the current tree.*
+- **Apply composes onto animated pose (§3D):** with a non-identity clip rotation on the spine, the applied result is `animRotation × q_activeShare`, **not** `setupPose × q_activeShare` — guards against a naive `AnimationLayerCompositor` base-pose compose silently discarding the clip's spine motion.
+- **Torso-capsule accessor (§3.1):** the accessor returns the torso capsule (not an arm/head/thigh/authored capsule) from a snapshot; both components consume the same accessor.
 - **Contact-aware clamp (Component A):** body (torso-capsule) overlap never exceeds `bodyContactMargin`, regardless of the driver's raw hold-sep.
 - **Non-interference:** no partner ⇒ postural layer is identity ⇒ single-avatar animation unchanged; and the standalone spring-bone sim stays bit-identical.
 - **Visual acceptance:** the crowd render — bodies press to contact instead of clipping through, the upper body visibly yields on contact and recovers on separation.
