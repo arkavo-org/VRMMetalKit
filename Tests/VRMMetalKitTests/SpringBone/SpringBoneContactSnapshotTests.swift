@@ -43,6 +43,27 @@ final class SpringBoneContactSnapshotTests: XCTestCase {
         }
     }
 
+    @MainActor func testContactTorsoCapsuleMatchesFirstSnapshotCapsule() async throws {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+        model.updateNodeTransforms()
+        let system = try SpringBoneComputeSystem(device: device)
+        // The dedicated accessor (design §3.1) returns THIS avatar's torso capsule
+        // in world space, so Components A/B never guess which capsule is the torso.
+        let torso = try XCTUnwrap(system.contactTorsoCapsule(model: model),
+                                  "a humanoid avatar yields a torso capsule")
+        // Single source of truth: it is exactly the capsule `synthesize` emits
+        // first (the trunk), so it can't drift from the snapshot's contents.
+        let snap = system.contactColliderSnapshot(model: model)
+        let first = try XCTUnwrap(snap.capsules.first)
+        XCTAssertEqual(torso.p0, first.p0)
+        XCTAssertEqual(torso.p1, first.p1)
+        XCTAssertEqual(torso.radius, first.radius)
+        XCTAssertNotEqual(torso.p0, torso.p1, "torso capsule spans spine -> chest")
+    }
+
     @MainActor func testSnapshotIsPure_doesNotAdvanceOrPerturbSim() async throws {
         let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }

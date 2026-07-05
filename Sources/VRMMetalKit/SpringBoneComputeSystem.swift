@@ -1207,15 +1207,43 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             case .sphere(let offset, let radius):
                 spheres.append(SphereCollider(center: node.worldPosition + rot * offset,
                                               radius: radius, groupIndex: 0))
-            case .capsule(let offset, let radius, let tail):
-                let p0 = node.worldPosition + rot * offset
-                let p1 = p0 + rot * tail
-                capsules.append(CapsuleCollider(p0: p0, p1: p1, radius: radius, groupIndex: 0))
+            case .capsule:
+                if let c = Self.worldCapsule(collider, model: model) { capsules.append(c) }
             default:
                 continue
             }
         }
         return ForeignColliderSnapshot(spheres: spheres, capsules: capsules)
+    }
+
+    /// This avatar's torso capsule in world space (design §3.1): the single
+    /// contact capsule the postural yield leans away from and the contact-aware
+    /// clamp measures separation against. Built from
+    /// `SpringBoneContactColliderSet.torsoCollider` — the same source of truth as
+    /// the first capsule `contactColliderSnapshot` emits — so a consumer never has
+    /// to guess which capsule in the snapshot bag is the trunk. Pure: reads world
+    /// matrices only, mutates nothing. `nil` when the model has no humanoid.
+    func contactTorsoCapsule(model: VRMModel) -> CapsuleCollider? {
+        guard let torso = SpringBoneContactColliderSet.torsoCollider(model: model) else { return nil }
+        return Self.worldCapsule(torso, model: model)
+    }
+
+    /// Transforms a local-space, node-anchored capsule `VRMCollider` into a
+    /// world-space `CapsuleCollider` using the anchor node's world matrix. The one
+    /// transform path shared by `contactColliderSnapshot` and
+    /// `contactTorsoCapsule`, so the accessor and the snapshot cannot disagree.
+    /// `groupIndex` is left 0; the receiving sink assigns the foreign group.
+    private static func worldCapsule(_ collider: VRMCollider, model: VRMModel) -> CapsuleCollider? {
+        guard case .capsule(let offset, let radius, let tail) = collider.shape,
+              let node = model.nodes[safe: collider.node] else { return nil }
+        let wm = node.worldMatrix
+        let rot = simd_float3x3(
+            SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+            SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+            SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2]))
+        let p0 = node.worldPosition + rot * offset
+        let p1 = p0 + rot * tail
+        return CapsuleCollider(p0: p0, p1: p1, radius: radius, groupIndex: 0)
     }
 
     func populateSpringBoneData(model: VRMModel) throws {

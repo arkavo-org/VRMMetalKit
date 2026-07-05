@@ -59,16 +59,9 @@ enum SpringBoneContactColliderSet {
         let ratios = SpringBoneColliderAugmentor.Ratios()
         var out: [VRMCollider] = []
 
-        // Torso: spine -> (upperChest ?? chest ?? neck). The single vertical
-        // trunk capsule — the primary hug surface #309 omits.
-        let torsoTo: VRMHumanoidBone = {
-            if humanoid.getBoneNode(.upperChest) != nil { return .upperChest }
-            if humanoid.getBoneNode(.chest) != nil { return .chest }
-            return .neck
-        }()
-        if let torso = SpringBoneBoneGeometry.limbCapsule(
-            fromBone: .spine, toBone: torsoTo, radiusFraction: torsoRadiusFractionOfLength,
-            humanoid: humanoid, model: model) {
+        // Torso: the single vertical trunk capsule — the primary hug surface #309
+        // omits, and the surface the postural yield (design §3) leans away from.
+        if let torso = torsoCollider(model: model) {
             out.append(torso)
         }
 
@@ -113,6 +106,25 @@ enum SpringBoneContactColliderSet {
                 cap: maxAuthoredContactColliders))
         }
         return out
+    }
+
+    /// The avatar's torso capsule: spine -> (upperChest ?? chest ?? neck), a
+    /// local-space node-anchored `VRMCollider`. The single source of truth for
+    /// "what is the torso" — both ``synthesize(model:includeAuthored:)`` (as its
+    /// first emitted capsule) and the world-space contact accessor
+    /// (`SpringBoneComputeSystem.contactTorsoCapsule`) build on it, so the two
+    /// can never disagree about which capsule the postural yield (design §3)
+    /// leans away from. `nil` when the model has no humanoid.
+    static func torsoCollider(model: VRMModel) -> VRMCollider? {
+        guard let humanoid = model.humanoid else { return nil }
+        let torsoTo: VRMHumanoidBone = {
+            if humanoid.getBoneNode(.upperChest) != nil { return .upperChest }
+            if humanoid.getBoneNode(.chest) != nil { return .chest }
+            return .neck
+        }()
+        return SpringBoneBoneGeometry.limbCapsule(
+            fromBone: .spine, toBone: torsoTo, radiusFraction: torsoRadiusFractionOfLength,
+            humanoid: humanoid, model: model)
     }
 
     /// The node indices mapped to humanoid bones. An authored collider counts as
