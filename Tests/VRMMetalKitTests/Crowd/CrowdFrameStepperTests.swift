@@ -287,6 +287,63 @@ final class CrowdFrameStepperTests: XCTestCase {
             "clamp raised the applied half-separation above the driver's deep hold")
     }
 
+    /// Component B, load-bearing (design §3/§6): the postural yield is written in
+    /// the kinematic phase BEFORE the spring solver, so spring bones anchored above
+    /// the chest (head hair — head descends from chest via neck) inherit the lean.
+    /// With `bodyContactMargin` OFF the placement is identical between the two runs,
+    /// so the ONLY difference is the lean — any change in the solved spring-bone
+    /// positions therefore proves the solver saw the leaned chest.
+    ///
+    /// The yield is *self-relieving* (the torso capsule is anchored to the leaning
+    /// chest, so leaning away reduces the penetration driving it, settling toward
+    /// light contact), so we assert on the transient PEAK across the run — the lean
+    /// magnitude and the spring divergence at their largest — not the settled end.
+    @MainActor func testPosturalYieldIsInheritedBySpringBones() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        // Deep hold so each chest penetrates the partner's torso capsule => lean.
+        // Torso radius ~0.10m; the chest penetrates when 2·halfSep < radius, so a
+        // 0.03 half-separation (0.06m apart) drives a clear overlap.
+        let driver = CrowdMotionDriver(startSep: 1.0, holdSep: 0.03,
+            approachStart: 0.0, approachEnd: 0.1, holdEnd: 0.9, partEnd: 1.0)
+        let postural = PosturalContactParams(kGain: 6.0, maxLeanAngle: 0.6, stiffness: 20.0, blendWeight: 1.0)
+
+        func run(postural params: PosturalContactParams?) async throws -> (frames: [[SIMD3<Float>]], peakLean: Float) {
+            let a = try await avatar(device, index: 0)
+            let b = try await avatar(device, index: 1)
+            let group = SpringBoneContactGroup()
+            a.renderer.joinContactGroup(group); b.renderer.joinContactGroup(group)
+            let stepper = CrowdFrameStepper(avatars: [a, b], driver: driver, group: group, fps: 60,
+                                            bodyContactMargin: nil, postural: params)
+            var frames: [[SIMD3<Float>]] = []
+            var peakLean: Float = 0
+            for _ in 0..<20 {
+                stepper.step(frameTime: 0.5)  // hold window
+                a.renderer.springBoneComputeSystem?.update(model: a.model, deltaTime: 1.0/60.0, commandBuffer: nil)
+                a.renderer.springBoneComputeSystem?.waitForPendingFrame()
+                frames.append(a.model.springBoneBuffers?.getCurrentPositions() ?? [])
+                peakLean = max(peakLean, stepper.posturalLayer(forAvatar: 0)?.currentLeanAngle ?? 0)
+            }
+            return (frames, peakLean)
+        }
+
+        let off = try await run(postural: nil)
+        let on = try await run(postural: postural)
+
+        XCTAssertGreaterThan(on.peakLean, 0.05, "chest penetrated the partner torso => a real lean accrued")
+        XCTAssertEqual(off.frames.count, on.frames.count)
+        XCTAssertFalse(off.frames.first?.isEmpty ?? true, "fixture has spring bones to inherit the lean")
+        // Largest per-bone spring divergence across ALL frames: the transient lean
+        // propagated into the solver's output.
+        var maxDelta: Float = 0
+        for f in off.frames.indices {
+            for i in off.frames[f].indices where i < on.frames[f].count {
+                maxDelta = max(maxDelta, simd_length(off.frames[f][i] - on.frames[f][i]))
+            }
+        }
+        XCTAssertGreaterThan(maxDelta, 1e-4,
+            "spring bones moved because the solver saw the leaned chest (kinematic-phase inheritance)")
+    }
+
     // Local camera helpers (avoid depending on the executable's private helpers).
     private func perspectiveTest(aspect: Float) -> float4x4 {
         let fov: Float = .pi / 4, near: Float = 0.1, far: Float = 100
