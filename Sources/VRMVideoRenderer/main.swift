@@ -471,7 +471,7 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
         model.updateNodeTransforms()
 
         let renderer = VRMRenderer(device: device, config: config)
-        renderer.loadModel(model)
+        renderer.loadModelWithoutWarmup(model)
         renderer.enableSpringBone = true
         renderer.projectionMatrix = options.orthographic
             ? orthographic(height: 2.0, aspect: aspect, near: 0.1, far: 100)
@@ -479,6 +479,13 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
 
         let clip = try VRMAnimationLoader.loadVRMA(from: animURL, model: model)
         let player = AnimationPlayer(); player.load(clip); player.play()
+
+        // Apply the first animation frame BEFORE warming up SpringBone physics.
+        // Mirrors the single-avatar path: warming up against the bind pose makes
+        // springs settle at rest and then snap when frame 0 is applied, causing
+        // the hair/cloth pop artifact (#351).
+        player.update(deltaTime: 0, model: model)
+        renderer.warmupPhysics(steps: 30)
 
         if let group { renderer.joinContactGroup(group) }
         avatars.append(CrowdFrameStepper.Avatar(renderer: renderer, model: model, player: player, index: index))
