@@ -121,6 +121,9 @@ func printUsage() {
         --crowd-start-sep M     Start half-separation in meters (default 1.0)
         --crowd-hold-sep M      Hold half-separation in meters (default 0.18)
         --crowd-no-contact      Disable cross-avatar collision (before/after baseline)
+        --body-contact-margin M Contact-aware motion: cap torso overlap at M meters
+                                (bodies press to contact instead of clipping through)
+        --postural              Postural yield: upper body leans away on contact
         --realtime              Use the async spring path a live app uses (sleep gate live)
         --help                  Show this help message
 
@@ -185,6 +188,8 @@ struct RenderOptions {
     var crowdHoldSep: Float = 0.18      // half-separation at hold (the tunable half of the coupled pair)
     var crowdNoContact: Bool = false
     var crowdRealtime: Bool = false     // async spring path (sleep gate live), the path a live app uses
+    var bodyContactMargin: Float? = nil // Component A: contact-aware clamp (nil = off)
+    var postural: Bool = false          // Component B: postural yield
 }
 
 func parseArguments() -> RenderOptions? {
@@ -279,6 +284,11 @@ func parseArguments() -> RenderOptions? {
             options.crowdHoldSep = Float(args[i]) ?? options.crowdHoldSep
         case "--crowd-no-contact":
             options.crowdNoContact = true
+        case "--body-contact-margin":
+            i += 1; guard i < args.count else { return nil }
+            options.bodyContactMargin = Float(args[i]) ?? options.bodyContactMargin
+        case "--postural":
+            options.postural = true
         case "--realtime":
             options.crowdRealtime = true
         default:
@@ -512,7 +522,9 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
     let driver = CrowdMotionDriver(
         startSep: options.crowdStartSep, holdSep: options.crowdHoldSep,
         approachStart: 0.1, approachEnd: 0.4, holdEnd: 0.7, partEnd: 0.95)
-    return (CrowdFrameStepper(avatars: avatars, driver: driver, group: group, fps: Float(options.fps)), group)
+    let postural: PosturalContactParams? = options.postural ? PosturalContactParams() : nil
+    return (CrowdFrameStepper(avatars: avatars, driver: driver, group: group, fps: Float(options.fps),
+                              bodyContactMargin: options.bodyContactMargin, postural: postural), group)
 }
 
 // MARK: - Main
