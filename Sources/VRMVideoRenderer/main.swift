@@ -121,6 +121,7 @@ func printUsage() {
         --crowd-start-sep M     Start half-separation in meters (default 1.0)
         --crowd-hold-sep M      Hold half-separation in meters (default 0.18)
         --crowd-no-contact      Disable cross-avatar collision (before/after baseline)
+        --realtime              Use the async spring path a live app uses (sleep gate live)
         --help                  Show this help message
 
     EXAMPLES:
@@ -183,6 +184,7 @@ struct RenderOptions {
     var crowdStartSep: Float = 1.0      // half-separation at start (meters)
     var crowdHoldSep: Float = 0.18      // half-separation at hold (the tunable half of the coupled pair)
     var crowdNoContact: Bool = false
+    var crowdRealtime: Bool = false     // async spring path (sleep gate live), the path a live app uses
 }
 
 func parseArguments() -> RenderOptions? {
@@ -277,6 +279,8 @@ func parseArguments() -> RenderOptions? {
             options.crowdHoldSep = Float(args[i]) ?? options.crowdHoldSep
         case "--crowd-no-contact":
             options.crowdNoContact = true
+        case "--realtime":
+            options.crowdRealtime = true
         default:
             break
         }
@@ -456,7 +460,11 @@ func makeVideoPipeline(options: RenderOptions, device: MTLDevice, sampleCount: I
 func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
                 options: RenderOptions) async throws -> (CrowdFrameStepper, SpringBoneContactGroup?) {
     var config = RendererConfig()
-    config.synchronousSpringBone = true
+    // Default: synchronous spring path (deterministic, sleep gate off). With
+    // --realtime, use the async path a live app uses: spring compute piped into
+    // the shared command buffer, one-frame readback lag, and the sleep gate LIVE
+    // (so F1 — waking a settled avatar to an approaching partner — is exercised).
+    config.synchronousSpringBone = !options.crowdRealtime
     config.sampleCount = 4
 
     let group: SpringBoneContactGroup? = options.crowdNoContact ? nil : SpringBoneContactGroup()

@@ -669,9 +669,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///
     /// The internal `SpringBoneComputeSystem` (per-model simulation state) is
     /// never exposed; this seam hands the coordinator only the membership handle.
-    /// Intended for offline-synchronous single-caller use
-    /// (`VRMVideoRenderer --crowd`); real-time / async multi-caller ordering is
-    /// unproven — see the crowd-collision design §2.2.
+    /// Validated on both render paths: the offline synchronous crowd demo
+    /// (`VRMVideoRenderer --crowd`) and the **async** multi-avatar path a live
+    /// app uses (`--realtime`; sleep gate live, one-frame lag) — see
+    /// `CrowdAsyncPathTests` (settled-avatar wake, contact stability, composite).
     public func joinContactGroup(_ group: SpringBoneContactGroup) {
         guard let system = springBoneComputeSystem, let model = model else { return }
         group.add(system: system, model: model)
