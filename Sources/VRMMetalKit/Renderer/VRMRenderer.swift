@@ -512,7 +512,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     // MARK: - Spring Bone Physics
 
-    private var springBoneComputeSystem: SpringBoneComputeSystem?
+    var springBoneComputeSystem: SpringBoneComputeSystem?
 
     /// Enables GPU-accelerated spring bone physics simulation.
     ///
@@ -661,6 +661,31 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public func warmupPhysics(steps: Int = 30) {
         guard let model = model else { return }
         springBoneComputeSystem?.warmupPhysics(model: model, steps: steps)
+    }
+
+    /// Joins this renderer's spring-bone system to a cross-avatar contact group
+    /// so its hair/cloth yields to other members' bodies (and vice versa). Call
+    /// after `loadModel`. No-op if this renderer has no spring-bone system yet.
+    ///
+    /// The internal `SpringBoneComputeSystem` (per-model simulation state) is
+    /// never exposed; this seam hands the coordinator only the membership handle.
+    /// Validated against offline-synchronous single-caller usage
+    /// (`VRMVideoRenderer --crowd`); real-time / async multi-caller ordering is
+    /// unproven — see the crowd-collision design §2.2.
+    public func joinContactGroup(_ group: SpringBoneContactGroup) {
+        guard let system = springBoneComputeSystem, let model = model else { return }
+        group.add(system: system, model: model)
+    }
+
+    /// Removes this renderer's spring-bone system from a contact group. Also
+    /// clears any previously-injected foreign colliders on this system
+    /// (`setForeignColliders` docs: "a departed partner leaves no ghost") —
+    /// `exchange()` never revisits a removed member, so without this the last
+    /// injected tail would persist indefinitely.
+    public func leaveContactGroup(_ group: SpringBoneContactGroup) {
+        guard let system = springBoneComputeSystem else { return }
+        group.remove(system: system)
+        system.setForeignColliders(ForeignColliderSnapshot())
     }
 
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
