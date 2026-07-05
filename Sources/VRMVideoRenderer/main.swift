@@ -124,6 +124,8 @@ func printUsage() {
         --body-contact-margin M Contact-aware motion: cap torso overlap at M meters
                                 (bodies press to contact instead of clipping through)
         --postural              Postural yield: upper body leans away on contact
+        --spring-gravity <M>    Downward spring-bone gravity (app-layer). Auto-applied
+                                to rigs that author none (e.g. AvatarSample); 0 disables.
         --realtime              Use the async spring path a live app uses (sleep gate live)
         --help                  Show this help message
 
@@ -190,6 +192,7 @@ struct RenderOptions {
     var crowdRealtime: Bool = false     // async spring path (sleep gate live), the path a live app uses
     var bodyContactMargin: Float? = nil // Component A: contact-aware clamp (nil = off)
     var postural: Bool = false          // Component B: postural yield
+    var springGravity: Float? = nil     // Override app-layer spring gravity (nil = auto)
 }
 
 func parseArguments() -> RenderOptions? {
@@ -289,6 +292,9 @@ func parseArguments() -> RenderOptions? {
             options.bodyContactMargin = Float(args[i]) ?? options.bodyContactMargin
         case "--postural":
             options.postural = true
+        case "--spring-gravity":
+            i += 1; guard i < args.count else { return nil }
+            options.springGravity = Float(args[i]) ?? options.springGravity
         case "--realtime":
             options.crowdRealtime = true
         default:
@@ -337,6 +343,48 @@ func copyTextureToPixelBuffer(_ texture: MTLTexture, to pixelBuffer: CVPixelBuff
         from: MTLRegionMake2D(0, 0, texture.width, texture.height),
         mipmapLevel: 0
     )
+}
+
+// MARK: - Spring-bone gravity default (app-layer)
+
+/// Magnitude of the default downward spring gravity supplied to rigs that author
+/// no per-joint gravity. `globalParams.gravity` is spec-additive (default zero);
+/// a real app is expected to set it, just like lighting.
+private let autoSpringGravity: Float = 2.0
+
+/// Supply the app-layer spring gravity a real host would set. VRM rigs that
+/// author `gravityPower == 0` on every joint (the AvatarSample family, for one)
+/// have NO downward force, so hair settles to its bind direction — which for a
+/// high ponytail points straight UP. This gives such rigs a sane default so hair
+/// hangs naturally, while respecting rigs that DID author gravity (adding to them
+/// would double their droop). `--spring-gravity X` overrides for any rig; `0`
+/// disables. Mirrors the design intent of `globalParams.gravity` (VMK#324): an
+/// additive external force the application, not the loader, provides.
+func applySpringGravityDefault(model: VRMModel, options: RenderOptions) {
+    let magnitude: Float
+    if let override = options.springGravity {
+        magnitude = override
+    } else {
+        let maxAuthored = (model.springBone?.springs ?? [])
+            .flatMap { $0.joints }.map { $0.gravityPower }.max() ?? 0
+        magnitude = maxAuthored < 0.001 ? autoSpringGravity : 0
+    }
+    guard magnitude > 0 else { return }
+    model.springBoneGlobalParams?.gravity = SIMD3<Float>(0, -magnitude, 0)
+}
+
+/// Hero/portrait lighting: 3-point (key + cool fill + warm rim) with lifted
+/// ambient. Shared by the single-avatar `--hero-lighting` path and the crowd
+/// path (which otherwise inherits the renderer's dark cel default).
+func applyHeroLighting(to renderer: VRMRenderer) {
+    renderer.setLight(0, direction: SIMD3<Float>(0.3, -0.3, -0.85),
+                      color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 1.0)
+    renderer.setLight(1, direction: SIMD3<Float>(-0.5, -0.1, -0.85),
+                      color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.55)
+    renderer.setLight(2, direction: SIMD3<Float>(0.0, -0.4, 0.85),
+                      color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.4)
+    renderer.setAmbientColor(SIMD3<Float>(0.18, 0.18, 0.2))
+    renderer.setLightNormalizationMode(.radiometric)
 }
 
 // MARK: - Video Pipeline
@@ -513,7 +561,13 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
         // springs settle at rest and then snap when frame 0 is applied, causing
         // the hair/cloth pop artifact (#351).
         player.update(deltaTime: 0, model: model)
+        applySpringGravityDefault(model: model, options: options)
         renderer.warmupPhysics(steps: 30)
+
+        // The crowd path (unlike renderVideo) sets no lights, so it fell back to
+        // the renderer's dark cel default. Give it the hero 3-point + lifted
+        // ambient so the composite reads clearly.
+        applyHeroLighting(to: renderer)
 
         if let group { renderer.joinContactGroup(group) }
         avatars.append(CrowdFrameStepper.Avatar(renderer: renderer, model: model, player: player, index: index))
@@ -626,6 +680,7 @@ struct VRMVideoRendererCLI {
         // then snap when the first rendered frame jumps to frame 0. This causes
         // hair/penetration artifacts on models like AvatarSample_A (see #351).
         player.update(deltaTime: 0, model: model)
+        applySpringGravityDefault(model: model, options: options)
         renderer.warmupPhysics(steps: 30)
         renderer.enableSpringBone = true
 
@@ -640,14 +695,7 @@ struct VRMVideoRendererCLI {
             // .radiometric (factor π) cancels the shader's BRDF_LAMBERT_NORM (1/π),
             // so authored intensities pass through unscaled — same effective brightness
             // as the pre-radiometric setup.
-            renderer.setLight(0, direction: SIMD3<Float>(0.3, -0.3, -0.85),
-                              color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 1.0)
-            renderer.setLight(1, direction: SIMD3<Float>(-0.5, -0.1, -0.85),
-                              color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.55)
-            renderer.setLight(2, direction: SIMD3<Float>(0.0, -0.4, 0.85),
-                              color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.4)
-            renderer.setAmbientColor(SIMD3<Float>(0.18, 0.18, 0.2))
-            renderer.setLightNormalizationMode(.radiometric)
+            applyHeroLighting(to: renderer)
             print("   💡 Lighting: hero (3-point, lifted ambient)")
         } else {
             // Default cel-shading: hard step shadows, dark ambient.
