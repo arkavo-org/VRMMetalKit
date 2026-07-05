@@ -1184,6 +1184,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var planeColliders: [PlaneCollider] = []
         boneBindDirections = [] // Reset bind directions (current→child)
 
+        // Reset the foreign-collider sink (design §7) so a freshly populated
+        // model starts with zero foreign injection. Without this, stale
+        // foreign state from a previously loaded model would carry across
+        // loadModel() calls on this reused compute system.
+        pendingForeignSnapshot = ForeignColliderSnapshot()
+        activeForeignSpheres = 0
+        activeForeignCapsules = 0
+
         // Build collider-to-group index mapping
         // Each collider can belong to multiple groups, but we assign the first group index for GPU filtering
         var colliderToGroupIndex: [Int: UInt32] = [:]

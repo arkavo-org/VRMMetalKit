@@ -116,4 +116,39 @@ final class SpringBoneForeignSinkTests: XCTestCase {
         XCTAssertEqual(uploadedNumSpheres, UInt32(buffers.numSpheres + system.activeForeignSpheres),
             "warmup's uploaded numSpheres must include the active foreign count, matching update()'s expression")
     }
+
+    /// Model-reload boundary (review follow-up): the compute system is
+    /// constructed once per `VRMRenderer` and reused across `loadModel()`
+    /// calls. `populateSpringBoneData` must reset the foreign sink so a
+    /// freshly populated model never inherits a stale, wrong-world-space
+    /// foreign set from the previously loaded model (design §4.1's
+    /// replace-or-clear contract applies across model boundaries too).
+    @MainActor func testPopulateResetsForeignStateAcrossModelReload() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let (modelA, system) = try await loadedSystem(device)
+
+        let s = SphereCollider(center: .zero, radius: 0.3, groupIndex: 0)
+        system.setForeignColliders(ForeignColliderSnapshot(spheres: [s], capsules: []))
+        system.update(model: modelA, deltaTime: 1.0 / 60.0, commandBuffer: nil)
+        system.waitForPendingFrame()
+        XCTAssertGreaterThan(system.activeForeignSpheres, 0,
+            "sanity check: avatar A's foreign sphere must be active before the reload")
+
+        // Reuse the SAME compute system for a second model load, as
+        // VRMRenderer does across loadModel() calls.
+        let path = getTestVRM10ModelPath()
+        try requireFixture(path, hint: testVRM10Filename)
+        let modelB = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        modelB.updateNodeTransforms()
+        try modelB.initializeSpringBoneGPUSystem(device: device)
+        try system.populateSpringBoneData(model: modelB)
+
+        // No setForeignColliders call for modelB — if the sink carried A's
+        // state forward, this would still report the stale active count.
+        system.update(model: modelB, deltaTime: 1.0 / 60.0, commandBuffer: nil)
+        system.waitForPendingFrame()
+        XCTAssertEqual(system.activeForeignSpheres, 0,
+            "avatar A's foreign colliders must not carry into freshly populated avatar B")
+    }
 }
