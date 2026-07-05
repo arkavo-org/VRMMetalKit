@@ -1,7 +1,7 @@
 # Cross-Avatar Body Response — Design
 
 **Date:** 2026-07-05
-**Status:** Design ratified; revised 2026-07-05 after a code-verification pass surfaced three implementation prerequisites not present in the tree (see §3.1): the crowd path runs no layer stack, the postural apply is not the stock compositor compose, and the partner torso capsule is not addressable in the snapshot.
+**Status:** Implemented 2026-07-05 (TDD, all §6 tests green). Design ratified, then revised after a code-verification pass surfaced three prerequisites not in the tree (see §3.1): the crowd path runs no layer stack, the postural apply is not the stock compositor compose, and the partner torso capsule is not addressable in the snapshot — all three resolved in the implementation. Implementation also surfaced a behavioural finding (the yield is self-relieving; see §5).
 **Scope:** Reduce body-on-body clip-through between avatars and make the rig visibly *yield* to contact — without a rigid-body/ragdoll engine. Two levers: contact-aware motion (bodies press to controlled contact instead of driving through) and a postural yield (the upper body leans away on contact).
 
 **Depends on:** the shipped cross-avatar collision feature (`SpringBoneContactGroup`, `contactColliderSnapshot` world-space body colliders, `CrowdFrameStepper`/`CrowdMotionDriver`) and the animation-layer stack (`AnimationLayer`, `IKLayer`).
@@ -91,18 +91,22 @@ The `PosturalContactLayer` needs the partner's torso capsule each frame. The coo
 
 **Coupled pair:** `bodyContactMargin` sets how much penetration *exists*; `kGain`/`maxLeanAngle` map that penetration to *lean*. Tuned together — a bigger margin with a matched gain gives a deep, soft yield; a tight margin with high gain gives a firm, shallow one. Calibrated visually in the spike, same as the earlier `holdSep`↔`radius` pair.
 
+**The yield is self-relieving (discovered in implementation, affects tuning).** Lever B measures the *chest point* against the partner torso capsule, but the chest is itself part of the trunk the lean rotates — leaning away moves the chest out of the partner, which *reduces the very penetration driving the lean*. The postural yield is therefore a negative-feedback loop that settles toward **light contact** (chest just grazing the partner torso), not toward a large sustained lean: the visible yield is a **transient** dip on approach, not a fixed pose. Two consequences: (1) the *steady-state* lean under a fixed hold is small by construction — the spring inheritance test asserts on the transient **peak**, not the settled end-state; (2) to hold a *visible* sustained press, Lever A (`bodyContactMargin`) — which moves the *roots* — is what keeps the bodies engaged while B relieves the chest. A and B act on different DOF (roots vs. spine) and compose rather than fight. If a firmer sustained lean is ever wanted, decouple B's measurement point from the leaning segment (measure e.g. the hips or a fixed chest offset) — a deliberate future change, not v1.
+
 ---
 
 ## 6. Testing
 
-- **Postural math (pure unit tests):** `θ = clamp(kGain·d, 0, θ_max)` monotonic in `d`, clamps at `θ_max`, identity at `d=0`; axis `cross(spineUp, v̂)` has the correct sign (leans *away* from the partner); critically-damped slerp approaches the target smoothly/monotonically and recovers to identity when penetration clears.
-- **Layer applies (headless):** a penetrating partner torso capsule changes the spine/chest rotations (lean away); separation recovers them. `blendWeight = 0` or disabled ⇒ **exact no-op** (animation bit-unchanged).
-- **Kinematic-phase inheritance (load-bearing):** the postural apply runs *before* the spring solver, so chest hair follows the *leaned* chest, not the un-leaned animated chest. Assert a chest-anchored spring bone's world position reflects the lean. *This test presumes the §3.1 wiring (a compositor/post-multiply hook added to the crowd path) — it cannot be written against the current tree.*
-- **Apply composes onto animated pose (§3D):** with a non-identity clip rotation on the spine, the applied result is `animRotation × q_activeShare`, **not** `setupPose × q_activeShare` — guards against a naive `AnimationLayerCompositor` base-pose compose silently discarding the clip's spine motion.
-- **Torso-capsule accessor (§3.1):** the accessor returns the torso capsule (not an arm/head/thigh/authored capsule) from a snapshot; both components consume the same accessor.
-- **Contact-aware clamp (Component A):** body (torso-capsule) overlap never exceeds `bodyContactMargin`, regardless of the driver's raw hold-sep.
-- **Non-interference:** no partner ⇒ postural layer is identity ⇒ single-avatar animation unchanged; and the standalone spring-bone sim stays bit-identical.
-- **Visual acceptance:** the crowd render — bodies press to contact instead of clipping through, the upper body visibly yields on contact and recovers on separation.
+**Status: implemented and green** (except visual acceptance, which is a human check). File references below.
+
+- **Postural math (pure unit tests)** — `PosturalContactSolverTests`: `θ = clamp(kGain·d, 0, θ_max)` monotonic in `d`, clamps at `θ_max`, identity at `d=0`; axis `cross(spineUp, v̂)` has the correct sign (leans *away* from the partner); critically-damped slerp eases toward the target without overshoot and recovers to identity when penetration clears.
+- **Layer applies (headless)** — `PosturalContactLayerTests`: a penetrating partner torso capsule changes the spine/chest rotations (lean away); separation recovers them. `blendWeight = 0` or disabled ⇒ **exact no-op** (spine rotation bit-unchanged).
+- **Kinematic-phase inheritance (load-bearing)** — `CrowdFrameStepperTests.testPosturalYieldIsInheritedBySpringBones`: the postural apply runs *before* the spring solver, so bones above the chest (head hair, since head descends from chest via neck) inherit the lean. With `bodyContactMargin` off the placement is identical between postural-on/off runs, so any divergence in solved spring positions is caused solely by the lean. Asserts on the transient **peak** (see the self-relieving note in §5), not the settled end-state.
+- **Apply composes onto animated pose (§3D)** — `PosturalContactLayerTests.testApplyDirect_composesOntoCurrentAnimatedRotation`: the same yield frame applied onto two different animated spine rotations leaves the **same residual delta** (`base⁻¹·result`) — impossible under a fixed-base overwrite; proves `applyDirect` post-multiplies the live pose.
+- **Torso-capsule accessor (§3.1)** — `SpringBoneContactSnapshotTests.testContactTorsoCapsuleMatchesFirstSnapshotCapsule`: the accessor returns exactly the torso capsule the snapshot emits first (single source of truth), spanning spine→chest.
+- **Contact-aware clamp (Component A)** — `CrowdContactClampTests` (pure geometry) + `CrowdFrameStepperTests.testBodyContactMarginClampsTorsoOverlap` (integration, with an unclamped control): torso overlap never exceeds `bodyContactMargin`, and the clamp raises the applied half-separation above the driver's deep hold.
+- **Non-interference** — `CrowdFrameStepperTests.testNoGroupIsBitIdenticalToSolo` (unchanged, still green): both components are opt-in, so the default crowd path stays bit-identical.
+- **Visual acceptance** (human): the crowd render — bodies press to contact instead of clipping through, the upper body visibly yields on contact and recovers on separation.
 
 ---
 
