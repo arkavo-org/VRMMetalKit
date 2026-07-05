@@ -92,6 +92,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// authored path is bit-identical (design §4.2, §8.1).
     var activeForeignSpheres: Int = 0
     var activeForeignCapsules: Int = 0
+    /// This frame's foreign colliders, set by the coordinator each frame. The
+    /// replace-or-clear contract is total over frames: every frame either
+    /// replaces (non-empty) or clears (empty). Never accumulates (design §4.1).
+    private var pendingForeignSnapshot: ForeignColliderSnapshot = ForeignColliderSnapshot()
     private var timeAccumulator: TimeInterval = 0
     private var lastUpdateTime: TimeInterval = 0
 
@@ -345,6 +349,54 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Defaults to `.ultra` to match the legacy global-constant behavior.
     var quality: VRMConstants.SpringBoneQuality = .ultra
 
+    /// Sets this frame's foreign colliders. Replace-or-clear: pass an empty
+    /// snapshot to clear (a departed partner leaves no ghost). Clamps to the
+    /// reserved tail capacity and logs any drop — never silently truncates
+    /// (design §4.1, §6).
+    func setForeignColliders(_ snapshot: ForeignColliderSnapshot) {
+        pendingForeignSnapshot = snapshot
+    }
+
+    /// Writes the pending foreign set into the reserved buffer tail ONCE per
+    /// frame, tagged with the reserved foreign group index, and sets the active
+    /// counts. Called before the substep loop; `interpolateColliders` only ever
+    /// rewrites the [0, active) prefix, so the tail persists across the frame's
+    /// substeps (design §4.2).
+    private func writeForeignTail(buffers: SpringBoneBuffers) {
+        let sphereRoom = max(buffers.sphereCapacity - buffers.numSpheres, 0)
+        let capsuleRoom = max(buffers.capsuleCapacity - buffers.numCapsules, 0)
+
+        var spheres = pendingForeignSnapshot.spheres
+        var capsules = pendingForeignSnapshot.capsules
+        if spheres.count > sphereRoom {
+            vrmLogPhysics("⚠️ [SpringBone] Foreign spheres \(spheres.count) exceed reserved tail \(sphereRoom); dropping \(spheres.count - sphereRoom).")
+            spheres = Array(spheres.prefix(sphereRoom))
+        }
+        if capsules.count > capsuleRoom {
+            vrmLogPhysics("⚠️ [SpringBone] Foreign capsules \(capsules.count) exceed reserved tail \(capsuleRoom); dropping \(capsules.count - capsuleRoom).")
+            capsules = Array(capsules.prefix(capsuleRoom))
+        }
+
+        if let buf = buffers.sphereColliders, !spheres.isEmpty {
+            let ptr = buf.contents().bindMemory(to: SphereCollider.self, capacity: buffers.sphereCapacity)
+            for (i, s) in spheres.enumerated() {
+                ptr[buffers.numSpheres + i] = SphereCollider(center: s.center, radius: s.radius,
+                                                             groupIndex: foreignColliderGroupIndex,
+                                                             inside: s.inside != 0)
+            }
+        }
+        if let buf = buffers.capsuleColliders, !capsules.isEmpty {
+            let ptr = buf.contents().bindMemory(to: CapsuleCollider.self, capacity: buffers.capsuleCapacity)
+            for (i, c) in capsules.enumerated() {
+                ptr[buffers.numCapsules + i] = CapsuleCollider(p0: c.p0, p1: c.p1, radius: c.radius,
+                                                              groupIndex: foreignColliderGroupIndex,
+                                                              inside: c.inside != 0)
+            }
+        }
+        activeForeignSpheres = spheres.count
+        activeForeignCapsules = capsules.count
+    }
+
     /// Run spring-bone simulation. If `commandBuffer` is non-nil, all substep compute
     /// passes are encoded into it (no internal `makeCommandBuffer`/`commit`) — caller
     /// owns the buffer's lifecycle. If `nil`, the legacy path is used (one fresh
@@ -458,6 +510,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         let allChainsAsleep = sleepGateEnabled && !chainSleepState.isEmpty && chainSleepState.allSatisfy { $0 }
+
+        // Write this frame's foreign colliders into the reserved tail once. The
+        // tail persists across substeps (interpolate only rewrites the prefix).
+        writeForeignTail(buffers: buffers)
 
         var stepsThisFrame = 0
 
@@ -2624,6 +2680,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               buffers.numBones > 0 else {
             return
         }
+
+        // Keep warmup's sphere/capsule counts consistent-by-construction with
+        // update()'s expression (buffers.numSpheres/numCapsules + active
+        // foreign). Warmup is a load-time settling loop that normally runs
+        // before any foreign injection (activeForeign* is 0 then, so this is
+        // inert), but setting it here means the two physics entry points can
+        // never diverge if warmup is ever invoked after a foreign injection.
+        globalParams.numSpheres = UInt32(buffers.numSpheres + activeForeignSpheres)
+        globalParams.numCapsules = UInt32(buffers.numCapsules + activeForeignCapsules)
 
         // Step 1: Capture current animated positions for root bones
         guard let springBone = model.springBone else { return }
