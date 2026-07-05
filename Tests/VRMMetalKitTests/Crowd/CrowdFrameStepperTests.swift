@@ -254,6 +254,39 @@ final class CrowdFrameStepperTests: XCTestCase {
             "right half (avatar B, drawn LAST) must match its solo render")
     }
 
+    /// Component A (design §2/§6): with `bodyContactMargin` set, the closest torso
+    /// pair never stays overlapped past the margin, even when the driver holds at a
+    /// deep-overlap separation. Control: the same deep hold WITHOUT the clamp leaves
+    /// the torsos overlapping far past the margin.
+    @MainActor func testBodyContactMarginClampsTorsoOverlap() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let margin: Float = 0.05
+        // Deep hold: 0.05 half-sep => 0.10m apart => torsos deeply interpenetrate.
+        let driver = CrowdMotionDriver(startSep: 1.0, holdSep: 0.05,
+            approachStart: 0.0, approachEnd: 0.1, holdEnd: 0.9, partEnd: 1.0)
+
+        func overlapAfterHold(margin: Float?) async throws -> (overlap: Float, applied: Float?) {
+            let a = try await avatar(device, index: 0)
+            let b = try await avatar(device, index: 1)
+            let stepper = CrowdFrameStepper(avatars: [a, b], driver: driver, group: nil, fps: 60,
+                                            bodyContactMargin: margin)
+            for _ in 0..<48 { stepper.step(frameTime: 0.5) }  // hold; let the clamp converge
+            let ta = try XCTUnwrap(SpringBoneContactColliderSet.worldTorsoCapsule(model: a.model))
+            let tb = try XCTUnwrap(SpringBoneContactColliderSet.worldTorsoCapsule(model: b.model))
+            return (CrowdContactClamp.maxOverlap(torsos: [ta, tb]), stepper.lastAppliedHalfSeparation)
+        }
+
+        let unclamped = try await overlapAfterHold(margin: nil)
+        XCTAssertGreaterThan(unclamped.overlap, margin + 0.05,
+            "control: without the clamp the torsos deeply overlap")
+
+        let clamped = try await overlapAfterHold(margin: margin)
+        XCTAssertLessThanOrEqual(clamped.overlap, margin + 0.02,
+            "clamp holds torso overlap at/under the margin")
+        XCTAssertGreaterThan(try XCTUnwrap(clamped.applied), driver.holdSep,
+            "clamp raised the applied half-separation above the driver's deep hold")
+    }
+
     // Local camera helpers (avoid depending on the executable's private helpers).
     private func perspectiveTest(aspect: Float) -> float4x4 {
         let fov: Float = .pi / 4, near: Float = 0.1, far: Float = 100

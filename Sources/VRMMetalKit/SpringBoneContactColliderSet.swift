@@ -127,6 +127,35 @@ enum SpringBoneContactColliderSet {
             humanoid: humanoid, model: model)
     }
 
+    /// This avatar's torso capsule in world space, or `nil` when the rig has no
+    /// humanoid / spine. The model-only accessor Component A (`CrowdFrameStepper`)
+    /// and Component B (`PosturalContactLayer`) both read — no compute system
+    /// required. Shares ``torsoCollider(model:)`` and ``worldCapsule(_:model:)``
+    /// with the snapshot path, so the world torso can never disagree with the
+    /// snapshot's first capsule.
+    static func worldTorsoCapsule(model: VRMModel) -> CapsuleCollider? {
+        guard let torso = torsoCollider(model: model) else { return nil }
+        return worldCapsule(torso, model: model)
+    }
+
+    /// Transforms a local-space, node-anchored capsule `VRMCollider` into a
+    /// world-space `CapsuleCollider` via the anchor node's world matrix. The one
+    /// transform path shared by `SpringBoneComputeSystem.contactColliderSnapshot`
+    /// and the torso accessors. `groupIndex` is left 0; the sink assigns groups.
+    static func worldCapsule(_ collider: VRMCollider, model: VRMModel) -> CapsuleCollider? {
+        guard case .capsule(let offset, let radius, let tail) = collider.shape,
+              collider.node >= 0, collider.node < model.nodes.count else { return nil }
+        let node = model.nodes[collider.node]
+        let wm = node.worldMatrix
+        let rot = simd_float3x3(
+            SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+            SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+            SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2]))
+        let p0 = node.worldPosition + rot * offset
+        let p1 = p0 + rot * tail
+        return CapsuleCollider(p0: p0, p1: p1, radius: radius, groupIndex: 0)
+    }
+
     /// The node indices mapped to humanoid bones. An authored collider counts as
     /// a *body* collider only if it is anchored to one of these (hair/accessory
     /// colliders live on non-humanoid nodes and are excluded).

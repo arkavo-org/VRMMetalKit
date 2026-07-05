@@ -44,14 +44,47 @@ public final class CrowdFrameStepper {
     private let dt: Float
     private let baseTranslations: [Int: [ObjectIdentifier: SIMD3<Float>]]
 
+    /// Max torso-capsule overlap allowed by the contact-aware clamp (Component A,
+    /// design §2). `nil` ⇒ clamp off (the driver's raw separation passes through).
+    private let bodyContactMargin: Float?
+    /// Per-avatar postural yield layers (Component B), keyed by avatar index.
+    /// Empty ⇒ postural yield off. Fed each frame with the nearest partner torso.
+    private let posturalLayers: [Int: PosturalContactLayer]
+    /// The half-separation actually applied last frame — the radius the clamp's
+    /// one-frame-lagged torso snapshot was measured at (design §2/§4).
+    public private(set) var lastAppliedHalfSeparation: Float?
+
     /// The avatars, exposed so a host can set a shared camera on each renderer.
     public var avatarsForCamera: [Avatar] { avatars }
 
-    public init(avatars: [Avatar], driver: CrowdMotionDriver, group: SpringBoneContactGroup?, fps: Float) {
+    /// The postural yield layer for `avatarIndex`, if postural yield is enabled.
+    public func posturalLayer(forAvatar avatarIndex: Int) -> PosturalContactLayer? {
+        posturalLayers[avatarIndex]
+    }
+
+    /// - Parameters:
+    ///   - bodyContactMargin: enables Component A (contact-aware clamp) — the max
+    ///     torso overlap allowed. `nil` leaves the driver's separation untouched.
+    ///   - postural: enables Component B (postural yield) with these params; a
+    ///     `PosturalContactLayer` is built and bound per avatar. `nil` ⇒ off.
+    public init(avatars: [Avatar], driver: CrowdMotionDriver, group: SpringBoneContactGroup?, fps: Float,
+                bodyContactMargin: Float? = nil, postural: PosturalContactParams? = nil) {
         self.avatars = avatars
         self.driver = driver
         self.group = group
         self.dt = fps > 0 ? 1.0 / fps : 1.0 / 60.0
+        self.bodyContactMargin = bodyContactMargin
+        if let postural = postural {
+            var layers: [Int: PosturalContactLayer] = [:]
+            for avatar in avatars {
+                let layer = PosturalContactLayer(params: postural)
+                layer.initialize(with: avatar.model)
+                layers[avatar.index] = layer
+            }
+            self.posturalLayers = layers
+        } else {
+            self.posturalLayers = [:]
+        }
         // Snapshot each root's authored (bind) translation so scripted motion is
         // applied additively and never loses the model's base pose.
         var bases: [Int: [ObjectIdentifier: SIMD3<Float>]] = [:]
@@ -67,7 +100,45 @@ public final class CrowdFrameStepper {
 
     /// Phase 0 (pose all) + Phase 1+2 (exchange). `frameTime` is normalized [0,1].
     public func step(frameTime: Float) {
-        let halfSep = driver.halfSeparation(at: frameTime)
+        let driverHalfSep = driver.halfSeparation(at: frameTime)
+
+        // World-space torso capsules from the CURRENT (previous-frame-committed)
+        // world matrices — the one-frame-lagged partner geometry (design §4) both
+        // the clamp and the postural feed read. Gathered only when a component
+        // needs it, so the default path stays untouched.
+        let needsTorsos = bodyContactMargin != nil || !posturalLayers.isEmpty
+        var torsos: [Int: CapsuleCollider] = [:]
+        if needsTorsos {
+            for avatar in avatars {
+                if let t = SpringBoneContactColliderSet.worldTorsoCapsule(model: avatar.model) {
+                    torsos[avatar.index] = t
+                }
+            }
+        }
+
+        // Component A: raise the shared placement radius so the closest torso pair
+        // overlaps by at most `bodyContactMargin` (the driver still governs when it
+        // is already beyond the contact floor).
+        let halfSep: Float
+        if let margin = bodyContactMargin {
+            halfSep = CrowdContactClamp.clampedHalfSeparation(
+                driverHalfSep: driverHalfSep,
+                lastAppliedHalfSep: lastAppliedHalfSeparation ?? driverHalfSep,
+                torsos: avatars.map { torsos[$0.index] },
+                avatarCount: avatars.count, margin: margin)
+        } else {
+            halfSep = driverHalfSep
+        }
+        lastAppliedHalfSeparation = halfSep
+
+        // Component B: feed each avatar's layer its nearest partner's torso (lag).
+        if !posturalLayers.isEmpty {
+            for avatar in avatars {
+                posturalLayers[avatar.index]?.partnerTorso =
+                    nearestPartnerTorso(of: avatar.index, torsos: torsos)
+            }
+        }
+
         for avatar in avatars {
             // Phase 0a: animation (applies to bones + internal updateNodeTransforms).
             avatar.player.update(deltaTime: dt, model: avatar.model)
@@ -81,9 +152,33 @@ public final class CrowdFrameStepper {
             }
             // Phase 0c: propagate root motion into world matrices for the snapshot.
             avatar.model.updateNodeTransforms()
+            // Phase 0d: postural yield in the kinematic phase — writes the leaned
+            // spine/chest BEFORE the spring solver (in drawComposite) runs, so the
+            // chest's spring bones inherit the lean (design §3/§3.1). Direct
+            // post-multiply onto the animated pose, then re-propagate for the snapshot.
+            if let layer = posturalLayers[avatar.index] {
+                layer.update(deltaTime: dt, context: AnimationContext())
+                layer.applyDirect(to: avatar.model)
+                avatar.model.updateNodeTransforms()
+            }
         }
-        // Phase 1+2: snapshot all (post-motion poses), inject union-minus-self.
+        // Phase 1+2: snapshot all (post-motion, post-yield poses), inject union-minus-self.
         group?.exchange()
+    }
+
+    /// The nearest OTHER avatar's torso capsule to `avatarIndex`, by capsule-midpoint
+    /// distance. `nil` when this or every other avatar lacks a torso.
+    private func nearestPartnerTorso(of avatarIndex: Int, torsos: [Int: CapsuleCollider]) -> CapsuleCollider? {
+        guard let mine = torsos[avatarIndex] else { return nil }
+        let myMid = (mine.p0 + mine.p1) * 0.5
+        var best: CapsuleCollider?
+        var bestDist = Float.greatestFiniteMagnitude
+        for avatar in avatars where avatar.index != avatarIndex {
+            guard let t = torsos[avatar.index] else { continue }
+            let d = simd_length((t.p0 + t.p1) * 0.5 - myMid)
+            if d < bestDist { bestDist = d; best = t }
+        }
+        return best
     }
 
     /// Phase 3: composite every avatar into `color`/`depth`. Each avatar is a
