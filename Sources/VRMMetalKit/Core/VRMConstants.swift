@@ -148,8 +148,12 @@ public enum VRMConstants {
         public static let minScaleForThreshold: Float = 0.1
 
         /// Max simultaneous contact-group partners a single avatar yields to
-        /// (design §6). The reserved foreign-collider tail is sized to this.
-        public static let maxContactPartners: Int = 3
+        /// (design §6). The reserved foreign-collider tail is sized to this. The
+        /// coordinator keeps each avatar's NEAREST `maxContactPartners` partners
+        /// (SpringBoneContactGroup.nearestPartnerIndices), so this bounds memory
+        /// for arbitrary crowd sizes while covering small crowds fully (up to
+        /// N = maxContactPartners + 1 avatars all contact each other).
+        public static let maxContactPartners: Int = 6
         /// Foreign sphere slots reserved per partner: the contact set contributes
         /// one skull sphere per partner (design §5).
         public static let foreignSphereSlotsPerPartner: Int = 1

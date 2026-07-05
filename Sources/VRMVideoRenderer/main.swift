@@ -807,13 +807,23 @@ struct VRMVideoRendererCLI {
 
             // Shared camera for all avatars (orbit or fixed), applied before stepping.
             let view: float4x4
+            // Ring radius (N>=3) is set by the start separation, not the avatar
+            // count — more avatars pack denser onto the same ring.
+            let ringRadius = options.crowdStartSep
             if options.orbitCamera {
                 let angle = Float(frameIndex) / Float(totalFrames) * 2.0 * Float.pi
-                let radius = max(options.orbitTarget.radius, Float(options.avatarCount) * options.crowdStartSep * 0.9)
+                let radius = max(options.orbitTarget.radius, ringRadius * 2.8 + 1.0)
                 let cy = options.orbitTarget.centerY
                 view = lookAt(eye: SIMD3<Float>(sin(angle) * radius, cy, cos(angle) * radius),
                               center: SIMD3<Float>(0, cy, 0), up: SIMD3<Float>(0, 1, 0))
+            } else if options.avatarCount >= 3 {
+                // Ring: frame the full diameter + avatar height, raised and
+                // tilted down to see into the cluster (the line heuristic
+                // under-frames a ring).
+                let dist = max(3.0, ringRadius * 3.5 + 1.5)
+                view = lookAt(eye: SIMD3<Float>(0, 2.0, dist), center: SIMD3<Float>(0, 1.0, 0), up: SIMD3<Float>(0, 1, 0))
             } else {
+                // Two avatars on a line at ∓startSep.
                 let dist = max(2.5, Float(options.avatarCount) * options.crowdStartSep * 1.1)
                 view = lookAt(eye: SIMD3<Float>(0, 1.3, dist), center: SIMD3<Float>(0, 1.3, 0), up: SIMD3<Float>(0, 1, 0))
             }

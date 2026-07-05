@@ -22,8 +22,10 @@ import simd
 /// so they meet chest-to-chest. Facing is baked here (set once at setup); the
 /// motion driver contributes only translation along the approach axis.
 ///
-/// For `avatarCount > 2` the avatars ring around the center facing inward — a
-/// documented stretch; v1 targets and tests `avatarCount == 2`.
+/// For `avatarCount > 2` the avatars ring around the center facing inward.
+/// N>2 is supported and tested (`CrowdNPlusTests`): the coordinator keeps each
+/// avatar's nearest `maxContactPartners` partners, so contact is correct and
+/// bounded for any crowd size.
 public enum CrowdPlacement {
 
     /// World-space root translation for `avatarIndex` given the current

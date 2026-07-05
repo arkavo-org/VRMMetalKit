@@ -67,15 +67,45 @@ public final class SpringBoneContactGroup {
     public func exchange() {
         // Phase 1: pure snapshots, no integrate, no mirror mutation.
         let snapshots = members.map { $0.system.contactColliderSnapshot(model: $0.model) }
-        // Phase 2: union-minus-self per participant, then inject (replace-or-clear).
+        let positions = snapshots.map { Self.centroid(of: $0) }
+        let k = VRMConstants.Physics.maxContactPartners
+        // Phase 2: NEAREST-K union-minus-self per participant, then inject.
+        // Nearest-K is physically motivated, not just a memory bound: an avatar
+        // only contacts nearby neighbours, so keeping the closest K partners is
+        // both correct physics (you don't collide with someone across the room)
+        // and a bounded-memory guarantee — the union fits the fixed reserved tail
+        // for ANY crowd size. When capped it drops the FARTHEST partners, never an
+        // arbitrary tail.
         for (i, member) in members.enumerated() {
             var spheres: [SphereCollider] = []
             var capsules: [CapsuleCollider] = []
-            for (j, snap) in snapshots.enumerated() where j != i {
-                spheres.append(contentsOf: snap.spheres)
-                capsules.append(contentsOf: snap.capsules)
+            for j in Self.nearestPartnerIndices(positions: positions, for: i, count: k) {
+                spheres.append(contentsOf: snapshots[j].spheres)
+                capsules.append(contentsOf: snapshots[j].capsules)
             }
             member.system.setForeignColliders(ForeignColliderSnapshot(spheres: spheres, capsules: capsules))
         }
+    }
+
+    /// Indices of the `count` members nearest to member `i` (excluding `i`),
+    /// ranked by centroid distance (nearest first). Pure and testable — the
+    /// nearest-K partner selection that makes cross-avatar contact correct and
+    /// bounded for arbitrary crowd sizes.
+    static func nearestPartnerIndices(positions: [SIMD3<Float>], for i: Int, count: Int) -> ArraySlice<Int> {
+        let others = (0..<positions.count).filter { $0 != i }
+        let sorted = others.sorted {
+            simd_distance_squared(positions[i], positions[$0]) < simd_distance_squared(positions[i], positions[$1])
+        }
+        return sorted.prefix(count)
+    }
+
+    /// Centroid of a contact snapshot (sphere centres + capsule midpoints), used
+    /// to rank partner proximity. Returns the origin for an empty snapshot.
+    static func centroid(of snap: ForeignColliderSnapshot) -> SIMD3<Float> {
+        var sum = SIMD3<Float>(0, 0, 0)
+        var n = 0
+        for s in snap.spheres { sum += s.center; n += 1 }
+        for c in snap.capsules { sum += (c.p0 + c.p1) * 0.5; n += 1 }
+        return n > 0 ? sum / Float(n) : sum
     }
 }
