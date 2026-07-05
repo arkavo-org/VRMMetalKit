@@ -480,6 +480,15 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
         model.updateNodeTransforms()
 
         let renderer = VRMRenderer(device: device, config: config)
+        // --realtime uses the async spring path (synchronousSpringBone=false),
+        // whose dt defaults to WALL-CLOCK — meaningless for an offline render that
+        // runs at hundreds of fps (springs would advance ~3ms while animation
+        // advances 1/fps, yanking hair/cloth without damping = permanent flaring).
+        // Pin the async path to frame-time dt so the offline video is correctly
+        // timed while still exercising the async code path (sleep gate, one-frame lag).
+        if options.crowdRealtime {
+            renderer.simulationDeltaTime = TimeInterval(1.0 / Double(options.fps))
+        }
         renderer.loadModelWithoutWarmup(model)
         renderer.enableSpringBone = true
         renderer.projectionMatrix = options.orthographic
