@@ -58,23 +58,31 @@ public final class SpringBoneBuffers: @unchecked Sendable {
     var numSpheres: Int = 0
     var numCapsules: Int = 0
     var numPlanes: Int = 0
+    /// Allocated sphere-buffer slot count (>= numSpheres). The tail
+    /// [numSpheres, sphereCapacity) is the reserved foreign region (design §4.2).
+    var sphereCapacity: Int = 0
+    /// Allocated capsule-buffer slot count (>= numCapsules).
+    var capsuleCapacity: Int = 0
 
     init(device: MTLDevice) {
         self.device = device
     }
 
-    func allocateBuffers(numBones: Int, numSpheres: Int, numCapsules: Int, numPlanes: Int = 0) {
+    func allocateBuffers(numBones: Int, numSpheres: Int, numCapsules: Int, numPlanes: Int = 0,
+                         foreignSphereSlots: Int = 0, foreignCapsuleSlots: Int = 0) {
         self.numBones = numBones
         self.numSpheres = numSpheres
         self.numCapsules = numCapsules
         self.numPlanes = numPlanes
+        self.sphereCapacity = numSpheres + foreignSphereSlots
+        self.capsuleCapacity = numCapsules + foreignCapsuleSlots
 
         // Allocate SoA buffers with proper alignment
         let bonePosSize = MemoryLayout<SIMD3<Float>>.stride * numBones
         let boneParamsSize = MemoryLayout<BoneParams>.stride * numBones
         let restLengthSize = MemoryLayout<Float>.stride * numBones
-        let sphereColliderSize = MemoryLayout<SphereCollider>.stride * numSpheres
-        let capsuleColliderSize = MemoryLayout<CapsuleCollider>.stride * numCapsules
+        let sphereColliderSize = MemoryLayout<SphereCollider>.stride * max(sphereCapacity, 0)
+        let capsuleColliderSize = MemoryLayout<CapsuleCollider>.stride * max(capsuleCapacity, 0)
         let planeColliderSize = MemoryLayout<PlaneCollider>.stride * numPlanes
 
         bonePosPrev = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])
@@ -88,12 +96,12 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         bindDirections = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])  // SIMD3<Float> per bone
         bindDirections?.label = "SpringBone BindDirections"
 
-        if numSpheres > 0 {
+        if sphereCapacity > 0 {
             sphereColliders = device.makeBuffer(length: sphereColliderSize, options: [.storageModeShared])
             sphereColliders?.label = "SpringBone SphereColliders"
         }
 
-        if numCapsules > 0 {
+        if capsuleCapacity > 0 {
             capsuleColliders = device.makeBuffer(length: capsuleColliderSize, options: [.storageModeShared])
             capsuleColliders?.label = "SpringBone CapsuleColliders"
         }

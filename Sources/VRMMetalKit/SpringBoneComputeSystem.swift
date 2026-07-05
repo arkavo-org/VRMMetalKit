@@ -80,6 +80,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// them (see `SpringBoneCollision.metal`). `0xFFFFFFFF` = no synthetic group
     /// present → swept collision never engages.
     private var sweptColliderGroupIndex: UInt32 = 0xFFFFFFFF
+    /// Reserved collider-group index for cross-avatar FOREIGN colliders (design
+    /// §7). Distinct from the synthetic group so foreign colliders stay OUT of
+    /// the synthetic group's swept-CCD scoping (foreign contact is discrete).
+    /// `colliderGroups.count + 1`, set at populate time; `0xFFFFFFFF` when the
+    /// model has too many authored collider groups to safely reserve the slot
+    /// (see the aliasing guard in `populateSpringBoneData`).
+    private var foreignColliderGroupIndex: UInt32 = 0xFFFFFFFF
+    /// Active foreign colliders written into the reserved tail THIS frame. Set by
+    /// the injection sink; drives the per-frame kernel active count. Zero ⇒ the
+    /// authored path is bit-identical (design §4.2, §8.1).
+    var activeForeignSpheres: Int = 0
+    var activeForeignCapsules: Int = 0
     private var timeAccumulator: TimeInterval = 0
     private var lastUpdateTime: TimeInterval = 0
 
@@ -474,6 +486,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // trajectory is preserved.
             params.dtSub = Float(fixedDeltaTime)
             params.windPhase += Float(fixedDeltaTime)
+
+            // Per-frame kernel active count = active authored+synthetic + active
+            // foreign. Zero foreign ⇒ equals the load-time value ⇒ bit-identical
+            // (design §4.2). buffers.numSpheres/numCapsules is the active
+            // authored+synthetic count (the reserved tail is beyond it).
+            params.numSpheres = UInt32(buffers.numSpheres + activeForeignSpheres)
+            params.numCapsules = UInt32(buffers.numCapsules + activeForeignCapsules)
 
             // Decrement settling frames counter (allows bones to settle with gravity before inertia compensation)
             if params.settlingFrames > 0 {
@@ -1137,6 +1156,24 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // (#313). No synthetic colliders → sentinel that matches no group.
         sweptColliderGroupIndex = hasSyntheticColliders ? syntheticGroupIndex : 0xFFFFFFFF
 
+        // Reserve the foreign group bit (design §7), distinct from synthetic and
+        // OR'd into every spring bone unconditionally — harmless when idle (no
+        // foreign colliders ⇒ the bit matches nothing). Only reserve the slot
+        // when `colliderGroups.count + 1` stays clear of the authored overflow
+        // clamp at 31 (models with >=32 authored groups already clamp their
+        // overflow colliders' groupIndex to 31 — see the `colliderToGroupIndex`
+        // clamp above). Below that ceiling, `count` and `count + 1` are both
+        // <31 and distinct from each other and from every authored index, so
+        // synthetic (`count`) and foreign (`count + 1`) can never collide with
+        // an authored bit or with one another. Above it, skip the reservation
+        // rather than risk leaking authored colliders through the spring
+        // filter (matches the `hasSyntheticColliders` guard's rationale).
+        let foreignSlotIsSafe = springBone.colliderGroups.count < 30
+        foreignColliderGroupIndex = foreignSlotIsSafe
+            ? UInt32(springBone.colliderGroups.count + 1)
+            : 0xFFFFFFFF
+        let foreignGroupBit: UInt32 = foreignSlotIsSafe ? (1 << foreignColliderGroupIndex) : 0
+
         // Process spring chains to extract bone parameters
         var boneIndex = 0
         rootBoneIndices = []
@@ -1164,6 +1201,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Always collide with synthetic colliders (issue #309). Harmless when
             // the mask is already the 0xFFFFFFFF all-groups default.
             colliderGroupMask |= syntheticGroupBit
+            // Always collide with the reserved foreign group (design §7) so
+            // cross-avatar colliders, once injected into the tail, affect every
+            // spring bone regardless of authored group membership.
+            colliderGroupMask |= foreignGroupBit
 
             for joint in spring.joints {
                 chainGravityPower.append(joint.gravityPower)

@@ -146,6 +146,16 @@ public enum VRMConstants {
         /// Minimum model scale for threshold calculation
         /// Prevents division issues and ensures very small models still have reasonable teleportation detection
         public static let minScaleForThreshold: Float = 0.1
+
+        /// Max simultaneous contact-group partners a single avatar yields to
+        /// (design §6). The reserved foreign-collider tail is sized to this.
+        public static let maxContactPartners: Int = 3
+        /// Foreign sphere slots reserved per partner: the contact set contributes
+        /// one skull sphere per partner (design §5).
+        public static let foreignSphereSlotsPerPartner: Int = 1
+        /// Foreign capsule slots reserved per partner: torso + 2 upper arms +
+        /// brow = 4 capsules per partner (design §5).
+        public static let foreignCapsuleSlotsPerPartner: Int = 4
     }
 
     // MARK: - Animation
