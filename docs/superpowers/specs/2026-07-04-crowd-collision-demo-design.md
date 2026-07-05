@@ -147,5 +147,5 @@ All logic is pushed out of the (pixel-untestable) video glue into testable units
 
 - **N > 2 crowds** beyond the documented ring stretch — v1 is N=2.
 - **Real-time / async wiring** of the seam — the seam ships validated for offline-synchronous single-caller only (§2.2); async multi-caller ordering is the collision design's deferred rung-2/3 work.
-- **The collision feature's own deferred items** (convergence rungs, authored-collider inclusion, F1 async sleep-gate wake) — untouched here; the offline path sidesteps F1 rather than fixing it.
+- **The collision feature's own deferred items** (convergence rungs, authored-collider inclusion) — untouched here. **F1 (async sleep-gate wake) is now FIXED** (`detectWakeConditions` wakes chains on a changed/moving foreign-collider set — `SpringBoneComputeSystem.foreignCollidersChanged`), so a settled avatar reacts to a partner leaning in on the async render path; the offline demo never needed it (sleep gate off). Real-time wiring of the coordinator into an async render loop is now unblocked by F1.
 - **Multiple *different* models in one crowd** — v1 replicates one passed model into N instances. Distinct per-avatar models is a trivial later extension (load a list) but not a v1 requirement.
