@@ -45,3 +45,32 @@ The value is proof, not the flag. Three tests, all Metal-gated, driving the **as
 - No change to the sync/offline demo path (still the default; deterministic for regression/video).
 - No new ordering scheme (this is the accepted (b) one-frame-lag path; zero-lag rung-2/rung-3 convergence is subsystem 5).
 - No windowed interactive app — the deliverable is *library async-path support proven and exposed*, which a real app consumes via the same `joinContactGroup` + `exchange()` pattern the crowd demo uses.
+
+---
+
+## 6. Feature-complete status + Lockstep (rung 3) escape hatch
+
+The cross-avatar collision feature is **feature-complete** on this branch:
+
+| Subsystem | Status |
+|-----------|--------|
+| 1. Async render-path support | ✅ built + proven (`CrowdAsyncPathTests`) |
+| 2. N>2 crowds (nearest-K partners) | ✅ built (`CrowdNPlusTests`) |
+| 3. Authored-collider inclusion | ✅ built (`CrowdAuthoredColliderTests`) |
+| 4. Per-partner response scaling | ✅ built, shader change (`CrowdResponseScaleTests`) |
+| 5. Lockstep hug-convergence (rung 3) | **deliberately NOT built — see below** |
+
+### Lockstep — evaluated, deliberately not built
+
+Lockstep (per-substep interleaved co-simulation: advance every avatar one substep, re-`exchange()` colliders, repeat) targets a **drag-damped anti-phase limit cycle** at sustained contact. It was evaluated and deliberately not built because in the current design it is **inert against that cycle — not globally inert** (this precision matters):
+
+**Trigger 1 — the anti-phase cycle: structurally cannot form here.** A limit cycle needs a *closed feedback loop* (an avatar's spring state → its own contact colliders → the partner's springs → back). The contact set is **body colliders on humanoid bones, driven by animation, independent of the spring-bone state** (subsystem 3 explicitly filters *out* hair/accessory colliders). So the coupling is a dead-end (`A's body → B's hair`), never a loop — no cycle can form, and lockstep has nothing to converge. This trigger only appears **IF the contact set ever includes spring-bone-driven (dynamic) colliders** — e.g. a collider anchored to a hair/cloth bone — which would create the loop.
+
+**Trigger 2 — approach staleness: real but bounded, and out-ranked.** During *fast relative body motion* (the approach, not the hold), the (b) one-frame / frozen-partner lag samples the partner's body trajectory coarsely, so contact *onset* can lag. Lockstep's finer per-substep re-sampling reduces this. But the effect is **bounded by the accepted snap-staleness argument** (staleness ∝ partner velocity, small in the contemplative register) and is **~zero at the sustained hold** (near-static bodies). A hold-focused test would measure ~zero and mislead into a "global no-op" overclaim; the regime where lockstep is non-zero is the *approach*.
+
+**Fix ranking for approach staleness (if it ever reads wrong), cheapest first:**
+1. **Slow the approach** — motion-driver tuning; the contemplative register already favors this.
+2. **Tune compliance/drag** on the contact bones — damps onset overshoot.
+3. **Lockstep (rung 3)** — the last resort: lift the substep loop into the coordinator and interleave advance/exchange per substep.
+
+**Build lockstep only when** either trigger fires: (1) the contact set gains dynamic colliders (feedback loop becomes possible), or (2) the approach demonstrably reads wrong *after* the cheaper fixes above. Until then it is dead complexity by the reasoning above.
