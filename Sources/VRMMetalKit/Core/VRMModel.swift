@@ -153,11 +153,12 @@ public class VRMModel: @unchecked Sendable {
     /// Global parameters for spring bone physics (gravity, wind, substeps).
     public var springBoneGlobalParams: SpringBoneGlobalParams?
 
-    /// Test-only toggle: when true, `initializeSpringBoneGPUSystem` reserves the
-    /// cross-avatar foreign-collider tail. Production reserves unconditionally
-    /// once contact groups are wired; this hook lets the capacity test compare
-    /// reserved vs. unreserved without a coordinator (design §8.1).
-    public var springBoneForeignReservationEnabledForTesting: Bool = true
+    /// Production toggle: when true, `initializeSpringBoneGPUSystem` reserves the
+    /// cross-avatar foreign-collider tail. Defaults to true so production reserves
+    /// the tail by default once contact groups are wired; the capacity test flips
+    /// it to false to compare reserved vs. unreserved without a coordinator
+    /// (design §8.1).
+    public var reservesForeignColliderTail: Bool = true
 
     /// Texture indices used as outline-width mask (linear R8, not sRGB).
     public var outlineWidthMaskTextureIndices: Set<Int> = []
@@ -1219,7 +1220,7 @@ public class VRMModel: @unchecked Sendable {
         }.count
 
         // Initialize buffers
-        let reserve = springBoneForeignReservationEnabledForTesting
+        let reserve = reservesForeignColliderTail
         let foreignSphereSlots = reserve
             ? VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignSphereSlotsPerPartner : 0
         let foreignCapsuleSlots = reserve

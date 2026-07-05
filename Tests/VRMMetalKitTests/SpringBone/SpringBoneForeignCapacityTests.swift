@@ -32,7 +32,7 @@ final class SpringBoneForeignCapacityTests: XCTestCase {
             model.updateNodeTransforms()
             // The reserve flag routes through initializeSpringBoneGPUSystem's
             // headroom (0 when !reserve, N when reserve).
-            model.springBoneForeignReservationEnabledForTesting = reserve
+            model.reservesForeignColliderTail = reserve
             try model.initializeSpringBoneGPUSystem(device: device)
             let system = try SpringBoneComputeSystem(device: device)
             try system.populateSpringBoneData(model: model)
@@ -58,7 +58,7 @@ final class SpringBoneForeignCapacityTests: XCTestCase {
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
             options: VRMLoadingOptions(augmentSpringBoneColliders: true))
         model.updateNodeTransforms()
-        model.springBoneForeignReservationEnabledForTesting = true
+        model.reservesForeignColliderTail = true
         try model.initializeSpringBoneGPUSystem(device: device)
         let buffers = try XCTUnwrap(model.springBoneBuffers)
         XCTAssertGreaterThan(buffers.capsuleCapacity, buffers.numCapsules)
