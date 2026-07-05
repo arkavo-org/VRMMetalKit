@@ -155,11 +155,14 @@ public enum VRMConstants {
         /// N = maxContactPartners + 1 avatars all contact each other).
         public static let maxContactPartners: Int = 6
         /// Foreign sphere slots reserved per partner: the contact set contributes
-        /// one skull sphere per partner (design §5).
-        public static let foreignSphereSlotsPerPartner: Int = 1
-        /// Foreign capsule slots reserved per partner: torso + 2 upper arms +
-        /// brow = 4 capsules per partner (design §5).
-        public static let foreignCapsuleSlotsPerPartner: Int = 4
+        /// Foreign sphere slots reserved per partner: 1 skeleton skull sphere +
+        /// up to `maxAuthoredContactColliders` (8) authored body spheres
+        /// (subsystem 3), sized for the all-sphere worst case.
+        public static let foreignSphereSlotsPerPartner: Int = 9
+        /// Foreign capsule slots reserved per partner: 4 skeleton capsules (torso
+        /// + 2 upper arms + brow) + up to `maxAuthoredContactColliders` (8)
+        /// authored body capsules (subsystem 3), sized for the all-capsule worst case.
+        public static let foreignCapsuleSlotsPerPartner: Int = 12
     }
 
     // MARK: - Animation

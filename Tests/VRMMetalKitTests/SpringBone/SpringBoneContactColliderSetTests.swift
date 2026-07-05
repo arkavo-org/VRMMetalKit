@@ -33,7 +33,7 @@ final class SpringBoneContactColliderSetTests: XCTestCase {
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
                                             options: VRMLoadingOptions(augmentSpringBoneColliders: false))
         model.updateNodeTransforms()
-        let set = SpringBoneContactColliderSet.synthesize(model: model)
+        let set = SpringBoneContactColliderSet.synthesize(model: model, includeAuthored: false)
         // torso (1 capsule) + 2 upper-arm capsules + head brow (1 capsule) = 4 capsules;
         // skull sphere = 1 sphere. Bounded contact-set cardinality (design §6).
         let capsules = set.filter { if case .capsule = $0.shape { return true } else { return false } }
@@ -68,7 +68,7 @@ final class SpringBoneContactColliderSetTests: XCTestCase {
             return XCTFail("augmentor skull primitive is not a sphere")
         }
 
-        let set = SpringBoneContactColliderSet.synthesize(model: model)
+        let set = SpringBoneContactColliderSet.synthesize(model: model, includeAuthored: false)
         let setBrow = set.first {
             if case .capsule = $0.shape, $0.node == brow.node { return true } else { return false }
         }

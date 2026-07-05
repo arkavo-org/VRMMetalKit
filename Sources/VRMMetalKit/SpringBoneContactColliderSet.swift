@@ -38,7 +38,16 @@ enum SpringBoneContactColliderSet {
     /// Upper-arm capsule radius as a fraction of the upperArm->lowerArm length.
     static let upperArmRadiusFractionOfLength: Float = 0.22
 
-    static func synthesize(model: VRMModel) -> [VRMCollider] {
+    /// Max authored body colliders folded into the contact set per avatar
+    /// (subsystem 3). Bounds the contact set so the reserved foreign tail stays
+    /// fixed for any avatar; most avatars author fewer than this. Largest-radius
+    /// authored colliders win when capped.
+    static let maxAuthoredContactColliders: Int = 8
+
+    /// Builds the contact set. `includeAuthored` (default true) folds in the
+    /// avatar's own authored body colliders (subsystem 3); pass false for the
+    /// pure skeleton-derived set (torso + arms + head).
+    static func synthesize(model: VRMModel, includeAuthored: Bool = true) -> [VRMCollider] {
         guard let humanoid = model.humanoid else { return [] }
         let ratios = SpringBoneColliderAugmentor.Ratios()
         var out: [VRMCollider] = []
@@ -73,6 +82,48 @@ enum SpringBoneContactColliderSet {
         if let skull = SpringBoneBoneGeometry.headSkullSphere(humanoid: humanoid, model: model, ratios: ratios) {
             out.append(skull)
         }
+
+        // Subsystem 3: fold in the avatar's own AUTHORED body colliders for
+        // precision around custom clothing/proportions the standard capsules
+        // miss. Appended AFTER the skeleton set so, if ever clamped, the reliable
+        // skeleton survives and only excess authored is dropped.
+        if includeAuthored {
+            out.append(contentsOf: filteredAuthoredBodyColliders(
+                model.springBone?.colliders ?? [],
+                humanoidNodes: humanoidNodeIndices(humanoid),
+                cap: maxAuthoredContactColliders))
+        }
         return out
+    }
+
+    /// The node indices mapped to humanoid bones. An authored collider counts as
+    /// a *body* collider only if it is anchored to one of these (hair/accessory
+    /// colliders live on non-humanoid nodes and are excluded).
+    static func humanoidNodeIndices(_ humanoid: VRMHumanoid) -> Set<Int> {
+        var nodes = Set<Int>()
+        for bone in VRMHumanoidBone.allCases {
+            if let n = humanoid.getBoneNode(bone) { nodes.insert(n) }
+        }
+        return nodes
+    }
+
+    /// Filters authored colliders to genuine body-contact surfaces (subsystem 3),
+    /// pure and testable: keeps only OUTSIDE sphere/capsule colliders anchored to
+    /// a humanoid bone, dropping hair/accessory colliders (non-humanoid nodes),
+    /// containment (`inside*`) colliders (wrong semantics — push in), and planes.
+    /// Returns the `cap` largest by radius (most significant body volumes win).
+    static func filteredAuthoredBodyColliders(_ colliders: [VRMCollider],
+                                              humanoidNodes: Set<Int>, cap: Int) -> [VRMCollider] {
+        var entries: [(collider: VRMCollider, radius: Float)] = []
+        for c in colliders {
+            guard humanoidNodes.contains(c.node) else { continue }
+            switch c.shape {
+            case .sphere(_, let r): entries.append((c, r))
+            case .capsule(_, let r, _): entries.append((c, r))
+            default: continue   // insideSphere / insideCapsule / plane — excluded
+            }
+        }
+        entries.sort { $0.radius > $1.radius }
+        return entries.prefix(cap).map { $0.collider }
     }
 }
