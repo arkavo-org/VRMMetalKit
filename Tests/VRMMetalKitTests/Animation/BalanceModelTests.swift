@@ -126,4 +126,32 @@ final class BalanceModelTests: XCTestCase {
         let hull = BalanceModel.supportPolygon(footCorners: line)
         XCTAssertLessThanOrEqual(hull.count, line.count)   // degenerate, but no trap
     }
+
+    // MARK: - Task 3: Stability margin
+
+    private var unitSquare: [SIMD2<Float>] {
+        // CCW unit square centered at origin, half-extent 1 (so edges at ±1).
+        [SIMD2<Float>(-1, -1), SIMD2<Float>(1, -1), SIMD2<Float>(1, 1), SIMD2<Float>(-1, 1)]
+    }
+
+    func testMargin_positiveAtCentroidEqualsHalfExtent() {
+        let (margin, centroid) = BalanceModel.stabilityMargin(comGround: .zero, polygon: unitSquare)
+        XCTAssertEqual(centroid.x, 0, accuracy: 1e-6)
+        XCTAssertEqual(centroid.y, 0, accuracy: 1e-6)
+        XCTAssertEqual(margin, 1.0, accuracy: 1e-5, "centroid is 1.0 from every edge")
+    }
+
+    func testMargin_decreasesMonotonicallyTowardEdge() {
+        let m0 = BalanceModel.stabilityMargin(comGround: SIMD2<Float>(0, 0), polygon: unitSquare).margin
+        let m1 = BalanceModel.stabilityMargin(comGround: SIMD2<Float>(0.5, 0), polygon: unitSquare).margin
+        let m2 = BalanceModel.stabilityMargin(comGround: SIMD2<Float>(0.9, 0), polygon: unitSquare).margin
+        XCTAssertGreaterThan(m0, m1)
+        XCTAssertGreaterThan(m1, m2)
+        XCTAssertGreaterThan(m2, 0, "still inside")
+    }
+
+    func testMargin_negativeOutsideWithCorrectMagnitude() {
+        let (margin, _) = BalanceModel.stabilityMargin(comGround: SIMD2<Float>(1.5, 0), polygon: unitSquare)
+        XCTAssertEqual(margin, -0.5, accuracy: 1e-5, "0.5 past the +x edge")
+    }
 }

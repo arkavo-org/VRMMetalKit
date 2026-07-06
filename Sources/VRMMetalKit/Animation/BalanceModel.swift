@@ -113,4 +113,33 @@ public enum BalanceModel {
         upper.removeLast()
         return lower + upper   // CCW
     }
+
+    // MARK: - Stability margin
+
+    /// Signed distance from `comGround` to the boundary of the (CCW) support polygon,
+    /// with the polygon centroid. `margin > 0` inside (distance to nearest edge),
+    /// `margin < 0` outside (−distance to nearest edge). Degenerate polygons (≤2
+    /// vertices) return a negative margin (no stable base).
+    public static func stabilityMargin(comGround p: SIMD2<Float>,
+                                       polygon poly: [SIMD2<Float>]) -> (margin: Float, centroid: SIMD2<Float>) {
+        let centroid = poly.isEmpty
+            ? SIMD2<Float>(repeating: 0)
+            : poly.reduce(SIMD2<Float>(repeating: 0), +) / Float(poly.count)
+        guard poly.count >= 3 else { return (-simd_distance(p, centroid), centroid) }
+
+        var inside = true
+        var minDist = Float.greatestFiniteMagnitude
+        for i in 0..<poly.count {
+            let a = poly[i], b = poly[(i + 1) % poly.count]
+            let e = b - a
+            // For a CCW polygon a point is inside when it is left of every edge.
+            let side = e.x * (p.y - a.y) - e.y * (p.x - a.x)
+            if side < 0 { inside = false }
+            let len2 = simd_length_squared(e)
+            let t = len2 > 1e-12 ? simd_clamp(simd_dot(p - a, e) / len2, 0, 1) : 0
+            let closest = a + e * t
+            minDist = min(minDist, simd_distance(p, closest))
+        }
+        return (inside ? minDist : -minDist, centroid)
+    }
 }
