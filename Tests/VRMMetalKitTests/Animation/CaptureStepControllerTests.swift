@@ -146,4 +146,62 @@ final class CaptureStepControllerTests: XCTestCase {
         // The swung (left) foot re-planted at the CoM ground projection (follow).
         XCTAssertEqual(c.target(.left).x, com.x, accuracy: 0.05)
     }
+
+    // MARK: - Task 4: convergence corner gate (the honest gate)
+    //
+    // CONDITIONAL ON 2a's CoM-RESPONSE MODEL: the CoM is held fixed under a synthetic
+    // shove and the foot lands exactly at its target. 2b's real-rig follow/moonwalk
+    // test is what validates that model against an actual rig. This gate proves the
+    // STEP LOGIC contracts given the model — not that the real CoM-response matches it.
+
+    /// Drive the controller one full step at a time against BalanceModel's pure statics
+    /// with a fixed CoM; return the residual (CoM distance past the support edge) after
+    /// each completed step.
+    private func residualSequence(params p: CaptureStepParams, comGround: SIMD2<Float>, steps: Int) -> [Float] {
+        let c = CaptureStepController(params: p)
+        c.seed(leftAnkle: SIMD3<Float>(-0.1, 0, 0), rightAnkle: SIMD3<Float>(0.1, 0, 0))
+        let com = SIMD3<Float>(comGround.x, 1, comGround.y)
+        var residuals: [Float] = []
+        // Deterministic one step per iteration: measure the residual with both feet
+        // planted, trigger a step, then advance frames until that swing completes
+        // (both planted again) before the next measurement.
+        for _ in 0..<steps {
+            let feet = c.plantedPositions()
+            let b = balanceFrom(feet: feet, com: com)
+            residuals.append(max(0, -b.margin))          // distance CoM is OUTSIDE support
+            if b.margin >= p.triggerMargin { break }     // converged — support caught the CoM
+            _ = c.step(balance: b, dt: 1.0 / 60.0)       // triggers one swing
+            var guardFrames = 0
+            while c.plantedFeet.count < 2 && guardFrames < 1000 {
+                _ = c.step(balance: b, dt: 1.0 / 60.0)   // finish the swing to the (stale-b) target
+                guardFrames += 1
+            }
+        }
+        return residuals
+    }
+
+    func testConvergence_atCommittedCorner_contracts() {
+        // Worst-case corner: max captureDistance × min stepDamping = max loop gain.
+        var p = CaptureStepParams()
+        p.captureDistance = CaptureStepParams.committedCaptureDistanceMax
+        p.stepDamping = CaptureStepParams.committedStepDampingMin
+        p.minStepInterval = 0
+        let r = residualSequence(params: p, comGround: SIMD2<Float>(0.4, 0), steps: 12)
+        // Monotone contraction (no oscillation): each residual ≤ the previous, and it
+        // reaches near zero (support caught up to the CoM).
+        for i in 1..<r.count { XCTAssertLessThanOrEqual(r[i], r[i - 1] + 1e-4, "step \(i) did not contract: \(r)") }
+        XCTAssertLessThan(r.last ?? .greatestFiniteMagnitude, 0.05, "recovery converges: \(r)")
+    }
+
+    func testConvergence_outsideRegion_doesNotContract() {
+        // A config well outside the stability region (huge capture, zero damping):
+        // loop gain > 1 ⇒ the residual must NOT monotonically contract to zero.
+        var p = CaptureStepParams()
+        p.captureDistance = 1.2
+        p.stepDamping = 0
+        p.minStepInterval = 0
+        let r = residualSequence(params: p, comGround: SIMD2<Float>(0.4, 0), steps: 12)
+        let contracted = zip(r.dropFirst(), r).allSatisfy { $0 <= $1 + 1e-4 } && (r.last ?? 1) < 0.05
+        XCTAssertFalse(contracted, "outside the region the recovery must not cleanly converge: \(r)")
+    }
 }

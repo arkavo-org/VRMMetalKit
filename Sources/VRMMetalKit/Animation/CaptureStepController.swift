@@ -44,6 +44,13 @@ public struct CaptureStepParams: Sendable {
         self.stepHeight = stepHeight
         self.minStepInterval = minStepInterval
     }
+
+    /// Shipped stability bounds — the corner `(committedCaptureDistanceMax,
+    /// committedStepDampingMin)` is where `CaptureStepControllerTests`'
+    /// `testConvergence_atCommittedCorner_contracts` proves convergence. The guarantee
+    /// is SCOPED to these bounds (design §6/§7): changing either re-triggers that test.
+    public static let committedCaptureDistanceMax: Float = 0.10
+    public static let committedStepDampingMin: Float = 0.4
 }
 
 /// Per-foot state: an ankle locked at a world point, or mid-swing.
