@@ -154,4 +154,25 @@ final class BalanceModelTests: XCTestCase {
         let (margin, _) = BalanceModel.stabilityMargin(comGround: SIMD2<Float>(1.5, 0), polygon: unitSquare)
         XCTAssertEqual(margin, -0.5, accuracy: 1e-5, "0.5 past the +x edge")
     }
+
+    // MARK: - Task 4: Foot ground corners
+
+    @MainActor func testFootGroundCorners_fourCornersSpanningTheFoot() async throws {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+        model.updateNodeTransforms()
+
+        let corners = try XCTUnwrap(BalanceModel.footGroundCorners(model: model, foot: .left, groundY: 0))
+        XCTAssertEqual(corners.count, 4)
+        // The four corners are not degenerate: they span a non-trivial area (a real foot).
+        let hull = BalanceModel.supportPolygon(footCorners: corners)
+        var area: Float = 0
+        for i in 0..<hull.count {
+            let a = hull[i], b = hull[(i + 1) % hull.count]
+            area += a.x * b.y - b.x * a.y
+        }
+        XCTAssertGreaterThan(abs(area) * 0.5, 1e-4, "one foot forms a real (non-degenerate) polygon")
+    }
 }

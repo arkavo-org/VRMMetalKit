@@ -142,4 +142,56 @@ public enum BalanceModel {
         }
         return (inside ? minDist : -minDist, centroid)
     }
+
+    // MARK: - Foot support corners
+
+    /// Which foot a support contribution comes from.
+    public enum Foot: Sendable { case left, right }
+
+    /// The four ground corners (heel±width, toe±width) of `foot` in the xz plane, or
+    /// `nil` when the foot bone is absent. `footForward` comes from the reliable
+    /// skeletal heel→toe vector when the rig has toes; otherwise from a
+    /// sanity-checked hips-forward fallback (VRM does not standardize a foot-forward
+    /// local axis, so a per-bone axis guess would silently rotate the polygon).
+    public static func footGroundCorners(model: VRMModel, foot: Foot, groundY: Float,
+                                         footLength: Float = 0.15,
+                                         halfWidth: Float = 0.04) -> [SIMD2<Float>]? {
+        guard let humanoid = model.humanoid else { return nil }
+        let footBone: VRMHumanoidBone = foot == .left ? .leftFoot : .rightFoot
+        let toesBone: VRMHumanoidBone = foot == .left ? .leftToes : .rightToes
+        guard let footIdx = humanoid.getBoneNode(footBone), footIdx < model.nodes.count else { return nil }
+
+        let footPos = model.nodes[footIdx].worldPosition
+        let heel = SIMD2<Float>(footPos.x, footPos.z)
+
+        let toe: SIMD2<Float>
+        let forward: SIMD2<Float>
+        if let toesIdx = humanoid.getBoneNode(toesBone), toesIdx < model.nodes.count {
+            let toesPos = model.nodes[toesIdx].worldPosition
+            toe = SIMD2<Float>(toesPos.x, toesPos.z)
+            let d = toe - heel
+            forward = simd_length(d) > 1e-5 ? d / simd_length(d) : hipsForward(humanoid, model)
+        } else {
+            forward = hipsForward(humanoid, model)
+            toe = heel + forward * footLength
+        }
+
+        let perp = SIMD2<Float>(-forward.y, forward.x)   // perpendicular in the xz plane
+        return [
+            heel + perp * halfWidth, heel - perp * halfWidth,
+            toe + perp * halfWidth, toe - perp * halfWidth,
+        ]
+    }
+
+    /// Rig-independent forward direction (hips local +Z projected to xz), the fallback
+    /// when a foot has no toes bone. Defaults to +z if the hips axis is degenerate.
+    private static func hipsForward(_ humanoid: VRMHumanoid, _ model: VRMModel) -> SIMD2<Float> {
+        guard let hipsIdx = humanoid.getBoneNode(.hips), hipsIdx < model.nodes.count else {
+            return SIMD2<Float>(0, 1)
+        }
+        let m = model.nodes[hipsIdx].worldMatrix
+        let fz = SIMD2<Float>(m[2][0], m[2][2])          // world xz of the hips local +Z axis
+        let len = simd_length(fz)
+        return len > 1e-5 ? fz / len : SIMD2<Float>(0, 1)
+    }
 }
