@@ -147,61 +147,58 @@ final class CaptureStepControllerTests: XCTestCase {
         XCTAssertEqual(c.target(.left).x, com.x, accuracy: 0.05)
     }
 
-    // MARK: - Task 4: convergence corner gate (the honest gate)
+    // MARK: - Task 4: fixed-CoM contraction sanity-check (NOT a stability gate)
     //
-    // CONDITIONAL ON 2a's CoM-RESPONSE MODEL: the CoM is held fixed under a synthetic
-    // shove and the foot lands exactly at its target. 2b's real-rig follow/moonwalk
-    // test is what validates that model against an actual rig. This gate proves the
-    // STEP LOGIC contracts given the model — not that the real CoM-response matches it.
+    // SCOPE — read before trusting this test. This is a contraction SANITY-CHECK /
+    // regression-lock on the step logic under a FIXED-CoM model, NOT the stability
+    // gate for the §2 limit cycle. The limit cycle is a MOVING-CoM phenomenon (a step
+    // over-recovers the margin → the disturbance re-drags the CoM → re-trips); with the
+    // CoM frozen there is no re-drag, so no cycle can occur here to catch — under a
+    // fixed CoM the two-foot capture recurrence contracts across essentially the whole
+    // committed `captureDistance` range (verified: 0.05–0.30 all contract; there is no
+    // monotone L=1 boundary for 2a to bracket). The genuine stability gate — a
+    // moving-CoM, real-rig test that asserts the response does not limit-cycle across
+    // the committed range and is MONOTONE in `captureDistance` — is 2b's, because
+    // stability lives in the CoM-response and the CoM-response is 2b's domain.
+    // This test only pins that the placement/damping math reduces a static residual
+    // and doesn't blow up on the committed params — a floor, not a proof.
 
-    /// Drive the controller one full step at a time against BalanceModel's pure statics
-    /// with a fixed CoM; return the residual (CoM distance past the support edge) after
-    /// each completed step.
-    private func residualSequence(params p: CaptureStepParams, comGround: SIMD2<Float>, steps: Int) -> [Float] {
+    /// Drive the controller one clean TWO-FOOT step per iteration against BalanceModel's
+    /// pure statics with a FIXED CoM; return the static residual (CoM distance past the
+    /// support edge) measured with both feet planted before each step. The rate limit
+    /// (`minStepInterval > swingDuration`) is what makes each iteration a single
+    /// two-foot step: after a swing lands, the limit blocks a re-trigger until the next
+    /// iteration, so the support is a genuine two-foot base at each measurement.
+    private func residualSequence(params pIn: CaptureStepParams, comGround: SIMD2<Float>, steps: Int) -> [Float] {
+        var p = pIn
+        p.swingDuration = 0.1
+        p.minStepInterval = 0.2                          // > swingDuration ⇒ one clean step/iter
         let c = CaptureStepController(params: p)
         c.seed(leftAnkle: SIMD3<Float>(-0.1, 0, 0), rightAnkle: SIMD3<Float>(0.1, 0, 0))
         let com = SIMD3<Float>(comGround.x, 1, comGround.y)
+        let framesPerIter = Int(((p.swingDuration + p.minStepInterval + 0.02) * 60).rounded(.up))
         var residuals: [Float] = []
-        // Deterministic one step per iteration: measure the residual with both feet
-        // planted, trigger a step, then advance frames until that swing completes
-        // (both planted again) before the next measurement.
         for _ in 0..<steps {
-            let feet = c.plantedPositions()
+            let feet = c.plantedPositions()               // both planted at measurement time
             let b = balanceFrom(feet: feet, com: com)
-            residuals.append(max(0, -b.margin))          // distance CoM is OUTSIDE support
-            if b.margin >= p.triggerMargin { break }     // converged — support caught the CoM
-            _ = c.step(balance: b, dt: 1.0 / 60.0)       // triggers one swing
-            var guardFrames = 0
-            while c.plantedFeet.count < 2 && guardFrames < 1000 {
-                _ = c.step(balance: b, dt: 1.0 / 60.0)   // finish the swing to the (stale-b) target
-                guardFrames += 1
-            }
+            residuals.append(max(0, -b.margin))           // distance CoM is OUTSIDE support
+            if b.margin >= p.triggerMargin { break }      // support caught the CoM
+            for _ in 0..<framesPerIter { _ = c.step(balance: b, dt: 1.0 / 60.0) }  // one two-foot step
         }
         return residuals
     }
 
-    func testConvergence_atCommittedCorner_contracts() {
-        // Worst-case corner: max captureDistance × min stepDamping = max loop gain.
+    /// Regression-lock: the committed default arrest params reduce a static residual to
+    /// near zero under the fixed-CoM two-foot model. Guards the placement/damping math
+    /// against a future refactor — it is NOT a stability proof (see the scope note above).
+    func testStepLogic_contractsAStaticResidual_fixedCoMModel() {
         var p = CaptureStepParams()
         p.captureDistance = CaptureStepParams.committedCaptureDistanceMax
         p.stepDamping = CaptureStepParams.committedStepDampingMin
-        p.minStepInterval = 0
         let r = residualSequence(params: p, comGround: SIMD2<Float>(0.4, 0), steps: 12)
-        // Monotone contraction (no oscillation): each residual ≤ the previous, and it
-        // reaches near zero (support caught up to the CoM).
-        for i in 1..<r.count { XCTAssertLessThanOrEqual(r[i], r[i - 1] + 1e-4, "step \(i) did not contract: \(r)") }
-        XCTAssertLessThan(r.last ?? .greatestFiniteMagnitude, 0.05, "recovery converges: \(r)")
-    }
-
-    func testConvergence_outsideRegion_doesNotContract() {
-        // A config well outside the stability region (huge capture, zero damping):
-        // loop gain > 1 ⇒ the residual must NOT monotonically contract to zero.
-        var p = CaptureStepParams()
-        p.captureDistance = 1.2
-        p.stepDamping = 0
-        p.minStepInterval = 0
-        let r = residualSequence(params: p, comGround: SIMD2<Float>(0.4, 0), steps: 12)
-        let contracted = zip(r.dropFirst(), r).allSatisfy { $0 <= $1 + 1e-4 } && (r.last ?? 1) < 0.05
-        XCTAssertFalse(contracted, "outside the region the recovery must not cleanly converge: \(r)")
+        for i in 1..<r.count {
+            XCTAssertLessThanOrEqual(r[i], r[i - 1] + 1e-4, "static residual did not reduce at step \(i): \(r)")
+        }
+        XCTAssertLessThan(r.last ?? .greatestFiniteMagnitude, 0.05, "residual reduced to near zero: \(r)")
     }
 }

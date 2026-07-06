@@ -45,10 +45,12 @@ public struct CaptureStepParams: Sendable {
         self.minStepInterval = minStepInterval
     }
 
-    /// Shipped stability bounds — the corner `(committedCaptureDistanceMax,
-    /// committedStepDampingMin)` is where `CaptureStepControllerTests`'
-    /// `testConvergence_atCommittedCorner_contracts` proves convergence. The guarantee
-    /// is SCOPED to these bounds (design §6/§7): changing either re-triggers that test.
+    /// Provisional committed arrest defaults. These are NOT proven-stable bounds: 2a's
+    /// test only sanity-checks that they *contract a static residual* under a fixed-CoM
+    /// model, which cannot exhibit the §2 limit cycle (that is a moving-CoM phenomenon).
+    /// The STABILITY of these values — that the real, moving-CoM stepping response does
+    /// not limit-cycle — is validated in 2b's real-rig gate, where the CoM-response
+    /// lives. Treat as defaults pending that 2b validation, not as a stability guarantee.
     public static let committedCaptureDistanceMax: Float = 0.10
     public static let committedStepDampingMin: Float = 0.4
 }
