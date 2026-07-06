@@ -82,4 +82,35 @@ public enum BalanceModel {
         guard total > 0 else { return nil }
         return sum / total
     }
+
+    // MARK: - Support polygon
+
+    /// CCW convex hull (Andrew's monotone chain) of foot ground corners in the xz
+    /// plane. Returns the input (≤2 unique points) unchanged for degenerate cases.
+    public static func supportPolygon(footCorners: [SIMD2<Float>]) -> [SIMD2<Float>] {
+        let pts = footCorners.sorted { $0.x != $1.x ? $0.x < $1.x : $0.y < $1.y }
+        guard pts.count >= 3 else { return pts }
+
+        func cross(_ o: SIMD2<Float>, _ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
+            (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+        }
+
+        var lower: [SIMD2<Float>] = []
+        for p in pts {
+            while lower.count >= 2, cross(lower[lower.count - 2], lower[lower.count - 1], p) <= 0 {
+                lower.removeLast()
+            }
+            lower.append(p)
+        }
+        var upper: [SIMD2<Float>] = []
+        for p in pts.reversed() {
+            while upper.count >= 2, cross(upper[upper.count - 2], upper[upper.count - 1], p) <= 0 {
+                upper.removeLast()
+            }
+            upper.append(p)
+        }
+        lower.removeLast()
+        upper.removeLast()
+        return lower + upper   // CCW
+    }
 }

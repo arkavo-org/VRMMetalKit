@@ -90,4 +90,40 @@ final class BalanceModelTests: XCTestCase {
         XCTAssertEqual(simd_distance(comWith, comWithout), 0, accuracy: 1e-6,
                        "trunk subdivision must not move the CoM (parent-fold)")
     }
+
+    // MARK: - Task 2: Support polygon (convex hull)
+
+    func testSupportPolygon_hullOfASquareIsThatSquare() {
+        let square: [SIMD2<Float>] = [
+            SIMD2<Float>(0, 0), SIMD2<Float>(1, 0),
+            SIMD2<Float>(1, 1), SIMD2<Float>(0, 1),
+            SIMD2<Float>(0.5, 0.5),   // interior point must be dropped
+        ]
+        let hull = BalanceModel.supportPolygon(footCorners: square)
+        XCTAssertEqual(hull.count, 4, "interior point excluded")
+        // Every hull vertex is a corner of the unit square.
+        for v in hull {
+            XCTAssertTrue((abs(v.x) < 1e-5 || abs(v.x - 1) < 1e-5) &&
+                          (abs(v.y) < 1e-5 || abs(v.y - 1) < 1e-5))
+        }
+    }
+
+    func testSupportPolygon_isCounterClockwise() {
+        let hull = BalanceModel.supportPolygon(footCorners: [
+            SIMD2<Float>(0, 0), SIMD2<Float>(2, 0), SIMD2<Float>(2, 2), SIMD2<Float>(0, 2),
+        ])
+        // Signed area of a CCW polygon is positive.
+        var area: Float = 0
+        for i in 0..<hull.count {
+            let a = hull[i], b = hull[(i + 1) % hull.count]
+            area += a.x * b.y - b.x * a.y
+        }
+        XCTAssertGreaterThan(area, 0, "hull wound counter-clockwise")
+    }
+
+    func testSupportPolygon_collinearInputDoesNotCrash() {
+        let line: [SIMD2<Float>] = [SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(2, 0)]
+        let hull = BalanceModel.supportPolygon(footCorners: line)
+        XCTAssertLessThanOrEqual(hull.count, line.count)   // degenerate, but no trap
+    }
 }
