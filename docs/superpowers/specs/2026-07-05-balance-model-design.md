@@ -66,7 +66,11 @@ public struct BalanceState: Sendable {
     /// `< 0` ⇒ CoM outside (falling), magnitude = distance past the nearest edge.
     public let margin: Float
     /// Unit xz direction `normalize(comGround − supportCentroid)` — the direction of
-    /// imbalance; a recovery step plants a foot along it. Zero when CoM ≈ centroid.
+    /// imbalance; a recovery step plants a foot along it. **The zero vector is a
+    /// meaningful, valid answer**, returned when `comGround` ≈ `supportCentroid`: it
+    /// means "CoM centered, no imbalance." Increment 2's contract is therefore
+    /// `imbalanceDirection == 0 ⇒ no step indicated`, never "undefined — pick a
+    /// direction." Consumers must read the zero case as balanced/centered.
     public let imbalanceDirection: SIMD2<Float>
     /// Convenience: `margin > 0`.
     public var isBalanced: Bool { margin > 0 }
@@ -80,19 +84,25 @@ public struct BalanceState: Sendable {
 ## 4. The three computations
 
 ### 4.1 Center of mass — weighted humanoid segment masses
-`CoM = Σ(bone.worldPosition × massFraction) / Σ(massFraction over bones present)`.
+`CoM = Σ(bone.worldPosition × effectiveFraction)`, where `effectiveFraction` is the base Dempster fraction after the redistribution rule below (the fractions sum to ≈ 1.0, so no separate global normalize).
 
-- A static `[VRMHumanoidBone: Float]` table of Dempster-derived segment mass fractions: pelvis + trunk (`hips`, `spine`, `chest`, `upperChest`) ≈ 0.50 total, `head` ≈ 0.08, each `upperLeg` ≈ 0.10, each `lowerLeg` ≈ 0.045, each `foot` ≈ 0.015, each `upperArm` ≈ 0.027, each `lowerArm` ≈ 0.016, each `hand` ≈ 0.006, `neck` ≈ 0.015 (full table finalized in implementation; the raw fractions sum to ≈ 1.0 over a complete skeleton).
-- **Renormalize over bones actually present**: missing optional bones (`upperChest`, `toes`, etc.) drop out and the denominator is the sum of present fractions, so the CoM is unbiased regardless of which optional bones a rig authored.
-- **Joint positions** (the bone's `worldPosition`) are used as the segment proxy in v1. Using segment *midpoints* (between a joint and its child) is more physically accurate and is a noted future refinement; joint positions are adequate for lean/imbalance detection and simpler to test.
-- Correctly shifts when the torso leans or a limb swings — the property "stay upright" depends on.
-- Requires at least `hips`; returns `nil` if absent.
+- A static `[VRMHumanoidBone: Float]` table of Dempster-derived segment mass fractions, grouped by **body region**: trunk (`hips`, `spine`, `chest`, `upperChest`) ≈ 0.50 total, head/neck (`head` ≈ 0.08, `neck` ≈ 0.015), each arm (`upperArm` ≈ 0.027, `lowerArm` ≈ 0.016, `hand` ≈ 0.006), each leg (`upperLeg` ≈ 0.10, `lowerLeg` ≈ 0.045, `foot` ≈ 0.015). The raw fractions sum to ≈ 1.0 over a complete skeleton (final values fixed in implementation).
+
+- **Redistribution = parent-fold within region, NOT global renormalize.** VRM subdivides the trunk (and other chains) at different granularities per rig, so an absent bone usually means "this mass is present but represented at a coarser joint," not "this mass is gone." A missing bone's fraction folds into its **nearest present ancestor in the same region** (absent `upperChest` → `chest`; absent `chest` too → `spine`; absent `hand` → `lowerArm`; etc.), so each **region keeps its total** (the trunk stays ≈ 0.50 no matter how finely it is split). This preserves the cross-avatar property: two avatars in the same pose that differ only in trunk subdivision get the **same** CoM.
+  - Global renormalization (rescaling *every* bone up by the missing fraction) is **wrong** here — dropping `upperChest` and rescaling would shift trunk mass onto the arms and legs, making the CoM more limb-influenced and producing a per-avatar discontinuity. Global renormalize is only correct for a genuinely region-absent case (an entire region missing), which does not occur in a VRM humanoid; parent-fold degrades to it safely if it ever did (a final normalize over the resulting sum is a harmless guard).
+
+- **Joint positions** (the bone's `worldPosition`) are used as the segment proxy in v1. Segment *midpoints* (between a joint and its child) are more physically accurate and are a noted future refinement; joint positions are adequate for lean/imbalance detection and simpler to test.
+
+- Correctly shifts when the torso leans **or a limb swings** — the limb-response property (§5) that distinguishes weighted-segment CoM from a torso-only approximation, and that increment 2's swung recovery leg depends on.
+
+- **Minimum:** requires `hips` **and at least one further humanoid bone**; returns `nil` otherwise, so a CoM is never a bare single point. (Real VRM humanoid rigs always far exceed this; `evaluate` additionally requires feet for the support polygon, §4.2.)
 
 ### 4.2 Support polygon — foot ground corners → convex hull
 For each **planted** foot, contribute 4 ground corners (heel/toe × left/right), then convex-hull all corners:
 
 - **heel** ≈ `foot` bone world position, ground-projected to `(x, z)`.
-- **toe** ≈ `toes` bone world position (ground-projected) when the rig has toes; otherwise `foot + footForward × footLength`, where `footForward` is the normalized horizontal heel→toe direction derived from the foot bone's forward axis and `footLength` a small default (≈ 0.15 m).
+- **toe** ≈ `toes` bone world position (ground-projected) when the rig has toes; otherwise `foot + footForward × footLength`, `footLength` a small default (≈ 0.15 m).
+  - **`footForward` is the one geometric input with no reliable standard behind it** (the §4.2 analog of the torso capsule). When toes exist, derive it from the **skeletal direction** — the ground-projected `foot`→`toes` joint vector — which is reliable. In the toes-absent fallback, deriving it from the **foot bone's own local axis** is fragile: VRM does not standardize which local axis is foot-forward, and the bone's rest orientation varies by authoring tool. A mis-derived forward silently rotates the entire support polygon (and every margin reading) with it. The fallback must therefore **sanity-check** its `footForward` (roughly horizontal; roughly aligned with the ankle→hips forward projection) and fall back to a rig-independent estimate (e.g. the pelvis/hips forward direction) if the local-axis guess fails the check.
 - **width**: offset heel and toe by `± footHalfWidth` (≈ 0.04 m) perpendicular to `footForward`, giving 4 corners per foot.
 - **Convex hull** via Andrew's monotone chain over all planted-foot corners (CCW). Two feet → a quadrilateral base; a single planted foot (mid-step, later increments) → still a real polygon because each foot has width.
 - Requires at least one planted foot with a resolvable `foot` bone; returns `nil` support otherwise (⇒ `evaluate` returns `nil`).
@@ -108,13 +118,14 @@ For each **planted** foot, contribute 4 ground corners (heel/toe × left/right),
 ## 5. Testing (the deliverable)
 
 **Pure geometry (no Metal, no model):**
-- **CoM:** weighted average of a synthetic `[bone: position]` set equals the hand-computed result; renormalization holds when a bone is omitted.
+- **CoM:** weighted average of a synthetic `[bone: position]` set equals the hand-computed result.
+- **CoM redistribution (the correctness fix, §4.1):** two synthetic bone sets in **identical positions** differing only in trunk subdivision — one with `upperChest`, one without (its mass parent-folded to `chest`) — produce the **same** CoM. Asserts parent-fold, and that a *global* renormalize would fail this (the without-`upperChest` CoM would drift toward the limbs).
 - **Support polygon:** convex hull of known corner sets is correct (order, vertices); degenerate/collinear inputs don't crash.
-- **Margin:** large-positive when `comGround` is the centroid; decreases monotonically as the CoM moves toward an edge; crosses to negative outside; magnitude equals the true distance to the boundary; `imbalanceDirection` points from centroid to CoM with the correct sign.
+- **Margin:** large-positive when `comGround` is the centroid; decreases monotonically as the CoM moves toward an edge; crosses to negative outside; magnitude equals the true distance to the boundary; `imbalanceDirection` points from centroid to CoM with the correct sign, and is the **zero vector** when `comGround == centroid`.
 
 **With a loaded VRM (AvatarSample_U, headless):**
 - Rest pose ⇒ CoM sits over the foot midpoint and `margin > 0` (balanced).
-- Rotating the spine to lean the torso ⇒ `centerOfMass` shifts measurably in the lean direction and `margin` drops (proves the CoM tracks pose, not just hips).
+- **Limb response — the test that discriminates the design choice (§4.1).** Raise one leg (rotate `upperLeg`/`lowerLeg` to swing the foot up and out) while the **torso stays vertical** ⇒ `centerOfMass` shifts measurably **toward the swung leg**. This test *fails* under a torso-only weighting and *passes* under weighted-segment CoM — it is the property increment 2's swung recovery leg depends on. Without it, a future regression to trunk-only weighting would keep the whole suite green. (A spine-lean test alone is insufficient: torso-only weighting captures a spine lean too.)
 - Displacing the CoM outside the base (extreme lean / moved root) ⇒ `margin < 0` with `imbalanceDirection` pointing toward the lean.
 - `plantedFeet = [.left]` ⇒ support polygon shrinks to the left foot and the margin/geometry reflect the single-foot base.
 
