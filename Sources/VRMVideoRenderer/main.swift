@@ -721,6 +721,14 @@ struct VRMVideoRendererCLI {
         let frameDuration = pipeline.frameDuration
         let totalFrames = pipeline.totalFrames
 
+        // Drive VRM gaze so bone-mode eyes compose onto their authored rest
+        // rotation each frame (without a controller the eye bones never get set,
+        // leaving VRoid/AvatarSample eyes in a broken/blank state).
+        let lookAtController = VRMLookAtController()
+        lookAtController.setup(model: model, expressionController: renderer.expressionController)
+        lookAtController.saccadeEnabled = false
+        lookAtController.target = .forward
+
         // Render loop
         print("⏳ Rendering...")
         let startTime = Date()
@@ -740,7 +748,8 @@ struct VRMVideoRendererCLI {
             for frameIndex in 0..<totalFrames {
                 // Update animation
                 player.update(deltaTime: 1.0 / Float(options.fps), model: model)
-                
+                lookAtController.applyImmediately()
+
                 // Update camera
                 if options.orbitCamera {
                     let angle = Float(frameIndex) / Float(totalFrames) * 2.0 * Float.pi
@@ -863,6 +872,17 @@ struct VRMVideoRendererCLI {
         let (stepper, group) = try await buildCrowd(modelURL: modelURL, animURL: animURL, device: device, options: options)
         print("   ✅ Crowd built (\(group == nil ? "no contact group" : "joined contact group"))")
 
+        // Per-avatar gaze: drive each avatar's eyes to a forward rest each frame
+        // so bone-mode eyes compose onto their authored rest rotation (without it,
+        // VRoid/AvatarSample eyes render blank — same fix as the single path).
+        let lookAtControllers: [VRMLookAtController] = stepper.avatarsForCamera.map { av in
+            let c = VRMLookAtController()
+            c.setup(model: av.model, expressionController: av.renderer.expressionController)
+            c.saccadeEnabled = false
+            c.target = .forward
+            return c
+        }
+
         print("🎨 Setting up video pipeline...")
         let pipeline = try makeVideoPipeline(options: options, device: device, sampleCount: 4)
 
@@ -899,6 +919,9 @@ struct VRMVideoRendererCLI {
             for av in stepper.avatarsForCamera { av.renderer.viewMatrix = view }
 
             stepper.step(frameTime: t)
+            // Gaze after the pose/exchange step, before compositing (eyes don't
+            // affect the contact snapshot).
+            for c in lookAtControllers { c.applyImmediately() }
 
             guard let pixelBuffer = createPixelBuffer(width: options.width, height: options.height),
                   let commandBuffer = pipeline.sharedCommandQueue.makeCommandBuffer() else { continue }
