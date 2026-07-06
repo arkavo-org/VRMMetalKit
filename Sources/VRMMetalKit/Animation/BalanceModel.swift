@@ -89,7 +89,10 @@ public enum BalanceModel {
     /// unless `hips` and at least one further bone are present (a CoM is never a bare
     /// point). Shifts with torso lean AND limb swing — the property staggering needs.
     public static func centerOfMass(jointPositions joints: [VRMHumanoidBone: SIMD3<Float>]) -> SIMD3<Float>? {
-        guard joints[.hips] != nil, joints.count >= 2 else { return nil }
+        // Require hips plus at least one further MASS-BEARING bone, so a CoM is never a
+        // bare single point (a non-mass bone like an eye/finger contributes nothing).
+        guard joints[.hips] != nil else { return nil }
+        guard joints.keys.filter({ massFractions[$0] != nil }).count >= 2 else { return nil }
         let eff = effectiveFractions(present: Set(joints.keys))
         var sum = SIMD3<Float>(repeating: 0)
         var total: Float = 0
@@ -160,6 +163,15 @@ public enum BalanceModel {
             minDist = min(minDist, simd_distance(p, closest))
         }
         return (inside ? minDist : -minDist, centroid)
+    }
+
+    /// Unit xz direction from the support centroid toward the CoM ground projection —
+    /// the imbalance direction a recovery step follows. The **zero vector** is the
+    /// defined answer for a centered CoM (`⇒ no step indicated`), returned when the
+    /// two points coincide (within 1e-5).
+    public static func imbalanceDirection(comGround: SIMD2<Float>, centroid: SIMD2<Float>) -> SIMD2<Float> {
+        let d = comGround - centroid
+        return simd_length(d) > 1e-5 ? d / simd_length(d) : SIMD2<Float>(repeating: 0)
     }
 
     // MARK: - Foot support corners
@@ -241,8 +253,7 @@ public enum BalanceModel {
         let poly = supportPolygon(footCorners: corners)
         let comGround = SIMD2<Float>(com.x, com.z)
         let (margin, centroid) = stabilityMargin(comGround: comGround, polygon: poly)
-        let d = comGround - centroid
-        let imbalance = simd_length(d) > 1e-5 ? d / simd_length(d) : SIMD2<Float>(repeating: 0)
+        let imbalance = imbalanceDirection(comGround: comGround, centroid: centroid)
 
         return BalanceState(centerOfMass: com, comGround: comGround, supportPolygon: poly,
                             supportCentroid: centroid, margin: margin, imbalanceDirection: imbalance)

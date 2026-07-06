@@ -49,6 +49,8 @@ final class BalanceModelTests: XCTestCase {
                      "no hips ⇒ nil")
         XCTAssertNil(BalanceModel.centerOfMass(jointPositions: [.hips: .zero]),
                      "hips-only (bare point) ⇒ nil")
+        XCTAssertNil(BalanceModel.centerOfMass(jointPositions: [.hips: .zero, .leftEye: SIMD3<Float>(1, 0, 0)]),
+                     "hips + a non-mass bone (leftEye not in massFractions) ⇒ nil, never a bare point")
     }
 
     /// Parent-fold (design §4.1): dropping a SPLIT trunk bone folds its mass into the
@@ -267,5 +269,18 @@ final class BalanceModelTests: XCTestCase {
         let comShift = shoved.comGround - rest.comGround
         XCTAssertGreaterThan(simd_dot(shoved.imbalanceDirection, comShift), 0,
                              "imbalance points toward the CoM shift")
+    }
+
+    func testImbalanceDirection_zeroWhenCentered_unitWhenOffset() {
+        // Centered ⇒ the defined zero vector (increment 2's "no step indicated" contract).
+        XCTAssertEqual(BalanceModel.imbalanceDirection(comGround: SIMD2<Float>(1, 1),
+                                                       centroid: SIMD2<Float>(1, 1)),
+                       SIMD2<Float>(0, 0))
+        // Offset ⇒ unit vector from centroid toward the CoM projection.
+        let dir = BalanceModel.imbalanceDirection(comGround: SIMD2<Float>(3, 1),
+                                                  centroid: SIMD2<Float>(1, 1))
+        XCTAssertEqual(simd_length(dir), 1, accuracy: 1e-5)
+        XCTAssertEqual(dir.x, 1, accuracy: 1e-5)
+        XCTAssertEqual(dir.y, 0, accuracy: 1e-5)
     }
 }
