@@ -241,4 +241,31 @@ final class BalanceModelTests: XCTestCase {
         XCTAssertEqual(a.margin, b.margin)
         XCTAssertEqual(model.nodes[hipsIdx].rotation, rotBefore, "evaluate must not mutate the model")
     }
+
+    /// Design §5: pushing the CoM outside the base of support makes the assembled
+    /// margin negative and `imbalanceDirection` point toward the shift — the only
+    /// integration test covering a negative real-rig margin and the imbalance
+    /// DIRECTION (the pure-geometry margin tests use synthetic squares; the other
+    /// integration tests only reach the zero/centered direction).
+    @MainActor func testEvaluate_comOutsideBaseIsUnbalancedInShiftDirection() async throws {
+        let model = try await loadRig()
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let rest = try XCTUnwrap(BalanceModel.evaluate(model: model))
+        XCTAssertGreaterThan(rest.margin, 0, "rest pose is balanced")
+
+        // Shove the whole upper body ~1 m to one side (spine + its children: chest,
+        // head, arms) while the feet stay planted — the CoM projects well outside the
+        // foot base regardless of the rig's exact proportions.
+        let spineIdx = try XCTUnwrap(humanoid.getBoneNode(.spine))
+        model.nodes[spineIdx].translation += SIMD3<Float>(1.0, 0, 0)
+        model.updateNodeTransforms()
+
+        let shoved = try XCTUnwrap(BalanceModel.evaluate(model: model))
+        XCTAssertLessThan(shoved.margin, 0, "CoM outside the base ⇒ falling")
+        XCTAssertEqual(simd_length(shoved.imbalanceDirection), 1, accuracy: 1e-3,
+                       "imbalanceDirection is a unit vector when imbalanced")
+        let comShift = shoved.comGround - rest.comGround
+        XCTAssertGreaterThan(simd_dot(shoved.imbalanceDirection, comShift), 0,
+                             "imbalance points toward the CoM shift")
+    }
 }
