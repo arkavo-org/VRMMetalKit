@@ -90,4 +90,60 @@ final class CaptureStepControllerTests: XCTestCase {
                                                      supportCentroid: centroid, captureDistance: 0.3, stepDamping: 0.5)
         XCTAssertEqual(damped.x, 0.65, accuracy: 1e-5, "damping scales the step from the centroid")
     }
+
+    // MARK: - Task 3: controller state machine
+
+    /// Build a BalanceState by hand from two foot positions + a CoM (rig-free), using
+    /// BalanceModel's pure statics — the same closed-loop the convergence gate uses.
+    private func balanceFrom(feet: [SIMD3<Float>], com: SIMD3<Float>, footHalf: Float = 0.05) -> BalanceState {
+        var corners: [SIMD2<Float>] = []
+        for f in feet {
+            corners.append(SIMD2<Float>(f.x - footHalf, f.z - footHalf))
+            corners.append(SIMD2<Float>(f.x + footHalf, f.z - footHalf))
+            corners.append(SIMD2<Float>(f.x + footHalf, f.z + footHalf))
+            corners.append(SIMD2<Float>(f.x - footHalf, f.z + footHalf))
+        }
+        let poly = BalanceModel.supportPolygon(footCorners: corners)
+        let comGround = SIMD2<Float>(com.x, com.z)
+        let (margin, centroid) = BalanceModel.stabilityMargin(comGround: comGround, polygon: poly)
+        let imbalance = BalanceModel.imbalanceDirection(comGround: comGround, centroid: centroid)
+        return BalanceState(centerOfMass: com, comGround: comGround, supportPolygon: poly,
+                            supportCentroid: centroid, margin: margin, imbalanceDirection: imbalance)
+    }
+
+    func testStep_noStepWhenBalanced() {
+        let c = CaptureStepController()
+        c.seed(leftAnkle: SIMD3<Float>(-0.1, 0, 0), rightAnkle: SIMD3<Float>(0.1, 0, 0))
+        // CoM centered ⇒ margin large positive ⇒ no step; feet stay planted where seeded.
+        let b = balanceFrom(feet: [SIMD3<Float>(-0.1, 0, 0), SIMD3<Float>(0.1, 0, 0)], com: SIMD3<Float>(0, 1, 0))
+        for _ in 0..<10 { _ = c.step(balance: b, dt: 1.0 / 60.0) }
+        XCTAssertEqual(c.plantedFeet, [.left, .right])
+        XCTAssertEqual(c.target(.left), SIMD3<Float>(-0.1, 0, 0))
+        XCTAssertEqual(c.target(.right), SIMD3<Float>(0.1, 0, 0))
+    }
+
+    func testStep_imbalanceStartsASingleSwing_keepsOneFootPlanted() {
+        var p = CaptureStepParams(); p.minStepInterval = 0
+        let c = CaptureStepController(params: p)
+        c.seed(leftAnkle: SIMD3<Float>(-0.1, 0, 0), rightAnkle: SIMD3<Float>(0.1, 0, 0))
+        // CoM shoved past the +x edge ⇒ margin < triggerMargin ⇒ a step fires.
+        let b = balanceFrom(feet: [SIMD3<Float>(-0.1, 0, 0), SIMD3<Float>(0.1, 0, 0)], com: SIMD3<Float>(0.5, 1, 0))
+        _ = c.step(balance: b, dt: 1.0 / 60.0)   // one frame: a swing begins
+        XCTAssertEqual(c.plantedFeet.count, 1, "exactly one foot planted during a swing (≥1 invariant)")
+    }
+
+    func testStep_swingCompletesToPlantedAtTarget() {
+        // Large minStepInterval so exactly ONE step fires; the swing then completes
+        // without a second step re-triggering.
+        var p = CaptureStepParams(); p.minStepInterval = 10; p.swingDuration = 0.1; p.captureDistance = 0; p.stepDamping = 0
+        let c = CaptureStepController(params: p)
+        c.seed(leftAnkle: SIMD3<Float>(-0.1, 0, 0), rightAnkle: SIMD3<Float>(0.1, 0, 0))
+        let com = SIMD3<Float>(0.5, 1, 0)
+        let b = balanceFrom(feet: [SIMD3<Float>(-0.1, 0, 0), SIMD3<Float>(0.1, 0, 0)], com: com)
+        _ = c.step(balance: b, dt: 0.02)          // begin the single swing (trailing = left, target ≈ comGround)
+        for _ in 0..<10 { _ = c.step(balance: b, dt: 0.02) }   // advance past swingDuration (0.1s)
+        XCTAssertEqual(c.plantedFeet.count, 2, "swing completed, both planted again")
+        // The swung (left) foot re-planted at the CoM ground projection (follow).
+        XCTAssertEqual(c.target(.left).x, com.x, accuracy: 0.05)
+    }
 }
