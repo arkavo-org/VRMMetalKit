@@ -66,4 +66,26 @@ public enum CaptureStepMath {
         }
         return p
     }
+
+    /// The planted foot furthest BEHIND the fall (smallest projection onto
+    /// `imbalanceDirection`) — the one to swing toward the CoM for a capture step.
+    public static func trailingFoot(leftPlant: SIMD3<Float>, rightPlant: SIMD3<Float>,
+                                    comGround: SIMD2<Float>, imbalanceDirection: SIMD2<Float>) -> BalanceModel.Foot {
+        let l = SIMD2<Float>(leftPlant.x, leftPlant.z)
+        let r = SIMD2<Float>(rightPlant.x, rightPlant.z)
+        let lp = simd_dot(l - comGround, imbalanceDirection)
+        let rp = simd_dot(r - comGround, imbalanceDirection)
+        return lp <= rp ? .left : .right
+    }
+
+    /// The damped capture target (xz): from the support centroid, step a fraction
+    /// `(1 − stepDamping)` of the way toward the raw capture point
+    /// `comGround + imbalanceDirection·captureDistance`. Follow (`captureDistance = 0,
+    /// stepDamping = 0`) collapses to `comGround`.
+    public static func captureTargetXZ(comGround: SIMD2<Float>, imbalanceDirection: SIMD2<Float>,
+                                       supportCentroid: SIMD2<Float>, captureDistance: Float,
+                                       stepDamping: Float) -> SIMD2<Float> {
+        let rawTarget = comGround + imbalanceDirection * captureDistance
+        return supportCentroid + (rawTarget - supportCentroid) * (1 - stepDamping)
+    }
 }
