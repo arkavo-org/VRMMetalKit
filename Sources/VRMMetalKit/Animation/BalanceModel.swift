@@ -17,6 +17,25 @@
 import Foundation
 import simd
 
+/// Read-only balance state for a model's current pose (design §3).
+public struct BalanceState: Sendable {
+    /// World-space center of mass.
+    public let centerOfMass: SIMD3<Float>
+    /// CoM projected to the ground plane (xz).
+    public let comGround: SIMD2<Float>
+    /// Base of support: xz convex hull of the planted feet's ground corners (CCW).
+    public let supportPolygon: [SIMD2<Float>]
+    /// Centroid of `supportPolygon`.
+    public let supportCentroid: SIMD2<Float>
+    /// Margin of stability: `> 0` inside the base (stable), `< 0` outside (falling).
+    public let margin: Float
+    /// Unit xz direction `normalize(comGround − supportCentroid)`; the zero vector is
+    /// a valid answer meaning "centered, no imbalance" (`⇒ no step indicated`).
+    public let imbalanceDirection: SIMD2<Float>
+    /// `margin > 0`.
+    public var isBalanced: Bool { margin > 0 }
+}
+
 /// Pure, read-only balance sensor (design: 2026-07-05-balance-model-design.md):
 /// weighted-segment center of mass, foot support polygon, and margin of stability.
 /// Metal-free and non-mutating — the foundation the later procedural staggering
@@ -193,5 +212,39 @@ public enum BalanceModel {
         let fz = SIMD2<Float>(m[2][0], m[2][2])          // world xz of the hips local +Z axis
         let len = simd_length(fz)
         return len > 1e-5 ? fz / len : SIMD2<Float>(0, 1)
+    }
+
+    // MARK: - Assembly
+
+    /// Full balance state for `model`'s current pose. `nil` when the rig lacks the
+    /// humanoid bones for a CoM or has no planted foot to form a support base.
+    public static func evaluate(model: VRMModel, groundY: Float = 0,
+                                plantedFeet: Set<Foot> = [.left, .right]) -> BalanceState? {
+        guard let humanoid = model.humanoid else { return nil }
+
+        var joints: [VRMHumanoidBone: SIMD3<Float>] = [:]
+        for bone in massFractions.keys {
+            if let idx = humanoid.getBoneNode(bone), idx < model.nodes.count {
+                joints[bone] = model.nodes[idx].worldPosition
+            }
+        }
+        guard let com = centerOfMass(jointPositions: joints) else { return nil }
+
+        var corners: [SIMD2<Float>] = []
+        for foot in [Foot.left, .right] where plantedFeet.contains(foot) {
+            if let c = footGroundCorners(model: model, foot: foot, groundY: groundY) {
+                corners.append(contentsOf: c)
+            }
+        }
+        guard corners.count >= 3 else { return nil }
+
+        let poly = supportPolygon(footCorners: corners)
+        let comGround = SIMD2<Float>(com.x, com.z)
+        let (margin, centroid) = stabilityMargin(comGround: comGround, polygon: poly)
+        let d = comGround - centroid
+        let imbalance = simd_length(d) > 1e-5 ? d / simd_length(d) : SIMD2<Float>(repeating: 0)
+
+        return BalanceState(centerOfMass: com, comGround: comGround, supportPolygon: poly,
+                            supportCentroid: centroid, margin: margin, imbalanceDirection: imbalance)
     }
 }

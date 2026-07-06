@@ -175,4 +175,70 @@ final class BalanceModelTests: XCTestCase {
         }
         XCTAssertGreaterThan(abs(area) * 0.5, 1e-4, "one foot forms a real (non-degenerate) polygon")
     }
+
+    // MARK: - Task 5: evaluate() integration
+
+    @MainActor private func loadRig() async throws -> VRMModel {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+        model.updateNodeTransforms()
+        return model
+    }
+
+    @MainActor func testEvaluate_restPoseIsBalanced() async throws {
+        let model = try await loadRig()
+        let state = try XCTUnwrap(BalanceModel.evaluate(model: model))
+        XCTAssertGreaterThan(state.margin, 0, "standing rest pose ⇒ CoM inside the base of support")
+        XCTAssertTrue(state.isBalanced)
+    }
+
+    /// The discriminating test (design §5): swinging a LEG moves the CoM toward the
+    /// leg's motion. Fails under a torso-only weighting; passes under weighted-segment.
+    @MainActor func testEvaluate_comShiftsTowardASwungLeg() async throws {
+        let model = try await loadRig()
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let comBefore = try XCTUnwrap(BalanceModel.evaluate(model: model)).centerOfMass
+        let footIdx = try XCTUnwrap(humanoid.getBoneNode(.leftFoot))
+        let footBefore = model.nodes[footIdx].worldPosition
+
+        // Swing the left leg out/up by rotating the upper leg, torso untouched.
+        let upperLegIdx = try XCTUnwrap(humanoid.getBoneNode(.leftUpperLeg))
+        model.nodes[upperLegIdx].rotation =
+            simd_quatf(angle: 1.0, axis: SIMD3<Float>(1, 0, 0)) * model.nodes[upperLegIdx].rotation
+        model.updateNodeTransforms()
+
+        let comAfter = try XCTUnwrap(BalanceModel.evaluate(model: model)).centerOfMass
+        let footAfter = model.nodes[footIdx].worldPosition
+
+        let comMove = SIMD2<Float>(comAfter.x - comBefore.x, comAfter.z - comBefore.z)
+        let legMove = SIMD2<Float>(footAfter.x - footBefore.x, footAfter.z - footBefore.z)
+        XCTAssertGreaterThan(simd_length(comMove), 1e-4, "CoM tracks the limb (not torso-only)")
+        XCTAssertGreaterThan(simd_dot(comMove, legMove), 0, "CoM shifted toward the swung leg")
+    }
+
+    @MainActor func testEvaluate_singlePlantedFootShrinksSupport() async throws {
+        let model = try await loadRig()
+        let both = try XCTUnwrap(BalanceModel.evaluate(model: model, plantedFeet: [.left, .right]))
+        let left = try XCTUnwrap(BalanceModel.evaluate(model: model, plantedFeet: [.left]))
+        func area(_ poly: [SIMD2<Float>]) -> Float {
+            var a: Float = 0
+            for i in 0..<poly.count { let p = poly[i], q = poly[(i + 1) % poly.count]; a += p.x * q.y - q.x * p.y }
+            return abs(a) * 0.5
+        }
+        XCTAssertLessThan(area(left.supportPolygon), area(both.supportPolygon),
+                          "one-foot base is smaller than two-foot base")
+    }
+
+    @MainActor func testEvaluate_isReadOnlyAndDeterministic() async throws {
+        let model = try await loadRig()
+        let hipsIdx = try XCTUnwrap(model.humanoid?.getBoneNode(.hips))
+        let rotBefore = model.nodes[hipsIdx].rotation
+        let a = try XCTUnwrap(BalanceModel.evaluate(model: model))
+        let b = try XCTUnwrap(BalanceModel.evaluate(model: model))
+        XCTAssertEqual(a.centerOfMass, b.centerOfMass, "deterministic")
+        XCTAssertEqual(a.margin, b.margin)
+        XCTAssertEqual(model.nodes[hipsIdx].rotation, rotBefore, "evaluate must not mutate the model")
+    }
 }
