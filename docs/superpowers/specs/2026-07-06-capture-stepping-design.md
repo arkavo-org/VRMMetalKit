@@ -1,7 +1,7 @@
 # Capture-Stepping Controller — Design
 
 **Date:** 2026-07-06
-**Status:** Design approved. Increment 2 of the procedural staggering north star — the first *actuator*.
+**Status:** Design approved. Increment 2 of the procedural staggering north star — the first *actuator*. **SUPERSEDED STABILITY MODEL (2026-07-07):** §2/§5/§6's framing of `captureDistance` as a *capture-gain term in a feedback loop, bounded above by a joint stability region* is WRONG — it imported momentum-based capture-point control into a no-momentum architecture. Three sweeps proved the momentum limit cycle does not exist here; `captureDistance` is monotonically **stabilizing** (a larger lead tracks a *faster* disturbance), bounded above only by animation quality, not stability. The real failure is a **tracking-capacity limit** (a disturbance rate exceeding the stepper's relocation rate escapes the support), validated in the 2b spec (`2026-07-06-capture-stepping-2b-design.md` §4). Read §2/§5/§6 below as historical; the tracking-capacity model governs.
 **Scope:** A procedural, kinematic controller that keeps an avatar's feet under its center of mass by taking **capture steps**: it locks planted feet as world-space pivots and, when the balance margin drops, swings a foot toward the CoM and re-plants. Library-only this increment; validated single-avatar headless. Fixes the moonwalk (as a follow-stepping case) and is the recovery mechanic a collision shove (increment 3) will drive.
 
 **Depends on:** the balance model (`BalanceModel.evaluate` → `BalanceState`: CoM, `margin`, `imbalanceDirection`, `supportPolygon`, `plantedFeet` parameter) and the existing `TwoBoneIKSolver` (hip→knee→ankle leg IK, already used by `IKLayer`).

@@ -315,116 +315,107 @@ git commit -m "feat(stepping): update() with restore-IK-before-evaluate; follow/
 
 ---
 
-### Task 3: Moving-CoM model stability gate (deterministic; monotone hard-assert + cycling counter-case)
+### Task 3: Moving-CoM model TRACKING-CAPACITY gate (deterministic; monotone in disturbance rate + over-capacity counter-case)
 
 **Files:**
 - Test: `Tests/VRMMetalKitTests/Animation/CaptureStepStabilityTests.swift`
-- (No source change — this drives 2a's pure `step` + `BalanceModel` statics against a MOVING-CoM model. If a shared model helper is useful it lives in the test file.)
+- (No source change — drives 2a's pure `step` + `BalanceModel` statics against a MOVING-CoM model.)
 
 **Interfaces:**
-- Consumes: 2a's `CaptureStepController.step`, `plantedPositions`, `CaptureStepParams`, `BalanceModel` statics (`supportPolygon`, `stabilityMargin`, `imbalanceDirection`).
+- Consumes: 2a's `CaptureStepController.step`, `plantedPositions`, `CaptureStepParams`, `BalanceModel` statics.
 
-**Empirical (calibration):** the committed defaults must produce a **monotone** pass/fail across `captureDistance`, and a just-over-the-line value must cycle. If the model's boundary isn't monotone, that is a FAILURE surfaced loudly (the `L` model is wrong) — do not paper over it; adjust the model's self-feedback coefficient to match the mechanism, or report the non-monotonicity.
+**RE-AXISED (spec §4).** The failure is a **tracking-capacity limit**, not a momentum cycle: the stepper relocates the support at a bounded rate, so a disturbance faster than that capacity escapes the support and the residual grows. Sweep **disturbance rate** (m/s), classify each run *tracks* (residual bounded) vs *escapes* (residual grows), and assert the boundary is **monotone in drive rate** with an over-capacity counter-case. `captureDistance` is stabilizing — do NOT sweep it for the boundary. This gate's shape is proven by the drive-rate probe (tracks ≤ ~0.2 m/s, escapes ≥ ~0.3 m/s at committed params).
 
-- [ ] **Step 1: Write the failing gate**
+- [ ] **Step 1: Write the gate**
 
 Create `Tests/VRMMetalKitTests/Animation/CaptureStepStabilityTests.swift`:
 
 ```swift
 //
 // Copyright 2025 Arkavo
-//   (Apache 2.0 header — copy the standard block)
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// ... (standard Apache 2.0 header block — copy from any file in the repo) ...
 //
 import XCTest
 import simd
 @testable import VRMMetalKit
 
 final class CaptureStepStabilityTests: XCTestCase {
-    // Moving-CoM model: the CoM advances by the driver AND shifts with the swung leg's
-    // mass toward the plant (spec §4.1 — the FEEDBACK term, without which this is not
-    // faithful). legFrac ≈ 0.16 (upper+lower+foot) from the Dempster table.
-    private let legFrac: Float = 0.16
+    private let legFrac: Float = 0.16   // swung-leg mass fraction (spec §4.1, Dempster)
 
     private func balanceFrom(feet: [SIMD3<Float>], com: SIMD3<Float>, footHalf: Float = 0.05) -> BalanceState {
-        var corners: [SIMD2<Float>] = []
+        var cor: [SIMD2<Float>] = []
         for f in feet {
-            corners.append(SIMD2<Float>(f.x - footHalf, f.z - footHalf))
-            corners.append(SIMD2<Float>(f.x + footHalf, f.z - footHalf))
-            corners.append(SIMD2<Float>(f.x + footHalf, f.z + footHalf))
-            corners.append(SIMD2<Float>(f.x - footHalf, f.z + footHalf))
+            cor.append(SIMD2<Float>(f.x - footHalf, f.z - footHalf)); cor.append(SIMD2<Float>(f.x + footHalf, f.z - footHalf))
+            cor.append(SIMD2<Float>(f.x + footHalf, f.z + footHalf)); cor.append(SIMD2<Float>(f.x - footHalf, f.z + footHalf))
         }
-        let poly = BalanceModel.supportPolygon(footCorners: corners)
+        let poly = BalanceModel.supportPolygon(footCorners: cor)
         let cg = SIMD2<Float>(com.x, com.z)
         let (m, c) = BalanceModel.stabilityMargin(comGround: cg, polygon: poly)
         return BalanceState(centerOfMass: com, comGround: cg, supportPolygon: poly,
                             supportCentroid: c, margin: m, imbalanceDirection: BalanceModel.imbalanceDirection(comGround: cg, centroid: c))
     }
 
-    /// Returns true if a sustained-drive run at `cap` stays bounded (converges/holds);
-    /// false if the residual grows (limit cycle). CoM moves by driver + swung-leg pull.
-    private func stableUnderDrive(cap: Float, damp: Float, drive: Float) -> Bool {
-        var p = CaptureStepParams(); p.captureDistance = cap; p.stepDamping = damp
-        p.swingDuration = 0.1; p.minStepInterval = 0.2
+    /// True if a CONTINUOUS-drive run TRACKS (residual bounded); false if it ESCAPES
+    /// (residual grows). The CoM advances by drivePerSec every FRAME (so the swing-lag
+    /// is live) plus the swung-leg self-feedback (§4.1). committed params.
+    private func tracks(drivePerSec: Float, cap: Float = CaptureStepParams.committedCaptureDistanceMax,
+                        swing: Float = 0.25, rate: Float = 0.15) -> Bool {
+        var p = CaptureStepParams(); p.captureDistance = cap; p.stepDamping = CaptureStepParams.committedStepDampingMin
+        p.swingDuration = swing; p.minStepInterval = rate
         let c = CaptureStepController(params: p)
         c.seed(leftAnkle: SIMD3<Float>(-0.1, 0, 0), rightAnkle: SIMD3<Float>(0.1, 0, 0))
-        var com = SIMD3<Float>(0, 1, 0)
-        let framesPerIter = Int(((p.swingDuration + p.minStepInterval + 0.02) * 60).rounded(.up))
-        var residuals: [Float] = []
-        for _ in 0..<20 {
-            com.x += drive                                   // DRIVER advance (disturbance)
-            let feet = c.plantedPositions()
-            let b = balanceFrom(feet: feet, com: com)
-            residuals.append(max(0, -b.margin))
-            let beforeFeet = c.plantedPositions()
-            for _ in 0..<framesPerIter { _ = c.step(balance: b, dt: 1.0 / 60.0) }
-            // SWUNG-LEG self-feedback: the foot that moved pulls the CoM toward its plant.
-            let afterFeet = c.plantedPositions()
-            if let moved = zip(afterFeet, beforeFeet).first(where: { simd_distance($0.0, $0.1) > 1e-4 }) {
-                com += legFrac * (moved.0 - moved.1)
-            }
+        var com = SIMD3<Float>(0, 1, 0); let dt: Float = 1.0 / 60.0
+        var res: [Float] = []
+        for _ in 0..<300 {
+            com.x += drivePerSec * dt
+            let before = c.plantedPositions()
+            let b = balanceFrom(feet: before, com: com)
+            res.append(max(0, -b.margin))
+            _ = c.step(balance: b, dt: dt)
+            let after = c.plantedPositions()
+            if let mv = zip(after, before).first(where: { simd_distance($0.0, $0.1) > 1e-4 }) { com += legFrac * (mv.0 - mv.1) }
         }
-        // Bounded ⇒ the tail does not exceed the peak (no runaway growth).
-        let peak = residuals.max() ?? 0
-        let tail = Array(residuals.suffix(5)).max() ?? 0
-        return tail <= peak + 1e-3
+        let peak = res.max() ?? 0; let tail = Array(res.suffix(30)).max() ?? 0
+        return tail <= peak * 0.5 + 0.02   // bounded/shrinking ⇒ tracks; still-high tail ⇒ escaped
     }
 
-    /// The stability gate (spec §4.1): pass/fail is MONOTONE in captureDistance (once it
-    /// cycles it stays cycling), and a just-over-line value cycles (counter-case, §0).
-    func testStability_isMonotoneInCaptureDistance_withCyclingCounterCase() {
-        let caps: [Float] = [0.04, 0.08, 0.10, 0.14, 0.20, 0.35, 0.6, 1.0]
-        let stable = caps.map { stableUnderDrive(cap: $0, damp: CaptureStepParams.committedStepDampingMin, drive: 0.05) }
-        // Monotone: no stable value appears AFTER an unstable one (no bounce).
-        if let firstUnstable = stable.firstIndex(of: false) {
-            for i in firstUnstable..<stable.count {
-                XCTAssertFalse(stable[i], "non-monotone at cap=\(caps[i]): \(Array(zip(caps, stable)))")
+    /// Tracking-capacity gate (spec §4.1): pass/fail is MONOTONE in disturbance rate —
+    /// once it escapes as the rate rises it stays escaped (no bounce) — with an
+    /// over-capacity counter-case that escapes and a below-capacity rate that tracks.
+    func testTrackingCapacity_isMonotoneInDriveRate_withEscapingCounterCase() {
+        let rates: [Float] = [0.1, 0.2, 0.3, 0.4, 0.6, 0.9, 1.3]
+        let tr = rates.map { tracks(drivePerSec: $0) }
+        // Monotone: no "tracks" appears AFTER an "escapes" as the rate rises.
+        if let firstEscape = tr.firstIndex(of: false) {
+            for i in firstEscape..<tr.count {
+                XCTAssertFalse(tr[i], "non-monotone boundary at rate=\(rates[i]): \(Array(zip(rates, tr))) — the model is wrong")
             }
         }
-        // Counter-case: some over-line cap MUST cycle (else the gate proves nothing).
-        XCTAssertTrue(stable.contains(false), "a cycling counter-case exists: \(Array(zip(caps, stable)))")
-        // Committed default is on the stable side.
-        XCTAssertTrue(stableUnderDrive(cap: CaptureStepParams.committedCaptureDistanceMax,
-                                       damp: CaptureStepParams.committedStepDampingMin, drive: 0.05),
-                      "committed captureDistance is stable under the moving-CoM model")
+        XCTAssertTrue(tr.contains(false), "an over-capacity rate escapes (counter-case): \(Array(zip(rates, tr)))")
+        XCTAssertTrue(tr.contains(true), "a below-capacity rate tracks: \(Array(zip(rates, tr)))")
+    }
+
+    /// captureDistance is STABILIZING, not a loop-gain term (spec §4 re-axis): a larger
+    /// lead tracks a disturbance that a smaller lead escapes.
+    func testLargerCaptureDistance_tracksFasterDisturbance() {
+        XCTAssertFalse(tracks(drivePerSec: 0.6, cap: 0.0), "no lead escapes at 0.6 m/s")
+        XCTAssertTrue(tracks(drivePerSec: 0.6, cap: 0.5), "a large lead tracks the same 0.6 m/s")
     }
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails, then CALIBRATE**
+- [ ] **Step 2: Run — verify the gate passes (the boundary is monotone)**
 
 Run: `swift test --filter "CaptureStepStabilityTests" --disable-sandbox`
-
-The test may fail on monotonicity or on the counter-case. Investigate:
-- If **no** cap cycles (all stable), the drive is too weak or the self-feedback too small to induce a cycle → raise `drive` (0.08, 0.12) until a large cap cycles (per spec §4.2 minor: counter-case-unreachable is never terminal).
-- If the boundary is **non-monotone** (a stable cap after an unstable one), the moving-CoM model is wrong — the self-feedback term does not match the mechanism. This is a loud failure per §4.1; adjust the self-feedback model (e.g. the leg centroid moves ~half the foot displacement, so try `com += legFrac * 0.5 * (moved.0 - moved.1)`, or distribute over the swing) until the boundary is monotone, OR report the non-monotonicity as a model defect.
-
-Record the final `drive`, self-feedback form, and the `(cap, stable)` table in the report.
+Expected: PASS. The probe already established the boundary (tracks ≤ 0.2, escapes ≥ 0.3). If the monotone assertion FAILS (a "tracks" after an "escapes"), the model is wrong — investigate the self-feedback term (spec §4.1), do NOT weaken the assertion. Record the `(rate, tracks)` table and the committed max-disturbance-rate (the last rate that tracks) in the report.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add Tests/VRMMetalKitTests/Animation/CaptureStepStabilityTests.swift
-git commit -m "feat(stepping): moving-CoM model stability gate (monotone + cycling counter-case)"
+git commit -m "feat(stepping): moving-CoM tracking-capacity gate (monotone in drive rate + escape counter-case)"
 ```
 
 ---
@@ -438,72 +429,68 @@ git commit -m "feat(stepping): moving-CoM model stability gate (monotone + cycli
 **Interfaces:**
 - Consumes: `update` (Task 2), Task 1's measured `ε`, Task 3's committed defaults + over-gain counter-case cap.
 
-**Empirical.** Drive a sustained disturbance on the real rig at the committed `captureDistance` and at an over-gain cap; the committed run must hold/contract above the ε floor with **zero clamp events**, the over-gain run must grow. If the rig grows where the model said stable, **correct the model (Task 3), not this test.**
+**Empirical (RE-AXISED, spec §4).** Drive the real rig at a **below-capacity disturbance rate** (residual holds, zero clamp events, ε floor valid) and at an **over-capacity rate** (residual grows — counter-case). If the rig escapes at a rate the model tracks, **correct the model (Task 3), not this test.**
 
 - [ ] **Step 1: Write the failing confirmation test**
 
-Append to `CaptureStepIKTests` (uses the Task-1 measured ε — substitute the number recorded in Task 1's report for `epsilon` below):
+Append to `CaptureStepIKTests` (substitute Task-1's measured ε — 0.00047 — for `epsilon`):
 
 ```swift
-    /// Real-rig stability confirmation (spec §4.2): at the committed captureDistance a
-    /// sustained shove does NOT grow the residual (beyond ε), with zero clamp events;
-    /// an over-gain cap DOES grow (counter-case). This is the model's VALIDITY gate.
-    @MainActor func testRigStability_committedHolds_overGainGrows() async throws {
-        let epsilon: Float = 0.01   // Task 1's measured worst-case placement error (ε)
+    /// Real-rig tracking-capacity confirmation (spec §4.2): a below-capacity root drive
+    /// rate does NOT grow the residual (beyond ε), zero clamp events; an over-capacity
+    /// rate DOES grow (counter-case). The model's VALIDITY gate.
+    @MainActor func testRigTrackingCapacity_belowHolds_overCapacityGrows() async throws {
+        let epsilon: Float = 0.001   // Task 1's measured ε (0.00047), rounded up
 
-        func residualPeakTail(cap: Float) async throws -> (peak: Float, tail: Float, clamps: Int) {
+        func residualPeakTail(drivePerSec: Float) async throws -> (peak: Float, tail: Float, clamps: Int) {
             let model = try await loadRig()
-            var p = CaptureStepParams(); p.captureDistance = cap
+            var p = CaptureStepParams()
+            p.captureDistance = CaptureStepParams.committedCaptureDistanceMax
             p.stepDamping = CaptureStepParams.committedStepDampingMin
             let c = CaptureStepController(params: p)
             c.update(deltaTime: 1.0 / 60.0, model: model)
             var residuals: [Float] = []
             var clamps = 0
-            for f in 1...120 {
-                for root in model.nodes where root.parent == nil { root.translation.x = 0.02 * Float(f) }  // sustained shove
+            let dt: Float = 1.0 / 60.0
+            for f in 1...180 {
+                for root in model.nodes where root.parent == nil { root.translation.x = drivePerSec * dt * Float(f) }
                 model.updateNodeTransforms()
-                c.update(deltaTime: 1.0 / 60.0, model: model)
-                if let b = BalanceModel.evaluate(model: model, plantedFeet: c.plantedFeet) {
-                    residuals.append(max(0, -b.margin))
-                }
-                // Clamp guard (spec §4.3): a step target beyond leg reach voids ε.
+                c.update(deltaTime: dt, model: model)
+                if let b = BalanceModel.evaluate(model: model, plantedFeet: c.plantedFeet) { residuals.append(max(0, -b.margin)) }
                 if c.lastStepClamped { clamps += 1 }
             }
-            let peak = residuals.max() ?? 0
-            let tail = Array(residuals.suffix(10)).max() ?? 0
-            return (peak, tail, clamps)
+            return (residuals.max() ?? 0, Array(residuals.suffix(15)).max() ?? 0, clamps)
         }
 
-        let committed = try await residualPeakTail(cap: CaptureStepParams.committedCaptureDistanceMax)
-        XCTAssertEqual(committed.clamps, 0, "no clamp events during the committed run (ε floor stays valid)")
-        XCTAssertLessThanOrEqual(committed.tail, committed.peak + epsilon,
-                                 "committed captureDistance holds — residual does not grow beyond ε")
+        // Below capacity (slow drive): residual holds, no clamps, ε floor valid.
+        let below = try await residualPeakTail(drivePerSec: 0.15)
+        XCTAssertEqual(below.clamps, 0, "no clamp events below capacity (ε floor stays valid)")
+        XCTAssertLessThanOrEqual(below.tail, below.peak + epsilon, "below capacity the residual holds — the stepper tracks")
 
-        // Over-gain counter-case: some large cap must visibly grow on the rig.
-        let overGain = try await residualPeakTail(cap: 0.8)
-        XCTAssertGreaterThan(overGain.tail, overGain.peak * 0.5 + epsilon,
-                             "over-gain captureDistance grows/oscillates — the metric discriminates")
+        // Over capacity (fast drive): residual grows — counter-case proving detection.
+        let over = try await residualPeakTail(drivePerSec: 0.6)
+        XCTAssertGreaterThan(over.tail, over.peak * 0.5 + 0.02, "over capacity the residual grows — the metric detects escape")
     }
 ```
 
 - [ ] **Step 2: Run to verify fail (needs `lastStepClamped`)**
 
-Run: `swift test --filter "CaptureStepIKTests/testRigStability_committedHolds_overGainGrows" --disable-sandbox`
+Run: `swift test --filter "CaptureStepIKTests/testRigTrackingCapacity_belowHolds_overCapacityGrows" --disable-sandbox`
 Expected: FAIL — `CaptureStepController` has no `lastStepClamped`.
 
 - [ ] **Step 3: Add clamp tracking + calibrate**
 
-The step target can exceed leg reach; 2a's `step` returns a target regardless, and `placeAnkle`'s solver clamps unreachably-far targets. Add a `lastStepClamped` flag set when a placed target's distance from the hip exceeds the leg length. In `placeAnkle`, after computing `hipPos`, compare `simd_distance(worldTarget, hipPos)` to the summed leg length (`TwoBoneIKSolver.boneLength(hipPos,kneePos)+boneLength(kneePos,anklePos)`); set `lastStepClamped = true` if it exceeds. Expose `public private(set) var lastStepClamped = false` (reset at the top of `update`).
+Add a `lastStepClamped` flag: `public private(set) var lastStepClamped = false` (reset at top of `update`). In `placeAnkle`, after `hipPos`, set it `true` when `simd_distance(worldTarget, hipPos)` exceeds the summed leg length (`TwoBoneIKSolver.boneLength(hipPos, kneePos) + boneLength(kneePos, anklePos)`).
 
-Then run the confirmation. Calibrate per §4.2:
-- If the committed run **grows** (rig unstable where the model said stable): the model (Task 3) is wrong — return to Task 3, correct the self-feedback, re-run both. Do NOT loosen this test.
-- If the over-gain (0.8) run does **not** grow: raise the over-gain cap and/or the shove magnitude until it demonstrably grows (counter-case reachability, §4.2 minor).
+Then run. Calibrate per §4.2:
+- If the **below**-capacity (0.15 m/s) run **grows or clamps**: either the rig's capacity is lower than the model's (correct the model, Task 3 — do NOT loosen this test) or 0.15 is above the fixture's capacity → lower the below-capacity rate until it tracks cleanly, and re-derive the committed max-disturbance-rate.
+- If the **over**-capacity (0.6 m/s) run does **not** grow: raise the rate until the residual demonstrably grows (a fast enough disturbance always escapes — counter-case guaranteed reachable, §4.2).
 
-Record the committed peak/tail, the over-gain peak/tail, and the clamp count.
+Record the below/over peak/tail, the clamp counts, and the committed max-disturbance-rate.
 
 - [ ] **Step 4: Promote the committed constants; run full suite**
 
-When both gates are green (Task 3 model + Task 4 rig), re-doc the committed constants in `CaptureStepController.swift` — change "provisional defaults pending 2b's stability validation" to "validated stable by the 2b model gate (monotone) AND the rig confirmation; changing either constant re-triggers both gates."
+When both gates are green (Task 3 model + Task 4 rig), re-doc the committed constants in `CaptureStepController.swift` — change "provisional defaults pending 2b's stability validation" to "the committed MAX DISTURBANCE RATE (not captureDistance) is validated by the 2b tracking-capacity model gate (monotone in drive rate) AND the rig confirmation; captureDistance is a stabilizing lead knob."
 
 Run: `swift test --filter "CaptureStepIKTests|CaptureStepStabilityTests|CaptureStepControllerTests" --disable-sandbox` → all PASS. `swift build` → Build complete.
 
@@ -519,13 +506,13 @@ git commit -m "feat(stepping): real-rig stability confirmation + promote committ
 ## Self-Review
 
 **Spec coverage:**
-- §0 counter-case rule (vacuous-metric distinction) → Task 3 (cycling counter-case), Task 4 (over-gain counter-case), Task 1 (range+ε, not a failing case). ✓
+- §0 counter-case rule (vacuous-metric distinction) → Task 3 (over-capacity escape counter-case), Task 4 (over-capacity escape counter-case), Task 1 (range+ε, not a failing case). ✓
 - §1 two failure surfaces apart → Task 1 (IK isolated), Task 3 (model, no IK), Task 4 (rig, depends on ε). ✓
 - §2 IK executor + restore-IK-before-evaluate + chained-frame + velocity-free → Tasks 1–2. ✓
 - §2.1 IK gate: ankle-at-target within ε across range; ε explicit → Task 1. ✓
 - §3 follow/moonwalk + non-interference + polygon gate → Task 2. ✓
-- §4.1 moving-CoM model with swung-leg self-feedback; monotone hard-assert + cycling case → Task 3. ✓
-- §4.2 rig confirmation: committed holds / over-gain grows; both required; model-corrected-not-waived → Task 4. ✓
+- §4.1 moving-CoM model with swung-leg self-feedback; monotone hard-assert in DRIVE RATE + over-capacity escape counter-case → Task 3. ✓
+- §4.2 rig confirmation: below-capacity holds / over-capacity grows; both required; model-corrected-not-waived → Task 4. ✓
 - §4.3 ε flows to Task 4 as noise floor; clamp guard (zero clamp events) → Task 4. ✓
 - §4.2 counter-case reachability (escalate disturbance) → Task 3 & 4 calibration steps. ✓
 
