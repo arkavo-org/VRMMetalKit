@@ -658,7 +658,8 @@ Append inside `StaggerShoveIntegrationTests`:
     /// root drive at `velocityCap` — running through the whole 180-frame window,
     /// exactly the drive shape increment 2's rig gate validated. Returns the
     /// residual peak/tail (increment 2's metric) and whether a step fired.
-    @MainActor private func staggerRun(velocityCap: Float, postural: Bool) async throws
+    @MainActor private func staggerRun(velocityCap: Float, postural: Bool,
+                                       suppressStep: Bool = false) async throws
         -> (peak: Float, tail: Float, stepped: Bool, leanAngle: Float) {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let a = try await avatar(device, index: 0)
@@ -693,6 +694,13 @@ Append inside `StaggerShoveIntegrationTests`:
             avatars: [a, b], driver: driver, group: nil, fps: 60,
             postural: postural ? PosturalContactParams() : nil,
             stagger: StaggerShoveParams(shoveGain: gain, velocityCap: velocityCap))
+        if suppressStep {
+            // G5's counter-case: make the step trigger unreachable. The controller
+            // still restores/pins the planted feet every frame — only the capture
+            // step is removed, isolating the mechanism under test.
+            stepper.captureStepController(forAvatar: 0)?.params.triggerMargin = -10
+            stepper.captureStepController(forAvatar: 1)?.params.triggerMargin = -10
+        }
 
         var residuals: [Float] = []
         var stepped = false
@@ -709,23 +717,36 @@ Append inside `StaggerShoveIntegrationTests`:
         return (residuals.max() ?? 0, Array(residuals.suffix(15)).max() ?? 0, stepped, maxLean)
     }
 
-    /// G5 — the north-star gate: a shove rate-limited UNDER the rig-confirmed
-    /// capacity staggers the avatar (a step fires) and it stays balanced — the
-    /// residual CONTRACTS, on the same metric increment 2's rig gate uses.
-    /// Counter-case (non-negotiable): the same shove with velocityCap OVER the
-    /// 0.2–0.3 escape boundary grows the residual — without it, "gentle shove
-    /// stays balanced" would pass vacuously.
-    @MainActor func testG5_underCapacityStaggersAndStaysUpright_overCapacityEscapes() async throws {
+    /// G5 — the north-star gate: the crowd shove staggers the avatar (a step
+    /// fires) and it stays balanced — the residual CONTRACTS, on the same metric
+    /// increment 2's rig gate uses. Counter-case (non-negotiable) — STEP
+    /// SUPPRESSED: the same shove with the step trigger made unreachable reaches
+    /// a real residual peak and FAILS to contract, proving the capture step (not
+    /// the fixture) is what restores balance. Rate discriminator: a 0.4 m/s cap
+    /// transiently degrades balance ≥2× the 0.14 peak yet still contracts — the
+    /// mutual shove is self-limiting (partner-feedback equilibrium, spec G5
+    /// amendment), so sustained over-capacity escape is structurally impossible
+    /// in-crowd; escape under sustained drive is increment 2's rig gate.
+    @MainActor func testG5_shoveStaggersAndStepKeepsItUpright() async throws {
         let epsilon: Float = 0.001
 
         let under = try await staggerRun(velocityCap: 0.14, postural: false)
         XCTAssertTrue(under.stepped, "the shove forced at least one capture step (plantedFeet dropped to one)")
         XCTAssertLessThanOrEqual(under.tail, under.peak * 0.5 + epsilon,
-            "under capacity the residual contracts — staggered but upright (peak \(under.peak), tail \(under.tail))")
+            "with the step the residual contracts — staggered but upright (peak \(under.peak), tail \(under.tail))")
 
-        let over = try await staggerRun(velocityCap: 0.4, postural: false)
-        XCTAssertGreaterThan(over.tail, over.peak * 0.5 + 0.02,
-            "over capacity the residual grows — the gate detects escape (peak \(over.peak), tail \(over.tail))")
+        let suppressed = try await staggerRun(velocityCap: 0.14, postural: false, suppressStep: true)
+        XCTAssertFalse(suppressed.stepped, "trigger unreachable ⇒ no step fired")
+        XCTAssertGreaterThan(suppressed.peak, 0.01,
+            "the shove produced a real disturbance (peak \(suppressed.peak))")
+        XCTAssertGreaterThan(suppressed.tail, suppressed.peak * 0.5 + epsilon,
+            "without the step the residual does NOT contract (peak \(suppressed.peak), tail \(suppressed.tail))")
+
+        let overRate = try await staggerRun(velocityCap: 0.4, postural: false)
+        XCTAssertGreaterThan(overRate.peak, under.peak * 2,
+            "a faster cap transiently degrades balance materially (\(overRate.peak) vs \(under.peak))")
+        XCTAssertLessThanOrEqual(overRate.tail, overRate.peak * 0.5 + epsilon,
+            "yet still contracts — the self-limiting displacement bound (peak \(overRate.peak), tail \(overRate.tail))")
     }
 
     /// G6 — self-relief independence: G5's under-capacity case with the postural
@@ -749,10 +770,11 @@ Run: `swift test --filter StaggerShoveIntegrationTests --disable-sandbox`
 Expected: `Executed 4 tests, with 0 failures`.
 
 Failure triage (in order):
-1. **Probe precondition fails** (`depth > 0.01`): lower the runner's `halfSep` to 0.05/0.04 — fixture knob only.
-2. **`under.stepped` false**: the CoM never lost the support margin. Check `under.peak` — if ~0, the shove isn't reaching the root (wiring bug, go back to Task 2); if small but non-zero, the support polygon is wider than 1.5 m of drift can cross, which contradicts increment 2's fixture (~0.1 m half-width) — investigate rather than tune.
-3. **Under-capacity contraction fails**: this is the gate doing its job — the crowd path is feeding the controller a disturbance outside the validated band. Verify Phase 0e applies the offset additively *after* 0b (not compounding across frames), and that no other root motion exists in the fixture (`holdOnlyDriver` constant).
-4. **Over-capacity counter-case fails to escape** (residual contracts at 0.4): confirm the drive really spans the window (target 1.5 m > 1.2 m) and that `velocityCap` reached the solver (params plumbed, not defaulted).
+1. **Probe precondition fails** (`depth > 0.01`): lower the runner's `halfSep` to 0.04 — fixture knob only.
+2. **`under.stepped` false**: the CoM never lost the support margin. Check `under.peak` — if ~0, the shove isn't reaching the root (wiring bug, go back to Task 2); if small but non-zero, the equilibrium displacement (~initial overlap depth, expected ~0.1+ m at halfSep 0.05) isn't crossing the ~0.1 m support half-width — deepen `halfSep` to 0.04 and re-measure before touching anything else.
+3. **Under-capacity contraction fails**: this is the gate doing its job — investigate Phase 0e ordering (offset applied after 0b, not compounding) and fixture motion (`holdOnlyDriver` constant) before anything else.
+4. **Step-suppressed counter-case contracts anyway** (`suppressed.tail` small): confirm no step fired (`suppressed.stepped == false` — if a step fired, the triggerMargin override didn't reach the controller) and that `suppressed.peak > 0.01` (if not, the disturbance never displaced past the support edge — deepen `halfSep`). If both hold and it still contracts, something else is recentering the CoM — stop and report with measurements.
+5. **Rate discriminator fails** (`overRate.peak ≤ 2× under.peak`): report the measured pair — the 2× factor is empirical headroom (measured 0.0522 vs 0.0176 ≈ 3×); do not weaken it below 1.5× without reporting.
 
 - [ ] **Step 3: Run the full stagger + capture-step + crowd suites together**
 
