@@ -363,6 +363,8 @@ Expected: `error: extra argument 'stagger' in call` (the init parameter doesn't 
 
 - [ ] **Step 3: Implement Phase 0e in `CrowdFrameStepper.swift`**
 
+*(Amended post-spike: the chest-point signal below was superseded by the torso-pair overlap signal — see spec §3 step 1 and commit 4863070. The shipped Phase 0e reads the own torso capsule fresh and the partner from the lagged snapshot; `chestWorldPosition` no longer exists.)*
+
 Four edits, all in `Sources/VRMMetalKit/Crowd/CrowdFrameStepper.swift`:
 
 **(a)** After the `posturalLayers` property (currently line 52), add the stagger state:
@@ -489,7 +491,7 @@ and add the chest helper next to `nearestPartnerTorso` (after it):
 Run: `swift test --filter StaggerShoveIntegrationTests --disable-sandbox`
 Expected: `Executed 2 tests, with 0 failures` (skips without a Metal device).
 
-If `testActivation_onsetAtFirstContact_offsetGrowsAwayFromPartner` fails its `offset > 0.02` assertion, the chest is not penetrating the partner torso at `halfSep: 0.06` — lower the fixture's `halfSep` (0.05, then 0.04) until depth is real. That is the fixture's single knob; do not touch the wiring.
+If `testActivation_onsetAtFirstContact_offsetGrowsAwayFromPartner` fails its `offset > 0.02` assertion, the chest is not penetrating the partner torso at `halfSep: 0.06` (historical framing — the shipped signal is the torso-pair surface overlap, not the chest point; see the Step 3 amendment note above) — lower the fixture's `halfSep` (0.05, then 0.04) until depth is real. That is the fixture's single knob; do not touch the wiring.
 
 - [ ] **Step 5: Confirm no regression in the existing crowd suite**
 
@@ -751,8 +753,9 @@ Append inside `StaggerShoveIntegrationTests`:
     }
 
     /// G6 — self-relief independence: G5's under-capacity case with the postural
-    /// lean ACTIVE. The lean partially relieves the penetration signal (Phase 0e
-    /// reads the chest after 0d), yet the step still fires and balance still
+    /// lean ACTIVE. The lean tilts the chest, which is this avatar's own torso
+    /// capsule's endpoint — so the lean still relieves the Phase 0e overlap
+    /// signal (0e runs after 0d), yet the step still fires and balance still
     /// contracts — the shove channel triggers the stagger independently of the
     /// self-relieving yield (validates the §5 tension resolution directly).
     @MainActor func testG6_stepFiresWithPosturalLeanActive() async throws {

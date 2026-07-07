@@ -301,8 +301,11 @@ func parseArguments() -> RenderOptions? {
         case "--stagger":
             options.stagger = true
         case "--stagger-gain":
-            i += 1; guard i < args.count else { return nil }
-            options.staggerGain = Float(args[i]) ?? options.staggerGain
+            i += 1
+            guard i < args.count else { return nil }
+            if let g = Float(args[i]), g.isFinite, g >= 0 {
+                options.staggerGain = g
+            }
         case "--spring-gravity":
             i += 1; guard i < args.count else { return nil }
             options.springGravity = Float(args[i]) ?? options.springGravity

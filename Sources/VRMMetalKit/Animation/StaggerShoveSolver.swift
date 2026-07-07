@@ -31,6 +31,8 @@ public struct StaggerShoveParams: Sendable {
     /// so the disturbance the capture-step controller sees stays inside the
     /// validated band. Bounds the shove component only; for a more dramatic
     /// stagger raise `shoveGain`, not this.
+    /// Must be positive and finite: a non-positive cap freezes the offset
+    /// (`maxStep` = 0) while contact can still latch activation.
     public var velocityCap: Float
 
     public init(shoveGain: Float = 6.0, velocityCap: Float = 0.14) {

@@ -67,20 +67,26 @@ final class StaggerShoveIntegrationTests: XCTestCase {
     /// with `stagger: nil` vs with stagger enabled produce exactly equal leg-bone
     /// rotations and root translations, and the enabled run's solver never leaves
     /// zero. This is the opt-in guarantee — existing renders are unaffected.
+    /// Checked for BOTH avatars in the pair, not just avatar 0 — Phase 0e reads a
+    /// partner snapshot, so a one-sided check could hide dormant-path drift that
+    /// only shows up on the partner's side.
     @MainActor func testG7_disabledAndDormantAreByteIdenticalNoOp() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
 
-        func run(stagger: StaggerShoveParams?) async throws -> (states: [[SIMD4<Float>]], stepper: CrowdFrameStepper, model: VRMModel) {
+        func run(stagger: StaggerShoveParams?) async throws
+            -> (statesA: [[SIMD4<Float>]], statesB: [[SIMD4<Float>]], stepper: CrowdFrameStepper, model: VRMModel) {
             let a = try await avatar(device, index: 0)
             let b = try await avatar(device, index: 1)
             let stepper = CrowdFrameStepper(avatars: [a, b], driver: holdOnlyDriver(halfSep: 1.0),
                                             group: nil, fps: 60, stagger: stagger)
-            var states: [[SIMD4<Float>]] = []
+            var statesA: [[SIMD4<Float>]] = []
+            var statesB: [[SIMD4<Float>]] = []
             for f in 0..<60 {
                 stepper.step(frameTime: Float(f) / 60.0)
-                states.append(try legAndRootState(a.model))
+                statesA.append(try legAndRootState(a.model))
+                statesB.append(try legAndRootState(b.model))
             }
-            return (states, stepper, a.model)
+            return (statesA, statesB, stepper, a.model)
         }
 
         let disabled = try await run(stagger: nil)
@@ -91,10 +97,15 @@ final class StaggerShoveIntegrationTests: XCTestCase {
         let solver = try XCTUnwrap(dormant.stepper.staggerSolver(forAvatar: 0))
         XCTAssertEqual(solver.offset, .zero, "no contact ⇒ solver never activated")
 
-        XCTAssertEqual(disabled.states.count, dormant.states.count)
-        for f in disabled.states.indices {
-            XCTAssertEqual(disabled.states[f], dormant.states[f],
-                           "frame \(f): dormant stagger must be byte-identical to stagger-off")
+        XCTAssertEqual(disabled.statesA.count, dormant.statesA.count)
+        for f in disabled.statesA.indices {
+            XCTAssertEqual(disabled.statesA[f], dormant.statesA[f],
+                           "avatar 0, frame \(f): dormant stagger must be byte-identical to stagger-off")
+        }
+        XCTAssertEqual(disabled.statesB.count, dormant.statesB.count)
+        for f in disabled.statesB.indices {
+            XCTAssertEqual(disabled.statesB[f], dormant.statesB[f],
+                           "avatar 1, frame \(f): dormant stagger must be byte-identical to stagger-off")
         }
     }
 
@@ -213,8 +224,9 @@ final class StaggerShoveIntegrationTests: XCTestCase {
     }
 
     /// G6 — self-relief independence: G5's under-capacity case with the postural
-    /// lean ACTIVE. The lean partially relieves the penetration signal (Phase 0e
-    /// reads the chest after 0d), yet the step still fires and balance still
+    /// lean ACTIVE. The lean tilts the chest, which is this avatar's own torso
+    /// capsule's endpoint — so the lean still relieves the Phase 0e overlap
+    /// signal (0e runs after 0d), yet the step still fires and balance still
     /// contracts — the shove channel triggers the stagger independently of the
     /// self-relieving yield (validates the §5 tension resolution directly).
     @MainActor func testG6_stepFiresWithPosturalLeanActive() async throws {

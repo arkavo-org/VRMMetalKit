@@ -8,7 +8,7 @@
 
 **Depends on:**
 - `CaptureStepController` (Increment 2) — reads the model's root/CoM, restores planted feet to world pivots, steps a foot when the support margin is lost. Validated: rig tracks a CoM disturbance up to ~0.2 m/s (holds through 0.2, escapes by 0.3).
-- `PosturalContactSolver.penetration(point:capsuleP0:capsuleP1:radius:)` — yields `(depth, pushDir)` of a point (this avatar's chest) into a partner torso capsule. Reused verbatim as the contact signal.
+- `PosturalContactSolver.penetration(point:capsuleP0:capsuleP1:radius:)` — yields `(depth, pushDir)` of a point (this avatar's chest) into a partner torso capsule. This remains the **postural lean's** chest signal only; the stagger's contact signal is the **torso-pair surface overlap** via `CrowdContactClamp` (own capsule read fresh, partner from the lagged snapshot — see §3 step 1's amendment).
 - `CrowdFrameStepper.step()` — the per-frame phase pipeline (0a animation → 0b/0c root placement + Component-A clamp → 0d postural lean → `exchange()` snapshot → spring solver → render).
 
 ---
