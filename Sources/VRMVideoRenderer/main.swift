@@ -196,7 +196,7 @@ struct RenderOptions {
     var crowdRealtime: Bool = false     // async spring path (sleep gate live), the path a live app uses
     var bodyContactMargin: Float? = nil // Component A: contact-aware clamp (nil = off)
     var postural: Bool = false          // Component B: postural yield
-    var stagger: Bool = false           // Increment 3: stagger shove + capture step
+    var stagger: Bool = false           // stagger shove + capture step (design 2026-07-07)
     var staggerGain: Float? = nil       // shoveGain override (calibration knob)
     var springGravity: Float? = nil     // Override app-layer spring gravity (nil = auto)
 }
@@ -301,7 +301,7 @@ func parseArguments() -> RenderOptions? {
         case "--stagger":
             options.stagger = true
         case "--stagger-gain":
-            i += 1
+            i += 1; guard i < args.count else { return nil }
             options.staggerGain = Float(args[i]) ?? options.staggerGain
         case "--spring-gravity":
             i += 1; guard i < args.count else { return nil }
