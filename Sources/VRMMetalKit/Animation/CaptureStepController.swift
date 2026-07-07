@@ -45,12 +45,19 @@ public struct CaptureStepParams: Sendable {
         self.minStepInterval = minStepInterval
     }
 
-    /// Provisional committed arrest defaults. These are NOT proven-stable bounds: 2a's
-    /// test only sanity-checks that they *contract a static residual* under a fixed-CoM
-    /// model, which cannot exhibit the §2 limit cycle (that is a moving-CoM phenomenon).
-    /// The STABILITY of these values — that the real, moving-CoM stepping response does
-    /// not limit-cycle — is validated in 2b's real-rig gate, where the CoM-response
-    /// lives. Treat as defaults pending that 2b validation, not as a stability guarantee.
+    /// Committed arrest defaults. The MAX DISTURBANCE RATE (not `captureDistance`) is
+    /// validated by two gates: the 2b moving-CoM tracking-capacity MODEL gate
+    /// (`CaptureStepStabilityTests`, monotone in drive rate, with an over-capacity
+    /// escape counter-case) AND the real-rig CONFIRMATION gate
+    /// (`CaptureStepIKTests.testRigTrackingCapacity_belowHolds_overCapacityGrows`,
+    /// below-capacity holds / over-capacity grows on the actual skeleton + IK). The rig
+    /// gate additionally surfaced that THIS fixture's physical leg reach is the binding
+    /// constraint at a far lower rate than the model's pure feedback-loop capacity — a
+    /// model-reality divergence the model doesn't see (no leg-length term) — so the
+    /// committed capacity here is a feedback-loop property, not a promise that every rig
+    /// tracks up to it. `captureDistance` is a stabilizing LEAD knob, not a loop-gain
+    /// term: a larger lead tracks a faster disturbance (`testLargerCaptureDistance_
+    /// tracksFasterDisturbance`), it does not bound stability on its own.
     public static let committedCaptureDistanceMax: Float = 0.10
     public static let committedStepDampingMin: Float = 0.4
 }
@@ -119,6 +126,13 @@ public final class CaptureStepController {
     /// the controller's restored feet (not the clip's skating positions).
     public private(set) var lastBalance: BalanceState?
 
+    /// Whether the MOST RECENT `placeAnkle` call clamped its reach (the requested
+    /// world target exceeded the summed leg length) — reset at the top of `update`. A
+    /// clamp means the IK solver's ε guarantee (spec §2.1) no longer applies to that
+    /// frame, since the ankle lands short of the target by construction. Task 4's
+    /// rig-tracking gate uses this to confirm zero clamp events below capacity.
+    public private(set) var lastStepClamped = false
+
     public init(params: CaptureStepParams = CaptureStepParams()) {
         self.params = params
     }
@@ -128,6 +142,7 @@ public final class CaptureStepController {
     public func update(deltaTime: Float, model: VRMModel, rootVelocity: SIMD3<Float> = .zero, groundY: Float = 0) {
         guard isEnabled, let humanoid = model.humanoid else { return }
         _ = rootVelocity   // velocity-free default; reserved for the predicted-target hook
+        lastStepClamped = false
 
         if !seeded {
             if let l = humanoid.getBoneNode(.leftFoot), let r = humanoid.getBoneNode(.rightFoot),
@@ -237,6 +252,9 @@ public final class CaptureStepController {
         let hipPos = model.nodes[hipIdx].worldPosition
         let kneePos = model.nodes[kneeIdx].worldPosition
         let anklePos = model.nodes[ankleIdx].worldPosition
+        let legReach = TwoBoneIKSolver.boneLength(from: hipPos, to: kneePos)
+                     + TwoBoneIKSolver.boneLength(from: kneePos, to: anklePos)
+        if simd_distance(worldTarget, hipPos) > legReach { lastStepClamped = true }
         guard let r = TwoBoneIKSolver.solve(rootPos: hipPos, midPos: kneePos, endPos: anklePos,
                                             targetPos: worldTarget,
                                             poleVector: SIMD3<Float>(0, 0, 1)) else { return }

@@ -155,4 +155,55 @@ final class CaptureStepIKTests: XCTestCase {
         XCTAssertTrue(sawStep, "a step fired as the root dragged the CoM toward the support edge")
         XCTAssertNotNil(firstPlanted)
     }
+
+    /// Real-rig tracking-capacity confirmation (spec §4.2): a below-capacity root drive
+    /// rate does NOT grow the residual (beyond ε), zero clamp events; an over-capacity
+    /// rate DOES grow (counter-case). The model's VALIDITY gate.
+    @MainActor func testRigTrackingCapacity_belowHolds_overCapacityGrows() async throws {
+        let epsilon: Float = 0.001   // Task 1's measured ε (0.00047), rounded up
+
+        func residualPeakTail(drivePerSec: Float) async throws -> (peak: Float, tail: Float, clamps: Int) {
+            let model = try await loadRig()
+            var p = CaptureStepParams()
+            p.captureDistance = CaptureStepParams.committedCaptureDistanceMax
+            p.stepDamping = CaptureStepParams.committedStepDampingMin
+            let c = CaptureStepController(params: p)
+            c.update(deltaTime: 1.0 / 60.0, model: model)
+            var residuals: [Float] = []
+            var clamps = 0
+            let dt: Float = 1.0 / 60.0
+            for f in 1...180 {
+                for root in model.nodes where root.parent == nil { root.translation.x = drivePerSec * dt * Float(f) }
+                model.updateNodeTransforms()
+                c.update(deltaTime: dt, model: model)
+                if let b = BalanceModel.evaluate(model: model, plantedFeet: c.plantedFeet) { residuals.append(max(0, -b.margin)) }
+                if c.lastStepClamped { clamps += 1 }
+            }
+            return (residuals.max() ?? 0, Array(residuals.suffix(15)).max() ?? 0, clamps)
+        }
+
+        // Below capacity (slow drive): residual holds, no clamps, ε floor valid.
+        //
+        // Empirical (§4.2 calibration): this fixture stands with essentially zero leg
+        // reach-slack at rest (see testUpdate_supportPolygonMatchesPlantedPositions_
+        // underDrivenRoot's note — rawReach ≈ maxReach). Combined with the fixed
+        // `minStepInterval` rate-limiter (a still-planted trailing foot cannot re-plant
+        // for up to 9 frames @60fps regardless of drive rate), that leaves almost no
+        // headroom before the hip-to-planted-ankle distance exceeds the physical leg
+        // length: a sweep found the zero-clamp boundary sits between 0.005 and 0.0052
+        // m/s — two orders of magnitude below the pure-model's committed capacity band
+        // (~0.15-0.2 m/s, spec §4.1/Task 3). That is model-reality divergence: the
+        // point-mass/foot-position model has no leg-length constraint, so it cannot see
+        // this failure mode; the rig's true capacity is bounded by physical reach, not
+        // by the capture-step feedback loop. Per §4.2, that reports as a rig capacity
+        // finding rather than loosening this assertion — 0.003 m/s sits comfortably
+        // under the measured boundary with margin against float jitter.
+        let below = try await residualPeakTail(drivePerSec: 0.003)
+        XCTAssertEqual(below.clamps, 0, "no clamp events below capacity (ε floor stays valid)")
+        XCTAssertLessThanOrEqual(below.tail, below.peak + epsilon, "below capacity the residual holds — the stepper tracks")
+
+        // Over capacity (fast drive): residual grows — counter-case proving detection.
+        let over = try await residualPeakTail(drivePerSec: 0.6)
+        XCTAssertGreaterThan(over.tail, over.peak * 0.5 + 0.02, "over capacity the residual grows — the metric detects escape")
+    }
 }
