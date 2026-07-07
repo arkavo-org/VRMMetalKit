@@ -53,6 +53,16 @@ public final class CrowdFrameStepper {
     /// The half-separation actually applied last frame — the radius the clamp's
     /// one-frame-lagged torso snapshot was measured at (design §2/§4).
     public private(set) var lastAppliedHalfSeparation: Float?
+    /// Stagger shove tuning (design 2026-07-07 §3). `nil` ⇒ stagger off; the
+    /// solver/controller dictionaries below stay empty and Phase 0e is skipped.
+    private let staggerParams: StaggerShoveParams?
+    /// Per-avatar shove solvers / capture-step controllers, keyed by avatar index.
+    private var staggerSolvers: [Int: StaggerShoveSolver] = [:]
+    private var captureSteppers: [Int: CaptureStepController] = [:]
+    /// Avatars whose stagger channel has activated (first frame with depth > 0).
+    /// Dormant avatars are byte-identical to the stagger-off path, so Phase 0b's
+    /// scripted approach never reads as a CoM disturbance.
+    private var staggerActive: Set<Int> = []
 
     /// The avatars, exposed so a host can set a shared camera on each renderer.
     public var avatarsForCamera: [Avatar] { avatars }
@@ -62,13 +72,28 @@ public final class CrowdFrameStepper {
         posturalLayers[avatarIndex]
     }
 
+    /// The stagger shove solver state for `avatarIndex` (a copy), if stagger is enabled.
+    public func staggerSolver(forAvatar avatarIndex: Int) -> StaggerShoveSolver? {
+        staggerSolvers[avatarIndex]
+    }
+
+    /// The capture-step controller for `avatarIndex`, if stagger is enabled.
+    public func captureStepController(forAvatar avatarIndex: Int) -> CaptureStepController? {
+        captureSteppers[avatarIndex]
+    }
+
     /// - Parameters:
     ///   - bodyContactMargin: enables Component A (contact-aware clamp) — the max
     ///     torso overlap allowed. `nil` leaves the driver's separation untouched.
     ///   - postural: enables Component B (postural yield) with these params; a
     ///     `PosturalContactLayer` is built and bound per avatar. `nil` ⇒ off.
+    ///   - stagger: enables the stagger shove (design 2026-07-07) with these params;
+    ///     a `StaggerShoveSolver` + `CaptureStepController` (committed arrest
+    ///     defaults — the configuration the ~0.2 m/s capacity was validated with)
+    ///     is built per avatar, dormant until first contact. `nil` ⇒ off.
     public init(avatars: [Avatar], driver: CrowdMotionDriver, group: SpringBoneContactGroup?, fps: Float,
-                bodyContactMargin: Float? = nil, postural: PosturalContactParams? = nil) {
+                bodyContactMargin: Float? = nil, postural: PosturalContactParams? = nil,
+                stagger: StaggerShoveParams? = nil) {
         self.avatars = avatars
         self.driver = driver
         self.group = group
@@ -84,6 +109,16 @@ public final class CrowdFrameStepper {
             self.posturalLayers = layers
         } else {
             self.posturalLayers = [:]
+        }
+        self.staggerParams = stagger
+        if let stagger = stagger {
+            for avatar in avatars {
+                staggerSolvers[avatar.index] = StaggerShoveSolver(params: stagger)
+                var stepParams = CaptureStepParams()
+                stepParams.captureDistance = CaptureStepParams.committedCaptureDistanceMax
+                stepParams.stepDamping = CaptureStepParams.committedStepDampingMin
+                captureSteppers[avatar.index] = CaptureStepController(params: stepParams)
+            }
         }
         // Snapshot each root's authored (bind) translation so scripted motion is
         // applied additively and never loses the model's base pose.
@@ -106,7 +141,7 @@ public final class CrowdFrameStepper {
         // world matrices — the one-frame-lagged partner geometry (design §4) both
         // the clamp and the postural feed read. Gathered only when a component
         // needs it, so the default path stays untouched.
-        let needsTorsos = bodyContactMargin != nil || !posturalLayers.isEmpty
+        let needsTorsos = bodyContactMargin != nil || !posturalLayers.isEmpty || staggerParams != nil
         var torsos: [Int: CapsuleCollider] = [:]
         if needsTorsos {
             for avatar in avatars {
@@ -161,6 +196,40 @@ public final class CrowdFrameStepper {
                 layer.applyDirect(to: avatar.model)
                 avatar.model.updateNodeTransforms()
             }
+            // Phase 0e: stagger shove + capture step (design 2026-07-07 §3).
+            // Dormant until this avatar's first contact so Phase 0b's scripted
+            // approach never reads as a CoM disturbance; from onset, the
+            // rate-limited shove displaces the scene root and the capture-step
+            // controller absorbs it by holding the planted feet and stepping.
+            // Runs after 0d so the penetration signal is the lean-relieved one
+            // and the spring snapshot sees the stepped pose.
+            if staggerParams != nil {
+                var depth: Float = 0
+                var pushDirXZ = SIMD2<Float>.zero
+                if let partner = nearestPartnerTorso(of: avatar.index, torsos: torsos),
+                   let chest = chestWorldPosition(avatar.model) {
+                    let p = PosturalContactSolver.penetration(
+                        point: chest, capsuleP0: partner.p0, capsuleP1: partner.p1, radius: partner.radius)
+                    depth = p.depth
+                    pushDirXZ = SIMD2<Float>(p.pushDir.x, p.pushDir.z)
+                }
+                if depth > 0 { staggerActive.insert(avatar.index) }
+                if staggerActive.contains(avatar.index) {
+                    let offset = staggerSolvers[avatar.index]?.update(depth: depth, pushDirXZ: pushDirXZ, dt: dt) ?? .zero
+                    if offset != .zero {
+                        for root in avatar.model.nodes where root.parent == nil {
+                            root.translation.x += offset.x
+                            root.translation.z += offset.y
+                        }
+                        avatar.model.updateNodeTransforms()
+                    }
+                    // The controller seeds itself from the current ankle worlds on
+                    // its first update — the contact-onset seeding the design's
+                    // activation rule requires.
+                    captureSteppers[avatar.index]?.update(deltaTime: dt, model: avatar.model)
+                    avatar.model.updateNodeTransforms()
+                }
+            }
         }
         // Phase 1+2: snapshot all (post-motion, post-yield poses), inject union-minus-self.
         group?.exchange()
@@ -179,6 +248,15 @@ public final class CrowdFrameStepper {
             if d < bestDist { bestDist = d; best = t }
         }
         return best
+    }
+
+    /// This avatar's chest world position — the penetration probe point (the chest
+    /// sits forward of the torso axis, so it penetrates the partner capsule even
+    /// at the torso-torso contact margin; design §5). `nil` when the rig lacks a chest.
+    private func chestWorldPosition(_ model: VRMModel) -> SIMD3<Float>? {
+        guard let humanoid = model.humanoid, let idx = humanoid.getBoneNode(.chest),
+              idx < model.nodes.count else { return nil }
+        return model.nodes[idx].worldPosition
     }
 
     /// Phase 3: composite every avatar into `color`/`depth`. Each avatar is a
