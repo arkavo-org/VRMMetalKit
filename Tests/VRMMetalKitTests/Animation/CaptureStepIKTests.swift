@@ -75,7 +75,7 @@ final class CaptureStepIKTests: XCTestCase {
         // is coverage + a tight ε, not a failing counter-case. Enough reachable targets,
         // ankle essentially at target across all of them.
         XCTAssertGreaterThanOrEqual(reachableCount, 5, "enough reachable targets for range coverage")
-        XCTAssertLessThan(worstError, 0.005, "worst-case placement error (ε) across the reachable range")
+        XCTAssertLessThan(worstError, 0.001, "worst-case placement error (ε) across the reachable range")
     }
 
     /// Restore-IK polygon gate (spec Redline 1): under a driven root the support polygon
@@ -144,7 +144,6 @@ final class CaptureStepIKTests: XCTestCase {
         let model = try await loadRig()
         let c = CaptureStepController()
         c.update(deltaTime: 1.0 / 60.0, model: model)
-        let firstPlanted = c.plantedPositions().first
         var sawStep = false
         for f in 1...40 {
             for root in model.nodes where root.parent == nil { root.translation.x = 0.012 * Float(f) }
@@ -153,7 +152,6 @@ final class CaptureStepIKTests: XCTestCase {
             if c.plantedFeet.count == 1 { sawStep = true }   // a swing occurred
         }
         XCTAssertTrue(sawStep, "a step fired as the root dragged the CoM toward the support edge")
-        XCTAssertNotNil(firstPlanted)
     }
 
     /// Real-rig tracking-capacity confirmation (spec §4.2): a below-capacity root drive
@@ -198,8 +196,8 @@ final class CaptureStepIKTests: XCTestCase {
         // holds well inside it, and reach-clamping is graceful degradation, not a fall.
         let below = try await residualPeakTail(drivePerSec: 0.08)
         XCTAssertLessThanOrEqual(
-            below.tail, below.peak + epsilon,
-            "below capacity the residual holds — the stepper tracks (clamps=\(below.clamps), peak=\(below.peak), tail=\(below.tail))"
+            below.tail, below.peak * 0.5 + epsilon,
+            "below capacity the residual CONTRACTS — the stepper tracks (peak \(below.peak), tail \(below.tail))"
         )
 
         // Over capacity (fast drive): residual grows — counter-case proving detection.

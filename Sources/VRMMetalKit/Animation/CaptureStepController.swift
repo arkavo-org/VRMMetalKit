@@ -18,9 +18,10 @@ import Foundation
 import simd
 
 /// Tuning for the capture-step controller (design 2026-07-06 §6). `captureDistance`
-/// is the capture-gain term in the §2 feedback loop — bounded above JOINTLY with
-/// `stepDamping` by the stability region, NOT a free firmness knob. Follow regime
-/// (driver-driven motion) uses `captureDistance = 0, stepDamping = 0`.
+/// is a stabilizing LEAD knob — a larger lead tracks a faster disturbance — NOT a
+/// loop-gain or stability-bound term. The bounded quantity is the max disturbance
+/// RATE the stepper can track. Follow regime (driver-driven motion) uses
+/// `captureDistance = 0, stepDamping = 0`.
 public struct CaptureStepParams: Sendable {
     /// Step when `BalanceState.margin` drops below this.
     public var triggerMargin: Float
