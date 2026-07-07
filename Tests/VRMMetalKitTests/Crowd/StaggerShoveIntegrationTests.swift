@@ -116,10 +116,11 @@ final class StaggerShoveIntegrationTests: XCTestCase {
     }
 
     /// Shared G5/G6 runner: two avatars at deep constant overlap (hold-only driver,
-    /// zero scripted motion), shove target sized to keep the ramp — a constant-rate
-    /// root drive at `velocityCap` — running through the whole 180-frame window,
-    /// exactly the drive shape increment 2's rig gate validated. Returns the
-    /// residual peak/tail (increment 2's metric) and whether a step fired.
+    /// zero scripted motion). The shove ramps the root at `velocityCap` until the
+    /// mutual displacement reaches the self-limiting equilibrium (≈ the initial
+    /// overlap depth; partner-feedback, spec G5 amendment) — a bounded transient,
+    /// not a sustained drive. Returns the residual peak/tail (increment 2's
+    /// metric) and whether a step fired.
     @MainActor private func staggerRun(velocityCap: Float, postural: Bool,
                                        suppressStep: Bool = false) async throws
         -> (peak: Float, tail: Float, stepped: Bool, leanAngle: Float) {
@@ -134,10 +135,10 @@ final class StaggerShoveIntegrationTests: XCTestCase {
         // Probe the fixture's torso-pair overlap depth (the Phase 0e signal:
         // radiusA + radiusB − segmentDistance) on throwaway avatars (scoped so
         // the ~330MB instances free before the measured run), then size the gain
-        // so the shove target (gain·depth = 1.5 m) exceeds the largest
-        // whole-window drive (0.4 m/s × 3 s = 1.2 m): the rate limiter then never
-        // saturates inside the window and both cases see a constant-rate drive
-        // throughout.
+        // large (target gain·depth = 1.5 m) so the raw target never caps the
+        // displacement — the binding bound is the partner-feedback equilibrium
+        // offset ≈ depth·g/(1+g) ≈ the measured overlap itself, reached at
+        // `velocityCap` and held (spec G5 amendment).
         let gain: Float = try await {
             let pa = try await avatar(device, index: 0)
             let pb = try await avatar(device, index: 1)
