@@ -111,8 +111,41 @@ public final class CaptureStepController {
     private var right: FootPhase = .planted(SIMD3<Float>(repeating: 0))
     private var timeSinceLastStep: Float = 0
 
+    /// Whether the override drives the legs this frame.
+    public var isEnabled: Bool = true
+    private var seeded = false
+
     public init(params: CaptureStepParams = CaptureStepParams()) {
         self.params = params
+    }
+
+    /// One frame: seed-once from the rig, RESTORE the controller's feet before reading
+    /// balance (spec §2 / Redline 1), evaluate, decide (2a `step`), apply via IK.
+    public func update(deltaTime: Float, model: VRMModel, rootVelocity: SIMD3<Float> = .zero, groundY: Float = 0) {
+        guard isEnabled, let humanoid = model.humanoid else { return }
+        _ = rootVelocity   // velocity-free default; reserved for the predicted-target hook
+
+        if !seeded {
+            if let l = humanoid.getBoneNode(.leftFoot), let r = humanoid.getBoneNode(.rightFoot),
+               l < model.nodes.count, r < model.nodes.count {
+                seed(leftAnkle: model.nodes[l].worldPosition, rightAnkle: model.nodes[r].worldPosition)
+                seeded = true
+            } else { return }
+        }
+
+        // RESTORE before evaluate: place both feet at the controller's current targets so
+        // evaluate's support polygon + CoM reflect the controller, not the clip's skate.
+        placeAnkle(.left, worldTarget: target(.left), model: model)
+        placeAnkle(.right, worldTarget: target(.right), model: model)
+        model.updateNodeTransforms()
+
+        guard let balance = BalanceModel.evaluate(model: model, groundY: groundY, plantedFeet: plantedFeet) else { return }
+        _ = step(balance: balance, dt: deltaTime)
+
+        // Apply the (possibly updated) targets.
+        placeAnkle(.left, worldTarget: target(.left), model: model)
+        placeAnkle(.right, worldTarget: target(.right), model: model)
+        model.updateNodeTransforms()
     }
 
     /// Seed both feet planted at the given (synthetic in 2a; rig-sourced in 2b) ankle
