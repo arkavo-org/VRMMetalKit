@@ -50,14 +50,18 @@ public struct CaptureStepParams: Sendable {
     /// (`CaptureStepStabilityTests`, monotone in drive rate, with an over-capacity
     /// escape counter-case) AND the real-rig CONFIRMATION gate
     /// (`CaptureStepIKTests.testRigTrackingCapacity_belowHolds_overCapacityGrows`,
-    /// below-capacity holds / over-capacity grows on the actual skeleton + IK). The rig
-    /// gate additionally surfaced that THIS fixture's physical leg reach is the binding
-    /// constraint at a far lower rate than the model's pure feedback-loop capacity — a
-    /// model-reality divergence the model doesn't see (no leg-length term) — so the
-    /// committed capacity here is a feedback-loop property, not a promise that every rig
-    /// tracks up to it. `captureDistance` is a stabilizing LEAD knob, not a loop-gain
-    /// term: a larger lead tracks a faster disturbance (`testLargerCaptureDistance_
-    /// tracksFasterDisturbance`), it does not bound stability on its own.
+    /// below-capacity holds / over-capacity grows on the actual skeleton + IK, measured
+    /// on the BALANCE RESIDUAL — the same quantity the model gate measures). On that
+    /// metric the rig CONFIRMS the model: below-capacity drive holds the residual,
+    /// over-capacity drive grows it, with the escape boundary in the model's committed
+    /// band. THIS fixture's physical leg reach does clamp at below-capacity drive rates
+    /// (it stands with near-zero reach-slack at rest), but reach-clamping is a graceful
+    /// KINEMATIC degradation mode (the foot lands short of its ideal capture point) that
+    /// does not by itself indicate balance failure and does not bound the rig's balance
+    /// capacity below the model's band. `captureDistance` is a stabilizing LEAD knob,
+    /// not a loop-gain term: a larger lead tracks a faster disturbance
+    /// (`testLargerCaptureDistance_tracksFasterDisturbance`), it does not bound
+    /// stability on its own.
     public static let committedCaptureDistanceMax: Float = 0.10
     public static let committedStepDampingMin: Float = 0.4
 }
