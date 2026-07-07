@@ -124,6 +124,10 @@ func printUsage() {
         --body-contact-margin M Contact-aware motion: cap torso overlap at M meters
                                 (bodies press to contact instead of clipping through)
         --postural              Postural yield: upper body leans away on contact
+        --stagger               Stagger shove: contact displaces the CoM and a
+                                capture step keeps the avatar upright (crowd only)
+        --stagger-gain G        Override the shove gain (metres of CoM offset per
+                                metre of penetration; default 6.0)
         --spring-gravity <M>    Downward spring-bone gravity (app-layer). Auto-applied
                                 to rigs that author none (e.g. AvatarSample); 0 disables.
         --realtime              Use the async spring path a live app uses (sleep gate live)
@@ -192,6 +196,8 @@ struct RenderOptions {
     var crowdRealtime: Bool = false     // async spring path (sleep gate live), the path a live app uses
     var bodyContactMargin: Float? = nil // Component A: contact-aware clamp (nil = off)
     var postural: Bool = false          // Component B: postural yield
+    var stagger: Bool = false           // Increment 3: stagger shove + capture step
+    var staggerGain: Float? = nil       // shoveGain override (calibration knob)
     var springGravity: Float? = nil     // Override app-layer spring gravity (nil = auto)
 }
 
@@ -292,6 +298,11 @@ func parseArguments() -> RenderOptions? {
             options.bodyContactMargin = Float(args[i]) ?? options.bodyContactMargin
         case "--postural":
             options.postural = true
+        case "--stagger":
+            options.stagger = true
+        case "--stagger-gain":
+            i += 1
+            options.staggerGain = Float(args[i]) ?? options.staggerGain
         case "--spring-gravity":
             i += 1; guard i < args.count else { return nil }
             options.springGravity = Float(args[i]) ?? options.springGravity
@@ -577,8 +588,15 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
         startSep: options.crowdStartSep, holdSep: options.crowdHoldSep,
         approachStart: 0.1, approachEnd: 0.4, holdEnd: 0.7, partEnd: 0.95)
     let postural: PosturalContactParams? = options.postural ? PosturalContactParams() : nil
+    var stagger: StaggerShoveParams? = nil
+    if options.stagger {
+        var p = StaggerShoveParams()
+        if let gain = options.staggerGain { p.shoveGain = gain }
+        stagger = p
+    }
     return (CrowdFrameStepper(avatars: avatars, driver: driver, group: group, fps: Float(options.fps),
-                              bodyContactMargin: options.bodyContactMargin, postural: postural), group)
+                              bodyContactMargin: options.bodyContactMargin, postural: postural,
+                              stagger: stagger), group)
 }
 
 // MARK: - Main
