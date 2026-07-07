@@ -64,7 +64,7 @@ On separation (`depth → 0`) the target becomes zero and `offset` ramps back to
 
 **Construction:** a new optional `stagger: StaggerShoveParams?` parameter on `CrowdFrameStepper.init` (nil ⇒ stagger off), parallel to the existing `postural:` parameter. When enabled, the stepper builds, per avatar:
 - one `StaggerShoveSolver` (with `stagger` params),
-- one `CaptureStepController` (default params), initially **dormant**.
+- one `CaptureStepController` built with the **committed arrest defaults** (`captureDistance = CaptureStepParams.committedCaptureDistanceMax`, `stepDamping = CaptureStepParams.committedStepDampingMin`) — the exact configuration the ~0.2 m/s capacity was validated with (`testRigTrackingCapacity_belowHolds_overCapacityGrows`); the plain `CaptureStepParams()` defaults are the *follow* regime and carry no validated capacity. Initially **dormant**.
 
 **Activation — contact-onset gating (per avatar):** the stagger channel is dormant until the first frame with `depth > 0`. On that frame the controller is **seeded from the avatar's current left/right ankle world positions** via `seed(leftAnkle:rightAnkle:)`, and both solver and controller run every frame thereafter. Rationale: Phase 0b's scripted approach translates the root the whole run; a controller live from frame 0 would pin the feet at their frame-0 world pivots and read the approach itself as a CoM disturbance — spurious capture steps during approach, or escape before contact ever occurs, contaminating G5/G6's residual. Once contact starts, the Component-A clamp pins separation at the margin, so scripted root motion is ≈ 0 during hold and the shove is the dominant disturbance — the regime the §2 capacity tie assumes. The part-phase's scripted withdrawal overlaps the offset decay; both are small, rate-limited, and same-order (see §1's return-glide note).
 
@@ -149,4 +149,4 @@ Carried directly from Increment 2's gate discipline: **a gate whose pass side ca
 - **Modify:** `Sources/VRMMetalKit/Crowd/CrowdFrameStepper.swift` (Component B: `stagger:` init param, per-avatar solver + `CaptureStepController`, Phase 0e, accessors).
 - **Modify:** `Sources/VRMVideoRenderer/main.swift` (Component C: `--stagger` flag).
 - **Create:** `Tests/VRMMetalKitTests/Animation/StaggerShoveSolverTests.swift` (G1–G4).
-- **Create:** `Tests/VRMMetalKitTests/Crowd/StaggerImpulseIntegrationTests.swift` (G5–G7).
+- **Create:** `Tests/VRMMetalKitTests/Crowd/StaggerShoveIntegrationTests.swift` (G5–G7).
