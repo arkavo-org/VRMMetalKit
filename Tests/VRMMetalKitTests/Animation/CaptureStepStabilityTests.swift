@@ -43,18 +43,26 @@ final class CaptureStepStabilityTests: XCTestCase {
         let c = CaptureStepController(params: p)
         c.seed(leftAnkle: SIMD3<Float>(-0.1, 0, 0), rightAnkle: SIMD3<Float>(0.1, 0, 0))
         var com = SIMD3<Float>(0, 1, 0); let dt: Float = 1.0 / 60.0
+        // Per-foot planted position tracked by IDENTITY — plantedPositions() is a
+        // variable-length, order-shifting array and must never be zipped.
+        func plantOf(_ foot: BalanceModel.Foot) -> SIMD3<Float>? {
+            if case .planted(let pos) = c.phase(foot) { return pos } else { return nil }
+        }
+        var lastL = plantOf(.left)!, lastR = plantOf(.right)!
         var res: [Float] = []
         for _ in 0..<300 {
             com.x += drivePerSec * dt
-            let before = c.plantedPositions()
-            let b = balanceFrom(feet: before, com: com)
+            let feet = c.plantedPositions()
+            let b = balanceFrom(feet: feet, com: com)
             res.append(max(0, -b.margin))
             _ = c.step(balance: b, dt: dt)
-            let after = c.plantedPositions()
-            if let mv = zip(after, before).first(where: { simd_distance($0.0, $0.1) > 1e-4 }) { com += legFrac * (mv.0 - mv.1) }
+            // Swung-leg self-feedback: when a foot re-plants at a NEW spot, its leg mass
+            // (legFrac) moved by THAT foot's own displacement — pull the CoM by it.
+            if let pl = plantOf(.left), simd_distance(pl, lastL) > 1e-4 { com += legFrac * (pl - lastL); lastL = pl }
+            if let pr = plantOf(.right), simd_distance(pr, lastR) > 1e-4 { com += legFrac * (pr - lastR); lastR = pr }
         }
         let peak = res.max() ?? 0; let tail = Array(res.suffix(30)).max() ?? 0
-        return tail <= peak * 0.5 + 0.02   // bounded/shrinking ⇒ tracks; still-high tail ⇒ escaped
+        return tail <= peak * 0.5 + 0.02
     }
 
     /// Tracking-capacity gate (spec §4.1): pass/fail is MONOTONE in disturbance rate —
@@ -75,8 +83,11 @@ final class CaptureStepStabilityTests: XCTestCase {
 
     /// captureDistance is STABILIZING, not a loop-gain term (spec §4 re-axis): a larger
     /// lead tracks a disturbance that a smaller lead escapes.
+    /// The corrected per-foot-identity self-feedback moved this boundary — cap=0.5 no
+    /// longer tracks 0.6 m/s (it sits in a since-shrunk pocket); cap=0.65 is comfortably
+    /// inside the new stable band [0.6, 0.7], verified false at 0.55/0.72 on either side.
     func testLargerCaptureDistance_tracksFasterDisturbance() {
         XCTAssertFalse(tracks(drivePerSec: 0.6, cap: 0.0), "no lead escapes at 0.6 m/s")
-        XCTAssertTrue(tracks(drivePerSec: 0.6, cap: 0.5), "a large lead tracks the same 0.6 m/s")
+        XCTAssertTrue(tracks(drivePerSec: 0.6, cap: 0.65), "a large lead tracks the same 0.6 m/s")
     }
 }
