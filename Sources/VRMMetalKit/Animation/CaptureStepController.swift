@@ -205,43 +205,28 @@ public final class CaptureStepController {
 
         // HIP: the solver assumes a bone chain whose REST direction (hip→knee) is
         // canonical world +Y — `rootRotation` is an absolute WORLD rotation that
-        // carries that canonical +Y axis onto the solved upper-leg direction
-        // (verified empirically: forward kinematics with `rootRotation.act((0,1,0))`
-        // reproduces the hip→knee direction to sub-mm precision, across the whole
-        // target range). This rig's actual rest direction — the fixed,
-        // rotation-independent direction encoded by a child's bind-pose `translation`
-        // in its parent's pre-rotation frame — is measured (diagnostic dump against
-        // the loaded rig) to be -Y, not +Y: legs hang down along local -Y from their
-        // parent joint. `legRestFlip` is the fixed 180° rotation that reconciles the
-        // solver's +Y convention with this rig's -Y bone convention; it is a
-        // structural property of the humanoid skeleton's parenting convention, not a
-        // per-target fudge factor:
+        // carries that canonical +Y axis onto the solved upper-leg direction.
+        // `legRestFlip` reconciles the solver's +Y convention with this rig's actual
+        // bind-pose thigh direction (hip→knee, i.e. the knee node's bind-pose
+        // `initialTranslation`), so it is derived per-rig rather than assumed to be
+        // a fixed 180°:
         //   hip.rotation = parentWorldRot⁻¹ · rootRotation · legRestFlip
-        let legRestFlip = simd_quatf(ix: 1, iy: 0, iz: 0, r: 0)
+        let thighRestDir = simd_normalize(model.nodes[kneeIdx].initialTranslation)
+        let legRestFlip = simd_quatf(from: thighRestDir, to: SIMD3<Float>(0, 1, 0))
         let hipParentWorld = worldRotation(model.nodes[hipIdx].parent?.worldMatrix)
         model.nodes[hipIdx].rotation = simd_normalize(hipParentWorld.inverse * r.rootRotation * legRestFlip)
         model.nodes[hipIdx].updateLocalMatrix(); model.nodes[hipIdx].updateWorldTransform()
 
-        // KNEE: composing `midRotation` algebraically against `rootRotation` (every
-        // combination in the brief's option list — direct, inverse, pre/post
-        // `legRestFlip`) reproduces the WRONG knee bend once the rig's -Y convention
-        // is folded in: `midRotation`'s bend axis is fixed at local (1,0,0), but the
-        // solver derives it from `bendAxis = cross(targetDir, poleVector)`, which is
-        // generally NOT the axis `rootRotation` maps its local X onto (aimRotation's
-        // shortest-arc axis and `bendAxis` coincide only when the pole vector has no
-        // component along the hip→knee direction) — so no fixed algebraic
-        // recombination of `rootRotation`/`midRotation` lands exactly; measured
-        // residual grew with the bend angle (~0.10° at a 5.8° knee bend, ~0.44° at
-        // 29.3°), confirming an axis mismatch rather than a sign/order slip.
-        // Calibrated fix: derive the knee's aim GEOMETRICALLY from the same
-        // reach-clamped triangle the solver itself solves (law of cosines is
-        // reach-only; it needs no extra axis assumption). This is exact by
-        // construction and still consumes the solver's hip placement:
+        // KNEE: the solver's `midRotation` bend axis does not generally coincide with
+        // this rig's fixed local bend axis, so the knee's aim is instead derived
+        // GEOMETRICALLY from the same reach-clamped triangle the solver itself solves
+        // (law of cosines is reach-only and needs no extra axis assumption). This is
+        // exact by construction and still consumes the solver's hip placement:
         //   exactAnklePos = hipPos + clamp(|target − hipPos|, |a−b|+ε, a+b−ε) · targetDir
         //   knee.rotation = kneeParentWorldRot⁻¹ · aim(kneeRestDir → (exactAnklePos − kneePos'))
         // where `kneePos'` is the POST-hip-write knee position (never the stale
-        // pre-IK cache) and `kneeRestDir` is this rig's measured -Y-ish rest
-        // direction for the shin (ankle's bind-pose translation, normalized).
+        // pre-IK cache) and `kneeRestDir` is this rig's bind-pose rest direction for
+        // the shin (ankle's bind-pose `initialTranslation`, normalized).
         let newKneePos = model.nodes[kneeIdx].worldPosition   // post-hip-write
         let a = simd_length(kneePos - hipPos)
         let b = simd_length(anklePos - kneePos)
@@ -255,7 +240,7 @@ public final class CaptureStepController {
         let desiredKneeToAnkle = simd_normalize(exactAnklePos - newKneePos)
 
         let kneeParentWorld = worldRotation(model.nodes[kneeIdx].parent?.worldMatrix)  // now post-hip-write
-        let kneeRestDir = simd_normalize(model.nodes[ankleIdx].translation)
+        let kneeRestDir = simd_normalize(model.nodes[ankleIdx].initialTranslation)
         let kneeAim = simd_quatf(from: kneeRestDir, to: desiredKneeToAnkle)
         model.nodes[kneeIdx].rotation = simd_normalize(kneeParentWorld.inverse * kneeAim)
         model.nodes[kneeIdx].updateLocalMatrix(); model.nodes[kneeIdx].updateWorldTransform()
