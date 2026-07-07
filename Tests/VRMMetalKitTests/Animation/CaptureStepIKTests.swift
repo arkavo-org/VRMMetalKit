@@ -78,9 +78,24 @@ final class CaptureStepIKTests: XCTestCase {
         XCTAssertLessThan(worstError, 0.005, "worst-case placement error (ε) across the reachable range")
     }
 
-    /// Restore-IK polygon gate (spec Redline 1): under a driven root the support-polygon
-    /// corners at decision time match the controller's plantedPositions — proving the
-    /// clip's skating leg positions never reach BalanceModel.evaluate.
+    /// Restore-IK polygon gate (spec Redline 1): under a driven root the support polygon
+    /// evaluate() actually reads at decision time must track the controller's restored
+    /// feet, not the clip's skating leg positions.
+    ///
+    /// The naive check — comparing `lastBalance.supportCentroid` to the plain average of
+    /// `plantedPositions()` — does not discriminate: `supportCentroid` comes from
+    /// `BalanceModel.footGroundCorners` (heel AND toe corners), which sits ~0.02-0.07m
+    /// off a bare ankle average purely from foot-corner geometry, regardless of restore.
+    /// That constant bias swamps the actual (much smaller, transient) skate signal.
+    ///
+    /// Instead this re-runs `BalanceModel.evaluate` on the model's POST-frame rig state
+    /// — which update()'s unconditional FINAL placeAnkle block always re-locks to the
+    /// controller's targets, restore or not — and compares that to `lastBalance`
+    /// (evaluate's own MID-frame reading, captured via the controller). Both sides go
+    /// through the identical evaluate → footGroundCorners path, so the constant
+    /// heel/toe corner geometry cancels out; what's left is purely whether evaluate saw
+    /// the controller's feet (restored, ~matches) or the clip's skate (root-dragged,
+    /// diverges) at the moment it ran.
     @MainActor func testUpdate_supportPolygonMatchesPlantedPositions_underDrivenRoot() async throws {
         let model = try await loadRig()
         let c = CaptureStepController()
@@ -92,24 +107,27 @@ final class CaptureStepIKTests: XCTestCase {
         // still-planted foot beyond physical leg reach regardless of controller
         // correctness (2a allows only one foot to swing at a time, and a swing needs
         // `swingDuration` to land). Capping the approach lets the triggered step complete
-        // within the run, which is what this gate is actually about.
+        // within the run, which is what this gate is actually about. The divergence this
+        // test is sensitive to only appears WHILE the root is actively moving (frames
+        // 1-9 here); once it holds, the previous frame's FINAL correction has already
+        // caught up and restore-vs-not converges to the same reading regardless — so the
+        // worst-case divergence is tracked across every frame, not just the last one.
+        var worstDivergence: Float = 0
         for f in 1...30 {
             for root in model.nodes where root.parent == nil {
                 root.translation.x = min(0.01 * Float(f), 0.09)      // slow scripted approach, then hold
             }
             model.updateNodeTransforms()
             c.update(deltaTime: 1.0 / 60.0, model: model)
+            let midFrame = try XCTUnwrap(c.lastBalance, "evaluate ran this frame")
+            let postFrame = try XCTUnwrap(BalanceModel.evaluate(model: model, groundY: 0, plantedFeet: c.plantedFeet))
+            worstDivergence = max(worstDivergence, simd_distance(midFrame.supportCentroid, postFrame.supportCentroid))
         }
-        // The polygon BalanceModel would build from the rig's planted feet must equal
-        // the controller's stored planted positions (within IK ε), i.e. no skate leaked in.
-        // Compare each planted foot's rig world position to the controller's stored one.
-        for foot in [BalanceModel.Foot.left, .right] where c.plantedFeet.contains(foot) {
-            let boneIdx = try XCTUnwrap(model.humanoid?.getBoneNode(foot == .left ? .leftFoot : .rightFoot))
-            let rig = model.nodes[boneIdx].worldPosition
-            let stored = c.target(foot)
-            XCTAssertLessThan(simd_distance(rig, stored), 0.02,
-                              "evaluate-time foot (\(foot)) reflects the controller, not the clip skate")
-        }
+        // With restore, divergence is float noise (~1e-7); without it, the per-frame
+        // root drift leaks into evaluate's mid-frame reading at up to ~0.019 during the
+        // active ramp — 0.005 sits well clear of both.
+        XCTAssertLessThan(worstDivergence, 0.005,
+                          "evaluate-time support reflects the controller's feet, not the clip skate (worst divergence \(worstDivergence))")
     }
 
     @MainActor func testUpdate_disabledIsBitIdenticalNoOp() async throws {

@@ -115,6 +115,10 @@ public final class CaptureStepController {
     public var isEnabled: Bool = true
     private var seeded = false
 
+    /// The BalanceState the last update() computed, for tests to confirm evaluate read
+    /// the controller's restored feet (not the clip's skating positions).
+    public private(set) var lastBalance: BalanceState?
+
     public init(params: CaptureStepParams = CaptureStepParams()) {
         self.params = params
     }
@@ -140,6 +144,7 @@ public final class CaptureStepController {
         model.updateNodeTransforms()
 
         guard let balance = BalanceModel.evaluate(model: model, groundY: groundY, plantedFeet: plantedFeet) else { return }
+        lastBalance = balance
         _ = step(balance: balance, dt: deltaTime)
 
         // Apply the (possibly updated) targets.
