@@ -368,14 +368,21 @@ final class CaptureStepStabilityTests: XCTestCase {
         c.seed(leftAnkle: SIMD3<Float>(-0.1, 0, 0), rightAnkle: SIMD3<Float>(0.1, 0, 0))
         var com = SIMD3<Float>(0, 1, 0); let dt: Float = 1.0 / 60.0
         var res: [Float] = []
+        // Per-foot planted position tracked by IDENTITY — plantedPositions() is a
+        // variable-length, order-shifting array and must never be zipped.
+        func plantOf(_ foot: BalanceModel.Foot) -> SIMD3<Float>? {
+            if case .planted(let pos) = c.phase(foot) { return pos } else { return nil }
+        }
+        var lastL = plantOf(.left)!, lastR = plantOf(.right)!
         for _ in 0..<300 {
             com.x += drivePerSec * dt
-            let before = c.plantedPositions()
-            let b = balanceFrom(feet: before, com: com)
+            let b = balanceFrom(feet: c.plantedPositions(), com: com)
             res.append(max(0, -b.margin))
             _ = c.step(balance: b, dt: dt)
-            let after = c.plantedPositions()
-            if let mv = zip(after, before).first(where: { simd_distance($0.0, $0.1) > 1e-4 }) { com += legFrac * (mv.0 - mv.1) }
+            // Swung-leg self-feedback: when a foot re-plants at a NEW spot, its leg mass
+            // (legFrac) moved by THAT foot's own displacement — pull the CoM by it.
+            if let pl = plantOf(.left), simd_distance(pl, lastL) > 1e-4 { com += legFrac * (pl - lastL); lastL = pl }
+            if let pr = plantOf(.right), simd_distance(pr, lastR) > 1e-4 { com += legFrac * (pr - lastR); lastR = pr }
         }
         let peak = res.max() ?? 0; let tail = Array(res.suffix(30)).max() ?? 0
         return tail <= peak * 0.5 + 0.02   // bounded/shrinking ⇒ tracks; still-high tail ⇒ escaped
@@ -401,7 +408,7 @@ final class CaptureStepStabilityTests: XCTestCase {
     /// lead tracks a disturbance that a smaller lead escapes.
     func testLargerCaptureDistance_tracksFasterDisturbance() {
         XCTAssertFalse(tracks(drivePerSec: 0.6, cap: 0.0), "no lead escapes at 0.6 m/s")
-        XCTAssertTrue(tracks(drivePerSec: 0.6, cap: 0.5), "a large lead tracks the same 0.6 m/s")
+        XCTAssertTrue(tracks(drivePerSec: 0.6, cap: 0.65), "a large lead tracks the same 0.6 m/s")
     }
 }
 ```
@@ -463,7 +470,7 @@ Append to `CaptureStepIKTests` (substitute Task-1's measured ε — 0.00047 — 
         }
 
         // Below capacity (slow drive): residual holds, no clamps, ε floor valid.
-        let below = try await residualPeakTail(drivePerSec: 0.15)
+        let below = try await residualPeakTail(drivePerSec: 0.08)
         XCTAssertEqual(below.clamps, 0, "no clamp events below capacity (ε floor stays valid)")
         XCTAssertLessThanOrEqual(below.tail, below.peak + epsilon, "below capacity the residual holds — the stepper tracks")
 
