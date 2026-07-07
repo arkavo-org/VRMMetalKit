@@ -114,4 +114,114 @@ final class StaggerShoveIntegrationTests: XCTestCase {
         XCTAssertLessThan(solver.offset.x, 0, "avatar 0 is shoved away from the +X partner")
         XCTAssertNotNil(stepper.captureStepController(forAvatar: 0), "controller wired per avatar")
     }
+
+    /// Shared G5/G6 runner: two avatars at deep constant overlap (hold-only driver,
+    /// zero scripted motion), shove target sized to keep the ramp — a constant-rate
+    /// root drive at `velocityCap` — running through the whole 180-frame window,
+    /// exactly the drive shape increment 2's rig gate validated. Returns the
+    /// residual peak/tail (increment 2's metric) and whether a step fired.
+    @MainActor private func staggerRun(velocityCap: Float, postural: Bool,
+                                       suppressStep: Bool = false) async throws
+        -> (peak: Float, tail: Float, stepped: Bool, leanAngle: Float) {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0)
+        let b = try await avatar(device, index: 1)
+        // 0.05, not 0.06: the postural lean (G6) is still driven by the CHEST
+        // signal, which only fires with the torso axes inside one radius — 0.05
+        // is where Task 2 measured it live, so G6's lean is genuinely active.
+        let driver = holdOnlyDriver(halfSep: 0.05)
+
+        // Probe the fixture's torso-pair overlap depth (the Phase 0e signal:
+        // radiusA + radiusB − segmentDistance) on throwaway avatars (scoped so
+        // the ~330MB instances free before the measured run), then size the gain
+        // so the shove target (gain·depth = 1.5 m) exceeds the largest
+        // whole-window drive (0.4 m/s × 3 s = 1.2 m): the rate limiter then never
+        // saturates inside the window and both cases see a constant-rate drive
+        // throughout.
+        let gain: Float = try await {
+            let pa = try await avatar(device, index: 0)
+            let pb = try await avatar(device, index: 1)
+            let probe = CrowdFrameStepper(avatars: [pa, pb], driver: driver, group: nil, fps: 60)
+            probe.step(frameTime: 0)
+            let mine = try XCTUnwrap(SpringBoneContactColliderSet.worldTorsoCapsule(model: pa.model))
+            let partner = try XCTUnwrap(SpringBoneContactColliderSet.worldTorsoCapsule(model: pb.model))
+            let dist = CrowdContactClamp.segmentDistance(mine.p0, mine.p1, partner.p0, partner.p1)
+            let depth = max(0, mine.radius + partner.radius - dist)
+            XCTAssertGreaterThan(depth, 0.01,
+                "fixture precondition: torso capsules overlap at halfSep 0.05 — lower halfSep if this fails")
+            return 1.5 / depth
+        }()
+
+        let stepper = CrowdFrameStepper(
+            avatars: [a, b], driver: driver, group: nil, fps: 60,
+            postural: postural ? PosturalContactParams() : nil,
+            stagger: StaggerShoveParams(shoveGain: gain, velocityCap: velocityCap))
+        if suppressStep {
+            // G5's counter-case: make the step trigger unreachable. The controller
+            // still restores/pins the planted feet every frame — only the capture
+            // step is removed, isolating the mechanism under test.
+            stepper.captureStepController(forAvatar: 0)?.params.triggerMargin = -10
+            stepper.captureStepController(forAvatar: 1)?.params.triggerMargin = -10
+        }
+
+        var residuals: [Float] = []
+        var stepped = false
+        var maxLean: Float = 0
+        for f in 0..<180 {
+            stepper.step(frameTime: Float(f) / 180.0)
+            let c = try XCTUnwrap(stepper.captureStepController(forAvatar: 0))
+            if c.plantedFeet.count == 1 { stepped = true }
+            if let bal = BalanceModel.evaluate(model: a.model, plantedFeet: c.plantedFeet) {
+                residuals.append(max(0, -bal.margin))
+            }
+            maxLean = max(maxLean, stepper.posturalLayer(forAvatar: 0)?.currentLeanAngle ?? 0)
+        }
+        return (residuals.max() ?? 0, Array(residuals.suffix(15)).max() ?? 0, stepped, maxLean)
+    }
+
+    /// G5 — the north-star gate: the crowd shove staggers the avatar (a step
+    /// fires) and it stays balanced — the residual CONTRACTS, on the same metric
+    /// increment 2's rig gate uses. Counter-case (non-negotiable) — STEP
+    /// SUPPRESSED: the same shove with the step trigger made unreachable reaches
+    /// a real residual peak and FAILS to contract, proving the capture step (not
+    /// the fixture) is what restores balance. Rate discriminator: a 0.4 m/s cap
+    /// transiently degrades balance ≥2× the 0.14 peak yet still contracts — the
+    /// mutual shove is self-limiting (partner-feedback equilibrium, spec G5
+    /// amendment), so sustained over-capacity escape is structurally impossible
+    /// in-crowd; escape under sustained drive is increment 2's rig gate.
+    @MainActor func testG5_shoveStaggersAndStepKeepsItUpright() async throws {
+        let epsilon: Float = 0.001
+
+        let under = try await staggerRun(velocityCap: 0.14, postural: false)
+        XCTAssertTrue(under.stepped, "the shove forced at least one capture step (plantedFeet dropped to one)")
+        XCTAssertLessThanOrEqual(under.tail, under.peak * 0.5 + epsilon,
+            "with the step the residual contracts — staggered but upright (peak \(under.peak), tail \(under.tail))")
+
+        let suppressed = try await staggerRun(velocityCap: 0.14, postural: false, suppressStep: true)
+        XCTAssertFalse(suppressed.stepped, "trigger unreachable ⇒ no step fired")
+        XCTAssertGreaterThan(suppressed.peak, 0.01,
+            "the shove produced a real disturbance (peak \(suppressed.peak))")
+        XCTAssertGreaterThan(suppressed.tail, suppressed.peak * 0.5 + epsilon,
+            "without the step the residual does NOT contract (peak \(suppressed.peak), tail \(suppressed.tail))")
+
+        let overRate = try await staggerRun(velocityCap: 0.4, postural: false)
+        XCTAssertGreaterThan(overRate.peak, under.peak * 2,
+            "a faster cap transiently degrades balance materially (\(overRate.peak) vs \(under.peak))")
+        XCTAssertLessThanOrEqual(overRate.tail, overRate.peak * 0.5 + epsilon,
+            "yet still contracts — the self-limiting displacement bound (peak \(overRate.peak), tail \(overRate.tail))")
+    }
+
+    /// G6 — self-relief independence: G5's under-capacity case with the postural
+    /// lean ACTIVE. The lean partially relieves the penetration signal (Phase 0e
+    /// reads the chest after 0d), yet the step still fires and balance still
+    /// contracts — the shove channel triggers the stagger independently of the
+    /// self-relieving yield (validates the §5 tension resolution directly).
+    @MainActor func testG6_stepFiresWithPosturalLeanActive() async throws {
+        let withLean = try await staggerRun(velocityCap: 0.14, postural: true)
+        XCTAssertGreaterThan(withLean.leanAngle, 0.01,
+            "non-vacuity: the postural lean genuinely engaged in this run")
+        XCTAssertTrue(withLean.stepped, "the step fires even with the self-relieving lean active")
+        XCTAssertLessThanOrEqual(withLean.tail, withLean.peak * 0.5 + 0.001,
+            "and the residual still contracts (peak \(withLean.peak), tail \(withLean.tail))")
+    }
 }
