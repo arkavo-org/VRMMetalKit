@@ -203,15 +203,25 @@ public final class CrowdFrameStepper {
             // controller absorbs it by holding the planted feet and stepping.
             // Runs after 0d so the penetration signal is the lean-relieved one
             // and the spring snapshot sees the stepped pose.
+            // Depth is the torso-pair surface overlap -- the same quantity
+            // Component A's clamp measures -- rather than the chest point's
+            // penetration into the partner capsule: the chest bone lies ON its
+            // own torso capsule axis (torsoCollider is spine->chest), so that
+            // signal is structurally zero at the clamp's contact floor, where
+            // depth = bodyContactMargin. `mine` is recomputed fresh from this
+            // avatar's just-updated pose (not the one-frame-stale `torsos`
+            // snapshot) so it reflects 0d's lean and never spuriously overlaps
+            // the partner's equally-stale pre-placement pose on frame 0; the
+            // partner side stays on the stale snapshot by design (§4 lag).
             if staggerParams != nil {
                 var depth: Float = 0
                 var pushDirXZ = SIMD2<Float>.zero
                 if let partner = nearestPartnerTorso(of: avatar.index, torsos: torsos),
-                   let chest = chestWorldPosition(avatar.model) {
-                    let p = PosturalContactSolver.penetration(
-                        point: chest, capsuleP0: partner.p0, capsuleP1: partner.p1, radius: partner.radius)
-                    depth = p.depth
-                    pushDirXZ = SIMD2<Float>(p.pushDir.x, p.pushDir.z)
+                   let mine = SpringBoneContactColliderSet.worldTorsoCapsule(model: avatar.model) {
+                    let pts = CrowdContactClamp.closestPoints(mine.p0, mine.p1, partner.p0, partner.p1)
+                    depth = max(0, mine.radius + partner.radius - simd_length(pts.onA - pts.onB))
+                    let away = pts.onA - pts.onB
+                    pushDirXZ = SIMD2<Float>(away.x, away.z)
                 }
                 if depth > 0 { staggerActive.insert(avatar.index) }
                 if staggerActive.contains(avatar.index) {
@@ -248,15 +258,6 @@ public final class CrowdFrameStepper {
             if d < bestDist { bestDist = d; best = t }
         }
         return best
-    }
-
-    /// This avatar's chest world position — the penetration probe point (the chest
-    /// sits forward of the torso axis, so it penetrates the partner capsule even
-    /// at the torso-torso contact margin; design §5). `nil` when the rig lacks a chest.
-    private func chestWorldPosition(_ model: VRMModel) -> SIMD3<Float>? {
-        guard let humanoid = model.humanoid, let idx = humanoid.getBoneNode(.chest),
-              idx < model.nodes.count else { return nil }
-        return model.nodes[idx].worldPosition
     }
 
     /// Phase 3: composite every avatar into `color`/`depth`. Each avatar is a

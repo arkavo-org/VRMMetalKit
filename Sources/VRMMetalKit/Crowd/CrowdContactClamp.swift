@@ -67,10 +67,12 @@ public enum CrowdContactClamp {
         return max(driverHalfSep, floor)
     }
 
-    /// Shortest distance between segments `[a0,a1]` and `[b0,b1]` (clamped closest
-    /// points). Standard Ericson routine; robust to parallel/degenerate segments.
-    public static func segmentDistance(_ a0: SIMD3<Float>, _ a1: SIMD3<Float>,
-                                       _ b0: SIMD3<Float>, _ b1: SIMD3<Float>) -> Float {
+    /// Closest points between segments `[a0,a1]` and `[b0,b1]` (clamped).
+    /// `segmentDistance` is its length; exposed so callers that need a
+    /// direction (e.g. the stagger shove's push direction) share the same
+    /// Ericson routine.
+    public static func closestPoints(_ a0: SIMD3<Float>, _ a1: SIMD3<Float>,
+                                     _ b0: SIMD3<Float>, _ b1: SIMD3<Float>) -> (onA: SIMD3<Float>, onB: SIMD3<Float>) {
         let d1 = a1 - a0        // direction of segment A
         let d2 = b1 - b0        // direction of segment B
         let r = a0 - b0
@@ -82,7 +84,7 @@ public enum CrowdContactClamp {
         var t: Float = 0
         let eps: Float = 1e-8
         if aa <= eps && ee <= eps {
-            return simd_length(a0 - b0)     // both degenerate to points
+            return (a0, b0)     // both degenerate to points
         }
         if aa <= eps {
             s = 0
@@ -103,6 +105,14 @@ public enum CrowdContactClamp {
         }
         let closestA = a0 + d1 * s
         let closestB = b0 + d2 * t
-        return simd_length(closestA - closestB)
+        return (closestA, closestB)
+    }
+
+    /// Shortest distance between segments `[a0,a1]` and `[b0,b1]` (clamped closest
+    /// points). Standard Ericson routine; robust to parallel/degenerate segments.
+    public static func segmentDistance(_ a0: SIMD3<Float>, _ a1: SIMD3<Float>,
+                                       _ b0: SIMD3<Float>, _ b1: SIMD3<Float>) -> Float {
+        let pts = closestPoints(a0, a1, b0, b1)
+        return simd_length(pts.onA - pts.onB)
     }
 }
