@@ -600,11 +600,11 @@ The §5 open question: is the Component-A-clamped chest penetration, amplified b
 ```bash
 swift build --configuration release
 SCRATCH=/private/tmp/claude-502/-Users-arkavo-Projects-VRMMetalKit/4fd90667-087c-4a80-a8f5-5fb789da2fa3/scratchpad
-.build/release/VRMVideoRenderer ../Muse/Resources/VRM/AvatarSample_A.vrm.glb ../Muse/Resources/VRMA/idle_neutral4.vrma "$SCRATCH/crowd_baseline.mov" --crowd --body-contact-margin 0.02 --postural
-.build/release/VRMVideoRenderer ../Muse/Resources/VRM/AvatarSample_A.vrm.glb ../Muse/Resources/VRMA/idle_neutral4.vrma "$SCRATCH/crowd_stagger.mov" --crowd --body-contact-margin 0.02 --postural --stagger
+.build/release/VRMVideoRenderer ../Muse/Resources/VRM/AvatarSample_A.vrm.glb ../Muse/Resources/VRMA/idle_neutral4.vrma "$SCRATCH/crowd_baseline.mov" --crowd --crowd-hold-sep 0.06 --body-contact-margin 0.02 --postural
+.build/release/VRMVideoRenderer ../Muse/Resources/VRM/AvatarSample_A.vrm.glb ../Muse/Resources/VRMA/idle_neutral4.vrma "$SCRATCH/crowd_stagger.mov" --crowd --crowd-hold-sep 0.06 --body-contact-margin 0.02 --postural --stagger
 ```
 
-(This register — margin clamp + postural on — is the demo configuration the spec calibrates against.)
+(This register — margin clamp + postural on — is the demo configuration the spec calibrates against. `--crowd-hold-sep 0.06` proposes deep overlap so the Component-A clamp genuinely floors the pair at the margin — the default 0.18 holds the torsos 0.36 m apart, which never reaches contact at all; the clamp only ever *raises* separation.)
 
 - [ ] **Step 2: Extract and inspect frames**
 
@@ -659,29 +659,33 @@ Append inside `StaggerShoveIntegrationTests`:
     /// exactly the drive shape increment 2's rig gate validated. Returns the
     /// residual peak/tail (increment 2's metric) and whether a step fired.
     @MainActor private func staggerRun(velocityCap: Float, postural: Bool) async throws
-        -> (peak: Float, tail: Float, stepped: Bool) {
+        -> (peak: Float, tail: Float, stepped: Bool, leanAngle: Float) {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let a = try await avatar(device, index: 0)
         let b = try await avatar(device, index: 1)
-        let driver = holdOnlyDriver(halfSep: 0.06)
+        // 0.05, not 0.06: the postural lean (G6) is still driven by the CHEST
+        // signal, which only fires with the torso axes inside one radius — 0.05
+        // is where Task 2 measured it live, so G6's lean is genuinely active.
+        let driver = holdOnlyDriver(halfSep: 0.05)
 
-        // Probe the fixture's chest depth on throwaway avatars (scoped so the
-        // ~330MB instances free before the measured run), then size the gain so
-        // the shove target (gain·depth = 1.5 m) exceeds the largest whole-window
-        // drive (0.4 m/s × 3 s = 1.2 m): the rate limiter then never saturates
-        // inside the window and both cases see a constant-rate drive throughout.
+        // Probe the fixture's torso-pair overlap depth (the Phase 0e signal:
+        // radiusA + radiusB − segmentDistance) on throwaway avatars (scoped so
+        // the ~330MB instances free before the measured run), then size the gain
+        // so the shove target (gain·depth = 1.5 m) exceeds the largest
+        // whole-window drive (0.4 m/s × 3 s = 1.2 m): the rate limiter then never
+        // saturates inside the window and both cases see a constant-rate drive
+        // throughout.
         let gain: Float = try await {
             let pa = try await avatar(device, index: 0)
             let pb = try await avatar(device, index: 1)
             let probe = CrowdFrameStepper(avatars: [pa, pb], driver: driver, group: nil, fps: 60)
             probe.step(frameTime: 0)
-            let torso = try XCTUnwrap(SpringBoneContactColliderSet.worldTorsoCapsule(model: pb.model))
-            let chestIdx = try XCTUnwrap(pa.model.humanoid?.getBoneNode(.chest))
-            let depth = PosturalContactSolver.penetration(
-                point: pa.model.nodes[chestIdx].worldPosition,
-                capsuleP0: torso.p0, capsuleP1: torso.p1, radius: torso.radius).depth
+            let mine = try XCTUnwrap(SpringBoneContactColliderSet.worldTorsoCapsule(model: pa.model))
+            let partner = try XCTUnwrap(SpringBoneContactColliderSet.worldTorsoCapsule(model: pb.model))
+            let dist = CrowdContactClamp.segmentDistance(mine.p0, mine.p1, partner.p0, partner.p1)
+            let depth = max(0, mine.radius + partner.radius - dist)
             XCTAssertGreaterThan(depth, 0.01,
-                "fixture precondition: chest penetrates the partner torso at halfSep 0.06 — lower halfSep if this fails")
+                "fixture precondition: torso capsules overlap at halfSep 0.05 — lower halfSep if this fails")
             return 1.5 / depth
         }()
 
@@ -692,6 +696,7 @@ Append inside `StaggerShoveIntegrationTests`:
 
         var residuals: [Float] = []
         var stepped = false
+        var maxLean: Float = 0
         for f in 0..<180 {
             stepper.step(frameTime: Float(f) / 180.0)
             let c = try XCTUnwrap(stepper.captureStepController(forAvatar: 0))
@@ -699,8 +704,9 @@ Append inside `StaggerShoveIntegrationTests`:
             if let bal = BalanceModel.evaluate(model: a.model, plantedFeet: c.plantedFeet) {
                 residuals.append(max(0, -bal.margin))
             }
+            maxLean = max(maxLean, stepper.posturalLayer(forAvatar: 0)?.currentLeanAngle ?? 0)
         }
-        return (residuals.max() ?? 0, Array(residuals.suffix(15)).max() ?? 0, stepped)
+        return (residuals.max() ?? 0, Array(residuals.suffix(15)).max() ?? 0, stepped, maxLean)
     }
 
     /// G5 — the north-star gate: a shove rate-limited UNDER the rig-confirmed
@@ -729,6 +735,8 @@ Append inside `StaggerShoveIntegrationTests`:
     /// self-relieving yield (validates the §5 tension resolution directly).
     @MainActor func testG6_stepFiresWithPosturalLeanActive() async throws {
         let withLean = try await staggerRun(velocityCap: 0.14, postural: true)
+        XCTAssertGreaterThan(withLean.leanAngle, 0.01,
+            "non-vacuity: the postural lean genuinely engaged in this run")
         XCTAssertTrue(withLean.stepped, "the step fires even with the self-relieving lean active")
         XCTAssertLessThanOrEqual(withLean.tail, withLean.peak * 0.5 + 0.001,
             "and the residual still contracts (peak \(withLean.peak), tail \(withLean.tail))")
