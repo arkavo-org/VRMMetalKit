@@ -66,6 +66,7 @@ final class ZFightingGPUTests: XCTestCase {
     // MARK: - Basic GPU Rendering Tests
 
     func testGPURenderingWorks() throws {
+        try skipOnOS27BetaMetalDriver()
         let frameData = try helper.renderFrame()
 
         XCTAssertEqual(frameData.count, 256 * 256 * 4, "Frame data should be 256x256 BGRA")
