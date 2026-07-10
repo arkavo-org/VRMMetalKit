@@ -65,7 +65,7 @@ Or in Xcode: **File → Add Package Dependencies** and enter the repository URL.
 
 `VRMRender` is a CLI for headless VRM rendering — batch thumbnails, CI/CD pipelines, etc.
 
-![AvatarSample_A Render](AvatarSample_A.png)
+![AvatarSample_U Render](AvatarSample_U.png)
 
 ```bash
 # Basic render
