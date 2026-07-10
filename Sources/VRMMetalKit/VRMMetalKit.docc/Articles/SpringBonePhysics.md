@@ -31,6 +31,16 @@ renderer.applySpringBoneForce(
 
 ``VRMRenderer/resetSpringBone()`` is provided as a stable entry point but is currently a no-op: the GPU pipeline reinitializes whenever a model is loaded.
 
+## External and cross-avatar colliders
+
+Two runtime paths let colliders that do not live in the VRM file deflect an avatar's hair and cloth. Both feed foreign, world-space shapes into the live simulation each frame, and both are independent second sources that compose with — rather than replace — the avatar's authored colliders.
+
+``VRMRenderer/setExternalColliders(spheres:capsules:)`` injects arbitrary world-space props into the running simulation: a picked-up rigid body, an external physics rig, a level prop the avatar leans against. It takes the already-public ``SphereCollider`` and ``CapsuleCollider`` value types, expressed in world space. The call is replace-or-clear each frame — the supplied arrays become the entire external set for the next step, with no interpolation, so a moved prop snaps to its new pose and a removed prop leaves no ghost. Passing empty arrays clears the set; an empty external set is bit-identical to the authored-only simulation. When an external collider moves or first appears, a settled or sleeping avatar is woken so it responds. Colliders beyond the reserved external budget are clamped with a log rather than silently dropped. It works standalone with no contact group at all — a single avatar plus props needs nothing else.
+
+The cross-avatar path, ``VRMRenderer/joinContactGroup(_:)`` / ``VRMRenderer/leaveContactGroup(_:)``, registers an avatar with a shared ``SpringBoneContactGroup`` coordinator so that avatars in a crowd deflect each other's secondary motion. The coordinator's `exchange()` publishes each member's body colliders into the group and hands every other member the crowd's world-space colliders for the frame; ``VRMRenderer/setContactResponseScale(_:in:)`` scales how strongly a given avatar reacts to that crowd contact.
+
+External props and crowd contact are unioned into a dedicated reserved budget and both apply on the same frame: neither source clobbers the other, and either works with the other absent. A single avatar can therefore take on level props while also being jostled in a crowd, with both deflections composited into the one XPBD step.
+
 ## Procedural collider augmentation (#309)
 
 VRM files rarely include colliders for every body part that animated geometry can reach, which leads to hair sinking into the forehead, skirt panels clipping through thighs, or sleeves passing through arms. To close the most common gaps, the loader can synthesize additional colliders at load time from bone positions and a stored head-radius estimate.
@@ -90,3 +100,11 @@ When you do have to tune, work in the order **drag → stiffness → gravity**: 
 
 - ``VRMRenderer/applySpringBoneForce(gravity:wind:duration:)``
 - ``VRMRenderer/resetSpringBone()``
+
+### Cross-avatar & external collision
+
+- ``VRMRenderer/setExternalColliders(spheres:capsules:)``
+- ``VRMRenderer/joinContactGroup(_:)``
+- ``VRMRenderer/leaveContactGroup(_:)``
+- ``VRMRenderer/setContactResponseScale(_:in:)``
+- ``SpringBoneContactGroup``

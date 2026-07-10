@@ -163,6 +163,15 @@ public enum VRMConstants {
         /// + 2 upper arms + brow + 2 thighs) + up to `maxAuthoredContactColliders`
         /// (8) authored body capsules, sized for the all-capsule worst case.
         public static let foreignCapsuleSlotsPerPartner: Int = 14
+        /// Sphere slots reserved for EXTERNAL colliders (rigid-body props, external
+        /// physics) injected via `VRMRenderer.setExternalColliders`. Dedicated so
+        /// props never contend with a full cross-avatar crowd for tail slots — the
+        /// external set is unioned into the same reserved tail but gets its own
+        /// budget on top of the per-partner cross-avatar budget. Bump this if a
+        /// consumer needs more than a handful of prop colliders per frame.
+        public static let externalColliderSphereSlots: Int = 8
+        /// Capsule slots reserved for external colliders (see `externalColliderSphereSlots`).
+        public static let externalColliderCapsuleSlots: Int = 8
     }
 
     // MARK: - Animation

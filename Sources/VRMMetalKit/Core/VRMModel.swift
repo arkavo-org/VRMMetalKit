@@ -1220,11 +1220,19 @@ public class VRMModel: @unchecked Sendable {
         }.count
 
         // Initialize buffers
+        // The reserved tail holds two independent foreign sources unioned at write
+        // time (SpringBoneComputeSystem.writeForeignTail): the cross-avatar crowd
+        // (nearest-K partners) and external rigid-body props. Each gets its own
+        // budget so props never contend with a full crowd for tail slots.
         let reserve = reservesForeignColliderTail
         let foreignSphereSlots = reserve
-            ? VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignSphereSlotsPerPartner : 0
+            ? VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignSphereSlotsPerPartner
+                + VRMConstants.Physics.externalColliderSphereSlots
+            : 0
         let foreignCapsuleSlots = reserve
-            ? VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignCapsuleSlotsPerPartner : 0
+            ? VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignCapsuleSlotsPerPartner
+                + VRMConstants.Physics.externalColliderCapsuleSlots
+            : 0
         springBoneBuffers = SpringBoneBuffers(device: device)
         springBoneBuffers?.allocateBuffers(
             numBones: totalBones,

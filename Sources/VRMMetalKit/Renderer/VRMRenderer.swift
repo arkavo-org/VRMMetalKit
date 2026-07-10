@@ -694,6 +694,27 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         group.setResponseScale(scale, for: system)
     }
 
+    /// Feeds this frame's external world-space colliders (rigid-body props, an
+    /// external physics engine, etc.) into this renderer's live spring-bone
+    /// simulation so they deflect the avatar's hair/cloth. No-op if this renderer
+    /// has no spring-bone system yet.
+    ///
+    /// Replace-or-clear: call every frame with the current world-space colliders;
+    /// pass empty arrays (the default) to clear — a removed prop leaves no ghost.
+    /// Snap semantics, no interpolation. Composes with `joinContactGroup`: external
+    /// colliders are UNIONED with cross-avatar contact into a dedicated reserved
+    /// budget, not replaced by it, so an avatar feels both props and neighbours the
+    /// same frame. Over-budget colliders are clamped with a log, never silently
+    /// dropped. A settled/sleeping avatar wakes when an external collider moves or
+    /// appears. An empty set is bit-identical to the authored simulation.
+    ///
+    /// The internal `SpringBoneComputeSystem` is never exposed; the public
+    /// `SphereCollider` / `CapsuleCollider` values carry world-space positions.
+    public func setExternalColliders(spheres: [SphereCollider] = [], capsules: [CapsuleCollider] = []) {
+        springBoneComputeSystem?.setExternalColliders(
+            ForeignColliderSnapshot(spheres: spheres, capsules: capsules))
+    }
+
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)
     private static let zeroMorphWeights = [Float](repeating: 0, count: 8)
     private var hasLoggedSpringBone = false

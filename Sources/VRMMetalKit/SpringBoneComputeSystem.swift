@@ -96,6 +96,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// replace-or-clear contract is total over frames: every frame either
     /// replaces (non-empty) or clears (empty). Never accumulates (design §4.1).
     private var pendingForeignSnapshot: ForeignColliderSnapshot = ForeignColliderSnapshot()
+    /// This frame's EXTERNAL colliders (rigid-body props, external physics), set by
+    /// `setExternalColliders`. An independent second foreign source: unioned with
+    /// `pendingForeignSnapshot` into the reserved tail so an avatar can feel both
+    /// cross-avatar contact and props in the same frame, and props work standalone
+    /// with no contact group. Same replace-or-clear contract.
+    private var pendingExternalColliders: ForeignColliderSnapshot = ForeignColliderSnapshot()
     private var timeAccumulator: TimeInterval = 0
     private var lastUpdateTime: TimeInterval = 0
 
@@ -177,6 +183,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// detection (F1). A moving or newly-appeared partner body wakes settled
     /// chains that the own-motion heuristics would otherwise leave asleep.
     private var previousForeignForSleep: ForeignColliderSnapshot = ForeignColliderSnapshot()
+    /// Previous-frame external (prop) collider set, for wake-on-external detection
+    /// (the external-source counterpart to `previousForeignForSleep`).
+    private var previousExternalForSleep: ForeignColliderSnapshot = ForeignColliderSnapshot()
     /// True when an explicit wake has been requested and not yet processed.
     private var forceWakePending: Bool = false
 
@@ -361,6 +370,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         pendingForeignSnapshot = snapshot
     }
 
+    /// Sets this frame's external colliders (rigid-body props, external physics).
+    /// Same replace-or-clear contract as `setForeignColliders`, but an independent
+    /// source: `writeForeignTail` unions this with the cross-avatar set, so props
+    /// compose with a contact group rather than clobbering it (and work with no
+    /// group at all). Public app entry point is `VRMRenderer.setExternalColliders`.
+    func setExternalColliders(_ snapshot: ForeignColliderSnapshot) {
+        pendingExternalColliders = snapshot
+    }
+
     /// Writes the pending foreign set into the reserved buffer tail ONCE per
     /// frame, tagged with the reserved foreign group index, and sets the active
     /// counts. Called before the substep loop; `interpolateColliders` only ever
@@ -382,16 +400,28 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let sphereRoom = max(buffers.sphereCapacity - buffers.numSpheres, 0)
         let capsuleRoom = max(buffers.capsuleCapacity - buffers.numCapsules, 0)
 
-        var spheres = pendingForeignSnapshot.spheres
-        var capsules = pendingForeignSnapshot.capsules
-        if spheres.count > sphereRoom {
-            vrmLogPhysics("⚠️ [SpringBone] Foreign spheres \(spheres.count) exceed reserved tail \(sphereRoom); dropping \(spheres.count - sphereRoom).")
-            spheres = Array(spheres.prefix(sphereRoom))
-        }
-        if capsules.count > capsuleRoom {
-            vrmLogPhysics("⚠️ [SpringBone] Foreign capsules \(capsules.count) exceed reserved tail \(capsuleRoom); dropping \(capsules.count - capsuleRoom).")
-            capsules = Array(capsules.prefix(capsuleRoom))
-        }
+        // The reserved tail carries a dedicated external (prop) budget on top of the
+        // cross-avatar crowd budget, so each source is clamped to its OWN slice — a
+        // full crowd never starves props and a flood of props never starves the
+        // crowd. Each budget is derived from the tail room so a model with no
+        // reserved tail (room == 0) clamps both sources to nothing.
+        let externalSphereBudget = min(VRMConstants.Physics.externalColliderSphereSlots, sphereRoom)
+        let crowdSphereBudget = sphereRoom - externalSphereBudget
+        let externalCapsuleBudget = min(VRMConstants.Physics.externalColliderCapsuleSlots, capsuleRoom)
+        let crowdCapsuleBudget = capsuleRoom - externalCapsuleBudget
+
+        var crowdSpheres = clampForeign(pendingForeignSnapshot.spheres, to: crowdSphereBudget,
+                                        label: "cross-avatar spheres")
+        let externalSpheres = clampForeign(pendingExternalColliders.spheres, to: externalSphereBudget,
+                                           label: "external spheres")
+        var crowdCapsules = clampForeign(pendingForeignSnapshot.capsules, to: crowdCapsuleBudget,
+                                         label: "cross-avatar capsules")
+        let externalCapsules = clampForeign(pendingExternalColliders.capsules, to: externalCapsuleBudget,
+                                            label: "external capsules")
+        crowdSpheres.append(contentsOf: externalSpheres)
+        crowdCapsules.append(contentsOf: externalCapsules)
+        let spheres = crowdSpheres
+        let capsules = crowdCapsules
 
         if let buf = buffers.sphereColliders, !spheres.isEmpty {
             let ptr = buf.contents().bindMemory(to: SphereCollider.self, capacity: buffers.sphereCapacity)
@@ -413,6 +443,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
         activeForeignSpheres = spheres.count
         activeForeignCapsules = capsules.count
+    }
+
+    /// Clamps a foreign collider list to its reserved budget, logging any drop so
+    /// overflow is never silent (design §6). Generic over sphere/capsule.
+    private func clampForeign<T>(_ colliders: [T], to budget: Int, label: String) -> [T] {
+        guard colliders.count > budget else { return colliders }
+        vrmLogPhysics("⚠️ [SpringBone] Foreign \(label) \(colliders.count) exceed reserved budget \(budget); dropping \(colliders.count - budget).")
+        return Array(colliders.prefix(budget))
     }
 
     /// Run spring-bone simulation. If `commandBuffer` is non-nil, all substep compute
@@ -1014,6 +1052,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return true
         }
 
+        // External (rigid-body prop) colliders wake physics the same way: a prop
+        // penetrating or moving against a settled avatar must wake its chains, or
+        // props silently no-op against idle avatars (F1 applied to the external source).
+        if foreignCollidersChanged(previous: previousExternalForSleep,
+                                   current: pendingExternalColliders,
+                                   threshold: motionThreshold) {
+            return true
+        }
+
         // External force / wind / character-velocity / drag changes wake physics.
         if let prev = previousGlobalParamsForSleep {
             if simd_distance(prev.gravity, globalParams.gravity) > 0.001 ||
@@ -1121,6 +1168,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         previousGlobalParamsForSleep = globalParams
         previousQualityForSleep = quality
         previousForeignForSleep = pendingForeignSnapshot
+        previousExternalForSleep = pendingExternalColliders
     }
 
     /// Transforms additive synthetic colliders (issue #309) into world space and
@@ -1249,6 +1297,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // foreign state from a previously loaded model would carry across
         // loadModel() calls on this reused compute system.
         pendingForeignSnapshot = ForeignColliderSnapshot()
+        pendingExternalColliders = ForeignColliderSnapshot()
         activeForeignSpheres = 0
         activeForeignCapsules = 0
 
