@@ -234,6 +234,11 @@ final class SpringBoneBugAuditTDDBatch2Tests: XCTestCase {
             .deletingLastPathComponent()  // repo root
             .appendingPathComponent("Sources/VRMMetalKit/Shaders/SpringBonePredict.metal")
 
+        try XCTSkipIf(
+            !FileManager.default.fileExists(atPath: shaderURL.path),
+            "Source checkout not available at #filePath (CI test-without-building worker); " +
+            "this source-audit test needs the repo on disk.")
+
         let source = try String(contentsOf: shaderURL, encoding: .utf8)
 
         XCTAssertFalse(source.contains("INERTIA COMPENSATION DISABLED FOR DEBUGGING"),

@@ -96,7 +96,8 @@ final class ZFightingFrameAnalysisTests: XCTestCase {
         XCTAssertEqual(depthTexture?.pixelFormat, .depth32Float)
     }
 
-    func testCreateReadableDepthBuffer() {
+    func testCreateReadableDepthBuffer() throws {
+        try skipOnBetaMetalDriverAborts()
         // Create a depth buffer that can be read back for analysis
         let depthDescriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .depth32Float,

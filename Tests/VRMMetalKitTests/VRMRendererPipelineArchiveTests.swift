@@ -34,6 +34,7 @@ final class VRMRendererPipelineArchiveTests: XCTestCase {
     /// With the flag on, constructing a renderer must build pipelines through
     /// the archive and flush a non-empty archive file into the configured dir.
     func testRendererWritesArchiveWhenFlagEnabled() throws {
+        try skipOnBetaMetalDriverAborts()
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("vmk-rend-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -56,6 +57,7 @@ final class VRMRendererPipelineArchiveTests: XCTestCase {
     /// GPUs, or with the flag off) keep recording into the first renderer's
     /// archive. (Gitar review #334, finding 2.)
     func testRendererDisablesArchiveOnSharedAfterInit() throws {
+        try skipOnBetaMetalDriverAborts()
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("vmk-rend-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

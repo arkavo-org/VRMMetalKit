@@ -43,6 +43,7 @@ final class PipelineBinaryArchiveTests: XCTestCase {
     /// file that re-opens without error in a fresh archive instance — the
     /// across-process-restart path.
     func testSerializeWritesReloadableArchive() throws {
+        try skipOnBetaMetalDriverAborts()
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no GPU") }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("vmk-archive-\(UUID().uuidString).metallib")
@@ -82,6 +83,7 @@ final class PipelineBinaryArchiveTests: XCTestCase {
     /// build the pipeline (the cross-restart path, exercised in-process via two
     /// isolated cache instances).
     func testPersistentArchiveRoundTripsThroughCache() throws {
+        try skipOnBetaMetalDriverAborts()
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no GPU") }
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("vmk-cache-\(UUID().uuidString)")
@@ -117,6 +119,7 @@ final class PipelineBinaryArchiveTests: XCTestCase {
     /// Guards the dirty-flag optimization from being defeated by re-recording
     /// every key on enable. (Gitar review #334, finding 1.)
     func testWarmReloadDoesNotRewriteArchive() throws {
+        try skipOnBetaMetalDriverAborts()
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no GPU") }
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("vmk-warm-\(UUID().uuidString)")
@@ -142,6 +145,7 @@ final class PipelineBinaryArchiveTests: XCTestCase {
     /// interrupted cold run) must complete itself: the miss is recorded and
     /// flushed, and the now-complete archive stays clean on the next reload.
     func testPartialPreloadedArchiveSelfHeals() throws {
+        try skipOnBetaMetalDriverAborts()
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no GPU") }
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("vmk-heal-\(UUID().uuidString)")
