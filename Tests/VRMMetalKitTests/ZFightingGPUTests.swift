@@ -65,9 +65,19 @@ final class ZFightingGPUTests: XCTestCase {
 
     // MARK: - Basic GPU Rendering Tests
 
+    /// Smoke test that GPU rendering + readback works end-to-end. Draws real
+    /// geometry: `VRMRenderer` encodes nothing without a model (not even the
+    /// clear), so a clear-only frame reads back uninitialized memory — zero on
+    /// fresh CI VMs, stale nonzero pages locally.
     func testGPURenderingWorks() throws {
-        try skipOnOS27BetaMetalDriver()
-        let frameData = try helper.renderFrame()
+        let renderer = try SimpleTestRenderer(device: device, width: 256, height: 256)
+        let (quad, _) = CoplanarTestGeometry.createCoplanarQuads(z: 1.0, separation: 0.0, size: 0.8)
+        let commands = [
+            SimpleTestRenderer.DrawCommand(mesh: quad, depthBias: 0, depthState: "less")
+        ]
+
+        let frames = try renderer.renderMultipleFrames(commands: commands, count: 1, perturbationScale: 0)
+        let frameData = try XCTUnwrap(frames.first, "Renderer should produce a frame")
 
         XCTAssertEqual(frameData.count, 256 * 256 * 4, "Frame data should be 256x256 BGRA")
 
@@ -76,12 +86,7 @@ final class ZFightingGPUTests: XCTestCase {
         print("  - Total bytes: \(frameData.count)")
         print("  - Non-zero bytes: \(nonZeroCount)")
 
-        if nonZeroCount > 0 {
-            let samplePixel = Array(frameData[0..<4])
-            print("  - First pixel (BGRA): \(samplePixel)")
-        }
-
-        XCTAssertGreaterThan(nonZeroCount, 0, "Frame should have non-zero data (clear color or rendered content)")
+        XCTAssertGreaterThan(nonZeroCount, 0, "Frame should have non-zero data (rendered quad)")
     }
 
     func testDepthBufferReadback() throws {
