@@ -81,6 +81,12 @@ public final class SpringBoneContactGroup {
         // Phase 1: pure snapshots, no integrate, no mirror mutation.
         let snapshots = members.map { $0.system.contactColliderSnapshot(model: $0.model) }
         let positions = snapshots.map { Self.centroid(of: $0) }
+        // A participant with an empty snapshot (e.g. no humanoid → no torso/arm/head
+        // colliders) has no meaningful body position: its centroid falls back to the
+        // origin. Exclude such participants from partner SELECTION so they can't sort
+        // in at the origin and displace a genuinely nearby partner from the fixed-K
+        // slot set (they inject nothing anyway). They still RECEIVE contact below.
+        let empty = snapshots.map { $0.spheres.isEmpty && $0.capsules.isEmpty }
         let k = VRMConstants.Physics.maxContactPartners
         // Phase 2: NEAREST-K union-minus-self per participant, then inject.
         // Nearest-K is physically motivated, not just a memory bound: an avatar
@@ -92,7 +98,7 @@ public final class SpringBoneContactGroup {
         for (i, member) in members.enumerated() {
             var spheres: [SphereCollider] = []
             var capsules: [CapsuleCollider] = []
-            for j in Self.nearestPartnerIndices(positions: positions, for: i, count: k) {
+            for j in Self.nearestPartnerIndices(positions: positions, for: i, count: k, excludingEmpty: empty) {
                 // Tag each partner's colliders with THAT partner's firmness
                 // (per-source), so avatar i yields to a gentle partner softly and
                 // a firm partner firmly (subsystem 4).
@@ -108,8 +114,14 @@ public final class SpringBoneContactGroup {
     /// ranked by centroid distance (nearest first). Pure and testable — the
     /// nearest-K partner selection that makes cross-avatar contact correct and
     /// bounded for arbitrary crowd sizes.
-    static func nearestPartnerIndices(positions: [SIMD3<Float>], for i: Int, count: Int) -> ArraySlice<Int> {
-        let others = (0..<positions.count).filter { $0 != i }
+    ///
+    /// `emptyMask`, when non-empty, marks participants whose contact snapshot is
+    /// empty; those indices are excluded from candidacy so an origin-defaulted
+    /// empty participant can't displace a real nearby partner from the fixed-K set.
+    /// Defaults to no exclusion.
+    static func nearestPartnerIndices(positions: [SIMD3<Float>], for i: Int, count: Int,
+                                      excludingEmpty emptyMask: [Bool] = []) -> ArraySlice<Int> {
+        let others = (0..<positions.count).filter { $0 != i && (emptyMask.isEmpty || !emptyMask[$0]) }
         let sorted = others.sorted {
             simd_distance_squared(positions[i], positions[$0]) < simd_distance_squared(positions[i], positions[$1])
         }

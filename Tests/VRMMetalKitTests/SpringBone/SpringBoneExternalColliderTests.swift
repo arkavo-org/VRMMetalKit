@@ -155,6 +155,40 @@ final class SpringBoneExternalColliderTests: XCTestCase {
             "injecting an external collider must wake sleeping chains; \(sleepingBefore) bones were asleep")
     }
 
+    /// A foreign/external collider that grows or shrinks in place — same centre,
+    /// same count, only its radius changing — must wake settled chains, matching the
+    /// authored-collider `collidersMoved` radius check (Gitar review: wake parity).
+    @MainActor func testExternalColliderRadiusChangeWakesSleepingChains() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let (model, system) = try await loadedSystem(device)
+        model.springBoneGlobalParams?.settlingFrames = 0
+
+        let queue = device.makeCommandQueue()!
+        // A far static external sphere: count stays 1 every frame, so ONLY a radius
+        // (or centre) change can drive a wake — isolating the radius path.
+        var sphere = SphereCollider(center: SIMD3<Float>(10, 10, 10), radius: 0.05, groupIndex: 0)
+        func stepAsync() {
+            system.setExternalColliders(ForeignColliderSnapshot(spheres: [sphere], capsules: []))
+            let cb = queue.makeCommandBuffer()!
+            system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: cb)
+            cb.commit()
+            cb.waitUntilCompleted()
+        }
+
+        var asleep = false
+        for _ in 0..<120 {
+            stepAsync()
+            if system.sleepingBoneCount > 0 { asleep = true; break }
+        }
+        XCTAssertTrue(asleep, "chains should settle with a static external sphere present")
+
+        // Change ONLY the radius (same centre, same count).
+        sphere.radius = 0.5
+        stepAsync()
+        XCTAssertEqual(system.sleepingBoneCount, 0,
+            "a radius-only change in an external collider must wake settled chains")
+    }
+
     /// Model-reload boundary: the compute system is reused across `loadModel()`
     /// calls; `populateSpringBoneData` must reset the external sink so a freshly
     /// populated model never inherits a stale, wrong-world-space external set.

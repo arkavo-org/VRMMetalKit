@@ -54,6 +54,30 @@ final class CrowdNPlusTests: XCTestCase {
         XCTAssertTrue(nearest.contains(2), "a near high-index avatar is kept")
     }
 
+    /// A participant with an empty contact snapshot (no humanoid → origin-defaulted
+    /// centroid) must not be selected as a nearest-K partner and displace a
+    /// genuinely nearby one from the fixed-size slot set (Gitar review).
+    func testEmptySnapshotParticipantExcludedFromPartners() {
+        // Avatar 0 at origin. Index 1 is an EMPTY participant that also sits at the
+        // origin (its centroid fell back to (0,0,0)); indices 2…8 are real neighbours.
+        var positions = [SIMD3<Float>(0, 0, 0), SIMD3<Float>(0, 0, 0)]
+        positions += (2...8).map { SIMD3<Float>(Float($0), 0, 0) }
+        var empty = [Bool](repeating: false, count: positions.count)
+        empty[1] = true
+
+        let excluded = Set(SpringBoneContactGroup.nearestPartnerIndices(
+            positions: positions, for: 0, count: 6, excludingEmpty: empty))
+        XCTAssertFalse(excluded.contains(1), "an empty-snapshot participant must not be selected as a partner")
+        XCTAssertTrue(excluded.contains(7), "excluding the empty participant frees its slot for a real neighbour")
+        XCTAssertEqual(excluded, Set([2, 3, 4, 5, 6, 7]))
+
+        // Without the mask the origin-sitting empty participant would win a slot and
+        // push the farthest real neighbour (index 8, then 7) out — the bug.
+        let unmasked = Set(SpringBoneContactGroup.nearestPartnerIndices(
+            positions: positions, for: 0, count: 6))
+        XCTAssertTrue(unmasked.contains(1), "sanity: unmasked selection would pick the origin empty participant")
+    }
+
     /// Three overlapping avatars in a contracted ring: contact injects for each,
     /// and the sim stays finite over many frames (the multi-way 'sandwich' stress).
     @MainActor func testThreeAvatarContactStable() async throws {

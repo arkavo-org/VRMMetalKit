@@ -1043,22 +1043,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return true
         }
 
-        // Foreign (cross-avatar) colliders wake physics too: a settled avatar
-        // must react to a partner leaning in — the own-motion checks above never
-        // see the partner's body (F1, cross-avatar collision final review).
-        if foreignCollidersChanged(previous: previousForeignForSleep,
-                                   current: pendingForeignSnapshot,
-                                   threshold: motionThreshold) {
-            return true
-        }
-
-        // External (rigid-body prop) colliders wake physics the same way: a prop
-        // penetrating or moving against a settled avatar must wake its chains, or
-        // props silently no-op against idle avatars (F1 applied to the external source).
-        if foreignCollidersChanged(previous: previousExternalForSleep,
-                                   current: pendingExternalColliders,
-                                   threshold: motionThreshold) {
-            return true
+        // Foreign (cross-avatar) and external (rigid-body prop) colliders wake
+        // physics too: a settled avatar must react to a partner leaning in or a
+        // prop penetrating — the own-motion checks above never see them (F1).
+        //
+        // Only when the foreign group slot was actually reserved: with >=30
+        // authored collider groups `writeForeignTail` carves out the bit and drops
+        // ALL foreign/external colliders, so waking for a change we will never apply
+        // is pure churn (wake→resim→resleep every frame a partner moves, yet zero
+        // foreign collision). Mirror the tail-write guard here.
+        if foreignColliderGroupIndex != 0xFFFFFFFF {
+            if foreignCollidersChanged(previous: previousForeignForSleep,
+                                       current: pendingForeignSnapshot,
+                                       threshold: motionThreshold) {
+                return true
+            }
+            if foreignCollidersChanged(previous: previousExternalForSleep,
+                                       current: pendingExternalColliders,
+                                       threshold: motionThreshold) {
+                return true
+            }
         }
 
         // External force / wind / character-velocity / drag changes wake physics.
@@ -1098,23 +1102,27 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         return false
     }
 
-    /// Foreign (cross-avatar) colliders wake physics like authored colliders do:
-    /// a changed count (partner appears/leaves) or motion beyond `threshold`
-    /// (partner moving relative to this avatar) wakes settled chains (F1). A
-    /// static, unchanging foreign set does NOT wake — chains that already
-    /// deflected against it may sleep, so sustained contact doesn't pin the
-    /// whole crowd awake.
+    /// Foreign (cross-avatar / external) colliders wake physics like authored
+    /// colliders do: a changed count (partner/prop appears or leaves), a moved
+    /// centre/endpoint, or a changed radius beyond `threshold` wakes settled chains
+    /// (F1). Radius parity matters — a collider that grows or shrinks in place (a
+    /// body part or prop scaling without translating) still changes the contact
+    /// surface and must wake, matching `collidersMoved` for authored colliders. A
+    /// static, unchanging set does NOT wake — chains that already deflected against
+    /// it may sleep, so sustained contact doesn't pin the whole crowd awake.
     private func foreignCollidersChanged(previous: ForeignColliderSnapshot,
                                          current: ForeignColliderSnapshot,
                                          threshold: Float) -> Bool {
         if previous.spheres.count != current.spheres.count { return true }
         if previous.capsules.count != current.capsules.count { return true }
         for i in current.spheres.indices {
-            if simd_distance(previous.spheres[i].center, current.spheres[i].center) > threshold { return true }
+            if simd_distance(previous.spheres[i].center, current.spheres[i].center) > threshold ||
+               abs(previous.spheres[i].radius - current.spheres[i].radius) > threshold { return true }
         }
         for i in current.capsules.indices {
             if simd_distance(previous.capsules[i].p0, current.capsules[i].p0) > threshold ||
-               simd_distance(previous.capsules[i].p1, current.capsules[i].p1) > threshold { return true }
+               simd_distance(previous.capsules[i].p1, current.capsules[i].p1) > threshold ||
+               abs(previous.capsules[i].radius - current.capsules[i].radius) > threshold { return true }
         }
         return false
     }
