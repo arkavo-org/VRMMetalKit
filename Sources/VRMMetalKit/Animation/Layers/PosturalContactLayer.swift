@@ -43,8 +43,20 @@ public final class PosturalContactLayer: AnimationLayer {
     /// Higher than foot-IK (4): the spine yield composes after leg IK has run.
     public let priority: Int = 5
     public var isEnabled: Bool = true
-    /// The upper-body bones the yield distributes across.
-    public var affectedBones: Set<VRMHumanoidBone> { [.spine, .chest] }
+    /// The upper-body bones the yield distributes across (chest falls back to
+    /// upperChest/neck/head when a rig omits `.chest` — common on VRM 1.0).
+    public var affectedBones: Set<VRMHumanoidBone> {
+        var s: Set<VRMHumanoidBone> = [.spine]
+        if let model = model, let humanoid = model.humanoid {
+            if humanoid.getBoneNode(.chest) != nil { s.insert(.chest) }
+            else if humanoid.getBoneNode(.upperChest) != nil { s.insert(.upperChest) }
+            else if humanoid.getBoneNode(.neck) != nil { s.insert(.neck) }
+            else if humanoid.getBoneNode(.head) != nil { s.insert(.head) }
+        } else {
+            s.insert(.chest)
+        }
+        return s
+    }
 
     // MARK: Configuration
 
@@ -92,8 +104,7 @@ public final class PosturalContactLayer: AnimationLayer {
     public func update(deltaTime: Float, context: AnimationContext) {
         pending.removeAll(keepingCapacity: true)
         guard isEnabled, params.blendWeight > 0, let model = model,
-              let spineWorld = boneWorldPosition(.spine, model),
-              let chestWorld = boneWorldPosition(.chest, model) else {
+              let trunk = trunkEndpoints(model: model) else {
             // Still decay any residual lean toward identity so a disable mid-lean
             // eases out rather than snapping (target identity via no penetration).
             solver.update(partnerTorso: CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 1, 0), radius: 0),
@@ -101,16 +112,19 @@ public final class PosturalContactLayer: AnimationLayer {
             return
         }
 
-        // Trunk axis (spine -> chest) as the lean's "up".
-        let trunk = chestWorld - spineWorld
-        let spineUp = simd_length(trunk) > 1e-6 ? simd_normalize(trunk) : SIMD3<Float>(0, 1, 0)
+        let spineWorld = trunk.spine
+        let chestWorld = trunk.chest
+        let upperBone = trunk.upperBone
+
+        // Trunk axis (spine -> chest/upperChest/…) as the lean's "up".
+        let trunkAxis = chestWorld - spineWorld
+        let spineUp = simd_length(trunkAxis) > 1e-6 ? simd_normalize(trunkAxis) : SIMD3<Float>(0, 1, 0)
 
         let torso = partnerTorso ?? CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 1, 0), radius: 0)
         let worldLean = solver.update(partnerTorso: torso, chestWorld: chestWorld,
                                       spineUp: spineUp, dt: deltaTime)
 
-        // Weight the whole lean, then split across spine/chest. `blendWeight`
-        // scales the world lean before it is distributed.
+        // Weight the whole lean, then split across spine + upper trunk bone.
         let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         let weighted = simd_slerp(identity, worldLean, simd_clamp(params.blendWeight, 0, 1))
         guard weighted.angle > 1e-5 else { return }
@@ -118,7 +132,7 @@ public final class PosturalContactLayer: AnimationLayer {
         let spineWorldShare = simd_slerp(identity, weighted, spineFraction)
         let chestWorldShare = simd_slerp(identity, weighted, 1 - spineFraction)
         if let ls = localDelta(spineWorldShare, bone: .spine, model: model) { pending[.spine] = ls }
-        if let lc = localDelta(chestWorldShare, bone: .chest, model: model) { pending[.chest] = lc }
+        if let lc = localDelta(chestWorldShare, bone: upperBone, model: model) { pending[upperBone] = lc }
     }
 
     /// Per-bone local yield deltas from the most recent ``update(deltaTime:context:)``,
@@ -143,6 +157,20 @@ public final class PosturalContactLayer: AnimationLayer {
     }
 
     // MARK: Helpers
+
+    /// Spine + upper-trunk sample points. Falls back through chest → upperChest
+    /// → neck → head so lean still runs on rigs that omit a VRM `.chest` bone.
+    private func trunkEndpoints(model: VRMModel)
+        -> (spine: SIMD3<Float>, chest: SIMD3<Float>, upperBone: VRMHumanoidBone)? {
+        guard let spine = boneWorldPosition(.spine, model) else { return nil }
+        let upperCandidates: [VRMHumanoidBone] = [.chest, .upperChest, .neck, .head]
+        for bone in upperCandidates {
+            if let p = boneWorldPosition(bone, model) {
+                return (spine, p, bone)
+            }
+        }
+        return nil
+    }
 
     private func boneWorldPosition(_ bone: VRMHumanoidBone, _ model: VRMModel) -> SIMD3<Float>? {
         guard let humanoid = model.humanoid, let idx = humanoid.getBoneNode(bone),
