@@ -313,28 +313,38 @@ struct KalmanFilter: SmoothingFilterProtocol {
 /// - O(N) space complexity (stores window)
 /// - ~10-15 CPU cycles per update
 struct WindowedAverageFilter: SmoothingFilterProtocol {
-    private var window: [Float] = []
+    private var window: [Float]
     private let windowSize: Int
     private var sum: Float = 0
+    private var head: Int = 0
+    private var count: Int = 0
 
     init(windowSize: Int) {
-        self.windowSize = max(1, windowSize)
+        let size = max(1, windowSize)
+        self.windowSize = size
+        self.window = [Float](repeating: 0, count: size)
     }
 
     mutating func update(_ value: Float) -> Float {
-        window.append(value)
-        sum += value
-
-        if window.count > windowSize {
-            sum -= window.removeFirst()
+        if count == windowSize {
+            sum -= window[head]
+        } else {
+            count += 1
         }
 
-        return sum / Float(window.count)
+        window[head] = value
+        sum += value
+        head = (head + 1) % windowSize
+
+        return sum / Float(count)
     }
 
     mutating func reset() {
-        window.removeAll()
         sum = 0
+        head = 0
+        count = 0
+        // Values left in `window` are never read because `count` is zero;
+        // no need to zero the buffer (and no allocation).
     }
 }
 

@@ -127,6 +127,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var previousPlaneColliders: [PlaneCollider] = []
     private var targetPlaneColliders: [PlaneCollider] = []
 
+    // Collider group mapping is static after load; rebuild only if the spring-bone
+    // configuration changes (which is extremely rare at runtime).
+    private var cachedColliderToGroupIndex: [Int: UInt32]?
+    private var cachedColliderGroupCount: Int = -1
+    private var cachedColliderCount: Int = -1
+
     // Cached model scale for scale-aware thresholds
     private var cachedModelScale: Float = 1.0
 
@@ -2090,15 +2096,27 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     /// Captures collider transforms based on current animated node positions/orientations
     private func captureTargetColliderTransforms(model: VRMModel, springBone: VRMSpringBone) {
-        // Build collider-to-group index mapping. Clamp to 31 so the shader's
-        // `1u << groupIndex` is well-defined (UB at >=32).
-        var colliderToGroupIndex: [Int: UInt32] = [:]
-        for (groupIndex, group) in springBone.colliderGroups.enumerated() {
-            for colliderIndex in group.colliders {
-                if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
+        // Build collider-to-group index mapping once and cache it. The mapping
+        // only changes if the collider group or collider count changes.
+        let colliderToGroupIndex: [Int: UInt32]
+        if let cached = cachedColliderToGroupIndex,
+           cachedColliderGroupCount == springBone.colliderGroups.count,
+           cachedColliderCount == springBone.colliders.count {
+            colliderToGroupIndex = cached
+        } else {
+            var map: [Int: UInt32] = [:]
+            // Clamp to 31 so the shader's `1u << groupIndex` is well-defined (UB at >=32).
+            for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+                for colliderIndex in group.colliders {
+                    if map[colliderIndex] == nil {
+                        map[colliderIndex] = UInt32(min(groupIndex, 31))
+                    }
                 }
             }
+            cachedColliderToGroupIndex = map
+            cachedColliderGroupCount = springBone.colliderGroups.count
+            cachedColliderCount = springBone.colliders.count
+            colliderToGroupIndex = map
         }
 
         targetSphereColliders.removeAll(keepingCapacity: true)
