@@ -760,7 +760,7 @@ extension VRMRenderer {
         features: MToonFunctionConstantKey
     ) -> MTLRenderPipelineState? {
         // Build a compact integer bitfield key instead of multiple string interpolations
-        // Bit layout: [skinned:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][alpha:4]
+        // Bit layout: [skinned:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4]
         var bits: UInt32 = isSkinned ? 1 : 0
         bits = (bits << 1) | (features.hasBaseColorTexture ? 1 : 0)
         bits = (bits << 1) | (features.hasShadeMultiplyTexture ? 1 : 0)
@@ -771,6 +771,7 @@ extension VRMRenderer {
         bits = (bits << 1) | (features.hasEmissiveTexture ? 1 : 0)
         bits = (bits << 1) | (features.hasOcclusionTexture ? 1 : 0)
         bits = (bits << 1) | (features.hasUvAnimationMaskTexture ? 1 : 0)
+        bits = (bits << 1) | (features.hasParametricRim ? 1 : 0)
         bits = (bits << 4) | (UInt32(features.alphaMode) & 0xF)
         let key = "mtfc_\(bits)_\(config.colorPixelFormat.rawValue)_\(config.sampleCount)"
 
