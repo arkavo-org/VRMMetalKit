@@ -3992,10 +3992,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
         }
 
-        // Add command buffer completion handler for error checking and semaphore signaling
+        // Add command buffer completion handler for error checking and semaphore signaling.
+        // The semaphore is captured STRONGLY (not through weak self): if the
+        // renderer's last reference drops while this frame is still on the GPU
+        // (host tears down its render loop — e.g. a visionOS immersive space
+        // closing), a `self?.…signal()` would be skipped and the semaphore
+        // would be deallocated below its creation value, which libdispatch
+        // traps on ("BUG IN CLIENT OF LIBDISPATCH: Semaphore object
+        // deallocated while in use"). Holding it here keeps it alive until
+        // every outstanding wait has been balanced.
+        let inflight = inflightSemaphore
         commandBuffer.addCompletedHandler { [weak self] buffer in
             // Signal that this frame's uniform buffer is available again
-            self?.inflightSemaphore.signal()
+            inflight.signal()
 
             // Record GPU timing if performance tracking is enabled
             if let tracker = self?.performanceTracker {
