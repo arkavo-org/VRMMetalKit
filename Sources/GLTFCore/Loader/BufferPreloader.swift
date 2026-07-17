@@ -105,8 +105,11 @@ public final class BufferPreloader: @unchecked Sendable {
                 if let data {
                     results[index] = data
                 }
-                await MainActor.run {
-                    progressCallback?(loaded, totalCount)
+                // Fire-and-forget: awaiting the hop stalls buffer preloads
+                // against the main actor (see VRMLoadingOptions).
+                let snapshot = loaded
+                Task { @MainActor in
+                    progressCallback?(snapshot, totalCount)
                 }
             }
         }

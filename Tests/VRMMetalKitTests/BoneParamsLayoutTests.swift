@@ -185,7 +185,7 @@ final class BoneParamsLayoutTests: XCTestCase {
     // MARK: - Collider Struct Layout Tests
 
     func testSphereColliderLayout() {
-        // SphereCollider: center (float3, 16 bytes with padding) + radius (4) + groupIndex (4) + padding (8)
+        // SphereCollider: center (float3, 16 bytes with padding) + radius (4) + groupMask (4) + padding (8)
         // Total: 32 bytes (16-byte aligned)
         let expectedStride = 32
         let actualStride = MemoryLayout<SphereCollider>.stride
@@ -195,14 +195,14 @@ final class BoneParamsLayoutTests: XCTestCase {
     }
 
     func testSphereColliderGroupIndex() {
-        let collider = SphereCollider(center: SIMD3<Float>(0, 1, 0), radius: 0.1, groupIndex: 5)
-        XCTAssertEqual(collider.groupIndex, 5)
+        let collider = SphereCollider(center: SIMD3<Float>(0, 1, 0), radius: 0.1, groupMask: 1 << 5)
+        XCTAssertEqual(collider.groupMask, 1 << 5)
         XCTAssertEqual(collider.center, SIMD3<Float>(0, 1, 0))
         XCTAssertEqual(collider.radius, 0.1, accuracy: 0.001)
     }
 
     func testCapsuleColliderLayout() {
-        // CapsuleCollider: p0 (float3, 16) + p1 (float3, 16) + radius (4) + groupIndex (4) + padding (8)
+        // CapsuleCollider: p0 (float3, 16) + p1 (float3, 16) + radius (4) + groupMask (4) + padding (8)
         // Total: 48 bytes (16-byte aligned)
         let expectedStride = 48
         let actualStride = MemoryLayout<CapsuleCollider>.stride
@@ -216,15 +216,15 @@ final class BoneParamsLayoutTests: XCTestCase {
             p0: SIMD3<Float>(0, 0, 0),
             p1: SIMD3<Float>(0, 1, 0),
             radius: 0.05,
-            groupIndex: 3
+            groupMask: 1 << 3
         )
-        XCTAssertEqual(collider.groupIndex, 3)
+        XCTAssertEqual(collider.groupMask, 1 << 3)
         XCTAssertEqual(collider.p0, SIMD3<Float>(0, 0, 0))
         XCTAssertEqual(collider.p1, SIMD3<Float>(0, 1, 0))
     }
 
     func testPlaneColliderLayout() {
-        // PlaneCollider: point (float3, 16) + normal (float3, 16) + groupIndex (4) + padding (12)
+        // PlaneCollider: point (float3, 16) + normal (float3, 16) + groupMask (4) + padding (12)
         // Total: 48 bytes (16-byte aligned)
         let expectedStride = 48
         let actualStride = MemoryLayout<PlaneCollider>.stride
@@ -237,9 +237,9 @@ final class BoneParamsLayoutTests: XCTestCase {
         let collider = PlaneCollider(
             point: SIMD3<Float>(0, 0, 0),
             normal: SIMD3<Float>(0, 1, 0),
-            groupIndex: 2
+            groupMask: 1 << 2
         )
-        XCTAssertEqual(collider.groupIndex, 2)
+        XCTAssertEqual(collider.groupMask, 1 << 2)
         XCTAssertEqual(collider.point, SIMD3<Float>(0, 0, 0))
         XCTAssertEqual(collider.normal, SIMD3<Float>(0, 1, 0))
     }
@@ -249,14 +249,14 @@ final class BoneParamsLayoutTests: XCTestCase {
     func testCollisionGroupMaskBitOperations() {
         // Simulate GPU collision group filtering logic
         let boneMask: UInt32 = 0b0101  // Groups 0 and 2
-        let colliderGroup0: UInt32 = 0
-        let colliderGroup1: UInt32 = 1
-        let colliderGroup2: UInt32 = 2
+        let colliderMask0: UInt32 = 1 << 0  // Collider in group 0
+        let colliderMask1: UInt32 = 1 << 1  // Collider in group 1
+        let colliderMask2: UInt32 = 1 << 2  // Collider in group 2
 
-        // Test mask check: boneMask & (1 << groupIndex)
-        XCTAssertTrue(boneMask & (1 << colliderGroup0) != 0, "Should collide with group 0")
-        XCTAssertFalse(boneMask & (1 << colliderGroup1) != 0, "Should NOT collide with group 1")
-        XCTAssertTrue(boneMask & (1 << colliderGroup2) != 0, "Should collide with group 2")
+        // Test mask check: boneMask & colliderGroupMask (colliders carry a full mask)
+        XCTAssertTrue(boneMask & colliderMask0 != 0, "Should collide with group 0")
+        XCTAssertFalse(boneMask & colliderMask1 != 0, "Should NOT collide with group 1")
+        XCTAssertTrue(boneMask & colliderMask2 != 0, "Should collide with group 2")
     }
 
     func testAllGroupsMaskCollision() {
@@ -283,22 +283,22 @@ final class BoneParamsLayoutTests: XCTestCase {
 
     func testPlaneColliderFloorYInitializer() {
         // Test simple floor plane at a given Y height
-        let floor = PlaneCollider(floorY: 0.5)
+        let floor = PlaneCollider(floorY: 0.5, groupMask: 1)
 
         XCTAssertEqual(floor.point.y, 0.5, accuracy: 0.001, "Floor Y should be 0.5")
         XCTAssertEqual(floor.point.x, 0.0, accuracy: 0.001, "Floor X should be 0")
         XCTAssertEqual(floor.point.z, 0.0, accuracy: 0.001, "Floor Z should be 0")
         XCTAssertEqual(floor.normal, SIMD3<Float>(0, 1, 0), "Normal should point up")
-        XCTAssertEqual(floor.groupIndex, 0, "Default group should be 0")
+        XCTAssertEqual(floor.groupMask, 1, "Default group should be group 0 (bit 0)")
     }
 
     func testPlaneColliderFloorYWithGroup() {
         // Test floor plane with custom collision group
-        let floor = PlaneCollider(floorY: -1.0, groupIndex: 5)
+        let floor = PlaneCollider(floorY: -1.0, groupMask: 1 << 5)
 
         XCTAssertEqual(floor.point.y, -1.0, accuracy: 0.001)
         XCTAssertEqual(floor.normal, SIMD3<Float>(0, 1, 0))
-        XCTAssertEqual(floor.groupIndex, 5)
+        XCTAssertEqual(floor.groupMask, 1 << 5)
     }
 
     func testPlaneColliderARKitTransformHorizontal() {
@@ -307,7 +307,7 @@ final class BoneParamsLayoutTests: XCTestCase {
         var transform = simd_float4x4(1)  // Identity
         transform.columns.3 = SIMD4<Float>(1.0, 0.25, 2.0, 1.0)  // Position at (1, 0.25, 2)
 
-        let floor = PlaneCollider(arkitTransform: transform)
+        let floor = PlaneCollider(arkitTransform: transform, groupMask: 1)
 
         XCTAssertEqual(floor.point.x, 1.0, accuracy: 0.001, "X position from transform")
         XCTAssertEqual(floor.point.y, 0.25, accuracy: 0.001, "Y position from transform")
@@ -328,7 +328,7 @@ final class BoneParamsLayoutTests: XCTestCase {
         transform.columns.1 = SIMD4<Float>(-sin(angle), cos(angle), 0, 0)
         transform.columns.3 = SIMD4<Float>(0, 1.0, 0, 1.0)
 
-        let plane = PlaneCollider(arkitTransform: transform)
+        let plane = PlaneCollider(arkitTransform: transform, groupMask: 1)
 
         XCTAssertEqual(plane.point.y, 1.0, accuracy: 0.001)
 
@@ -346,8 +346,8 @@ final class BoneParamsLayoutTests: XCTestCase {
         var transform = simd_float4x4(1)
         transform.columns.3 = SIMD4<Float>(0, 0.5, 0, 1.0)
 
-        let floor = PlaneCollider(arkitTransform: transform, groupIndex: 3)
+        let floor = PlaneCollider(arkitTransform: transform, groupMask: 1 << 3)
 
-        XCTAssertEqual(floor.groupIndex, 3, "Should use provided group index")
+        XCTAssertEqual(floor.groupMask, 1 << 3, "Should use provided group mask")
     }
 }

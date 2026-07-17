@@ -153,6 +153,13 @@ public class VRMModel: @unchecked Sendable {
     /// Global parameters for spring bone physics (gravity, wind, substeps).
     public var springBoneGlobalParams: SpringBoneGlobalParams?
 
+    /// Production toggle: when true, `initializeSpringBoneGPUSystem` reserves the
+    /// cross-avatar foreign-collider tail. Defaults to true so production reserves
+    /// the tail by default once contact groups are wired; the capacity test flips
+    /// it to false to compare reserved vs. unreserved without a coordinator
+    /// (design §8.1).
+    public var reservesForeignColliderTail: Bool = true
+
     /// Texture indices used as outline-width mask (linear R8, not sRGB).
     public var outlineWidthMaskTextureIndices: Set<Int> = []
 
@@ -981,8 +988,10 @@ public class VRMModel: @unchecked Sendable {
             }
         }
 
-        // Calculate initial transforms
-        for node in nodes {
+        // Calculate initial transforms. updateWorldTransform() recurses
+        // through children, so walking ROOTS covers every node exactly once
+        // (the previous all-nodes pass recomputed subtrees O(depth) times).
+        for node in nodes where node.parent == nil {
             node.updateWorldTransform()
         }
 
@@ -1213,12 +1222,27 @@ public class VRMModel: @unchecked Sendable {
         }.count
 
         // Initialize buffers
+        // The reserved tail holds two independent foreign sources unioned at write
+        // time (SpringBoneComputeSystem.writeForeignTail): the cross-avatar crowd
+        // (nearest-K partners) and external rigid-body props. Each gets its own
+        // budget so props never contend with a full crowd for tail slots.
+        let reserve = reservesForeignColliderTail
+        let foreignSphereSlots = reserve
+            ? VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignSphereSlotsPerPartner
+                + VRMConstants.Physics.externalColliderSphereSlots
+            : 0
+        let foreignCapsuleSlots = reserve
+            ? VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignCapsuleSlotsPerPartner
+                + VRMConstants.Physics.externalColliderCapsuleSlots
+            : 0
         springBoneBuffers = SpringBoneBuffers(device: device)
         springBoneBuffers?.allocateBuffers(
             numBones: totalBones,
             numSpheres: totalSpheres,
             numCapsules: totalCapsules,
-            numPlanes: totalPlanes
+            numPlanes: totalPlanes,
+            foreignSphereSlots: foreignSphereSlots,
+            foreignCapsuleSlots: foreignCapsuleSlots
         )
 
         // Initialize global parameters
@@ -1259,7 +1283,7 @@ public class VRMModel: @unchecked Sendable {
     /// model.setFloorPlane(at: 0.0)  // Ground level
     /// ```
     public func setFloorPlane(at floorY: Float) {
-        let floor = PlaneCollider(floorY: floorY)
+        let floor = PlaneCollider(floorY: floorY, groupMask: 1)
         springBoneBuffers?.setPlaneColliders([floor])
         springBoneGlobalParams?.numPlanes = 1
     }
@@ -1271,7 +1295,7 @@ public class VRMModel: @unchecked Sendable {
     ///
     /// - Parameter transform: The `ARPlaneAnchor.transform` matrix.
     public func setFloorPlane(arkitTransform transform: simd_float4x4) {
-        let floor = PlaneCollider(arkitTransform: transform)
+        let floor = PlaneCollider(arkitTransform: transform, groupMask: 1)
         springBoneBuffers?.setPlaneColliders([floor])
         springBoneGlobalParams?.numPlanes = 1
     }

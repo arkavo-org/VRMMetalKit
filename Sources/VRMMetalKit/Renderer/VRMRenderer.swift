@@ -512,7 +512,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     // MARK: - Spring Bone Physics
 
-    private var springBoneComputeSystem: SpringBoneComputeSystem?
+    var springBoneComputeSystem: SpringBoneComputeSystem?
 
     /// Enables GPU-accelerated spring bone physics simulation.
     ///
@@ -661,6 +661,63 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public func warmupPhysics(steps: Int = 30) {
         guard let model = model else { return }
         springBoneComputeSystem?.warmupPhysics(model: model, steps: steps)
+    }
+
+    /// Joins this renderer's spring-bone system to a cross-avatar contact group
+    /// so its hair/cloth yields to other members' bodies (and vice versa). Call
+    /// after `loadModel`. No-op if this renderer has no spring-bone system yet.
+    ///
+    /// The internal `SpringBoneComputeSystem` (per-model simulation state) is
+    /// never exposed; this seam hands the coordinator only the membership handle.
+    /// Validated on both render paths: the offline synchronous crowd demo
+    /// (`VRMVideoRenderer --crowd`) and the **async** multi-avatar path a live
+    /// app uses (`--realtime`; sleep gate live, one-frame lag) — see
+    /// `CrowdAsyncPathTests` (settled-avatar wake, contact stability, composite).
+    public func joinContactGroup(_ group: SpringBoneContactGroup) {
+        guard let system = springBoneComputeSystem, let model = model else { return }
+        group.add(system: system, model: model)
+    }
+
+    /// Removes this renderer's spring-bone system from a contact group.
+    /// `SpringBoneContactGroup.remove(system:)` clears any previously-injected
+    /// foreign colliders on this system as part of its own contract.
+    public func leaveContactGroup(_ group: SpringBoneContactGroup) {
+        guard let system = springBoneComputeSystem else { return }
+        group.remove(system: system)
+    }
+
+    /// Sets how firmly this avatar's body pushes OTHER participants' hair/cloth in
+    /// a contact group (subsystem 4, per-source): 1.0 = full (default), 0.5 =
+    /// gentle, 0.0 = ghost (present but no push). The value is clamped to [0, 1].
+    /// Call after `joinContactGroup`.
+    public func setContactResponseScale(_ scale: Float, in group: SpringBoneContactGroup) {
+        guard let system = springBoneComputeSystem else { return }
+        group.setResponseScale(scale, for: system)
+    }
+
+    /// Feeds this frame's external world-space colliders (rigid-body props, an
+    /// external physics engine, etc.) into this renderer's live spring-bone
+    /// simulation so they deflect the avatar's hair/cloth. No-op if this renderer
+    /// has no spring-bone system yet.
+    ///
+    /// Replace-or-clear: call every frame with the current world-space colliders;
+    /// pass empty arrays (the default) to clear — a removed prop leaves no ghost.
+    /// Snap semantics, no interpolation. Composes with `joinContactGroup`: external
+    /// colliders are UNIONED with cross-avatar contact into a dedicated reserved
+    /// budget, not replaced by it, so an avatar feels both props and neighbours the
+    /// same frame. Over-budget colliders are clamped with a log, never silently
+    /// dropped. A settled/sleeping avatar wakes when an external collider moves or
+    /// appears. An empty set is bit-identical to the authored simulation.
+    ///
+    /// The internal `SpringBoneComputeSystem` is never exposed; the public
+    /// `SphereCollider` / `CapsuleCollider` values carry world-space positions.
+    ///
+    /// Threading: the write is consumed by `update()` on the render path; callers
+    /// on a live/async path own frame-boundary synchronization (set between
+    /// frames, not while a frame's `update()` is in flight).
+    public func setExternalColliders(spheres: [SphereCollider] = [], capsules: [CapsuleCollider] = []) {
+        springBoneComputeSystem?.setExternalColliders(
+            ForeignColliderSnapshot(spheres: spheres, capsules: capsules))
     }
 
     // OPTIMIZATION: Static zero weights array (avoids allocation per primitive)

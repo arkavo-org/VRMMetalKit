@@ -31,6 +31,16 @@ renderer.applySpringBoneForce(
 
 ``VRMRenderer/resetSpringBone()`` is provided as a stable entry point but is currently a no-op: the GPU pipeline reinitializes whenever a model is loaded.
 
+## External and cross-avatar colliders
+
+Two runtime paths let colliders that do not live in the VRM file deflect an avatar's hair and cloth. Both feed foreign, world-space shapes into the live simulation each frame, and both are independent second sources that compose with — rather than replace — the avatar's authored colliders.
+
+``VRMRenderer/setExternalColliders(spheres:capsules:)`` injects arbitrary world-space props into the running simulation: a picked-up rigid body, an external physics rig, a level prop the avatar leans against. It takes the already-public ``SphereCollider`` and ``CapsuleCollider`` value types, expressed in world space. The call is replace-or-clear each frame — the supplied arrays become the entire external set for the next step, with no interpolation, so a moved prop snaps to its new pose and a removed prop leaves no ghost. Passing empty arrays clears the set; an empty external set is bit-identical to the authored-only simulation. When an external collider moves or first appears, a settled or sleeping avatar is woken so it responds. Colliders beyond the reserved external budget are clamped with a log rather than silently dropped. It works standalone with no contact group at all — a single avatar plus props needs nothing else.
+
+The cross-avatar path, ``VRMRenderer/joinContactGroup(_:)`` / ``VRMRenderer/leaveContactGroup(_:)``, registers an avatar with a shared ``SpringBoneContactGroup`` coordinator so that avatars in a crowd deflect each other's secondary motion. The coordinator's `exchange()` publishes each member's body colliders into the group and hands every other member the crowd's world-space colliders for the frame; ``VRMRenderer/setContactResponseScale(_:in:)`` scales how strongly a given avatar reacts to that crowd contact.
+
+External props and crowd contact are unioned into a dedicated reserved budget and both apply on the same frame: neither source clobbers the other, and either works with the other absent. A single avatar can therefore take on level props while also being jostled in a crowd, with both deflections composited into the one XPBD step.
+
 ## Procedural collider augmentation (#309)
 
 VRM files rarely include colliders for every body part that animated geometry can reach, which leads to hair sinking into the forehead, skirt panels clipping through thighs, or sleeves passing through arms. To close the most common gaps, the loader can synthesize additional colliders at load time from bone positions and a stored head-radius estimate.
@@ -45,13 +55,23 @@ let model = try await VRMModel.load(from: url, device: device, options: options)
 
 ### What is synthesized
 
-**Forward head/brow capsule.** A single capsule oriented along the forward axis of the head bone, sized from the model's stored head-reference radius. It closes the persistent front-hair-into-forehead clipping (#309 primary repro). Residual: a lone lateral side-bang strand at the temple can still touch the skull region; a future lateral head collider is needed to address it.
+**Forward head/brow capsule.** A single capsule oriented along the forward axis of the head bone, sized from the model's stored head-reference radius. It closes the persistent front-hair-into-forehead clipping (#309 primary repro).
+
+**Lateral skull sphere.** One midline sphere lifted toward the cranium, giving the head lateral coverage the brow capsule cannot reach (temple side-bang strands).
 
 **End-to-end leg capsules.** One capsule per leg spanning from the upper-leg to the ankle joint. These substantially reduce skirt-panel-into-thigh clipping (peak penetration drops from roughly 23 mm to roughly 10 mm in the worst dynamic case and is never worse), though a single-frame transient can remain during fast leg swings.
 
+**Lower-arm→hand capsules and palm spheres (#321).** Forearm capsules plus one sphere capping each palm, so a slow hand gesture into the chest ribbon, hair, or skirt collides instead of interpenetrating.
+
+**Torso and upper-arm capsules.** One capsule over the spine→chest segment and one per upper arm, closing the hair-into-chest/breast and hair-into-upper-arm gap. Their radii floor at the model's own authored collider hints (an authored chest sphere still wins), so they hug the body rather than reading as an invisible forcefield.
+
 ### What is not addressed
 
-Arm and sleeve clipping was investigated and intentionally not shipped: arm capsules could not be validated as an improvement and worsened a stiff-sleeve "whip" artefact. The root cause is PBD without continuous collision detection (CCD); when a joint tunnels through a collider in one substep the impulse overshoots, producing a visible snap. This is deferred.
+Full-arm capsules for cloth sleeves were investigated and intentionally not shipped: they could not be validated as an improvement and worsened a stiff-sleeve "whip" artefact. The root cause is PBD without continuous collision detection (CCD) on fast cloth chains; when a joint tunnels through a collider in one substep the impulse overshoots, producing a visible snap. This is deferred. (Swept CCD does apply to all synthetic colliders above — the synthetic group is the swept group.)
+
+### Collider group membership
+
+Each collider carries the OR of every collider group's bit it belongs to (a 32-bit group mask), and a spring chain collides with any collider whose mask shares a bit with the chain's mask. A collider shared by several groups — a common authoring pattern, e.g. one chest capsule in both a "Body" and a "Hair" group — is therefore visible to springs referencing any of them.
 
 ### Behaviour-change note
 
@@ -90,3 +110,11 @@ When you do have to tune, work in the order **drag → stiffness → gravity**: 
 
 - ``VRMRenderer/applySpringBoneForce(gravity:wind:duration:)``
 - ``VRMRenderer/resetSpringBone()``
+
+### Cross-avatar & external collision
+
+- ``VRMRenderer/setExternalColliders(spheres:capsules:)``
+- ``VRMRenderer/joinContactGroup(_:)``
+- ``VRMRenderer/leaveContactGroup(_:)``
+- ``VRMRenderer/setContactResponseScale(_:in:)``
+- ``SpringBoneContactGroup``

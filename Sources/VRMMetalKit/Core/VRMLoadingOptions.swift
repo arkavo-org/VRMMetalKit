@@ -368,9 +368,14 @@ internal actor VRMLoadingContext {
             operationDescription: "\(currentPhase.rawValue) (\(Int(phaseProgress * 100))%)"
         )
         
-        // Call the callback on the main actor
+        // Deliver the callback on the main actor, fire-and-forget: awaiting
+        // the MainActor round-trip here stalls the load task whenever the
+        // main thread is busy — with N concurrent model loads these forced
+        // hops (every phase change) serialize the loaders against the main
+        // actor. `elapsedTime` is stamped above, before the hop, so progress
+        // timing stays accurate, and MainActor delivery preserves ordering.
         if let callback = options.progressCallback {
-            await MainActor.run {
+            Task { @MainActor in
                 callback(loadingProgress)
             }
         }

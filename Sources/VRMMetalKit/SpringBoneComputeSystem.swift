@@ -77,9 +77,33 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// surfaced to the sphere-collision kernel so continuous (swept) collision
     /// (#313) is scoped to that group ONLY. Authored body colliders keep the
     /// discrete endpoint test, so stiff cloth chains are not deflected against
-    /// them (see `SpringBoneCollision.metal`). `0xFFFFFFFF` = no synthetic group
-    /// present → swept collision never engages.
-    private var sweptColliderGroupIndex: UInt32 = 0xFFFFFFFF
+    /// them (see `SpringBoneCollision.metal`). Stored as the precomputed group
+    /// BIT (uploaded verbatim to the shader, which ANDs it against each
+    /// collider's `groupMask`): `0` = no synthetic group present → swept
+    /// collision never engages.
+    private var sweptColliderGroupMask: UInt32 = 0
+    /// Reserved collider-group index for cross-avatar FOREIGN colliders (design
+    /// §7). Distinct from the synthetic group so foreign colliders stay OUT of
+    /// the synthetic group's swept-CCD scoping (foreign contact is discrete).
+    /// `colliderGroups.count + 1`, set at populate time; `0xFFFFFFFF` when the
+    /// model has too many authored collider groups to safely reserve the slot
+    /// (see the aliasing guard in `populateSpringBoneData`).
+    private var foreignColliderGroupIndex: UInt32 = 0xFFFFFFFF
+    /// Active foreign colliders written into the reserved tail THIS frame. Set by
+    /// the injection sink; drives the per-frame kernel active count. Zero ⇒ the
+    /// authored path is bit-identical (design §4.2, §8.1).
+    var activeForeignSpheres: Int = 0
+    var activeForeignCapsules: Int = 0
+    /// This frame's foreign colliders, set by the coordinator each frame. The
+    /// replace-or-clear contract is total over frames: every frame either
+    /// replaces (non-empty) or clears (empty). Never accumulates (design §4.1).
+    private var pendingForeignSnapshot: ForeignColliderSnapshot = ForeignColliderSnapshot()
+    /// This frame's EXTERNAL colliders (rigid-body props, external physics), set by
+    /// `setExternalColliders`. An independent second foreign source: unioned with
+    /// `pendingForeignSnapshot` into the reserved tail so an avatar can feel both
+    /// cross-avatar contact and props in the same frame, and props work standalone
+    /// with no contact group. Same replace-or-clear contract.
+    private var pendingExternalColliders: ForeignColliderSnapshot = ForeignColliderSnapshot()
     private var timeAccumulator: TimeInterval = 0
     private var lastUpdateTime: TimeInterval = 0
 
@@ -157,6 +181,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Previous-frame global params for wake-on-force-change detection.
     private var previousGlobalParamsForSleep: SpringBoneGlobalParams?
     private var previousQualityForSleep: VRMConstants.SpringBoneQuality?
+    /// Previous-frame foreign (cross-avatar) collider set AS APPLIED (clamped to
+    /// the reserved tail budget), for wake-on-foreign detection (F1). A moving or
+    /// newly-appeared partner body wakes settled chains that the own-motion
+    /// heuristics would otherwise leave asleep.
+    private var previousForeignForSleep: ForeignColliderSnapshot = ForeignColliderSnapshot()
+    /// Previous-frame external (prop) collider set AS APPLIED (clamped), for
+    /// wake-on-external detection (the external-source counterpart to
+    /// `previousForeignForSleep`).
+    private var previousExternalForSleep: ForeignColliderSnapshot = ForeignColliderSnapshot()
     /// True when an explicit wake has been requested and not yet processed.
     private var forceWakePending: Bool = false
 
@@ -333,6 +366,111 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Defaults to `.ultra` to match the legacy global-constant behavior.
     var quality: VRMConstants.SpringBoneQuality = .ultra
 
+    /// Sets this frame's foreign colliders. Replace-or-clear: pass an empty
+    /// snapshot to clear (a departed partner leaves no ghost). Clamps to the
+    /// reserved tail capacity and logs any drop — never silently truncates
+    /// (design §4.1, §6).
+    func setForeignColliders(_ snapshot: ForeignColliderSnapshot) {
+        pendingForeignSnapshot = snapshot
+    }
+
+    /// Sets this frame's external colliders (rigid-body props, external physics).
+    /// Same replace-or-clear contract as `setForeignColliders`, but an independent
+    /// source: `writeForeignTail` unions this with the cross-avatar set, so props
+    /// compose with a contact group rather than clobbering it (and work with no
+    /// group at all). Public app entry point is `VRMRenderer.setExternalColliders`.
+    func setExternalColliders(_ snapshot: ForeignColliderSnapshot) {
+        pendingExternalColliders = snapshot
+    }
+
+    /// Writes the frame's foreign set into the reserved buffer tail ONCE per
+    /// frame, tagged with the reserved foreign group index, and sets the active
+    /// counts. Called before the substep loop; `interpolateColliders` only ever
+    /// rewrites the [0, active) prefix, so the tail persists across the frame's
+    /// substeps (design §4.2). `foreign`/`external` must be the clamped sets
+    /// from `clampedForeignSets` — `update()` computes them once per frame so
+    /// the wake check, this write, and the sleep snapshot all see the exact set
+    /// that is applied.
+    private func writeForeignTail(buffers: SpringBoneBuffers,
+                                  foreign: ForeignColliderSnapshot,
+                                  external: ForeignColliderSnapshot) {
+        // No valid foreign group was reserved: `foreignColliderGroupIndex` is the
+        // 0xFFFFFFFF sentinel (model has >=30 authored collider groups, so the
+        // group-bit carve-out zeroed the bone-side foreign bit). Foreign colliders
+        // cannot be safely tagged here — shifting `1 << foreignColliderGroupIndex`
+        // on the sentinel is undefined (reduces to bit 31, aliasing an
+        // authored/synthetic group). Drop them: that model simply receives no
+        // cross-avatar contact, consistent with the zeroed foreign bit.
+        guard foreignColliderGroupIndex != 0xFFFFFFFF else {
+            activeForeignSpheres = 0
+            activeForeignCapsules = 0
+            return
+        }
+        var spheres = foreign.spheres
+        spheres.append(contentsOf: external.spheres)
+        var capsules = foreign.capsules
+        capsules.append(contentsOf: external.capsules)
+
+        if let buf = buffers.sphereColliders, !spheres.isEmpty {
+            let ptr = buf.contents().bindMemory(to: SphereCollider.self, capacity: buffers.sphereCapacity)
+            for (i, s) in spheres.enumerated() {
+                // Re-tag the foreign group in place, preserving every other field
+                // (radius, inside, and the per-partner responseScale — subsystem 4).
+                var tagged = s
+                tagged.groupMask = 1 << foreignColliderGroupIndex
+                ptr[buffers.numSpheres + i] = tagged
+            }
+        }
+        if let buf = buffers.capsuleColliders, !capsules.isEmpty {
+            let ptr = buf.contents().bindMemory(to: CapsuleCollider.self, capacity: buffers.capsuleCapacity)
+            for (i, c) in capsules.enumerated() {
+                var tagged = c
+                tagged.groupMask = 1 << foreignColliderGroupIndex
+                ptr[buffers.numCapsules + i] = tagged
+            }
+        }
+        activeForeignSpheres = spheres.count
+        activeForeignCapsules = capsules.count
+    }
+
+    /// Clamps the pending foreign/external sets to their reserved tail budgets,
+    /// yielding the exact sets `writeForeignTail` applies this frame (design §6).
+    /// The reserved tail carries a dedicated external (prop) budget on top of the
+    /// cross-avatar crowd budget, so each source is clamped to its OWN slice — a
+    /// full crowd never starves props and a flood of props never starves the
+    /// crowd. Each budget is derived from the tail room so a model with no
+    /// reserved tail (room == 0) clamps both sources to nothing. `update()`
+    /// computes these ONCE per frame so the wake check and the sleep snapshot
+    /// compare/store the APPLIED set: colliders beyond the budget must not wake
+    /// a sleeping avatar they will never touch.
+    private func clampedForeignSets(buffers: SpringBoneBuffers)
+        -> (crowd: ForeignColliderSnapshot, external: ForeignColliderSnapshot) {
+        let sphereRoom = max(buffers.sphereCapacity - buffers.numSpheres, 0)
+        let capsuleRoom = max(buffers.capsuleCapacity - buffers.numCapsules, 0)
+        let externalSphereBudget = min(VRMConstants.Physics.externalColliderSphereSlots, sphereRoom)
+        let crowdSphereBudget = sphereRoom - externalSphereBudget
+        let externalCapsuleBudget = min(VRMConstants.Physics.externalColliderCapsuleSlots, capsuleRoom)
+        let crowdCapsuleBudget = capsuleRoom - externalCapsuleBudget
+        return (ForeignColliderSnapshot(
+                    spheres: clampForeign(pendingForeignSnapshot.spheres, to: crowdSphereBudget,
+                                          label: "cross-avatar spheres"),
+                    capsules: clampForeign(pendingForeignSnapshot.capsules, to: crowdCapsuleBudget,
+                                           label: "cross-avatar capsules")),
+                ForeignColliderSnapshot(
+                    spheres: clampForeign(pendingExternalColliders.spheres, to: externalSphereBudget,
+                                          label: "external spheres"),
+                    capsules: clampForeign(pendingExternalColliders.capsules, to: externalCapsuleBudget,
+                                           label: "external capsules")))
+    }
+
+    /// Clamps a foreign collider list to its reserved budget, logging any drop so
+    /// overflow is never silent (design §6). Generic over sphere/capsule.
+    private func clampForeign<T>(_ colliders: [T], to budget: Int, label: String) -> [T] {
+        guard colliders.count > budget else { return colliders }
+        vrmLogPhysics("⚠️ [SpringBone] Foreign \(label) \(colliders.count) exceed reserved budget \(budget); dropping \(colliders.count - budget).")
+        return Array(colliders.prefix(budget))
+    }
+
     /// Run spring-bone simulation. If `commandBuffer` is non-nil, all substep compute
     /// passes are encoded into it (no internal `makeCommandBuffer`/`commit`) — caller
     /// owns the buffer's lifecycle. If `nil`, the legacy path is used (one fresh
@@ -424,6 +562,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             fillCenterDeltaBufferForFrame(substepCount: frameSubstepCount)
         }
 
+        // Clamp the pending foreign/external sets to their reserved tail budgets
+        // ONCE per frame: the wake check, the tail write, and the sleep snapshot
+        // below all use the exact set that will be applied, so colliders beyond
+        // the budget (never written) can't wake a sleeping avatar. Mirrors
+        // `writeForeignTail`'s sentinel guard — with no reserved foreign group
+        // the applied set is empty.
+        let clampedForeign: ForeignColliderSnapshot
+        let clampedExternal: ForeignColliderSnapshot
+        if foreignColliderGroupIndex != 0xFFFFFFFF {
+            (clampedForeign, clampedExternal) = clampedForeignSets(buffers: buffers)
+        } else {
+            clampedForeign = ForeignColliderSnapshot()
+            clampedExternal = ForeignColliderSnapshot()
+        }
+
         // Sleep gate: decide whether the XPBD pipeline can be skipped this frame.
         // Only enabled on the shared-command-buffer (async runtime) path; the
         // self-owned-buffer path is used for offline/conformance rendering where
@@ -434,7 +587,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let chainVelocities = computeChainMaxVelocities(buffers: buffers)
             let wakeDetected = detectWakeConditions(model: model,
                                                     buffers: buffers,
-                                                    globalParams: globalParams)
+                                                    globalParams: globalParams,
+                                                    foreign: clampedForeign,
+                                                    external: clampedExternal)
             updateSleepState(velocities: chainVelocities, wakeDetected: wakeDetected)
         } else {
             // Offline/sync path: keep everything awake and don't touch GPU buffers
@@ -446,6 +601,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         let allChainsAsleep = sleepGateEnabled && !chainSleepState.isEmpty && chainSleepState.allSatisfy { $0 }
+
+        // Write this frame's foreign colliders into the reserved tail once. The
+        // tail persists across substeps (interpolate only rewrites the prefix).
+        writeForeignTail(buffers: buffers, foreign: clampedForeign, external: clampedExternal)
 
         var stepsThisFrame = 0
 
@@ -474,6 +633,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // trajectory is preserved.
             params.dtSub = Float(fixedDeltaTime)
             params.windPhase += Float(fixedDeltaTime)
+
+            // Per-frame kernel active count = active authored+synthetic + active
+            // foreign. Zero foreign ⇒ equals the load-time value ⇒ bit-identical
+            // (design §4.2). buffers.numSpheres/numCapsules is the active
+            // authored+synthetic count (the reserved tail is beyond it).
+            params.numSpheres = UInt32(buffers.numSpheres + activeForeignSpheres)
+            params.numCapsules = UInt32(buffers.numCapsules + activeForeignCapsules)
 
             // Decrement settling frames counter (allows bones to settle with gravity before inertia compensation)
             if params.settlingFrames > 0 {
@@ -577,7 +743,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         // Snapshot targets and params for next frame's wake-condition checks.
-        captureSleepSnapshots(model: model, globalParams: globalParams)
+        captureSleepSnapshots(model: model, globalParams: globalParams,
+                              foreign: clampedForeign, external: clampedExternal)
 
         lastUpdateTime = CACurrentMediaTime()
     }
@@ -716,7 +883,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if globalParams.numSpheres > 0 {
             computeEncoder.setComputePipelineState(collideSpheresPipeline)
             // Scope swept (continuous) collision to the synthetic group (#313).
-            var sweptGroup = sweptColliderGroupIndex
+            var sweptGroup = sweptColliderGroupMask
             computeEncoder.setBytes(&sweptGroup, length: MemoryLayout<UInt32>.size, index: 15)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
@@ -725,7 +892,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if globalParams.numCapsules > 0 {
             computeEncoder.setComputePipelineState(collideCapsulesPipeline)
             // Scope swept (continuous) collision to the synthetic group (#313).
-            var sweptGroupCaps = sweptColliderGroupIndex
+            var sweptGroupCaps = sweptColliderGroupMask
             computeEncoder.setBytes(&sweptGroupCaps, length: MemoryLayout<UInt32>.size, index: 15)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
@@ -867,7 +1034,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     private func detectWakeConditions(model: VRMModel,
                                       buffers: SpringBoneBuffers,
-                                      globalParams: SpringBoneGlobalParams) -> Bool {
+                                      globalParams: SpringBoneGlobalParams,
+                                      foreign: ForeignColliderSnapshot,
+                                      external: ForeignColliderSnapshot) -> Bool {
         if forceWakePending {
             return true
         }
@@ -912,6 +1081,31 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return true
         }
 
+        // Foreign (cross-avatar) and external (rigid-body prop) colliders wake
+        // physics too: a settled avatar must react to a partner leaning in or a
+        // prop penetrating — the own-motion checks above never see them (F1).
+        // `foreign`/`external` are the CLAMPED sets (the exact colliders
+        // `writeForeignTail` applies this frame), so colliders beyond the
+        // reserved budget can't wake a sleeping avatar they will never touch.
+        //
+        // Only when the foreign group slot was actually reserved: with >=30
+        // authored collider groups `writeForeignTail` carves out the bit and drops
+        // ALL foreign/external colliders, so waking for a change we will never apply
+        // is pure churn (wake→resim→resleep every frame a partner moves, yet zero
+        // foreign collision). Mirror the tail-write guard here.
+        if foreignColliderGroupIndex != 0xFFFFFFFF {
+            if foreignCollidersChanged(previous: previousForeignForSleep,
+                                       current: foreign,
+                                       threshold: motionThreshold) {
+                return true
+            }
+            if foreignCollidersChanged(previous: previousExternalForSleep,
+                                       current: external,
+                                       threshold: motionThreshold) {
+                return true
+            }
+        }
+
         // External force / wind / character-velocity / drag changes wake physics.
         if let prev = previousGlobalParamsForSleep {
             if simd_distance(prev.gravity, globalParams.gravity) > 0.001 ||
@@ -945,6 +1139,35 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                abs(previous[i].radius - current[i].radius) > threshold {
                 return true
             }
+        }
+        return false
+    }
+
+    /// Foreign (cross-avatar / external) colliders wake physics like authored
+    /// colliders do: a changed count (partner/prop appears or leaves), a moved
+    /// centre/endpoint, or a changed radius beyond `threshold` wakes settled chains
+    /// (F1). Radius parity matters — a collider that grows or shrinks in place (a
+    /// body part or prop scaling without translating) still changes the contact
+    /// surface and must wake, matching `collidersMoved` for authored colliders. A
+    /// changed `responseScale` (ghost→firm via `setContactResponseScale`) also
+    /// wakes: the push strength changes even though no geometry moved (subsystem
+    /// 4). A static, unchanging set does NOT wake — chains that already deflected
+    /// against it may sleep, so sustained contact doesn't pin the whole crowd awake.
+    private func foreignCollidersChanged(previous: ForeignColliderSnapshot,
+                                         current: ForeignColliderSnapshot,
+                                         threshold: Float) -> Bool {
+        if previous.spheres.count != current.spheres.count { return true }
+        if previous.capsules.count != current.capsules.count { return true }
+        for i in current.spheres.indices {
+            if simd_distance(previous.spheres[i].center, current.spheres[i].center) > threshold ||
+               abs(previous.spheres[i].radius - current.spheres[i].radius) > threshold ||
+               previous.spheres[i].responseScale != current.spheres[i].responseScale { return true }
+        }
+        for i in current.capsules.indices {
+            if simd_distance(previous.capsules[i].p0, current.capsules[i].p0) > threshold ||
+               simd_distance(previous.capsules[i].p1, current.capsules[i].p1) > threshold ||
+               abs(previous.capsules[i].radius - current.capsules[i].radius) > threshold ||
+               previous.capsules[i].responseScale != current.capsules[i].responseScale { return true }
         }
         return false
     }
@@ -990,18 +1213,24 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         sleepingBoneCount = asleepCount
     }
 
-    private func captureSleepSnapshots(model: VRMModel, globalParams: SpringBoneGlobalParams) {
+    private func captureSleepSnapshots(model: VRMModel, globalParams: SpringBoneGlobalParams,
+                                       foreign: ForeignColliderSnapshot, external: ForeignColliderSnapshot) {
         previousRootPositionsForSleep = targetRootPositions
         previousSphereCollidersForSleep = targetSphereColliders
         previousCapsuleCollidersForSleep = targetCapsuleColliders
         previousPlaneCollidersForSleep = targetPlaneColliders
         previousGlobalParamsForSleep = globalParams
         previousQualityForSleep = quality
+        // Store the CLAMPED sets (what `writeForeignTail` applied this frame), so
+        // next frame's wake check diffs applied-vs-applied and over-budget
+        // colliders that were never written can't trigger a spurious wake.
+        previousForeignForSleep = foreign
+        previousExternalForSleep = external
     }
 
     /// Transforms additive synthetic colliders (issue #309) into world space and
     /// appends them to the given destination arrays. They live in the reserved
-    /// synthetic group (`groupIndex`) so every spring collides with them.
+    /// synthetic group (`groupMask` bit) so every spring collides with them.
     ///
     /// This is the single shared implementation behind the three synthetic-upload
     /// passes (`populateSpringBoneData`, `updateAnimatedPositions`, and
@@ -1018,7 +1247,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private func appendSyntheticColliders(
         _ synthetics: [VRMCollider],
         model: VRMModel,
-        groupIndex: UInt32,
+        groupMask: UInt32,
         spheres: inout [SphereCollider],
         capsules: inout [CapsuleCollider]
     ) {
@@ -1035,21 +1264,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             switch collider.shape {
             case .sphere(let offset, let radius):
                 let worldCenter = colliderNode.worldPosition + worldRotation * offset
-                spheres.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
+                spheres.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask))
 
             case .insideSphere(let offset, let radius):
                 let worldCenter = colliderNode.worldPosition + worldRotation * offset
-                spheres.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex, inside: true))
+                spheres.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask, inside: true))
 
             case .capsule(let offset, let radius, let tail):
                 let worldP0 = colliderNode.worldPosition + worldRotation * offset
                 let worldP1 = worldP0 + worldRotation * tail
-                capsules.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+                capsules.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask))
 
             case .insideCapsule(let offset, let radius, let tail):
                 let worldP0 = colliderNode.worldPosition + worldRotation * offset
                 let worldP1 = worldP0 + worldRotation * tail
-                capsules.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex, inside: true))
+                capsules.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask, inside: true))
 
             case .plane:
                 // Synthetic planes have no buffer here; allocation counts planes
@@ -1060,6 +1289,51 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 continue
             }
         }
+    }
+
+    /// Pure world-space snapshot of this avatar's skeleton-derived body contact
+    /// set (torso + upper arms + head + thigh capsules, plus up to 8 authored
+    /// body colliders). Reuses the world-transform idiom of
+    /// `appendSyntheticColliders` but mutates NOTHING — it does not read or write
+    /// the interpolation mirror, so the coordinator can call it before this
+    /// system's integrate without perturbing the subsequent frame (design §2.2).
+    /// `groupMask` is left 0 (untagged); the receiving sink assigns the foreign
+    /// group bit.
+    func contactColliderSnapshot(model: VRMModel) -> ForeignColliderSnapshot {
+        let local = SpringBoneContactColliderSet.synthesize(model: model)
+        var spheres: [SphereCollider] = []
+        var capsules: [CapsuleCollider] = []
+        for collider in local {
+            guard let node = model.nodes[safe: collider.node] else { continue }
+            let wm = node.worldMatrix
+            let rot = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2]))
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                spheres.append(SphereCollider(center: node.worldPosition + rot * offset,
+                                              radius: radius, groupMask: 0))
+            case .capsule:
+                if let c = SpringBoneContactColliderSet.worldCapsule(collider, model: model) {
+                    capsules.append(c)
+                }
+            default:
+                continue
+            }
+        }
+        return ForeignColliderSnapshot(spheres: spheres, capsules: capsules)
+    }
+
+    /// This avatar's torso capsule in world space (design §3.1): the single
+    /// contact capsule the postural yield leans away from and the contact-aware
+    /// clamp measures separation against. Built from
+    /// `SpringBoneContactColliderSet.torsoCollider` — the same source of truth as
+    /// the first capsule `contactColliderSnapshot` emits — so a consumer never has
+    /// to guess which capsule in the snapshot bag is the trunk. Pure: reads world
+    /// matrices only, mutates nothing. `nil` when the model has no humanoid.
+    func contactTorsoCapsule(model: VRMModel) -> CapsuleCollider? {
+        SpringBoneContactColliderSet.worldTorsoCapsule(model: model)
     }
 
     func populateSpringBoneData(model: VRMModel) throws {
@@ -1077,23 +1351,37 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var planeColliders: [PlaneCollider] = []
         boneBindDirections = [] // Reset bind directions (current→child)
 
-        // Build collider-to-group index mapping
-        // Each collider can belong to multiple groups, but we assign the first group index for GPU filtering
-        var colliderToGroupIndex: [Int: UInt32] = [:]
+        // Reset the foreign-collider sink (design §7) so a freshly populated
+        // model starts with zero foreign injection. Without this, stale
+        // foreign state from a previously loaded model would carry across
+        // loadModel() calls on this reused compute system. The sleep snapshots
+        // reset too — otherwise the stale previous set diffs against the new
+        // model's empty set and triggers one spurious wake after reload.
+        pendingForeignSnapshot = ForeignColliderSnapshot()
+        pendingExternalColliders = ForeignColliderSnapshot()
+        previousForeignForSleep = ForeignColliderSnapshot()
+        previousExternalForSleep = ForeignColliderSnapshot()
+        activeForeignSpheres = 0
+        activeForeignCapsules = 0
+
+        // Build collider-to-group-MEMBERSHIP mapping: every collider carries the
+        // OR of the bits of ALL groups it belongs to (a collider shared by
+        // several groups — e.g. one chest capsule in both a "Body" and a "Hair"
+        // group — must be visible to springs referencing ANY of them; the
+        // previous first-group-only index silently dropped the others).
+        // Clamp each bit to 31 so the shader's `1u << bit` is well-defined
+        // (UB at >=32). Bone masks are already truncated to <32.
+        var colliderToGroupMask: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+            let bit = UInt32(1 << min(groupIndex, 31))
             for colliderIndex in group.colliders {
-                // Use first group if collider belongs to multiple groups.
-                // Clamp to 31 so the shader's `1u << groupIndex` is well-defined
-                // (UB at >=32). Bone masks are already truncated to <32.
-                if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
-                }
+                colliderToGroupMask[colliderIndex, default: 0] |= bit
             }
         }
 
         // Synthetic colliders (issue #309) live in a reserved group bit so EVERY
         // spring collides with them, regardless of authored group membership.
-        // Clamp to 31 so the shader's `1u << groupIndex` stays well-defined. Only
+        // Clamp to 31 so the bit shift stays well-defined. Only
         // reserve the bit when synthetic colliders actually exist — otherwise the
         // reserved bit could alias an authored group's clamped bit (models with
         // >=32 groups all clamp to 31) and leak authored colliders through the
@@ -1102,8 +1390,27 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let hasSyntheticColliders = !springBone.syntheticColliders.isEmpty
         let syntheticGroupBit: UInt32 = hasSyntheticColliders ? (1 << syntheticGroupIndex) : 0
         // Scope swept (continuous) sphere collision to the synthetic group only
-        // (#313). No synthetic colliders → sentinel that matches no group.
-        sweptColliderGroupIndex = hasSyntheticColliders ? syntheticGroupIndex : 0xFFFFFFFF
+        // (#313), as the precomputed group BIT the shader ANDs against each
+        // collider's `groupMask`. No synthetic colliders → 0 → matches nothing.
+        sweptColliderGroupMask = syntheticGroupBit
+
+        // Reserve the foreign group bit (design §7), distinct from synthetic and
+        // OR'd into every spring bone unconditionally — harmless when idle (no
+        // foreign colliders ⇒ the bit matches nothing). Only reserve the slot
+        // when `colliderGroups.count + 1` stays clear of the authored overflow
+        // clamp at 31 (models with >=32 authored groups already clamp their
+        // overflow colliders' group bits to 31 — see the `colliderToGroupMask`
+        // clamp above). Below that ceiling, `count` and `count + 1` are both
+        // <31 and distinct from each other and from every authored index, so
+        // synthetic (`count`) and foreign (`count + 1`) can never collide with
+        // an authored bit or with one another. Above it, skip the reservation
+        // rather than risk leaking authored colliders through the spring
+        // filter (matches the `hasSyntheticColliders` guard's rationale).
+        let foreignSlotIsSafe = springBone.colliderGroups.count < 30
+        foreignColliderGroupIndex = foreignSlotIsSafe
+            ? UInt32(springBone.colliderGroups.count + 1)
+            : 0xFFFFFFFF
+        let foreignGroupBit: UInt32 = foreignSlotIsSafe ? (1 << foreignColliderGroupIndex) : 0
 
         // Process spring chains to extract bone parameters
         var boneIndex = 0
@@ -1132,6 +1439,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Always collide with synthetic colliders (issue #309). Harmless when
             // the mask is already the 0xFFFFFFFF all-groups default.
             colliderGroupMask |= syntheticGroupBit
+            // Always collide with the reserved foreign group (design §7) so
+            // cross-avatar colliders, once injected into the tail, affect every
+            // spring bone regardless of authored group membership.
+            colliderGroupMask |= foreignGroupBit
 
             for joint in spring.joints {
                 chainGravityPower.append(joint.gravityPower)
@@ -1237,10 +1548,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Real VRM files with broken physics should be fixed at the source or use a dedicated flag
         // to enable auto-fixing behavior rather than applying it unconditionally.
 
-        // Process colliders with group index assignment
+        // Process colliders with group membership masks
         for (colliderIndex, collider) in springBone.colliders.enumerated() {
             guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-            let groupIndex = colliderToGroupIndex[colliderIndex] ?? 0
+            let groupMask = colliderToGroupMask[colliderIndex] ?? 1   // no group ⇒ bit 0 (legacy default)
 
             // Extract rotation from world matrix (upper 3x3) to transform local offsets
             let wm = colliderNode.worldMatrix
@@ -1250,44 +1561,54 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
             )
 
+            // Non-unit node scale: offsets/tails ARE scaled by the 3x3 but the
+            // radius never is, so the collision volume silently mismatches the
+            // mesh. Warn once per populate so the model can be fixed at the source.
+            let scaleX = simd_length(worldRotation.columns.0)
+            let scaleY = simd_length(worldRotation.columns.1)
+            let scaleZ = simd_length(worldRotation.columns.2)
+            if abs(scaleX - 1) > 0.01 || abs(scaleY - 1) > 0.01 || abs(scaleZ - 1) > 0.01 {
+                vrmLogPhysics("⚠️ [SpringBone] collider \(colliderIndex) on node \(collider.node) has non-unit world scale (\(String(format: "%.3f", scaleX)), \(String(format: "%.3f", scaleY)), \(String(format: "%.3f", scaleZ))): offsets scale but radius does not — collision geometry may not match the mesh")
+            }
+
             switch collider.shape {
             case .sphere(let offset, let radius):
                 let worldOffset = worldRotation * offset
                 let worldCenter = colliderNode.worldPosition + worldOffset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask))
 
             case .insideSphere(let offset, let radius):
                 let worldOffset = worldRotation * offset
                 let worldCenter = colliderNode.worldPosition + worldOffset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex, inside: true))
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask, inside: true))
 
             case .capsule(let offset, let radius, let tail):
                 let worldOffset = worldRotation * offset
                 let worldTail = worldRotation * tail
                 let worldP0 = colliderNode.worldPosition + worldOffset
                 let worldP1 = worldP0 + worldTail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask))
 
             case .insideCapsule(let offset, let radius, let tail):
                 let worldOffset = worldRotation * offset
                 let worldTail = worldRotation * tail
                 let worldP0 = colliderNode.worldPosition + worldOffset
                 let worldP1 = worldP0 + worldTail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex, inside: true))
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask, inside: true))
 
             case .plane(let offset, let normal):
                 let worldOffset = worldRotation * offset
                 let worldNormal = worldRotation * normal
                 let worldPoint = colliderNode.worldPosition + worldOffset
                 let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
-                planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
+                planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupMask: groupMask))
             }
         }
 
         // Append synthetic colliders (issue #309) via the shared helper. They
         // live in the reserved synthetic group so every spring collides with them.
         appendSyntheticColliders(
-            springBone.syntheticColliders, model: model, groupIndex: syntheticGroupIndex,
+            springBone.syntheticColliders, model: model, groupMask: syntheticGroupBit,
             spheres: &sphereColliders, capsules: &capsuleColliders)
 
         // Update buffers
@@ -1408,11 +1729,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         print("[SpringBone DEBUG] === Colliders ===")
         print("[SpringBone DEBUG] Spheres: \(sphereColliders.count)")
         for (i, sphere) in sphereColliders.enumerated() {
-            print("  Sphere \(i): center=(\(String(format: "%.3f", sphere.center.x)), \(String(format: "%.3f", sphere.center.y)), \(String(format: "%.3f", sphere.center.z))) radius=\(String(format: "%.3f", sphere.radius)) group=\(sphere.groupIndex)")
+            print("  Sphere \(i): center=(\(String(format: "%.3f", sphere.center.x)), \(String(format: "%.3f", sphere.center.y)), \(String(format: "%.3f", sphere.center.z))) radius=\(String(format: "%.3f", sphere.radius)) groupMask=0x\(String(sphere.groupMask, radix: 16))")
         }
         print("[SpringBone DEBUG] Capsules: \(capsuleColliders.count)")
         for (i, capsule) in capsuleColliders.enumerated() {
-            print("  Capsule \(i): p0=(\(String(format: "%.3f", capsule.p0.x)), \(String(format: "%.3f", capsule.p0.y)), \(String(format: "%.3f", capsule.p0.z))) p1=(\(String(format: "%.3f", capsule.p1.x)), \(String(format: "%.3f", capsule.p1.y)), \(String(format: "%.3f", capsule.p1.z))) radius=\(String(format: "%.3f", capsule.radius)) group=\(capsule.groupIndex)")
+            print("  Capsule \(i): p0=(\(String(format: "%.3f", capsule.p0.x)), \(String(format: "%.3f", capsule.p0.y)), \(String(format: "%.3f", capsule.p0.z))) p1=(\(String(format: "%.3f", capsule.p1.x)), \(String(format: "%.3f", capsule.p1.y)), \(String(format: "%.3f", capsule.p1.z))) radius=\(String(format: "%.3f", capsule.radius)) groupMask=0x\(String(capsule.groupMask, radix: 16))")
         }
         print("[SpringBone DEBUG] Planes: \(planeColliders.count)")
         #endif
@@ -1560,14 +1881,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             )
         }
 
-        // Build collider-to-group index mapping for animated updates.
-        // Clamp to 31 so the shader's `1u << groupIndex` is well-defined.
-        var colliderToGroupIndex: [Int: UInt32] = [:]
+        // Build collider-to-group-MEMBERSHIP mapping for animated updates (OR of
+        // every group's bit — a collider in several groups must be visible to
+        // springs referencing ANY of them). Clamp each bit to 31 so the shader's
+        // `1u << bit` is well-defined.
+        var colliderToGroupMask: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+            let bit = UInt32(1 << min(groupIndex, 31))
             for colliderIndex in group.colliders {
-                if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
-                }
+                colliderToGroupMask[colliderIndex, default: 0] |= bit
             }
         }
 
@@ -1578,7 +1900,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         for (colliderIndex, collider) in springBone.colliders.enumerated() {
             guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-            let groupIndex = colliderToGroupIndex[colliderIndex] ?? 0
+            let groupMask = colliderToGroupMask[colliderIndex] ?? 1   // no group ⇒ bit 0 (legacy default)
 
             // Extract rotation from world matrix (upper 3x3) to transform local offsets
             let wm = colliderNode.worldMatrix
@@ -1603,47 +1925,48 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     print("  localOffset=(\(String(format: "%.3f", offset.x)), \(String(format: "%.3f", offset.y)), \(String(format: "%.3f", offset.z))) -> worldOffset=(\(String(format: "%.3f", worldOffset.x)), \(String(format: "%.3f", worldOffset.y)), \(String(format: "%.3f", worldOffset.z))) -> center=(\(String(format: "%.3f", worldCenter.x)), \(String(format: "%.3f", worldCenter.y)), \(String(format: "%.3f", worldCenter.z)))")
                 }
                 #endif
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask))
 
             case .insideSphere(let offset, let radius):
                 let worldOffset = worldRotation * offset
                 let worldCenter = colliderNode.worldPosition + worldOffset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex, inside: true))
+                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask, inside: true))
 
             case .capsule(let offset, let radius, let tail):
                 let worldOffset = worldRotation * offset
                 let worldTail = worldRotation * tail
                 let worldP0 = colliderNode.worldPosition + worldOffset
                 let worldP1 = worldP0 + worldTail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask))
 
             case .insideCapsule(let offset, let radius, let tail):
                 let worldOffset = worldRotation * offset
                 let worldTail = worldRotation * tail
                 let worldP0 = colliderNode.worldPosition + worldOffset
                 let worldP1 = worldP0 + worldTail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex, inside: true))
+                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask, inside: true))
 
             case .plane(let offset, let normal):
                 let worldOffset = worldRotation * offset
                 let worldNormal = worldRotation * normal
                 let worldPoint = colliderNode.worldPosition + worldOffset
                 let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
-                planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
+                planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupMask: groupMask))
             }
         }
 
         // Append synthetic colliders (issue #309) via the shared helper.
-        let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
+        let syntheticGroupMask: UInt32 = springBone.syntheticColliders.isEmpty
+            ? 0 : (1 << UInt32(min(springBone.colliderGroups.count, 31)))
         appendSyntheticColliders(
-            springBone.syntheticColliders, model: model, groupIndex: syntheticGroupIndex,
+            springBone.syntheticColliders, model: model, groupMask: syntheticGroupMask,
             spheres: &sphereColliders, capsules: &capsuleColliders)
 
         #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
         if updateCounter % 600 == 1 && !sphereColliders.isEmpty {
             print("[SpringBone DEBUG] === Animated Collider Positions (frame \(updateCounter)) ===")
             for (i, sphere) in sphereColliders.enumerated() {
-                print("  Sphere \(i): center=(\(String(format: "%.3f", sphere.center.x)), \(String(format: "%.3f", sphere.center.y)), \(String(format: "%.3f", sphere.center.z))) group=\(sphere.groupIndex)")
+                print("  Sphere \(i): center=(\(String(format: "%.3f", sphere.center.x)), \(String(format: "%.3f", sphere.center.y)), \(String(format: "%.3f", sphere.center.z))) groupMask=0x\(String(sphere.groupMask, radix: 16))")
             }
         }
         #endif
@@ -2090,14 +2413,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     /// Captures collider transforms based on current animated node positions/orientations
     private func captureTargetColliderTransforms(model: VRMModel, springBone: VRMSpringBone) {
-        // Build collider-to-group index mapping. Clamp to 31 so the shader's
-        // `1u << groupIndex` is well-defined (UB at >=32).
-        var colliderToGroupIndex: [Int: UInt32] = [:]
+        // Build collider-to-group-MEMBERSHIP mapping (OR of every group's bit —
+        // a collider in several groups must be visible to springs referencing
+        // ANY of them). Clamp each bit to 31 so the shader's `1u << bit` is
+        // well-defined (UB at >=32).
+        var colliderToGroupMask: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+            let bit = UInt32(1 << min(groupIndex, 31))
             for colliderIndex in group.colliders {
-                if colliderToGroupIndex[colliderIndex] == nil {
-                    colliderToGroupIndex[colliderIndex] = UInt32(min(groupIndex, 31))
-                }
+                colliderToGroupMask[colliderIndex, default: 0] |= bit
             }
         }
 
@@ -2107,7 +2431,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         for (colliderIndex, collider) in springBone.colliders.enumerated() {
             guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-            let groupIndex = colliderToGroupIndex[colliderIndex] ?? 0
+            let groupMask = colliderToGroupMask[colliderIndex] ?? 1   // no group ⇒ bit 0 (legacy default)
 
             let wm = colliderNode.worldMatrix
             let worldRotation = simd_float3x3(
@@ -2120,40 +2444,41 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             case .sphere(let offset, let radius):
                 let worldOffset = worldRotation * offset
                 let worldCenter = colliderNode.worldPosition + worldOffset
-                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex))
+                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask))
 
             case .insideSphere(let offset, let radius):
                 let worldOffset = worldRotation * offset
                 let worldCenter = colliderNode.worldPosition + worldOffset
-                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupIndex: groupIndex, inside: true))
+                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask, inside: true))
 
             case .capsule(let offset, let radius, let tail):
                 let worldOffset = worldRotation * offset
                 let worldTail = worldRotation * tail
                 let worldP0 = colliderNode.worldPosition + worldOffset
                 let worldP1 = worldP0 + worldTail
-                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex))
+                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask))
 
             case .insideCapsule(let offset, let radius, let tail):
                 let worldOffset = worldRotation * offset
                 let worldTail = worldRotation * tail
                 let worldP0 = colliderNode.worldPosition + worldOffset
                 let worldP1 = worldP0 + worldTail
-                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupIndex: groupIndex, inside: true))
+                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask, inside: true))
 
             case .plane(let offset, let normal):
                 let worldOffset = worldRotation * offset
                 let worldNormal = worldRotation * normal
                 let worldPoint = colliderNode.worldPosition + worldOffset
                 let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
-                targetPlaneColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupIndex: groupIndex))
+                targetPlaneColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupMask: groupMask))
             }
         }
 
         // Append synthetic colliders (issue #309) via the shared helper.
-        let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
+        let syntheticGroupMask: UInt32 = springBone.syntheticColliders.isEmpty
+            ? 0 : (1 << UInt32(min(springBone.colliderGroups.count, 31)))
         appendSyntheticColliders(
-            springBone.syntheticColliders, model: model, groupIndex: syntheticGroupIndex,
+            springBone.syntheticColliders, model: model, groupMask: syntheticGroupMask,
             spheres: &targetSphereColliders, capsules: &targetCapsuleColliders)
 
         // Apply runtime radius overrides (e.g., for hair clipping prevention)
@@ -2251,7 +2576,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 ptr[i] = SphereCollider(
                     center: simd_mix(prev.center, target.center, SIMD3<Float>(repeating: t)),
                     radius: prev.radius + t * (target.radius - prev.radius),
-                    groupIndex: target.groupIndex,
+                    groupMask: target.groupMask,
                     inside: target.inside != 0
                 )
             }
@@ -2269,7 +2594,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     p0: simd_mix(prev.p0, target.p0, SIMD3<Float>(repeating: t)),
                     p1: simd_mix(prev.p1, target.p1, SIMD3<Float>(repeating: t)),
                     radius: prev.radius + t * (target.radius - prev.radius),
-                    groupIndex: target.groupIndex,
+                    groupMask: target.groupMask,
                     inside: target.inside != 0
                 )
             }
@@ -2289,7 +2614,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 ptr[i] = PlaneCollider(
                     point: simd_mix(prev.point, target.point, SIMD3<Float>(repeating: t)),
                     normal: normalLen > 0.001 ? interpolatedNormal / normalLen : target.normal,
-                    groupIndex: target.groupIndex
+                    groupMask: target.groupMask
                 )
             }
         }
@@ -2551,6 +2876,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               buffers.numBones > 0 else {
             return
         }
+
+        // Keep warmup's sphere/capsule counts consistent-by-construction with
+        // update()'s expression (buffers.numSpheres/numCapsules + active
+        // foreign). Warmup is a load-time settling loop that normally runs
+        // before any foreign injection (activeForeign* is 0 then, so this is
+        // inert), but setting it here means the two physics entry points can
+        // never diverge if warmup is ever invoked after a foreign injection.
+        globalParams.numSpheres = UInt32(buffers.numSpheres + activeForeignSpheres)
+        globalParams.numCapsules = UInt32(buffers.numCapsules + activeForeignCapsules)
 
         // Step 1: Capture current animated positions for root bones
         guard let springBone = model.springBone else { return }

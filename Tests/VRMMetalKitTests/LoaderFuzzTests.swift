@@ -307,21 +307,21 @@ final class LoaderFuzzTests: XCTestCase {
         buffers.allocateBuffers(numBones: 1, numSpheres: 2, numCapsules: 2, numPlanes: 2)
 
         let nanSpheres = [
-            SphereCollider(center: SIMD3<Float>(.nan, .nan, .nan), radius: 1.0, groupIndex: 0),
-            SphereCollider(center: SIMD3<Float>(.infinity, 0, 0), radius: .nan, groupIndex: 0),
+            SphereCollider(center: SIMD3<Float>(.nan, .nan, .nan), radius: 1.0, groupMask: 1),
+            SphereCollider(center: SIMD3<Float>(.infinity, 0, 0), radius: .nan, groupMask: 1),
         ]
         let nanCapsules = [
             CapsuleCollider(p0: SIMD3<Float>(.nan, 0, 0),
                             p1: SIMD3<Float>(0, .nan, 0),
-                            radius: 1.0, groupIndex: 0),
+                            radius: 1.0, groupMask: 1),
             CapsuleCollider(p0: .zero, p1: SIMD3<Float>(.infinity, 0, 0),
-                            radius: -1.0, groupIndex: 0),
+                            radius: -1.0, groupMask: 1),
         ]
         let nanPlanes = [
             PlaneCollider(point: SIMD3<Float>(.nan, .nan, .nan),
-                          normal: SIMD3<Float>(0, 1, 0), groupIndex: 0),
+                          normal: SIMD3<Float>(0, 1, 0), groupMask: 1),
             PlaneCollider(point: .zero,
-                          normal: SIMD3<Float>(.nan, .nan, .nan), groupIndex: 0),
+                          normal: SIMD3<Float>(.nan, .nan, .nan), groupMask: 1),
         ]
 
         buffers.updateSphereColliders(nanSpheres)

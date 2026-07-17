@@ -40,7 +40,9 @@ struct CoalescedProgressReporter {
         guard let callback else { return }
         if completed % batchSize == 0 || completed == total {
             let snapshot = completed
-            await MainActor.run { callback(snapshot, total) }
+            // Fire-and-forget: awaiting the hop stalls batch loaders against
+            // the main actor (see VRMLoadingOptions.reportProgressIfNeeded).
+            Task { @MainActor in callback(snapshot, total) }
         }
     }
 }

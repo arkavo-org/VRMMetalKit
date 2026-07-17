@@ -32,6 +32,7 @@ enum VideoRenderError: Error {
     case videoEncodingFailed
     case missingArguments
     case fileNotFound(String)
+    case commandBufferFailed(frame: Int, message: String)
 }
 
 // MARK: - Matrix Utilities
@@ -99,6 +100,9 @@ func printUsage() {
         --hevc                  Use HEVC codec instead of H.264
         --root-motion           Enable root motion (hips translation)
         --dump-bones <path>     Write per-frame bone trajectory CSV alongside the .mov
+        --dump-colliders        Print the spring-bone collider setup (per-spring group
+                                masks + authored/synthetic collider inventory with
+                                full group membership) after load, then exit
         --dump-bones-filter <regex>
                                 Regex on bone name to limit dump output (default: all)
         --outline-scale <float> Multiply every material's outlineWidthFactor by this
@@ -115,6 +119,25 @@ func printUsage() {
                                 with an additive directional rim
         --rim-power <float>     Fresnel exponent for silhouette rim
                                 (typical 4..12, default: 5)
+        --crowd                 Render multiple avatars approaching/touching
+        --avatar-count N        Avatars in the crowd (default 2, max 32; crowd only)
+        --crowd-start-sep M     Start half-separation in meters (default 1.0; crowd only)
+        --crowd-hold-sep M      Hold half-separation in meters (default 0.18; crowd only)
+        --crowd-no-contact      Disable cross-avatar collision (before/after baseline)
+        --body-contact-margin M Contact-aware motion: cap torso overlap at M meters
+                                (bodies press to contact instead of clipping through;
+                                crowd only)
+        --postural              Postural yield: upper body leans away on contact
+                                (crowd only)
+        --stagger               Stagger shove: contact displaces the CoM, a capture
+                                step keeps the avatar upright, and the arms brace
+                                with the imbalance (arm counterbalance; crowd only)
+        --stagger-gain G        Override the shove gain (metres of CoM offset per
+                                metre of penetration; default 6.0; crowd only)
+        --spring-gravity <M>    Downward spring-bone gravity (app-layer). Auto-applied
+                                to rigs that author none (e.g. AvatarSample); 0 disables.
+        --realtime              Use the async spring path a live app uses (sleep gate
+                                live; crowd only)
         --help                  Show this help message
 
     EXAMPLES:
@@ -172,6 +195,33 @@ struct RenderOptions {
     var heroLighting: Bool = false
     var silhouette: Bool = false
     var rimPower: Float = 5.0
+    var crowd: Bool = false
+    var avatarCount: Int = 2
+    var crowdStartSep: Float = 1.0      // half-separation at start (meters)
+    var crowdHoldSep: Float = 0.18      // half-separation at hold (the tunable half of the coupled pair)
+    var crowdNoContact: Bool = false
+    var crowdRealtime: Bool = false     // async spring path (sleep gate live), the path a live app uses
+    var bodyContactMargin: Float? = nil // Component A: contact-aware clamp (nil = off)
+    var postural: Bool = false          // Component B: postural yield
+    var stagger: Bool = false           // stagger shove + capture step (design 2026-07-07)
+    var staggerGain: Float? = nil       // shoveGain override (calibration knob)
+    var springGravity: Float? = nil     // Override app-layer spring gravity (nil = auto)
+    var dumpColliders: Bool = false     // Print the spring-bone collider setup and exit
+}
+
+/// Diagnostics go to stderr so a typo'd option stays visible when stdout is
+/// piped into a render log. Message style matches the file's existing
+/// "Warning:"/"Error:" prints.
+func warnToStderr(_ message: String) {
+    FileHandle.standardError.write(Data("Warning: \(message)\n".utf8))
+}
+
+/// A flag truncated at end of argv (no value) is a malformed command: name the
+/// flag and fail. Returning nil here would land in main()'s exit(0), which is
+/// reserved for --help.
+func missingValueError(for flag: String) -> Never {
+    FileHandle.standardError.write(Data("Error: \(flag) requires a value\n".utf8))
+    exit(1)
 }
 
 func parseArguments() -> RenderOptions? {
@@ -236,6 +286,8 @@ func parseArguments() -> RenderOptions? {
         case "--dump-bones":
             i += 1
             if i < args.count { options.dumpBonesPath = args[i] }
+        case "--dump-colliders":
+            options.dumpColliders = true
         case "--dump-bones-filter":
             i += 1
             if i < args.count { options.dumpBonesFilter = args[i] }
@@ -253,6 +305,67 @@ func parseArguments() -> RenderOptions? {
             if i < args.count, let val = Float(args[i]) {
                 options.rimPower = max(0, val)
             }
+        case "--crowd":
+            options.crowd = true
+        case "--avatar-count":
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            let count = Int(args[i]) ?? options.avatarCount
+            if count > 32 {
+                // Cap: each avatar is a full model load + render pass, so an
+                // unbounded count (e.g. a typo'd 10000) hangs the run.
+                warnToStderr("--avatar-count \(count) exceeds the 32-avatar cap; using 32")
+                options.avatarCount = 32
+            } else {
+                options.avatarCount = max(2, count)
+            }
+        case "--crowd-start-sep":
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            if let v = Float(args[i]), v.isFinite, v >= 0 {
+                options.crowdStartSep = v
+            } else {
+                warnToStderr("Invalid --crowd-start-sep '\(args[i])' (need finite, >= 0); using \(options.crowdStartSep)")
+            }
+        case "--crowd-hold-sep":
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            if let v = Float(args[i]), v.isFinite, v >= 0 {
+                options.crowdHoldSep = v
+            } else {
+                warnToStderr("Invalid --crowd-hold-sep '\(args[i])' (need finite, >= 0); using \(options.crowdHoldSep)")
+            }
+        case "--crowd-no-contact":
+            options.crowdNoContact = true
+        case "--body-contact-margin":
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            // A negative margin makes the clamp's excess always positive (avatars
+            // accelerate apart unbounded); NaN silently disables the clamp.
+            if let v = Float(args[i]), v.isFinite, v >= 0 {
+                options.bodyContactMargin = v
+            } else {
+                warnToStderr("Invalid --body-contact-margin '\(args[i])' (need finite, >= 0); leaving the clamp off")
+            }
+        case "--postural":
+            options.postural = true
+        case "--stagger":
+            options.stagger = true
+        case "--stagger-gain":
+            i += 1
+            guard i < args.count else { missingValueError(for: arg) }
+            if let g = Float(args[i]), g.isFinite, g >= 0 {
+                options.staggerGain = g
+            } else {
+                warnToStderr("Invalid --stagger-gain '\(args[i])' (need finite, >= 0); using the default")
+            }
+        case "--spring-gravity":
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            // Non-finite (e.g. 1e999 → +inf) would pass the magnitude > 0 guard
+            // in applySpringGravityDefault and inject infinite gravity.
+            if let v = Float(args[i]), v.isFinite {
+                options.springGravity = v
+            } else {
+                warnToStderr("Invalid --spring-gravity '\(args[i])' (need finite); using auto")
+            }
+        case "--realtime":
+            options.crowdRealtime = true
         default:
             break
         }
@@ -301,6 +414,313 @@ func copyTextureToPixelBuffer(_ texture: MTLTexture, to pixelBuffer: CVPixelBuff
     )
 }
 
+// MARK: - Spring-bone gravity default (app-layer)
+
+/// Magnitude of the default downward spring gravity supplied to rigs that author
+/// no per-joint gravity. `globalParams.gravity` is spec-additive (default zero);
+/// a real app is expected to set it, just like lighting.
+private let autoSpringGravity: Float = 2.0
+
+/// Supply the app-layer spring gravity a real host would set. VRM rigs that
+/// author `gravityPower == 0` on every joint (the AvatarSample family, for one)
+/// have NO downward force, so hair settles to its bind direction — which for a
+/// high ponytail points straight UP. This gives such rigs a sane default so hair
+/// hangs naturally, while respecting rigs that DID author gravity (adding to them
+/// would double their droop). `--spring-gravity X` overrides for any rig; `0`
+/// disables. Mirrors the design intent of `globalParams.gravity` (VMK#324): an
+/// additive external force the application, not the loader, provides.
+func applySpringGravityDefault(model: VRMModel, options: RenderOptions) {
+    let magnitude: Float
+    if let override = options.springGravity {
+        magnitude = override
+    } else {
+        let maxAuthored = (model.springBone?.springs ?? [])
+            .flatMap { $0.joints }.map { $0.gravityPower }.max() ?? 0
+        magnitude = maxAuthored < 0.001 ? autoSpringGravity : 0
+    }
+    guard magnitude > 0 else { return }
+    model.springBoneGlobalParams?.gravity = SIMD3<Float>(0, -magnitude, 0)
+}
+
+/// Hero/portrait lighting: 3-point (key + cool fill + warm rim) with lifted
+/// ambient. Shared by the single-avatar `--hero-lighting` path and the crowd
+/// path (which otherwise inherits the renderer's dark cel default).
+func applyHeroLighting(to renderer: VRMRenderer) {
+    renderer.setLight(0, direction: SIMD3<Float>(0.3, -0.3, -0.85),
+                      color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 1.0)
+    renderer.setLight(1, direction: SIMD3<Float>(-0.5, -0.1, -0.85),
+                      color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.55)
+    renderer.setLight(2, direction: SIMD3<Float>(0.0, -0.4, 0.85),
+                      color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.4)
+    renderer.setAmbientColor(SIMD3<Float>(0.18, 0.18, 0.2))
+    renderer.setLightNormalizationMode(.radiometric)
+}
+
+// MARK: - Video Pipeline
+
+/// The MSAA render targets, AVAssetWriter, and command queue shared by both
+/// the single-avatar and crowd render loops.
+struct VideoPipeline {
+    let resolveTexture: MTLTexture
+    let msaaColorTexture: MTLTexture
+    let msaaDepthTexture: MTLTexture
+    let videoWriter: AVAssetWriter
+    let writerInput: AVAssetWriterInput
+    let adaptor: AVAssetWriterInputPixelBufferAdaptor
+    let sharedCommandQueue: MTLCommandQueue
+    let frameDuration: CMTime
+    let totalFrames: Int
+}
+
+func makeVideoPipeline(options: RenderOptions, device: MTLDevice, sampleCount: Int) throws -> VideoPipeline {
+    // Create resolve texture (final output, non-multisampled)
+    // Use BGRA format to match AVFoundation's pixel buffer format (kCVPixelFormatType_32BGRA)
+    let resolveDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .bgra8Unorm,
+        width: options.width,
+        height: options.height,
+        mipmapped: false
+    )
+    resolveDescriptor.usage = [.renderTarget, .shaderRead]
+    resolveDescriptor.storageMode = .managed
+
+    guard let resolveTexture = device.makeTexture(descriptor: resolveDescriptor) else {
+        throw VideoRenderError.failedToCreateTexture
+    }
+
+    // Create multisample color texture for MSAA rendering
+    let msaaColorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .bgra8Unorm,
+        width: options.width,
+        height: options.height,
+        mipmapped: false
+    )
+    msaaColorDescriptor.textureType = .type2DMultisample
+    msaaColorDescriptor.sampleCount = sampleCount
+    msaaColorDescriptor.usage = .renderTarget
+    msaaColorDescriptor.storageMode = .private
+
+    guard let msaaColorTexture = device.makeTexture(descriptor: msaaColorDescriptor) else {
+        throw VideoRenderError.failedToCreateTexture
+    }
+
+    // Create multisample depth texture
+    let msaaDepthDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .depth32Float,
+        width: options.width,
+        height: options.height,
+        mipmapped: false
+    )
+    msaaDepthDescriptor.textureType = .type2DMultisample
+    msaaDepthDescriptor.sampleCount = sampleCount
+    msaaDepthDescriptor.usage = .renderTarget
+    msaaDepthDescriptor.storageMode = .private
+
+    guard let msaaDepthTexture = device.makeTexture(descriptor: msaaDepthDescriptor) else {
+        throw VideoRenderError.failedToCreateTexture
+    }
+
+    // Setup video writer
+    print("📝 Setting up video encoder...")
+    let outputURL = URL(fileURLWithPath: options.outputPath)
+    // AVAssetWriter.init throws if the path already exists; remove first.
+    if FileManager.default.fileExists(atPath: options.outputPath) {
+        try FileManager.default.removeItem(at: outputURL)
+    }
+    let videoWriter = try AVAssetWriter(url: outputURL, fileType: .mov)
+
+    let videoSettings: [String: Any] = [
+        AVVideoCodecKey: options.hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
+        AVVideoWidthKey: options.width,
+        AVVideoHeightKey: options.height,
+        AVVideoCompressionPropertiesKey: [
+            AVVideoAverageBitRateKey: options.width * options.height * 4,
+            AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
+        ]
+    ]
+
+    let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+    writerInput.expectsMediaDataInRealTime = false
+
+    let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+        assetWriterInput: writerInput,
+        sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+            kCVPixelBufferWidthKey as String: options.width,
+            kCVPixelBufferHeightKey as String: options.height
+        ]
+    )
+
+    videoWriter.add(writerInput)
+    guard videoWriter.startWriting() else {
+        throw VideoRenderError.videoEncodingFailed
+    }
+    videoWriter.startSession(atSourceTime: .zero)
+
+    let frameDuration = CMTime(value: 1, timescale: CMTimeScale(options.fps))
+    let totalFrames = Int(options.duration * Double(options.fps))
+
+    // Reuse a single command queue across the whole run. Creating one per
+    // frame spawns a Metal driver thread per iteration, which accumulates
+    // until the OS watchdog kills the process on long videos.
+    guard let sharedCommandQueue = device.makeCommandQueue() else {
+        throw VideoRenderError.failedToCreateCommandQueue
+    }
+
+    return VideoPipeline(
+        resolveTexture: resolveTexture,
+        msaaColorTexture: msaaColorTexture,
+        msaaDepthTexture: msaaDepthTexture,
+        videoWriter: videoWriter,
+        writerInput: writerInput,
+        adaptor: adaptor,
+        sharedCommandQueue: sharedCommandQueue,
+        frameDuration: frameDuration,
+        totalFrames: totalFrames
+    )
+}
+
+// MARK: - Crowd Setup
+
+/// Build N avatars, wire a contact group, and drive `CrowdFrameStepper` into the
+/// existing MSAA -> pixelBuffer -> AVAssetWriter pipeline.
+func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
+                options: RenderOptions) async throws -> (CrowdFrameStepper, SpringBoneContactGroup?) {
+    var config = RendererConfig()
+    // Default: synchronous spring path (deterministic, sleep gate off). With
+    // --realtime, use the async path a live app uses: spring compute piped into
+    // the shared command buffer, one-frame readback lag, and the sleep gate LIVE
+    // (so F1 — waking a settled avatar to an approaching partner — is exercised).
+    config.synchronousSpringBone = !options.crowdRealtime
+    config.sampleCount = 4
+
+    let group: SpringBoneContactGroup? = options.crowdNoContact ? nil : SpringBoneContactGroup()
+    var avatars: [CrowdFrameStepper.Avatar] = []
+    let aspect = Float(options.width) / Float(options.height)
+
+    for index in 0..<options.avatarCount {
+        let model = try await VRMModel.load(from: modelURL, device: device, options: VRMLoadingOptions())
+        // Bake inward facing once (design §4.1) via T/R/S — never localMatrix.
+        for root in model.nodes where root.parent == nil {
+            root.rotation = CrowdPlacement.facing(avatarIndex: index, avatarCount: options.avatarCount)
+        }
+        model.updateNodeTransforms()
+
+        let renderer = VRMRenderer(device: device, config: config)
+        // --realtime uses the async spring path (synchronousSpringBone=false),
+        // whose dt defaults to WALL-CLOCK — meaningless for an offline render that
+        // runs at hundreds of fps (springs would advance ~3ms while animation
+        // advances 1/fps, yanking hair/cloth without damping = permanent flaring).
+        // Pin the async path to frame-time dt so the offline video is correctly
+        // timed while still exercising the async code path (sleep gate, one-frame lag).
+        if options.crowdRealtime {
+            renderer.simulationDeltaTime = TimeInterval(1.0 / Double(options.fps))
+        }
+        renderer.loadModelWithoutWarmup(model)
+        renderer.enableSpringBone = true
+        if options.dumpColliders { dumpColliderSetup(model: model, label: "avatar \(index)") }
+        renderer.projectionMatrix = options.orthographic
+            ? orthographic(height: 2.0, aspect: aspect, near: 0.1, far: 100)
+            : perspective(fovRadians: Float.pi / 4, aspect: aspect, near: 0.1, far: 100)
+
+        let clip = try VRMAnimationLoader.loadVRMA(from: animURL, model: model)
+        let player = AnimationPlayer(); player.load(clip); player.play()
+
+        // Apply the first animation frame BEFORE warming up SpringBone physics.
+        // Mirrors the single-avatar path: warming up against the bind pose makes
+        // springs settle at rest and then snap when frame 0 is applied, causing
+        // the hair/cloth pop artifact (#351).
+        player.update(deltaTime: 0, model: model)
+        applySpringGravityDefault(model: model, options: options)
+        renderer.warmupPhysics(steps: 30)
+
+        // The crowd path (unlike renderVideo) sets no lights, so it fell back to
+        // the renderer's dark cel default. Give it the hero 3-point + lifted
+        // ambient so the composite reads clearly.
+        applyHeroLighting(to: renderer)
+
+        if let group { renderer.joinContactGroup(group) }
+        avatars.append(CrowdFrameStepper.Avatar(renderer: renderer, model: model, player: player, index: index))
+    }
+
+    let driver = CrowdMotionDriver(
+        startSep: options.crowdStartSep, holdSep: options.crowdHoldSep,
+        approachStart: 0.1, approachEnd: 0.4, holdEnd: 0.7, partEnd: 0.95)
+    if options.dumpColliders { exit(0) }
+    let postural: PosturalContactParams? = options.postural ? PosturalContactParams() : nil
+    var stagger: StaggerShoveParams? = nil
+    if options.stagger {
+        var p = StaggerShoveParams()
+        if let gain = options.staggerGain { p.shoveGain = gain }
+        stagger = p
+    }
+    return (CrowdFrameStepper(avatars: avatars, driver: driver, group: group, fps: Float(options.fps),
+                              bodyContactMargin: options.bodyContactMargin, postural: postural,
+                              stagger: stagger,
+                              armCounterbalance: stagger != nil ? ArmCounterbalanceParams() : nil), group)
+}
+
+// MARK: - Main
+
+/// `--dump-colliders`: print the spring-bone collision setup exactly as the GPU
+/// group filter sees it — per-spring collider-group masks, plus every authored
+/// and synthetic collider with its FULL group-membership mask (a collider in
+/// several groups carries the OR of their bits). Diagnostic for "hair ignores
+/// the chest/arm colliders" reports: check the hair springs' masks include the
+/// bits of the groups holding those colliders.
+func dumpColliderSetup(model: VRMModel, label: String) {
+    guard let springBone = model.springBone else {
+        print("[\(label)] no spring bone data")
+        return
+    }
+    // Collider → full group-membership mask (the same mapping the compute
+    // system uploads: OR of every group's bit, each clamped to <32).
+    var colliderMask: [Int: UInt32] = [:]
+    for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+        let bit = UInt32(1 << min(groupIndex, 31))
+        for colliderIndex in group.colliders {
+            colliderMask[colliderIndex, default: 0] |= bit
+        }
+    }
+    func describe(_ collider: VRMCollider) -> String {
+        let nodeName = (collider.node >= 0 && collider.node < model.nodes.count)
+            ? (model.nodes[collider.node].name ?? "?") : "?"
+        switch collider.shape {
+        case .sphere(let o, let r):
+            return "sphere       r=\(String(format: "%.3f", r)) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) node=\(collider.node) '\(nodeName)'"
+        case .insideSphere(let o, let r):
+            return "insideSphere r=\(String(format: "%.3f", r)) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) node=\(collider.node) '\(nodeName)'"
+        case .capsule(let o, let r, let t):
+            return "capsule      r=\(String(format: "%.3f", r)) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) tail=(\(String(format: "%.3f", t.x)), \(String(format: "%.3f", t.y)), \(String(format: "%.3f", t.z))) node=\(collider.node) '\(nodeName)'"
+        case .insideCapsule(let o, let r, let t):
+            return "insideCapsule r=\(String(format: "%.3f", r)) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) tail=(\(String(format: "%.3f", t.x)), \(String(format: "%.3f", t.y)), \(String(format: "%.3f", t.z))) node=\(collider.node) '\(nodeName)'"
+        case .plane(let o, let n):
+            return "plane        normal=(\(String(format: "%.3f", n.x)), \(String(format: "%.3f", n.y)), \(String(format: "%.3f", n.z))) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) node=\(collider.node) '\(nodeName)'"
+        }
+    }
+
+    print("[\(label)] === SpringBone collider setup ===")
+    print("  authored: \(springBone.colliders.count) colliders in \(springBone.colliderGroups.count) groups; \(springBone.springs.count) springs; synthetic: \(springBone.syntheticColliders.count)")
+    for (i, group) in springBone.colliderGroups.enumerated() {
+        print("  group \(i) '\(group.name ?? "")': colliders \(group.colliders)")
+    }
+    for (i, collider) in springBone.colliders.enumerated() {
+        let mask = colliderMask[i] ?? 0
+        print("  collider \(i): \(describe(collider)) groupMask=0x\(String(mask, radix: 16))")
+    }
+    for (i, collider) in springBone.syntheticColliders.enumerated() {
+        print("  synthetic \(i): \(describe(collider)) (synthetic group bit OR'd into every spring)")
+    }
+    for (i, spring) in springBone.springs.enumerated() {
+        var mask: UInt32 = 0xFFFFFFFF   // empty colliderGroups ⇒ collide-all default
+        if !spring.colliderGroups.isEmpty {
+            mask = 0
+            for g in spring.colliderGroups where g >= 0 && g < 32 { mask |= (1 << g) }
+        }
+        print("  spring \(i) '\(spring.name ?? "")': joints=\(spring.joints.count) colliderGroups=\(spring.colliderGroups) mask=0x\(String(mask, radix: 16))")
+    }
+}
+
 // MARK: - Main
 
 struct VRMVideoRendererCLI {
@@ -343,7 +763,12 @@ struct VRMVideoRendererCLI {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw VideoRenderError.failedToCreateDevice
         }
-        
+
+        if options.crowd {
+            try await renderCrowd(options: options, device: device)
+            return
+        }
+
         // Load VRM model
         print("📦 Loading VRM model...")
         let modelURL = URL(fileURLWithPath: options.vrmPath)
@@ -388,6 +813,7 @@ struct VRMVideoRendererCLI {
 
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModelWithoutWarmup(model)
+        if options.dumpColliders { dumpColliderSetup(model: model, label: options.vrmPath); exit(0) }
 
         // Apply the first animation frame BEFORE warming up SpringBone physics.
         // VRMRenderer.loadModel calls warmupPhysics against the current skeleton
@@ -395,6 +821,7 @@ struct VRMVideoRendererCLI {
         // then snap when the first rendered frame jumps to frame 0. This causes
         // hair/penetration artifacts on models like AvatarSample_A (see #351).
         player.update(deltaTime: 0, model: model)
+        applySpringGravityDefault(model: model, options: options)
         renderer.warmupPhysics(steps: 30)
         renderer.enableSpringBone = true
 
@@ -409,14 +836,7 @@ struct VRMVideoRendererCLI {
             // .radiometric (factor π) cancels the shader's BRDF_LAMBERT_NORM (1/π),
             // so authored intensities pass through unscaled — same effective brightness
             // as the pre-radiometric setup.
-            renderer.setLight(0, direction: SIMD3<Float>(0.3, -0.3, -0.85),
-                              color: SIMD3<Float>(1.0, 0.97, 0.92), intensity: 1.0)
-            renderer.setLight(1, direction: SIMD3<Float>(-0.5, -0.1, -0.85),
-                              color: SIMD3<Float>(0.85, 0.9, 1.0), intensity: 0.55)
-            renderer.setLight(2, direction: SIMD3<Float>(0.0, -0.4, 0.85),
-                              color: SIMD3<Float>(1.0, 0.95, 0.9), intensity: 0.4)
-            renderer.setAmbientColor(SIMD3<Float>(0.18, 0.18, 0.2))
-            renderer.setLightNormalizationMode(.radiometric)
+            applyHeroLighting(to: renderer)
             print("   💡 Lighting: hero (3-point, lifted ambient)")
         } else {
             // Default cel-shading: hard step shadows, dark ambient.
@@ -431,102 +851,28 @@ struct VRMVideoRendererCLI {
             renderer.setLightNormalizationMode(.radiometric)
         }
 
-        // Create resolve texture (final output, non-multisampled)
-        // Use BGRA format to match AVFoundation's pixel buffer format (kCVPixelFormatType_32BGRA)
-        let resolveDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: options.width,
-            height: options.height,
-            mipmapped: false
-        )
-        resolveDescriptor.usage = [.renderTarget, .shaderRead]
-        resolveDescriptor.storageMode = .managed
+        let pipeline = try makeVideoPipeline(options: options, device: device, sampleCount: config.sampleCount)
+        let resolveTexture = pipeline.resolveTexture
+        let msaaColorTexture = pipeline.msaaColorTexture
+        let msaaDepthTexture = pipeline.msaaDepthTexture
+        let videoWriter = pipeline.videoWriter
+        let writerInput = pipeline.writerInput
+        let adaptor = pipeline.adaptor
+        let sharedCommandQueue = pipeline.sharedCommandQueue
+        let frameDuration = pipeline.frameDuration
+        let totalFrames = pipeline.totalFrames
 
-        guard let resolveTexture = device.makeTexture(descriptor: resolveDescriptor) else {
-            throw VideoRenderError.failedToCreateTexture
-        }
+        // Drive VRM gaze so bone-mode eyes compose onto their authored rest
+        // rotation each frame (without a controller the eye bones never get set,
+        // leaving VRoid/AvatarSample eyes in a broken/blank state).
+        let lookAtController = VRMLookAtController()
+        lookAtController.setup(model: model, expressionController: renderer.expressionController)
+        lookAtController.saccadeEnabled = false
+        lookAtController.target = .forward
 
-        // Create multisample color texture for MSAA rendering
-        let msaaColorDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: options.width,
-            height: options.height,
-            mipmapped: false
-        )
-        msaaColorDescriptor.textureType = .type2DMultisample
-        msaaColorDescriptor.sampleCount = config.sampleCount
-        msaaColorDescriptor.usage = .renderTarget
-        msaaColorDescriptor.storageMode = .private
-
-        guard let msaaColorTexture = device.makeTexture(descriptor: msaaColorDescriptor) else {
-            throw VideoRenderError.failedToCreateTexture
-        }
-
-        // Create multisample depth texture
-        let msaaDepthDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .depth32Float,
-            width: options.width,
-            height: options.height,
-            mipmapped: false
-        )
-        msaaDepthDescriptor.textureType = .type2DMultisample
-        msaaDepthDescriptor.sampleCount = config.sampleCount
-        msaaDepthDescriptor.usage = .renderTarget
-        msaaDepthDescriptor.storageMode = .private
-
-        guard let msaaDepthTexture = device.makeTexture(descriptor: msaaDepthDescriptor) else {
-            throw VideoRenderError.failedToCreateTexture
-        }
-        
-        // Setup video writer
-        print("📝 Setting up video encoder...")
-        let outputURL = URL(fileURLWithPath: options.outputPath)
-        // AVAssetWriter.init throws if the path already exists; remove first.
-        if FileManager.default.fileExists(atPath: options.outputPath) {
-            try FileManager.default.removeItem(at: outputURL)
-        }
-        let videoWriter = try AVAssetWriter(url: outputURL, fileType: .mov)
-
-        let videoSettings: [String: Any] = [
-            AVVideoCodecKey: options.hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
-            AVVideoWidthKey: options.width,
-            AVVideoHeightKey: options.height,
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: options.width * options.height * 4,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel
-            ]
-        ]
-
-        let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
-        writerInput.expectsMediaDataInRealTime = false
-
-        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
-            assetWriterInput: writerInput,
-            sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
-                kCVPixelBufferWidthKey as String: options.width,
-                kCVPixelBufferHeightKey as String: options.height
-            ]
-        )
-
-        videoWriter.add(writerInput)
-        guard videoWriter.startWriting() else {
-            throw VideoRenderError.videoEncodingFailed
-        }
-        videoWriter.startSession(atSourceTime: .zero)
-        
         // Render loop
         print("⏳ Rendering...")
         let startTime = Date()
-        let frameDuration = CMTime(value: 1, timescale: CMTimeScale(options.fps))
-        let totalFrames = Int(options.duration * Double(options.fps))
-
-        // Reuse a single command queue across the whole run. Creating one per
-        // frame spawns a Metal driver thread per iteration, which accumulates
-        // until the OS watchdog kills the process on long videos.
-        guard let sharedCommandQueue = device.makeCommandQueue() else {
-            throw VideoRenderError.failedToCreateCommandQueue
-        }
 
         // Optional bone trajectory CSV dumper for physics-verification tests.
         let boneDumper: BoneTrajectoryDumper?
@@ -543,7 +889,8 @@ struct VRMVideoRendererCLI {
             for frameIndex in 0..<totalFrames {
                 // Update animation
                 player.update(deltaTime: 1.0 / Float(options.fps), model: model)
-                
+                lookAtController.applyImmediately()
+
                 // Update camera
                 if options.orbitCamera {
                     let angle = Float(frameIndex) / Float(totalFrames) * 2.0 * Float.pi
@@ -645,6 +992,143 @@ struct VRMVideoRendererCLI {
         let totalTime = Date().timeIntervalSince(startTime)
         print("")
         print("✅ Render complete!")
+        print("   📁 Output: \(options.outputPath)")
+        print("   ⏱️  Time: \(String(format: "%.2f", totalTime))s")
+        print("   🎬 Average: \(String(format: "%.1f", Double(totalFrames) / totalTime)) fps")
+    }
+
+    @MainActor
+    static func renderCrowd(options: RenderOptions, device: MTLDevice) async throws {
+        print("👥 Crowd mode: \(options.avatarCount) avatars, contact=\(!options.crowdNoContact)")
+        print("   Model: \(options.vrmPath)")
+        print("   Animation: \(options.vrmaPath)")
+        print("   Output: \(options.outputPath)")
+        print("   Resolution: \(options.width)x\(options.height) @ \(options.fps)fps for \(options.duration)s")
+        print("")
+
+        let modelURL = URL(fileURLWithPath: options.vrmPath)
+        let animURL = URL(fileURLWithPath: options.vrmaPath)
+
+        print("📦 Loading \(options.avatarCount) avatar instances...")
+        let (stepper, group) = try await buildCrowd(modelURL: modelURL, animURL: animURL, device: device, options: options)
+        print("   ✅ Crowd built (\(group == nil ? "no contact group" : "joined contact group"))")
+
+        // Per-avatar gaze: drive each avatar's eyes to a forward rest each frame
+        // so bone-mode eyes compose onto their authored rest rotation (without it,
+        // VRoid/AvatarSample eyes render blank — same fix as the single path).
+        let lookAtControllers: [VRMLookAtController] = stepper.avatarsForCamera.map { av in
+            let c = VRMLookAtController()
+            c.setup(model: av.model, expressionController: av.renderer.expressionController)
+            c.saccadeEnabled = false
+            c.target = .forward
+            return c
+        }
+
+        print("🎨 Setting up video pipeline...")
+        let pipeline = try makeVideoPipeline(options: options, device: device, sampleCount: 4)
+
+        // Render loop
+        print("⏳ Rendering crowd...")
+        let startTime = Date()
+        let totalFrames = pipeline.totalFrames
+
+        for frameIndex in 0..<totalFrames {
+            let t = totalFrames > 1 ? Float(frameIndex) / Float(totalFrames - 1) : 0
+
+            // Shared camera for all avatars (orbit or fixed), applied before stepping.
+            let view: float4x4
+            // Ring radius (N>=3) is set by the start separation, not the avatar
+            // count — more avatars pack denser onto the same ring.
+            let ringRadius = options.crowdStartSep
+            if options.orbitCamera {
+                let angle = Float(frameIndex) / Float(totalFrames) * 2.0 * Float.pi
+                let radius = max(options.orbitTarget.radius, ringRadius * 2.8 + 1.0)
+                let cy = options.orbitTarget.centerY
+                view = lookAt(eye: SIMD3<Float>(sin(angle) * radius, cy, cos(angle) * radius),
+                              center: SIMD3<Float>(0, cy, 0), up: SIMD3<Float>(0, 1, 0))
+            } else if options.avatarCount >= 3 {
+                // Ring: frame the full diameter + avatar height, raised and
+                // tilted down to see into the cluster (the line heuristic
+                // under-frames a ring).
+                let dist = max(3.0, ringRadius * 3.5 + 1.5)
+                view = lookAt(eye: SIMD3<Float>(0, 2.0, dist), center: SIMD3<Float>(0, 1.0, 0), up: SIMD3<Float>(0, 1, 0))
+            } else {
+                // Two avatars on a line at ∓startSep.
+                let dist = max(2.5, Float(options.avatarCount) * options.crowdStartSep * 1.1)
+                view = lookAt(eye: SIMD3<Float>(0, 1.3, dist), center: SIMD3<Float>(0, 1.3, 0), up: SIMD3<Float>(0, 1, 0))
+            }
+            for av in stepper.avatarsForCamera { av.renderer.viewMatrix = view }
+
+            stepper.step(frameTime: t)
+            // Gaze after the pose/exchange step, before compositing (eyes don't
+            // affect the contact snapshot).
+            for c in lookAtControllers { c.applyImmediately() }
+
+            guard let pixelBuffer = createPixelBuffer(width: options.width, height: options.height),
+                  let commandBuffer = pipeline.sharedCommandQueue.makeCommandBuffer() else { continue }
+
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = pipeline.msaaColorTexture
+            rpd.colorAttachments[0].resolveTexture = pipeline.resolveTexture
+            rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.5, green: 0.5, blue: 0.5, alpha: 1.0)
+            rpd.colorAttachments[0].storeAction = .multisampleResolve
+            rpd.depthAttachment.texture = pipeline.msaaDepthTexture
+            rpd.depthAttachment.clearDepth = 1.0
+            rpd.depthAttachment.storeAction = .dontCare
+
+            // drawComposite overrides loadAction/storeAction per avatar (clear+load
+            // for load, store+resolve for store) so all N avatars accumulate in one
+            // frame before the final pass resolves into resolveTexture.
+            stepper.drawComposite(color: pipeline.msaaColorTexture, depth: pipeline.msaaDepthTexture,
+                                  commandBuffer: commandBuffer, renderPassDescriptor: rpd)
+
+            commandBuffer.commit()
+
+            // Wait for completion (can't use waitUntilCompleted in async context)
+            while commandBuffer.status != .completed && commandBuffer.status != .error {
+                await Task.yield()
+            }
+
+            // A GPU error means the resolve texture holds garbage; don't append a
+            // corrupt frame — fail loudly rather than silently encode it. The pixel
+            // buffer is not locked until copyTextureToPixelBuffer below, so nothing
+            // to release here.
+            if commandBuffer.status == .error {
+                // This throw skips markAsFinished/finishWriting, so cancel the
+                // writer and remove the partial output makeVideoPipeline created —
+                // otherwise a truncated, unplayable .mov is left behind.
+                pipeline.videoWriter.cancelWriting()
+                try? FileManager.default.removeItem(at: URL(fileURLWithPath: options.outputPath))
+                throw VideoRenderError.commandBufferFailed(frame: frameIndex,
+                    message: commandBuffer.error?.localizedDescription ?? "unknown GPU error")
+            }
+
+            copyTextureToPixelBuffer(pipeline.resolveTexture, to: pixelBuffer, device: device, commandBuffer: commandBuffer)
+
+            let presentationTime = CMTimeMultiply(pipeline.frameDuration, multiplier: Int32(frameIndex))
+
+            while !pipeline.writerInput.isReadyForMoreMediaData {
+                await Task.yield()
+            }
+
+            pipeline.adaptor.append(pixelBuffer, withPresentationTime: presentationTime)
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+
+            // Progress
+            if frameIndex % 30 == 0 || frameIndex == totalFrames - 1 {
+                let progress = Double(frameIndex + 1) / Double(totalFrames) * 100
+                let elapsed = Date().timeIntervalSince(startTime)
+                let currentFps = Double(frameIndex + 1) / elapsed
+                print("   📊 Progress: \(String(format: "%.1f", progress))% (\(frameIndex + 1)/\(totalFrames) frames, \(String(format: "%.1f", currentFps)) fps)")
+            }
+        }
+
+        pipeline.writerInput.markAsFinished()
+        await pipeline.videoWriter.finishWriting()
+
+        let totalTime = Date().timeIntervalSince(startTime)
+        print("")
+        print("✅ Crowd render complete!")
         print("   📁 Output: \(options.outputPath)")
         print("   ⏱️  Time: \(String(format: "%.2f", totalTime))s")
         print("   🎬 Average: \(String(format: "%.1f", Double(totalFrames) / totalTime)) fps")
