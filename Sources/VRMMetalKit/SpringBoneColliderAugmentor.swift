@@ -31,11 +31,11 @@ public enum SpringBoneColliderAugmentor {
     private static let colliderGroupBitCount = 32
 
     /// Generator ratios (fractions of a reference scale). The generator emits leg
-    /// capsules plus one forward head/brow capsule and one lateral skull sphere
-    /// (arm capsules were dropped pending CCD/substep work — see
-    /// ``synthesize(model:ratios:)``). All head geometry is expressed as a
-    /// fraction of the head's reference radius `rHead` (never raw metres), so the
-    /// head colliders scale with the model.
+    /// capsules, one forward head/brow capsule, one lateral skull sphere,
+    /// lower-arm→hand capsules, hand spheres, and — for own-body hair protection —
+    /// a torso capsule and two upper-arm capsules. All head geometry is expressed
+    /// as a fraction of the head's reference radius `rHead` (never raw metres), so
+    /// the head colliders scale with the model.
     public struct Ratios: Sendable {
         /// Leg capsule radius as a fraction of the leg segment's length. Legs are
         /// thicker relative to their segment length than arms, so this floor is
@@ -72,6 +72,15 @@ public enum SpringBoneColliderAugmentor {
         /// smaller than ``legRadiusFractionOfLength``. Closes hand-poke-through
         /// against the forearm (#321).
         public var armRadiusFractionOfLength: Float = 0.20
+        /// Torso (spine→upperChest/chest/neck) capsule radius as a fraction of
+        /// that segment's length. The trunk is thick relative to the segment, so
+        /// this floor is the largest of the set; sized like the cross-avatar
+        /// contact torso (`SpringBoneContactColliderSet`). Keeps hair out of the
+        /// chest/breast volume — the gap the original #309 set left uncovered.
+        public var torsoRadiusFractionOfLength: Float = 0.5
+        /// Upper-arm (upperArm→lowerArm) capsule radius as a fraction of that
+        /// segment's length. Same value the contact set uses for the hug surface.
+        public var upperArmRadiusFractionOfLength: Float = 0.22
         /// Hand SPHERE radius as a fraction of the lower-arm→hand length. The
         /// sphere caps the palm so a hand placed on the chest/hair pushes cloth
         /// out instead of the fingers interpenetrating it (#321). Tuned down from
@@ -111,18 +120,28 @@ public enum SpringBoneColliderAugmentor {
         LimbSegment(from: .rightLowerArm, to: .rightHand),
     ]
 
+    /// Upper-arm segments (own-body hair protection — the hair-vs-upper-arm gap
+    /// in the original #309 set). Appended AFTER the torso so the synthetic
+    /// capsules take buffer slots 8+, preserving every validated slot below.
+    private static let upperArmSegments: [LimbSegment] = [
+        LimbSegment(from: .leftUpperArm, to: .leftLowerArm),
+        LimbSegment(from: .rightUpperArm, to: .rightLowerArm),
+    ]
+
     /// Generates additive bone-derived colliders for the given model.
     ///
     /// Emits one end-to-end capsule per leg segment (upper/lower legs, both
     /// sides — four in total on a fully-rigged humanoid) PLUS one forward
-    /// head/brow capsule anchored at the head bone. Arm capsules were dropped: a
-    /// frequency sweep showed they could not be validated as an improvement (the
-    /// capsule deflects the stiff sleeve whip and frequently makes peak
-    /// penetration worse — a PBD-without-CCD limitation, tracked as a CCD/substep
-    /// follow-up on #309). Each leg capsule is anchored at its `from` bone with
-    /// its far end pointing at the `to` bone expressed in the `from` bone's local
-    /// frame, so it rides the limb under animation once the upload path re-applies
-    /// the node's world transform.
+    /// head/brow capsule anchored at the head bone, PLUS a torso capsule and two
+    /// upper-arm capsules for own-body hair protection (hair through the
+    /// chest/breast volume and the upper arms was the coverage gap left by the
+    /// original set; full-arm capsules for CLOTH SLEEVES were dropped — a
+    /// frequency sweep showed they could not be validated as an improvement for
+    /// the stiff sleeve whip, a PBD-without-CCD limitation tracked as a
+    /// CCD/substep follow-up on #309). Each leg capsule is anchored at its
+    /// `from` bone with its far end pointing at the `to` bone expressed in the
+    /// `from` bone's local frame, so it rides the limb under animation once the
+    /// upload path re-applies the node's world transform.
     ///
     /// The head capsule sweeps from the upper face forward and down to the brow
     /// (head-local +Z forward, -Y down) so that short head-hugging hair chains
@@ -181,6 +200,15 @@ public enum SpringBoneColliderAugmentor {
             appendLimbCapsule(segment, humanoid: humanoid, model: model,
                               radiusFraction: ratios.armRadiusFractionOfLength, into: &out)
         }
+        // Torso (slot 7) and upper arms (slots 8–9): own-body hair protection for
+        // the chest/breast volume and the upper arms. Pure append after the
+        // validated slots; the torso mirrors the contact set's spine →
+        // (upperChest ?? chest ?? neck) fallback chain.
+        appendTorsoCapsule(humanoid: humanoid, model: model, ratios: ratios, into: &out)
+        for segment in upperArmSegments {
+            appendLimbCapsule(segment, humanoid: humanoid, model: model,
+                              radiusFraction: ratios.upperArmRadiusFractionOfLength, into: &out)
+        }
         // The skull SPHERE is a SPHERE, so it lands in the SEPARATE sphere
         // collider buffer (not the capsule buffer). Its position in `out` does
         // NOT affect the capsule buffer order, so the validated leg/head capsule
@@ -199,6 +227,26 @@ public enum SpringBoneColliderAugmentor {
         humanoid: VRMHumanoid, model: VRMModel, ratios: Ratios, into out: inout [VRMCollider]
     ) {
         if let c = SpringBoneBoneGeometry.headBrowCapsule(humanoid: humanoid, model: model, ratios: ratios) {
+            out.append(c)
+        }
+    }
+
+    /// Torso capsule: spine → (upperChest ?? chest ?? neck) — the same fallback
+    /// chain the cross-avatar contact set uses, sized by
+    /// ``Ratios/torsoRadiusFractionOfLength`` (with the authored-hint floor from
+    /// `limbCapsule`, so an authored chest sphere still wins).
+    private static func appendTorsoCapsule(
+        humanoid: VRMHumanoid, model: VRMModel, ratios: Ratios, into out: inout [VRMCollider]
+    ) {
+        let torsoTo: VRMHumanoidBone = {
+            if humanoid.getBoneNode(.upperChest) != nil { return .upperChest }
+            if humanoid.getBoneNode(.chest) != nil { return .chest }
+            return .neck
+        }()
+        if let c = SpringBoneBoneGeometry.limbCapsule(
+            fromBone: .spine, toBone: torsoTo,
+            radiusFraction: ratios.torsoRadiusFractionOfLength,
+            humanoid: humanoid, model: model) {
             out.append(c)
         }
     }

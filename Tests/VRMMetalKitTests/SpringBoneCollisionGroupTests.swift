@@ -790,4 +790,137 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
             XCTAssertLessThan(simd_length(pos), 1000.0, "Bone \(i) position exploded")
         }
     }
+
+    // MARK: - Multi-group collider membership mask (32-bit groupMask)
+
+    /// Builds a minimal 3-joint chain with two sphere colliders and five collider
+    /// groups, laid out so group INDICES are exact (no sorted-remap like
+    /// `buildModelWithColliders`):
+    ///   - collider 0 ("shared") is a member of group 1 AND group 4
+    ///   - collider 1 ("single") is a member of group 2 only
+    ///   - the one spring chain references ONLY group 4
+    /// Under the pre-fix first-group-only upload, collider 0 would carry just bit
+    /// 1 and the chain (mask bit 4) could never collide with it; the 32-bit
+    /// `groupMask` must carry the OR of ALL memberships.
+    private func buildModelWithMultiGroupColliders() throws -> VRMModel {
+        let builder = VRMBuilder()
+        let model = try builder.setSkeleton(.defaultHumanoid).build()
+
+        model.nodes.removeAll()
+        var previousNode: VRMNode? = nil
+        for i in 0..<3 {
+            let localY: Float = (i == 0) ? 1.0 : -0.1
+            let gltfNode = try createGLTFNode(name: "spring_bone_\(i)", translation: SIMD3<Float>(0, localY, 0))
+            let node = VRMNode(index: i, gltfNode: gltfNode)
+            if let parent = previousNode {
+                node.parent = parent
+                parent.children.append(node)
+            }
+            model.nodes.append(node)
+            previousNode = node
+        }
+        for node in model.nodes where node.parent == nil {
+            node.updateWorldTransform()
+        }
+
+        var springBone = VRMSpringBone()
+        springBone.colliders = [
+            VRMCollider(node: 0, shape: .sphere(offset: SIMD3<Float>(0.2, 0.5, 0), radius: 0.1)),  // index 0: groups 1 + 4
+            VRMCollider(node: 0, shape: .sphere(offset: SIMD3<Float>(-0.2, 0.5, 0), radius: 0.1)), // index 1: group 2 only
+        ]
+        springBone.colliderGroups = [
+            VRMColliderGroup(name: "G0", colliders: []),
+            VRMColliderGroup(name: "G1", colliders: [0]),
+            VRMColliderGroup(name: "G2", colliders: [1]),
+            VRMColliderGroup(name: "G3", colliders: []),
+            VRMColliderGroup(name: "G4", colliders: [0]),
+        ]
+
+        var joints: [VRMSpringJoint] = []
+        for i in 0..<3 {
+            var joint = VRMSpringJoint(node: i)
+            joint.hitRadius = 0.02
+            joint.stiffness = 0.5
+            joint.gravityPower = 0.5
+            joint.gravityDir = SIMD3<Float>(0, -1, 0)
+            joint.dragForce = 0.4
+            joints.append(joint)
+        }
+        var spring = VRMSpring(name: "TestSpring")
+        spring.joints = joints
+        spring.colliderGroups = [4]   // references ONLY group 4
+        springBone.springs = [spring]
+        model.springBone = springBone
+
+        model.device = device
+
+        let buffers = SpringBoneBuffers(device: device)
+        buffers.allocateBuffers(numBones: 3, numSpheres: 2, numCapsules: 0, numPlanes: 0)
+        model.springBoneBuffers = buffers
+
+        model.springBoneGlobalParams = SpringBoneGlobalParams(
+            gravity: SIMD3<Float>(0, -9.8, 0),
+            dtSub: Float(1.0 / 120.0),
+            windAmplitude: 0.0,
+            windFrequency: 0.0,
+            windPhase: 0.0,
+            windDirection: SIMD3<Float>(1, 0, 0),
+            substeps: 1,
+            numBones: 3,
+            numSpheres: 2,
+            numCapsules: 0,
+            numPlanes: 0
+        )
+        return model
+    }
+
+    private func readUploadedSpheres(model: VRMModel) throws -> [SphereCollider] {
+        let buffers = try XCTUnwrap(model.springBoneBuffers)
+        let buffer = try XCTUnwrap(buffers.sphereColliders)
+        XCTAssertEqual(buffers.numSpheres, 2)
+        let ptr = buffer.contents().bindMemory(to: SphereCollider.self, capacity: buffers.numSpheres)
+        return Array(UnsafeBufferPointer(start: ptr, count: buffers.numSpheres))
+    }
+
+    /// A collider shared by groups 1 and 4 must upload with
+    /// `groupMask == (1<<1) | (1<<4)` — the OR of ALL its memberships — so a
+    /// spring referencing only group 4 still collides with it (the shader
+    /// filters on `(boneMask & collider.groupMask) != 0`).
+    func testSharedColliderUploadsOROfGroupMembershipMasks() throws {
+        let model = try buildModelWithMultiGroupColliders()
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+
+        let spheres = try readUploadedSpheres(model: model)
+        // Both colliders are spheres, so buffer slots match collider indices.
+        XCTAssertEqual(spheres[0].groupMask, UInt32(1 << 1) | UInt32(1 << 4),
+            "shared collider must carry the OR of its group memberships (bits 1 and 4); "
+            + "first-group-only upload would leave just bit 1 and hide it from group-4 springs")
+
+        // The spring references only group 4: its bone mask must have bit 4 set
+        // and bit 1 clear — so the ONLY way the shader matches collider 0 is via
+        // the collider's own bit 4. (The mask also ORs the reserved foreign bit,
+        // which is intentionally not asserted — an unrelated design detail.)
+        let buffers = try XCTUnwrap(model.springBoneBuffers)
+        let paramsBuffer = try XCTUnwrap(buffers.boneParams)
+        let params = paramsBuffer.contents().bindMemory(to: BoneParams.self, capacity: buffers.numBones)
+        for i in 0..<buffers.numBones {
+            XCTAssertNotEqual(params[i].colliderGroupMask & UInt32(1 << 4), 0,
+                "bone \(i): spring references group 4, so bit 4 must be set")
+            XCTAssertEqual(params[i].colliderGroupMask & UInt32(1 << 1), 0,
+                "bone \(i): spring does not reference group 1, so bit 1 must be clear")
+        }
+    }
+
+    /// Equivalence for the common case: a collider in exactly one group keeps
+    /// exactly that group's bit in the uploaded buffer.
+    func testSingleGroupColliderUploadsExactlyItsGroupBit() throws {
+        let model = try buildModelWithMultiGroupColliders()
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+
+        let spheres = try readUploadedSpheres(model: model)
+        XCTAssertEqual(spheres[1].groupMask, UInt32(1 << 2),
+            "single-group collider must carry exactly its one membership bit")
+    }
 }

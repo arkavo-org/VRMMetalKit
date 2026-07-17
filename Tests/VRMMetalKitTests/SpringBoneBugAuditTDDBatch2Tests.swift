@@ -252,16 +252,20 @@ final class SpringBoneBugAuditTDDBatch2Tests: XCTestCase {
 
     // MARK: - Bug #7: Collider groupIndex >= 32 triggers bit-shift undefined behavior
 
-    /// `SpringBoneCollision.metal` does `1u << sphere.groupIndex` to build a per-collider
-    /// group bitmask. Per Metal C++ (and the underlying SPIR-V/MSL semantics), shifting
-    /// a 32-bit value by 32 or more is undefined behavior. The collider's `groupIndex`
-    /// is plumbed through unclamped from Swift, so a model with 33 or more collider
-    /// groups silently corrupts collision filtering.
+    /// Historical bug: `SpringBoneCollision.metal` used to compute
+    /// `1u << sphere.groupIndex` per collider to build its group bitmask. Per
+    /// Metal C++ (and the underlying SPIR-V/MSL semantics), shifting a 32-bit
+    /// value by 32 or more is undefined behavior, so a model with 33 or more
+    /// collider groups silently corrupted collision filtering.
     ///
-    /// Both candidate fixes (Swift-side clamp to `0...31`, or shader-side
-    /// `if (groupIndex >= 32) continue;`) leave a bone in group 0 unaffected by an
-    /// out-of-range collider whose group bit cannot fit in the bone's mask. This test
-    /// asserts that observable invariant.
+    /// The shipped fix is a representation change: colliders now carry a full
+    /// `groupMask` (`uint groupMask` in `SpringBoneCollision.metal`), computed
+    /// CPU-side in `SpringBoneComputeSystem.populateSpringBoneData` as
+    /// `1 << min(groupIndex, 31)` per collider group. The shader no longer shifts
+    /// by a collider group value at all (the swept-CCD scoping is likewise a
+    /// precomputed mask uploaded by the CPU), so the UB is gone by construction.
+    /// An out-of-range group (>= 32) clamps to bit 31, which cannot match a bone
+    /// whose mask holds only bit 0. This test asserts that observable invariant.
     func testBoneInGroup0NotAffectedByColliderWithGroupIndexAbove31() throws {
         let model = try makeChainModel(
             names: ["A", "B"],
@@ -269,10 +273,12 @@ final class SpringBoneBugAuditTDDBatch2Tests: XCTestCase {
         )
 
         // 33 colliders. Indices 0..31 are placed far away (irrelevant). Index 32 is
-        // placed overlapping bone B — this is the out-of-range one whose `1u << 32`
-        // shift is UB. The sphere is offset along +X from the bone so the collision
-        // normal has a defined direction (a sphere centered exactly on the bone yields
-        // zero push because `toCenter / |toCenter|` is undefined at the center).
+        // placed overlapping bone B — this is the out-of-range one that historically
+        // triggered the UB `1u << 32` shader shift; today its group bit is computed
+        // CPU-side as `1 << min(32, 31)` = bit 31. The sphere is offset along +X from
+        // the bone so the collision normal has a defined direction (a sphere centered
+        // exactly on the bone yields zero push because `toCenter / |toCenter|` is
+        // undefined at the center).
         let groupCount = 33
         var colliders: [VRMCollider] = []
         for i in 0..<groupCount {
@@ -298,8 +304,9 @@ final class SpringBoneBugAuditTDDBatch2Tests: XCTestCase {
         spring.joints = joints
         // Bone collides ONLY with group index 0 of the spring's known groups, so its
         // bone-mask bit is `1 << 0 = 1` and an in-bounds collider in any other group
-        // would not touch it. The bug is that `1u << 32` is UB, so the sphere in
-        // group 32 may slip through anyway.
+        // would not touch it. The historical bug was that `1u << 32` is UB, so the
+        // sphere in group 32 could slip through anyway; with the CPU-computed mask
+        // it clamps to bit 31 and must not match.
         spring.colliderGroups = [0]
 
         var sb = VRMSpringBone()
@@ -330,12 +337,14 @@ final class SpringBoneBugAuditTDDBatch2Tests: XCTestCase {
             "Bone whose collider mask contains only group 0 must not be displaced " +
             "by an overlapping collider in group 32. " +
             "Initial: \(initialB), final: \(finalB), displacement: \(displacement). " +
-            "Bug #7: `1u << 32` is undefined behavior in Metal C++; on Apple GPUs " +
-            "the LSL instruction takes the low 5 bits of the shift amount, so the " +
-            "out-of-range bit collides with the bone's group-0 bit and the sphere " +
-            "leaks through the filter. Fix: clamp groupIndex to 0...31 in Swift " +
-            "before populating colliders, OR add `if (groupIndex >= 32) continue;` " +
-            "at the top of each collide* helper in SpringBoneCollision.metal before " +
-            "the shift.")
+            "Bug #7 (fixed): the shader used to compute `1u << groupIndex` per " +
+            "collider — undefined behavior in Metal C++ for group 32; on Apple " +
+            "GPUs the LSL instruction takes the low 5 bits of the shift amount, " +
+            "so the out-of-range bit collided with the bone's group-0 bit and the " +
+            "sphere leaked through the filter. The shipped fix: colliders carry a " +
+            "full `groupMask` computed CPU-side as `1 << min(groupIndex, 31)` " +
+            "(SpringBoneComputeSystem.populateSpringBoneData), so the shader " +
+            "performs no shift by a collider group value; group 32 clamps to " +
+            "bit 31 and must not match this bone's bit-0 mask.")
     }
 }

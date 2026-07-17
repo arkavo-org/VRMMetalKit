@@ -46,7 +46,7 @@ final class SpringBoneForeignSinkTests: XCTestCase {
         // Inject a large foreign sphere at the avatar's centroid so many joints
         // overlap it; run more frames.
         let centroid = settled.reduce(SIMD3<Float>(0,0,0), +) / Float(max(settled.count, 1))
-        let big = SphereCollider(center: centroid, radius: 0.5, groupIndex: 0)
+        let big = SphereCollider(center: centroid, radius: 0.5, groupMask: 0)
         for _ in 0..<20 {
             system.setForeignColliders(ForeignColliderSnapshot(spheres: [big], capsules: []))
             system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: nil)
@@ -65,7 +65,7 @@ final class SpringBoneForeignSinkTests: XCTestCase {
     @MainActor func testClearLeavesZeroActiveForeign() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let (model, system) = try await loadedSystem(device)
-        let s = SphereCollider(center: .zero, radius: 0.3, groupIndex: 0)
+        let s = SphereCollider(center: .zero, radius: 0.3, groupMask: 0)
         system.setForeignColliders(ForeignColliderSnapshot(spheres: [s], capsules: []))
         system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: nil)
         system.waitForPendingFrame()
@@ -82,7 +82,7 @@ final class SpringBoneForeignSinkTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let (model, system) = try await loadedSystem(device)
         let cap = VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignSphereSlotsPerPartner
-        let many = (0..<(cap + 5)).map { _ in SphereCollider(center: .zero, radius: 0.1, groupIndex: 0) }
+        let many = (0..<(cap + 5)).map { _ in SphereCollider(center: .zero, radius: 0.1, groupMask: 0) }
         system.setForeignColliders(ForeignColliderSnapshot(spheres: many, capsules: []))
         system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: nil)
         system.waitForPendingFrame()
@@ -99,7 +99,7 @@ final class SpringBoneForeignSinkTests: XCTestCase {
         let (model, system) = try await loadedSystem(device)
         let buffers = try XCTUnwrap(model.springBoneBuffers)
 
-        let s = SphereCollider(center: .zero, radius: 0.3, groupIndex: 0)
+        let s = SphereCollider(center: .zero, radius: 0.3, groupMask: 0)
         system.setForeignColliders(ForeignColliderSnapshot(spheres: [s], capsules: []))
         system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: nil)
         system.waitForPendingFrame()
@@ -127,7 +127,7 @@ final class SpringBoneForeignSinkTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let (modelA, system) = try await loadedSystem(device)
 
-        let s = SphereCollider(center: .zero, radius: 0.3, groupIndex: 0)
+        let s = SphereCollider(center: .zero, radius: 0.3, groupMask: 0)
         system.setForeignColliders(ForeignColliderSnapshot(spheres: [s], capsules: []))
         system.update(model: modelA, deltaTime: 1.0 / 60.0, commandBuffer: nil)
         system.waitForPendingFrame()

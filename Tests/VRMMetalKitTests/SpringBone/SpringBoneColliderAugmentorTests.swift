@@ -46,9 +46,11 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
                                             options: VRMLoadingOptions(augmentSpringBoneColliders: true))
         // Four end-to-end leg capsules + one forward head/brow capsule + one
         // lateral skull SPHERE, PLUS (since #321, per the ADR-007 amendment) two
-        // lower-arm→hand capsules and two palm spheres for the hand-poke-through.
+        // lower-arm→hand capsules and two palm spheres for the hand-poke-through,
+        // PLUS a torso capsule and two upper-arm capsules for own-body hair
+        // protection (the chest/breast + upper-arm coverage gap).
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 10)
+        XCTAssertEqual(synthetic.count, 13)
         var capsuleCount = 0
         var sphereCount = 0
         for collider in synthetic {
@@ -63,7 +65,7 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
                 return XCTFail("Synthetic colliders must be capsules or spheres")
             }
         }
-        XCTAssertEqual(capsuleCount, 7, "Expect 4 leg + 1 brow + 2 lower-arm→hand capsules")
+        XCTAssertEqual(capsuleCount, 10, "Expect 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm capsules")
         XCTAssertEqual(sphereCount, 3, "Expect 1 lateral skull + 2 palm spheres")
     }
 
@@ -114,8 +116,8 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let headNode = humanoid.getBoneNode(.head) else { return XCTFail("A must rig a head") }
 
         let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
-        XCTAssertEqual(synthetic.count, 10,
-            "A: 4 leg + 1 brow + 2 lower-arm→hand capsules; 1 skull + 2 palm spheres")
+        XCTAssertEqual(synthetic.count, 13,
+            "A: 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm capsules; 1 skull + 2 palm spheres")
 
         // The brow capsule (the head-node CAPSULE) is appended AFTER the legs.
         // The skull sphere follows it but is a SPHERE in a separate buffer, so the
@@ -170,8 +172,7 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
     /// capsule's far end (after applying the from-bone world transform to
     /// offset+tail) lands within 1 cm of `leftLowerLeg`'s world position; and the
     /// thigh radius comfortably exceeds the physical skin floor the oracle
-    /// measured (thigh > 0.062) — a sanity FLOOR, not an oracle read. Arm capsules
-    /// were dropped pending CCD/substep work (see SpringBoneColliderAugmentor).
+    /// measured (thigh > 0.062) — a sanity FLOOR, not an oracle read.
     @MainActor func testAugmentU_legCapsuleGeometryAndRadii() async throws {
         let path = getTestModelPath("AvatarSample_U_1.0.vrm.glb")
         try requireFixture(path, hint: "AvatarSample_U_1.0.vrm.glb")
@@ -181,9 +182,10 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let humanoid = model.humanoid else { return XCTFail("U must have a humanoid") }
 
         let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
-        // Capsule-buffer order: legs (0–3), head/brow (4), lower-arm→hand (5–6).
-        // The leg slots (0–3) and head slot (4) must stay put — the arm capsules
-        // are appended after them (#321) and never disturb the validated order.
+        // Capsule-buffer order: legs (0–3), head/brow (4), lower-arm→hand (5–6),
+        // torso (7), upper arms (8–9). The leg slots (0–3) and head slot (4)
+        // must stay put — everything else is appended after them and never
+        // disturbs the validated order.
         let legBoneNodes = Set([
             humanoid.getBoneNode(.leftUpperLeg), humanoid.getBoneNode(.leftLowerLeg),
             humanoid.getBoneNode(.rightUpperLeg), humanoid.getBoneNode(.rightLowerLeg),
@@ -225,6 +227,57 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         XCTAssertTrue(radius.isFinite)
         XCTAssertGreaterThan(radius, 0.062, "Thigh capsule must enclose the thigh skin")
         XCTAssertLessThan(radius, 0.12, "Thigh capsule radius must stay physically plausible")
+    }
+
+    /// Own-body hair protection for the chest/breast volume and the upper arms:
+    /// `synthesize` appends a torso capsule (spine → upperChest/chest/neck) and
+    /// two upper-arm capsules AFTER the validated leg (0–3) / head (4) /
+    /// lower-arm→hand (5–6) slots, so the new capsules occupy slots 7–9 without
+    /// disturbing the validated order. Each far end must land on its `to` bone
+    /// (same transform idiom as the leg test).
+    @MainActor func testAugmentOnAddsTorsoAndUpperArmCapsules() async throws {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        guard let humanoid = model.humanoid else { return XCTFail("fixture must have a humanoid") }
+
+        let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
+        let capsules = synthetic.filter { if case .capsule = $0.shape { return true } else { return false } }
+        XCTAssertEqual(capsules.count, 10, "4 leg + 1 brow + 2 arm→hand + 1 torso + 2 upper-arm")
+
+        // Slot 7 = torso, slots 8–9 = upper arms (append order above).
+        guard let spineNode = humanoid.getBoneNode(.spine),
+              let chestNode = humanoid.getBoneNode(.upperChest) ?? humanoid.getBoneNode(.chest) ?? humanoid.getBoneNode(.neck),
+              let leftUpperArm = humanoid.getBoneNode(.leftUpperArm),
+              let leftLowerArm = humanoid.getBoneNode(.leftLowerArm),
+              let rightUpperArm = humanoid.getBoneNode(.rightUpperArm),
+              let rightLowerArm = humanoid.getBoneNode(.rightLowerArm) else {
+            throw XCTSkip("fixture rigs lack spine/chest/arm bones")
+        }
+        XCTAssertEqual(capsules[7].node, spineNode, "torso capsule must be slot 7, anchored at spine")
+        XCTAssertEqual(Set([capsules[8].node, capsules[9].node]), Set([leftUpperArm, rightUpperArm]),
+                       "upper-arm capsules must be slots 8–9, anchored at the upper arms")
+
+        // Each capsule's far end lands on its `to` bone (rot-then-translate idiom).
+        func assertFarEndLands(_ capsule: VRMCollider, fromNode: Int, toNode: Int, _ label: String) {
+            guard case let .capsule(offset, radius, tail) = capsule.shape else {
+                return XCTFail("\(label) must be a capsule")
+            }
+            let wm = model.nodes[fromNode].worldMatrix
+            let rot = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2]))
+            let p0 = model.nodes[fromNode].worldPosition + rot * offset
+            let farEnd = p0 + rot * tail
+            XCTAssertLessThan(simd_length(farEnd - model.nodes[toNode].worldPosition), 0.01,
+                              "\(label) far end must land within 1cm of its to-bone")
+            XCTAssertTrue(radius.isFinite && radius > 0, "\(label) radius must be finite and positive")
+        }
+        assertFarEndLands(capsules[7], fromNode: spineNode, toNode: chestNode, "torso capsule")
+        assertFarEndLands(capsules[8], fromNode: leftUpperArm, toNode: leftLowerArm, "left upper-arm capsule")
+        assertFarEndLands(capsules[9], fromNode: rightUpperArm, toNode: rightLowerArm, "right upper-arm capsule")
     }
 
 

@@ -1283,7 +1283,7 @@ public class VRMModel: @unchecked Sendable {
     /// model.setFloorPlane(at: 0.0)  // Ground level
     /// ```
     public func setFloorPlane(at floorY: Float) {
-        let floor = PlaneCollider(floorY: floorY)
+        let floor = PlaneCollider(floorY: floorY, groupMask: 1)
         springBoneBuffers?.setPlaneColliders([floor])
         springBoneGlobalParams?.numPlanes = 1
     }
@@ -1295,7 +1295,7 @@ public class VRMModel: @unchecked Sendable {
     ///
     /// - Parameter transform: The `ARPlaneAnchor.transform` matrix.
     public func setFloorPlane(arkitTransform transform: simd_float4x4) {
-        let floor = PlaneCollider(arkitTransform: transform)
+        let floor = PlaneCollider(arkitTransform: transform, groupMask: 1)
         springBoneBuffers?.setPlaneColliders([floor])
         springBoneGlobalParams?.numPlanes = 1
     }

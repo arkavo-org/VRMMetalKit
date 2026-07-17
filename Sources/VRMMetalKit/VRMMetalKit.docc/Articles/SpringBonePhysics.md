@@ -55,13 +55,23 @@ let model = try await VRMModel.load(from: url, device: device, options: options)
 
 ### What is synthesized
 
-**Forward head/brow capsule.** A single capsule oriented along the forward axis of the head bone, sized from the model's stored head-reference radius. It closes the persistent front-hair-into-forehead clipping (#309 primary repro). Residual: a lone lateral side-bang strand at the temple can still touch the skull region; a future lateral head collider is needed to address it.
+**Forward head/brow capsule.** A single capsule oriented along the forward axis of the head bone, sized from the model's stored head-reference radius. It closes the persistent front-hair-into-forehead clipping (#309 primary repro).
+
+**Lateral skull sphere.** One midline sphere lifted toward the cranium, giving the head lateral coverage the brow capsule cannot reach (temple side-bang strands).
 
 **End-to-end leg capsules.** One capsule per leg spanning from the upper-leg to the ankle joint. These substantially reduce skirt-panel-into-thigh clipping (peak penetration drops from roughly 23 mm to roughly 10 mm in the worst dynamic case and is never worse), though a single-frame transient can remain during fast leg swings.
 
+**Lower-arm→hand capsules and palm spheres (#321).** Forearm capsules plus one sphere capping each palm, so a slow hand gesture into the chest ribbon, hair, or skirt collides instead of interpenetrating.
+
+**Torso and upper-arm capsules.** One capsule over the spine→chest segment and one per upper arm, closing the hair-into-chest/breast and hair-into-upper-arm gap. Their radii floor at the model's own authored collider hints (an authored chest sphere still wins), so they hug the body rather than reading as an invisible forcefield.
+
 ### What is not addressed
 
-Arm and sleeve clipping was investigated and intentionally not shipped: arm capsules could not be validated as an improvement and worsened a stiff-sleeve "whip" artefact. The root cause is PBD without continuous collision detection (CCD); when a joint tunnels through a collider in one substep the impulse overshoots, producing a visible snap. This is deferred.
+Full-arm capsules for cloth sleeves were investigated and intentionally not shipped: they could not be validated as an improvement and worsened a stiff-sleeve "whip" artefact. The root cause is PBD without continuous collision detection (CCD) on fast cloth chains; when a joint tunnels through a collider in one substep the impulse overshoots, producing a visible snap. This is deferred. (Swept CCD does apply to all synthetic colliders above — the synthetic group is the swept group.)
+
+### Collider group membership
+
+Each collider carries the OR of every collider group's bit it belongs to (a 32-bit group mask), and a spring chain collides with any collider whose mask shares a bit with the chain's mask. A collider shared by several groups — a common authoring pattern, e.g. one chest capsule in both a "Body" and a "Hair" group — is therefore visible to springs referencing any of them.
 
 ### Behaviour-change note
 

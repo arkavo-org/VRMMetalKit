@@ -274,8 +274,11 @@ public struct SphereCollider: Sendable {
     public var center: SIMD3<Float>
     /// Sphere radius in world space (metres).
     public var radius: Float
-    /// Index of the collision group this collider belongs to.
-    public var groupIndex: UInt32
+    /// Bitmask of the collision groups this collider belongs to (bit `i` = group
+    /// `i`). A collider may belong to several groups; a spring bone collides with
+    /// it when the bone's mask and this mask share any bit. (`1 << 0` when the
+    /// collider is in no explicit group — the legacy "group 0" default.)
+    public var groupMask: UInt32
     /// Collision mode. `0` = outside-collision (joints pushed out of the
     /// sphere — the default and base-spec behaviour). `1` = containment
     /// (joints pushed *inside* the sphere — from
@@ -288,22 +291,41 @@ public struct SphereCollider: Sendable {
     /// padding word now carries it without changing the struct stride.
     public var responseScale: Float = 1.0
 
+    /// The collider's first (lowest-numbered) collision group — the legacy
+    /// single-group view of ``groupMask``. Setting it replaces the mask with
+    /// that group's single bit.
+    @available(*, deprecated, renamed: "groupMask")
+    public var groupIndex: UInt32 {
+        get { UInt32(groupMask.trailingZeroBitCount) }
+        set { groupMask = 1 << min(newValue, 31) }
+    }
+
     /// Creates an outside-collision sphere collider at the given centre and radius.
-    public init(center: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
+    public init(center: SIMD3<Float>, radius: Float, groupMask: UInt32) {
         self.center = center
         self.radius = radius
-        self.groupIndex = groupIndex
+        self.groupMask = groupMask
         self.inside = 0
     }
 
     /// Creates a sphere collider with an explicit collision mode (used by
     /// the `VRMC_springBone_extended_collider` parser to plumb through
     /// `inside = true` containment shapes).
-    public init(center: SIMD3<Float>, radius: Float, groupIndex: UInt32, inside: Bool) {
+    public init(center: SIMD3<Float>, radius: Float, groupMask: UInt32, inside: Bool) {
         self.center = center
         self.radius = radius
-        self.groupIndex = groupIndex
+        self.groupMask = groupMask
         self.inside = inside ? 1 : 0
+    }
+
+    @available(*, deprecated, renamed: "init(center:radius:groupMask:inside:)")
+    public init(center: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
+        self.init(center: center, radius: radius, groupMask: 1 << min(groupIndex, 31))
+    }
+
+    @available(*, deprecated, renamed: "init(center:radius:groupMask:inside:)")
+    public init(center: SIMD3<Float>, radius: Float, groupIndex: UInt32, inside: Bool) {
+        self.init(center: center, radius: radius, groupMask: 1 << min(groupIndex, 31), inside: inside)
     }
 }
 
@@ -318,8 +340,10 @@ public struct CapsuleCollider: Sendable {
     public var p1: SIMD3<Float>
     /// Sweep radius (metres).
     public var radius: Float
-    /// Index of the collision group this collider belongs to.
-    public var groupIndex: UInt32
+    /// Bitmask of the collision groups this collider belongs to (bit `i` = group
+    /// `i`). A collider may belong to several groups; a spring bone collides with
+    /// it when the masks share any bit.
+    public var groupMask: UInt32
     /// Collision mode. `0` = outside-collision (default). `1` = containment
     /// (joints pushed *inside* the capsule — from
     /// `VRMC_springBone_extended_collider.shape.capsule.inside = true`).
@@ -329,29 +353,48 @@ public struct CapsuleCollider: Sendable {
     /// by the cross-avatar coordinator; fills the struct's former padding word.
     public var responseScale: Float = 1.0
 
+    /// The collider's first (lowest-numbered) collision group — the legacy
+    /// single-group view of ``groupMask``. Setting it replaces the mask with
+    /// that group's single bit.
+    @available(*, deprecated, renamed: "groupMask")
+    public var groupIndex: UInt32 {
+        get { UInt32(groupMask.trailingZeroBitCount) }
+        set { groupMask = 1 << min(newValue, 31) }
+    }
+
     /// Creates an outside-collision capsule collider.
-    public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
+    public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupMask: UInt32) {
         self.p0 = p0
         self.p1 = p1
         self.radius = radius
-        self.groupIndex = groupIndex
+        self.groupMask = groupMask
         self.inside = 0
     }
 
     /// Creates a capsule collider with an explicit collision mode.
-    public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupIndex: UInt32, inside: Bool) {
+    public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupMask: UInt32, inside: Bool) {
         self.p0 = p0
         self.p1 = p1
         self.radius = radius
-        self.groupIndex = groupIndex
+        self.groupMask = groupMask
         self.inside = inside ? 1 : 0
+    }
+
+    @available(*, deprecated, renamed: "init(p0:p1:radius:groupMask:inside:)")
+    public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupIndex: UInt32 = 0) {
+        self.init(p0: p0, p1: p1, radius: radius, groupMask: 1 << min(groupIndex, 31))
+    }
+
+    @available(*, deprecated, renamed: "init(p0:p1:radius:groupMask:inside:)")
+    public init(p0: SIMD3<Float>, p1: SIMD3<Float>, radius: Float, groupIndex: UInt32, inside: Bool) {
+        self.init(p0: p0, p1: p1, radius: radius, groupMask: 1 << min(groupIndex, 31), inside: inside)
     }
 }
 
 /// A world-space snapshot of one avatar's body contact set, handed across the
-/// avatar boundary by `SpringBoneContactGroup`. `groupIndex` is unset here (0);
+/// avatar boundary by `SpringBoneContactGroup`. `groupMask` is unset here (0);
 /// the receiving avatar's injection sink assigns its own reserved foreign group
-/// index when writing these into its buffer tail (design §2.2, §7).
+/// bit when writing these into its buffer tail (design §2.2, §7).
 public struct ForeignColliderSnapshot: Sendable {
     public var spheres: [SphereCollider]
     public var capsules: [CapsuleCollider]
@@ -370,14 +413,25 @@ public struct PlaneCollider {
     public var point: SIMD3<Float>
     /// Plane normal (normalized).
     public var normal: SIMD3<Float>
-    /// Index of the collision group this collider belongs to.
-    public var groupIndex: UInt32
+    /// Bitmask of the collision groups this collider belongs to (bit `i` = group
+    /// `i`). A collider may belong to several groups; a spring bone collides with
+    /// it when the masks share any bit.
+    public var groupMask: UInt32
+
+    /// The collider's first (lowest-numbered) collision group — the legacy
+    /// single-group view of ``groupMask``. Setting it replaces the mask with
+    /// that group's single bit.
+    @available(*, deprecated, renamed: "groupMask")
+    public var groupIndex: UInt32 {
+        get { UInt32(groupMask.trailingZeroBitCount) }
+        set { groupMask = 1 << min(newValue, 31) }
+    }
 
     /// Creates a plane collider from a point on the plane and its normal.
-    public init(point: SIMD3<Float>, normal: SIMD3<Float>, groupIndex: UInt32 = 0) {
+    public init(point: SIMD3<Float>, normal: SIMD3<Float>, groupMask: UInt32) {
         self.point = point
         self.normal = normal
-        self.groupIndex = groupIndex
+        self.groupMask = groupMask
     }
 
     /// Create a floor plane collider from an ARKit plane anchor transform
@@ -387,7 +441,7 @@ public struct PlaneCollider {
     ///
     /// - Parameters:
     ///   - transform: The ARPlaneAnchor's transform (simd_float4x4)
-    ///   - groupIndex: Collision group for this plane (default 0)
+    ///   - groupMask: Collision group bitmask for this plane
     /// - Returns: A PlaneCollider configured for the detected floor
     ///
     /// ## Usage with ARKit
@@ -400,7 +454,7 @@ public struct PlaneCollider {
     ///     model.springBoneBuffers?.setPlaneColliders([floorPlane])
     /// }
     /// ```
-    public init(arkitTransform transform: simd_float4x4, groupIndex: UInt32 = 0) {
+    public init(arkitTransform transform: simd_float4x4, groupMask: UInt32) {
         // Extract position from transform's translation column
         self.point = SIMD3<Float>(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
 
@@ -408,7 +462,7 @@ public struct PlaneCollider {
         let rawNormal = SIMD3<Float>(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
         self.normal = simd_length(rawNormal) > 0.001 ? simd_normalize(rawNormal) : SIMD3<Float>(0, 1, 0)
 
-        self.groupIndex = groupIndex
+        self.groupMask = groupMask
     }
 
     /// Create a simple floor plane at a specified Y height
@@ -417,7 +471,7 @@ public struct PlaneCollider {
     ///
     /// - Parameters:
     ///   - floorY: The Y coordinate of the floor in world space
-    ///   - groupIndex: Collision group for this plane (default 0)
+    ///   - groupMask: Collision group bitmask for this plane
     ///
     /// ## Usage
     /// ```swift
@@ -428,10 +482,25 @@ public struct PlaneCollider {
     /// let floor = PlaneCollider(floorY: detectedFloorHeight)
     /// model.springBoneBuffers?.setPlaneColliders([floor])
     /// ```
-    public init(floorY: Float, groupIndex: UInt32 = 0) {
+    public init(floorY: Float, groupMask: UInt32) {
         self.point = SIMD3<Float>(0, floorY, 0)
         self.normal = SIMD3<Float>(0, 1, 0)
-        self.groupIndex = groupIndex
+        self.groupMask = groupMask
+    }
+
+    @available(*, deprecated, renamed: "init(point:normal:groupMask:)")
+    public init(point: SIMD3<Float>, normal: SIMD3<Float>, groupIndex: UInt32 = 0) {
+        self.init(point: point, normal: normal, groupMask: 1 << min(groupIndex, 31))
+    }
+
+    @available(*, deprecated, renamed: "init(arkitTransform:groupMask:)")
+    public init(arkitTransform transform: simd_float4x4, groupIndex: UInt32 = 0) {
+        self.init(arkitTransform: transform, groupMask: 1 << min(groupIndex, 31))
+    }
+
+    @available(*, deprecated, renamed: "init(floorY:groupMask:)")
+    public init(floorY: Float, groupIndex: UInt32 = 0) {
+        self.init(floorY: floorY, groupMask: 1 << min(groupIndex, 31))
     }
 }
 

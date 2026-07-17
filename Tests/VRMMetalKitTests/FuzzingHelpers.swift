@@ -205,7 +205,7 @@ struct FuzzGenerator {
         SphereCollider(
             center: randomVector(in: -100...100),
             radius: randomFloat(in: -10...10),
-            groupIndex: UInt32.random(in: 0...31, using: &rng)
+            groupMask: 1 << UInt32.random(in: 0...31, using: &rng)
         )
     }
 
@@ -215,7 +215,7 @@ struct FuzzGenerator {
             p0: randomVector(in: -100...100),
             p1: randomVector(in: -100...100),
             radius: randomFloat(in: -10...10),
-            groupIndex: UInt32.random(in: 0...31, using: &rng)
+            groupMask: 1 << UInt32.random(in: 0...31, using: &rng)
         )
     }
 
@@ -224,7 +224,7 @@ struct FuzzGenerator {
         PlaneCollider(
             point: randomVector(in: -100...100),
             normal: randomVector(in: -10...10),
-            groupIndex: UInt32.random(in: 0...31, using: &rng)
+            groupMask: 1 << UInt32.random(in: 0...31, using: &rng)
         )
     }
 }

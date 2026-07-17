@@ -100,6 +100,9 @@ func printUsage() {
         --hevc                  Use HEVC codec instead of H.264
         --root-motion           Enable root motion (hips translation)
         --dump-bones <path>     Write per-frame bone trajectory CSV alongside the .mov
+        --dump-colliders        Print the spring-bone collider setup (per-spring group
+                                masks + authored/synthetic collider inventory with
+                                full group membership) after load, then exit
         --dump-bones-filter <regex>
                                 Regex on bone name to limit dump output (default: all)
         --outline-scale <float> Multiply every material's outlineWidthFactor by this
@@ -203,6 +206,7 @@ struct RenderOptions {
     var stagger: Bool = false           // stagger shove + capture step (design 2026-07-07)
     var staggerGain: Float? = nil       // shoveGain override (calibration knob)
     var springGravity: Float? = nil     // Override app-layer spring gravity (nil = auto)
+    var dumpColliders: Bool = false     // Print the spring-bone collider setup and exit
 }
 
 /// Diagnostics go to stderr so a typo'd option stays visible when stdout is
@@ -282,6 +286,8 @@ func parseArguments() -> RenderOptions? {
         case "--dump-bones":
             i += 1
             if i < args.count { options.dumpBonesPath = args[i] }
+        case "--dump-colliders":
+            options.dumpColliders = true
         case "--dump-bones-filter":
             i += 1
             if i < args.count { options.dumpBonesFilter = args[i] }
@@ -612,6 +618,7 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
         }
         renderer.loadModelWithoutWarmup(model)
         renderer.enableSpringBone = true
+        if options.dumpColliders { dumpColliderSetup(model: model, label: "avatar \(index)") }
         renderer.projectionMatrix = options.orthographic
             ? orthographic(height: 2.0, aspect: aspect, near: 0.1, far: 100)
             : perspective(fovRadians: Float.pi / 4, aspect: aspect, near: 0.1, far: 100)
@@ -639,6 +646,7 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
     let driver = CrowdMotionDriver(
         startSep: options.crowdStartSep, holdSep: options.crowdHoldSep,
         approachStart: 0.1, approachEnd: 0.4, holdEnd: 0.7, partEnd: 0.95)
+    if options.dumpColliders { exit(0) }
     let postural: PosturalContactParams? = options.postural ? PosturalContactParams() : nil
     var stagger: StaggerShoveParams? = nil
     if options.stagger {
@@ -650,6 +658,67 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
                               bodyContactMargin: options.bodyContactMargin, postural: postural,
                               stagger: stagger,
                               armCounterbalance: stagger != nil ? ArmCounterbalanceParams() : nil), group)
+}
+
+// MARK: - Main
+
+/// `--dump-colliders`: print the spring-bone collision setup exactly as the GPU
+/// group filter sees it — per-spring collider-group masks, plus every authored
+/// and synthetic collider with its FULL group-membership mask (a collider in
+/// several groups carries the OR of their bits). Diagnostic for "hair ignores
+/// the chest/arm colliders" reports: check the hair springs' masks include the
+/// bits of the groups holding those colliders.
+func dumpColliderSetup(model: VRMModel, label: String) {
+    guard let springBone = model.springBone else {
+        print("[\(label)] no spring bone data")
+        return
+    }
+    // Collider → full group-membership mask (the same mapping the compute
+    // system uploads: OR of every group's bit, each clamped to <32).
+    var colliderMask: [Int: UInt32] = [:]
+    for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+        let bit = UInt32(1 << min(groupIndex, 31))
+        for colliderIndex in group.colliders {
+            colliderMask[colliderIndex, default: 0] |= bit
+        }
+    }
+    func describe(_ collider: VRMCollider) -> String {
+        let nodeName = (collider.node >= 0 && collider.node < model.nodes.count)
+            ? (model.nodes[collider.node].name ?? "?") : "?"
+        switch collider.shape {
+        case .sphere(let o, let r):
+            return "sphere       r=\(String(format: "%.3f", r)) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) node=\(collider.node) '\(nodeName)'"
+        case .insideSphere(let o, let r):
+            return "insideSphere r=\(String(format: "%.3f", r)) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) node=\(collider.node) '\(nodeName)'"
+        case .capsule(let o, let r, let t):
+            return "capsule      r=\(String(format: "%.3f", r)) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) tail=(\(String(format: "%.3f", t.x)), \(String(format: "%.3f", t.y)), \(String(format: "%.3f", t.z))) node=\(collider.node) '\(nodeName)'"
+        case .insideCapsule(let o, let r, let t):
+            return "insideCapsule r=\(String(format: "%.3f", r)) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) tail=(\(String(format: "%.3f", t.x)), \(String(format: "%.3f", t.y)), \(String(format: "%.3f", t.z))) node=\(collider.node) '\(nodeName)'"
+        case .plane(let o, let n):
+            return "plane        normal=(\(String(format: "%.3f", n.x)), \(String(format: "%.3f", n.y)), \(String(format: "%.3f", n.z))) offset=(\(String(format: "%.3f", o.x)), \(String(format: "%.3f", o.y)), \(String(format: "%.3f", o.z))) node=\(collider.node) '\(nodeName)'"
+        }
+    }
+
+    print("[\(label)] === SpringBone collider setup ===")
+    print("  authored: \(springBone.colliders.count) colliders in \(springBone.colliderGroups.count) groups; \(springBone.springs.count) springs; synthetic: \(springBone.syntheticColliders.count)")
+    for (i, group) in springBone.colliderGroups.enumerated() {
+        print("  group \(i) '\(group.name ?? "")': colliders \(group.colliders)")
+    }
+    for (i, collider) in springBone.colliders.enumerated() {
+        let mask = colliderMask[i] ?? 0
+        print("  collider \(i): \(describe(collider)) groupMask=0x\(String(mask, radix: 16))")
+    }
+    for (i, collider) in springBone.syntheticColliders.enumerated() {
+        print("  synthetic \(i): \(describe(collider)) (synthetic group bit OR'd into every spring)")
+    }
+    for (i, spring) in springBone.springs.enumerated() {
+        var mask: UInt32 = 0xFFFFFFFF   // empty colliderGroups ⇒ collide-all default
+        if !spring.colliderGroups.isEmpty {
+            mask = 0
+            for g in spring.colliderGroups where g >= 0 && g < 32 { mask |= (1 << g) }
+        }
+        print("  spring \(i) '\(spring.name ?? "")': joints=\(spring.joints.count) colliderGroups=\(spring.colliderGroups) mask=0x\(String(mask, radix: 16))")
+    }
 }
 
 // MARK: - Main
@@ -744,6 +813,7 @@ struct VRMVideoRendererCLI {
 
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModelWithoutWarmup(model)
+        if options.dumpColliders { dumpColliderSetup(model: model, label: options.vrmPath); exit(0) }
 
         // Apply the first animation frame BEFORE warming up SpringBone physics.
         // VRMRenderer.loadModel calls warmupPhysics against the current skeleton

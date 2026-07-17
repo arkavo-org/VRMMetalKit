@@ -40,7 +40,7 @@ final class CrowdResponseScaleTests: XCTestCase {
             try sys.populateSpringBoneData(model: model)
             for _ in 0..<30 {
                 if let scale, let center {
-                    var s = SphereCollider(center: center, radius: 0.5, groupIndex: 0)
+                    var s = SphereCollider(center: center, radius: 0.5, groupMask: 0)
                     s.responseScale = scale
                     sys.setForeignColliders(ForeignColliderSnapshot(spheres: [s], capsules: []))
                 } else {

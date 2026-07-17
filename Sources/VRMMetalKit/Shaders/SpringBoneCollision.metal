@@ -21,7 +21,7 @@ using namespace metal;
 struct SphereCollider {
     float3 center;
     float radius;
-    uint groupIndex;  // Index of collision group this collider belongs to
+    uint groupMask;   // Bitmask of collision groups this collider belongs to (bit i = group i)
     uint inside;      // 0 = outside-collision (default), 1 = containment (joint pushed inside)
     float responseScale; // subsystem 4: per-partner push scale (1=full, 0=ghost)
 };
@@ -30,7 +30,7 @@ struct CapsuleCollider {
     float3 p0;
     float3 p1;
     float radius;
-    uint groupIndex;  // Index of collision group this collider belongs to
+    uint groupMask;   // Bitmask of collision groups this collider belongs to (bit i = group i)
     uint inside;      // 0 = outside-collision (default), 1 = containment (joint pushed inside)
     float responseScale; // subsystem 4: per-partner push scale (1=full, 0=ghost)
 };
@@ -38,7 +38,7 @@ struct CapsuleCollider {
 struct PlaneCollider {
     float3 point;     // Point on the plane
     float3 normal;    // Plane normal (normalized)
-    uint groupIndex;  // Index of collision group this collider belongs to
+    uint groupMask;   // Bitmask of collision groups this collider belongs to (bit i = group i)
 };
 
 struct SpringBoneParams {
@@ -82,7 +82,7 @@ struct BoneParams {
 // cleanly enter (e.g. prev already inside) we fall back to the discrete
 // endpoint push-out, so shallow resting penetration behaves exactly as before.
 float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadius,
-                                  uint groupMask, uint sweptGroupIndex,
+                                  uint boneMask, uint sweptGroupMask,
                                   constant SphereCollider* spheres, uint numSpheres) {
     float3 result = position;
     const float epsilon = 1e-6;
@@ -90,8 +90,8 @@ float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadi
     for (uint i = 0; i < numSpheres; i++) {
         SphereCollider sphere = spheres[i];
 
-        // Skip if bone doesn't collide with this group
-        if (!(groupMask & (1u << sphere.groupIndex))) continue;
+        // Skip if the bone and the collider share no collision group
+        if ((boneMask & sphere.groupMask) == 0u) continue;
 
         if (sphere.inside != 0u) {
             // Containment: penetration when joint is escaping the sphere.
@@ -137,7 +137,7 @@ float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadi
             float3 m = prevPos - sphere.center;
             float a = dot(d, d);
             float c = dot(m, m) - R * R;
-            if (sphere.groupIndex == sweptGroupIndex && a > epsilon && c > 0.0) {
+            if ((sphere.groupMask & sweptGroupMask) != 0u && a > epsilon && c > 0.0) {
                 // Depth gate: only treat this as a tunnel worth clamping when
                 // the joint CENTRE actually passes through the solid sphere
                 // body (closest approach < sphere.radius), not merely grazes
@@ -284,7 +284,7 @@ static float sweptCapsuleEntryDist(float3 ro, float3 rdn, float3 pa, float3 pb, 
 // capsules keep the discrete endpoint test — see the CCD-scoping invariant in
 // CLAUDE.md §4 and `collideWithSphereFiltered`.
 float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRadius,
-                                   uint groupMask, uint sweptGroupIndex,
+                                   uint boneMask, uint sweptGroupMask,
                                    constant CapsuleCollider* capsules, uint numCapsules) {
     float3 result = position;
     const float epsilon = 1e-6;
@@ -292,8 +292,8 @@ float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRad
     for (uint i = 0; i < numCapsules; i++) {
         CapsuleCollider capsule = capsules[i];
 
-        // Skip if bone doesn't collide with this group
-        if (!(groupMask & (1u << capsule.groupIndex))) continue;
+        // Skip if the bone and the collider share no collision group
+        if ((boneMask & capsule.groupMask) == 0u) continue;
 
         float3 closestPoint = closestPointOnSegment(result, capsule.p0, capsule.p1);
         float3 toClosest = result - closestPoint;
@@ -318,7 +318,7 @@ float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRad
             float penetration = R - distance;
             float3 outward = toClosest / max(distance, epsilon);
             result += outward * penetration * capsule.responseScale;
-        } else if (capsule.groupIndex == sweptGroupIndex) {
+        } else if ((capsule.groupMask & sweptGroupMask) != 0u) {
             // Endpoint OUTSIDE — discrete sees nothing. Sweep prevPos → result
             // against the inflated capsule (synthetic group only) and, if it
             // tunneled through, stop the joint at the entry surface.
@@ -353,15 +353,15 @@ float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRad
 }
 
 // Plane collision function with group filtering
-float3 collideWithPlaneFiltered(float3 position, float boneRadius, uint groupMask,
+float3 collideWithPlaneFiltered(float3 position, float boneRadius, uint boneMask,
                                  constant PlaneCollider* planes, uint numPlanes) {
     float3 result = position;
 
     for (uint i = 0; i < numPlanes; i++) {
         PlaneCollider plane = planes[i];
 
-        // Skip if bone doesn't collide with this group
-        if (!(groupMask & (1u << plane.groupIndex))) continue;
+        // Skip if the bone and the collider share no collision group
+        if ((boneMask & plane.groupMask) == 0u) continue;
 
         // Distance from bone to plane (negative if below plane)
         float3 toPoint = result - plane.point;
@@ -413,7 +413,7 @@ kernel void springBoneCollideSpheres(
     constant SphereCollider* sphereColliders [[buffer(5)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
     device float3* bonePosPrev [[buffer(0)]],
-    constant uint& sweptGroupIndex [[buffer(15)]],
+    constant uint& sweptGroupMask [[buffer(15)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numSpheres == 0) return;
@@ -423,11 +423,11 @@ kernel void springBoneCollideSpheres(
     if (boneParams[id].parentIndex == 0xFFFFFFFFu) return;
 
     float boneRadius = boneParams[id].radius;
-    uint groupMask = boneParams[id].colliderGroupMask;
+    uint boneMask = boneParams[id].colliderGroupMask;
     float3 oldPos = bonePosCurr[id];
     float3 prevForSweep = bonePosPrev[id];
-    float3 newPos = collideWithSphereFiltered(prevForSweep, oldPos, boneRadius, groupMask,
-                                              sweptGroupIndex,
+    float3 newPos = collideWithSphereFiltered(prevForSweep, oldPos, boneRadius, boneMask,
+                                              sweptGroupMask,
                                               sphereColliders, globalParams.numSpheres);
     bonePosCurr[id] = newPos;
     float3 prevPos = bonePosPrev[id];
@@ -441,18 +441,18 @@ kernel void springBoneCollideCapsules(
     constant CapsuleCollider* capsuleColliders [[buffer(6)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
     device float3* bonePosPrev [[buffer(0)]],
-    constant uint& sweptGroupIndex [[buffer(15)]],
+    constant uint& sweptGroupMask [[buffer(15)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numCapsules == 0) return;
     if (boneParams[id].parentIndex == 0xFFFFFFFFu) return;
 
     float boneRadius = boneParams[id].radius;
-    uint groupMask = boneParams[id].colliderGroupMask;
+    uint boneMask = boneParams[id].colliderGroupMask;
     float3 oldPos = bonePosCurr[id];
     float3 prevForSweep = bonePosPrev[id];
-    float3 newPos = collideWithCapsuleFiltered(prevForSweep, oldPos, boneRadius, groupMask,
-                                               sweptGroupIndex,
+    float3 newPos = collideWithCapsuleFiltered(prevForSweep, oldPos, boneRadius, boneMask,
+                                               sweptGroupMask,
                                                capsuleColliders, globalParams.numCapsules);
     bonePosCurr[id] = newPos;
     float3 prevPos = bonePosPrev[id];

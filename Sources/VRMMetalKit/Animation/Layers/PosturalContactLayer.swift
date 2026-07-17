@@ -107,7 +107,7 @@ public final class PosturalContactLayer: AnimationLayer {
               let trunk = trunkEndpoints(model: model) else {
             // Still decay any residual lean toward identity so a disable mid-lean
             // eases out rather than snapping (target identity via no penetration).
-            solver.update(partnerTorso: CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 1, 0), radius: 0),
+            solver.update(partnerTorso: CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 1, 0), radius: 0, groupMask: 0),
                           chestWorld: SIMD3<Float>(0, 1e6, 0), spineUp: SIMD3<Float>(0, 1, 0), dt: deltaTime)
             return
         }
@@ -120,7 +120,7 @@ public final class PosturalContactLayer: AnimationLayer {
         let trunkAxis = chestWorld - spineWorld
         let spineUp = simd_length(trunkAxis) > 1e-6 ? simd_normalize(trunkAxis) : SIMD3<Float>(0, 1, 0)
 
-        let torso = partnerTorso ?? CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 1, 0), radius: 0)
+        let torso = partnerTorso ?? CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 1, 0), radius: 0, groupMask: 0)
         let worldLean = solver.update(partnerTorso: torso, chestWorld: chestWorld,
                                       spineUp: spineUp, dt: deltaTime)
 

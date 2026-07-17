@@ -62,7 +62,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         curr: [SIMD3<Float>],
         boneRadius: Float,
         sphere: SphereCollider,
-        sweptGroupIndex: UInt32? = nil
+        sweptGroupMask: UInt32? = nil
     ) throws -> [SIMD3<Float>] {
         let numBones = prev.count
         precondition(curr.count == numBones)
@@ -108,9 +108,9 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
                                           options: .storageModeShared)!
 
         // Swept (continuous) collision is scoped to the synthetic collider group
-        // (#313). Default the test's swept group to the sphere's own group so the
-        // swept path engages; callers override to exercise the scoping guard.
-        var sweptGroup = sweptGroupIndex ?? sphere.groupIndex
+        // (#313). Default the test's swept group mask to the sphere's own mask so
+        // the swept path engages; callers override to exercise the scoping guard.
+        var sweptGroup = sweptGroupMask ?? sphere.groupMask
 
         guard let cb = commandQueue.makeCommandBuffer(),
               let enc = cb.makeComputeCommandEncoder() else {
@@ -140,7 +140,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         curr: [SIMD3<Float>],
         boneRadius: Float,
         capsule: CapsuleCollider,
-        sweptGroupIndex: UInt32? = nil
+        sweptGroupMask: UInt32? = nil
     ) throws -> [SIMD3<Float>] {
         let numBones = prev.count
         precondition(curr.count == numBones)
@@ -177,7 +177,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
                                            length: MemoryLayout<CapsuleCollider>.stride,
                                            options: .storageModeShared)!
 
-        var sweptGroup = sweptGroupIndex ?? capsule.groupIndex
+        var sweptGroup = sweptGroupMask ?? capsule.groupMask
 
         guard let cb = commandQueue.makeCommandBuffer(),
               let enc = cb.makeComputeCommandEncoder() else {
@@ -209,7 +209,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     func testFastSegmentThroughCapsuleIsCaughtOnEntrySide() throws {
         let boneRadius: Float = 0.02
         let capsule = CapsuleCollider(p0: SIMD3<Float>(-0.3, 0, 0),
-                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2)
+                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2, groupMask: 1)
         // Path crosses perpendicular through the cylinder body, -y → +y.
         let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, -0.5, 0)]
         let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, 0.5, 0)]
@@ -229,7 +229,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     func testShallowCapsulePenetrationStillPushedOut() throws {
         let boneRadius: Float = 0.02
         let capsule = CapsuleCollider(p0: SIMD3<Float>(-0.3, 0, 0),
-                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2)
+                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2, groupMask: 1)
         let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, -0.25, 0)]
         let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, -0.15, 0)]
 
@@ -247,13 +247,13 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     func testTunnelingThroughNonSweptGroupCapsuleNotCaught() throws {
         let boneRadius: Float = 0.02
         let capsule = CapsuleCollider(p0: SIMD3<Float>(-0.3, 0, 0),
-                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2, groupIndex: 0)
+                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2, groupMask: 1)
         let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, -0.5, 0)]
         let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, 0.5, 0)]
 
         let result = try runCapsuleCollision(prev: prev, curr: curr,
                                              boneRadius: boneRadius, capsule: capsule,
-                                             sweptGroupIndex: 7)  // no match → discrete only
+                                             sweptGroupMask: 1 << 7)  // no mask overlap → discrete only
 
         let bone = result[1]
         XCTAssertEqual(bone.y, 0.5, accuracy: 1e-5,
@@ -264,7 +264,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     func testCapsuleSegmentMissIsUntouched() throws {
         let boneRadius: Float = 0.02
         let capsule = CapsuleCollider(p0: SIMD3<Float>(-0.3, 0, 0),
-                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2)
+                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2, groupMask: 1)
         // A path well above the capsule — closest approach ~0.8, no contact.
         let prev = [SIMD3<Float>(0, 2, 0), SIMD3<Float>(-0.5, 1.0, 0)]
         let curr = [SIMD3<Float>(0, 2, 0), SIMD3<Float>(0.5, 1.0, 0)]
@@ -287,7 +287,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     func testCapsuleGrazeOfInflatedShellNotSnapped() throws {
         let boneRadius: Float = 0.02
         let capsule = CapsuleCollider(p0: SIMD3<Float>(-0.3, 0, 0),
-                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2)
+                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2, groupMask: 1)
         // Perpendicular crossing offset in z so the centre's closest approach to
         // the axis is 0.21 — inside the inflated shell, outside the solid body.
         let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, -0.5, 0.21)]
@@ -309,7 +309,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     func testParallelAxisTunnelThroughCapIsCaught() throws {
         let boneRadius: Float = 0.02
         let capsule = CapsuleCollider(p0: SIMD3<Float>(-0.3, 0, 0),
-                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2)
+                                      p1: SIMD3<Float>(0.3, 0, 0), radius: 0.2, groupMask: 1)
         // Sweep along the axis from beyond +x cap to beyond -x cap.
         let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0.8, 0, 0)]
         let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(-0.8, 0, 0)]
@@ -327,7 +327,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     /// and lets it pass; swept collision must stop it at the entry surface.
     func testFastSegmentThroughSphereIsCaughtOnEntrySide() throws {
         let boneRadius: Float = 0.02
-        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2)
+        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2, groupMask: 1)
         // prev on the -x side (outside), curr on the +x side (outside): the
         // segment passes clean through the sphere centre.
         let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(-0.5, 0, 0)]
@@ -354,7 +354,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     /// the outward normal exactly as discrete collision already does.
     func testShallowPenetrationStillPushedOut() throws {
         let boneRadius: Float = 0.02
-        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2)
+        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2, groupMask: 1)
         // prev just outside on +x, curr just inside on +x: a normal shallow hit.
         let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0.23, 0, 0)]
         let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0.15, 0, 0)]
@@ -378,13 +378,13 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     func testTunnelingThroughNonSweptGroupIsNotCaught() throws {
         let boneRadius: Float = 0.02
         // Sphere in group 0; swept group set to a non-matching index.
-        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2, groupIndex: 0)
+        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2, groupMask: 1)
         let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(-0.5, 0, 0)]
         let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0.5, 0, 0)]
 
         let result = try runSphereCollision(prev: prev, curr: curr,
                                             boneRadius: boneRadius, sphere: sphere,
-                                            sweptGroupIndex: 7)  // no match → discrete only
+                                            sweptGroupMask: 1 << 7)  // no mask overlap → discrete only
 
         let bone = result[1]
         XCTAssertEqual(bone.x, 0.5, accuracy: 1e-5,
@@ -395,7 +395,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
     /// catch from an over-eager sweep).
     func testSegmentMissingSphereIsUntouched() throws {
         let boneRadius: Float = 0.02
-        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2)
+        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2, groupMask: 1)
         // A segment well above the sphere — closest approach ~1.0, no contact.
         let prev = [SIMD3<Float>(0, 2, 0), SIMD3<Float>(-0.5, 1.0, 0)]
         let curr = [SIMD3<Float>(0, 2, 0), SIMD3<Float>(0.5, 1.0, 0)]

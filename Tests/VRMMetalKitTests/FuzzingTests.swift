@@ -485,7 +485,7 @@ final class FuzzingTests: XCTestCase {
         let zeroRadiusCollider = SphereCollider(
             center: SIMD3<Float>(0, 0, 0),
             radius: 0,
-            groupIndex: 0
+            groupMask: 1
         )
 
         // Zero radius should be valid (point collider)
@@ -503,7 +503,7 @@ final class FuzzingTests: XCTestCase {
         let negativeRadiusCollider = SphereCollider(
             center: SIMD3<Float>(0, 0, 0),
             radius: -1.0,  // Negative!
-            groupIndex: 0
+            groupMask: 1
         )
 
         // Document behavior - negative radius is accepted (should it be?)
@@ -521,13 +521,13 @@ final class FuzzingTests: XCTestCase {
         let infiniteCollider = SphereCollider(
             center: SIMD3<Float>(.infinity, 0, 0),
             radius: 1.0,
-            groupIndex: 0
+            groupMask: 1
         )
 
         let nanCollider = SphereCollider(
             center: SIMD3<Float>(.nan, .nan, .nan),
             radius: 1.0,
-            groupIndex: 0
+            groupMask: 1
         )
 
         // Document that these are accepted

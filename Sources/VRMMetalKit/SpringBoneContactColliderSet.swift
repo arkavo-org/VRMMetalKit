@@ -142,7 +142,8 @@ enum SpringBoneContactColliderSet {
     /// Transforms a local-space, node-anchored capsule `VRMCollider` into a
     /// world-space `CapsuleCollider` via the anchor node's world matrix. The one
     /// transform path shared by `SpringBoneComputeSystem.contactColliderSnapshot`
-    /// and the torso accessors. `groupIndex` is left 0; the sink assigns groups.
+    /// and the torso accessors. `groupMask` is left 0 (untagged); the sink
+    /// assigns the foreign group bit.
     static func worldCapsule(_ collider: VRMCollider, model: VRMModel) -> CapsuleCollider? {
         guard case .capsule(let offset, let radius, let tail) = collider.shape,
               collider.node >= 0, collider.node < model.nodes.count else { return nil }
@@ -154,7 +155,7 @@ enum SpringBoneContactColliderSet {
             SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2]))
         let p0 = node.worldPosition + rot * offset
         let p1 = p0 + rot * tail
-        return CapsuleCollider(p0: p0, p1: p1, radius: radius, groupIndex: 0)
+        return CapsuleCollider(p0: p0, p1: p1, radius: radius, groupMask: 0)
     }
 
     /// The node indices mapped to humanoid bones. An authored collider counts as

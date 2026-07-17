@@ -60,7 +60,7 @@ final class SpringBoneForeignWakeTests: XCTestCase {
         XCTAssertFalse(positions.isEmpty)
         let centroid = positions.reduce(SIMD3<Float>(0, 0, 0), +) / Float(max(positions.count, 1))
         system.setForeignColliders(ForeignColliderSnapshot(
-            spheres: [SphereCollider(center: centroid, radius: 0.5, groupIndex: 0)], capsules: []))
+            spheres: [SphereCollider(center: centroid, radius: 0.5, groupMask: 0)], capsules: []))
 
         // One more async frame: the foreign injection must WAKE the sleeping chains (F1).
         stepAsync()
@@ -85,7 +85,7 @@ final class SpringBoneForeignWakeTests: XCTestCase {
         let queue = device.makeCommandQueue()!
         // A fixed foreign collider well away from the bones: unchanging each frame.
         let farSphere = ForeignColliderSnapshot(
-            spheres: [SphereCollider(center: SIMD3<Float>(10, 10, 10), radius: 0.05, groupIndex: 0)], capsules: [])
+            spheres: [SphereCollider(center: SIMD3<Float>(10, 10, 10), radius: 0.05, groupMask: 0)], capsules: [])
         func stepAsync() {
             system.setForeignColliders(farSphere)   // same snapshot every frame => no change
             let cb = queue.makeCommandBuffer()!
@@ -119,7 +119,7 @@ final class SpringBoneForeignWakeTests: XCTestCase {
 
         let queue = device.makeCommandQueue()!
         // Ghost partner: fixed geometry, responseScale 0 — static, so chains may sleep.
-        var ghost = SphereCollider(center: SIMD3<Float>(10, 10, 10), radius: 0.05, groupIndex: 0)
+        var ghost = SphereCollider(center: SIMD3<Float>(10, 10, 10), radius: 0.05, groupMask: 0)
         ghost.responseScale = 0.0
         func stepAsync(_ sphere: SphereCollider) {
             system.setForeignColliders(ForeignColliderSnapshot(spheres: [sphere], capsules: []))

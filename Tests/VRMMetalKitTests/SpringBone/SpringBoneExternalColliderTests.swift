@@ -49,7 +49,7 @@ final class SpringBoneExternalColliderTests: XCTestCase {
         }
         let settled = model.springBoneBuffers?.getCurrentPositions() ?? []
         let centroid = settled.reduce(SIMD3<Float>(0, 0, 0), +) / Float(max(settled.count, 1))
-        let big = SphereCollider(center: centroid, radius: 0.5, groupIndex: 0)
+        let big = SphereCollider(center: centroid, radius: 0.5, groupMask: 0)
         for _ in 0..<20 {
             system.setExternalColliders(ForeignColliderSnapshot(spheres: [big], capsules: []))
             system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: nil)
@@ -68,7 +68,7 @@ final class SpringBoneExternalColliderTests: XCTestCase {
     @MainActor func testClearLeavesZeroActiveExternal() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let (model, system) = try await loadedSystem(device)
-        let s = SphereCollider(center: .zero, radius: 0.3, groupIndex: 0)
+        let s = SphereCollider(center: .zero, radius: 0.3, groupMask: 0)
         system.setExternalColliders(ForeignColliderSnapshot(spheres: [s], capsules: []))
         system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: nil)
         system.waitForPendingFrame()
@@ -86,11 +86,11 @@ final class SpringBoneExternalColliderTests: XCTestCase {
     @MainActor func testExternalUnionsWithForeignSet() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let (model, system) = try await loadedSystem(device)
-        let foreignSpheres = (0..<2).map { _ in SphereCollider(center: .zero, radius: 0.1, groupIndex: 0) }
-        let foreignCapsules = [CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 0.1, 0), radius: 0.05, groupIndex: 0)]
-        let externalSpheres = [SphereCollider(center: SIMD3<Float>(0.2, 0, 0), radius: 0.1, groupIndex: 0)]
+        let foreignSpheres = (0..<2).map { _ in SphereCollider(center: .zero, radius: 0.1, groupMask: 0) }
+        let foreignCapsules = [CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 0.1, 0), radius: 0.05, groupMask: 0)]
+        let externalSpheres = [SphereCollider(center: SIMD3<Float>(0.2, 0, 0), radius: 0.1, groupMask: 0)]
         let externalCapsules = (0..<2).map { _ in
-            CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 0.2, 0), radius: 0.05, groupIndex: 0)
+            CapsuleCollider(p0: .zero, p1: SIMD3<Float>(0, 0.2, 0), radius: 0.05, groupMask: 0)
         }
         system.setForeignColliders(ForeignColliderSnapshot(spheres: foreignSpheres, capsules: foreignCapsules))
         system.setExternalColliders(ForeignColliderSnapshot(spheres: externalSpheres, capsules: externalCapsules))
@@ -109,9 +109,9 @@ final class SpringBoneExternalColliderTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let (model, system) = try await loadedSystem(device)
         let crowdSpheres = (0..<VRMConstants.Physics.maxContactPartners * VRMConstants.Physics.foreignSphereSlotsPerPartner)
-            .map { _ in SphereCollider(center: .zero, radius: 0.05, groupIndex: 0) }
+            .map { _ in SphereCollider(center: .zero, radius: 0.05, groupMask: 0) }
         let propSpheres = (0..<VRMConstants.Physics.externalColliderSphereSlots)
-            .map { _ in SphereCollider(center: SIMD3<Float>(1, 0, 0), radius: 0.05, groupIndex: 0) }
+            .map { _ in SphereCollider(center: SIMD3<Float>(1, 0, 0), radius: 0.05, groupMask: 0) }
         system.setForeignColliders(ForeignColliderSnapshot(spheres: crowdSpheres, capsules: []))
         system.setExternalColliders(ForeignColliderSnapshot(spheres: propSpheres, capsules: []))
         system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: nil)
@@ -148,7 +148,7 @@ final class SpringBoneExternalColliderTests: XCTestCase {
         XCTAssertFalse(positions.isEmpty)
         let centroid = positions.reduce(SIMD3<Float>(0, 0, 0), +) / Float(max(positions.count, 1))
         system.setExternalColliders(ForeignColliderSnapshot(
-            spheres: [SphereCollider(center: centroid, radius: 0.5, groupIndex: 0)], capsules: []))
+            spheres: [SphereCollider(center: centroid, radius: 0.5, groupMask: 0)], capsules: []))
 
         stepAsync()
         XCTAssertEqual(system.sleepingBoneCount, 0,
@@ -166,7 +166,7 @@ final class SpringBoneExternalColliderTests: XCTestCase {
         let queue = device.makeCommandQueue()!
         // A far static external sphere: count stays 1 every frame, so ONLY a radius
         // (or centre) change can drive a wake — isolating the radius path.
-        var sphere = SphereCollider(center: SIMD3<Float>(10, 10, 10), radius: 0.05, groupIndex: 0)
+        var sphere = SphereCollider(center: SIMD3<Float>(10, 10, 10), radius: 0.05, groupMask: 0)
         func stepAsync() {
             system.setExternalColliders(ForeignColliderSnapshot(spheres: [sphere], capsules: []))
             let cb = queue.makeCommandBuffer()!
@@ -196,7 +196,7 @@ final class SpringBoneExternalColliderTests: XCTestCase {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let (modelA, system) = try await loadedSystem(device)
 
-        let s = SphereCollider(center: .zero, radius: 0.3, groupIndex: 0)
+        let s = SphereCollider(center: .zero, radius: 0.3, groupMask: 0)
         system.setExternalColliders(ForeignColliderSnapshot(spheres: [s], capsules: []))
         system.update(model: modelA, deltaTime: 1.0 / 60.0, commandBuffer: nil)
         system.waitForPendingFrame()
