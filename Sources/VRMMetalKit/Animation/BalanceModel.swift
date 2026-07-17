@@ -25,7 +25,7 @@ public struct BalanceState: Sendable {
     public let comGround: SIMD2<Float>
     /// Base of support: xz convex hull of the planted feet's ground corners (CCW).
     public let supportPolygon: [SIMD2<Float>]
-    /// Centroid of `supportPolygon`.
+    /// Vertex average of the `supportPolygon` hull vertices.
     public let supportCentroid: SIMD2<Float>
     /// Margin of stability: `> 0` inside the base (stable), `< 0` outside (falling).
     public let margin: Float
@@ -108,7 +108,9 @@ public enum BalanceModel {
     // MARK: - Support polygon
 
     /// CCW convex hull (Andrew's monotone chain) of foot ground corners in the xz
-    /// plane. Returns the input (≤2 unique points) unchanged for degenerate cases.
+    /// plane. The input is sorted by (x, y) first and the emitted hull is
+    /// deduplicated; degenerate inputs (≤2 points) return those sorted points
+    /// directly — not the input in its original order.
     public static func supportPolygon(footCorners: [SIMD2<Float>]) -> [SIMD2<Float>] {
         let pts = footCorners.sorted { $0.x != $1.x ? $0.x < $1.x : $0.y < $1.y }
         guard pts.count >= 3 else { return pts }
@@ -139,9 +141,11 @@ public enum BalanceModel {
     // MARK: - Stability margin
 
     /// Signed distance from `comGround` to the boundary of the (CCW) support polygon,
-    /// with the polygon centroid. `margin > 0` inside (distance to nearest edge),
-    /// `margin < 0` outside (−distance to nearest edge). Degenerate polygons (≤2
-    /// vertices) return a negative margin (no stable base).
+    /// with the polygon's vertex-average centroid. `margin > 0` inside (distance to
+    /// nearest edge), `margin < 0` outside (−distance to nearest edge). Degenerate
+    /// polygons (≤2 vertices) return a negative margin (no stable base). A collinear
+    /// ≥3-vertex polygon is degenerate the same way — zero area, yet a point on the
+    /// segment reads a positive margin — though the hull construction never emits one.
     public static func stabilityMargin(comGround p: SIMD2<Float>,
                                        polygon poly: [SIMD2<Float>]) -> (margin: Float, centroid: SIMD2<Float>) {
         let centroid = poly.isEmpty
@@ -180,11 +184,13 @@ public enum BalanceModel {
     public enum Foot: Sendable { case left, right }
 
     /// The four ground corners (heel±width, toe±width) of `foot` in the xz plane, or
-    /// `nil` when the foot bone is absent. `footForward` comes from the reliable
-    /// skeletal heel→toe vector when the rig has toes; otherwise from a
+    /// `nil` when the foot bone is absent. The heel corners sit at the ANKLE joint's
+    /// xz projection — not the anatomical heel — so the rectangle is shifted
+    /// systematically forward by the ankle-to-heel offset. `footForward` comes from
+    /// the reliable skeletal heel→toe vector when the rig has toes; otherwise from a
     /// sanity-checked hips-forward fallback (VRM does not standardize a foot-forward
     /// local axis, so a per-bone axis guess would silently rotate the polygon).
-    public static func footGroundCorners(model: VRMModel, foot: Foot, groundY: Float,
+    public static func footGroundCorners(model: VRMModel, foot: Foot,
                                          footLength: Float = 0.15,
                                          halfWidth: Float = 0.04) -> [SIMD2<Float>]? {
         guard let humanoid = model.humanoid else { return nil }
@@ -230,7 +236,7 @@ public enum BalanceModel {
 
     /// Full balance state for `model`'s current pose. `nil` when the rig lacks the
     /// humanoid bones for a CoM or has no planted foot to form a support base.
-    public static func evaluate(model: VRMModel, groundY: Float = 0,
+    public static func evaluate(model: VRMModel,
                                 plantedFeet: Set<Foot> = [.left, .right]) -> BalanceState? {
         guard let humanoid = model.humanoid else { return nil }
 
@@ -244,7 +250,7 @@ public enum BalanceModel {
 
         var corners: [SIMD2<Float>] = []
         for foot in [Foot.left, .right] where plantedFeet.contains(foot) {
-            if let c = footGroundCorners(model: model, foot: foot, groundY: groundY) {
+            if let c = footGroundCorners(model: model, foot: foot) {
                 corners.append(contentsOf: c)
             }
         }

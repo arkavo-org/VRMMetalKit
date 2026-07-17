@@ -26,11 +26,13 @@ public struct StaggerShoveParams: Sendable {
     /// the visual spike (design §5).
     public var shoveGain: Float
     /// Maximum rate of change of the offset (m/s). Defaults to 0.7 × 0.2 = 0.14 —
-    /// a safety fraction of the rig-confirmed ~0.2 m/s tracking capacity
-    /// (`CaptureStepIKTests.testRigTrackingCapacity_belowHolds_overCapacityGrows`),
-    /// so the disturbance the capture-step controller sees stays inside the
-    /// validated band. Bounds the shove component only; for a more dramatic
-    /// stagger raise `shoveGain`, not this.
+    /// a safety fraction of the ~0.2 m/s tracking capacity the MODEL gate
+    /// validates. On the rig
+    /// (`CaptureStepIKTests.testRigTrackingCapacity_belowHolds_overCapacityGrows`)
+    /// only two rates are asserted — 0.08 m/s holds, 0.6 m/s escapes — so 0.14
+    /// sits under the lowest rig-confirmed-holding rate and the disturbance the
+    /// capture-step controller sees stays inside the gated band. Bounds the shove
+    /// component only; for a more dramatic stagger raise `shoveGain`, not this.
     /// Must be positive and finite: a non-positive cap freezes the offset
     /// (`maxStep` = 0) while contact can still latch activation.
     public var velocityCap: Float

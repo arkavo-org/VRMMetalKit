@@ -179,12 +179,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Previous-frame global params for wake-on-force-change detection.
     private var previousGlobalParamsForSleep: SpringBoneGlobalParams?
     private var previousQualityForSleep: VRMConstants.SpringBoneQuality?
-    /// Previous-frame foreign (cross-avatar) collider set, for wake-on-foreign
-    /// detection (F1). A moving or newly-appeared partner body wakes settled
-    /// chains that the own-motion heuristics would otherwise leave asleep.
+    /// Previous-frame foreign (cross-avatar) collider set AS APPLIED (clamped to
+    /// the reserved tail budget), for wake-on-foreign detection (F1). A moving or
+    /// newly-appeared partner body wakes settled chains that the own-motion
+    /// heuristics would otherwise leave asleep.
     private var previousForeignForSleep: ForeignColliderSnapshot = ForeignColliderSnapshot()
-    /// Previous-frame external (prop) collider set, for wake-on-external detection
-    /// (the external-source counterpart to `previousForeignForSleep`).
+    /// Previous-frame external (prop) collider set AS APPLIED (clamped), for
+    /// wake-on-external detection (the external-source counterpart to
+    /// `previousForeignForSleep`).
     private var previousExternalForSleep: ForeignColliderSnapshot = ForeignColliderSnapshot()
     /// True when an explicit wake has been requested and not yet processed.
     private var forceWakePending: Bool = false
@@ -379,12 +381,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         pendingExternalColliders = snapshot
     }
 
-    /// Writes the pending foreign set into the reserved buffer tail ONCE per
+    /// Writes the frame's foreign set into the reserved buffer tail ONCE per
     /// frame, tagged with the reserved foreign group index, and sets the active
     /// counts. Called before the substep loop; `interpolateColliders` only ever
     /// rewrites the [0, active) prefix, so the tail persists across the frame's
-    /// substeps (design §4.2).
-    private func writeForeignTail(buffers: SpringBoneBuffers) {
+    /// substeps (design §4.2). `foreign`/`external` must be the clamped sets
+    /// from `clampedForeignSets` — `update()` computes them once per frame so
+    /// the wake check, this write, and the sleep snapshot all see the exact set
+    /// that is applied.
+    private func writeForeignTail(buffers: SpringBoneBuffers,
+                                  foreign: ForeignColliderSnapshot,
+                                  external: ForeignColliderSnapshot) {
         // No valid foreign group was reserved: `foreignColliderGroupIndex` is the
         // 0xFFFFFFFF sentinel (model has >=30 authored collider groups, so the
         // group-bit carve-out zeroed the bone-side foreign bit). Foreign colliders
@@ -397,31 +404,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             activeForeignCapsules = 0
             return
         }
-        let sphereRoom = max(buffers.sphereCapacity - buffers.numSpheres, 0)
-        let capsuleRoom = max(buffers.capsuleCapacity - buffers.numCapsules, 0)
-
-        // The reserved tail carries a dedicated external (prop) budget on top of the
-        // cross-avatar crowd budget, so each source is clamped to its OWN slice — a
-        // full crowd never starves props and a flood of props never starves the
-        // crowd. Each budget is derived from the tail room so a model with no
-        // reserved tail (room == 0) clamps both sources to nothing.
-        let externalSphereBudget = min(VRMConstants.Physics.externalColliderSphereSlots, sphereRoom)
-        let crowdSphereBudget = sphereRoom - externalSphereBudget
-        let externalCapsuleBudget = min(VRMConstants.Physics.externalColliderCapsuleSlots, capsuleRoom)
-        let crowdCapsuleBudget = capsuleRoom - externalCapsuleBudget
-
-        var crowdSpheres = clampForeign(pendingForeignSnapshot.spheres, to: crowdSphereBudget,
-                                        label: "cross-avatar spheres")
-        let externalSpheres = clampForeign(pendingExternalColliders.spheres, to: externalSphereBudget,
-                                           label: "external spheres")
-        var crowdCapsules = clampForeign(pendingForeignSnapshot.capsules, to: crowdCapsuleBudget,
-                                         label: "cross-avatar capsules")
-        let externalCapsules = clampForeign(pendingExternalColliders.capsules, to: externalCapsuleBudget,
-                                            label: "external capsules")
-        crowdSpheres.append(contentsOf: externalSpheres)
-        crowdCapsules.append(contentsOf: externalCapsules)
-        let spheres = crowdSpheres
-        let capsules = crowdCapsules
+        var spheres = foreign.spheres
+        spheres.append(contentsOf: external.spheres)
+        var capsules = foreign.capsules
+        capsules.append(contentsOf: external.capsules)
 
         if let buf = buffers.sphereColliders, !spheres.isEmpty {
             let ptr = buf.contents().bindMemory(to: SphereCollider.self, capacity: buffers.sphereCapacity)
@@ -443,6 +429,36 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
         activeForeignSpheres = spheres.count
         activeForeignCapsules = capsules.count
+    }
+
+    /// Clamps the pending foreign/external sets to their reserved tail budgets,
+    /// yielding the exact sets `writeForeignTail` applies this frame (design §6).
+    /// The reserved tail carries a dedicated external (prop) budget on top of the
+    /// cross-avatar crowd budget, so each source is clamped to its OWN slice — a
+    /// full crowd never starves props and a flood of props never starves the
+    /// crowd. Each budget is derived from the tail room so a model with no
+    /// reserved tail (room == 0) clamps both sources to nothing. `update()`
+    /// computes these ONCE per frame so the wake check and the sleep snapshot
+    /// compare/store the APPLIED set: colliders beyond the budget must not wake
+    /// a sleeping avatar they will never touch.
+    private func clampedForeignSets(buffers: SpringBoneBuffers)
+        -> (crowd: ForeignColliderSnapshot, external: ForeignColliderSnapshot) {
+        let sphereRoom = max(buffers.sphereCapacity - buffers.numSpheres, 0)
+        let capsuleRoom = max(buffers.capsuleCapacity - buffers.numCapsules, 0)
+        let externalSphereBudget = min(VRMConstants.Physics.externalColliderSphereSlots, sphereRoom)
+        let crowdSphereBudget = sphereRoom - externalSphereBudget
+        let externalCapsuleBudget = min(VRMConstants.Physics.externalColliderCapsuleSlots, capsuleRoom)
+        let crowdCapsuleBudget = capsuleRoom - externalCapsuleBudget
+        return (ForeignColliderSnapshot(
+                    spheres: clampForeign(pendingForeignSnapshot.spheres, to: crowdSphereBudget,
+                                          label: "cross-avatar spheres"),
+                    capsules: clampForeign(pendingForeignSnapshot.capsules, to: crowdCapsuleBudget,
+                                           label: "cross-avatar capsules")),
+                ForeignColliderSnapshot(
+                    spheres: clampForeign(pendingExternalColliders.spheres, to: externalSphereBudget,
+                                          label: "external spheres"),
+                    capsules: clampForeign(pendingExternalColliders.capsules, to: externalCapsuleBudget,
+                                           label: "external capsules")))
     }
 
     /// Clamps a foreign collider list to its reserved budget, logging any drop so
@@ -544,6 +560,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             fillCenterDeltaBufferForFrame(substepCount: frameSubstepCount)
         }
 
+        // Clamp the pending foreign/external sets to their reserved tail budgets
+        // ONCE per frame: the wake check, the tail write, and the sleep snapshot
+        // below all use the exact set that will be applied, so colliders beyond
+        // the budget (never written) can't wake a sleeping avatar. Mirrors
+        // `writeForeignTail`'s sentinel guard — with no reserved foreign group
+        // the applied set is empty.
+        let clampedForeign: ForeignColliderSnapshot
+        let clampedExternal: ForeignColliderSnapshot
+        if foreignColliderGroupIndex != 0xFFFFFFFF {
+            (clampedForeign, clampedExternal) = clampedForeignSets(buffers: buffers)
+        } else {
+            clampedForeign = ForeignColliderSnapshot()
+            clampedExternal = ForeignColliderSnapshot()
+        }
+
         // Sleep gate: decide whether the XPBD pipeline can be skipped this frame.
         // Only enabled on the shared-command-buffer (async runtime) path; the
         // self-owned-buffer path is used for offline/conformance rendering where
@@ -554,7 +585,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let chainVelocities = computeChainMaxVelocities(buffers: buffers)
             let wakeDetected = detectWakeConditions(model: model,
                                                     buffers: buffers,
-                                                    globalParams: globalParams)
+                                                    globalParams: globalParams,
+                                                    foreign: clampedForeign,
+                                                    external: clampedExternal)
             updateSleepState(velocities: chainVelocities, wakeDetected: wakeDetected)
         } else {
             // Offline/sync path: keep everything awake and don't touch GPU buffers
@@ -569,7 +602,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Write this frame's foreign colliders into the reserved tail once. The
         // tail persists across substeps (interpolate only rewrites the prefix).
-        writeForeignTail(buffers: buffers)
+        writeForeignTail(buffers: buffers, foreign: clampedForeign, external: clampedExternal)
 
         var stepsThisFrame = 0
 
@@ -708,7 +741,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         // Snapshot targets and params for next frame's wake-condition checks.
-        captureSleepSnapshots(model: model, globalParams: globalParams)
+        captureSleepSnapshots(model: model, globalParams: globalParams,
+                              foreign: clampedForeign, external: clampedExternal)
 
         lastUpdateTime = CACurrentMediaTime()
     }
@@ -998,7 +1032,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     private func detectWakeConditions(model: VRMModel,
                                       buffers: SpringBoneBuffers,
-                                      globalParams: SpringBoneGlobalParams) -> Bool {
+                                      globalParams: SpringBoneGlobalParams,
+                                      foreign: ForeignColliderSnapshot,
+                                      external: ForeignColliderSnapshot) -> Bool {
         if forceWakePending {
             return true
         }
@@ -1046,6 +1082,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Foreign (cross-avatar) and external (rigid-body prop) colliders wake
         // physics too: a settled avatar must react to a partner leaning in or a
         // prop penetrating — the own-motion checks above never see them (F1).
+        // `foreign`/`external` are the CLAMPED sets (the exact colliders
+        // `writeForeignTail` applies this frame), so colliders beyond the
+        // reserved budget can't wake a sleeping avatar they will never touch.
         //
         // Only when the foreign group slot was actually reserved: with >=30
         // authored collider groups `writeForeignTail` carves out the bit and drops
@@ -1054,12 +1093,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // foreign collision). Mirror the tail-write guard here.
         if foreignColliderGroupIndex != 0xFFFFFFFF {
             if foreignCollidersChanged(previous: previousForeignForSleep,
-                                       current: pendingForeignSnapshot,
+                                       current: foreign,
                                        threshold: motionThreshold) {
                 return true
             }
             if foreignCollidersChanged(previous: previousExternalForSleep,
-                                       current: pendingExternalColliders,
+                                       current: external,
                                        threshold: motionThreshold) {
                 return true
             }
@@ -1108,8 +1147,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// (F1). Radius parity matters — a collider that grows or shrinks in place (a
     /// body part or prop scaling without translating) still changes the contact
     /// surface and must wake, matching `collidersMoved` for authored colliders. A
-    /// static, unchanging set does NOT wake — chains that already deflected against
-    /// it may sleep, so sustained contact doesn't pin the whole crowd awake.
+    /// changed `responseScale` (ghost→firm via `setContactResponseScale`) also
+    /// wakes: the push strength changes even though no geometry moved (subsystem
+    /// 4). A static, unchanging set does NOT wake — chains that already deflected
+    /// against it may sleep, so sustained contact doesn't pin the whole crowd awake.
     private func foreignCollidersChanged(previous: ForeignColliderSnapshot,
                                          current: ForeignColliderSnapshot,
                                          threshold: Float) -> Bool {
@@ -1117,12 +1158,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if previous.capsules.count != current.capsules.count { return true }
         for i in current.spheres.indices {
             if simd_distance(previous.spheres[i].center, current.spheres[i].center) > threshold ||
-               abs(previous.spheres[i].radius - current.spheres[i].radius) > threshold { return true }
+               abs(previous.spheres[i].radius - current.spheres[i].radius) > threshold ||
+               previous.spheres[i].responseScale != current.spheres[i].responseScale { return true }
         }
         for i in current.capsules.indices {
             if simd_distance(previous.capsules[i].p0, current.capsules[i].p0) > threshold ||
                simd_distance(previous.capsules[i].p1, current.capsules[i].p1) > threshold ||
-               abs(previous.capsules[i].radius - current.capsules[i].radius) > threshold { return true }
+               abs(previous.capsules[i].radius - current.capsules[i].radius) > threshold ||
+               previous.capsules[i].responseScale != current.capsules[i].responseScale { return true }
         }
         return false
     }
@@ -1168,15 +1211,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         sleepingBoneCount = asleepCount
     }
 
-    private func captureSleepSnapshots(model: VRMModel, globalParams: SpringBoneGlobalParams) {
+    private func captureSleepSnapshots(model: VRMModel, globalParams: SpringBoneGlobalParams,
+                                       foreign: ForeignColliderSnapshot, external: ForeignColliderSnapshot) {
         previousRootPositionsForSleep = targetRootPositions
         previousSphereCollidersForSleep = targetSphereColliders
         previousCapsuleCollidersForSleep = targetCapsuleColliders
         previousPlaneCollidersForSleep = targetPlaneColliders
         previousGlobalParamsForSleep = globalParams
         previousQualityForSleep = quality
-        previousForeignForSleep = pendingForeignSnapshot
-        previousExternalForSleep = pendingExternalColliders
+        // Store the CLAMPED sets (what `writeForeignTail` applied this frame), so
+        // next frame's wake check diffs applied-vs-applied and over-budget
+        // colliders that were never written can't trigger a spurious wake.
+        previousForeignForSleep = foreign
+        previousExternalForSleep = external
     }
 
     /// Transforms additive synthetic colliders (issue #309) into world space and
@@ -1243,7 +1290,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
 
     /// Pure world-space snapshot of this avatar's skeleton-derived body contact
-    /// set (torso + upper arms + head). Reuses the world-transform idiom of
+    /// set (torso + upper arms + head + thigh capsules, plus up to 8 authored
+    /// body colliders). Reuses the world-transform idiom of
     /// `appendSyntheticColliders` but mutates NOTHING — it does not read or write
     /// the interpolation mirror, so the coordinator can call it before this
     /// system's integrate without perturbing the subsequent frame (design §2.2).
@@ -1303,9 +1351,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Reset the foreign-collider sink (design §7) so a freshly populated
         // model starts with zero foreign injection. Without this, stale
         // foreign state from a previously loaded model would carry across
-        // loadModel() calls on this reused compute system.
+        // loadModel() calls on this reused compute system. The sleep snapshots
+        // reset too — otherwise the stale previous set diffs against the new
+        // model's empty set and triggers one spurious wake after reload.
         pendingForeignSnapshot = ForeignColliderSnapshot()
         pendingExternalColliders = ForeignColliderSnapshot()
+        previousForeignForSleep = ForeignColliderSnapshot()
+        previousExternalForSleep = ForeignColliderSnapshot()
         activeForeignSpheres = 0
         activeForeignCapsules = 0
 

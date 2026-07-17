@@ -28,7 +28,7 @@ import simd
 public final class SpringBoneContactGroup {
     private struct Member {
         let system: SpringBoneComputeSystem
-        let model: VRMModel
+        var model: VRMModel
         /// Per-source firmness (subsystem 4): how firmly THIS avatar's body
         /// pushes others' spring bones. 1.0 = full (default), 0.0 = ghost.
         var responseScale: Float = 1.0
@@ -37,17 +37,23 @@ public final class SpringBoneContactGroup {
 
     public init() {}
 
-    /// Adds a participant. Fails loudly if the participant cannot support
-    /// cross-avatar contact (interpolation off), rather than silently yielding
-    /// to no one (design §4.3).
+    /// Adds a participant. Re-joining with a system that is already a member
+    /// REPLACES its model in place (keeping its `responseScale`) instead of
+    /// appending a duplicate: `VRMRenderer.springBoneComputeSystem` is created
+    /// once per renderer and reused across `loadModel`, and the documented usage
+    /// is "call `joinContactGroup` after `loadModel`", so a model reload re-joins
+    /// the same system. A duplicate entry would keep injecting the OLD model's
+    /// colliders into partners (ghost) and, since `nearestPartnerIndices` only
+    /// excludes the receiver's own index, would become the system's own nearest
+    /// partner (self-collision).
     ///
     /// Not `public`: `SpringBoneComputeSystem` is package-internal, so this
     /// method's access level follows its parameter type (Swift requires a
     /// public method's signature to be built only from public types).
     func add(system: SpringBoneComputeSystem, model: VRMModel) {
-        if !VRMConstants.Physics.enableRootInterpolation {
-            assertionFailure("SpringBoneContactGroup requires enableRootInterpolation == true; v1 foreign injection hooks only the interpolation path (design §4.3).")
-            vrmLogPhysics("❌ [SpringBoneContactGroup] enableRootInterpolation is off; participant will not receive cross-avatar contact.")
+        if let existing = members.firstIndex(where: { $0.system === system }) {
+            members[existing].model = model
+            return
         }
         members.append(Member(system: system, model: model))
     }

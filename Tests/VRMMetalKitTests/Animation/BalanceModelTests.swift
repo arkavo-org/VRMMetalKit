@@ -166,7 +166,7 @@ final class BalanceModelTests: XCTestCase {
                                             options: VRMLoadingOptions(augmentSpringBoneColliders: false))
         model.updateNodeTransforms()
 
-        let corners = try XCTUnwrap(BalanceModel.footGroundCorners(model: model, foot: .left, groundY: 0))
+        let corners = try XCTUnwrap(BalanceModel.footGroundCorners(model: model, foot: .left))
         XCTAssertEqual(corners.count, 4)
         // The four corners are not degenerate: they span a non-trivial area (a real foot).
         let hull = BalanceModel.supportPolygon(footCorners: corners)

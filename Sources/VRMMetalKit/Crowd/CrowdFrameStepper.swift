@@ -59,6 +59,16 @@ public final class CrowdFrameStepper {
     /// Per-avatar shove solvers / capture-step controllers, keyed by avatar index.
     private var staggerSolvers: [Int: StaggerShoveSolver] = [:]
     private var captureSteppers: [Int: CaptureStepController] = [:]
+    /// Per-avatar arm-counterbalance layers, keyed by avatar index. Empty ⇒ brace
+    /// off. Driven by the capture-step controller's own balance read (Phase 0f),
+    /// so the brace tracks the imbalance transient and releases as the step
+    /// restores the margin — never a latched pose.
+    private let armLayers: [Int: ArmCounterbalanceLayer]
+    /// Balance residual (metres of CoM outside the support base) that maps to a
+    /// full brace. Sized against the measured stagger peaks (≈0.05 m under-capacity,
+    /// ≈0.076 m over-capacity — StaggerShoveIntegrationTests) so a hard shove reads
+    /// as a near-full brace and the step's contraction releases it.
+    private static let fullBraceResidual: Float = 0.08
     /// Avatars whose stagger channel has activated (first frame with depth > 0).
     /// Dormant avatars are byte-identical to the stagger-off path, so Phase 0b's
     /// scripted approach never reads as a CoM disturbance.
@@ -82,6 +92,11 @@ public final class CrowdFrameStepper {
         captureSteppers[avatarIndex]
     }
 
+    /// The arm-counterbalance layer for `avatarIndex`, if the brace is enabled.
+    public func armCounterbalanceLayer(forAvatar avatarIndex: Int) -> ArmCounterbalanceLayer? {
+        armLayers[avatarIndex]
+    }
+
     /// - Parameters:
     ///   - bodyContactMargin: enables Component A (contact-aware clamp) — the max
     ///     torso overlap allowed. `nil` leaves the driver's separation untouched.
@@ -91,9 +106,15 @@ public final class CrowdFrameStepper {
     ///     a `StaggerShoveSolver` + `CaptureStepController` (committed arrest
     ///     defaults — the configuration the ~0.2 m/s capacity was validated with)
     ///     is built per avatar, dormant until first contact. `nil` ⇒ off.
+    ///   - armCounterbalance: enables the arm brace (Component C) with these params;
+    ///     an `ArmCounterbalanceLayer` is built and bound per avatar, driven each
+    ///     frame by that avatar's balance residual (Phase 0f). Requires the stagger
+    ///     channel (its `CaptureStepController` provides the balance read); with
+    ///     stagger off the layers exist but never see a non-zero intensity.
+    ///     `nil` ⇒ off.
     public init(avatars: [Avatar], driver: CrowdMotionDriver, group: SpringBoneContactGroup?, fps: Float,
                 bodyContactMargin: Float? = nil, postural: PosturalContactParams? = nil,
-                stagger: StaggerShoveParams? = nil) {
+                stagger: StaggerShoveParams? = nil, armCounterbalance: ArmCounterbalanceParams? = nil) {
         self.avatars = avatars
         self.driver = driver
         self.group = group
@@ -119,6 +140,17 @@ public final class CrowdFrameStepper {
                 stepParams.stepDamping = CaptureStepParams.committedStepDampingMin
                 captureSteppers[avatar.index] = CaptureStepController(params: stepParams)
             }
+        }
+        if let armCounterbalance = armCounterbalance {
+            var layers: [Int: ArmCounterbalanceLayer] = [:]
+            for avatar in avatars {
+                let layer = ArmCounterbalanceLayer(params: armCounterbalance)
+                layer.initialize(with: avatar.model)
+                layers[avatar.index] = layer
+            }
+            self.armLayers = layers
+        } else {
+            self.armLayers = [:]
         }
         // Snapshot each root's authored (bind) translation so scripted motion is
         // applied additively and never loses the model's base pose.
@@ -153,12 +185,17 @@ public final class CrowdFrameStepper {
 
         // Component A: raise the shared placement radius so the closest torso pair
         // overlaps by at most `bodyContactMargin` (the driver still governs when it
-        // is already beyond the contact floor).
+        // is already beyond the contact floor). Skipped on the first frame: there is
+        // no committed-pose measurement to correct against yet — the lagged torsos
+        // still reflect the un-placed bind pose (all roots coincident at origin ⇒
+        // overlap ≈ 2·r), so clamping against them would kick frame 0's placement
+        // outward by ≈(2r − margin)/chordFactor for exactly one frame, a visible
+        // pop at video start.
         let halfSep: Float
-        if let margin = bodyContactMargin {
+        if let margin = bodyContactMargin, let lastHalfSep = lastAppliedHalfSeparation {
             halfSep = CrowdContactClamp.clampedHalfSeparation(
                 driverHalfSep: driverHalfSep,
-                lastAppliedHalfSep: lastAppliedHalfSeparation ?? driverHalfSep,
+                lastAppliedHalfSep: lastHalfSep,
                 torsos: avatars.map { torsos[$0.index] },
                 avatarCount: avatars.count, margin: margin)
         } else {
@@ -238,6 +275,21 @@ public final class CrowdFrameStepper {
                     // activation rule requires.
                     captureSteppers[avatar.index]?.update(deltaTime: dt, model: avatar.model)
                     avatar.model.updateNodeTransforms()
+                    // Phase 0f: arm counterbalance. Driven by the controller's own
+                    // balance read, so the brace engages with the imbalance
+                    // transient and RELEASES as the capture step restores the
+                    // margin — intensity is this frame's residual, never a latched
+                    // state. Runs after 0e so the brace sits on the stepped pose
+                    // and the snapshot sees the braced arms.
+                    if let layer = armLayers[avatar.index] {
+                        let balance = captureSteppers[avatar.index]?.lastBalance
+                        let residual = max(0, -(balance?.margin ?? 0))
+                        layer.intensity = min(residual / Self.fullBraceResidual, 1)
+                        layer.fallDirXZ = balance?.imbalanceDirection ?? .zero
+                        layer.update(deltaTime: dt, context: AnimationContext())
+                        layer.applyDirect(to: avatar.model)
+                        avatar.model.updateNodeTransforms()
+                    }
                 }
             }
         }

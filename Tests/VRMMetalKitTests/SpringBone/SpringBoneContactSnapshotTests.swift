@@ -76,6 +76,7 @@ final class SpringBoneContactSnapshotTests: XCTestCase {
         system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: nil)
         system.waitForPendingFrame()
         let before = model.springBoneBuffers?.getCurrentPositions() ?? []
+        XCTAssertFalse(before.isEmpty)  // guard: purity must not pass vacuously as 0==0
         // Calling snapshot repeatedly must not change sim state.
         for _ in 0..<5 { _ = system.contactColliderSnapshot(model: model) }
         let after = model.springBoneBuffers?.getCurrentPositions() ?? []

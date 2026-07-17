@@ -26,8 +26,12 @@ import simd
 /// so pushing the whole ring out by ∆radius grows the closest chord by
 /// `2·sin(π/N)·∆radius` (for two avatars, `2·∆radius`). The clamp only ever
 /// *raises* the radius — it prevents deep clip-through, never pulls avatars in —
-/// and is a one-frame-lagged feedback (§4) that converges to the margin over a
-/// few frames as the re-measured overlap shrinks.
+/// and is a one-frame-lagged feedback (§4) that BOUNDS the overlap at the margin:
+/// the bump lands the re-measured overlap exactly on the margin, `excess > 0` then
+/// passes the driver through until the overlap re-exceeds — a period-2 oscillation
+/// around the margin in exact arithmetic, pinned within float rounding in practice
+/// and never diverging. Worst case is a bounded root tremor of amplitude
+/// (overlap−margin)/chordFactor, not a drift.
 public enum CrowdContactClamp {
 
     /// Largest pairwise surface overlap among the torso capsules (`0` when the

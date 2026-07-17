@@ -144,4 +144,68 @@ final class PosturalContactLayerTests: XCTestCase {
         let diff = (shareA.inverse * shareB).angle
         XCTAssertEqual(diff, 0, accuracy: 1e-4, "same share onto both bases → post-multiply, not fixed-base overwrite")
     }
+
+    /// §3.1 world-space exactness under an animated pose: with the spine rotated
+    /// AWAY from identity (a clip pose), the post-multiplied yield must realize
+    /// the lean in world space exactly — the spine's world rotation becomes
+    /// `qShare · W_before`, tipping the trunk directly away from the partner.
+    /// Parent-frame conjugation deflects the lean axis by the bone's local
+    /// rotation; own-world conjugation (`W⁻¹·q·W`) is exact at any pose.
+    @MainActor func testApplyDirect_animatedPose_worldLeanAxisExact() async throws {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+        model.updateNodeTransforms()
+        guard let spineIdx = model.humanoid?.getBoneNode(.spine) else { throw XCTSkip("no spine") }
+        guard let chestIdx = model.humanoid?.getBoneNode(.chest) else { throw XCTSkip("rig has no chest bone") }
+
+        // Simulate a clip pose: yaw the spine well away from bind. The yaw axis
+        // is (near-)perpendicular to the lean axis computed below, so a
+        // parent-frame conjugation would deflect the world lean by ~0.6 rad.
+        model.nodes[spineIdx].rotation = simd_quatf(angle: 0.6, axis: SIMD3<Float>(0, 1, 0))
+        model.updateNodeTransforms()
+
+        let spinePos = model.nodes[spineIdx].worldPosition
+        let chest = model.nodes[chestIdx].worldPosition
+        let spineUp = simd_normalize(chest - spinePos)
+
+        let layer = PosturalContactLayer()
+        layer.initialize(with: model)
+        // Partner axis 0.1 m to the chest's +X → outward push is exactly −X.
+        layer.partnerTorso = penetratingPartner(near: chest)
+        // One long step: alpha = min(k·dt, 1) = 1 → the lean is at target.
+        layer.update(deltaTime: 0.5, context: AnimationContext())
+        let share = try XCTUnwrap(layer.evaluate().bones[.spine]?.rotation,
+                                  "spine yield engages on contact")
+        XCTAssertGreaterThan(share.angle, 0.05, "a real lean, not a no-op")
+
+        let wBefore = worldRotation(model.nodes[spineIdx].worldMatrix)
+        layer.applyDirect(to: model)
+        model.updateNodeTransforms()
+        let wAfter = worldRotation(model.nodes[spineIdx].worldMatrix)
+
+        // The residual world rotation must BE the world-space share: same angle
+        // (conjugation preserves it) about the solver's axis cross(spineUp, push).
+        let residual = simd_normalize(wAfter * wBefore.inverse)
+        XCTAssertEqual(residual.angle, share.angle, accuracy: 1e-3,
+                       "applied world rotation magnitude matches the share")
+        let push = SIMD3<Float>(-1, 0, 0)
+        let expectedAxis = simd_normalize(simd_cross(spineUp, push))
+        XCTAssertEqual(abs(simd_dot(residual.axis, expectedAxis)), 1, accuracy: 1e-3,
+                       "lean axis is undeflected by the animated local pose")
+        // Geometric intent: the top of the spine tips AWAY from the partner.
+        let tipped = residual.act(spineUp)
+        XCTAssertGreaterThan(simd_dot(tipped, push), 0.1,
+                             "trunk leans along the outward push, away from the partner")
+    }
+
+    /// Orthonormalized rotation quaternion from a (possibly scaled) world matrix
+    /// — mirrors the layer's own extraction so the test measures the same frame.
+    private func worldRotation(_ m: simd_float4x4) -> simd_quatf {
+        let c0 = simd_normalize(SIMD3<Float>(m[0][0], m[0][1], m[0][2]))
+        let c1 = simd_normalize(SIMD3<Float>(m[1][0], m[1][1], m[1][2]))
+        let c2 = simd_normalize(SIMD3<Float>(m[2][0], m[2][1], m[2][2]))
+        return simd_quatf(simd_float3x3(c0, c1, c2))
+    }
 }

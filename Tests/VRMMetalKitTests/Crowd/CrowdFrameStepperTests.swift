@@ -287,6 +287,33 @@ final class CrowdFrameStepperTests: XCTestCase {
             "clamp raised the applied half-separation above the driver's deep hold")
     }
 
+    /// Frame-0 no-kick (Component A regression): with the clamp enabled, the FIRST
+    /// step must apply the driver's proposal verbatim — the lagged torsos still show
+    /// the un-placed bind pose (roots coincident at origin ⇒ overlap ≈ 2·r), so
+    /// clamping against them would bump the placement outward for exactly one frame
+    /// (a visible pop at video start). The clamp engages from the second step on,
+    /// once a committed pose exists to measure.
+    @MainActor func testFirstStepAppliesDriverValueWithoutClampKick() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let margin: Float = 0.05
+        let a = try await avatar(device, index: 0)
+        let b = try await avatar(device, index: 1)
+        // Deep hold so the placed torsos overlap past the margin from frame 1 on,
+        // proving the clamp does engage once a committed pose exists.
+        let driver = CrowdMotionDriver(startSep: 1.0, holdSep: 0.05,
+            approachStart: 0.0, approachEnd: 0.1, holdEnd: 0.9, partEnd: 1.0)
+        let stepper = CrowdFrameStepper(avatars: [a, b], driver: driver, group: nil, fps: 60,
+                                        bodyContactMargin: margin)
+
+        stepper.step(frameTime: 0.5)  // hold window
+        XCTAssertEqual(stepper.lastAppliedHalfSeparation, driver.halfSeparation(at: 0.5),
+            "frame 0 must use the driver's proposal — no committed pose to correct against")
+
+        stepper.step(frameTime: 0.5)
+        XCTAssertGreaterThan(try XCTUnwrap(stepper.lastAppliedHalfSeparation), driver.halfSeparation(at: 0.5),
+            "frame 1 must clamp against frame 0's committed (overlapping) pose")
+    }
+
     /// Component B, load-bearing (design §3/§6): the postural yield is written in
     /// the kinematic phase BEFORE the spring solver, so spring bones anchored above
     /// the chest (head hair — head descends from chest via neck) inherit the lean.

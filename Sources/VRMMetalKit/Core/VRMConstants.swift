@@ -154,7 +154,6 @@ public enum VRMConstants {
         /// for arbitrary crowd sizes while covering small crowds fully (up to
         /// N = maxContactPartners + 1 avatars all contact each other).
         public static let maxContactPartners: Int = 6
-        /// Foreign sphere slots reserved per partner: the contact set contributes
         /// Foreign sphere slots reserved per partner: 1 skeleton skull sphere +
         /// up to `maxAuthoredContactColliders` (8) authored body spheres
         /// (subsystem 3), sized for the all-sphere worst case.

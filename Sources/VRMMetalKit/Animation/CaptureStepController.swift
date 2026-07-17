@@ -51,11 +51,13 @@ public struct CaptureStepParams: Sendable {
     /// (`CaptureStepStabilityTests`, monotone in drive rate, with an over-capacity
     /// escape counter-case) AND the real-rig CONFIRMATION gate
     /// (`CaptureStepIKTests.testRigTrackingCapacity_belowHolds_overCapacityGrows`,
-    /// below-capacity holds / over-capacity grows on the actual skeleton + IK, measured
-    /// on the BALANCE RESIDUAL — the same quantity the model gate measures). On that
-    /// metric the rig CONFIRMS the model: below-capacity drive holds the residual,
-    /// over-capacity drive grows it, with the escape boundary in the model's committed
-    /// band. THIS fixture's physical leg reach does clamp at below-capacity drive rates
+    /// on the actual skeleton + IK, measured on the BALANCE RESIDUAL — the same
+    /// quantity the model gate measures). What the rig gate ASSERTS is exactly two
+    /// drive rates: 0.08 m/s holds the residual, 0.6 m/s grows it. Where the rig's
+    /// escape boundary falls between them (the 0.15–0.4 m/s sweep) is print-only
+    /// characterization, NOT gated — "the boundary sits in the model's committed
+    /// band" is an observation, not a checked fact. THIS fixture's physical leg
+    /// reach does clamp at below-capacity drive rates
     /// (it stands with near-zero reach-slack at rest), but reach-clamping is a graceful
     /// KINEMATIC degradation mode (the foot lands short of its ideal capture point) that
     /// does not by itself indicate balance failure and does not bound the rig's balance
@@ -106,8 +108,13 @@ public enum CaptureStepMath {
     public static func captureTargetXZ(comGround: SIMD2<Float>, imbalanceDirection: SIMD2<Float>,
                                        supportCentroid: SIMD2<Float>, captureDistance: Float,
                                        stepDamping: Float) -> SIMD2<Float> {
-        let rawTarget = comGround + imbalanceDirection * captureDistance
-        return supportCentroid + (rawTarget - supportCentroid) * (1 - stepDamping)
+        // Clamp to the documented domains: damping > 1 steps to the far side of the
+        // centroid (never recovers), negative overshoots; a negative lead steps
+        // away from the fall.
+        let damping = min(max(stepDamping, 0), 0.999)
+        let lead = max(captureDistance, 0)
+        let rawTarget = comGround + imbalanceDirection * lead
+        return supportCentroid + (rawTarget - supportCentroid) * (1 - damping)
     }
 }
 
@@ -131,11 +138,14 @@ public final class CaptureStepController {
     /// the controller's restored feet (not the clip's skating positions).
     public private(set) var lastBalance: BalanceState?
 
-    /// Whether the MOST RECENT `placeAnkle` call clamped its reach (the requested
-    /// world target exceeded the summed leg length) — reset at the top of `update`. A
-    /// clamp means the IK solver's ε guarantee (spec §2.1) no longer applies to that
-    /// frame, since the ankle lands short of the target by construction. Task 4's
-    /// rig-tracking gate uses this to confirm zero clamp events below capacity.
+    /// Whether ANY of the frame's `placeAnkle` calls clamped its reach (a requested
+    /// world target exceeded the summed leg length) — reset at the top of `update`,
+    /// then OR-accumulated across the four calls `update` makes per frame. A clamp
+    /// means the IK solver's ε guarantee (spec §2.1) no longer applies to that
+    /// frame, since the ankle lands short of the target by construction. Recorded
+    /// for diagnostics only: the rig-tracking gate does NOT gate on clamps — the
+    /// trailing leg reach-clamps routinely below capacity (169/180 frames at
+    /// 0.08 m/s) because this fixture stands with near-zero reach-slack at rest.
     public private(set) var lastStepClamped = false
 
     public init(params: CaptureStepParams = CaptureStepParams()) {
@@ -144,16 +154,16 @@ public final class CaptureStepController {
 
     /// One frame: seed-once from the rig, RESTORE the controller's feet before reading
     /// balance (spec §2 / Redline 1), evaluate, decide (2a `step`), apply via IK.
-    public func update(deltaTime: Float, model: VRMModel, rootVelocity: SIMD3<Float> = .zero, groundY: Float = 0) {
+    public func update(deltaTime: Float, model: VRMModel, rootVelocity: SIMD3<Float> = .zero) {
+        lastStepClamped = false
         guard isEnabled, let humanoid = model.humanoid else { return }
         _ = rootVelocity   // velocity-free default; reserved for the predicted-target hook
-        lastStepClamped = false
+        let dt = max(deltaTime, 0)   // a negative dt must not run the state machine backwards
 
         if !seeded {
             if let l = humanoid.getBoneNode(.leftFoot), let r = humanoid.getBoneNode(.rightFoot),
                l < model.nodes.count, r < model.nodes.count {
                 seed(leftAnkle: model.nodes[l].worldPosition, rightAnkle: model.nodes[r].worldPosition)
-                seeded = true
             } else { return }
         }
 
@@ -163,9 +173,9 @@ public final class CaptureStepController {
         placeAnkle(.right, worldTarget: target(.right), model: model)
         model.updateNodeTransforms()
 
-        guard let balance = BalanceModel.evaluate(model: model, groundY: groundY, plantedFeet: plantedFeet) else { return }
+        guard let balance = BalanceModel.evaluate(model: model, plantedFeet: plantedFeet) else { return }
         lastBalance = balance
-        _ = step(balance: balance, dt: deltaTime)
+        _ = step(balance: balance, dt: dt)
 
         // Apply the (possibly updated) targets.
         placeAnkle(.left, worldTarget: target(.left), model: model)
@@ -174,11 +184,13 @@ public final class CaptureStepController {
     }
 
     /// Seed both feet planted at the given (synthetic in 2a; rig-sourced in 2b) ankle
-    /// world positions. Rig-free — takes positions as data.
+    /// world positions. Rig-free — takes positions as data. Sets the seeded latch, so
+    /// the next `update` keeps these positions instead of re-seeding from the rig.
     public func seed(leftAnkle: SIMD3<Float>, rightAnkle: SIMD3<Float>) {
         left = .planted(leftAnkle)
         right = .planted(rightAnkle)
         timeSinceLastStep = params.minStepInterval   // ready to step immediately
+        seeded = true
     }
 
     /// Translate planted (and mid-swing) foot world targets by `delta`.
@@ -245,7 +257,7 @@ public final class CaptureStepController {
                                                       captureDistance: params.captureDistance,
                                                       stepDamping: params.stepDamping)
             let from = foot == .left ? lp : rp
-            let to = SIMD3<Float>(txz.x, from.y, txz.y)   // preserve the foot's own height (flat ground; groundY is 2b)
+            let to = SIMD3<Float>(txz.x, from.y, txz.y)   // preserve the foot's own height (flat ground)
             let swing = FootPhase.swinging(from: from, to: to, elapsed: 0)
             if foot == .left { left = swing } else { right = swing }
             timeSinceLastStep = 0

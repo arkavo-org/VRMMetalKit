@@ -19,7 +19,8 @@ import simd
 
 /// Skeleton-derived body contact set for cross-avatar collision (design §5):
 /// the huggable surfaces a partner's spring bones yield to — torso, upper arms,
-/// and head. A *second caller* of the shared bone->capsule geometry
+/// head, and thigh capsules, plus up to 8 authored body colliders (subsystem 3).
+/// A *second caller* of the shared bone->capsule geometry
 /// (`SpringBoneBoneGeometry`), independent of the #309 augmentor's trigger and
 /// enable flag: it fires because a contact-group participant needs its contact
 /// surface, computed from the humanoid skeleton every VRM 1.0 avatar has.

@@ -117,20 +117,24 @@ func printUsage() {
         --rim-power <float>     Fresnel exponent for silhouette rim
                                 (typical 4..12, default: 5)
         --crowd                 Render multiple avatars approaching/touching
-        --avatar-count N        Avatars in the crowd (default 2)
-        --crowd-start-sep M     Start half-separation in meters (default 1.0)
-        --crowd-hold-sep M      Hold half-separation in meters (default 0.18)
+        --avatar-count N        Avatars in the crowd (default 2, max 32; crowd only)
+        --crowd-start-sep M     Start half-separation in meters (default 1.0; crowd only)
+        --crowd-hold-sep M      Hold half-separation in meters (default 0.18; crowd only)
         --crowd-no-contact      Disable cross-avatar collision (before/after baseline)
         --body-contact-margin M Contact-aware motion: cap torso overlap at M meters
-                                (bodies press to contact instead of clipping through)
+                                (bodies press to contact instead of clipping through;
+                                crowd only)
         --postural              Postural yield: upper body leans away on contact
-        --stagger               Stagger shove: contact displaces the CoM and a
-                                capture step keeps the avatar upright (crowd only)
+                                (crowd only)
+        --stagger               Stagger shove: contact displaces the CoM, a capture
+                                step keeps the avatar upright, and the arms brace
+                                with the imbalance (arm counterbalance; crowd only)
         --stagger-gain G        Override the shove gain (metres of CoM offset per
-                                metre of penetration; default 6.0)
+                                metre of penetration; default 6.0; crowd only)
         --spring-gravity <M>    Downward spring-bone gravity (app-layer). Auto-applied
                                 to rigs that author none (e.g. AvatarSample); 0 disables.
-        --realtime              Use the async spring path a live app uses (sleep gate live)
+        --realtime              Use the async spring path a live app uses (sleep gate
+                                live; crowd only)
         --help                  Show this help message
 
     EXAMPLES:
@@ -199,6 +203,21 @@ struct RenderOptions {
     var stagger: Bool = false           // stagger shove + capture step (design 2026-07-07)
     var staggerGain: Float? = nil       // shoveGain override (calibration knob)
     var springGravity: Float? = nil     // Override app-layer spring gravity (nil = auto)
+}
+
+/// Diagnostics go to stderr so a typo'd option stays visible when stdout is
+/// piped into a render log. Message style matches the file's existing
+/// "Warning:"/"Error:" prints.
+func warnToStderr(_ message: String) {
+    FileHandle.standardError.write(Data("Warning: \(message)\n".utf8))
+}
+
+/// A flag truncated at end of argv (no value) is a malformed command: name the
+/// flag and fail. Returning nil here would land in main()'s exit(0), which is
+/// reserved for --help.
+func missingValueError(for flag: String) -> Never {
+    FileHandle.standardError.write(Data("Error: \(flag) requires a value\n".utf8))
+    exit(1)
 }
 
 func parseArguments() -> RenderOptions? {
@@ -283,32 +302,62 @@ func parseArguments() -> RenderOptions? {
         case "--crowd":
             options.crowd = true
         case "--avatar-count":
-            i += 1; guard i < args.count else { return nil }
-            options.avatarCount = max(2, Int(args[i]) ?? 2)
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            let count = Int(args[i]) ?? options.avatarCount
+            if count > 32 {
+                // Cap: each avatar is a full model load + render pass, so an
+                // unbounded count (e.g. a typo'd 10000) hangs the run.
+                warnToStderr("--avatar-count \(count) exceeds the 32-avatar cap; using 32")
+                options.avatarCount = 32
+            } else {
+                options.avatarCount = max(2, count)
+            }
         case "--crowd-start-sep":
-            i += 1; guard i < args.count else { return nil }
-            options.crowdStartSep = Float(args[i]) ?? options.crowdStartSep
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            if let v = Float(args[i]), v.isFinite, v >= 0 {
+                options.crowdStartSep = v
+            } else {
+                warnToStderr("Invalid --crowd-start-sep '\(args[i])' (need finite, >= 0); using \(options.crowdStartSep)")
+            }
         case "--crowd-hold-sep":
-            i += 1; guard i < args.count else { return nil }
-            options.crowdHoldSep = Float(args[i]) ?? options.crowdHoldSep
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            if let v = Float(args[i]), v.isFinite, v >= 0 {
+                options.crowdHoldSep = v
+            } else {
+                warnToStderr("Invalid --crowd-hold-sep '\(args[i])' (need finite, >= 0); using \(options.crowdHoldSep)")
+            }
         case "--crowd-no-contact":
             options.crowdNoContact = true
         case "--body-contact-margin":
-            i += 1; guard i < args.count else { return nil }
-            options.bodyContactMargin = Float(args[i]) ?? options.bodyContactMargin
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            // A negative margin makes the clamp's excess always positive (avatars
+            // accelerate apart unbounded); NaN silently disables the clamp.
+            if let v = Float(args[i]), v.isFinite, v >= 0 {
+                options.bodyContactMargin = v
+            } else {
+                warnToStderr("Invalid --body-contact-margin '\(args[i])' (need finite, >= 0); leaving the clamp off")
+            }
         case "--postural":
             options.postural = true
         case "--stagger":
             options.stagger = true
         case "--stagger-gain":
             i += 1
-            guard i < args.count else { return nil }
+            guard i < args.count else { missingValueError(for: arg) }
             if let g = Float(args[i]), g.isFinite, g >= 0 {
                 options.staggerGain = g
+            } else {
+                warnToStderr("Invalid --stagger-gain '\(args[i])' (need finite, >= 0); using the default")
             }
         case "--spring-gravity":
-            i += 1; guard i < args.count else { return nil }
-            options.springGravity = Float(args[i]) ?? options.springGravity
+            i += 1; guard i < args.count else { missingValueError(for: arg) }
+            // Non-finite (e.g. 1e999 → +inf) would pass the magnitude > 0 guard
+            // in applySpringGravityDefault and inject infinite gravity.
+            if let v = Float(args[i]), v.isFinite {
+                options.springGravity = v
+            } else {
+                warnToStderr("Invalid --spring-gravity '\(args[i])' (need finite); using auto")
+            }
         case "--realtime":
             options.crowdRealtime = true
         default:
@@ -599,7 +648,8 @@ func buildCrowd(modelURL: URL, animURL: URL, device: MTLDevice,
     }
     return (CrowdFrameStepper(avatars: avatars, driver: driver, group: group, fps: Float(options.fps),
                               bodyContactMargin: options.bodyContactMargin, postural: postural,
-                              stagger: stagger), group)
+                              stagger: stagger,
+                              armCounterbalance: stagger != nil ? ArmCounterbalanceParams() : nil), group)
 }
 
 // MARK: - Main
@@ -974,6 +1024,11 @@ struct VRMVideoRendererCLI {
             // buffer is not locked until copyTextureToPixelBuffer below, so nothing
             // to release here.
             if commandBuffer.status == .error {
+                // This throw skips markAsFinished/finishWriting, so cancel the
+                // writer and remove the partial output makeVideoPipeline created —
+                // otherwise a truncated, unplayable .mov is left behind.
+                pipeline.videoWriter.cancelWriting()
+                try? FileManager.default.removeItem(at: URL(fileURLWithPath: options.outputPath))
                 throw VideoRenderError.commandBufferFailed(frame: frameIndex,
                     message: commandBuffer.error?.localizedDescription ?? "unknown GPU error")
             }

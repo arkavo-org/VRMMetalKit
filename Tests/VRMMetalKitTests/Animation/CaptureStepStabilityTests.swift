@@ -82,10 +82,11 @@ final class CaptureStepStabilityTests: XCTestCase {
     }
 
     /// captureDistance is STABILIZING, not a loop-gain term (spec §4 re-axis): a larger
-    /// lead tracks a disturbance that a smaller lead escapes.
-    /// The corrected per-foot-identity self-feedback moved this boundary — cap=0.5 no
-    /// longer tracks 0.6 m/s (it sits in a since-shrunk pocket); cap=0.65 is comfortably
-    /// inside the new stable band [0.6, 0.7], verified false at 0.55/0.72 on either side.
+    /// lead tracks a disturbance that a smaller lead escapes — but it does not BOUND
+    /// stability: stability is not monotone in captureDistance. With the corrected
+    /// per-foot-identity self-feedback one sweep observed a bounded pocket (cap=0.5
+    /// escapes 0.6 m/s, cap=0.65 tracks it, 0.55 and 0.72 escape again), so this gate
+    /// pins exactly the two asserted points rather than claiming a stable band.
     func testLargerCaptureDistance_tracksFasterDisturbance() {
         XCTAssertFalse(tracks(drivePerSec: 0.6, cap: 0.0), "no lead escapes at 0.6 m/s")
         XCTAssertTrue(tracks(drivePerSec: 0.6, cap: 0.65), "a large lead tracks the same 0.6 m/s")

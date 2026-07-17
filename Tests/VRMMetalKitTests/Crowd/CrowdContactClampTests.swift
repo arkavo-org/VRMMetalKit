@@ -67,24 +67,23 @@ final class CrowdContactClampTests: XCTestCase {
         XCTAssertEqual(out, 0.5, accuracy: 1e-6)
     }
 
-    /// Feedback convergence: applying the clamp repeatedly (snapshot re-measured
-    /// at the new radius) drives the overlap to the margin within a few frames.
+    /// Feedback bound: applying the clamp repeatedly (snapshot re-measured at the
+    /// new radius) holds the overlap at the margin — a period-2 dither around it
+    /// in exact arithmetic, bounded, never diverging.
     func testClamp_convergesToMarginOverFrames() {
         let margin: Float = 0.05
         let radiusSum: Float = 0.6   // two 0.3 torsos, parallel vertical
         var h: Float = 0.2           // start deeply overlapped (chord 0.4, overlap 0.2)
         for _ in 0..<8 {
-            let chord = 2 * h                     // N=2 chord = 2·radius
             let a = CapsuleCollider(p0: SIMD3<Float>(-h, 0, 0), p1: SIMD3<Float>(-h, 1, 0), radius: 0.3)
             let b = CapsuleCollider(p0: SIMD3<Float>(h, 0, 0), p1: SIMD3<Float>(h, 1, 0), radius: 0.3)
-            _ = chord; _ = radiusSum
             h = CrowdContactClamp.clampedHalfSeparation(
                 driverHalfSep: 0.0, lastAppliedHalfSep: h,
                 torsos: [a, b], avatarCount: 2, margin: margin)
         }
         let finalChord = 2 * h
         let finalOverlap = radiusSum - finalChord
-        XCTAssertLessThanOrEqual(finalOverlap, margin + 1e-3, "overlap converges to the margin")
+        XCTAssertLessThanOrEqual(finalOverlap, margin + 1e-3, "overlap is bounded at the margin")
         XCTAssertGreaterThan(finalOverlap, -0.05, "does not over-push far past the margin")
     }
 }

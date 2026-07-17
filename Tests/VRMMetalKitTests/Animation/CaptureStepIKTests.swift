@@ -120,7 +120,7 @@ final class CaptureStepIKTests: XCTestCase {
             model.updateNodeTransforms()
             c.update(deltaTime: 1.0 / 60.0, model: model)
             let midFrame = try XCTUnwrap(c.lastBalance, "evaluate ran this frame")
-            let postFrame = try XCTUnwrap(BalanceModel.evaluate(model: model, groundY: 0, plantedFeet: c.plantedFeet))
+            let postFrame = try XCTUnwrap(BalanceModel.evaluate(model: model, plantedFeet: c.plantedFeet))
             worstDivergence = max(worstDivergence, simd_distance(midFrame.supportCentroid, postFrame.supportCentroid))
         }
         // With restore, divergence is float noise (~1e-7); without it, the per-frame

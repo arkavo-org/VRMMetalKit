@@ -125,6 +125,10 @@ public final class PosturalContactLayer: AnimationLayer {
                                       spineUp: spineUp, dt: deltaTime)
 
         // Weight the whole lean, then split across spine + upper trunk bone.
+        // The two shares are same-axis powers of the same quaternion, so they
+        // commute: the chest inherits q_spine through the hierarchy and its own
+        // share adds q_chest, totalling q — per-bone own-world conjugation
+        // (see `localDelta`) stays exact across the split.
         let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         let weighted = simd_slerp(identity, worldLean, simd_clamp(params.blendWeight, 0, 1))
         guard weighted.angle > 1e-5 else { return }
@@ -136,18 +140,26 @@ public final class PosturalContactLayer: AnimationLayer {
     }
 
     /// Per-bone local yield deltas from the most recent ``update(deltaTime:context:)``,
-    /// for the compositor path. Empty ⇒ exact no-op.
+    /// for the compositor path. Emitted `.additive` so the yield multiplies ON TOP of
+    /// lower-priority clip deltas (e.g. locomotion's rest-relative `rest⁻¹·clip`):
+    /// `base * (rest⁻¹·clip) * share == clipLocal * share` — the same post-multiply
+    /// semantic as ``applyDirect(to:)``. (`.blend(1.0)` would REPLACE the running
+    /// delta, snapping the bones out of the clip pose.) Empty ⇒ exact no-op.
     public func evaluate() -> LayerOutput {
         guard !pending.isEmpty else { return LayerOutput() }
         var bones: [VRMHumanoidBone: ProceduralBoneTransform] = [:]
         for (bone, q) in pending { bones[bone] = ProceduralBoneTransform(rotation: q) }
-        return LayerOutput(bones: bones, morphWeights: [:], blendMode: .blend(1.0))
+        return LayerOutput(bones: bones, morphWeights: [:], blendMode: .additive)
     }
 
     /// Post-multiply the yield onto each affected bone's *current animated* local
     /// rotation (design §3.1 / §3D): `node.rotation = animRotation × yieldShare`.
     /// The caller runs `updateNodeTransforms()` afterward. No-op when ``evaluate()``
     /// is empty. Unlike the compositor, this preserves the live clip pose.
+    ///
+    /// Contract: the caller's clip must rewrite the affected bones every frame (as
+    /// the crowd stepper's clips do). For a bone the clip does NOT drive, the
+    /// post-multiplied yield accumulates frame-over-frame instead of decaying away.
     public func applyDirect(to model: VRMModel) {
         guard !pending.isEmpty, let humanoid = model.humanoid else { return }
         for (bone, share) in pending {
@@ -178,20 +190,19 @@ public final class PosturalContactLayer: AnimationLayer {
         return model.nodes[idx].worldPosition
     }
 
-    /// Convert a world-space rotation delta into `bone`'s local space so applying
-    /// it as a local rotation produces that world tilt regardless of the avatar's
-    /// facing: `qLocal = parentWorldRot⁻¹ · qWorld · parentWorldRot`.
+    /// Convert a world-space rotation delta into `bone`'s local space for
+    /// **post-multiply** application (`rotation * delta` in ``applyDirect(to:)``,
+    /// `base * composite` in the compositor). Post-multiply realizes a world
+    /// rotation q exactly when the delta is conjugated by the bone's OWN world
+    /// rotation W: `qLocal = W⁻¹ · qWorld · W`, since `W · qLocal == qWorld · W`.
+    /// (Parent conjugacy is exact only when the bone's local rotation is
+    /// identity — the bind pose.)
     private func localDelta(_ worldDelta: simd_quatf, bone: VRMHumanoidBone,
                             model: VRMModel) -> simd_quatf? {
         guard let humanoid = model.humanoid, let idx = humanoid.getBoneNode(bone),
               idx < model.nodes.count else { return nil }
-        let parentWorldRot: simd_quatf
-        if let parent = model.nodes[idx].parent {
-            parentWorldRot = worldRotation(parent.worldMatrix)
-        } else {
-            parentWorldRot = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        }
-        return simd_normalize(parentWorldRot.inverse * worldDelta * parentWorldRot)
+        let w = worldRotation(model.nodes[idx].worldMatrix)
+        return simd_normalize(w.inverse * worldDelta * w)
     }
 
     /// Orthonormalized rotation quaternion from a (possibly scaled) world matrix.

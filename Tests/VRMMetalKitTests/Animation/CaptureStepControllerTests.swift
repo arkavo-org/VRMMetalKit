@@ -15,6 +15,7 @@
 //
 
 import XCTest
+import Metal
 import simd
 @testable import VRMMetalKit
 
@@ -200,5 +201,62 @@ final class CaptureStepControllerTests: XCTestCase {
             XCTAssertLessThanOrEqual(r[i], r[i - 1] + 1e-4, "static residual did not reduce at step \(i): \(r)")
         }
         XCTAssertLessThan(r.last ?? .greatestFiniteMagnitude, 0.05, "residual reduced to near zero: \(r)")
+    }
+
+    // MARK: - Task 5: seed latch + plant translation
+
+    func testTranslatePlants_movesTargetsByExactlyDelta_phasesUnchanged() {
+        var p = CaptureStepParams(); p.minStepInterval = 0
+        let c = CaptureStepController(params: p)
+        c.seed(leftAnkle: SIMD3<Float>(-0.1, 0, 0), rightAnkle: SIMD3<Float>(0.1, 0, 0))
+        let delta = SIMD3<Float>(0.05, 0, -0.02)
+
+        // Planted: both targets move by exactly delta, and stay planted.
+        c.translatePlants(by: delta)
+        XCTAssertEqual(c.target(.left), SIMD3<Float>(-0.05, 0, -0.02))
+        XCTAssertEqual(c.target(.right), SIMD3<Float>(0.15, 0, -0.02))
+        XCTAssertEqual(c.plantedFeet, [.left, .right], "planted stays planted")
+
+        // Mid-swing: the swing endpoints move by delta and the phase stays swinging.
+        let b = balanceFrom(feet: [SIMD3<Float>(-0.05, 0, -0.02), SIMD3<Float>(0.15, 0, -0.02)],
+                            com: SIMD3<Float>(0.5, 1, 0))
+        _ = c.step(balance: b, dt: 1.0 / 60.0)   // imbalance toward +x ⇒ left (trailing) swings
+        guard case .swinging(let from0, let to0, let e0) = c.phase(.left) else {
+            XCTFail("a swing should have begun"); return
+        }
+        c.translatePlants(by: delta)
+        guard case .swinging(let from1, let to1, let e1) = c.phase(.left) else {
+            XCTFail("a swing stays a swing"); return
+        }
+        XCTAssertEqual(from1, from0 + delta)
+        XCTAssertEqual(to1, to0 + delta)
+        XCTAssertEqual(e1, e0, "swing elapsed is carried, not reset")
+    }
+
+    @MainActor private func loadRig() async throws -> VRMModel {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+        model.updateNodeTransforms()
+        return model
+    }
+
+    /// seed() sets the seeded latch: an explicit caller seed survives the first
+    /// update() instead of being silently overwritten by the rig's ankle positions.
+    @MainActor func testUpdate_explicitSeedSurvivesFirstUpdate() async throws {
+        let model = try await loadRig()
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let l = try XCTUnwrap(humanoid.getBoneNode(.leftFoot))
+        let r = try XCTUnwrap(humanoid.getBoneNode(.rightFoot))
+        // 1 cm off the rig's ankles — small enough that no capture step triggers.
+        let seededL = model.nodes[l].worldPosition + SIMD3<Float>(0.01, 0, 0)
+        let seededR = model.nodes[r].worldPosition + SIMD3<Float>(0.01, 0, 0)
+        let c = CaptureStepController()
+        c.seed(leftAnkle: seededL, rightAnkle: seededR)
+        c.update(deltaTime: 1.0 / 60.0, model: model)
+        XCTAssertEqual(c.plantedFeet, [.left, .right], "the 1 cm offset did not trigger a step")
+        XCTAssertEqual(c.target(.left), seededL, "planted target stays the caller seed, not re-seeded from the rig")
+        XCTAssertEqual(c.target(.right), seededR)
     }
 }

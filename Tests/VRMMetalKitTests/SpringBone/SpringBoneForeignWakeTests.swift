@@ -101,4 +101,46 @@ final class SpringBoneForeignWakeTests: XCTestCase {
         }
         XCTAssertTrue(asleep, "a static, unchanging foreign collider must not pin chains awake forever")
     }
+
+    /// A responseScale-only change (ghost → firm via `setContactResponseScale`:
+    /// same count, same geometry, only the push strength changes) must still
+    /// wake sleeping chains — the contact response changes even though no
+    /// collider moved (subsystem 4).
+    @MainActor func testForeignResponseScaleChangeWakesSleepingChains() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        model.updateNodeTransforms()
+        try model.initializeSpringBoneGPUSystem(device: device)
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+        model.springBoneGlobalParams?.settlingFrames = 0
+
+        let queue = device.makeCommandQueue()!
+        // Ghost partner: fixed geometry, responseScale 0 — static, so chains may sleep.
+        var ghost = SphereCollider(center: SIMD3<Float>(10, 10, 10), radius: 0.05, groupIndex: 0)
+        ghost.responseScale = 0.0
+        func stepAsync(_ sphere: SphereCollider) {
+            system.setForeignColliders(ForeignColliderSnapshot(spheres: [sphere], capsules: []))
+            let cb = queue.makeCommandBuffer()!
+            system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: cb)
+            cb.commit()
+            cb.waitUntilCompleted()
+        }
+
+        var asleep = false
+        for _ in 0..<80 {
+            stepAsync(ghost)
+            if system.sleepingBoneCount > 0 { asleep = true; break }
+        }
+        XCTAssertTrue(asleep, "a static ghost foreign collider must not pin chains awake")
+
+        // Ghost → firm: identical geometry, only the push scale changes.
+        var firm = ghost
+        firm.responseScale = 1.0
+        stepAsync(firm)
+        XCTAssertEqual(system.sleepingBoneCount, 0,
+            "a responseScale-only change must wake sleeping chains (ghost -> firm)")
+    }
 }

@@ -197,9 +197,11 @@ final class StaggerShoveIntegrationTests: XCTestCase {
     /// SUPPRESSED: the same shove with the step trigger made unreachable reaches
     /// a real residual peak and FAILS to contract, proving the capture step (not
     /// the fixture) is what restores balance. Rate discriminator: a 0.4 m/s cap
-    /// transiently degrades balance ≥2× the 0.14 peak yet still contracts — the
-    /// mutual shove is self-limiting (partner-feedback equilibrium, spec G5
-    /// amendment), so sustained over-capacity escape is structurally impossible
+    /// transiently degrades balance materially (>1.3× the 0.14 peak) yet still
+    /// contracts — the mutual shove is self-limiting (partner-feedback
+    /// equilibrium, spec G5 amendment), which bounds the transient peak
+    /// independently of rate and compresses the ratio (measured ≈1.52× on Apple
+    /// Silicon), so sustained over-capacity escape is structurally impossible
     /// in-crowd; escape under sustained drive is increment 2's rig gate.
     @MainActor func testG5_shoveStaggersAndStepKeepsItUpright() async throws {
         let epsilon: Float = 0.001
@@ -217,7 +219,12 @@ final class StaggerShoveIntegrationTests: XCTestCase {
             "without the step the residual does NOT contract (peak \(suppressed.peak), tail \(suppressed.tail))")
 
         let overRate = try await staggerRun(velocityCap: 0.4, postural: false)
-        XCTAssertGreaterThan(overRate.peak, under.peak * 2,
+        // Re-gated ×2 → ×1.3: this discriminator predates 93c6cf9's torso-pair-overlap
+        // depth signal, and the G5-amendment equilibrium (offset ≈ depth·g/(1+g)) bounds
+        // the transient peak independently of rate, compressing the ratio. Measured on
+        // Apple Silicon: under.peak ≈ 0.0499, overRate.peak ≈ 0.0757 (ratio ≈ 1.52).
+        // ×1.3 still fails a total loss of rate sensitivity (ratio → 1).
+        XCTAssertGreaterThan(overRate.peak, under.peak * 1.3,
             "a faster cap transiently degrades balance materially (\(overRate.peak) vs \(under.peak))")
         XCTAssertLessThanOrEqual(overRate.tail, overRate.peak * 0.5 + epsilon,
             "yet still contracts — the self-limiting displacement bound (peak \(overRate.peak), tail \(overRate.tail))")
@@ -236,5 +243,48 @@ final class StaggerShoveIntegrationTests: XCTestCase {
         XCTAssertTrue(withLean.stepped, "the step fires even with the self-relieving lean active")
         XCTAssertLessThanOrEqual(withLean.tail, withLean.peak * 0.5 + 0.001,
             "and the residual still contracts (peak \(withLean.peak), tail \(withLean.tail))")
+    }
+
+    /// Arm brace — engagement AND release: with counterbalance wired, the shove's
+    /// imbalance transient raises the arms (intensity tracks the balance residual
+    /// via Phase 0f), and once the capture step contracts the residual the brace
+    /// releases. The release assertion pins the drive contract — intensity is
+    /// this frame's residual, never a latched state, so the arms can't stay out
+    /// past the recovery.
+    @MainActor func testArmBrace_engagesOnShove_releasesOnRecovery() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0)
+        let b = try await avatar(device, index: 1)
+        let stepper = CrowdFrameStepper(avatars: [a, b], driver: holdOnlyDriver(halfSep: 0.05),
+                                        group: nil, fps: 60,
+                                        stagger: StaggerShoveParams(),
+                                        armCounterbalance: ArmCounterbalanceParams())
+        let layer = try XCTUnwrap(stepper.armCounterbalanceLayer(forAvatar: 0), "brace wired per avatar")
+        var maxIntensity: Float = 0
+        for f in 0..<180 {
+            stepper.step(frameTime: Float(f) / 180.0)
+            maxIntensity = max(maxIntensity, layer.currentIntensity)
+        }
+        print("[brace] peak intensity \(maxIntensity), final \(layer.currentIntensity)")
+        XCTAssertGreaterThan(maxIntensity, 0.15,
+            "the shove's imbalance transient engaged the brace (peak \(maxIntensity))")
+        XCTAssertLessThan(layer.currentIntensity, 0.05,
+            "the brace released once the step restored the margin (final \(layer.currentIntensity))")
+    }
+
+    /// Arm brace dormancy — without contact there is no balance read, so the
+    /// brace never engages: intensity stays zero, `pending` stays empty, and
+    /// `applyDirect` is a no-op (the opt-in guarantee, same shape as G7's).
+    @MainActor func testArmBrace_noContact_neverEngages() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0)
+        let b = try await avatar(device, index: 1)
+        let stepper = CrowdFrameStepper(avatars: [a, b], driver: holdOnlyDriver(halfSep: 1.0),
+                                        group: nil, fps: 60,
+                                        stagger: StaggerShoveParams(),
+                                        armCounterbalance: ArmCounterbalanceParams())
+        let layer = try XCTUnwrap(stepper.armCounterbalanceLayer(forAvatar: 0))
+        for f in 0..<60 { stepper.step(frameTime: Float(f) / 60.0) }
+        XCTAssertEqual(layer.currentIntensity, 0, "no contact ⇒ brace never engaged")
     }
 }

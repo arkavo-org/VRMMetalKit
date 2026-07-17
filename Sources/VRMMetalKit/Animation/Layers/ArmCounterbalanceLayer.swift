@@ -30,7 +30,7 @@ import simd
 /// bind. Post-multiplying them onto A-pose / walk clips drives the arms
 /// **inward through the torso**. Brace therefore applies a **world-space**
 /// raise about the character forward axis and converts to each bone's local
-/// space (same parent-world conjugacy as ``PosturalContactLayer``):
+/// space (same own-world conjugacy as ``PosturalContactLayer``):
 /// - Left arm:  +angle about character **+Z** (from hang: −Y → +X, out/up)
 /// - Right arm: −angle about character **+Z** (from hang: −Y → −X, out/up)
 ///
@@ -75,7 +75,11 @@ public final class ArmCounterbalanceLayer: AnimationLayer {
             _ = solver.update(intensity: 0, localFallXZ: .zero, dt: deltaTime)
             return
         }
-        guard let model = model else { return }
+        guard let model = model else {
+            // Decay any residual brace so a stale pose doesn't apply on rebind.
+            _ = solver.update(intensity: 0, localFallXZ: .zero, dt: deltaTime)
+            return
+        }
 
         let localFall = characterLocalFall(worldXZ: fallDirXZ, model: model)
         let pose = solver.update(intensity: intensity, localFallXZ: localFall, dt: deltaTime)
@@ -112,7 +116,10 @@ public final class ArmCounterbalanceLayer: AnimationLayer {
         guard !pending.isEmpty else { return LayerOutput() }
         var bones: [VRMHumanoidBone: ProceduralBoneTransform] = [:]
         for (bone, q) in pending { bones[bone] = ProceduralBoneTransform(rotation: q) }
-        return LayerOutput(bones: bones, morphWeights: [:], blendMode: .blend(1.0))
+        // `.additive` so the brace multiplies on top of lower-priority clip
+        // deltas (see PosturalContactLayer.evaluate) — `.blend(1.0)` would
+        // replace the running delta and snap the arms out of the clip pose.
+        return LayerOutput(bones: bones, morphWeights: [:], blendMode: .additive)
     }
 
     public func applyDirect(to model: VRMModel) {
@@ -146,8 +153,11 @@ public final class ArmCounterbalanceLayer: AnimationLayer {
         return (left, forward, SIMD3(0, 1, 0))
     }
 
-    /// World rotation about `worldAxis` by `worldAngle` → bone local delta.
-    /// `qLocal = parentWorldRot⁻¹ · qWorld · parentWorldRot`
+    /// World rotation about `worldAxis` by `worldAngle` → bone local delta for
+    /// post-multiply application: `qLocal = W⁻¹ · qWorld · W`, where W is the
+    /// bone's OWN world rotation, so `W · qLocal == qWorld · W` exactly under
+    /// any animated local pose. (Parent conjugacy is exact only at bind pose,
+    /// where the bone's local rotation is identity.)
     private func localDelta(worldAngle: Float, worldAxis: SIMD3<Float>,
                             bone: VRMHumanoidBone, model: VRMModel) -> simd_quatf? {
         guard let humanoid = model.humanoid, let idx = humanoid.getBoneNode(bone),
@@ -155,13 +165,8 @@ public final class ArmCounterbalanceLayer: AnimationLayer {
         let axisLen = simd_length(worldAxis)
         guard axisLen > 1e-6, abs(worldAngle) > 1e-5 else { return nil }
         let qWorld = simd_quatf(angle: worldAngle, axis: worldAxis / axisLen)
-        let parentWorldRot: simd_quatf
-        if let parent = model.nodes[idx].parent {
-            parentWorldRot = worldRotation(parent.worldMatrix)
-        } else {
-            parentWorldRot = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        }
-        return simd_normalize(parentWorldRot.inverse * qWorld * parentWorldRot)
+        let w = worldRotation(model.nodes[idx].worldMatrix)
+        return simd_normalize(w.inverse * qWorld * w)
     }
 
     private func worldRotation(_ m: simd_float4x4) -> simd_quatf {

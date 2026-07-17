@@ -24,8 +24,8 @@ public struct PosturalContactParams: Sendable {
     public var kGain: Float
     /// Safety clamp on the lean angle (radians) so the spine can't break awkwardly.
     public var maxLeanAngle: Float
-    /// Critically-damped slerp rate: yield speed on contact + recovery speed on
-    /// separation. Larger = firmer/faster.
+    /// Exponential approach rate (no overshoot): yield speed on contact +
+    /// recovery speed on separation. Larger = firmer/faster.
     public var stiffness: Float
     /// Overall layer weight 0–1 (mirrors ``IKLayer/ikBlendWeight``).
     public var blendWeight: Float
@@ -44,7 +44,7 @@ public struct PosturalContactParams: Sendable {
 }
 
 /// The pure, deterministic core of the postural yield (design §3 A/B/C):
-/// chest-vs-partner-torso penetration → target lean → critically-damped
+/// chest-vs-partner-torso penetration → target lean → exponential-approach
 /// smoothing. Metal-free and model-free so the yield behaviour is unit-testable
 /// in isolation; ``PosturalContactLayer`` wraps it with the model/stack plumbing.
 public struct PosturalContactSolver: Sendable {
@@ -92,10 +92,10 @@ public struct PosturalContactSolver: Sendable {
     }
 
     /// **A+B+C.** Advance one frame: recompute the target lean from the partner
-    /// torso capsule and this chest position, then critically-damp `lean` toward
-    /// it (`slerp(lean, target, min(stiffness·dt, 1))`). Returns the updated
-    /// `lean`. When the chest no longer penetrates, the target is identity and
-    /// `lean` decays back to identity.
+    /// torso capsule and this chest position, then ease `lean` toward it —
+    /// `slerp(lean, target, min(stiffness·dt, 1))`, an exponential approach
+    /// (no overshoot). Returns the updated `lean`. When the chest no longer
+    /// penetrates, the target is identity and `lean` decays back to identity.
     @discardableResult
     public mutating func update(partnerTorso: CapsuleCollider, chestWorld: SIMD3<Float>,
                                 spineUp: SIMD3<Float>, dt: Float) -> simd_quatf {

@@ -688,7 +688,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     /// Sets how firmly this avatar's body pushes OTHER participants' hair/cloth in
     /// a contact group (subsystem 4, per-source): 1.0 = full (default), 0.5 =
-    /// gentle, 0.0 = ghost (present but no push). Call after `joinContactGroup`.
+    /// gentle, 0.0 = ghost (present but no push). The value is clamped to [0, 1].
+    /// Call after `joinContactGroup`.
     public func setContactResponseScale(_ scale: Float, in group: SpringBoneContactGroup) {
         guard let system = springBoneComputeSystem else { return }
         group.setResponseScale(scale, for: system)
@@ -710,6 +711,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///
     /// The internal `SpringBoneComputeSystem` is never exposed; the public
     /// `SphereCollider` / `CapsuleCollider` values carry world-space positions.
+    ///
+    /// Threading: the write is consumed by `update()` on the render path; callers
+    /// on a live/async path own frame-boundary synchronization (set between
+    /// frames, not while a frame's `update()` is in flight).
     public func setExternalColliders(spheres: [SphereCollider] = [], capsules: [CapsuleCollider] = []) {
         springBoneComputeSystem?.setExternalColliders(
             ForeignColliderSnapshot(spheres: spheres, capsules: capsules))

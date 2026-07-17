@@ -69,6 +69,32 @@ final class ArmCounterbalanceSolverTests: XCTestCase {
         XCTAssertLessThan(s.pose.rightRaise, 0.05)
     }
 
+    func testUpdate_subFrameDt_stepsPartwayTowardTarget() {
+        // stiffness 20, dt 0.01 → blend factor k·dt = 0.2 < 1: the spring is
+        // actually exercised (large dt clamps to 1 and jumps straight to target).
+        let params = ArmCounterbalanceParams(stiffness: 20)
+        var s = ArmCounterbalanceSolver(params: params)
+        let target = ArmCounterbalanceSolver.targetPose(
+            intensity: 1, localFallXZ: SIMD2(1, 0), params: params)
+
+        _ = s.update(intensity: 1, localFallXZ: SIMD2(1, 0), dt: 0.01)
+        XCTAssertGreaterThan(s.pose.rightRaise, 0, "spring leaves rest on impact")
+        XCTAssertLessThan(s.pose.rightRaise, target.rightRaise,
+                          "one sub-frame step must land strictly short of the target")
+        XCTAssertEqual(s.pose.rightRaise, target.rightRaise * 0.2, accuracy: 1e-5,
+                       "blend factor is k·dt = 0.2")
+
+        // Further steps keep easing in without overshoot.
+        var prev = s.pose.rightRaise
+        for _ in 0..<5 {
+            _ = s.update(intensity: 1, localFallXZ: SIMD2(1, 0), dt: 0.01)
+            XCTAssertGreaterThan(s.pose.rightRaise, prev, "monotonic approach")
+            prev = s.pose.rightRaise
+        }
+        XCTAssertLessThanOrEqual(prev, target.rightRaise + 1e-6,
+                                 "never overshoots the target (exponential approach)")
+    }
+
     func testTargetPose_intensityIsMonotonic() {
         let lo = ArmCounterbalanceSolver.targetPose(
             intensity: 0.3, localFallXZ: SIMD2(0, 1), params: ArmCounterbalanceParams())

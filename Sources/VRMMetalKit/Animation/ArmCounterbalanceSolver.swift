@@ -28,7 +28,7 @@ public struct ArmCounterbalanceParams: Sendable {
     public var maxSpread: Float
     /// Elbow bend (radians) — soft, not locked straight.
     public var maxElbow: Float
-    /// Critically-damped approach rate toward targets (and recovery to rest).
+    /// Exponential approach rate (no overshoot) toward targets (and recovery to rest).
     public var stiffness: Float
     /// Overall 0–1 weight.
     public var blendWeight: Float
@@ -140,7 +140,7 @@ public struct ArmCounterbalanceSolver: Sendable {
             intensity: i)
     }
 
-    /// Critically-damped step of `pose` toward `target`.
+    /// Exponential approach (no overshoot) of `pose` toward `target`.
     @discardableResult
     public mutating func update(intensity: Float,
                                 localFallXZ: SIMD2<Float>,
