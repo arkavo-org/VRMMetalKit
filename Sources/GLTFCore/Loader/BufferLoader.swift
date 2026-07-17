@@ -54,6 +54,17 @@ public class BufferLoader: @unchecked Sendable {
     /// Preloaded buffer data (optional optimization)
     private var preloadedData: [Int: Data]?
 
+    /// Memoized accessor decodes, keyed by accessor index. Face meshes split
+    /// into many material primitives re-reference the same morph/attribute
+    /// accessors (measured: 7–8× redundant decodes on avatar files), so the
+    /// final array is cached per accessor and repeats are ~free. The stored
+    /// array is shared with every caller — value semantics make any caller
+    /// mutation copy-on-write, so this is safe. Lock-guarded because mesh
+    /// decode runs concurrently across primitives.
+    private let accessorCacheLock = NSLock()
+    private var floatAccessorCache: [Int: [Float]] = [:]
+    private var uint32AccessorCache: [Int: [UInt32]] = [:]
+
     /// The file path for error reporting
     public var filePath: String? {
         return baseURL?.path
@@ -165,6 +176,13 @@ public class BufferLoader: @unchecked Sendable {
         }
         try validateAccessor(accessor, accessorIndex: accessorIndex, context: "loadAccessorAsFloat")
 
+        accessorCacheLock.lock()
+        if let cached = floatAccessorCache[accessorIndex] {
+            accessorCacheLock.unlock()
+            return cached
+        }
+        accessorCacheLock.unlock()
+
         let components = componentCount(for: accessor.type)
         let componentSize = bytesPerComponent(accessor.componentType)
         var result: [Float]
@@ -179,14 +197,32 @@ public class BufferLoader: @unchecked Sendable {
 
             let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
 
-            result = []
-            result.reserveCapacity(accessor.count * components)
-            for i in 0..<accessor.count {
-                let elementOffset = combinedOffset + (i * stride)
-                for j in 0..<components {
-                    let componentOffset = elementOffset + (j * componentSize)
-                    let value = extractFloatComponent(from: data, at: componentOffset, componentType: accessor.componentType)
-                    result.append(value)
+            // Fast path: tightly-packed FLOAT with no sparse overrides is one
+            // bulk copy — the per-scalar extraction loop below only runs for
+            // strided/normalized/sparse accessors.
+            if accessor.sparse == nil,
+               accessor.componentType == 5126, // FLOAT
+               stride == components * MemoryLayout<Float>.size,
+               accessor.count > 0,
+               combinedOffset + accessor.count * components * MemoryLayout<Float>.size <= data.count {
+                var packed = [Float](repeating: 0, count: accessor.count * components)
+                packed.withUnsafeMutableBytes { dst in
+                    data.withUnsafeBytes { src in
+                        memcpy(dst.baseAddress!, src.baseAddress! + combinedOffset,
+                               accessor.count * components * MemoryLayout<Float>.size)
+                    }
+                }
+                result = packed
+            } else {
+                result = []
+                result.reserveCapacity(accessor.count * components)
+                for i in 0..<accessor.count {
+                    let elementOffset = combinedOffset + (i * stride)
+                    for j in 0..<components {
+                        let componentOffset = elementOffset + (j * componentSize)
+                        let value = extractFloatComponent(from: data, at: componentOffset, componentType: accessor.componentType)
+                        result.append(value)
+                    }
                 }
             }
         } else {
@@ -199,6 +235,10 @@ public class BufferLoader: @unchecked Sendable {
             }
         }
 
+        // Cache the final array (post-sparse); see the cache note above.
+        accessorCacheLock.lock()
+        floatAccessorCache[accessorIndex] = result
+        accessorCacheLock.unlock()
         return result
     }
 
@@ -219,6 +259,13 @@ public class BufferLoader: @unchecked Sendable {
         }
         try validateAccessor(accessor, accessorIndex: accessorIndex, context: "loadAccessorAsUInt32")
 
+        accessorCacheLock.lock()
+        if let cached = uint32AccessorCache[accessorIndex] {
+            accessorCacheLock.unlock()
+            return cached
+        }
+        accessorCacheLock.unlock()
+
         let components = componentCount(for: accessor.type)
         let componentSize = bytesPerComponent(accessor.componentType)
         var result: [UInt32]
@@ -234,14 +281,32 @@ public class BufferLoader: @unchecked Sendable {
             // CRITICAL FIX: Use the bufferView's byteStride for interleaved vertex attributes.
             let stride = bufferView.byteStride ?? bytesPerElement(componentType: accessor.componentType, accessorType: accessor.type)
 
-            result = []
-            result.reserveCapacity(accessor.count * components)
-            for i in 0..<accessor.count {
-                let elementOffset = combinedOffset + (i * stride)
-                for j in 0..<components {
-                    let componentOffset = elementOffset + (j * componentSize)
-                    let value = extractUIntComponent(from: data, at: componentOffset, componentType: accessor.componentType)
-                    result.append(value)
+            // Fast path: tightly-packed UNSIGNED_INT with no sparse overrides
+            // is one bulk copy — the per-scalar loop below only runs for
+            // strided/widened/sparse accessors.
+            if accessor.sparse == nil,
+               accessor.componentType == 5125, // UNSIGNED_INT
+               stride == components * MemoryLayout<UInt32>.size,
+               accessor.count > 0,
+               combinedOffset + accessor.count * components * MemoryLayout<UInt32>.size <= data.count {
+                var packed = [UInt32](repeating: 0, count: accessor.count * components)
+                packed.withUnsafeMutableBytes { dst in
+                    data.withUnsafeBytes { src in
+                        memcpy(dst.baseAddress!, src.baseAddress! + combinedOffset,
+                               accessor.count * components * MemoryLayout<UInt32>.size)
+                    }
+                }
+                result = packed
+            } else {
+                result = []
+                result.reserveCapacity(accessor.count * components)
+                for i in 0..<accessor.count {
+                    let elementOffset = combinedOffset + (i * stride)
+                    for j in 0..<components {
+                        let componentOffset = elementOffset + (j * componentSize)
+                        let value = extractUIntComponent(from: data, at: componentOffset, componentType: accessor.componentType)
+                        result.append(value)
+                    }
                 }
             }
         } else {
@@ -254,6 +319,10 @@ public class BufferLoader: @unchecked Sendable {
             }
         }
 
+        // Cache the final array (post-sparse); see the cache note above.
+        accessorCacheLock.lock()
+        uint32AccessorCache[accessorIndex] = result
+        accessorCacheLock.unlock()
         return result
     }
 

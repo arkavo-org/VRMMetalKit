@@ -988,8 +988,10 @@ public class VRMModel: @unchecked Sendable {
             }
         }
 
-        // Calculate initial transforms
-        for node in nodes {
+        // Calculate initial transforms. updateWorldTransform() recurses
+        // through children, so walking ROOTS covers every node exactly once
+        // (the previous all-nodes pass recomputed subtrees O(depth) times).
+        for node in nodes where node.parent == nil {
             node.updateWorldTransform()
         }
 
