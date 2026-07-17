@@ -38,7 +38,7 @@ final class LayerCompositionTests: XCTestCase {
     private func penetratingPartner(near chest: SIMD3<Float>) -> CapsuleCollider {
         let axis = chest + SIMD3<Float>(0.1, 0, 0)   // 0.1 m to the side of the chest
         return CapsuleCollider(p0: axis - SIMD3<Float>(0, 0.3, 0),
-                               p1: axis + SIMD3<Float>(0, 0.3, 0), radius: 0.5)  // depth ~0.4
+                               p1: axis + SIMD3<Float>(0, 0.3, 0), radius: 0.5, groupMask: 0)  // depth ~0.4
     }
 
     /// A clip holding a constant spine pose, with the locomotion metadata

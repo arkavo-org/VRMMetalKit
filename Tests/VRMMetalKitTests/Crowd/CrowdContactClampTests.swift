@@ -31,23 +31,23 @@ final class CrowdContactClampTests: XCTestCase {
 
     /// Overlap = r0 + r1 − segment distance, positive only when surfaces cross.
     func testMaxOverlap_twoOverlappingTorsos() {
-        let a = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0), radius: 0.3)
-        let b = CapsuleCollider(p0: SIMD3<Float>(0.4, 0, 0), p1: SIMD3<Float>(0.4, 1, 0), radius: 0.3)
+        let a = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0), radius: 0.3, groupMask: 0)
+        let b = CapsuleCollider(p0: SIMD3<Float>(0.4, 0, 0), p1: SIMD3<Float>(0.4, 1, 0), radius: 0.3, groupMask: 0)
         // distance 0.4, radii sum 0.6 → overlap 0.2
         XCTAssertEqual(CrowdContactClamp.maxOverlap(torsos: [a, b]), 0.2, accuracy: 1e-5)
     }
 
     func testMaxOverlap_separatedTorsos_isZero() {
-        let a = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0), radius: 0.3)
-        let b = CapsuleCollider(p0: SIMD3<Float>(2, 0, 0), p1: SIMD3<Float>(2, 1, 0), radius: 0.3)
+        let a = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0), radius: 0.3, groupMask: 0)
+        let b = CapsuleCollider(p0: SIMD3<Float>(2, 0, 0), p1: SIMD3<Float>(2, 1, 0), radius: 0.3, groupMask: 0)
         XCTAssertEqual(CrowdContactClamp.maxOverlap(torsos: [a, b]), 0, accuracy: 1e-6)
     }
 
     /// Deep overlap past the margin pushes the shared radius out. For N=2 the
     /// chord grows 2× the radius, so the needed radius bump is excess/2.
     func testClamp_deepOverlap_raisesHalfSeparation() {
-        let a = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0), radius: 0.3)
-        let b = CapsuleCollider(p0: SIMD3<Float>(0.4, 0, 0), p1: SIMD3<Float>(0.4, 1, 0), radius: 0.3)
+        let a = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0), radius: 0.3, groupMask: 0)
+        let b = CapsuleCollider(p0: SIMD3<Float>(0.4, 0, 0), p1: SIMD3<Float>(0.4, 1, 0), radius: 0.3, groupMask: 0)
         // overlap 0.2, margin 0.05 → excess 0.15 → radius bump 0.075.
         let out = CrowdContactClamp.clampedHalfSeparation(
             driverHalfSep: 0.5, lastAppliedHalfSep: 0.5,
@@ -58,8 +58,8 @@ final class CrowdContactClampTests: XCTestCase {
     /// Within the margin (or separated) the driver's value passes through — the
     /// clamp only ever pushes apart, never pulls in.
     func testClamp_withinMargin_passesDriverValueThrough() {
-        let a = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0), radius: 0.3)
-        let b = CapsuleCollider(p0: SIMD3<Float>(0.58, 0, 0), p1: SIMD3<Float>(0.58, 1, 0), radius: 0.3)
+        let a = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0), radius: 0.3, groupMask: 0)
+        let b = CapsuleCollider(p0: SIMD3<Float>(0.58, 0, 0), p1: SIMD3<Float>(0.58, 1, 0), radius: 0.3, groupMask: 0)
         // overlap 0.02 < margin 0.05 → no push.
         let out = CrowdContactClamp.clampedHalfSeparation(
             driverHalfSep: 0.5, lastAppliedHalfSep: 0.5,
@@ -75,8 +75,8 @@ final class CrowdContactClampTests: XCTestCase {
         let radiusSum: Float = 0.6   // two 0.3 torsos, parallel vertical
         var h: Float = 0.2           // start deeply overlapped (chord 0.4, overlap 0.2)
         for _ in 0..<8 {
-            let a = CapsuleCollider(p0: SIMD3<Float>(-h, 0, 0), p1: SIMD3<Float>(-h, 1, 0), radius: 0.3)
-            let b = CapsuleCollider(p0: SIMD3<Float>(h, 0, 0), p1: SIMD3<Float>(h, 1, 0), radius: 0.3)
+            let a = CapsuleCollider(p0: SIMD3<Float>(-h, 0, 0), p1: SIMD3<Float>(-h, 1, 0), radius: 0.3, groupMask: 0)
+            let b = CapsuleCollider(p0: SIMD3<Float>(h, 0, 0), p1: SIMD3<Float>(h, 1, 0), radius: 0.3, groupMask: 0)
             h = CrowdContactClamp.clampedHalfSeparation(
                 driverHalfSep: 0.0, lastAppliedHalfSep: h,
                 torsos: [a, b], avatarCount: 2, margin: margin)

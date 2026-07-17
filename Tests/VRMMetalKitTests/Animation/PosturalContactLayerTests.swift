@@ -35,7 +35,7 @@ final class PosturalContactLayerTests: XCTestCase {
     private func penetratingPartner(near chest: SIMD3<Float>) -> CapsuleCollider {
         let axis = chest + SIMD3<Float>(0.1, 0, 0)   // 0.1 m to the side of the chest
         return CapsuleCollider(p0: axis - SIMD3<Float>(0, 0.3, 0),
-                               p1: axis + SIMD3<Float>(0, 0.3, 0), radius: 0.5)  // depth ~0.4
+                               p1: axis + SIMD3<Float>(0, 0.3, 0), radius: 0.5, groupMask: 0)  // depth ~0.4
     }
 
     @MainActor func testPenetratingPartner_leansSpineAndChest_thenRecovers() async throws {
@@ -62,7 +62,7 @@ final class PosturalContactLayerTests: XCTestCase {
         XCTAssertGreaterThan(layer.currentLeanAngle, 0.02, "a visible lean accumulates")
 
         // Partner leaves: the layer recovers to identity.
-        layer.partnerTorso = CapsuleCollider(p0: SIMD3<Float>(9, 0, 0), p1: SIMD3<Float>(9, 1, 0), radius: 0.5)
+        layer.partnerTorso = CapsuleCollider(p0: SIMD3<Float>(9, 0, 0), p1: SIMD3<Float>(9, 1, 0), radius: 0.5, groupMask: 0)
         for _ in 0..<200 {
             layer.update(deltaTime: 1.0 / 60.0, context: AnimationContext())
             layer.applyDirect(to: model)
