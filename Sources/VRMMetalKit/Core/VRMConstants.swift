@@ -56,6 +56,13 @@ public enum VRMConstants {
 
     /// Quality presets for the spring-bone XPBD simulation, mapping substep rate, iteration count, and frame budget.
     public enum SpringBoneQuality: Int, Sendable {
+        /// 480Hz substeps, 4 iterations — the ADR-007 reserved tier. Fast limb
+        /// sweeps through hair/cloth are a large-timestep instability; the
+        /// ADR-007 sweep measured penetration monotonic in substep rate
+        /// (120 Hz: catapults; 240 Hz: <= coarse; 480 Hz: 0-1/180 frames,
+        /// 1-7 mm). ~4x the ultra spring-bone GPU cost — opt in for hero
+        /// avatars (menu host, cinematics), not crowds.
+        case extreme = 5
         /// 120Hz substeps, 4 iterations — highest fidelity, recommended on desktop.
         case ultra = 0
         /// 90Hz substeps, 3 iterations — high fidelity, suitable for ProMotion devices.
@@ -70,6 +77,7 @@ public enum VRMConstants {
         /// Substep rate in Hz for this quality level.
         public var substepRateHz: Double {
             switch self {
+            case .extreme: return 480.0
             case .ultra: return 120.0
             case .high: return 90.0
             case .medium: return 60.0
@@ -81,6 +89,7 @@ public enum VRMConstants {
         /// Number of XPBD constraint iterations per substep.
         public var constraintIterations: Int {
             switch self {
+            case .extreme: return 4
             case .ultra: return 4
             case .high: return 3
             case .medium: return 2
@@ -92,6 +101,12 @@ public enum VRMConstants {
         /// Maximum substeps allowed per frame before the simulation drops steps to avoid the spiral of death.
         public var maxSubstepsPerFrame: Int {
             switch self {
+            // MUST NOT exceed Physics.maxSubstepsPerFrame (10) — per-substep
+            // buffer segments are allocated at that static capacity (see the
+            // substepIndex asserts in SpringBoneComputeSystem). 10 covers full
+            // 480 Hz at 60 fps (needs 8); below ~48 fps the accumulator clamp
+            // time-dilates gracefully instead of overrunning the allocation.
+            case .extreme: return 10
             case .ultra: return 10
             case .high: return 8
             case .medium: return 6
