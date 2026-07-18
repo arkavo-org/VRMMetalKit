@@ -48,9 +48,15 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         // lateral skull SPHERE, PLUS (since #321, per the ADR-007 amendment) two
         // lower-arm→hand capsules and two palm spheres for the hand-poke-through,
         // PLUS a torso capsule and two upper-arm capsules for own-body hair
-        // protection (the chest/breast + upper-arm coverage gap).
+        // protection, PLUS (#377) one breast TWIN sphere per authored
+        // chest/upperChest/spine sphere (AvatarSample_A authors 4: 1 spine + 3
+        // upperChest). Twin count is fixture-derived so this stays correct if the
+        // fixture's authored chest spheres change.
+        let twinCount = SpringBoneBoneGeometry.breastTwinSpheres(
+            humanoid: try XCTUnwrap(model.humanoid), model: model).count
+        XCTAssertEqual(twinCount, 4, "AvatarSample_A authors 4 chest/spine spheres to twin")
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 15)
+        XCTAssertEqual(synthetic.count, 15 + twinCount)
         var capsuleCount = 0
         var sphereCount = 0
         for collider in synthetic {
@@ -66,7 +72,91 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
             }
         }
         XCTAssertEqual(capsuleCount, 10, "Expect 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm capsules")
-        XCTAssertEqual(sphereCount, 5, "Expect 1 lateral skull + 2 palm + 2 shoulder spheres")
+        XCTAssertEqual(sphereCount, 5 + twinCount,
+                       "Expect 1 lateral skull + 2 palm + 2 shoulder spheres + \(twinCount) breast twins")
+    }
+
+    /// #377: the augmentor emits a synthetic SWEPT twin sphere co-located with
+    /// each authored chest/upperChest/spine sphere (and any VRoid `*_Bust` /
+    /// `*_Breast` sphere). Because synthetic colliders live in the swept group,
+    /// the twin gives the trunk-front volume the entry-clamping continuous
+    /// collision the authored discrete-only spheres never get — so hair can no
+    /// longer tunnel in and be ejected out the front of the breast mesh. Twins
+    /// mirror the authored node/offset/radius EXACTLY (co-located, same radius ⇒
+    /// the swept depth-gate fires at the same surface). Arm/hand/neck/head
+    /// colliders are NEVER twinned (ADR-007 arm-safety).
+    @MainActor func testBreastTwinSpheresMirrorAuthoredChestSpheres() async throws {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let springBone = try XCTUnwrap(model.springBone)
+
+        // Independently enumerate authored chest/upperChest/spine + bust spheres —
+        // the trunk-front volume hair pierces (#377) — excluding neck/head/arms.
+        let chestNodes = Set([VRMHumanoidBone.chest, .upperChest, .spine]
+            .compactMap { humanoid.getBoneNode($0) })
+        var authoredChest: [(node: Int, offset: SIMD3<Float>, radius: Float)] = []
+        for c in springBone.colliders {
+            let name = (model.nodes[safe: c.node]?.name ?? "").lowercased()
+            let isBust = name.contains("bust") || name.contains("breast")
+            guard chestNodes.contains(c.node) || isBust else { continue }
+            // Only OUTSIDE spheres are twinned; never containment (.insideSphere).
+            if case let .sphere(off, r) = c.shape { authoredChest.append((c.node, off, r)) }
+        }
+        XCTAssertFalse(authoredChest.isEmpty,
+                       "AvatarSample_A authors chest/upperChest/spine spheres to twin")
+
+        let twins = SpringBoneBoneGeometry.breastTwinSpheres(humanoid: humanoid, model: model)
+        XCTAssertEqual(twins.count, authoredChest.count,
+                       "One synthetic twin per authored chest/upperChest/spine sphere")
+
+        for twin in twins {
+            guard case let .sphere(offset, radius) = twin.shape else {
+                return XCTFail("Breast twin must be a .sphere (never containment/capsule)")
+            }
+            let match = authoredChest.contains {
+                $0.node == twin.node
+                    && simd_length($0.offset - offset) < 1e-6
+                    && abs($0.radius - radius) < 1e-6
+            }
+            XCTAssertTrue(match,
+                "Twin node=\(twin.node) r=\(radius) offset=\(offset) must mirror an authored chest sphere")
+        }
+
+        // ADR-007 arm-safety: twins must never cover arm/hand/neck/head nodes.
+        let forbidden = Set([VRMHumanoidBone.leftUpperArm, .rightUpperArm, .leftLowerArm,
+                             .rightLowerArm, .leftHand, .rightHand, .neck, .head]
+            .compactMap { humanoid.getBoneNode($0) })
+        for twin in twins {
+            XCTAssertFalse(forbidden.contains(twin.node),
+                "Breast twins must never cover arm/hand/neck/head nodes (ADR-007 arm-safety)")
+        }
+    }
+
+    /// #377: `synthesize` must APPEND the breast twins into the synthetic set so
+    /// they reach the swept collision group at upload. Every twin the shared
+    /// geometry helper produces must appear (matched by node + offset + radius).
+    @MainActor func testSynthesizeIncludesBreastTwins() async throws {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let twins = SpringBoneBoneGeometry.breastTwinSpheres(humanoid: humanoid, model: model)
+        XCTAssertFalse(twins.isEmpty, "fixture must author chest spheres to twin")
+
+        let synthetic = model.springBone?.syntheticColliders ?? []
+        for twin in twins {
+            guard case let .sphere(tOffset, tRadius) = twin.shape else { continue }
+            let present = synthetic.contains {
+                guard $0.node == twin.node, case let .sphere(o, r) = $0.shape else { return false }
+                return simd_length(o - tOffset) < 1e-6 && abs(r - tRadius) < 1e-6
+            }
+            XCTAssertTrue(present,
+                "synthesize() must include the breast twin on node \(twin.node) (r=\(tRadius))")
+        }
     }
 
     /// A bone with a singular (zero-scale) world matrix must be SKIPPED, not emit
@@ -116,8 +206,9 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let headNode = humanoid.getBoneNode(.head) else { return XCTFail("A must rig a head") }
 
         let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
-        XCTAssertEqual(synthetic.count, 15,
-            "A: 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm capsules; 1 skull + 2 palm spheres")
+        let twinCount = SpringBoneBoneGeometry.breastTwinSpheres(humanoid: humanoid, model: model).count
+        XCTAssertEqual(synthetic.count, 15 + twinCount,
+            "A: 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm capsules; 1 skull + 2 palm + 2 shoulder spheres + \(twinCount) breast twins (#377)")
 
         // The brow capsule (the head-node CAPSULE) is appended AFTER the legs.
         // The skull sphere follows it but is a SPHERE in a separate buffer, so the

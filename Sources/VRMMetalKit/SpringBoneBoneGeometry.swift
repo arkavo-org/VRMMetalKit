@@ -137,6 +137,41 @@ enum SpringBoneBoneGeometry {
         return VRMCollider(node: upperNode, shape: .sphere(offset: offset, radius: radius))
     }
 
+    /// Synthetic SWEPT twin spheres for the authored trunk-front colliders
+    /// (#377). For every authored OUTSIDE sphere on a chest / upperChest / spine
+    /// bone (or a VRoid `*_Bust` / `*_Breast` node), emit a synthetic sphere that
+    /// copies the authored `node`, `offset`, and `radius` VERBATIM. The twin
+    /// lands in the synthetic group, which is the ONLY group the compute path
+    /// sweeps (`SpringBoneCollision.metal`, CLAUDE.md §4): the authored discrete
+    /// spheres are entry-blind and eject a strand that drifted past the sphere
+    /// centre out the FRONT of the breast mesh, while the co-located swept twin
+    /// clamps a fast tunnel-in at the entry surface before it can get there.
+    /// Co-located, equal-radius ⇒ the swept depth-gate (`distClose < radius`)
+    /// fires at exactly the surface the authored discrete test uses.
+    ///
+    /// Arm/hand/neck/head colliders are never twinned — extending swept response
+    /// to authored ARM colliders is the ADR-007 sleeve→arm deflection regression;
+    /// the trunk-front nodes here carry hair drape, not a stiff levering chain.
+    /// Containment (`.insideSphere`), capsules, and planes are out of scope.
+    /// Empty when the model authors no such spheres (coverage there stays with
+    /// the synthetic torso capsule).
+    static func breastTwinSpheres(humanoid: VRMHumanoid, model: VRMModel) -> [VRMCollider] {
+        guard let colliders = model.springBone?.colliders else { return [] }
+        let chestNodes = Set([VRMHumanoidBone.chest, .upperChest, .spine]
+            .compactMap { humanoid.getBoneNode($0) })
+        var twins: [VRMCollider] = []
+        for collider in colliders {
+            guard collider.node >= 0, collider.node < model.nodes.count else { continue }
+            let name = (model.nodes[collider.node].name ?? "").lowercased()
+            let isBust = name.contains("bust") || name.contains("breast")
+            guard chestNodes.contains(collider.node) || isBust else { continue }
+            guard case let .sphere(offset, radius) = collider.shape else { continue }
+            twins.append(VRMCollider(node: collider.node,
+                                     shape: .sphere(offset: offset, radius: radius)))
+        }
+        return twins
+    }
+
     /// Extracts the upper-left 3x3 of a 4x4 world matrix (mirrors the upload path).
     static func upperLeft3x3(_ m: float4x4) -> simd_float3x3 {
         simd_float3x3(

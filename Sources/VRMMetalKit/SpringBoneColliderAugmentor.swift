@@ -241,7 +241,20 @@ public enum SpringBoneColliderAugmentor {
         // into the front shoulder there. Sphere-buffer order does not affect
         // the validated capsule slots.
         appendShoulderSpheres(humanoid: humanoid, model: model, ratios: ratios, into: &out)
+        // Breast TWIN spheres (sphere buffer, appended last): synthetic copies of
+        // the authored chest/upperChest/spine spheres so the trunk-front volume
+        // gets the swept entry-clamp that the authored discrete-only spheres lack
+        // — hair can no longer tunnel in and be ejected out the FRONT of the
+        // breast mesh (#377). Sphere-buffer order does not affect the validated
+        // capsule slots; empty on models with no authored chest spheres.
+        appendBreastTwinSpheres(humanoid: humanoid, model: model, into: &out)
         return out
+    }
+
+    private static func appendBreastTwinSpheres(
+        humanoid: VRMHumanoid, model: VRMModel, into out: inout [VRMCollider]
+    ) {
+        out.append(contentsOf: SpringBoneBoneGeometry.breastTwinSpheres(humanoid: humanoid, model: model))
     }
 
     private static func appendShoulderSpheres(
