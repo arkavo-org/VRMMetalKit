@@ -1180,7 +1180,18 @@ public class VRMModel: @unchecked Sendable {
         // here must match the count uploaded later in
         // `SpringBoneComputeSystem.populateSpringBoneData(model:)`.
         if augmentColliders {
-            expandedSpringBone.syntheticColliders = SpringBoneColliderAugmentor.synthesize(model: self)
+            var synthetic = SpringBoneColliderAugmentor.synthesize(model: self)
+            // Mesh-aware breast colliders (#377): the visible breast rides forward
+            // on the spring `Bust` bones, far beyond the authored/bone-derived
+            // chest colliders, and hair enters at the collarbone and slides down
+            // behind them. Fit a swept CAPSULE (collarbone→breast) to the skinned
+            // breast mesh so front hair is pushed to the actual breast surface.
+            // Requires the uploaded vertex buffers, so it runs here
+            // (post-`loadResources`), not in the pure augmentor. Appended to the
+            // capsule-buffer tail — the validated synthetic capsule slots (0–9)
+            // are untouched. Empty on rigs without a `Bust` spring / body mesh.
+            synthetic.append(contentsOf: SpringBoneBreastCollider.computeBreastColliders(model: self))
+            expandedSpringBone.syntheticColliders = synthetic
         } else {
             expandedSpringBone.syntheticColliders = []
         }

@@ -1443,6 +1443,16 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // cross-avatar colliders, once injected into the tail, affect every
             // spring bone regardless of authored group membership.
             colliderGroupMask |= foreignGroupBit
+            // The `Bust` spring IS the breast surface — the #377 breast collider is
+            // fitted to the mesh it skins, so it ENCLOSES this spring's own joints.
+            // Left colliding, that collider shoves the bust joints out of
+            // themselves every frame and hair contact reads as breast jiggle.
+            // Clear the synthetic bit (works even from the 0xFFFFFFFF default) so
+            // the bust spring ignores every synthetic body collider, while hair
+            // and cloth springs still collide with the breast collider normally.
+            if (spring.name ?? "").lowercased().contains("bust") {
+                colliderGroupMask &= ~syntheticGroupBit
+            }
 
             for joint in spring.joints {
                 chainGravityPower.append(joint.gravityPower)

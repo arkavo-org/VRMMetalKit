@@ -55,8 +55,11 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         let twinCount = SpringBoneBoneGeometry.breastTwinSpheres(
             humanoid: try XCTUnwrap(model.humanoid), model: model).count
         XCTAssertEqual(twinCount, 4, "AvatarSample_A authors 4 chest/spine spheres to twin")
+        // #377 mesh-fitted breast CAPSULES (one per Bust spring chain) are added at
+        // load, not in the pure augmentor — fixture-derived so the counts follow.
+        let breastCount = SpringBoneBreastCollider.computeBreastColliders(model: model).count
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 15 + twinCount)
+        XCTAssertEqual(synthetic.count, 15 + twinCount + breastCount)
         var capsuleCount = 0
         var sphereCount = 0
         for collider in synthetic {
@@ -71,7 +74,8 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
                 return XCTFail("Synthetic colliders must be capsules or spheres")
             }
         }
-        XCTAssertEqual(capsuleCount, 10, "Expect 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm capsules")
+        XCTAssertEqual(capsuleCount, 10 + breastCount,
+                       "Expect 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm + \(breastCount) breast capsules")
         XCTAssertEqual(sphereCount, 5 + twinCount,
                        "Expect 1 lateral skull + 2 palm + 2 shoulder spheres + \(twinCount) breast twins")
     }
