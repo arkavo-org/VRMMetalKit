@@ -1191,6 +1191,15 @@ public class VRMModel: @unchecked Sendable {
             // capsule-buffer tail — the validated synthetic capsule slots (0–9)
             // are untouched. Empty on rigs without a `Bust` spring / body mesh.
             synthetic.append(contentsOf: SpringBoneBreastCollider.computeBreastColliders(model: self))
+            // Mesh-fitted shoulder colliders (#377 upper body): the clothed
+            // shoulder sits outside the bone-derived shoulder sphere, so hair
+            // sinks through the dress during dynamic motion. Fit a swept sphere
+            // to the proximal clothed deltoid. Same load-time reason as breast.
+            synthetic.append(contentsOf: SpringBoneBreastCollider.computeShoulderColliders(model: self))
+            // Mesh-fitted upper-torso collider (#377 upper body): fills the clothed
+            // upper chest (above the breast) and torso sides/back (behind it) that
+            // the bone-derived midline torso capsule leaves inside the dress.
+            synthetic.append(contentsOf: SpringBoneBreastCollider.computeTorsoCollider(model: self))
             expandedSpringBone.syntheticColliders = synthetic
         } else {
             expandedSpringBone.syntheticColliders = []

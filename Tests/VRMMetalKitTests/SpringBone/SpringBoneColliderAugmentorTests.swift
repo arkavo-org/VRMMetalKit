@@ -55,11 +55,13 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         let twinCount = SpringBoneBoneGeometry.breastTwinSpheres(
             humanoid: try XCTUnwrap(model.humanoid), model: model).count
         XCTAssertEqual(twinCount, 4, "AvatarSample_A authors 4 chest/spine spheres to twin")
-        // #377 mesh-fitted breast CAPSULES (one per Bust spring chain) are added at
-        // load, not in the pure augmentor — fixture-derived so the counts follow.
+        // #377 mesh-fitted breast CAPSULES + shoulder SPHERES are added at load,
+        // not in the pure augmentor — fixture-derived so the counts follow.
         let breastCount = SpringBoneBreastCollider.computeBreastColliders(model: model).count
+        let shoulderCount = SpringBoneBreastCollider.computeShoulderColliders(model: model).count
+        let torsoCount = SpringBoneBreastCollider.computeTorsoCollider(model: model).count
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 15 + twinCount + breastCount)
+        XCTAssertEqual(synthetic.count, 15 + twinCount + breastCount + shoulderCount + torsoCount)
         var capsuleCount = 0
         var sphereCount = 0
         for collider in synthetic {
@@ -74,10 +76,10 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
                 return XCTFail("Synthetic colliders must be capsules or spheres")
             }
         }
-        XCTAssertEqual(capsuleCount, 10 + breastCount,
-                       "Expect 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm + \(breastCount) breast capsules")
-        XCTAssertEqual(sphereCount, 5 + twinCount,
-                       "Expect 1 lateral skull + 2 palm + 2 shoulder spheres + \(twinCount) breast twins")
+        XCTAssertEqual(capsuleCount, 10 + breastCount + torsoCount,
+                       "Expect 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm + \(breastCount) breast + \(torsoCount) mesh-fit torso capsules")
+        XCTAssertEqual(sphereCount, 5 + twinCount + shoulderCount,
+                       "Expect 1 lateral skull + 2 palm + 2 shoulder spheres + \(twinCount) breast twins + \(shoulderCount) mesh-fit shoulder spheres")
     }
 
     /// #377: the augmentor emits a synthetic SWEPT twin sphere co-located with

@@ -135,4 +135,23 @@ final class HairBreastPierceTests: XCTestCase {
         XCTAssertLessThan(m.rate, 0.001,
             "augment ON: hair must not pierce the breast mesh >5 mm (#377); got \(String(format: "%.2f%%", m.rate*100)), worst \(String(format: "%.1f mm", m.worst*1000))")
     }
+
+    /// #377 upper body: the mesh-fitted shoulder + torso colliders must be
+    /// emitted with plausible, mesh-sized dimensions on a clothed VRoid rig.
+    func testUpperBodyMeshCollidersFitPlausibly_H() async throws {
+        let path = getTestModelPath("AvatarSample_H_1.0.vrm"); try requireFixture(path, hint: "AvatarSample_H")
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+                                            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        let shoulders = SpringBoneBreastCollider.computeShoulderColliders(model: model)
+        XCTAssertEqual(shoulders.count, 2, "expect left+right mesh-fit shoulder spheres")
+        for c in shoulders {
+            guard case let .sphere(_, r) = c.shape else { return XCTFail("shoulder collider must be a sphere") }
+            XCTAssertTrue(r.isFinite && r > 0.01 && r < 0.15, "shoulder radius \(r) must be plausible (deltoid-sized)")
+        }
+        let torso = SpringBoneBreastCollider.computeTorsoCollider(model: model)
+        XCTAssertEqual(torso.count, 1, "expect one mesh-fit upper-torso capsule")
+        guard case let .capsule(_, r, tail) = torso[0].shape else { return XCTFail("torso collider must be a capsule") }
+        XCTAssertTrue(r.isFinite && r > 0.03 && r < 0.20, "torso radius \(r) must be plausible (clothed-torso-sized)")
+        XCTAssertGreaterThan(simd_length(tail), 0.05, "torso capsule must span spine→upperChest")
+    }
 }

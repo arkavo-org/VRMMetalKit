@@ -152,6 +152,125 @@ enum SpringBoneBreastCollider {
         return out
     }
 
+    /// Per-side deltoid/shoulder COLLIDERS for the swept synthetic group (#377
+    /// upper body). The clothed shoulder (dress/skin) sits outside the
+    /// bone-derived shoulder sphere, so hair sinks through it during dynamic
+    /// motion. Fits a swept sphere to the PROXIMAL clothed shoulder mesh (verts
+    /// weighted to the shoulder/upperArm bones within half an arm-length of the
+    /// socket), anchored on the upperArm so it rides the arm. Empty when the
+    /// bones / body mesh don't resolve.
+    static func computeShoulderColliders(model: VRMModel,
+                                         radiusPercentile: Float = 0.95,
+                                         radiusScale: Float = 1.0) -> [VRMCollider] {
+        guard let humanoid = model.humanoid, let (meshIndex, skin) = bodyMeshAndSkin(model: model) else { return [] }
+        let skinMatrices = skin.joints.indices.map { skin.joints[$0].worldMatrix * skin.inverseBindMatrices[$0] }
+
+        let sides: [(shoulder: VRMHumanoidBone, upper: VRMHumanoidBone, lower: VRMHumanoidBone)] = [
+            (.leftShoulder, .leftUpperArm, .leftLowerArm),
+            (.rightShoulder, .rightUpperArm, .rightLowerArm)
+        ]
+        var out: [VRMCollider] = []
+        for side in sides {
+            guard let upperNode = humanoid.getBoneNode(side.upper), upperNode >= 0, upperNode < model.nodes.count else { continue }
+            let upperOrigin = model.nodes[upperNode].worldPosition
+            var armLen: Float = 0.2
+            if let lowerNode = humanoid.getBoneNode(side.lower), lowerNode >= 0, lowerNode < model.nodes.count {
+                let l = simd_length(model.nodes[lowerNode].worldPosition - upperOrigin)
+                if l > 1e-3 { armLen = l }
+            }
+            let regionNodes = Set([side.shoulder, side.upper].compactMap { humanoid.getBoneNode($0) })
+            let regionSlots = Set(skin.joints.indices.filter { regionNodes.contains(skin.joints[$0].index) })
+
+            var verts: [SIMD3<Float>] = []
+            for primitive in model.meshes[meshIndex].primitives {
+                guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0 else { continue }
+                let ptr = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
+                for vi in 0..<primitive.vertexCount {
+                    let v = ptr[vi]
+                    let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
+                    let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
+                    var domSlot = -1
+                    var domW: Float = 0
+                    for k in 0..<4 where ws[k] > domW { domW = ws[k]; domSlot = js[k] }
+                    guard domSlot >= 0, domW > 0.5, regionSlots.contains(domSlot) else { continue }
+                    let wp = skinVertex(v.position, v.joints, v.weights, skinMatrices)
+                    // Proximal deltoid only — exclude the mid/lower arm.
+                    if simd_length(wp - upperOrigin) < armLen * 0.5 { verts.append(wp) }
+                }
+            }
+            guard verts.count >= 8 else { continue }
+            let centroid = verts.reduce(SIMD3<Float>(repeating: 0), +) / Float(verts.count)
+            let dists = verts.map { simd_length($0 - centroid) }.sorted()
+            let pIdx = min(dists.count - 1, max(0, Int(Float(dists.count - 1) * radiusPercentile)))
+            let radius = dists[pIdx] * radiusScale
+            guard radius.isFinite, radius > 1e-4 else { continue }
+            let localC = simd_inverse(model.nodes[upperNode].worldMatrix) * SIMD4<Float>(centroid, 1)
+            guard localC.x.isFinite, localC.y.isFinite, localC.z.isFinite else { continue }
+            out.append(VRMCollider(node: upperNode,
+                                   shape: .sphere(offset: SIMD3<Float>(localC.x, localC.y, localC.z), radius: radius)))
+        }
+        return out
+    }
+
+    /// Mesh-fitted upper-TORSO collider (#377 upper body): the clothed upper
+    /// chest / décolletage (ABOVE the breast) and the sides/back of the upper
+    /// torso (BEHIND the breast) sit outside the bone-derived midline torso
+    /// capsule, so hair sinks through the dress there. Fits a swept capsule along
+    /// the spine→upperChest axis with a radius fitted to the clothed torso
+    /// surface (verts weighted to spine/chest/upperChest, EXCLUDING the bust which
+    /// the breast capsule already covers). Anchored on the spine. Empty when the
+    /// bones / body mesh don't resolve.
+    static func computeTorsoCollider(model: VRMModel,
+                                     radiusPercentile: Float = 0.90,
+                                     radiusScale: Float = 1.0) -> [VRMCollider] {
+        guard let humanoid = model.humanoid, let (meshIndex, skin) = bodyMeshAndSkin(model: model) else { return [] }
+        guard let spineNode = humanoid.getBoneNode(.spine), spineNode >= 0, spineNode < model.nodes.count else { return [] }
+        let superiorBone = humanoid.getBoneNode(.upperChest) ?? humanoid.getBoneNode(.chest)
+        guard let superiorNode = superiorBone, superiorNode < model.nodes.count else { return [] }
+        let p0 = model.nodes[spineNode].worldPosition       // axis base
+        let p1 = model.nodes[superiorNode].worldPosition    // axis top
+        let axis = p1 - p0
+        let axisLen = simd_length(axis)
+        guard axisLen > 1e-3 else { return [] }
+
+        let skinMatrices = skin.joints.indices.map { skin.joints[$0].worldMatrix * skin.inverseBindMatrices[$0] }
+        let regionNodes = Set([VRMHumanoidBone.spine, .chest, .upperChest].compactMap { humanoid.getBoneNode($0) })
+        let regionSlots = Set(skin.joints.indices.filter { regionNodes.contains(skin.joints[$0].index) })
+
+        func perpDist(_ p: SIMD3<Float>) -> Float {
+            let t = max(0, min(1, simd_dot(p - p0, axis) / (axisLen * axisLen)))
+            return simd_length(p - (p0 + t * axis))
+        }
+        var dists: [Float] = []
+        for primitive in model.meshes[meshIndex].primitives {
+            guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0 else { continue }
+            let ptr = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
+            for vi in 0..<primitive.vertexCount {
+                let v = ptr[vi]
+                let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
+                let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
+                var domSlot = -1
+                var domW: Float = 0
+                for k in 0..<4 where ws[k] > domW { domW = ws[k]; domSlot = js[k] }
+                guard domSlot >= 0, domW > 0.5, regionSlots.contains(domSlot) else { continue }
+                dists.append(perpDist(skinVertex(v.position, v.joints, v.weights, skinMatrices)))
+            }
+        }
+        guard dists.count >= 16 else { return [] }
+        dists.sort()
+        let pIdx = min(dists.count - 1, max(0, Int(Float(dists.count - 1) * radiusPercentile)))
+        let radius = dists[pIdx] * radiusScale
+        guard radius.isFinite, radius > 1e-4 else { return [] }
+        // Capsule along spine→superior in the spine's local frame.
+        let inv = simd_inverse(model.nodes[spineNode].worldMatrix)
+        let o0 = inv * SIMD4<Float>(p0, 1)
+        let o1 = inv * SIMD4<Float>(p1, 1)
+        let offset = SIMD3<Float>(o0.x, o0.y, o0.z)
+        let tail = SIMD3<Float>(o1.x - o0.x, o1.y - o0.y, o1.z - o0.z)
+        guard offset.x.isFinite, tail.x.isFinite else { return [] }
+        return [VRMCollider(node: spineNode, shape: .capsule(offset: offset, radius: radius, tail: tail))]
+    }
+
     /// The body/skin mesh and its skin. Matches the mesh whose name contains
     /// "body" (VRoid exports the torso/skin/dress under a "Body" mesh) and that
     /// binds a skin.
