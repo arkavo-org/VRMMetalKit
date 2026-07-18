@@ -71,6 +71,10 @@ final class HairChestPenetrationTests: XCTestCase {
         var armPenetrations = 0     // raw, either upper-arm capsule — diagnostic
         var worstDepth: Float = 0
         var syntheticCount = 0
+        var breastTwinCount = 0     // #377 breast twins in the synthetic set (fixture-derived)
+        var breastColliderCount = 0 // #377 mesh-fitted breast capsules (fixture-derived)
+        var shoulderColliderCount = 0 // #377 mesh-fitted shoulder spheres (fixture-derived)
+        var torsoColliderCount = 0    // #377 mesh-fitted upper-torso capsule (fixture-derived)
         var hairJoints = 0
         var rate: Float { totalSamples > 0 ? Float(penetrations) / Float(totalSamples) : 0 }
         var nearRate: Float { totalSamples > 0 ? Float(nearSamples) / Float(totalSamples) : 0 }
@@ -166,6 +170,10 @@ final class HairChestPenetrationTests: XCTestCase {
 
         var m = TorsoPenetrationMeasurement()
         m.syntheticCount = springBone.syntheticColliders.count
+        m.breastTwinCount = SpringBoneBoneGeometry.breastTwinSpheres(humanoid: humanoid, model: model).count
+        m.breastColliderCount = SpringBoneBreastCollider.computeBreastColliders(model: model).count
+        m.shoulderColliderCount = SpringBoneBreastCollider.computeShoulderColliders(model: model).count
+        m.torsoColliderCount = SpringBoneBreastCollider.computeTorsoCollider(model: model).count
         m.hairJoints = hairJointNodeIndices.count
 
         let fps: Float = 30
@@ -239,24 +247,24 @@ final class HairChestPenetrationTests: XCTestCase {
     /// capsules (>5 mm deep) on at least 99% of samples. H measured 0.00%
     /// (0/8850) and A 0.11% (4/3600) — the 1% bound carries ~9× margin over the
     /// worst measured cell while tripping toward the 1.9–7.8% augment-off range.
-    private func assertGate(modelFile: String, expectedSynthetic: Int) async throws {
+    private func assertGate(modelFile: String, expectedBaseSynthetic: Int) async throws {
         let m = try await measureTorsoPenetration(modelFile: modelFile, vrmaFile: "Walk.vrma", augment: true)
         print("[HairChest \(modelFile) ON] samples=\(m.totalSamples) joints=\(m.hairJoints) synth=\(m.syntheticCount) "
             + "rate=\(String(format: "%.2f%%", m.rate * 100)) raw=\(m.rawPenetrations) "
             + "near=\(String(format: "%.1f%%", m.nearRate * 100)) worst=\(String(format: "%.1f mm", m.worstDepth * 1000))")
-        XCTAssertEqual(m.syntheticCount, expectedSynthetic,
-            "augmentation must be active in the gated run (13 synthetic colliders: 4 leg + 1 brow + 2 arm→hand + 1 torso + 2 upper-arm capsules, 1 skull + 2 palm spheres)")
+        XCTAssertEqual(m.syntheticCount, expectedBaseSynthetic + m.breastTwinCount + m.breastColliderCount + m.shoulderColliderCount + m.torsoColliderCount,
+            "augmentation must be active in the gated run (\(expectedBaseSynthetic) base + \(m.breastTwinCount) #377 breast twins + \(m.breastColliderCount) breast capsules)")
         assertNonVacuous(m, modelFile)
         XCTAssertLessThan(m.rate, 0.01,
             "\(modelFile): hair penetrates a torso/upper-arm capsule >5mm on \(String(format: "%.1f%%", m.rate * 100)) of samples (expected < 1%; augment-off baseline for this fixture is 3.7–7.8%). Worst: \(String(format: "%.1f mm", m.worstDepth * 1000))")
     }
 
     func testHairStaysOutOfTorsoAndUpperArmCapsulesDuringWalk_H() async throws {
-        try await assertGate(modelFile: "AvatarSample_H_1.0.vrm", expectedSynthetic: 13)
+        try await assertGate(modelFile: "AvatarSample_H_1.0.vrm", expectedBaseSynthetic: 15)
     }
 
     func testHairStaysOutOfTorsoAndUpperArmCapsulesDuringWalk_A() async throws {
-        try await assertGate(modelFile: testVRM10Filename, expectedSynthetic: 13)
+        try await assertGate(modelFile: testVRM10Filename, expectedBaseSynthetic: 15)
     }
 
     /// DISCRIMINATOR (anti-vacuity for the gate itself): the SAME measurement
@@ -277,7 +285,8 @@ final class HairChestPenetrationTests: XCTestCase {
             + "on=\(String(format: "%.2f%%", on.rate * 100)) (\(on.penetrations)/\(on.totalSamples), worst \(String(format: "%.1f mm", on.worstDepth * 1000)))")
 
         XCTAssertEqual(off.syntheticCount, 0, "augment-off run must have no synthetic colliders")
-        XCTAssertEqual(on.syntheticCount, 13, "augment-on run must carry the 13 synthetic colliders")
+        XCTAssertEqual(on.syntheticCount, 15 + on.breastTwinCount + on.breastColliderCount + on.shoulderColliderCount + on.torsoColliderCount,
+                       "augment-on run must carry 15 synthetic colliders + \(on.breastTwinCount) breast twins + \(on.breastColliderCount) breast capsules (#377)")
         assertNonVacuous(off, "H off")
         assertNonVacuous(on, "H on")
 

@@ -1180,7 +1180,27 @@ public class VRMModel: @unchecked Sendable {
         // here must match the count uploaded later in
         // `SpringBoneComputeSystem.populateSpringBoneData(model:)`.
         if augmentColliders {
-            expandedSpringBone.syntheticColliders = SpringBoneColliderAugmentor.synthesize(model: self)
+            var synthetic = SpringBoneColliderAugmentor.synthesize(model: self)
+            // Mesh-aware breast colliders (#377): the visible breast rides forward
+            // on the spring `Bust` bones, far beyond the authored/bone-derived
+            // chest colliders, and hair enters at the collarbone and slides down
+            // behind them. Fit a swept CAPSULE (collarbone→breast) to the skinned
+            // breast mesh so front hair is pushed to the actual breast surface.
+            // Requires the uploaded vertex buffers, so it runs here
+            // (post-`loadResources`), not in the pure augmentor. Appended to the
+            // capsule-buffer tail — the validated synthetic capsule slots (0–9)
+            // are untouched. Empty on rigs without a `Bust` spring / body mesh.
+            synthetic.append(contentsOf: SpringBoneBreastCollider.computeBreastColliders(model: self))
+            // Mesh-fitted shoulder colliders (#377 upper body): the clothed
+            // shoulder sits outside the bone-derived shoulder sphere, so hair
+            // sinks through the dress during dynamic motion. Fit a swept sphere
+            // to the proximal clothed deltoid. Same load-time reason as breast.
+            synthetic.append(contentsOf: SpringBoneBreastCollider.computeShoulderColliders(model: self))
+            // Mesh-fitted upper-torso collider (#377 upper body): fills the clothed
+            // upper chest (above the breast) and torso sides/back (behind it) that
+            // the bone-derived midline torso capsule leaves inside the dress.
+            synthetic.append(contentsOf: SpringBoneBreastCollider.computeTorsoCollider(model: self))
+            expandedSpringBone.syntheticColliders = synthetic
         } else {
             expandedSpringBone.syntheticColliders = []
         }

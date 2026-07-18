@@ -81,6 +81,21 @@ public enum SpringBoneColliderAugmentor {
         /// Upper-arm (upperArm→lowerArm) capsule radius as a fraction of that
         /// segment's length. Same value the contact set uses for the hug surface.
         public var upperArmRadiusFractionOfLength: Float = 0.22
+        /// Shoulder SPHERE radius as a fraction of the upperArm→lowerArm length.
+        /// Anchored on the upperArm node and offset down the arm axis (see
+        /// ``shoulderSphereDownFraction``), it fills the deltoid pocket between
+        /// the midline torso capsule and the upper-arm capsule's thin proximal
+        /// cap — the front-shoulder gap where hair draping forward over the
+        /// shoulder clips into the mesh. Larger than the 0.22 arm-shaft
+        /// fraction because the deltoid bulges past the shaft; 0.30 with no
+        /// down-offset regressed the look-up head gate (the sphere's crown
+        /// shoved hanging strands into the temple), so the pair 0.26/0.15 hugs
+        /// the deltoid instead of the socket.
+        public var shoulderSphereRadiusFraction: Float = 0.26
+        /// Shoulder sphere center placement down the upperArm→lowerArm axis as
+        /// a fraction of that length — drops the sphere from the socket to the
+        /// deltoid mass so its crown stays clear of neck/jaw hair paths.
+        public var shoulderSphereDownFraction: Float = 0.15
         /// Hand SPHERE radius as a fraction of the lower-arm→hand length. The
         /// sphere caps the palm so a hand placed on the chest/hair pushes cloth
         /// out instead of the fingers interpenetrating it (#321). Tuned down from
@@ -220,7 +235,41 @@ public enum SpringBoneColliderAugmentor {
         // interpenetrating it (#321). Sphere-buffer order does not affect the
         // validated capsule slots.
         appendHandSpheres(humanoid: humanoid, model: model, ratios: ratios, into: &out)
+        // Shoulder SPHERES at the upperArm origins (sphere buffer) fill the
+        // deltoid pocket between the torso capsule and the upper-arm capsule's
+        // thin proximal cap — hair draping forward over the shoulder clipped
+        // into the front shoulder there. Sphere-buffer order does not affect
+        // the validated capsule slots.
+        appendShoulderSpheres(humanoid: humanoid, model: model, ratios: ratios, into: &out)
+        // Breast TWIN spheres (sphere buffer, appended last): synthetic copies of
+        // the authored chest/upperChest/spine spheres so the trunk-front volume
+        // gets the swept entry-clamp that the authored discrete-only spheres lack
+        // — hair can no longer tunnel in and be ejected out the FRONT of the
+        // breast mesh (#377). Sphere-buffer order does not affect the validated
+        // capsule slots; empty on models with no authored chest spheres.
+        appendBreastTwinSpheres(humanoid: humanoid, model: model, into: &out)
         return out
+    }
+
+    private static func appendBreastTwinSpheres(
+        humanoid: VRMHumanoid, model: VRMModel, into out: inout [VRMCollider]
+    ) {
+        out.append(contentsOf: SpringBoneBoneGeometry.breastTwinSpheres(humanoid: humanoid, model: model))
+    }
+
+    private static func appendShoulderSpheres(
+        humanoid: VRMHumanoid, model: VRMModel, ratios: Ratios, into out: inout [VRMCollider]
+    ) {
+        for (upper, lower) in [(VRMHumanoidBone.leftUpperArm, VRMHumanoidBone.leftLowerArm),
+                               (VRMHumanoidBone.rightUpperArm, VRMHumanoidBone.rightLowerArm)] {
+            if let c = SpringBoneBoneGeometry.shoulderSphere(
+                upperArmBone: upper, lowerArmBone: lower,
+                radiusFraction: ratios.shoulderSphereRadiusFraction,
+                downFraction: ratios.shoulderSphereDownFraction,
+                humanoid: humanoid, model: model) {
+                out.append(c)
+            }
+        }
     }
 
     private static func appendHeadCapsule(
