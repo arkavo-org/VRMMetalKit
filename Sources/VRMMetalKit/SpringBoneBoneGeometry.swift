@@ -102,6 +102,41 @@ enum SpringBoneBoneGeometry {
         return VRMCollider(node: headNode, shape: .sphere(offset: offset, radius: radius))
     }
 
+    /// Shoulder sphere hugging the deltoid: anchored on the upperArm node,
+    /// center offset `downFraction × length` along the upperArm→lowerArm axis
+    /// (in upperArm-local space, so it rides the arm under animation). The
+    /// down-axis offset keeps the sphere's crown clear of the neck/jaw — a
+    /// socket-centered sphere large enough to cover the deltoid also shoves
+    /// hanging hair up into the temple in look-up poses (the head stress gate
+    /// caught exactly that at radius 0.30 / offset 0). Radius is the larger of
+    /// the author's scale hint (largest authored sphere parented to the
+    /// upperArm) and `radiusFraction × |upperArm→lowerArm|`. Fills the deltoid
+    /// pocket between the torso capsule and the upper-arm capsule's proximal
+    /// cap. `nil` when either bone does not resolve, the segment is
+    /// degenerate, or the frame is singular.
+    static func shoulderSphere(upperArmBone: VRMHumanoidBone, lowerArmBone: VRMHumanoidBone,
+                               radiusFraction: Float, downFraction: Float,
+                               humanoid: VRMHumanoid,
+                               model: VRMModel) -> VRMCollider? {
+        guard let upperNode = humanoid.getBoneNode(upperArmBone),
+              upperNode >= 0, upperNode < model.nodes.count,
+              let lowerNode = humanoid.getBoneNode(lowerArmBone),
+              lowerNode >= 0, lowerNode < model.nodes.count else {
+            return nil
+        }
+        let segWorld = model.nodes[lowerNode].worldPosition
+                       - model.nodes[upperNode].worldPosition
+        let length = simd_length(segWorld)
+        guard length > 1e-4 else { return nil }
+        let upperRot = upperLeft3x3(model.nodes[upperNode].worldMatrix)
+        guard abs(simd_determinant(upperRot)) > 1e-6 else { return nil }
+        let axisLocal = simd_normalize(simd_inverse(upperRot) * segWorld)
+        let offset = axisLocal * (downFraction * length)
+        let radius = max(maxAuthoredSphereRadius(parentedTo: upperNode, model: model),
+                         radiusFraction * length)
+        return VRMCollider(node: upperNode, shape: .sphere(offset: offset, radius: radius))
+    }
+
     /// Extracts the upper-left 3x3 of a 4x4 world matrix (mirrors the upload path).
     static func upperLeft3x3(_ m: float4x4) -> simd_float3x3 {
         simd_float3x3(

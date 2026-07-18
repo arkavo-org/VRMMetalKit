@@ -245,18 +245,18 @@ final class HairChestPenetrationTests: XCTestCase {
             + "rate=\(String(format: "%.2f%%", m.rate * 100)) raw=\(m.rawPenetrations) "
             + "near=\(String(format: "%.1f%%", m.nearRate * 100)) worst=\(String(format: "%.1f mm", m.worstDepth * 1000))")
         XCTAssertEqual(m.syntheticCount, expectedSynthetic,
-            "augmentation must be active in the gated run (13 synthetic colliders: 4 leg + 1 brow + 2 arm→hand + 1 torso + 2 upper-arm capsules, 1 skull + 2 palm spheres)")
+            "augmentation must be active in the gated run (15 synthetic colliders: 4 leg + 1 brow + 2 arm→hand + 1 torso + 2 upper-arm capsules, 1 skull + 2 palm + 2 shoulder spheres)")
         assertNonVacuous(m, modelFile)
         XCTAssertLessThan(m.rate, 0.01,
             "\(modelFile): hair penetrates a torso/upper-arm capsule >5mm on \(String(format: "%.1f%%", m.rate * 100)) of samples (expected < 1%; augment-off baseline for this fixture is 3.7–7.8%). Worst: \(String(format: "%.1f mm", m.worstDepth * 1000))")
     }
 
     func testHairStaysOutOfTorsoAndUpperArmCapsulesDuringWalk_H() async throws {
-        try await assertGate(modelFile: "AvatarSample_H_1.0.vrm", expectedSynthetic: 13)
+        try await assertGate(modelFile: "AvatarSample_H_1.0.vrm", expectedSynthetic: 15)
     }
 
     func testHairStaysOutOfTorsoAndUpperArmCapsulesDuringWalk_A() async throws {
-        try await assertGate(modelFile: testVRM10Filename, expectedSynthetic: 13)
+        try await assertGate(modelFile: testVRM10Filename, expectedSynthetic: 15)
     }
 
     /// DISCRIMINATOR (anti-vacuity for the gate itself): the SAME measurement
@@ -277,7 +277,7 @@ final class HairChestPenetrationTests: XCTestCase {
             + "on=\(String(format: "%.2f%%", on.rate * 100)) (\(on.penetrations)/\(on.totalSamples), worst \(String(format: "%.1f mm", on.worstDepth * 1000)))")
 
         XCTAssertEqual(off.syntheticCount, 0, "augment-off run must have no synthetic colliders")
-        XCTAssertEqual(on.syntheticCount, 13, "augment-on run must carry the 13 synthetic colliders")
+        XCTAssertEqual(on.syntheticCount, 15, "augment-on run must carry the 15 synthetic colliders")
         assertNonVacuous(off, "H off")
         assertNonVacuous(on, "H on")
 

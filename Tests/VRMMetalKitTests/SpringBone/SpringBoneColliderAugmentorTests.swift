@@ -50,7 +50,7 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         // PLUS a torso capsule and two upper-arm capsules for own-body hair
         // protection (the chest/breast + upper-arm coverage gap).
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 13)
+        XCTAssertEqual(synthetic.count, 15)
         var capsuleCount = 0
         var sphereCount = 0
         for collider in synthetic {
@@ -66,7 +66,7 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
             }
         }
         XCTAssertEqual(capsuleCount, 10, "Expect 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm capsules")
-        XCTAssertEqual(sphereCount, 3, "Expect 1 lateral skull + 2 palm spheres")
+        XCTAssertEqual(sphereCount, 5, "Expect 1 lateral skull + 2 palm + 2 shoulder spheres")
     }
 
     /// A bone with a singular (zero-scale) world matrix must be SKIPPED, not emit
@@ -116,7 +116,7 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         guard let headNode = humanoid.getBoneNode(.head) else { return XCTFail("A must rig a head") }
 
         let synthetic = SpringBoneColliderAugmentor.synthesize(model: model)
-        XCTAssertEqual(synthetic.count, 13,
+        XCTAssertEqual(synthetic.count, 15,
             "A: 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm capsules; 1 skull + 2 palm spheres")
 
         // The brow capsule (the head-node CAPSULE) is appended AFTER the legs.
