@@ -160,12 +160,18 @@ enum SpringBoneBoneGeometry {
         let chestNodes = Set([VRMHumanoidBone.chest, .upperChest, .spine]
             .compactMap { humanoid.getBoneNode($0) })
         var twins: [VRMCollider] = []
+        // Dedup near-identical authored spheres (same node/offset/radius) so a
+        // malformed VRM authoring many duplicate chest colliders can't inflate
+        // the synthetic sphere buffer with redundant twins.
+        var seen = Set<String>()
         for collider in colliders {
             guard collider.node >= 0, collider.node < model.nodes.count else { continue }
             let name = (model.nodes[collider.node].name ?? "").lowercased()
             let isBust = name.contains("bust") || name.contains("breast")
             guard chestNodes.contains(collider.node) || isBust else { continue }
             guard case let .sphere(offset, radius) = collider.shape else { continue }
+            let key = "\(collider.node):\(offset.x),\(offset.y),\(offset.z):\(radius)"
+            guard seen.insert(key).inserted else { continue }
             twins.append(VRMCollider(node: collider.node,
                                      shape: .sphere(offset: offset, radius: radius)))
         }
