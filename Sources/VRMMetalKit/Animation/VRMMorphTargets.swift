@@ -658,6 +658,19 @@ public class VRMExpressionController: @unchecked Sendable {
         customCurrentWeights[name]
     }
 
+    /// Returns a serializable snapshot of all current preset and custom
+    /// expression weights, keyed by name. Used by crowd-impostor pose hashing.
+    public func allExpressionWeights() -> [String: Float] {
+        var result: [String: Float] = [:]
+        for (preset, weight) in currentWeights {
+            result[preset.rawValue] = weight
+        }
+        for (name, weight) in customCurrentWeights {
+            result[name] = weight
+        }
+        return result
+    }
+
     // MARK: - Preset Animations
 
     /// Plays a one-shot blink that rises to full weight over `duration` and decays back to `0` over the same `duration`.

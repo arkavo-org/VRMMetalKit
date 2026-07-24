@@ -50,6 +50,10 @@ struct BenchmarkOptions {
     var archiveDir: String? = nil            // --archive-dir DIR (pipeline mode)
     var avatarCount: Int = 1                  // --avatar-count N (Game of Mods multi-avatar)
     var avatarSpacing: Float = 1.2            // --avatar-spacing M (meters between avatars)
+    var detailLevel: String = "full3d"        // --detail-level full3d|cached|hybrid
+    var spriteResolution: Int = 256           // --sprite-resolution N
+    var maxFull3D: Int = 3                    // --max-full3d N (hybrid mode budget)
+    var enableImpostors: Bool = false         // --impostors
 }
 
 func usage() {
@@ -97,6 +101,10 @@ func usage() {
                          N copies of the model are placed in a row; tests
                          multi-avatar throughput for Game of Mods.
       --avatar-spacing M Distance between avatars in meters (default 1.2).
+      --impostors         Enable crowd impostors (default off).
+      --detail-level L    full3d | cached | hybrid (default full3d).
+      --sprite-resolution N Cached sprite size in pixels (default 256).
+      --max-full3d N      Maximum full-3D avatars in hybrid mode (default 3).
 
     Recommended invocation:
       swift run -c release VRMBenchmark <vrm-path> --vrma <vrma-path> --frames 500
@@ -200,6 +208,17 @@ func parseArguments() -> BenchmarkOptions? {
         case "--avatar-spacing":
             guard let v = nextValue(for: a) else { return nil }
             opts.avatarSpacing = Float(v) ?? 1.2
+        case "--impostors":
+            opts.enableImpostors = true
+        case "--detail-level":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.detailLevel = v.lowercased()
+        case "--sprite-resolution":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.spriteResolution = max(32, Int(v) ?? 256)
+        case "--max-full3d":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.maxFull3D = max(0, Int(v) ?? 3)
         case "--threshold":
             guard let v = nextValue(for: a) else { return nil }
             let parts = v.split(separator: ":").map(String.init)
@@ -673,9 +692,20 @@ struct VRMBenchmarkCLI {
         config.sampleCount = opts.sampleCount
         config.strict = .off
         config.enableDepthPrepass = opts.depthPrepass
+        config.enableCrowdImpostors = opts.enableImpostors
+        config.impostorSpriteResolution = opts.spriteResolution
+        config.impostorMaxFull3D = opts.maxFull3D
 
         let avatarCount = opts.avatarCount
         let spacing = opts.avatarSpacing
+
+        // When running hybrid multi-avatar benchmarks, share a single priority
+        // system across all renderer instances so the max-full3d budget is
+        // applied across the whole crowd, not per-avatar.
+        let sharedPrioritySystem: CharacterPrioritySystem? = (opts.enableImpostors && opts.detailLevel == "hybrid" && avatarCount > 1)
+            ? CharacterPrioritySystem()
+            : nil
+        sharedPrioritySystem?.budget.maxFull3DCharacters = opts.maxFull3D
 
         // Multi-avatar: create N renderers, each with its own model copy.
         // For single avatar (the default), this is just one renderer.
@@ -708,6 +738,19 @@ struct VRMBenchmarkCLI {
 
             let r = VRMRenderer(device: device, config: config)
             if i == 0 { r.performanceTracker = PerformanceTracker() }
+            switch opts.detailLevel {
+            case "cached", "cachedsprite": r.detailLevel = .cachedSprite
+            case "hybrid":               r.detailLevel = .hybrid
+            case "full3d", "full3D":     r.detailLevel = .full3D
+            default:
+                FileHandle.standardError.write(Data("ERROR: unknown --detail-level '\(opts.detailLevel)'. Expected full3d|cached|hybrid.\n".utf8))
+                exit(1)
+            }
+            if let sharedPrioritySystem = sharedPrioritySystem {
+                r.prioritySystem = sharedPrioritySystem
+            } else {
+                r.prioritySystem?.budget.maxFull3DCharacters = opts.maxFull3D
+            }
             r.loadModel(avatarModel)
             r.outlineWidth = opts.outlineWidth
             r.enableSpringBone = opts.enableSpringBone
@@ -892,6 +935,20 @@ struct VRMBenchmarkCLI {
         for _ in 0..<opts.warmup {
             renderOnce(&discard)
         }
+
+        // Pre-populate sprite cache for impostor modes so the measured phase
+        // actually exercises cached-sprite draws, not cache-miss fallbacks.
+        if opts.enableImpostors {
+            await MainActor.run {
+                for avatar in avatars {
+                    guard let cb = commandQueue.makeCommandBuffer() else { continue }
+                    avatar.renderer.warmImpostorCache(commandBuffer: cb)
+                    cb.commit()
+                    cb.waitUntilCompleted()
+                }
+            }
+        }
+
         renderer.resetPerformanceMetrics()
 
         // Measure
