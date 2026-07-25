@@ -206,14 +206,43 @@ final class MyTests: XCTestCase {
 Metal shaders are excluded from SPM compilation (see `Package.swift` exclude list) and must be pre-compiled to `.metallib`:
 
 ```bash
-# Compile individual shader
-xcrun -sdk macosx metal -c SpringBonePredict.metal -o SpringBonePredict.air
+# Compile individual shader — ALWAYS pass -target (see below)
+xcrun -sdk macosx metal -c -target air64-apple-macos26.0 \
+    SpringBonePredict.metal -o SpringBonePredict.air
 
-# Link to metallib
-xcrun -sdk macosx metallib SpringBone*.air -o VRMMetalKitShaders.metallib
+# Link with the `metal` DRIVER, not the `metallib` packager
+xcrun -sdk macosx metal -target air64-apple-macos26.0 \
+    SpringBone*.air -o VRMMetalKitShaders.metallib
 ```
 
 The compiled `.metallib` goes in `Sources/VRMMetalKit/Resources/`.
+
+#### `-target` is not optional
+
+Without `-target`, `metal` compiles for whatever the **installed SDK** defaults to — not for this
+package's `.macOS(.v26)` deployment target. Kernels built for a newer OS than the one running them
+load fine, resolve every function, and produce correct output **at roughly a quarter of the speed**.
+Nothing about the result looks wrong.
+
+The trap is that the default is *correct until an SDK bump moves it*. The committed
+`VRMMetalKitShaders.metallib` is `air64_v28-apple-macosx26.0.0` because it was built in Oct 2025,
+before the bump — not because the commands above used to be right. Rebuilding it under Xcode 27
+without `-target` produces `air64_v29-apple-macosx27.0.0` and the slowdown.
+
+This is not hypothetical: it shipped in `arkavo-agent` 0.4.0 and cost ~4x on decode
+(15.9 vs 59.6 tok/s, measured M4 mini, same binary, only the library swapped). See
+arkavo-agent PR #192.
+
+Verify any metallib you build before committing it:
+
+```bash
+xcrun metal-lipo -info Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
+# expect: architecture: air64_v28   (v29 means the target was defaulted)
+```
+
+Note the committed metallib is macOS-only, so on iOS the loader falls through to
+`makeDefaultLibrary()`; an iOS-targeted artifact would need its own
+`-target air64-apple-ios26.0` build.
 
 ### Shader Loading Pattern
 ```swift
