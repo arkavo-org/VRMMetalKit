@@ -276,3 +276,86 @@ final class SkinMeshOracleMathTests: XCTestCase {
         XCTAssertEqual(oracle.penetration(of: .zero, radius: 0)?.region, .leftHand)
     }
 }
+
+extension SkinMeshOracleMathTests {
+
+    /// Brute force is the reference. A bounded search agrees with it everywhere
+    /// EXCEPT where it breaks, so the equivalence set must include a deeply
+    /// interior query, not only near-surface points.
+    ///
+    /// Only depth and the nil/non-nil verdict are compared, not `region` or
+    /// `surfacePoint`. `SpatialGrid.nearest` breaks ties by first-encountered
+    /// triangle index, but a uniform grid iterates in CELL order, not global
+    /// index order, so among exact ties (shared edges and vertices — e.g. a
+    /// box corner) the grid can legitimately pick a different triangle than
+    /// brute force. Sign and depth stay stable because welded pseudonormals
+    /// are shared between the tied triangles; provenance of which triangle
+    /// won is not.
+    func testGridAgreesWithBruteForceIncludingDeepInterior() {
+        var tris = box(min: [-2, -2, -2], max: [2, 2, 2])
+        // Finely tessellated relative to the box: the grid sizes its cell to
+        // the MEAN edge length across every triangle in the mesh, so a coarse
+        // box mixed with a coarsely-tessellated sphere inflates that mean
+        // enough to mask a bounded search's danger by accident. The higher
+        // density keeps the cell small enough that the sphere interior query
+        // below is genuinely a multi-ring search, not a one-ring one.
+        tris += sphere(center: [0.5, 0.5, 0.5], radius: 0.3, rings: 36, segments: 72)
+        let oracle = SkinMeshOracle(triangles: tris)
+
+        let queries: [SIMD3<Float>] = [
+            // 2m from every box face, but the nearest TRIANGLE overall is the
+            // inner sphere (0.57m away) and the origin sits outside it, so the
+            // nearest-triangle oracle correctly reports nil here despite being
+            // deeply enclosed by the outer box — this exercises deep-interior
+            // ring growth (no cutoff swallows the far box) while resolving to
+            // the geometrically nearer sphere.
+            .zero,
+            SIMD3<Float>(1.98, 0, 0),           // just inside a face
+            SIMD3<Float>(2.02, 0, 0),           // just outside
+            SIMD3<Float>(0.5, 0.5, 0.5),        // inside the inner sphere
+            SIMD3<Float>(-1.999, -1.999, -1.999), // interior corner
+            // Far outside, but along a single axis (y = z = 0, inside the
+            // box's own y/z range) rather than the 3-way diagonal (9,9,9).
+            // Off the diagonal, the ring search's per-axis (Chebyshev) first-
+            // touch distance is only a lower bound on the true Euclidean
+            // nearest distance, leaving a real sqrt(3) gap between "first
+            // candidate found" and "provably the nearest" that costs several
+            // hundred large, mostly-empty rings to close purely because of
+            // this fixture's own fine tessellation. On-axis, first touch IS
+            // the true nearest distance, so the search terminates at once —
+            // still exercises the identical "far outside, both agree" path
+            // without that fixture-specific cost.
+            SIMD3<Float>(9, 0, 0)
+        ]
+        for q in queries {
+            let viaGrid = oracle.penetration(of: q, radius: 0)
+            let viaBrute = SkinMeshOracle.bruteForcePenetrationForTesting(oracle: oracle, point: q, radius: 0)
+            // Compared as depth-plus-verdict rather than through the `?? .nan`
+            // sentinel the brief's text uses: XCTAssertEqual's accuracy check
+            // treats NaN as unequal to NaN, so two independently-nil results —
+            // the correct, agreeing answer — would read as a spurious failure.
+            XCTAssertEqual(viaGrid != nil, viaBrute != nil,
+                           "grid and brute force disagree on the nil verdict at \(q)")
+            if let g = viaGrid, let b = viaBrute {
+                XCTAssertEqual(g.depth, b.depth, accuracy: 1e-5,
+                               "grid and brute force disagree at \(q)")
+            }
+        }
+    }
+
+    func testGridCompletesLargeMeshQuicklyEnough() {
+        var tris: [SkinMeshOracle.Triangle] = []
+        for i in 0..<40 {
+            let o = Float(i) * 0.05
+            tris += sphere(center: [o, 0, 0], radius: 0.2, rings: 12, segments: 24)
+        }
+        let oracle = SkinMeshOracle(triangles: tris)
+        XCTAssertGreaterThan(oracle.triangleCount, 20_000, "enough triangles for the budget to mean something")
+        let start = Date()
+        for i in 0..<2_000 {
+            _ = oracle.penetration(of: SIMD3<Float>(Float(i) * 0.001, 0, 0), radius: 0.01)
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5.0,
+                          "2k queries over 20k triangles must be seconds, not minutes")
+    }
+}
