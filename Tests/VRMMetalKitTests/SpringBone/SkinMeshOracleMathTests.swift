@@ -36,7 +36,6 @@ final class SkinMeshOracleMathTests: XCTestCase {
             SIMD3<Float>(lo.x, lo.y, hi.z), SIMD3<Float>(hi.x, lo.y, hi.z),
             SIMD3<Float>(hi.x, hi.y, hi.z), SIMD3<Float>(lo.x, hi.y, hi.z)
         ]
-        // Each quad wound counter-clockwise seen from outside.
         let quads: [(Int, Int, Int, Int)] = [
             (1, 5, 6, 2), (4, 0, 3, 7),     // +x, -x
             (3, 2, 6, 7), (0, 4, 5, 1),     // +y, -y
@@ -99,6 +98,34 @@ final class SkinMeshOracleMathTests: XCTestCase {
         return out
     }
 
+    /// Triangular prism ("roof"): a ridge edge at `x=0` running the length of
+    /// the prism, sloping out to two floor corners at `x=run, z=±halfWidth`.
+    /// `run` deliberately dwarfs `halfWidth` — the same H≫R shape as
+    /// `needle()`, applied to an EDGE instead of a point — so the two ridge
+    /// faces are long and thin and their individual normals end up nearly
+    /// perpendicular to the true outward direction at the ridge. Closed with
+    /// a floor and two end caps so "outside" is the ordinary, unambiguous
+    /// sense: the solid spans `x ∈ [0, run]`, so any point at `x < 0` is
+    /// outside regardless of which way any single triangle's normal points.
+    private func roof(ridgeLength: Float, run: Float, halfWidth: Float) -> [SkinMeshOracle.Triangle] {
+        let r0 = SIMD3<Float>(0, 0, 0)
+        let r1 = SIMD3<Float>(0, ridgeLength, 0)
+        let f1_0 = SIMD3<Float>(run, 0, halfWidth)
+        let f1_1 = SIMD3<Float>(run, ridgeLength, halfWidth)
+        let f2_0 = SIMD3<Float>(run, 0, -halfWidth)
+        let f2_1 = SIMD3<Float>(run, ridgeLength, -halfWidth)
+        return [
+            .init(a: r0, b: f1_1, c: r1, region: nil),
+            .init(a: r0, b: f1_0, c: f1_1, region: nil),
+            .init(a: r0, b: f2_1, c: f2_0, region: nil),
+            .init(a: r0, b: r1, c: f2_1, region: nil),
+            .init(a: f1_0, b: f2_0, c: f2_1, region: nil),
+            .init(a: f1_0, b: f2_1, c: f1_1, region: nil),
+            .init(a: r0, b: f2_0, c: f1_0, region: nil),
+            .init(a: r1, b: f1_1, c: f2_1, region: nil)
+        ]
+    }
+
     // MARK: - Convex baseline
 
     func testPointAtBoxCentreReportsHalfExtentDepth() {
@@ -146,11 +173,12 @@ final class SkinMeshOracleMathTests: XCTestCase {
     /// side faces; because the faces are long and thin, each face's own
     /// normal is nearly perpendicular to the true "outward" direction there.
     /// Whichever single face happens to win the nearest-triangle search gives
-    /// `dot(delta, faceNormal)` the WRONG sign for this query — proven by the
-    /// sabotage run in task-2-report.md — while the angle-weighted vertex
-    /// pseudonormal averages the four faces back to the true outward (+y)
-    /// direction and classifies it correctly. Box and sphere are both convex
-    /// with generously-angled faces and structurally cannot catch this.
+    /// `dot(delta, faceNormal)` the WRONG sign for this query, so flattening
+    /// vertex-pseudonormal lookup to the winning face's own normal makes this
+    /// test fail. The angle-weighted vertex pseudonormal averages the four
+    /// faces back to the true outward (+y) direction and classifies it
+    /// correctly. Box and sphere are both convex with generously-angled faces
+    /// and structurally cannot catch this.
     func testNeedleApexClassifiesJustBeyondTipAsOutside() {
         let height: Float = 1.0
         let oracle = SkinMeshOracle(triangles: needle(height: height, baseHalfWidth: 0.02))
@@ -166,6 +194,54 @@ final class SkinMeshOracleMathTests: XCTestCase {
         let oracle = SkinMeshOracle(triangles: needle(height: 1.0, baseHalfWidth: 0.02))
         XCTAssertNotNil(oracle.penetration(of: SIMD3<Float>(0, 0.1, 0), radius: 0),
                         "on-axis, well below the tip, is inside the tapered body")
+    }
+
+    // MARK: - Roof ridge fixture (REQUIRED — the needle only exercises .vertex)
+
+    /// The ridge itself: confirms the closest feature this whole fixture
+    /// depends on is genuinely `.edge`, not `.face` or `.vertex`. Without
+    /// this, a fixture could silently regress to a non-discriminating shape
+    /// the way the original overlapping-box notch did.
+    func testRoofRidgeClosestFeatureIsGenuinelyAnEdge() {
+        let tris = roof(ridgeLength: 1.0, run: 1.0, halfWidth: 0.02)
+        let query = SIMD3<Float>(-0.05, 0.5, -0.01)
+        let grid = SkinMeshOracle.SpatialGrid(triangles: tris)
+        guard let hit = grid.nearest(to: query, triangles: tris) else {
+            return XCTFail("expected a nearest triangle")
+        }
+        guard case .edge = hit.feature else {
+            return XCTFail("expected the closest feature to be an edge, got \(hit.feature)")
+        }
+    }
+
+    /// A query tucked behind the ridge, tilted toward one of the two roof
+    /// faces. The solid spans `x ∈ [0, run]`, so `x < 0` is outside no matter
+    /// which way any single triangle's normal points — that's the ground
+    /// truth, independent of the pseudonormal machinery being tested. The
+    /// closest feature is the shared ridge edge; because the two ridge faces
+    /// are long and thin (see `roof(...)`), the single face that wins the
+    /// nearest-triangle search gives `dot(delta, faceNormal)` the WRONG sign
+    /// for this query, so flattening edge-pseudonormal lookup to that face's
+    /// own normal makes this test fail. Summing the two adjacent faces'
+    /// normals at the shared edge classifies it correctly. Box, sphere, and
+    /// the needle's vertex case are all structurally unable to exercise the
+    /// `.edge` branch of `closestPoint`, `EdgeKey`, or `edgePseudonormals`.
+    func testRoofRidgeClassifiesBehindTheFoldAsOutside() {
+        let oracle = SkinMeshOracle(triangles: roof(ridgeLength: 1.0, run: 1.0, halfWidth: 0.02))
+        let query = SIMD3<Float>(-0.05, 0.5, -0.01)
+        XCTAssertNil(oracle.penetration(of: query, radius: 0),
+                     "behind the ridge (x<0) is OUTSIDE the prism (x∈[0,1]); a "
+                     + "face-normal classifier reports it inside")
+    }
+
+    /// `EdgeKey` welds an edge regardless of which triangle visits it first
+    /// or in which corner order; the edge pseudonormal lookup above depends
+    /// on this normalisation holding for both directions of the same pair.
+    func testEdgeKeyOrderingIsSymmetric() {
+        let a = SkinMeshOracle.VertexKey(SIMD3<Float>(1, 2, 3))
+        let b = SkinMeshOracle.VertexKey(SIMD3<Float>(4, 5, 6))
+        XCTAssertEqual(SkinMeshOracle.EdgeKey(a, b), SkinMeshOracle.EdgeKey(b, a))
+        XCTAssertEqual(SkinMeshOracle.EdgeKey(a, b).hashValue, SkinMeshOracle.EdgeKey(b, a).hashValue)
     }
 
     // MARK: - No proximity cutoff
