@@ -208,22 +208,168 @@ extension SkinMeshOracle {
         }
     }
 
-    /// Brute-force nearest. Task 3 replaces the internals with a uniform grid
-    /// and must return identical results.
+    /// Uniform spatial hash over triangle bounds with an EXPANDING ring search.
+    ///
+    /// The search widens until the nearest ring's minimum possible distance
+    /// exceeds the best found, so it terminates on a true nearest with no
+    /// distance gate anywhere. A fixed search radius would make a deeply buried
+    /// query find nothing and read clean.
     struct SpatialGrid {
-        init(triangles: [Triangle]) {}
+        private let cell: Float
+        private let buckets: [Cell: [Int]]
+        private let origin: SIMD3<Float>
+        /// Every occupied bucket lies within this range (inclusive), since a
+        /// triangle can only ever be inserted into cells spanning its own
+        /// bounds, which are themselves within the mesh's overall extent.
+        private let minCell: Cell
+        private let maxCell: Cell
+
+        struct Cell: Hashable { let x: Int32, y: Int32, z: Int32 }
+
+        init(triangles: [Triangle]) {
+            guard !triangles.isEmpty else {
+                cell = 1; buckets = [:]; origin = .zero
+                minCell = Cell(x: 0, y: 0, z: 0); maxCell = Cell(x: 0, y: 0, z: 0)
+                return
+            }
+            var lo = triangles[0].a, hi = triangles[0].a
+            var edgeSum: Float = 0
+            for t in triangles {
+                for v in [t.a, t.b, t.c] { lo = simd_min(lo, v); hi = simd_max(hi, v) }
+                edgeSum += simd_length(t.b - t.a)
+            }
+            // Cell ~ mean edge length keeps occupancy near one triangle per cell.
+            cell = max(edgeSum / Float(triangles.count), 1e-4)
+            origin = lo
+            var b: [Cell: [Int]] = [:]
+            for (i, t) in triangles.enumerated() {
+                let tlo = simd_min(simd_min(t.a, t.b), t.c)
+                let thi = simd_max(simd_max(t.a, t.b), t.c)
+                let c0 = Self.cellIndex(tlo, origin: lo, cell: cell)
+                let c1 = Self.cellIndex(thi, origin: lo, cell: cell)
+                for x in c0.x...c1.x { for y in c0.y...c1.y { for z in c0.z...c1.z {
+                    b[Cell(x: x, y: y, z: z), default: []].append(i)
+                } } }
+            }
+            buckets = b
+            minCell = Self.cellIndex(lo, origin: lo, cell: cell)
+            maxCell = Self.cellIndex(hi, origin: lo, cell: cell)
+        }
+
+        private static func cellIndex(_ p: SIMD3<Float>, origin: SIMD3<Float>, cell: Float) -> Cell {
+            let q = (p - origin) / cell
+            return Cell(x: Int32(q.x.rounded(.down)), y: Int32(q.y.rounded(.down)), z: Int32(q.z.rounded(.down)))
+        }
+
+        /// Chebyshev distance in cells from `c` to the occupied bucket range.
+        /// Zero if `c` is inside it. Every ring below this value is provably
+        /// empty, so the search can start there directly instead of walking
+        /// out from ring 0 — the win that matters for a query far outside the
+        /// whole mesh, where the alternative is thousands of empty rings.
+        private func ringToReach(_ c: Cell) -> Int32 {
+            let dx = max(0, max(minCell.x - c.x, c.x - maxCell.x))
+            let dy = max(0, max(minCell.y - c.y, c.y - maxCell.y))
+            let dz = max(0, max(minCell.z - c.z, c.z - maxCell.z))
+            return max(dx, max(dy, dz))
+        }
 
         func nearest(to p: SIMD3<Float>, triangles: [Triangle]) -> ClosestHit? {
+            guard !buckets.isEmpty else { return nil }
+            let centre = Self.cellIndex(p, origin: origin, cell: cell)
             var best: ClosestHit?
-            for (i, t) in triangles.enumerated() {
-                let (q, feature) = SkinMeshOracle.closestPoint(on: t, to: p)
-                let d2 = simd_length_squared(p - q)
-                // Ties break by lowest triangle index so results are deterministic.
-                if best == nil || d2 < best!.distanceSquared - 1e-12 {
-                    best = ClosestHit(index: i, point: q, feature: feature, distanceSquared: d2)
+            // A triangle whose bounds span many cells (e.g. a large flat panel
+            // next to finely-tessellated detail) is inserted into every one of
+            // them at build time, so the same index can turn up in several
+            // shell cells within one search. Skipping indices already scored
+            // this call avoids recomputing an identical closest point — same
+            // candidate, same winner, just not redundantly.
+            var seen = Set<Int>()
+            func consider(_ c: Cell) {
+                guard let ids = buckets[c] else { return }
+                for i in ids {
+                    guard seen.insert(i).inserted else { continue }
+                    let (q, feature) = SkinMeshOracle.closestPoint(on: triangles[i], to: p)
+                    let d2 = simd_length_squared(p - q)
+                    if best == nil || d2 < best!.distanceSquared - 1e-12 {
+                        best = ClosestHit(index: i, point: q, feature: feature, distanceSquared: d2)
+                    }
                 }
             }
-            return best
+            // Every ring below this is provably outside the occupied bucket
+            // range, so start where the shell can first possibly touch it.
+            var ring: Int32 = ringToReach(centre)
+            while true {
+                // Visit exactly the cells at Chebyshev distance `ring` from
+                // `centre` — the six faces of the (2·ring+1)³ cube's boundary —
+                // rather than the whole cube filtered down. A query far from
+                // any occupied bucket (e.g. the far-outside case) can need a
+                // large ring before finding a candidate; walking the full cube
+                // at every ring is O(ring³) of wasted work per ring, which
+                // makes that case pathologically slow without changing the
+                // answer. Visiting the shell directly is O(ring²) per ring and
+                // examines the identical set of cells.
+                if ring == 0 {
+                    consider(centre)
+                } else {
+                    for x in [centre.x - ring, centre.x + ring] {
+                        for y in (centre.y - ring)...(centre.y + ring) {
+                            for z in (centre.z - ring)...(centre.z + ring) {
+                                consider(Cell(x: x, y: y, z: z))
+                            }
+                        }
+                    }
+                    for y in [centre.y - ring, centre.y + ring] {
+                        for x in (centre.x - ring + 1)...(centre.x + ring - 1) {
+                            for z in (centre.z - ring)...(centre.z + ring) {
+                                consider(Cell(x: x, y: y, z: z))
+                            }
+                        }
+                    }
+                    for z in [centre.z - ring, centre.z + ring] {
+                        for x in (centre.x - ring + 1)...(centre.x + ring - 1) {
+                            for y in (centre.y - ring + 1)...(centre.y + ring - 1) {
+                                consider(Cell(x: x, y: y, z: z))
+                            }
+                        }
+                    }
+                }
+                // A triangle outside this shell cannot be nearer than the shell's
+                // own minimum distance, so once that exceeds `best` we are done.
+                if let b = best {
+                    let shellDistance = Float(ring) * cell
+                    if shellDistance * shellDistance > b.distanceSquared { return best }
+                }
+                ring += 1
+                if ring > 4096 { return best }
+            }
         }
+    }
+}
+
+extension SkinMeshOracle {
+    /// Reference implementation for the grid's equivalence gate. Scans every
+    /// triangle; correctness here is Task 2's, already pinned.
+    static func bruteForcePenetrationForTesting(oracle: SkinMeshOracle, point: SIMD3<Float>,
+                                                radius: Float) -> Penetration? {
+        oracle.penetrationScanningAll(point: point, radius: radius)
+    }
+
+    /// Linear-scan twin of `penetration(of:radius:)`. Identical logic; the only
+    /// difference is that it never consults the grid.
+    func penetrationScanningAll(point: SIMD3<Float>, radius: Float) -> Penetration? {
+        var best: ClosestHit?
+        for (i, t) in triangles.enumerated() {
+            let (q, feature) = SkinMeshOracle.closestPoint(on: t, to: point)
+            let d2 = simd_length_squared(point - q)
+            if best == nil || d2 < best!.distanceSquared - 1e-12 {
+                best = ClosestHit(index: i, point: q, feature: feature, distanceSquared: d2)
+            }
+        }
+        guard let hit = best else { return nil }
+        let t = triangles[hit.index]
+        let signed = signedDistance(from: point, to: hit, triangle: t, faceNormal: faceNormals[hit.index])
+        let depth = radius - signed
+        guard depth > 0 else { return nil }
+        return Penetration(depth: depth, region: t.region, surfacePoint: hit.point)
     }
 }
