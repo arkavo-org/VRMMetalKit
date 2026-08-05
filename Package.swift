@@ -116,8 +116,7 @@ let package = Package(
             name: "VRMMetalKitTests",
             dependencies: ["VRMMetalKit", "VRMAProcessKit"],
             resources: [
-                .copy("TestData"),
-                .copy("Fixtures")
+                .copy("TestData")
             ]
         ),
         .testTarget(
