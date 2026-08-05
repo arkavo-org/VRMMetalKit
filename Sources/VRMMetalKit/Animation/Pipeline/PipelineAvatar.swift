@@ -36,9 +36,13 @@ public struct PipelineAvatar {
     /// existing construction site — `CrowdFrameStepper` never sets it, so the
     /// crowd path is unaffected until a caller opts in.
     public var ikLayer: IKLayer?
-    /// The world-space foot-target source `ikLayer` re-sources from once the
-    /// interaction-volume RFC lands. Wired but not yet consumed by `IKLayer`.
-    public var footTargetSource: FootTargetSource?
+    /// This frame's `RootDisplacement` accumulator, one per top-level root node,
+    /// threaded from `PoseStage.place` through `PoseStage.displace` so
+    /// `RootDisplacement`'s one-absolute-per-frame rule is enforced across both
+    /// beats instead of each beat starting a fresh, unlinked accumulator. Reset
+    /// by `place` at the start of every frame; not part of this type's public
+    /// construction surface because nothing outside `PoseStage` should seed it.
+    var rootDisplacements: [ObjectIdentifier: RootDisplacement] = [:]
     public var staggerSolver: StaggerShoveSolver?
     /// Set on this avatar's first frame with non-zero contact depth. Until then the
     /// stagger channel is dormant and the path is byte-identical to stagger-off.
@@ -52,13 +56,20 @@ public struct PipelineAvatar {
     /// when different avatars carry different constraint sets.
     public let constraintSolver: ConstraintSolver
 
+    /// Constructing a `PipelineAvatar` is an ownership transfer of `player`'s
+    /// constraint solving to S4 (`PoseStage.constrain`, via `constraintSolver`
+    /// above): `player.solvesConstraints` is forced to `false` here so `S0`
+    /// (`PoseStage.sample`, which drives `player.update`) never solves the raw
+    /// sampled pose a second time against a different, unpropagated pose. Every
+    /// `PipelineAvatar` is a direct-`PoseStage` user in this sense, not just
+    /// `CrowdFrameStepper`'s — the invariant holds unconditionally rather than
+    /// only where a caller remembered to set the flag by hand.
     public init(index: Int, model: VRMModel, player: AnimationPlayer,
                 baseTranslations: [ObjectIdentifier: SIMD3<Float>],
                 posturalLayer: PosturalContactLayer? = nil,
                 armLayer: ArmCounterbalanceLayer? = nil,
                 captureStepper: CaptureStepController? = nil,
                 ikLayer: IKLayer? = nil,
-                footTargetSource: FootTargetSource? = nil,
                 staggerSolver: StaggerShoveSolver? = nil,
                 staggerActive: Bool = false,
                 constraintSolver: ConstraintSolver = ConstraintSolver()) {
@@ -70,9 +81,9 @@ public struct PipelineAvatar {
         self.armLayer = armLayer
         self.captureStepper = captureStepper
         self.ikLayer = ikLayer
-        self.footTargetSource = footTargetSource
         self.staggerSolver = staggerSolver
         self.staggerActive = staggerActive
         self.constraintSolver = constraintSolver
+        player.solvesConstraints = false
     }
 }

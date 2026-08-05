@@ -87,12 +87,24 @@ public enum PoseStage {
     ///
     /// Runs before S1 because the postural lean measures its own trunk endpoints
     /// in world space, which depend on where this avatar was placed.
+    ///
+    /// Starts this frame's `RootDisplacement` accumulator (one per root node,
+    /// since an avatar may have several top-level nodes — `Root`/`Face`/`Body`/
+    /// `Hair` on a typical VRoid rig — each with its own base translation) and
+    /// hands it forward via `avatar.rootDisplacements` so `displace` accumulates
+    /// onto the SAME instance rather than starting a fresh one. That is what
+    /// makes `RootDisplacement`'s one-absolute-per-frame `precondition` an
+    /// enforced rule across the frame's two beats instead of decorative: a
+    /// future second absolute request anywhere downstream of `place` now hits
+    /// the same accumulator this call seeded, not a blank one.
     public static func place(avatar: inout PipelineAvatar, placement: SIMD3<Float>) {
+        avatar.rootDisplacements.removeAll(keepingCapacity: true)
         for root in avatar.model.nodes where root.parent == nil {
             let base = avatar.baseTranslations[ObjectIdentifier(root)] ?? .zero
             var displacement = RootDisplacement()
             displacement.setAbsolute(base + placement)
             root.translation = displacement.resolve(base: base)
+            avatar.rootDisplacements[ObjectIdentifier(root)] = displacement
         }
         // Required: S1's postural lean (`compose`) measures its own trunk
         // endpoints in world space, which must reflect this placement.
@@ -103,11 +115,17 @@ public enum PoseStage {
     ///
     /// Runs after S1 because its penetration signal is the lean-relieved one.
     ///
+    /// Continues each root's `RootDisplacement` from `place` (via
+    /// `avatar.rootDisplacements`) rather than starting a fresh one — see
+    /// `place`'s doc comment. A root `place` never saw (a direct-`PoseStage`
+    /// caller that skips `place`) falls back to a blank accumulator, matching
+    /// this stage's pre-existing standalone behaviour.
+    ///
     /// Exit contract: root and hips final, world transforms refreshed — S3 reads
     /// world space.
     public static func displace(avatar: inout PipelineAvatar, partners: FrozenSnapshot,
                                 dt: Float, staggerEnabled: Bool) {
-        var displacement = RootDisplacement()
+        var delta: SIMD3<Float>?
 
         if staggerEnabled {
             var depth: Float = 0
@@ -123,13 +141,16 @@ public enum PoseStage {
             if avatar.staggerActive {
                 let offset = avatar.staggerSolver?.update(depth: depth, pushDirXZ: pushDirXZ, dt: dt) ?? .zero
                 if offset != .zero {
-                    displacement.addDelta(SIMD3<Float>(offset.x, 0, offset.y))
+                    delta = SIMD3<Float>(offset.x, 0, offset.y)
                 }
             }
         }
 
         for root in avatar.model.nodes where root.parent == nil {
+            var displacement = avatar.rootDisplacements[ObjectIdentifier(root)] ?? RootDisplacement()
+            if let delta { displacement.addDelta(delta) }
             root.translation = displacement.resolve(base: root.translation)
+            avatar.rootDisplacements[ObjectIdentifier(root)] = displacement
         }
         avatar.model.updateNodeTransforms()
     }
