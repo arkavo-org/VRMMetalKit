@@ -12,7 +12,7 @@ import simd
 @testable import VRMMetalKit
 
 enum StressPose: String, CaseIterable {
-    case lookUp, armsRaised, armsCrossed, seatedDeepFlexion
+    case lookUp, armsRaised, armsCrossed, seatedDeepFlexion, armsAtSides
 }
 
 enum StressPoseFactory {
@@ -34,6 +34,14 @@ enum StressPoseFactory {
         case .seatedDeepFlexion:
             clip.addJointTrack(JointTrack(bone: .leftUpperLeg,  rotationSampler: fixed(rot(90, [1, 0, 0]))))
             clip.addJointTrack(JointTrack(bone: .rightUpperLeg, rotationSampler: fixed(rot(90, [1, 0, 0]))))
+        case .armsAtSides:
+            // Measured against AvatarSample_U_1.0: -90°/+90° about Z brings
+            // the wrists down beside the hips (verified via a node-position
+            // probe, not assumed from the T-pose geometry).
+            clip.addJointTrack(JointTrack(bone: .leftUpperArm,  rotationSampler: fixed(rot(-90, [0, 0, 1]))))
+            clip.addJointTrack(JointTrack(bone: .rightUpperArm, rotationSampler: fixed(rot(90, [0, 0, 1]))))
+            clip.addJointTrack(JointTrack(bone: .leftLowerArm,  rotationSampler: fixed(rot(8, [0, 0, 1]))))
+            clip.addJointTrack(JointTrack(bone: .rightLowerArm, rotationSampler: fixed(rot(-8, [0, 0, 1]))))
         }
         return clip
     }

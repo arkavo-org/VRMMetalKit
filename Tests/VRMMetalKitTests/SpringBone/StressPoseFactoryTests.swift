@@ -38,12 +38,17 @@ final class StressPoseFactoryTests: XCTestCase {
         XCTAssertEqual(clip.jointTracks.count, 2, "seatedDeepFlexion should have 2 joint tracks")
     }
 
+    func testArmsAtSidesHasFourJointTracks() {
+        let clip = StressPoseFactory.clip(.armsAtSides)
+        XCTAssertEqual(clip.jointTracks.count, 4, "armsAtSides should have 4 joint tracks")
+    }
+
     func testCustomDurationIsRespected() {
         let clip = StressPoseFactory.clip(.lookUp, duration: 2.5)
         XCTAssertEqual(clip.duration, 2.5, accuracy: 0.001)
     }
 
     func testAllCasesAreCovered() {
-        XCTAssertEqual(StressPose.allCases.count, 4)
+        XCTAssertEqual(StressPose.allCases.count, 5)
     }
 }
