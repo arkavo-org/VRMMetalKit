@@ -85,7 +85,29 @@ final class StageExtractionGateTests: XCTestCase {
         ("stagger-on-post-contact/crowd",  2, StaggerShoveParams(),  0.12),
     ]
 
+    /// Resolves a committed baseline, preferring the test bundle over the source
+    /// tree.
+    ///
+    /// Xcode Cloud runs the bundle without the repository checked out at the
+    /// path `getProjectRoot()` derives, so a source-tree-only lookup fails there
+    /// with all six cells "missing" while passing locally. The bundle copy
+    /// (`Package.swift` → `.copy("Fixtures")`) is what makes the gate portable;
+    /// the source-tree fallback keeps `PIPELINE_BASELINE_GENERATE=1` writing
+    /// back to the checkout rather than into a build product.
     private func fixturePath(for label: String) -> String {
+        let slug = label.replacingOccurrences(of: "/", with: "_")
+        if let root = Bundle.module.resourceURL {
+            let bundled = root
+                .appendingPathComponent("Fixtures/PipelineBaseline")
+                .appendingPathComponent("\(slug).txt")
+            if FileManager.default.fileExists(atPath: bundled.path) { return bundled.path }
+        }
+        return sourceTreeFixturePath(for: label)
+    }
+
+    /// The checkout location, used for regeneration and as the fallback when the
+    /// bundle has no copy.
+    private func sourceTreeFixturePath(for label: String) -> String {
         let slug = label.replacingOccurrences(of: "/", with: "_")
         return "\(getProjectRoot())/Tests/VRMMetalKitTests/Fixtures/PipelineBaseline/\(slug).txt"
     }
@@ -139,7 +161,7 @@ final class StageExtractionGateTests: XCTestCase {
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         for (label, count, stagger, halfSep) in Self.cells {
             let sequences = try await runCell(device: device, avatarCount: count, stagger: stagger, halfSep: halfSep)
-            try PipelineBaselineFixture.write(sequences, toFile: fixturePath(for: label))
+            try PipelineBaselineFixture.write(sequences, toFile: sourceTreeFixturePath(for: label))
         }
     }
 }

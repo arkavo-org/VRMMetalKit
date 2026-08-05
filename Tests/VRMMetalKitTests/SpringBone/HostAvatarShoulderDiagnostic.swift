@@ -19,8 +19,12 @@ import simd
 @MainActor
 final class HostAvatarShoulderDiagnostic: XCTestCase {
 
-    private let hostVRM = "/Users/arkavo/Projects/modelH-final.vrm"
-    private let idleVRMA = "/Users/arkavo/Library/Developer/Xcode/DerivedData/GameOfMods-brymrjdjfcfkebetfjvubsrvomzd/Build/Products/Debug/GameOfMods.app/Contents/Resources/Builtins/com.gameofmods.firstlight/animations/f45abc44800c647fa106537a2e31a84cb83b74cf3dd8a0ee71c6915f1555ac57.vrma"
+    /// Machine-local host avatar, supplied via `VMK_HOST_VRM`.
+    private var hostVRM: String { ProcessInfo.processInfo.environment["VMK_HOST_VRM"] ?? "" }
+    /// Machine-local idle clip, supplied via `VMK_HOST_VRMA`. Both default to
+    /// empty so the diagnostic self-skips off-machine; hardcoding them would
+    /// trip the repo's static-path lint and resolve on exactly one checkout.
+    private var idleVRMA: String { ProcessInfo.processInfo.environment["VMK_HOST_VRMA"] ?? "" }
 
     func testDiagnoseHostShoulder() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
