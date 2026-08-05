@@ -116,7 +116,12 @@ let package = Package(
             name: "VRMMetalKitTests",
             dependencies: ["VRMMetalKit", "VRMAProcessKit"],
             resources: [
-                .copy("TestData")
+                .copy("TestData"),
+                // Pipeline byte-identity baselines. Bundled because Xcode Cloud
+                // runs the test bundle without the checkout at the path
+                // `getProjectRoot()` derives, and a source-tree-only lookup
+                // fails there while passing locally.
+                .copy("Fixtures")
             ]
         ),
         .testTarget(

@@ -20,6 +20,14 @@ import simd
 @MainActor
 final class HairBodyMeshPenetrationDiagnostic: XCTestCase {
 
+    /// Machine-local host avatar, supplied via `VMK_HOST_VRM`. Absent by
+    /// default, so this diagnostic self-skips everywhere but the machine that
+    /// has the asset. Hardcoding the path would trip the repo's static-path
+    /// lint and would not resolve on anyone else's checkout.
+    static func hostVRMPath() -> String {
+        ProcessInfo.processInfo.environment["VMK_HOST_VRM"] ?? ""
+    }
+
     private var device: MTLDevice!
     override func setUp() async throws {
         guard let d = MTLCreateSystemDefaultDevice() else { throw XCTSkip("no Metal") }
@@ -29,7 +37,7 @@ final class HairBodyMeshPenetrationDiagnostic: XCTestCase {
     /// Measures hair penetration into the fitted shoulder oracle during the spin
     /// dance (host). Toggle VMK_NO_SHOULDER for the before/after.
     func testShoulderPierce_Host() async throws {
-        let host = "/Users/arkavo/Projects/modelH-final.vrm"
+        let host = Self.hostVRMPath()
         let dance = getTestModelPath("VRMA_Avatar_Mega_Pack/Dance_Northern_Soul_Spin.vrma")
         try requireFixture(host, hint: "host VRM"); try requireFixture(dance, hint: "dance VRMA")
         let model = try await VRMModel.load(from: URL(fileURLWithPath: host), device: device,
@@ -85,7 +93,7 @@ final class HairBodyMeshPenetrationDiagnostic: XCTestCase {
     /// Measures hair penetration into the fitted upper-torso capsule during the
     /// spin dance (host). Toggle VMK_NO_TORSO for before/after.
     func testTorsoPierce_Host() async throws {
-        let host = "/Users/arkavo/Projects/modelH-final.vrm"
+        let host = Self.hostVRMPath()
         let dance = getTestModelPath("VRMA_Avatar_Mega_Pack/Dance_Northern_Soul_Spin.vrma")
         try requireFixture(host, hint: "host VRM"); try requireFixture(dance, hint: "dance VRMA")
         let model = try await VRMModel.load(from: URL(fileURLWithPath: host), device: device,
@@ -142,7 +150,7 @@ final class HairBodyMeshPenetrationDiagnostic: XCTestCase {
     }
 
     func testWhereHairEntersBody_Host() async throws {
-        let host = "/Users/arkavo/Projects/modelH-final.vrm"
+        let host = Self.hostVRMPath()
         // Spinning dance — dynamic hair flow that falls THROUGH the dress (the
         // user's reported trigger), unlike the gentle greet.
         let greet = getTestModelPath("VRMA_Avatar_Mega_Pack/Dance_Northern_Soul_Spin.vrma")
