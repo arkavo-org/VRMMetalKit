@@ -220,6 +220,13 @@ public final class CrowdFrameStepper {
             PoseStage.debugAssertRootsUnchanged(avatar: pipelineAvatars[i], since: rootsAfterDisplace)
             #endif
             PoseStage.constrain(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt)
+            // The frame's commit propagation: `constrain` deliberately does not
+            // re-propagate after solving (see its doc comment), so this is the
+            // one guaranteed refresh downstream readers (the renderer's
+            // skinning, `group?.exchange()`'s spring-bone snapshot, next
+            // frame's `place`) can rely on without needing to know which S1–S4
+            // branches ran this frame.
+            pipelineAvatars[i].model.updateNodeTransforms()
         }
         // Phase 1+2: snapshot all (post-motion, post-yield poses), inject union-minus-self.
         group?.exchange()

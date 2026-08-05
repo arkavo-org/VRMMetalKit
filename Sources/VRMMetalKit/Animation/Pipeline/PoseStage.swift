@@ -53,6 +53,10 @@ public enum PoseStage {
         layer.partnerTorso = partners.nearestPartnerTorso(of: avatar.index)
         layer.update(deltaTime: dt, context: AnimationContext())
         layer.applyDirect(to: avatar.model)
+        // Required: S2's second beat (`displace`) reads this avatar's own
+        // world-space torso capsule to measure penetration, and that capsule
+        // must reflect the postural lean this call just applied — otherwise
+        // `displace` would clamp against a pre-lean torso.
         avatar.model.updateNodeTransforms()
     }
 
@@ -67,6 +71,8 @@ public enum PoseStage {
             displacement.setAbsolute(base + placement)
             root.translation = displacement.resolve(base: base)
         }
+        // Required: S1's postural lean (`compose`) measures its own trunk
+        // endpoints in world space, which must reflect this placement.
         avatar.model.updateNodeTransforms()
     }
 
@@ -134,13 +140,27 @@ public enum PoseStage {
                     }
                     node.updateLocalMatrix()
                 }
+                // Required: an early return here (staggerActive false, or no
+                // captureStepper) hands control back to the caller with the IK
+                // write as the pipeline's last action this call — callers read
+                // world-space bone positions (`PlantedFootDriftTests`) straight
+                // off this return with no further propagation of their own.
                 avatar.model.updateNodeTransforms()
             }
         }
 
         guard avatar.staggerActive, let stepper = avatar.captureStepper else { return }
+        // `stepper.update` (`CaptureStepController`) propagates after every
+        // return path that writes a node local: the restore placement it
+        // evaluates balance against (`:174`), and — if it re-steps — the
+        // applied target (`:183`). Its two return paths that write nothing
+        // (`guard isEnabled, let humanoid = model.humanoid else { return }`
+        // at `:159`, and the missing-foot-bone `else { return }` at `:167`)
+        // correctly propagate zero times. No further propagation is needed
+        // here; adding one would just repeat a walk `stepper.update` already
+        // did. This depends on `stepper.update` never adding a write above
+        // its `isEnabled` guard without also adding a propagate there.
         stepper.update(deltaTime: dt, model: avatar.model)
-        avatar.model.updateNodeTransforms()
 
         if let layer = avatar.armLayer {
             let balance = stepper.lastBalance
@@ -149,6 +169,10 @@ public enum PoseStage {
             layer.fallDirXZ = balance?.imbalanceDirection ?? .zero
             layer.update(deltaTime: dt, context: AnimationContext())
             layer.applyDirect(to: avatar.model)
+            // Required: S4 (`constrain`) reads world position/matrix for aim
+            // constraints, and this arm write is the last local write before
+            // S4 runs — without this refresh S4 would solve against a pose
+            // that predates the brace.
             avatar.model.updateNodeTransforms()
         }
     }
@@ -168,12 +192,30 @@ public enum PoseStage {
     /// when this runs. Aim constraints read `worldPosition` / the parent's
     /// `worldMatrix`, so a stale world matrix from a stage that wrote locals
     /// without calling `updateNodeTransforms()` would solve against last
-    /// frame's geometry. Every S0–S3 stage in this file re-propagates before
-    /// returning, so the precondition holds today; it is not re-verified here.
+    /// frame's geometry. This holds because every S0–S3 stage that writes a
+    /// node local propagates before returning — NOT because every stage
+    /// propagates unconditionally on every call: `limbSolve` can return
+    /// having written and propagated zero times (no `ikLayer`, `staggerActive`
+    /// false or no `captureStepper`, no `armLayer`), which satisfies this
+    /// precondition trivially (nothing changed since the prior refresh), not
+    /// vacuously. It is not re-verified here.
+    ///
+    /// Deliberately does NOT re-propagate after solving: `ConstraintSolver`
+    /// writes each target's local matrix but not its world matrix (see
+    /// `solveAimConstraint`), so a chained constraint reading a just-solved
+    /// node's `worldPosition` within the same `solve()` call already reads
+    /// pre-solve data — a pre-existing property of `ConstraintSolver`, not
+    /// this stage. Nothing between this call and the scheduler's end-of-frame
+    /// commit reads world space, so the commit is this stage's exit refresh.
+    ///
+    /// Contract change: this function used to end with its own
+    /// `updateNodeTransforms()` call whenever it solved anything. It no
+    /// longer does — an out-of-tree caller invoking `constrain` directly
+    /// (outside `CrowdFrameStepper`, which now issues the commit itself)
+    /// must propagate on its own afterward before reading world space.
     public static func constrain(avatar: inout PipelineAvatar, partners: FrozenSnapshot, dt: Float) {
         guard !avatar.model.nodeConstraints.isEmpty else { return }
         avatar.constraintSolver.solve(constraints: avatar.model.nodeConstraints, nodes: avatar.model.nodes)
-        avatar.model.updateNodeTransforms()
     }
 }
 
