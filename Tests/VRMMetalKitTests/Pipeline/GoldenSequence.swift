@@ -93,4 +93,103 @@ final class GoldenSequenceTests: XCTestCase {
         let b = PoseSample(bones: [SIMD4<Float>(1, 2, 3, 4)], roots: [SIMD4<Float>(5, 6, 7, 0)])
         XCTAssertEqual(a, b)
     }
+
+    func testAssertSequencesIdenticalDetectsDivergenceAtKnownIndex() {
+        let sample = PoseSample(bones: [SIMD4<Float>(0, 0, 0, 1)], roots: [SIMD4<Float>(0, 0, 0, 0)])
+        var perturbedBones = sample.bones
+        perturbedBones[0] = SIMD4<Float>(0.1, 0, 0, 1)
+        let perturbed = PoseSample(bones: perturbedBones, roots: sample.roots)
+
+        let seqA = [[sample, sample], [sample, sample]]
+        var seqB = [[sample, sample], [sample, sample]]
+        seqB[1][1] = perturbed
+
+        XCTExpectFailure("diverged at model 1, frame 1")
+        assertSequencesIdentical(seqA, seqB, "test divergence detection")
+    }
+
+    func testAssertSequencesIdenticalDetectsDifferentModelCount() {
+        let sample = PoseSample(bones: [SIMD4<Float>(0, 0, 0, 1)], roots: [SIMD4<Float>(0, 0, 0, 0)])
+        let seqA = [[sample]]
+        let seqB = [[sample], [sample]]
+
+        XCTExpectFailure("model count")
+        assertSequencesIdentical(seqA, seqB, "model count mismatch")
+    }
+
+    func testAssertSequencesIdenticalDetectsDifferentFrameCount() {
+        let sample = PoseSample(bones: [SIMD4<Float>(0, 0, 0, 1)], roots: [SIMD4<Float>(0, 0, 0, 0)])
+        let seqA = [[sample, sample]]
+        let seqB = [[sample]]
+
+        XCTExpectFailure("frame count")
+        assertSequencesIdentical(seqA, seqB, "frame count mismatch")
+    }
+
+    func testAssertSequencesIdenticalPassesForIdenticalSequences() {
+        let sample = PoseSample(bones: [SIMD4<Float>(0, 0, 0, 1)], roots: [SIMD4<Float>(0, 0, 0, 0)])
+        let seqA = [[sample, sample], [sample, sample]]
+        let seqB = [[sample, sample], [sample, sample]]
+
+        assertSequencesIdentical(seqA, seqB, "identical sequences")
+    }
+
+    @MainActor func testCapturePoseReadsKnownBoneRotation() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+
+        let path = getTestVRM10ModelPath()
+        try requireFixture(path, hint: testVRM10Filename)
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+        model.updateNodeTransforms()
+
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let boneIdx = try XCTUnwrap(humanoid.getBoneNode(.chest))
+        let knownRotation = simd_quatf(ix: 0.1, iy: 0.2, iz: 0.3, r: 0.9)
+        model.nodes[boneIdx].rotation = knownRotation
+        model.nodes[boneIdx].updateLocalMatrix()
+        model.updateNodeTransforms()
+
+        let sample = try capturePose(model)
+        let chestIndex = VRMHumanoidBone.allCases.firstIndex(of: .chest)!
+        let captured = sample.bones[chestIndex]
+        let expected = knownRotation.vector
+        let distance = simd_distance(captured, expected)
+        XCTAssertLessThan(distance, 0.0001, "captured bone rotation matches written value")
+    }
+
+    @MainActor func testCaptureSequenceReturnsCorrectFrameCountAndOrder() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+
+        let path = getTestVRM10ModelPath()
+        try requireFixture(path, hint: testVRM10Filename)
+        let model1 = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+        let model2 = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+
+        model1.updateNodeTransforms()
+        model2.updateNodeTransforms()
+
+        let humanoid = try XCTUnwrap(model1.humanoid)
+        let boneIdx = try XCTUnwrap(humanoid.getBoneNode(.chest))
+
+        var frameCount = 0
+        let sequences = try captureSequence(frames: 5, step: { frameIndex in
+            frameCount = frameIndex + 1
+            let rotation = simd_quatf(ix: Float(frameIndex) * 0.1, iy: 0, iz: 0, r: 0.99)
+            model1.nodes[boneIdx].rotation = rotation
+            model1.nodes[boneIdx].updateLocalMatrix()
+            model1.updateNodeTransforms()
+        }, models: [model1, model2])
+
+        XCTAssertEqual(sequences.count, 2, "sequence count matches model count")
+        XCTAssertEqual(sequences[0].count, 5, "model 0 has 5 frames")
+        XCTAssertEqual(sequences[1].count, 5, "model 1 has 5 frames")
+        XCTAssertEqual(frameCount, 5, "step called 5 times")
+
+        let chestIndex = VRMHumanoidBone.allCases.firstIndex(of: .chest)!
+        XCTAssertNotEqual(sequences[0][0].bones[chestIndex], sequences[0][4].bones[chestIndex],
+                          "model 1 frames show different rotations")
+    }
 }
