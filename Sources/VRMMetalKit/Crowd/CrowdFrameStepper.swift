@@ -54,6 +54,11 @@ public final class CrowdFrameStepper {
     private let staggerParams: StaggerShoveParams?
     /// Every avatar's mutable per-frame pipeline state (S0–S3), keyed by
     /// position, in the same order as `avatars`.
+    /// Players whose `solvesConstraints` this stepper disabled, with the value it
+    /// found. Ownership of a caller-supplied `AnimationPlayer` is borrowed for the
+    /// stepper's lifetime, not taken permanently.
+    private var restoreSolvesConstraints: [(AnimationPlayer, Bool)] = []
+
     private var pipelineAvatars: [PipelineAvatar]
 
     /// The avatars, exposed so a host can set a shared camera on each renderer.
@@ -112,6 +117,9 @@ public final class CrowdFrameStepper {
         self.dt = fps > 0 ? 1.0 / fps : 1.0 / 60.0
         self.bodyContactMargin = bodyContactMargin
         self.staggerParams = stagger
+        // Borrowed, not taken: record each caller-supplied player's prior
+        // `solvesConstraints` so `deinit` restores it.
+        self.restoreSolvesConstraints = avatars.map { ($0.player, $0.player.solvesConstraints) }
         self.pipelineAvatars = avatars.map { avatar in
             // Snapshot each root's authored (bind) translation so scripted
             // motion is applied additively and never loses the model's base pose.
@@ -154,6 +162,10 @@ public final class CrowdFrameStepper {
             // S4 (PoseStage.constrain) solves node constraints on the final pipeline
             // pose; AnimationPlayer's own solve, which would run on the raw sampled
             // pose at S0, is disabled to avoid solving twice against two different poses.
+            // The prior value is captured so `deinit` can hand the caller's player
+            // back as it was found — `avatarsForCamera` returns these instances, and
+            // a host that later drives one directly would otherwise silently lose
+            // twist/aim constraint solving with no runtime signal.
             avatar.player.solvesConstraints = false
 
             return PipelineAvatar(index: avatar.index, model: avatar.model, player: avatar.player,
@@ -161,6 +173,10 @@ public final class CrowdFrameStepper {
                                   armLayer: armLayer, captureStepper: captureStepper,
                                   staggerSolver: staggerSolver, staggerActive: false)
         }
+    }
+
+    deinit {
+        for (player, prior) in restoreSolvesConstraints { player.solvesConstraints = prior }
     }
 
     /// Phase 0 (pose all) + Phase 1+2 (exchange). `frameTime` is normalized [0,1].
