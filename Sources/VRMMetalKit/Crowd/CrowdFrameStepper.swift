@@ -142,6 +142,11 @@ public final class CrowdFrameStepper {
                 armLayer = nil
             }
 
+            // S4 (PoseStage.constrain) solves node constraints on the final pipeline
+            // pose; AnimationPlayer's own solve, which would run on the raw sampled
+            // pose at S0, is disabled to avoid solving twice against two different poses.
+            avatar.player.solvesConstraints = false
+
             return PipelineAvatar(index: avatar.index, model: avatar.model, player: avatar.player,
                                   baseTranslations: baseTranslations, posturalLayer: posturalLayer,
                                   armLayer: armLayer, captureStepper: captureStepper,
@@ -205,6 +210,7 @@ public final class CrowdFrameStepper {
             #if DEBUG
             PoseStage.debugAssertRootsUnchanged(avatar: pipelineAvatars[i], since: rootsAfterDisplace)
             #endif
+            PoseStage.constrain(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt)
         }
         // Phase 1+2: snapshot all (post-motion, post-yield poses), inject union-minus-self.
         group?.exchange()

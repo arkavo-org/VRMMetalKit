@@ -102,3 +102,87 @@ final class ConstraintHoistTests: XCTestCase {
                           "target angle (\(angleOn)) must be less than source (\(sourceAngle)) due to 0.5 weight")
     }
 }
+
+extension ConstraintHoistTests {
+    /// The behaviour change C2 buys: a constraint whose source bone is written
+    /// by a post-S0 stage now tracks that stage's output. Built as a synthetic
+    /// roll constraint on the forearm sourced from the upper arm, because the
+    /// stock fixture may author none — the mechanism is what is under test, not
+    /// any particular rig's authoring. Constraint axis and source-rotation axis
+    /// are the same (0,1,0): a mismatch would send `extractTwist`'s projection
+    /// to zero and make this pass even if the solver were broken.
+    @MainActor func testConstraintTracksPostComposeArmWrite() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await loadModel(device)
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let upperArm = try XCTUnwrap(humanoid.getBoneNode(.leftUpperArm))
+        let lowerArm = try XCTUnwrap(humanoid.getBoneNode(.leftLowerArm))
+
+        let axis = SIMD3<Float>(0, 1, 0)
+        model.nodeConstraints = [
+            VRMNodeConstraint(targetNode: lowerArm, constraint: .roll(sourceNode: upperArm, axis: axis, weight: 1.0))
+        ]
+
+        var avatar = PipelineAvatar(index: 0, model: model, player: AnimationPlayer(),
+                                    baseTranslations: [:])
+        avatar.player.solvesConstraints = false
+        let snapshot = FrozenSnapshot(torsos: [:], indices: [0])
+
+        PoseStage.sample(avatar: &avatar, partners: snapshot, dt: 1.0 / 60.0)
+        let afterSample = model.nodes[lowerArm].rotation
+
+        model.nodes[upperArm].rotation = simd_quatf(angle: 0.4, axis: axis)
+        model.nodes[upperArm].updateLocalMatrix()
+        model.updateNodeTransforms()
+
+        PoseStage.constrain(avatar: &avatar, partners: snapshot, dt: 1.0 / 60.0)
+        let afterConstrain = model.nodes[lowerArm].rotation
+
+        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        XCTAssertNotEqual(afterConstrain, identity,
+                          "solved target rotation must be non-identity, else the projection degenerated to zero")
+        XCTAssertNotEqual(afterSample.vector, afterConstrain.vector,
+                          "S4 must resolve the constraint against the arm write that landed after S0")
+    }
+
+    /// Proves the WIRED path, not just `PoseStage.constrain` in isolation:
+    /// `CrowdFrameStepper` must (a) flip `solvesConstraints` off on every
+    /// pipeline-driven player, so the solve is not run twice against two
+    /// different poses, and (b) reach S4 after S3 inside `step()`, so a
+    /// synthetic constraint set before the frame is resolved by the time the
+    /// frame returns.
+    @MainActor func testStepperWiresConstrainAfterLimbSolve() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let model = try await loadModel(device)
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let upperArm = try XCTUnwrap(humanoid.getBoneNode(.leftUpperArm))
+        let lowerArm = try XCTUnwrap(humanoid.getBoneNode(.leftLowerArm))
+
+        let axis = SIMD3<Float>(0, 1, 0)
+        model.nodeConstraints = [
+            VRMNodeConstraint(targetNode: lowerArm, constraint: .roll(sourceNode: upperArm, axis: axis, weight: 1.0))
+        ]
+        model.nodes[upperArm].rotation = simd_quatf(angle: 0.4, axis: axis)
+        model.nodes[upperArm].updateLocalMatrix()
+        model.updateNodeTransforms()
+
+        var config = RendererConfig(); config.synchronousSpringBone = true
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.loadModel(model)
+
+        let player = AnimationPlayer()
+        let avatar = CrowdFrameStepper.Avatar(renderer: renderer, model: model, player: player, index: 0)
+        let driver = CrowdMotionDriver(startSep: 1.0, holdSep: 1.0,
+                                       approachStart: 0.0, approachEnd: 0.01, holdEnd: 1.0, partEnd: 1.0)
+        let stepper = CrowdFrameStepper(avatars: [avatar], driver: driver, group: nil, fps: 60)
+
+        XCTAssertFalse(player.solvesConstraints,
+                       "CrowdFrameStepper must disable the player's own solve for pipeline-driven avatars")
+
+        stepper.step(frameTime: 0)
+
+        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        XCTAssertNotEqual(model.nodes[lowerArm].rotation, identity,
+                          "PoseStage.constrain must run inside CrowdFrameStepper.step() after limbSolve")
+    }
+}

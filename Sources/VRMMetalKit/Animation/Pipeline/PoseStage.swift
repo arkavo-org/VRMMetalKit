@@ -127,6 +127,19 @@ public enum PoseStage {
     /// full brace. Sized against the measured stagger peaks (≈0.05 m
     /// under-capacity, ≈0.076 m over-capacity — `StaggerShoveIntegrationTests`).
     static let fullBraceResidual: Float = 0.08
+
+    /// S4 — VRM node constraints on the final pose.
+    ///
+    /// Nothing before S4 may read constraint output. A layer needing a
+    /// post-constraint pose is a cycle in the stage graph, which is a design
+    /// smell to surface rather than accommodate.
+    public static func constrain(avatar: inout PipelineAvatar, partners: FrozenSnapshot, dt: Float) {
+        guard !avatar.model.nodeConstraints.isEmpty else { return }
+        constraintSolver.solve(constraints: avatar.model.nodeConstraints, nodes: avatar.model.nodes)
+        avatar.model.updateNodeTransforms()
+    }
+
+    private static let constraintSolver = ConstraintSolver()
 }
 
 extension PoseStage {
