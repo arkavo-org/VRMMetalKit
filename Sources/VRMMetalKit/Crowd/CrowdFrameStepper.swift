@@ -198,9 +198,13 @@ public final class CrowdFrameStepper {
             PoseStage.compose(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt)
             PoseStage.displace(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt,
                                staggerEnabled: staggerParams != nil)
+            #if DEBUG
             let rootsAfterDisplace = PoseStage.rootTranslations(of: pipelineAvatars[i].model)
+            #endif
             PoseStage.limbSolve(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt)
+            #if DEBUG
             PoseStage.debugAssertRootsUnchanged(avatar: pipelineAvatars[i], since: rootsAfterDisplace)
+            #endif
         }
         // Phase 1+2: snapshot all (post-motion, post-yield poses), inject union-minus-self.
         group?.exchange()
