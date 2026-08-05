@@ -22,17 +22,25 @@ import simd
 /// Which primitives constitute the body surface a simulated garment should be
 /// pushed OUT of.
 ///
-/// Must exclude anything that is itself simulated: a garment whose own joints
-/// are driven by spring bones would report those joints as permanently inside
-/// it. Must also exclude hair for the same reason. Scoped over materials across
-/// every mesh, never by mesh name — name-matching drops the Face mesh's SKIN
-/// primitives.
+/// Excludes CLOTH categorically, not by per-material judgement: CLOTH is
+/// simulated garment surface (skirts, sleeves, tops, hair accessories), and a
+/// garment whose own joints are driven by spring bones would report those
+/// joints as permanently inside it — the nearest triangle to a buried joint
+/// would be the garment's own surface, at distance ≈0, so the region reported
+/// would be the garment's own body-region tag rather than whatever it is
+/// actually penetrating. This holds even for a CLOTH primitive that happens
+/// not to be simulated (e.g. shoes): the exclusion is a property of the
+/// method, not a fact checked per material. CLOTH is also frequently a thin
+/// double-sided shell, on which nearest-triangle-normal classification is
+/// undefined. Must also exclude hair for the same reason. Scoped over
+/// materials across every mesh, never by mesh name — name-matching drops the
+/// Face mesh's SKIN primitives.
 enum BodySurfacePredicate {
 
     static func includes(materialName: String?) -> Bool {
         guard let raw = materialName?.uppercased() else { return false }
         if raw.contains("HAIR") { return false }
-        return raw.contains("SKIN") || raw.contains("CLOTH")
+        return raw.contains("SKIN")
     }
 
     static func inventory(model: VRMModel) -> [BodySurfaceInventory] {

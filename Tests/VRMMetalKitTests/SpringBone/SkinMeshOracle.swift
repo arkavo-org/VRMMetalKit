@@ -391,12 +391,25 @@ extension SkinMeshOracle {
 
     /// Skins every body-surface primitive to world space and builds an oracle.
     ///
-    /// Precondition: morph weights are zero. `StressPoseFactory.clip` emits
-    /// joint tracks only, so this holds for every caller in this plan — a
-    /// silent morph would move the surface out from under the measurement.
-    static func build(model: VRMModel) -> SkinMeshOracle? {
+    /// Precondition: morph weights are zero. `primitive.vertexBuffer` is the
+    /// rest-pose buffer as loaded — morph target compute writes into a
+    /// separate, privately-stored GPU buffer that this function never reads
+    /// (see `VRMRenderer.applyMorphTargetsCompute`), so a bare `VRMModel`
+    /// with no renderer attached (every caller in this plan) can never carry
+    /// morphed positions here regardless of any expression state. Pass
+    /// `expressionController` when the model WAS driven through a
+    /// `VRMRenderer` that could have set non-zero expression weights, so the
+    /// precondition is asserted directly against the controller rather than
+    /// silently trusted from a doc comment.
+    static func build(model: VRMModel, expressionController: VRMExpressionController? = nil) -> SkinMeshOracle? {
+        if let controller = expressionController {
+            assertMorphWeightsAreZero(controller: controller, model: model)
+        }
+
         let inventory = BodySurfacePredicate.inventory(model: model)
         guard !inventory.isEmpty else { return nil }
+
+        let boneByNode = humanoidBoneByNode(model: model)
 
         var triangles: [Triangle] = []
         for entry in inventory {
@@ -404,15 +417,25 @@ extension SkinMeshOracle {
             let mesh = model.meshes[entry.meshIndex]
             let primitive = mesh.primitives[entry.primitiveIndex]
             guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0,
-                  let indices = BodySurfacePredicate.readIndices(primitive) else { continue }
+                  let indices = BodySurfacePredicate.readIndices(primitive) else {
+                preconditionFailure(
+                    "SkinMeshOracle.build: \(entry.materialName) (mesh \(entry.meshIndex), primitive " +
+                    "\(entry.primitiveIndex)) has no readable vertex/index data — a body-surface " +
+                    "primitive must contribute geometry or the surface silently loses coverage there")
+            }
             guard let node = model.nodes.first(where: { $0.mesh == entry.meshIndex }),
-                  let skinIndex = node.skin, skinIndex >= 0, skinIndex < model.skins.count else { continue }
+                  let skinIndex = node.skin, skinIndex >= 0, skinIndex < model.skins.count else {
+                preconditionFailure(
+                    "SkinMeshOracle.build: \(entry.materialName) (mesh \(entry.meshIndex)) has no skin " +
+                    "— a body-surface primitive must be skinned or it silently drops out of the oracle")
+            }
             let skin = model.skins[skinIndex]
             let palette = skin.joints.indices.map {
                 skin.joints[$0].worldMatrix * skin.inverseBindMatrices[$0]
             }
             let verts = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
 
+            var unweightedVertexCount = 0
             func world(_ index: UInt32) -> (SIMD3<Float>, VRMHumanoidBone?) {
                 let v = verts[Int(index)]
                 let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
@@ -426,8 +449,12 @@ extension SkinMeshOracle {
                     sum += ws[k]
                     if ws[k] > domW { domW = ws[k]; dom = js[k] }
                 }
-                if sum > 1e-6 { p /= sum }
-                let bone = dom >= 0 ? humanoidBone(ofNode: skin.joints[dom], model: model) : nil
+                if sum > 1e-6 {
+                    p /= sum
+                } else {
+                    unweightedVertexCount += 1
+                }
+                let bone = dom >= 0 ? boneByNode[ObjectIdentifier(skin.joints[dom])] : nil
                 return (p, bone)
             }
 
@@ -440,27 +467,84 @@ extension SkinMeshOracle {
                                           region: majorityBone(ba, bb, bc)))
                 i += 3
             }
+            precondition(unweightedVertexCount == 0,
+                "SkinMeshOracle.build: \(entry.materialName) has \(unweightedVertexCount) vertex " +
+                "reference(s) with all-zero skin weights — they collapse to the world origin and " +
+                "silently corrupt the surface instead of being skinned")
         }
         guard !triangles.isEmpty else { return nil }
         return SkinMeshOracle(triangles: triangles)
     }
 
-    /// A triangle whose corners disagree takes the majority; a tie takes the
-    /// first non-nil, and §5's tolerance rule sends ties to the tighter bound.
+    /// A triangle whose corners disagree takes the majority. A genuine
+    /// three-way disagreement (no pair agrees) prefers a hand or finger bone
+    /// over the first corner: §5's tolerance table is tightest there, and
+    /// since region is collapsed once at build time — not re-resolved per
+    /// query — falling back to an arbitrary corner can silently widen the
+    /// tolerance a hand-region joint is measured against.
     private static func majorityBone(_ a: VRMHumanoidBone?, _ b: VRMHumanoidBone?,
                                      _ c: VRMHumanoidBone?) -> VRMHumanoidBone? {
         if a != nil && a == b { return a }
         if b != nil && b == c { return b }
         if a != nil && a == c { return a }
+        for candidate in [a, b, c] {
+            if let bone = candidate, isHandOrFinger(bone) { return bone }
+        }
         return a ?? b ?? c
     }
 
-    private static func humanoidBone(ofNode node: VRMNode, model: VRMModel) -> VRMHumanoidBone? {
-        guard let humanoid = model.humanoid,
-              let index = model.nodes.firstIndex(where: { $0 === node }) else { return nil }
-        for bone in VRMHumanoidBone.allCases where humanoid.getBoneNode(bone) == index {
-            return bone
+    private static func isHandOrFinger(_ bone: VRMHumanoidBone) -> Bool {
+        switch bone {
+        case .leftHand, .rightHand,
+             .leftThumbMetacarpal, .leftThumbProximal, .leftThumbDistal,
+             .leftIndexProximal, .leftIndexIntermediate, .leftIndexDistal,
+             .leftMiddleProximal, .leftMiddleIntermediate, .leftMiddleDistal,
+             .leftRingProximal, .leftRingIntermediate, .leftRingDistal,
+             .leftLittleProximal, .leftLittleIntermediate, .leftLittleDistal,
+             .rightThumbMetacarpal, .rightThumbProximal, .rightThumbDistal,
+             .rightIndexProximal, .rightIndexIntermediate, .rightIndexDistal,
+             .rightMiddleProximal, .rightMiddleIntermediate, .rightMiddleDistal,
+             .rightRingProximal, .rightRingIntermediate, .rightRingDistal,
+             .rightLittleProximal, .rightLittleIntermediate, .rightLittleDistal:
+            return true
+        default:
+            return false
         }
-        return nil
+    }
+
+    /// Built once per `build(model:)` call rather than resolved per vertex:
+    /// the old per-vertex lookup was `O(nodes × bones)`, called three times
+    /// per triangle, and dominated `build`'s runtime.
+    private static func humanoidBoneByNode(model: VRMModel) -> [ObjectIdentifier: VRMHumanoidBone] {
+        guard let humanoid = model.humanoid else { return [:] }
+        var map: [ObjectIdentifier: VRMHumanoidBone] = [:]
+        for bone in VRMHumanoidBone.allCases {
+            guard let index = humanoid.getBoneNode(bone), index >= 0, index < model.nodes.count else { continue }
+            map[ObjectIdentifier(model.nodes[index])] = bone
+        }
+        return map
+    }
+
+    /// A silent morph would move the surface out from under the measurement.
+    /// Checked against both the preset weights and each mesh's fully-resolved
+    /// per-morph-target weight vector (the same aggregation
+    /// `VRMRenderer.applyMorphTargetsCompute` consumes to decide whether
+    /// morphing is active), so a custom expression is covered as well as a
+    /// preset one.
+    private static func assertMorphWeightsAreZero(controller: VRMExpressionController, model: VRMModel) {
+        for preset in VRMExpressionPreset.allCases {
+            let w = controller.weight(for: preset)
+            precondition(abs(w) <= 0.001,
+                "SkinMeshOracle.build: expression '\(preset.rawValue)' has non-zero weight \(w) — a " +
+                "morph would move the surface out from under the measurement")
+        }
+        for (meshIndex, mesh) in model.meshes.enumerated() {
+            let morphCount = mesh.primitives.reduce(0) { max($0, $1.morphTargets.count) }
+            guard morphCount > 0 else { continue }
+            let weights = controller.weightsForMesh(meshIndex, morphCount: morphCount)
+            precondition(weights.allSatisfy { abs($0) <= 0.001 },
+                "SkinMeshOracle.build: mesh \(meshIndex) has non-zero morph weight(s) \(weights) — a " +
+                "morph would move the surface out from under the measurement")
+        }
     }
 }
