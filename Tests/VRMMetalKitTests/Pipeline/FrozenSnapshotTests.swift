@@ -49,4 +49,37 @@ final class FrozenSnapshotTests: XCTestCase {
         XCTAssertEqual(snap.nearestPartnerTorso(of: 0)?.p0.x, 9,
                        "index 1 has no capsule and must be skipped, not treated as origin")
     }
+
+    func testTieBreakingIsFirstEncounteredWins() {
+        let querier = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0),
+                                     radius: 0.2, groupMask: 0xFFFF_FFFF)
+        let partner1 = CapsuleCollider(p0: SIMD3<Float>(1, 0, 0), p1: SIMD3<Float>(1, 1, 0),
+                                      radius: 0.3, groupMask: 0xFFFF_FFFF)
+        let partner2 = CapsuleCollider(p0: SIMD3<Float>(-1, 0, 0), p1: SIMD3<Float>(-1, 1, 0),
+                                      radius: 0.5, groupMask: 0xFFFF_FFFF)
+        var snap = FrozenSnapshot(torsos: [0: querier, 1: partner1, 2: partner2],
+                                 indices: [0, 1, 2])
+        var nearest = snap.nearestPartnerTorso(of: 0)
+        XCTAssertEqual(nearest?.radius, 0.3,
+                       "when two partners are equidistant (symmetric ±1 positions), indices-order wins: partner1 first")
+        snap = FrozenSnapshot(torsos: [0: querier, 1: partner1, 2: partner2],
+                             indices: [0, 2, 1])
+        nearest = snap.nearestPartnerTorso(of: 0)
+        XCTAssertEqual(nearest?.radius, 0.5,
+                       "reversed indices order makes partner2 first: iteration order is load-bearing")
+    }
+
+    func testIterationFollowsIndicesNotDictionary() {
+        let querier = CapsuleCollider(p0: SIMD3<Float>(0, 0, 0), p1: SIMD3<Float>(0, 1, 0),
+                                     radius: 0.2, groupMask: 0xFFFF_FFFF)
+        let inList = CapsuleCollider(p0: SIMD3<Float>(2, 0, 0), p1: SIMD3<Float>(2, 1, 0),
+                                    radius: 0.2, groupMask: 0xFFFF_FFFF)
+        let omitted = CapsuleCollider(p0: SIMD3<Float>(0.5, 0, 0), p1: SIMD3<Float>(0.5, 1, 0),
+                                     radius: 0.2, groupMask: 0xFFFF_FFFF)
+        let snap = FrozenSnapshot(torsos: [0: querier, 1: omitted, 2: inList],
+                                 indices: [0, 2])
+        let nearest = snap.nearestPartnerTorso(of: 0)
+        XCTAssertEqual(nearest?.p0.x, 2.0,
+                       "avatar 1 (omitted from indices, despite being closer) must not be returned; iteration is indices-driven")
+    }
 }
