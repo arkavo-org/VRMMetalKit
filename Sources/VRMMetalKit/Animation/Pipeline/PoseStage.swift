@@ -128,3 +128,24 @@ public enum PoseStage {
     /// under-capacity, ≈0.076 m over-capacity — `StaggerShoveIntegrationTests`).
     static let fullBraceResidual: Float = 0.08
 }
+
+extension PoseStage {
+    /// Every scene root's translation, for the S2 exit guard.
+    public static func rootTranslations(of model: VRMModel) -> [SIMD3<Float>] {
+        model.nodes.filter { $0.parent == nil }.map { $0.translation }
+    }
+
+    /// Whether no scene root has moved since `since` was captured. S2 is the sole
+    /// writer of root and hips; a later stage moving a root is a structural
+    /// violation, not a tuning issue.
+    public static func rootsUnchanged(_ model: VRMModel, since: [SIMD3<Float>]) -> Bool {
+        let now = rootTranslations(of: model)
+        return now.count == since.count && zip(now, since).allSatisfy { $0 == $1 }
+    }
+
+    /// Debug-build assertion that S3 and beyond left the roots alone.
+    public static func debugAssertRootsUnchanged(avatar: PipelineAvatar, since: [SIMD3<Float>]) {
+        assert(rootsUnchanged(avatar.model, since: since),
+               "a stage after S2 moved a scene root; S2 is the sole writer of root and hips")
+    }
+}
