@@ -43,15 +43,26 @@ final class RootDisplacementTests: XCTestCase {
         XCTAssertEqual(d.resolve(base: SIMD3<Float>(0, 0, 2)), SIMD3<Float>(0, 0, 3))
     }
 
-    func testDeltaOrderIsInsertionOrder() {
-        var d1 = RootDisplacement()
-        d1.addDelta(SIMD3<Float>(1e7, 0, 0))
-        d1.addDelta(SIMD3<Float>(1, 0, 0))
-        var d2 = RootDisplacement()
-        d2.addDelta(SIMD3<Float>(1, 0, 0))
-        d2.addDelta(SIMD3<Float>(1e7, 0, 0))
-        XCTAssertEqual(d1.resolve(base: .zero).x, Float(1e7) + Float(1))
-        XCTAssertEqual(d2.resolve(base: .zero).x, Float(1) + Float(1e7))
+    func testSequentialAccumulationVsReassociation() {
+        let delta1 = SIMD3<Float>(1e7, 0, 0)
+        let delta2 = SIMD3<Float>(1.0, 0, 0)
+        let delta3 = SIMD3<Float>(-1e7, 0, 0)
+
+        var d = RootDisplacement()
+        d.addDelta(delta1)
+        d.addDelta(delta2)
+        d.addDelta(delta3)
+        let result = d.resolve(base: .zero)
+
+        var sequentialResult = SIMD3<Float>.zero
+        sequentialResult += delta1
+        sequentialResult += delta2
+        sequentialResult += delta3
+
+        XCTAssertEqual(result.x.bitPattern, sequentialResult.x.bitPattern,
+                       "Sequential left-to-right SIMD accumulation")
+        XCTAssertEqual(result.y.bitPattern, sequentialResult.y.bitPattern)
+        XCTAssertEqual(result.z.bitPattern, sequentialResult.z.bitPattern)
     }
 
     func testHasAbsoluteReportsRequestState() {
@@ -73,6 +84,27 @@ final class RootDisplacementTests: XCTestCase {
         var d = RootDisplacement()
         d.setAbsolute(base + placement)
         d.addDelta(SIMD3<Float>(shove.x, 0, shove.y))
+        let result = d.resolve(base: base)
+
+        XCTAssertEqual(result.x.bitPattern, literal.x.bitPattern)
+        XCTAssertEqual(result.y.bitPattern, literal.y.bitPattern)
+        XCTAssertEqual(result.z.bitPattern, literal.z.bitPattern)
+    }
+
+    func testBitIdentityWithTwoDeltaForm() {
+        let base = SIMD3<Float>(0.37, 1.11, -0.29)
+        let placement = SIMD3<Float>(0.813, 0, -0.447)
+        let shove = SIMD3<Float>(0.0231, 0.0189, -0.0177)
+        let goalApproach = SIMD3<Float>(-0.0113, 0, 0.00824)
+
+        var literal = base + placement
+        literal += shove
+        literal += goalApproach
+
+        var d = RootDisplacement()
+        d.setAbsolute(base + placement)
+        d.addDelta(shove)
+        d.addDelta(goalApproach)
         let result = d.resolve(base: base)
 
         XCTAssertEqual(result.x.bitPattern, literal.x.bitPattern)
