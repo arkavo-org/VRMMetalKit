@@ -32,6 +32,13 @@ public struct PipelineAvatar {
     public let posturalLayer: PosturalContactLayer?
     public let armLayer: ArmCounterbalanceLayer?
     public let captureStepper: CaptureStepController?
+    /// S3's limb-IK layer, terminal against S2's finalised root. `nil` on every
+    /// existing construction site — `CrowdFrameStepper` never sets it, so the
+    /// crowd path is unaffected until a caller opts in.
+    public var ikLayer: IKLayer?
+    /// The world-space foot-target source `ikLayer` re-sources from once the
+    /// interaction-volume RFC lands. Wired but not yet consumed by `IKLayer`.
+    public var footTargetSource: FootTargetSource?
     public var staggerSolver: StaggerShoveSolver?
     /// Set on this avatar's first frame with non-zero contact depth. Until then the
     /// stagger channel is dormant and the path is byte-identical to stagger-off.
@@ -50,6 +57,8 @@ public struct PipelineAvatar {
                 posturalLayer: PosturalContactLayer? = nil,
                 armLayer: ArmCounterbalanceLayer? = nil,
                 captureStepper: CaptureStepController? = nil,
+                ikLayer: IKLayer? = nil,
+                footTargetSource: FootTargetSource? = nil,
                 staggerSolver: StaggerShoveSolver? = nil,
                 staggerActive: Bool = false,
                 constraintSolver: ConstraintSolver = ConstraintSolver()) {
@@ -60,6 +69,8 @@ public struct PipelineAvatar {
         self.posturalLayer = posturalLayer
         self.armLayer = armLayer
         self.captureStepper = captureStepper
+        self.ikLayer = ikLayer
+        self.footTargetSource = footTargetSource
         self.staggerSolver = staggerSolver
         self.staggerActive = staggerActive
         self.constraintSolver = constraintSolver

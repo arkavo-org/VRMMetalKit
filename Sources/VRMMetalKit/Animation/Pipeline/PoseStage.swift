@@ -107,7 +107,37 @@ public enum PoseStage {
 
     /// S3 — terminal pose writes. Pelvis height/tilt slot is empty this
     /// increment; the capture step is the current occupant of the leg channel.
+    ///
+    /// If both `avatar.ikLayer` and `avatar.captureStepper` are set, both may
+    /// write the same four leg bones this call — `ikLayer` runs first, so the
+    /// capture step's write wins (last writer). No construction site sets both
+    /// today (`CrowdFrameStepper` never sets `ikLayer`), so this is a latent,
+    /// untested interaction, not an exercised one; a future caller combining
+    /// the two channels on one avatar needs an explicit precedence decision,
+    /// not silent overwrite.
     public static func limbSolve(avatar: inout PipelineAvatar, partners: FrozenSnapshot, dt: Float) {
+        if let ik = avatar.ikLayer {
+            ik.update(deltaTime: dt, context: AnimationContext())
+            let output = ik.evaluate()
+            if !output.bones.isEmpty {
+                for (bone, transform) in output.bones {
+                    guard let humanoid = avatar.model.humanoid,
+                          let idx = humanoid.getBoneNode(bone), idx < avatar.model.nodes.count else { continue }
+                    let node = avatar.model.nodes[idx]
+                    switch output.blendMode {
+                    case .replace:
+                        node.rotation = transform.rotation
+                    case .additive:
+                        node.rotation = simd_mul(node.rotation, transform.rotation)
+                    case .blend(let weight):
+                        node.rotation = simd_slerp(node.rotation, transform.rotation, weight)
+                    }
+                    node.updateLocalMatrix()
+                }
+                avatar.model.updateNodeTransforms()
+            }
+        }
+
         guard avatar.staggerActive, let stepper = avatar.captureStepper else { return }
         stepper.update(deltaTime: dt, model: avatar.model)
         avatar.model.updateNodeTransforms()
