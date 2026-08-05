@@ -23,13 +23,21 @@ import simd
 /// two-bone IK to lock them in place, preventing the "moonwalk" effect
 /// when animations are retargeted to models with different proportions.
 ///
+/// `solveIKForLeg` returns absolute bone-local rotations (thigh/shin), meant
+/// for direct assignment to `node.rotation` — the construction in
+/// `PoseStage.limbSolve` (the pipeline's S3). It is NOT a delta meant to be
+/// composed as `basePose * delta`: on a rig with non-identity bind rotations
+/// on the leg bones, that composition applies the base twice. See
+/// `AnimationLayerCompositor.addIKLayer` for the compositor path this
+/// disqualifies.
+///
 /// ## Usage
 /// ```swift
-/// let compositor = AnimationLayerCompositor()
-/// compositor.setup(model: model)
-///
 /// let ikLayer = IKLayer()
-/// compositor.addIKLayer(ikLayer, for: model)
+/// ikLayer.initialize(with: model)
+/// var avatar = PipelineAvatar(index: 0, model: model, player: player, baseTranslations: [:])
+/// avatar.ikLayer = ikLayer
+/// PoseStage.limbSolve(avatar: &avatar, partners: snapshot, dt: dt)
 /// ```
 public final class IKLayer: AnimationLayer {
 
@@ -97,7 +105,7 @@ public final class IKLayer: AnimationLayer {
 
     private var pendingOutput: LayerOutput?
 
-    /// Creates an unconfigured IK layer. Call ``initialize(with:)`` (or use ``AnimationLayerCompositor/addIKLayer(_:for:)``) before evaluation.
+    /// Creates an unconfigured IK layer. Call ``initialize(with:)`` before evaluation.
     public init() {}
 
     /// Initialize the IK layer with a VRM model.
@@ -378,6 +386,7 @@ extension AnimationLayerCompositor {
     /// - Parameters:
     ///   - layer: The IK layer to add
     ///   - model: VRM model to initialize the layer with
+    @available(*, deprecated, message: "IKLayer.solveIKForLeg returns absolute bone-local rotations; AnimationLayerCompositor applies layer output as basePose * delta, which double-applies the base on rigs with non-identity leg bind rotations. Use the pipeline's S3 (PoseStage.limbSolve via PipelineAvatar.ikLayer) instead.")
     public func addIKLayer(_ layer: IKLayer, for model: VRMModel) {
         layer.initialize(with: model)
         addLayer(layer)
