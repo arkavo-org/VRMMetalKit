@@ -138,51 +138,113 @@ extension ConstraintHoistTests {
         PoseStage.constrain(avatar: &avatar, partners: snapshot, dt: 1.0 / 60.0)
         let afterConstrain = model.nodes[lowerArm].rotation
 
-        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        XCTAssertNotEqual(afterConstrain, identity,
-                          "solved target rotation must be non-identity, else the projection degenerated to zero")
+        // Weight is 1.0 and the source rotation is a pure rotation about the
+        // constraint axis, so the extracted twist equals the source rotation
+        // exactly (no swing component to discard) — the solved value has a
+        // known closed form, not just "differs from identity".
+        let expected = simd_quatf(angle: 0.4, axis: axis)
+        XCTAssertEqual(afterConstrain.vector.x, expected.vector.x, accuracy: 1e-5)
+        XCTAssertEqual(afterConstrain.vector.y, expected.vector.y, accuracy: 1e-5)
+        XCTAssertEqual(afterConstrain.vector.z, expected.vector.z, accuracy: 1e-5)
+        XCTAssertEqual(afterConstrain.vector.w, expected.vector.w, accuracy: 1e-5)
         XCTAssertNotEqual(afterSample.vector, afterConstrain.vector,
                           "S4 must resolve the constraint against the arm write that landed after S0")
     }
 
-    /// Proves the WIRED path, not just `PoseStage.constrain` in isolation:
-    /// `CrowdFrameStepper` must (a) flip `solvesConstraints` off on every
-    /// pipeline-driven player, so the solve is not run twice against two
-    /// different poses, and (b) reach S4 after S3 inside `step()`, so a
-    /// synthetic constraint set before the frame is resolved by the time the
-    /// frame returns.
+    /// Proves the WIRED path, not just `PoseStage.constrain` in isolation, and
+    /// specifically that S4 runs AFTER S3 — not merely "somewhere in `step()`".
+    ///
+    /// The source bone is `leftLowerArm`, one of the four bones
+    /// `ArmCounterbalanceLayer` (S3) writes via its soft-elbow term
+    /// (`ArmCounterbalanceLayer.applyDirect`); the target is `leftHand`, which no
+    /// stage in this pipeline configuration writes. Two avatars are shoved into
+    /// contact (`halfSep: 0.05`, matching `StaggerShoveIntegrationTests`'s brace
+    /// gate) with `stagger` + `armCounterbalance` both enabled so S3 actually
+    /// moves the source bone.
+    ///
+    /// The test solves the SAME constraint, with the SAME real `ConstraintSolver`,
+    /// against two different source values — the value just before this frame's
+    /// `step()` (pre-S3) and the value `step()` actually left behind (post-S3) —
+    /// and shows the pipeline's own S4 output matches the post-S3 solve and NOT
+    /// the pre-S3 one. That is the assertion that pins the ordering: a stray
+    /// `constrain` call anywhere else in `step()` that happened to run before S3
+    /// would fail it, where a bare "rotation != identity" check would not.
     @MainActor func testStepperWiresConstrainAfterLimbSolve() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
-        let model = try await loadModel(device)
-        let humanoid = try XCTUnwrap(model.humanoid)
-        let upperArm = try XCTUnwrap(humanoid.getBoneNode(.leftUpperArm))
-        let lowerArm = try XCTUnwrap(humanoid.getBoneNode(.leftLowerArm))
+
+        @MainActor func crowdAvatar(index: Int) async throws -> CrowdFrameStepper.Avatar {
+            let model = try await loadModel(device)
+            var config = RendererConfig(); config.synchronousSpringBone = true
+            let renderer = VRMRenderer(device: device, config: config)
+            renderer.loadModel(model)
+            for root in model.nodes where root.parent == nil {
+                root.rotation = CrowdPlacement.facing(avatarIndex: index, avatarCount: 2)
+            }
+            model.updateNodeTransforms()
+            return CrowdFrameStepper.Avatar(renderer: renderer, model: model, player: AnimationPlayer(), index: index)
+        }
+
+        let a = try await crowdAvatar(index: 0)
+        let b = try await crowdAvatar(index: 1)
+        let humanoid = try XCTUnwrap(a.model.humanoid)
+        let sourceIdx = try XCTUnwrap(humanoid.getBoneNode(.leftLowerArm))
+        let targetIdx = try XCTUnwrap(humanoid.getBoneNode(.leftHand))
 
         let axis = SIMD3<Float>(0, 1, 0)
-        model.nodeConstraints = [
-            VRMNodeConstraint(targetNode: lowerArm, constraint: .roll(sourceNode: upperArm, axis: axis, weight: 1.0))
-        ]
-        model.nodes[upperArm].rotation = simd_quatf(angle: 0.4, axis: axis)
-        model.nodes[upperArm].updateLocalMatrix()
-        model.updateNodeTransforms()
+        let constraint = VRMNodeConstraint(
+            targetNode: targetIdx, constraint: .roll(sourceNode: sourceIdx, axis: axis, weight: 1.0))
+        a.model.nodeConstraints = [constraint]
 
-        var config = RendererConfig(); config.synchronousSpringBone = true
-        let renderer = VRMRenderer(device: device, config: config)
-        renderer.loadModel(model)
-
-        let player = AnimationPlayer()
-        let avatar = CrowdFrameStepper.Avatar(renderer: renderer, model: model, player: player, index: 0)
-        let driver = CrowdMotionDriver(startSep: 1.0, holdSep: 1.0,
+        let driver = CrowdMotionDriver(startSep: 0.05, holdSep: 0.05,
                                        approachStart: 0.0, approachEnd: 0.01, holdEnd: 1.0, partEnd: 1.0)
-        let stepper = CrowdFrameStepper(avatars: [avatar], driver: driver, group: nil, fps: 60)
+        let stepper = CrowdFrameStepper(avatars: [a, b], driver: driver, group: nil, fps: 60,
+                                        stagger: StaggerShoveParams(), armCounterbalance: ArmCounterbalanceParams())
+        let armLayer = try XCTUnwrap(stepper.armCounterbalanceLayer(forAvatar: 0), "brace wired for avatar 0")
 
-        XCTAssertFalse(player.solvesConstraints,
+        XCTAssertFalse(a.player.solvesConstraints,
                        "CrowdFrameStepper must disable the player's own solve for pipeline-driven avatars")
 
-        stepper.step(frameTime: 0)
+        // Drive frames until the brace's elbow term actually engages — the fixture
+        // precondition `StaggerShoveIntegrationTests.testArmBrace_engagesOnShove_releasesOnRecovery`
+        // already establishes halfSep 0.05 does this within 180 frames.
+        var preS3Source = a.model.nodes[sourceIdx].rotation
+        var engaged = false
+        for f in 0..<180 {
+            preS3Source = a.model.nodes[sourceIdx].rotation
+            stepper.step(frameTime: Float(f) / 180.0)
+            if armLayer.currentPose.leftElbow > 1e-3 { engaged = true; break }
+        }
+        XCTAssertTrue(engaged,
+                      "fixture precondition: halfSep 0.05 must engage the arm brace's elbow term within 180 frames, else the ordering probe never exercises S3's write")
 
-        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        XCTAssertNotEqual(model.nodes[lowerArm].rotation, identity,
-                          "PoseStage.constrain must run inside CrowdFrameStepper.step() after limbSolve")
+        let postS3Source = a.model.nodes[sourceIdx].rotation
+        let actualTarget = a.model.nodes[targetIdx].rotation
+        XCTAssertNotEqual(preS3Source.vector, postS3Source.vector,
+                          "the elbow term must change the source bone this frame, else pre/post-S3 are indistinguishable")
+
+        // Solve the identical constraint against each candidate source value with
+        // a fresh, isolated solver — mutating and immediately restoring the live
+        // nodes so this probe has no lasting effect on the model.
+        func solvedTarget(usingSource source: simd_quatf) -> simd_quatf {
+            let savedSource = a.model.nodes[sourceIdx].rotation
+            let savedTarget = a.model.nodes[targetIdx].rotation
+            a.model.nodes[sourceIdx].rotation = source
+            ConstraintSolver().solve(constraints: [constraint], nodes: a.model.nodes)
+            let result = a.model.nodes[targetIdx].rotation
+            a.model.nodes[sourceIdx].rotation = savedSource
+            a.model.nodes[targetIdx].rotation = savedTarget
+            return result
+        }
+
+        let expectedFromPostS3 = solvedTarget(usingSource: postS3Source)
+        let expectedFromPreS3 = solvedTarget(usingSource: preS3Source)
+
+        XCTAssertEqual(actualTarget.vector.x, expectedFromPostS3.vector.x, accuracy: 1e-6)
+        XCTAssertEqual(actualTarget.vector.y, expectedFromPostS3.vector.y, accuracy: 1e-6)
+        XCTAssertEqual(actualTarget.vector.z, expectedFromPostS3.vector.z, accuracy: 1e-6)
+        XCTAssertEqual(actualTarget.vector.w, expectedFromPostS3.vector.w, accuracy: 1e-6)
+        XCTAssertNotEqual(actualTarget.vector, expectedFromPreS3.vector,
+                          "S4 must resolve against S3's output, not the pre-S3 value — a mis-ordered "
+                          + "constrain() call would produce this pre-S3 result instead")
     }
 }
