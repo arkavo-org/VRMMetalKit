@@ -358,4 +358,26 @@ extension SkinMeshOracleMathTests {
         XCTAssertLessThan(Date().timeIntervalSince(start), 5.0,
                           "2k queries over 20k triangles must be seconds, not minutes")
     }
+
+    /// Reproduces the shape of VMK's real-avatar finding (Task 4): a finely
+    /// tessellated mesh (cell ≈0.0105 here, matching the ≈0.011 measured on
+    /// AvatarSample_U's body+face mesh) queried far outside its bounds. The
+    /// Chebyshev first-touch ring for this query is ≈4743 — comfortably past
+    /// the `SpatialGrid.nearest` ring backstop (4096) that would previously
+    /// have made this query crash the test process via `preconditionFailure`
+    /// rather than return an answer. It must instead fall back to a linear
+    /// scan and complete in a bounded, small amount of time with the correct
+    /// answer, not merely "some" answer.
+    func testGridFallsBackToLinearScanForFarOutsideQuery() {
+        let tris = sphere(center: .zero, radius: 0.2, rings: 60, segments: 120)
+        let oracle = SkinMeshOracle(triangles: tris)
+        let farQuery = SIMD3<Float>(50, 0, 0)
+        let start = Date()
+        let pen = oracle.penetration(of: farQuery, radius: 50.0)
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertEqual(pen?.depth ?? -1, 0.2, accuracy: 0.01,
+                       "50m away, a 50m-radius joint buries the sphere's near surface by ~0.2m")
+        XCTAssertLessThan(elapsed, 0.05,
+                          "must be a bounded linear scan, not a ring search needing thousands of empty shells")
+    }
 }

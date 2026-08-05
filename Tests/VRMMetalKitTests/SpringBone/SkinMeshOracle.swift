@@ -152,6 +152,23 @@ extension SkinMeshOracle {
         let distanceSquared: Float
     }
 
+    /// Exhaustive nearest-triangle scan, shared by the brute-force reference
+    /// path and by `SpatialGrid`'s far-query fallback so both compute the
+    /// identical answer with the identical tie-break (lowest index wins
+    /// within `1e-12` of the current best) — a query routed through the
+    /// fallback therefore matches brute force exactly, not merely in depth.
+    static func linearNearest(to p: SIMD3<Float>, in triangles: [Triangle]) -> ClosestHit? {
+        var best: ClosestHit?
+        for (i, t) in triangles.enumerated() {
+            let (q, feature) = closestPoint(on: t, to: p)
+            let d2 = simd_length_squared(p - q)
+            if best == nil || d2 < best!.distanceSquared - 1e-12 {
+                best = ClosestHit(index: i, point: q, feature: feature, distanceSquared: d2)
+            }
+        }
+        return best
+    }
+
     /// Closest point on a triangle by Voronoi region (Ericson, *Real-Time
     /// Collision Detection* §5.1.5), reporting WHICH feature owns the closest
     /// point so the caller can pick the right pseudonormal.
@@ -273,9 +290,33 @@ extension SkinMeshOracle {
             return max(dx, max(dy, dz))
         }
 
+        /// Ring count beyond which the shell search is abandoned in favour of
+        /// a linear scan. The grid's cell size is the MEAN edge length across
+        /// every triangle in the mesh (see `init`), so a mesh mixing coarse
+        /// and fine tessellation (a real skinned body: coarse torso next to a
+        /// finely-tessellated face) can drive the cell size far below what
+        /// the coarse regions alone would need — and every ring beyond first
+        /// touch costs O(ring²) of mostly-empty cells to rule out. Bounding
+        /// the ring search caps that cost at O(threshold³) regardless of how
+        /// far outside the mesh a query lands, and the threshold is well
+        /// beyond any query that is actually near the surface (a joint sitting
+        /// just outside the skin never approaches it) — measured against a
+        /// real avatar (~13.6k triangles, cell≈0.011m), 32 rings is ≈0.36m,
+        /// while the failure case that motivated this fallback needed ring
+        /// 89 at 1m outside and ring 4394 at 50m outside. Below the
+        /// threshold the grid is strictly faster than a linear scan; above
+        /// it, a linear scan over the whole mesh (one pass, no distance
+        /// gate) is both correct and bounded, and is exactly the equivalence
+        /// test's own reference implementation.
+        private static let fallbackRingThreshold: Int32 = 32
+
         func nearest(to p: SIMD3<Float>, triangles: [Triangle]) -> ClosestHit? {
             guard !buckets.isEmpty else { return nil }
             let centre = Self.cellIndex(p, origin: origin, cell: cell)
+            let startRing = ringToReach(centre)
+            if startRing > Self.fallbackRingThreshold {
+                return SkinMeshOracle.linearNearest(to: p, in: triangles)
+            }
             var best: ClosestHit?
             // A triangle whose bounds span many cells (e.g. a large flat panel
             // next to finely-tessellated detail) is inserted into every one of
@@ -297,7 +338,7 @@ extension SkinMeshOracle {
             }
             // Every ring below this is provably outside the occupied bucket
             // range, so start where the shell can first possibly touch it.
-            var ring: Int32 = ringToReach(centre)
+            var ring: Int32 = startRing
             while true {
                 // Visit exactly the cells at Chebyshev distance `ring` from
                 // `centre` — the six faces of the (2·ring+1)³ cube's boundary —
@@ -340,14 +381,27 @@ extension SkinMeshOracle {
                     if shellDistance * shellDistance > b.distanceSquared { return best }
                 }
                 ring += 1
+                // Covers the case `startRing` alone doesn't: a query whose
+                // Chebyshev first-touch ring is comfortably below the
+                // threshold but whose Euclidean termination ring is not (the
+                // diagonal-query gap — see the equivalence test's (9,0,0)
+                // comment). Discarding `best` and rescanning is deliberate:
+                // it is exactly the reference implementation, so the answer
+                // it returns needs no reconciling with whatever partial state
+                // the abandoned shell search had accumulated.
+                if ring > Self.fallbackRingThreshold {
+                    return SkinMeshOracle.linearNearest(to: p, in: triangles)
+                }
                 // Not a distance cutoff: at any VRM-plausible cell size this
                 // is unreachable (~28m of ring growth at cell~0.007), and
                 // reaching it for a real query is itself a bug — the mesh's
                 // own bounding-box origin should have made `ringToReach`
-                // land near it already. Returning `best` here silently would
-                // report a buried joint CLEAN, which is exactly the failure
-                // mode this type exists to rule out, so an unreachable
-                // branch must abort loudly rather than lie.
+                // land near it already, and the fallback above should have
+                // already routed any query that could reach this far through
+                // a linear scan. Returning `best` here silently would report
+                // a buried joint CLEAN, which is exactly the failure mode
+                // this type exists to rule out, so an unreachable branch
+                // must abort loudly rather than lie.
                 if ring > 4096 {
                     preconditionFailure(
                         "SpatialGrid.nearest exceeded the ring backstop: ring=\(ring) "
@@ -370,15 +424,7 @@ extension SkinMeshOracle {
     /// Linear-scan twin of `penetration(of:radius:)`. Identical logic; the only
     /// difference is that it never consults the grid.
     func penetrationScanningAll(point: SIMD3<Float>, radius: Float) -> Penetration? {
-        var best: ClosestHit?
-        for (i, t) in triangles.enumerated() {
-            let (q, feature) = SkinMeshOracle.closestPoint(on: t, to: point)
-            let d2 = simd_length_squared(point - q)
-            if best == nil || d2 < best!.distanceSquared - 1e-12 {
-                best = ClosestHit(index: i, point: q, feature: feature, distanceSquared: d2)
-            }
-        }
-        guard let hit = best else { return nil }
+        guard let hit = SkinMeshOracle.linearNearest(to: point, in: triangles) else { return nil }
         let t = triangles[hit.index]
         let signed = signedDistance(from: point, to: hit, triangle: t, faceNormal: faceNormals[hit.index])
         let depth = radius - signed
