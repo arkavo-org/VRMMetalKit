@@ -145,6 +145,71 @@ final class StageExtractionGateTests: XCTestCase {
 }
 
 extension StageExtractionGateTests {
+    /// C4's accounting check: this pins the ACTUAL measured propagation count in
+    /// the pipeline's most demanding regime (matching the fixture's
+    /// "stagger-on-post-contact" cells) — not the brief's five-call guess,
+    /// which predates the `place`/`displace` split and undercounts
+    /// `CaptureStepController`'s own two internal propagations.
+    ///
+    /// The floor here is 7, not 2: `place`(1) and `compose`(1) each gate a
+    /// world-space read in the very next stage (postural lean reads the
+    /// placement; `displace`'s penetration read reads the lean), `displace`(1)
+    /// is S2's mandated exit refresh, `CaptureStepController.update` internally
+    /// propagates twice or its own restore/apply steps (out of this file's
+    /// scope — see `PoseStage.limbSolve`'s doc comment), `armLayer`(1) is
+    /// required by S4's aim-constraint precondition, and the scheduler's
+    /// commit(1) is the mandated end-of-frame refresh. The one genuine
+    /// duplicate this task found — `limbSolve`'s own propagate immediately
+    /// after `stepper.update`, which repeated a walk `CaptureStepController`
+    /// had just done itself — is gone; it does not move this total because
+    /// this fixture has zero VRM node constraints, so `constrain`'s deleted
+    /// conditional propagate (which used to cost 0 here) and the new
+    /// unconditional commit (which always costs 1) net to +1, cancelling the
+    /// duplicate's -1. A constraint-bearing avatar nets an actual reduction.
+    @MainActor func testPropagationCountPerAvatarPerFrame() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0, count: 2)
+        let b = try await avatar(device, index: 1, count: 2)
+        let stepper = CrowdFrameStepper(avatars: [a, b], driver: holdDriver(halfSep: 0.12),
+                                        group: nil, fps: 60,
+                                        postural: PosturalContactParams(),
+                                        stagger: StaggerShoveParams(),
+                                        armCounterbalance: ArmCounterbalanceParams())
+        // Warm the stagger channel so `staggerActive` is true and `limbSolve`'s
+        // capture-step + arm-layer branches are actually exercised, matching the
+        // regime the fixture's "stagger-on-post-contact" cells run in
+        // (`testPostContactCellReachesContact` establishes 60 frames reaches it).
+        for f in 0..<60 { stepper.step(frameTime: Float(f) / 60.0) }
+        VRMModel.propagationCountForTesting = 0
+        stepper.step(frameTime: 60.0 / 60.0)
+        XCTAssertEqual(VRMModel.propagationCountForTesting % 2, 0,
+                       "both avatars are in the same symmetric contact state, so the total must split evenly")
+        XCTAssertEqual(VRMModel.propagationCountForTesting / 2, 7,
+                       "the active-regime floor: place + compose + displace + " +
+                       "CaptureStepController's own restore/apply + armLayer + the end-of-frame commit")
+    }
+
+    /// Isolates the one genuine duplicate C4 removed: before this task,
+    /// `limbSolve` called `updateNodeTransforms()` a third time immediately
+    /// after `stepper.update(...)`, repeating a walk `CaptureStepController`
+    /// had just finished doing itself (its `update` ends every return path
+    /// with its own propagate — see `CaptureStepController.swift:174,183`).
+    /// With no `armLayer` configured, this call is `limbSolve`'s only work,
+    /// so the count pins directly to `CaptureStepController`'s own two calls.
+    @MainActor func testLimbSolveDoesNotRepeatCaptureStepControllersOwnPropagation() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0, count: 1)
+        var avatarState = PipelineAvatar(index: 0, model: a.model, player: a.player, baseTranslations: [:],
+                                         captureStepper: CaptureStepController(), staggerActive: true)
+        let snapshot = FrozenSnapshot(torsos: [:], indices: [0])
+        VRMModel.propagationCountForTesting = 0
+        PoseStage.limbSolve(avatar: &avatarState, partners: snapshot, dt: 1.0 / 60.0)
+        XCTAssertEqual(VRMModel.propagationCountForTesting, 2,
+                       "CaptureStepController.update's own restore+apply propagations should be the only ones")
+    }
+}
+
+extension StageExtractionGateTests {
     /// The write-guard must fire when a root moves after S2 and stay silent
     /// otherwise. Tested on the detector itself rather than by tripping it in a
     /// live pipeline, because tripping it in debug builds aborts the process.

@@ -53,6 +53,17 @@ import Metal
 ///
 /// - SeeAlso: ``VRMRenderer``, ``VRMLoadingOptions``, ``VRMError``.
 public class VRMModel: @unchecked Sendable {
+    #if DEBUG
+    /// Counts `updateNodeTransforms()` calls so the pipeline's propagation
+    /// budget is assertable. Debug-only; reset by the test that reads it.
+    /// Increments outside `lock`, unsynchronized across model instances —
+    /// fine for the single-threaded pipeline tests that read it, but a
+    /// `swift test --sanitize=thread` run touching this from more than one
+    /// model concurrently may report a benign data race on the counter
+    /// itself, unrelated to any propagation-correctness question.
+    nonisolated(unsafe) public static var propagationCountForTesting = 0
+    #endif
+
     // MARK: - Thread Safety
     let lock = NSLock()
 
@@ -1345,6 +1356,9 @@ public class VRMModel: @unchecked Sendable {
     ///
     /// - Complexity: O(n) where n is the number of nodes.
     public func updateNodeTransforms() {
+        #if DEBUG
+        Self.propagationCountForTesting += 1
+        #endif
         for node in nodes where node.parent == nil {
             node.updateWorldTransform()
         }
