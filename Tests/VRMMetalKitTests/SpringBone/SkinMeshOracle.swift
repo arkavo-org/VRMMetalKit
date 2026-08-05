@@ -340,7 +340,20 @@ extension SkinMeshOracle {
                     if shellDistance * shellDistance > b.distanceSquared { return best }
                 }
                 ring += 1
-                if ring > 4096 { return best }
+                // Not a distance cutoff: at any VRM-plausible cell size this
+                // is unreachable (~28m of ring growth at cell~0.007), and
+                // reaching it for a real query is itself a bug — the mesh's
+                // own bounding-box origin should have made `ringToReach`
+                // land near it already. Returning `best` here silently would
+                // report a buried joint CLEAN, which is exactly the failure
+                // mode this type exists to rule out, so an unreachable
+                // branch must abort loudly rather than lie.
+                if ring > 4096 {
+                    preconditionFailure(
+                        "SpatialGrid.nearest exceeded the ring backstop: ring=\(ring) "
+                        + "cell=\(cell) query=\(p) — this should be unreachable; a silent "
+                        + "return here would report a buried joint clean")
+                }
             }
         }
     }

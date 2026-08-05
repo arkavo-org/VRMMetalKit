@@ -316,12 +316,12 @@ extension SkinMeshOracleMathTests {
             SIMD3<Float>(-1.999, -1.999, -1.999), // interior corner
             // Far outside, but along a single axis (y = z = 0, inside the
             // box's own y/z range) rather than the 3-way diagonal (9,9,9).
-            // Off the diagonal, the ring search's per-axis (Chebyshev) first-
+            // On the diagonal, the ring search's per-axis (Chebyshev) first-
             // touch distance is only a lower bound on the true Euclidean
             // nearest distance, leaving a real sqrt(3) gap between "first
             // candidate found" and "provably the nearest" that costs several
             // hundred large, mostly-empty rings to close purely because of
-            // this fixture's own fine tessellation. On-axis, first touch IS
+            // this fixture's own fine tessellation. Off-axis, first touch IS
             // the true nearest distance, so the search terminates at once —
             // still exercises the identical "far outside, both agree" path
             // without that fixture-specific cost.
