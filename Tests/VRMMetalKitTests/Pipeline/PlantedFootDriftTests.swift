@@ -130,7 +130,6 @@ extension PlantedFootDriftTests {
         var avatarState = PipelineAvatar(index: 0, model: a.model, player: a.player,
                                          baseTranslations: [:])
         avatarState.ikLayer = ik
-        avatarState.footTargetSource = DetectorFootTargetSource()
         let snapshot = FrozenSnapshot(torsos: [:], indices: [0])
         let dt: Float = 1.0 / 60.0
 

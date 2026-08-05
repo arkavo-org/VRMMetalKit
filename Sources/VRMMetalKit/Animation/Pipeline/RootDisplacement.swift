@@ -30,6 +30,13 @@ import simd
 /// scene); the shove and its successors are deltas. A second absolute request
 /// means two producers each believe they own placement, which is a wiring bug
 /// rather than a value to reconcile.
+///
+/// The rule is only as real as the accumulator it's checked against:
+/// `PoseStage.place` and `PoseStage.displace` — S2's two beats — thread ONE
+/// instance per top-level root through `avatar.rootDisplacements` rather than
+/// each building its own, so a stray second `setAbsolute` anywhere between
+/// `place` and `displace` hits the same accumulator `place` seeded and trips
+/// this type's `precondition` instead of silently landing in a blank one.
 public struct RootDisplacement: Sendable {
     private var absolute: SIMD3<Float>?
     private var deltas: [SIMD3<Float>] = []

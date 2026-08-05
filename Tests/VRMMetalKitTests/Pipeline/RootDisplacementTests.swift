@@ -15,6 +15,7 @@
 //
 
 import XCTest
+import Metal
 import simd
 @testable import VRMMetalKit
 
@@ -99,5 +100,50 @@ final class RootDisplacementTests: XCTestCase {
         XCTAssertEqual(result.x.bitPattern, literal.x.bitPattern)
         XCTAssertEqual(result.y.bitPattern, literal.y.bitPattern)
         XCTAssertEqual(result.z.bitPattern, literal.z.bitPattern)
+    }
+}
+
+extension RootDisplacementTests {
+    /// `PoseStage.place` and `PoseStage.displace` used to each build their own,
+    /// unlinked `RootDisplacement` — so a second absolute request landing in
+    /// `displace` could never trip the type's one-absolute-per-frame
+    /// `precondition`, the exact case it exists for. This pins the fix: `place`
+    /// seeds `avatar.rootDisplacements` (one accumulator per top-level root) and
+    /// `displace` must continue those SAME instances, not start fresh ones.
+    @MainActor func testPoseStageThreadsRootDisplacementAcrossPlaceAndDisplace() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let path = getTestVRM10ModelPath()
+        try requireFixture(path, hint: testVRM10Filename)
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+
+        var baseTranslations: [ObjectIdentifier: SIMD3<Float>] = [:]
+        for root in model.nodes where root.parent == nil {
+            baseTranslations[ObjectIdentifier(root)] = root.translation
+        }
+
+        var avatar = PipelineAvatar(index: 0, model: model, player: AnimationPlayer(),
+                                    baseTranslations: baseTranslations)
+        XCTAssertTrue(avatar.rootDisplacements.isEmpty, "no beat has run yet")
+
+        let roots = model.nodes.filter { $0.parent == nil }
+        XCTAssertFalse(roots.isEmpty, "fixture precondition: at least one scene root")
+
+        PoseStage.place(avatar: &avatar, placement: SIMD3<Float>(1, 0, 0))
+        XCTAssertEqual(avatar.rootDisplacements.count, roots.count,
+                       "place must seed one accumulator per top-level root")
+        for root in roots {
+            let seeded = try XCTUnwrap(avatar.rootDisplacements[ObjectIdentifier(root)])
+            XCTAssertTrue(seeded.hasAbsolute, "place's accumulator must carry its absolute request")
+        }
+
+        let snapshot = FrozenSnapshot(torsos: [:], indices: [0])
+        PoseStage.displace(avatar: &avatar, partners: snapshot, dt: 1.0 / 60.0, staggerEnabled: false)
+
+        for root in roots {
+            let continued = try XCTUnwrap(avatar.rootDisplacements[ObjectIdentifier(root)])
+            XCTAssertTrue(continued.hasAbsolute,
+                          "displace must continue place's accumulator — a fresh one would never have seen the absolute request")
+        }
     }
 }
