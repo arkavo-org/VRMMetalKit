@@ -41,8 +41,31 @@ import simd
 /// overlaps a conditionally-driven bone.
 public enum PoseStage {
 
-    /// S0 — clip sampling, root motion, morph caching, VRMA look-at target.
+    /// S0 — clip sampling, morph caching, VRMA look-at target.
+    ///
+    /// Root motion is NOT yet routed through this pipeline. `AnimationPlayer.update`
+    /// writes hips translation directly, in clip space, whenever
+    /// `applyRootMotion == true` — bypassing S2's `RootDisplacement`, the frame's
+    /// only sanctioned root/hips writer (see the enum doc above). The S2 exit
+    /// guard (`rootTranslations` / `debugAssertRootsUnchanged`) cannot see this:
+    /// it only ever compares *scene-root* translations captured between `displace`
+    /// and `limbSolve`, never hips, and never anything from S0. A locomotion clip
+    /// driven with `applyRootMotion == true` would compose placement and clip-space
+    /// root motion silently, with no test or assertion catching it.
+    ///
+    /// Every current construction site leaves `applyRootMotion` at its `false`
+    /// default (crowd players carry no clip with hips translation tracks), so this
+    /// fires nowhere today. It exists to fail loudly the moment a caller tries to
+    /// route a locomotion clip through this pipeline before that routing has
+    /// actually been built: `applyRootMotion` needs to become a delta contributed
+    /// to S2's `RootDisplacement`, not a direct hips write in S0. That routing is
+    /// a design decision out of scope here.
     public static func sample(avatar: inout PipelineAvatar, partners: FrozenSnapshot, dt: Float) {
+        assert(!avatar.player.applyRootMotion,
+               "S0 sampled a clip with applyRootMotion == true; AnimationPlayer writes hips " +
+               "translation directly and bypasses S2's RootDisplacement, the pipeline's sole " +
+               "sanctioned root/hips writer. Root motion must be routed through S2 as a delta " +
+               "before a locomotion clip can use this pipeline.")
         avatar.player.update(deltaTime: dt, model: avatar.model)
     }
 
