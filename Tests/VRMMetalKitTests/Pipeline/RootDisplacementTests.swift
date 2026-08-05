@@ -43,26 +43,15 @@ final class RootDisplacementTests: XCTestCase {
         XCTAssertEqual(d.resolve(base: SIMD3<Float>(0, 0, 2)), SIMD3<Float>(0, 0, 3))
     }
 
-    func testSequentialAccumulationVsReassociation() {
-        let delta1 = SIMD3<Float>(1e7, 0, 0)
-        let delta2 = SIMD3<Float>(1.0, 0, 0)
-        let delta3 = SIMD3<Float>(-1e7, 0, 0)
-
+    func testAccumulationIsSequentialNotReassociated() {
         var d = RootDisplacement()
-        d.addDelta(delta1)
-        d.addDelta(delta2)
-        d.addDelta(delta3)
+        d.addDelta(SIMD3<Float>(1.0, 0, 0))
+        d.addDelta(SIMD3<Float>(-1.0, 0, 0))
+        d.addDelta(SIMD3<Float>(1e-8, 0, 0))
         let result = d.resolve(base: .zero)
 
-        var sequentialResult = SIMD3<Float>.zero
-        sequentialResult += delta1
-        sequentialResult += delta2
-        sequentialResult += delta3
-
-        XCTAssertEqual(result.x.bitPattern, sequentialResult.x.bitPattern,
-                       "Sequential left-to-right SIMD accumulation")
-        XCTAssertEqual(result.y.bitPattern, sequentialResult.y.bitPattern)
-        XCTAssertEqual(result.z.bitPattern, sequentialResult.z.bitPattern)
+        XCTAssertEqual(result.x.bitPattern, Float(1e-8).bitPattern,
+                       "Sequential accumulation preserves final small delta: ((0 + 1.0) + (-1.0)) + 1e-8 = 1e-8")
     }
 
     func testHasAbsoluteReportsRequestState() {
