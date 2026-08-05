@@ -386,3 +386,81 @@ extension SkinMeshOracle {
         return Penetration(depth: depth, region: t.region, surfacePoint: hit.point)
     }
 }
+
+extension SkinMeshOracle {
+
+    /// Skins every body-surface primitive to world space and builds an oracle.
+    ///
+    /// Precondition: morph weights are zero. `StressPoseFactory.clip` emits
+    /// joint tracks only, so this holds for every caller in this plan — a
+    /// silent morph would move the surface out from under the measurement.
+    static func build(model: VRMModel) -> SkinMeshOracle? {
+        let inventory = BodySurfacePredicate.inventory(model: model)
+        guard !inventory.isEmpty else { return nil }
+
+        var triangles: [Triangle] = []
+        for entry in inventory {
+            guard entry.isTriangleTopology else { continue }
+            let mesh = model.meshes[entry.meshIndex]
+            let primitive = mesh.primitives[entry.primitiveIndex]
+            guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0,
+                  let indices = BodySurfacePredicate.readIndices(primitive) else { continue }
+            guard let node = model.nodes.first(where: { $0.mesh == entry.meshIndex }),
+                  let skinIndex = node.skin, skinIndex >= 0, skinIndex < model.skins.count else { continue }
+            let skin = model.skins[skinIndex]
+            let palette = skin.joints.indices.map {
+                skin.joints[$0].worldMatrix * skin.inverseBindMatrices[$0]
+            }
+            let verts = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
+
+            func world(_ index: UInt32) -> (SIMD3<Float>, VRMHumanoidBone?) {
+                let v = verts[Int(index)]
+                let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
+                let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
+                var p = SIMD3<Float>.zero
+                var sum: Float = 0
+                var dom = -1, domW: Float = 0
+                for k in 0..<4 where ws[k] > 0 && js[k] >= 0 && js[k] < palette.count {
+                    let h = palette[js[k]] * SIMD4<Float>(v.position, 1)
+                    p += ws[k] * SIMD3<Float>(h.x, h.y, h.z)
+                    sum += ws[k]
+                    if ws[k] > domW { domW = ws[k]; dom = js[k] }
+                }
+                if sum > 1e-6 { p /= sum }
+                let bone = dom >= 0 ? humanoidBone(ofNode: skin.joints[dom], model: model) : nil
+                return (p, bone)
+            }
+
+            var i = 0
+            while i + 2 < indices.count {
+                let (a, ba) = world(indices[i])
+                let (b, bb) = world(indices[i + 1])
+                let (c, bc) = world(indices[i + 2])
+                triangles.append(Triangle(a: a, b: b, c: c,
+                                          region: majorityBone(ba, bb, bc)))
+                i += 3
+            }
+        }
+        guard !triangles.isEmpty else { return nil }
+        return SkinMeshOracle(triangles: triangles)
+    }
+
+    /// A triangle whose corners disagree takes the majority; a tie takes the
+    /// first non-nil, and §5's tolerance rule sends ties to the tighter bound.
+    private static func majorityBone(_ a: VRMHumanoidBone?, _ b: VRMHumanoidBone?,
+                                     _ c: VRMHumanoidBone?) -> VRMHumanoidBone? {
+        if a != nil && a == b { return a }
+        if b != nil && b == c { return b }
+        if a != nil && a == c { return a }
+        return a ?? b ?? c
+    }
+
+    private static func humanoidBone(ofNode node: VRMNode, model: VRMModel) -> VRMHumanoidBone? {
+        guard let humanoid = model.humanoid,
+              let index = model.nodes.firstIndex(where: { $0 === node }) else { return nil }
+        for bone in VRMHumanoidBone.allCases where humanoid.getBoneNode(bone) == index {
+            return bone
+        }
+        return nil
+    }
+}
