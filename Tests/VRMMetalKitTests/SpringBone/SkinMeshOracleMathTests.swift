@@ -74,6 +74,31 @@ final class SkinMeshOracleMathTests: XCTestCase {
         return out
     }
 
+    /// Square pyramid ("needle"): apex at `(0, height, 0)`, a tiny square base
+    /// at y=0. `height` is deliberately large relative to `baseHalfWidth` so
+    /// the four side faces are long and thin — their normals end up nearly
+    /// PERPENDICULAR to the apex axis, which is exactly what makes a single
+    /// face normal an unreliable stand-in for "outward" near the tip: fingers
+    /// are long and thin the same way, which is why the spec insists on
+    /// pseudonormals there.
+    private func needle(height: Float, baseHalfWidth: Float) -> [SkinMeshOracle.Triangle] {
+        let apex = SIMD3<Float>(0, height, 0)
+        let base = [
+            SIMD3<Float>(-baseHalfWidth, 0, -baseHalfWidth),
+            SIMD3<Float>(baseHalfWidth, 0, -baseHalfWidth),
+            SIMD3<Float>(baseHalfWidth, 0, baseHalfWidth),
+            SIMD3<Float>(-baseHalfWidth, 0, baseHalfWidth)
+        ]
+        var out: [SkinMeshOracle.Triangle] = []
+        for i in 0..<4 {
+            out.append(.init(a: apex, b: base[(i + 1) % 4], c: base[i], region: nil))
+        }
+        // Base cap, outward-facing (-y), so the solid is closed.
+        out.append(.init(a: base[0], b: base[1], c: base[2], region: nil))
+        out.append(.init(a: base[0], b: base[2], c: base[3], region: nil))
+        return out
+    }
+
     // MARK: - Convex baseline
 
     func testPointAtBoxCentreReportsHalfExtentDepth() {
@@ -114,27 +139,33 @@ final class SkinMeshOracleMathTests: XCTestCase {
                        "tessellation makes this approximate; 1cm on a 50cm sphere")
     }
 
-    // MARK: - Concave fixture (REQUIRED — convex shapes cannot observe this)
+    // MARK: - Needle apex fixture (REQUIRED — convex shapes cannot observe this)
 
-    /// Two boxes forming a notch. A query in the notch has its closest point on
-    /// a shared EDGE, where an arbitrary adjacent face normal flips the sign.
-    /// Cube and sphere are both convex and structurally cannot catch this.
-    func testConcaveNotchClassifiesOutsideCorrectly() {
-        var tris = box(min: [-1, -1, -1], max: [0, 1, 1])
-        tris += box(min: [-1, -1, -1], max: [1, 1, 0])
-        let oracle = SkinMeshOracle(triangles: tris)
-        // Sits in the open quadrant (x>0, z>0) — outside both boxes.
-        XCTAssertNil(oracle.penetration(of: SIMD3<Float>(0.30, 0, 0.30), radius: 0),
-                     "a point in the notch's open quadrant is OUTSIDE; a face-normal "
+    /// A tall thin spike, queried just past the tip along a direction tilted
+    /// off-axis. The nearest feature is the apex VERTEX, shared by all four
+    /// side faces; because the faces are long and thin, each face's own
+    /// normal is nearly perpendicular to the true "outward" direction there.
+    /// Whichever single face happens to win the nearest-triangle search gives
+    /// `dot(delta, faceNormal)` the WRONG sign for this query — proven by the
+    /// sabotage run in task-2-report.md — while the angle-weighted vertex
+    /// pseudonormal averages the four faces back to the true outward (+y)
+    /// direction and classifies it correctly. Box and sphere are both convex
+    /// with generously-angled faces and structurally cannot catch this.
+    func testNeedleApexClassifiesJustBeyondTipAsOutside() {
+        let height: Float = 1.0
+        let oracle = SkinMeshOracle(triangles: needle(height: height, baseHalfWidth: 0.02))
+        let apex = SIMD3<Float>(0, height, 0)
+        let offAxis = simd_normalize(SIMD3<Float>(0, 1, 1))
+        let query = apex + 0.05 * offAxis
+        XCTAssertNil(oracle.penetration(of: query, radius: 0),
+                     "just past the tip, tilted off-axis, is OUTSIDE; a face-normal "
                      + "classifier reports it inside")
     }
 
-    func testConcaveNotchStillDetectsGenuineInterior() {
-        var tris = box(min: [-1, -1, -1], max: [0, 1, 1])
-        tris += box(min: [-1, -1, -1], max: [1, 1, 0])
-        let oracle = SkinMeshOracle(triangles: tris)
-        XCTAssertNotNil(oracle.penetration(of: SIMD3<Float>(-0.5, 0, -0.5), radius: 0),
-                        "deep in the shared interior is inside")
+    func testNeedleApexStillDetectsGenuineInterior() {
+        let oracle = SkinMeshOracle(triangles: needle(height: 1.0, baseHalfWidth: 0.02))
+        XCTAssertNotNil(oracle.penetration(of: SIMD3<Float>(0, 0.1, 0), radius: 0),
+                        "on-axis, well below the tip, is inside the tapered body")
     }
 
     // MARK: - No proximity cutoff
