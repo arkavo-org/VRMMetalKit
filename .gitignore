@@ -65,3 +65,6 @@ tmp/
 # Local renderer output
 /emote-output/
 .bench-out/
+
+# Subagent-driven-development scratch workspace (ledger, briefs, reports, review packages)
+.superpowers/
