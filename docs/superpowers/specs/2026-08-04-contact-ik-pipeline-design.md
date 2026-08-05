@@ -1,7 +1,7 @@
 # Contact IK — Stage Pipeline Unification — Design
 
 **Date:** 2026-08-04
-**Status:** Ratified (brainstorm complete); ready for planning.
+**Status:** Implemented on branch `fix/stagger-collision`; C1–C4 landed.
 **Track:** Contact IK — a track parallel to the cross-avatar-collision increments, not a member of that sequence (Increment 4 there is upright recovery / stance re-centering, still unclaimed). Builds on **Increment 3** (`StaggerShoveSolver`, capture step) and the shipped cross-avatar body-response (`PosturalContactSolver`, `PosturalContactLayer`, `CrowdFrameStepper`). Its first client is the Contact IK protocol RFC.
 
 **Scope:** Replace the two competing frame orderings — `AnimationLayerCompositor` priorities and `CrowdFrameStepper`'s hand-rolled phases — with **one named stage pipeline**, hoist the VRM node-constraint solve to run on the final pose, and make limb IK terminal. Ships the seams that the follow-on protocol RFC (`InteractionVolume`, `ContactGoal`) specifies against.
@@ -82,7 +82,11 @@ They coexist because they mean different things; unifying them would be churn fo
 ### S2 — Displace
 **Sole writer of scene root and hips.** A displacement request queue absorbs crowd steering (Phase 0b placement), the stagger shove (Phase 0e), and later goal-approach motion.
 
+**Displacement conflict rule:** At most one absolute request per avatar per frame; every other request is an additive delta applied after it, in insertion order. Scripted placement is the absolute writer; the shove and later goal-approach are deltas. A second absolute request is a wiring bug (`precondition` in debug). See `RootDisplacement`.
+
 **Exit contract:** root and hips are final, **and world transforms are refreshed** (see §4).
+
+**S2 executes in two beats:** The actual stage ordering is `sample → place → compose → displace → limbSolve → constrain`, not a linear S0–S6 sequence. Placement (crowd steering) must precede S1 composition because the postural lean measures its own trunk endpoints in world space, which depends on where the avatar was placed. The shove must follow S1 because its penetration signal is derived from the lean-relieved pose. Collapsing the two beats into a single contiguous S2 would alter the depth signal — placement before lean-measure gives a different result than shove-after-lean-measure, because the shove reads the lean's output and fires based on it.
 
 ### S3 — Limb solve
 Terminal pose writes, in order: pelvis height/tilt slot (empty this increment), then leg two-bone IK, later arm/hand contact IK.
@@ -108,7 +112,16 @@ The loop currently calls `updateNodeTransforms()` up to **five times per avatar 
 
 The principled form: **transform validity is a stage-boundary contract.** S2's exit contract already says root/hips final; it extends to *world transforms refreshed*, because S3 reads world space.
 
-Steady state is therefore **two** propagations, not one: post-S2 refresh, and S6 commit. C1 preserves all five existing call sites as stage postludes so byte-identity holds trivially; the 5→2 reduction is its own gated commit (C4) after C3.
+Propagation count in the fully-active regime (stagger enabled, constraints enabled) is **seven per avatar per frame**, not the two proposed here. The reason: `place`, `compose`, `displace`-exit, and `limbSolve`'s IK and arm branches each have real downstream readers that require current world space, and `CaptureStepController` propagates twice internally as part of its own algorithm. C1 preserves all five existing call sites as stage postludes so byte-identity holds trivially; the 5→2 projection was superseded by C4's observed floor.
+
+| constraints | staggerActive | old | new | Δ |
+|---|---|---|---|---|
+| yes | yes | 8 | 7 | −1 |
+| no | yes | 7 | 7 | 0 |
+| yes | no | 4 | 4 | 0 |
+| no | no | 3 | 4 | +1 |
+
+**C4 is a structural cleanup, not a performance win:** idle crowd members pay one extra hierarchy walk per frame when both stagger and constraints are disabled.
 
 ---
 
@@ -135,13 +148,18 @@ Stages extracted; crowd phases become bindings to shared stage functions; stage-
 Move the solve to S4. Output changes only on constraint-source bones written after the old call site.
 *Gate (split by caller):* pipeline fixtures assert the behavior change — forearm twist tracks the counterbalanced arm, today's latent candy-wrapper bug promoted to a fixture. Direct-caller fixtures (validator, benchmark, isolation tests) assert byte-identity via `solvesConstraints = true`. Bounded-delta check everywhere else.
 
+**Gate reach limitation:** The test fixture authors zero VRM node constraints, so the C1 byte-identity gate is structurally incapable of detecting a C2 regression — hoisting the solve changes nothing observable on a constraint-free rig. C2's correctness rests on the synthetic-constraint tests in `ConstraintHoistTests`. Recommend adding a rig with authored `VRMC_node_constraint` twist bones as a second fixture to get real end-to-end coverage.
+
 **C3 — S2→S3 re-solve.**
 Foot IK re-solves after displacement. Identity when displacement is zero, so the no-contact regime is unchanged by construction.
-*Gate:* the MuseBench headline — planted-foot world-space drift under threshold while the stagger shove fires, on the **crowd** fixture. It reaches its bug because C3 lands in the unified path.
+*Gate (crowd fixture):* planted-foot drift measurement showed the crowd fixture already passed before any change (9.7e-05 m). The original threshold was rewritten as cumulative drift from the plant versus `controller.target(_:)` with a 2 mm threshold. The crowd path's headline was decorative; measurement also showed the original rate-limited shove (0.14 m/s maximum) could not fail the old 5 mm frame-to-frame threshold at 1/60 s (max 2.33 mm).
+*Gate (single-avatar):* C3's actual evidence is the `IKLayer` gate, which failed by construction at 0.05 m before the change on the single-avatar fixture and passes after.
 
 **C4 — propagation reduction.**
 5 → 2 propagations per avatar per frame, per §4.
 *Gate:* the same C1 golden sequences.
+
+**Finding: pre-existing `IKLayer` bug discovered and fixed during C3.** `IKLayer.solveIKForLeg` assigned `TwoBoneIKSolver.solve`'s world-frame rotation directly as a bone-local rotation. VRM legs rest at roughly −Y, so the aim hit `aimAt`'s antiparallel branch and produced a ~174.5° misrotation even for a trivial identity target. All 24 existing `IKLayerTests` stayed green because none applied solve output to a rig. The defect is now pinned by `IKLayerRoundTripTests`. `TwoBoneIKSolver`'s documentation, which called its output "local rotation for root joint", was the proximate cause and has been corrected to state world-frame with a +Y rest assumption.
 
 **Standing guards (debug builds):** write-assert on root/hips after S2 exits; read-assert on constraint outputs before S4. Regressions become structural failures rather than visual ones.
 
