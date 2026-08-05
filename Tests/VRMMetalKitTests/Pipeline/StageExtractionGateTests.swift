@@ -143,3 +143,19 @@ final class StageExtractionGateTests: XCTestCase {
         }
     }
 }
+
+extension StageExtractionGateTests {
+    /// The write-guard must fire when a root moves after S2 and stay silent
+    /// otherwise. Tested on the detector itself rather than by tripping it in a
+    /// live pipeline, because tripping it in debug builds aborts the process.
+    @MainActor func testRootWriteGuardDetectsMovement() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0, count: 1)
+        let before = PoseStage.rootTranslations(of: a.model)
+        XCTAssertTrue(PoseStage.rootsUnchanged(a.model, since: before))
+        for root in a.model.nodes where root.parent == nil {
+            root.translation.x += 0.001
+        }
+        XCTAssertFalse(PoseStage.rootsUnchanged(a.model, since: before))
+    }
+}
