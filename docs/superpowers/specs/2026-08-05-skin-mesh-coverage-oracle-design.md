@@ -6,6 +6,8 @@
 
 **Scope:** A test-only oracle that measures penetration against the **actual skinned body mesh** instead of hand-authored capsules, plus the coverage gate built on it. No runtime behaviour changes. Ships a *failing* measurement of a known visual defect — fingers and hands sinking into a simulated dress — so the later sub-projects have a number to move.
 
+**Depends on:** `SpringBoneStressPosePenetrationTests` (the existing harness this gate joins — pose driving, offscreen render loop, `clothJointNodeIndices`), `StressPose` / `StressPoseFactory`, `HairBodyMeshPenetrationDiagnostic` (the prototype being promoted, on `fix/stagger-collision`), `ColliderDimensionAudit` (the sizing guard whose exemption table SP2 empties), and `AvatarSample_U_1.0.vrm.glb` as the only skirt-simulating fixture. Nothing here depends on runtime collider code, by design — see §1.
+
 **Explicitly not shipped here:** collider sizing changes, per-finger colliders, hierarchical collision, chains for high-spread regions. Each of those is validated by this gate and specced separately.
 
 ---
@@ -142,7 +144,23 @@ To record it without a red CI, the assertion is wrapped in `XCTExpectFailure` ca
 
 ---
 
-## 8. Acceptance
+## 8. Decomposition (task-gated slices)
+
+Each slice ends with a gate that can be observed failing before it is trusted. A slice is not done because its code exists; it is done because its gate has been seen to discriminate.
+
+**Slice 1 — oracle maths, no rig.** `Triangle`, `init(triangles:)`, closest-point-on-triangle, signed classification, `penetration(of:radius:)`. Gate: synthetic cube and sphere (§7 layer 1), including the radius-aware case. Verified non-vacuous by running against a deliberately inverted inside-test. No Metal, no fixture.
+
+**Slice 2 — spatial hash.** Acceleration over triangle bounds. Gate: identical results to slice 1's brute force on the same synthetic inputs, plus a runtime assertion that the gate completes in seconds on a real fixture. Correctness is slice 1's; this slice only buys speed and must not change an answer.
+
+**Slice 3 — body-surface predicate + rig build.** `BodySurfacePredicate`, `build(model:)`, LBS skinning from live matrices. Gate: per-fixture assertion of the exact included and excluded primitive sets by material name and vertex count (§3). This is the slice where a material rename must fail loudly.
+
+**Slice 4 — the pose.** `armsAtSides` in `StressPose` / `StressPoseFactory`. Gate: the posed rig places the hands beside the hips, asserted on wrist world position relative to the hip, not eyeballed.
+
+**Slice 5 — the coverage gate.** Wire slices 1–4 into an assertion over `AvatarSample_U`'s simulated joints, reported per region. Gate: it produces a specific depth, region and joint for the hand-into-skirt defect, recorded via `XCTExpectFailure`. Verified non-vacuous by emptying the oracle, which must flip the expected failure to a pass and thereby fail the marker.
+
+Slices 1 and 2 are independent of the rig and can be built and reviewed without any fixture present. Slice 5 depends on all four.
+
+## 9. Acceptance
 
 - `SkinMeshOracle` reports correct signed depth on synthetic geometry, verified in both directions.
 - The body-surface predicate has an explicit per-fixture test.
@@ -151,6 +169,6 @@ To record it without a red CI, the assertion is wrapped in `XCTExpectFailure` ca
 - Existing suites are untouched: `SpringBoneStressPosePenetrationTests`, `HairShoulder*`, `HairChest*`, `HairBreast*`, `SpringBoneColliderAugmentor*`, and the pipeline gates all keep their current numbers.
 - `swift test --disable-sandbox` stays green.
 
-## 9. Follow-on
+## 10. Follow-on
 
 Sub-project 2 (fidelity: retire the `*Fraction` constants, size from authored colliders and mesh, empty `ColliderDimensionAudit.knownOversized`) and sub-project 3 (hierarchical colliders and per-finger capsules tiered on `SpringBoneQuality`) both validate against this gate. Sub-project 4 (chains for high-spread regions — chest 3.00, upperArm 4.06, lowerArm 4.23 p95/p05) likely folds into 3.
