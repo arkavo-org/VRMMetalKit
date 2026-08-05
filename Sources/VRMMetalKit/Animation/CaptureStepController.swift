@@ -335,7 +335,7 @@ public final class CaptureStepController {
         guard simd_length(thighRest) > 1e-6 else { return }
         let thighRestDir = simd_normalize(thighRest)
         let desiredThigh = simd_normalize(kneeWorld - hipPos)
-        let hipParentWorld = worldRotation(model.nodes[hipIdx].parent?.worldMatrix)
+        let hipParentWorld = TwoBoneIKSolver.worldRotation(model.nodes[hipIdx].parent?.worldMatrix)
         let desiredThighLocal = simd_act(hipParentWorld.inverse, desiredThigh)
         guard simd_length(desiredThighLocal) > 1e-6 else { return }
         model.nodes[hipIdx].rotation = simd_normalize(
@@ -351,7 +351,7 @@ public final class CaptureStepController {
         let shinRest = model.nodes[ankleIdx].initialTranslation
         guard simd_length(shinRest) > 1e-6 else { return }
         let shinRestDir = simd_normalize(shinRest)
-        let kneeParentWorld = worldRotation(model.nodes[kneeIdx].parent?.worldMatrix)
+        let kneeParentWorld = TwoBoneIKSolver.worldRotation(model.nodes[kneeIdx].parent?.worldMatrix)
         let desiredShinLocal = simd_act(kneeParentWorld.inverse, desiredShin)
         guard simd_length(desiredShinLocal) > 1e-6 else { return }
         model.nodes[kneeIdx].rotation = simd_normalize(
@@ -374,14 +374,5 @@ public final class CaptureStepController {
             if simd_length(f) > 1e-4 { return simd_normalize(f) }
         }
         return SIMD3<Float>(0, 0, 1)
-    }
-
-    /// Orthonormalized rotation quaternion from a (possibly scaled) world matrix.
-    private func worldRotation(_ m: simd_float4x4?) -> simd_quatf {
-        guard let m = m else { return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) }
-        let c0 = simd_normalize(SIMD3<Float>(m[0][0], m[0][1], m[0][2]))
-        let c1 = simd_normalize(SIMD3<Float>(m[1][0], m[1][1], m[1][2]))
-        let c2 = simd_normalize(SIMD3<Float>(m[2][0], m[2][1], m[2][2]))
-        return simd_quatf(simd_float3x3(c0, c1, c2))
     }
 }
