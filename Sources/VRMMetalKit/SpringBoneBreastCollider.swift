@@ -159,6 +159,17 @@ enum SpringBoneBreastCollider {
     /// weighted to the shoulder/upperArm bones within half an arm-length of the
     /// socket), anchored on the upperArm so it rides the arm. Empty when the
     /// bones / body mesh don't resolve.
+    ///
+    /// The proximity filter alone is a RADIUS filter with no directional
+    /// component: verts on the collarbone/décolletage side of the arm socket
+    /// fall inside the same half-arm-length ball as the deltoid cap and get
+    /// averaged into the fit, dragging the centroid toward the midline and
+    /// bulging the sphere across the front gap between the two shoulders (#309
+    /// lookUp regression — measured 1.76-1.88x the authored shoulder radius,
+    /// against 1.0-1.5x for every other grounded/mesh-fitted collider in this
+    /// file). A second filter along the shoulder→upperArm axis drops anything
+    /// medial of the socket before the centroid/radius are computed, so the fit
+    /// only sees the deltoid cap the collider is meant to cover.
     static func computeShoulderColliders(model: VRMModel,
                                          radiusPercentile: Float = 0.95,
                                          radiusScale: Float = 1.0) -> [VRMCollider] {
@@ -178,6 +189,14 @@ enum SpringBoneBreastCollider {
                 let l = simd_length(model.nodes[lowerNode].worldPosition - upperOrigin)
                 if l > 1e-3 { armLen = l }
             }
+            // Lateral axis (shoulder → upperArm, pointing away from the
+            // midline). Verts behind the socket along this axis belong to the
+            // collarbone/chest, not the deltoid.
+            var lateralDir: SIMD3<Float>?
+            if let shoulderNode = humanoid.getBoneNode(side.shoulder), shoulderNode >= 0, shoulderNode < model.nodes.count {
+                let d = upperOrigin - model.nodes[shoulderNode].worldPosition
+                if simd_length(d) > 1e-4 { lateralDir = simd_normalize(d) }
+            }
             let regionNodes = Set([side.shoulder, side.upper].compactMap { humanoid.getBoneNode($0) })
             let regionSlots = Set(skin.joints.indices.filter { regionNodes.contains(skin.joints[$0].index) })
 
@@ -195,7 +214,10 @@ enum SpringBoneBreastCollider {
                     guard domSlot >= 0, domW > 0.5, regionSlots.contains(domSlot) else { continue }
                     let wp = skinVertex(v.position, v.joints, v.weights, skinMatrices)
                     // Proximal deltoid only — exclude the mid/lower arm.
-                    if simd_length(wp - upperOrigin) < armLen * 0.5 { verts.append(wp) }
+                    guard simd_length(wp - upperOrigin) < armLen * 0.5 else { continue }
+                    // Lateral deltoid only — exclude verts medial of the socket.
+                    if let dir = lateralDir, simd_dot(wp - upperOrigin, dir) < 0 { continue }
+                    verts.append(wp)
                 }
             }
             guard verts.count >= 8 else { continue }

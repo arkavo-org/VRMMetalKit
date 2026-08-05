@@ -72,7 +72,7 @@ final class ColliderDimensionAudit: XCTestCase {
         .init(bone: .rightHand, kind: .sphere, limit: 4.0,
               note: "mirror of leftHand"),
         .init(bone: .leftUpperArm, kind: .sphere, limit: 2.0,
-              note: "shoulder spheres: augmentor 1.20-1.53x, mesh-fitted SpringBoneBreastCollider 1.76-1.88x. The mesh-fitted one funnels front hair into the décolletage (#309 lookUp regression)."),
+              note: "shoulder spheres: augmentor 1.20-1.53x, mesh-fitted SpringBoneBreastCollider 1.34-1.66x after the medial-vertex fit filter (was 1.76-1.88x, which funnelled front hair into the décolletage — #309 lookUp regression)."),
         .init(bone: .rightUpperArm, kind: .sphere, limit: 2.0,
               note: "mirror of leftUpperArm"),
         .init(bone: .leftLowerArm, kind: .capsule, limit: 1.6,
