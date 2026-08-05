@@ -133,13 +133,18 @@ public enum PoseStage {
     /// Nothing before S4 may read constraint output. A layer needing a
     /// post-constraint pose is a cycle in the stage graph, which is a design
     /// smell to surface rather than accommodate.
+    ///
+    /// Precondition: `avatar.model`'s world transforms are already propagated
+    /// when this runs. Aim constraints read `worldPosition` / the parent's
+    /// `worldMatrix`, so a stale world matrix from a stage that wrote locals
+    /// without calling `updateNodeTransforms()` would solve against last
+    /// frame's geometry. Every S0–S3 stage in this file re-propagates before
+    /// returning, so the precondition holds today; it is not re-verified here.
     public static func constrain(avatar: inout PipelineAvatar, partners: FrozenSnapshot, dt: Float) {
         guard !avatar.model.nodeConstraints.isEmpty else { return }
-        constraintSolver.solve(constraints: avatar.model.nodeConstraints, nodes: avatar.model.nodes)
+        avatar.constraintSolver.solve(constraints: avatar.model.nodeConstraints, nodes: avatar.model.nodes)
         avatar.model.updateNodeTransforms()
     }
-
-    private static let constraintSolver = ConstraintSolver()
 }
 
 extension PoseStage {

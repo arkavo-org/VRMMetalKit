@@ -36,6 +36,14 @@ public struct PipelineAvatar {
     /// Set on this avatar's first frame with non-zero contact depth. Until then the
     /// stagger channel is dormant and the path is byte-identical to stagger-off.
     public var staggerActive: Bool
+    /// This avatar's own S4 constraint solver — one per avatar, not shared, because
+    /// `ConstraintSolver`'s `@unchecked Sendable` conformance is conditioned on the
+    /// instance never being reachable from more than one concurrency domain
+    /// (`ConstraintSolver.swift`). A process-wide static would put every stepper's
+    /// avatars on the same instance, racing its unsynchronized topological-sort
+    /// cache; a per-avatar instance also avoids cross-avatar cache invalidation
+    /// when different avatars carry different constraint sets.
+    public let constraintSolver: ConstraintSolver
 
     public init(index: Int, model: VRMModel, player: AnimationPlayer,
                 baseTranslations: [ObjectIdentifier: SIMD3<Float>],
@@ -43,7 +51,8 @@ public struct PipelineAvatar {
                 armLayer: ArmCounterbalanceLayer? = nil,
                 captureStepper: CaptureStepController? = nil,
                 staggerSolver: StaggerShoveSolver? = nil,
-                staggerActive: Bool = false) {
+                staggerActive: Bool = false,
+                constraintSolver: ConstraintSolver = ConstraintSolver()) {
         self.index = index
         self.model = model
         self.player = player
@@ -53,5 +62,6 @@ public struct PipelineAvatar {
         self.captureStepper = captureStepper
         self.staggerSolver = staggerSolver
         self.staggerActive = staggerActive
+        self.constraintSolver = constraintSolver
     }
 }
