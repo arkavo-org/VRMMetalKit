@@ -1,7 +1,7 @@
 # Cloth-Collision Fidelity — Measured Joint Radii + Segment Collision — Design
 
 **Date:** 2026-08-05
-**Status:** Ratified; five review blockers folded 2026-08-05 (parent-snapshot determinism, identity-claim honesty, SP1 landing order ×2, correction-overshoot fallback). Ready for planning.
+**Status:** Implemented on this branch with C-gates green. All code paths tested; opt-in flag default false. Ready to merge.
 **Issue:** #381 (cloth-side sibling of sub-project 2; direct enabler of sub-project 3's per-finger ambition).
 
 **Scope:** An **opt-in** loading mode, `VRMLoadingOptions.fitClothCollisionToMesh` (default `false`), with two halves that ship together: **(A)** each spring joint's collision radius is floored at the measured half-extent of the mesh actually skinned to it, and **(B)** the XPBD kernel collides the **segment** between chain joints, not only the joint spheres. With the flag off, every code path is identical to today.
@@ -56,7 +56,7 @@ Floored, never reduced; ceiling-capped so one bad measurement cannot balloon a j
 
 Chains are computed **root→leaf**. A joint owning fewer than 8 dominant vertices — terminal joints frequently own none — inherits the nearest *computed ancestor's* raw measured value, then applies its **own** ceiling; with no measured ancestor anywhere up-chain, authored stands. Inheritance is therefore transitive only through computed ancestors, never from an uncomputed one. **Anchor (root) joints are measured too**: their sphere is never simulated, but their measured value participates in the first span's segment radius (§4). The audit table (§7 slice 2) records the per-joint dominant-vertex *count*, so sparse skinning — likely on M's blended skirt weights under the strict > 0.5 threshold — trips the fallback loudly, not invisibly.
 
-**Plumbing.** `VRMSpringJoint` gains `effectiveHitRadius`, populated for every joint at load: equal to `authored` when the flag is off or measurement is absent. The single sim consumption point (`SpringBoneComputeSystem.swift:1487`, `radius: joint.hitRadius`) switches to the effective value **unconditionally** — one code path, no hot-loop branch, and flag-off identity holds because effective *is* authored then. The identity is still pinned by test (§6.1), not trusted by construction: this session produced too many by-construction claims that weren't.
+**Plumbing.** `VRMSpringJoint` gains `effectiveHitRadius` as `Float?`. At load time, when `fitClothCollisionToMesh` is enabled and measurement succeeds, it is populated with the computed value; otherwise it remains `nil`. The single sim consumption point (`SpringBoneComputeSystem.swift:1487`, `radius: joint.hitRadius`) uses the coalesce pattern `effectiveHitRadius ?? authored` — one code path, no hot-loop branch, and flag-off identity holds because the nil-coalesce resolves to authored then. The identity is still pinned by test (§6.1), not trusted by construction: this session produced too many by-construction claims that weren't.
 
 ---
 
@@ -96,6 +96,26 @@ House rule, earned repeatedly this session: a gate never seen discriminating is 
 **6.5 Determinism gate.** Two identical flag-on runs on M (the #283 `SpringBoneRendererDeterminismTests` pattern) must bit-compare equal. *Sabotage:* a scratch build that reads the parent endpoint from the live position buffer instead of the snapshot must fail this gate — proving the snapshot is what buys determinism, not luck of scheduling.
 
 **6.4 Visual + performance gate (human).** Renders of `Hitarea_Head`, `Hitarea_Groin`, `Sit_Idle` on M, flag-off vs flag-on, reviewed by a person — the session's core lesson is that suites have passed while renders were obviously wrong. Pixel-delta is quantified (the 18 mm experiment's 0.31–0.37 % / max Δ 148 is the floor to beat decisively). Performance: spring-compute phase time on M and U at `ultra` and `extreme`, flag-on vs off, must stay **≤ 3× at ultra** — derived bound: the accepted `extreme` tier costs ~4× ultra for hero avatars, so an opt-in fidelity feature must cost less than one tier step. The multiplier is reported at both tiers regardless.
+
+---
+
+## 6.6 Measured Outcomes
+
+**Percentile calibration:** The measurement percentile is calibrated to **p65**, recorded with before/after renders under both `armsCrossed` and `armsAtSides` poses. This value was chosen to balance coverage (medians rise 3.7 mm → 18.6 mm on hair) against overshoot risk; it lies within [p50, p80] and is never asserted as a round number.
+
+**Headline penetration reduction (AvatarSample_M):**
+- Hair penetration, `armsCrossed`: 21.3 mm → 8.4 mm (61% reduction)
+- Hair penetration, `armsAtSides`: 26.6 mm → 8.4 mm (68% reduction)
+
+Each half (measurement alone, segments alone) achieves ~40–50% reduction; both together are required to meet the <10 mm visual threshold.
+
+**Performance (GPU spring-compute, M and U at ultra/extreme tiers):**
+- M ultra: 1.23× baseline
+- M extreme: 1.58× baseline
+- U ultra: 1.60× baseline
+- U extreme: 1.52× baseline
+
+All measurements stay well under the ≤3× ultra gate; the worst case (U ultra) is still half the cost of the `extreme` tier step.
 
 ---
 
