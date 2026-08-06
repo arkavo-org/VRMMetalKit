@@ -47,6 +47,10 @@ extension VRMRenderer {
     /// any failure degrades silently to plain in-memory caching.
     static func enablePipelineArchiveIfRequested(device: MTLDevice, config: RendererConfig) -> Bool {
         guard config.enablePipelineArchive else { return false }
+        guard VRMPipelineCache.isPersistentArchiveSupported else {
+            vrmLog("[VRMRenderer] Pipeline archive requested but archive serialisation aborts on the simulator; skipping persistence.")
+            return false
+        }
         guard let shaderHash = VRMShaderLibraryLoader.bundledLibraryHash() else {
             vrmLog("[VRMRenderer] Pipeline archive requested but the bundled shader hash is unavailable; skipping persistence.")
             return false
