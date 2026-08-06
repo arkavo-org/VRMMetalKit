@@ -45,8 +45,12 @@ public enum VRMConstants {
         /// Maximum number of morph targets simultaneously active during vertex shading.
         public static let maxActiveMorphs: Int = 8
 
-        /// Maximum number of morph targets supported per mesh.
-        public static let maxMorphTargets: Int = 64
+        /// Maximum number of morph targets supported per mesh. This is a
+        /// sanity cap against malicious files, not a hardware limit — keep it
+        /// comfortably above real avatars: avatars made for VRChat can be
+        /// can be baked with blendshape sets of 150+ targets (expression
+        /// binds observed at index 150), which a 64 cap silently discarded.
+        public static let maxMorphTargets: Int = 256
 
         /// Active-morph count at which the renderer switches from CPU to GPU morph evaluation.
         public static let morphComputeThreshold: Int = 8
