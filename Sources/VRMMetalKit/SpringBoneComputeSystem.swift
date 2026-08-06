@@ -1484,7 +1484,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let params = BoneParams(
                     stiffness: clamped.stiffness,
                     drag: clamped.dragForce,
-                    radius: joint.hitRadius,
+                    radius: joint.effectiveHitRadius ?? joint.hitRadius,
                     // Only set parent for non-root bones within the same chain
                     parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
                     gravityPower: clamped.gravityPower,
