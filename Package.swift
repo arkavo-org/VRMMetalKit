@@ -21,7 +21,8 @@ let package = Package(
     name: "VRMMetalKit",
     platforms: [
         .macOS(.v26),
-        .iOS(.v26)
+        .iOS(.v26),
+        .visionOS(.v26)
     ],
     products: [
         .library(
