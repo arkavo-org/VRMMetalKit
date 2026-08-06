@@ -38,6 +38,28 @@ using namespace metal;
 // Struct copies below mirror `SpringBoneCollision.metal`'s (same layout
 // contract as every other SpringBone shader file — each translation unit
 // redeclares only the prefix of `SpringBoneParams` it actually reads).
+//
+// ANCHOR/INTERIOR CORRECTION POLICY (applies to all three kernels below):
+// each kernel scales its push down toward zero as the contact point moves
+// toward the PARENT end of the span (barycentric t/s → 0), because a contact
+// near the parent is normally covered by the PARENT's own span (parent as
+// child of ITS parent) — full-strength correction there would double-correct
+// on top of that. That argument breaks for the FIRST simulated joint: its
+// parent is the kinematic root/anchor, which has no span of its own and never
+// moves, so a contact near that end would be scaled toward zero with NO
+// corrective coverage anywhere — under-correction that never converges
+// (unlike the overshoot the scaling elsewhere prevents, which damps out).
+// Spans whose parent is itself anchored directly to the kinematic root
+// (`boneParams[parent].parentIndex == 0xFFFFFFFFu`) therefore always get the
+// FULL, un-scaled correction; interior spans keep the scaled correction.
+//
+// Also honors each collider's `responseScale` (subsystem 4, cross-avatar
+// ghost/firm partners) exactly like the untouched endpoint kernels do —
+// without this, a ghosted partner (`responseScale = 0`) would push spans
+// while pushing nothing else, a behavioral inconsistency with the shipped
+// cross-avatar feature. `PlaneCollider` carries no `responseScale` field (the
+// endpoint plane kernel doesn't use one either), so the plane kernel has
+// nothing to honor there.
 
 struct SphereCollider {
     float3 center;
@@ -147,11 +169,14 @@ static inline void closestPtSegmentSegment(float3 p1, float3 q1, float3 p2, floa
 // kernels read for the PARENT endpoint. The collide kernels read AND write
 // bonePosCurr[id] per thread; a live read of bonePosCurr[parentIndex] would be
 // their first unsynchronized cross-thread read and run-to-run nondeterministic
-// (spec §4). One snapshot per substep, after integration and after the three
-// existing endpoint collide dispatches, before all segment collide dispatches;
-// staleness relative to this substep's own endpoint pushes is the chosen
-// semantics (parent-side coverage of the endpoint pushes comes from the
-// parent's own segment, tested next substep against the fresh snapshot).
+// (spec §4). Dispatched BEFORE the three existing endpoint collide kernels
+// (and before all segment collide dispatches) — see the encoder in
+// `SpringBoneComputeSystem.swift`, which places it right after the distance-
+// constraint loop and before `springBoneCollideSpheres`. Staleness relative
+// to THIS substep's own endpoint pushes is the chosen semantics: a parent
+// pushed by the endpoint kernel this substep is read by the segment kernels
+// at its PRE-push position this substep, and at its post-push (settled)
+// position from next substep onward.
 kernel void springBoneSnapshotPositions(
     device const float3* bonePosCurr [[buffer(1)]],
     device float3* bonePosSnapshot   [[buffer(16)]],
@@ -167,15 +192,11 @@ kernel void springBoneSnapshotPositions(
 // its own slot, `bonePosCurr[id]`). No swept branch here — CCD scoping
 // (CLAUDE.md §4) is the endpoint kernels' job and is untouched.
 //
-// The correction is scaled by the barycentric `t` (spec §4 fallback): an
-// un-scaled full push overshoots when the contact point sits near the PARENT
-// end of the segment (t≈0) — the child, potentially far away, would be moved
-// by the full penetration depth even though the actual contact geometry is
-// close to the parent. A contact near the parent is exactly where the
-// PARENT's own endpoint collision (the untouched per-joint kernel, which
-// tests the parent's own position directly) already provides coverage, so
-// scaling by t avoids double-correcting on top of that while still applying
-// the full push when the contact is genuinely at the child end (t≈1).
+// Scaled by the barycentric `t` on interior spans (small t = contact near the
+// parent end, already covered by the parent's own span) and by the
+// collider's `responseScale` (subsystem 4) always; spans rooted at the
+// kinematic anchor get the FULL push regardless of `t` — see the file-level
+// ANCHOR/INTERIOR CORRECTION POLICY comment above.
 kernel void springBoneCollideSegmentSpheres(
     device float3* bonePosCurr [[buffer(1)]],
     constant BoneParams* boneParams [[buffer(2)]],
@@ -192,6 +213,7 @@ kernel void springBoneCollideSegmentSpheres(
 
     float radius = max(boneParams[id].radius, boneParams[parent].radius);
     uint mask = boneParams[id].colliderGroupMask;
+    bool parentIsAnchor = (boneParams[parent].parentIndex == 0xFFFFFFFFu);
     float3 childPos = bonePosCurr[id];
     float3 parentPos = bonePosSnapshot[parent];
     float3 oldPos = childPos;
@@ -205,7 +227,8 @@ kernel void springBoneCollideSegmentSpheres(
         float dist = length(delta);
         float minDist = sphereColliders[i].radius + radius;
         if (dist < minDist && dist > 1e-9f) {
-            float3 push = (delta / dist) * (minDist - dist) * t;
+            float scale = (parentIsAnchor ? 1.0f : t) * sphereColliders[i].responseScale;
+            float3 push = (delta / dist) * (minDist - dist) * scale;
             childPos += push;
         }
     }
@@ -219,8 +242,8 @@ kernel void springBoneCollideSegmentSpheres(
 
 // Discrete segment push-out vs capsule colliders. Mirrors the sphere kernel;
 // the barycentric scale is `s` (the parameter along the parent→child segment
-// returned by `closestPtSegmentSegment`) for the same small-t-overshoot
-// reason documented above.
+// returned by `closestPtSegmentSegment`), the anchor/interior policy and
+// `responseScale` honoring are identical.
 kernel void springBoneCollideSegmentCapsules(
     device float3* bonePosCurr [[buffer(1)]],
     constant BoneParams* boneParams [[buffer(2)]],
@@ -237,6 +260,7 @@ kernel void springBoneCollideSegmentCapsules(
 
     float radius = max(boneParams[id].radius, boneParams[parent].radius);
     uint mask = boneParams[id].colliderGroupMask;
+    bool parentIsAnchor = (boneParams[parent].parentIndex == 0xFFFFFFFFu);
     float3 childPos = bonePosCurr[id];
     float3 parentPos = bonePosSnapshot[parent];
     float3 oldPos = childPos;
@@ -252,7 +276,8 @@ kernel void springBoneCollideSegmentCapsules(
         float dist = length(delta);
         float minDist = capsuleColliders[i].radius + radius;
         if (dist < minDist && dist > 1e-9f) {
-            float3 push = (delta / dist) * (minDist - dist) * s;
+            float scale = (parentIsAnchor ? 1.0f : s) * capsuleColliders[i].responseScale;
+            float3 push = (delta / dist) * (minDist - dist) * scale;
             childPos += push;
         }
     }
@@ -268,9 +293,14 @@ kernel void springBoneCollideSegmentCapsules(
 // tests (a single closest point on the segment), a plane's half-space test is
 // linear along the segment, so the worse (more penetrating) of the two
 // endpoints — tested directly against the plane, using the snapshot for the
-// parent — already gives the correct contact depth without a barycentric
-// scale: pushing the child by that depth resolves the shallower-than-worst
-// endpoint's penetration too, since the plane is flat between them.
+// parent — already gives the correct contact depth. The scale uses the SAME
+// anchor/interior policy as the other two kernels, keyed off which endpoint
+// is the deeper (more relevant) one: a child-deeper contact is already
+// endpoint-shaped (scale 1, unchanged from before this fix); a parent-deeper
+// contact on an INTERIOR span is left to the parent's own span (scale 0);
+// spans rooted at the kinematic anchor always get the full push, exactly as
+// the sphere/capsule kernels do. `PlaneCollider` has no `responseScale` field
+// (the untouched endpoint plane kernel doesn't use one either).
 kernel void springBoneCollideSegmentPlanes(
     device float3* bonePosCurr [[buffer(1)]],
     constant BoneParams* boneParams [[buffer(2)]],
@@ -287,6 +317,7 @@ kernel void springBoneCollideSegmentPlanes(
 
     float radius = max(boneParams[id].radius, boneParams[parent].radius);
     uint mask = boneParams[id].colliderGroupMask;
+    bool parentIsAnchor = (boneParams[parent].parentIndex == 0xFFFFFFFFu);
     float3 childPos = bonePosCurr[id];
     float3 parentPos = bonePosSnapshot[parent];
     float3 oldPos = childPos;
@@ -299,7 +330,15 @@ kernel void springBoneCollideSegmentPlanes(
         float parentDist = dot(toParent, planeColliders[i].normal) - radius;
         float worstDist = min(childDist, parentDist);
         if (worstDist < 0.0f) {
-            childPos += planeColliders[i].normal * (-worstDist);
+            // "t of the deeper endpoint": child at least as deep as parent ⇒
+            // the contact is already endpoint-shaped at the child ⇒ t = 1
+            // (unchanged, full push). Parent strictly deeper ⇒ the contact
+            // belongs to the parent end ⇒ t = 0 on interior spans (parent's
+            // own span/endpoint kernel covers it), overridden back to full
+            // when the parent is the kinematic anchor.
+            float t = (childDist <= parentDist) ? 1.0f : 0.0f;
+            float scale = parentIsAnchor ? 1.0f : t;
+            childPos += planeColliders[i].normal * (-worstDist) * scale;
         }
     }
     if (any(childPos != oldPos)) {
