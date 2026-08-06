@@ -25,6 +25,14 @@ import simd
 /// metallib. Serialization is Float.bitPattern text, the PipelineBaseline
 /// discipline; regeneration is env-gated so a normal run cannot overwrite its
 /// own oracle.
+///
+/// Division of labor: the bit gate's harness always passes `fit` explicitly,
+/// so it certifies the flag-off *simulated path* is unchanged across a kernel
+/// recompile — it cannot see a regression to `VRMLoadingOptions`'s default
+/// value. That axis is covered instead by `testFitClothCollisionDefaultsToOff`
+/// plus the 1mm-envelope CSVs (`SpringBoneRegressionTests`, which load with no
+/// explicit options and observed 0.14–0.17 m drift when the default was
+/// sabotaged to `true`).
 final class SpringBoneBitBaselineTests: XCTestCase {
 
     private static let frames = 90
@@ -64,6 +72,14 @@ final class SpringBoneBitBaselineTests: XCTestCase {
         let raised = sb.springs.flatMap(\.joints).filter { ($0.effectiveHitRadius ?? $0.hitRadius) > $0.hitRadius + 1e-6 }
         XCTAssertGreaterThan(raised.count, 10,
             "flag on raised only \(raised.count) joints on M — plumbing is not wired")
+    }
+
+    /// The opt-in boundary itself (spec §2/#326): the default must be false, and
+    /// the 1mm-envelope CSVs — not the bit gate, whose harness sets the flag
+    /// explicitly — are what catch a flipped default at scale.
+    func testFitClothCollisionDefaultsToOff() {
+        XCTAssertFalse(VRMLoadingOptions().fitClothCollisionToMesh)
+        XCTAssertFalse(VRMLoadingOptions(augmentSpringBoneColliders: true).fitClothCollisionToMesh)
     }
 
     // MARK: - 6.1(ii) bit-exact GPU baseline
