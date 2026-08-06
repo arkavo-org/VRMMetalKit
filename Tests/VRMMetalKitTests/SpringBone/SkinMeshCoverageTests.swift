@@ -357,6 +357,24 @@ extension SkinMeshCoverageTests {
         return result
     }
 
+    /// Absolute combined-mechanism bound for the Hair family (fix round 1,
+    /// spec §6.3 dual sabotage): the relative margin (`max(2mm, 20%)`) below
+    /// is cleared by EITHER half of `fitClothCollisionToMesh` alone —
+    /// confirmed by the armsCrossed sabotage cycles recorded in the task
+    /// report, both run against `AvatarSample_M_1.0.vrm`:
+    ///   - measurement stubbed (segments-only): worst Hair 0.0160m
+    ///   - segments disabled (radii-only):      worst Hair 0.0111m
+    ///   - both on (combined):                  worst Hair 0.0084m
+    /// 0.010 sits strictly below the better of the two single-half results
+    /// (0.0111m, ~10% headroom) and strictly above the combined result
+    /// (0.0084m, ~20% headroom) — reachable only when BOTH mechanisms are
+    /// live. This is a fixture-and-solver-coupled pin, not a general
+    /// physical law: it must be re-derived (new sabotage cycles, new bound)
+    /// if the underlying spring solver changes in a way that shifts these
+    /// numbers — e.g. a future fix to the phantom-velocity coast noted in
+    /// `measureWorstPenetrationPerFamily`'s doc comment.
+    private static let hairAbsoluteBound: Float = 0.010
+
     /// Margin: `max(0.002, 0.2 * flagOff.worst)` — 2mm or 20% of the recorded
     /// flag-off depth, whichever is larger — below the flag-off depth, for
     /// every family that was non-zero flag-off. A family already clean
@@ -395,6 +413,17 @@ extension SkinMeshCoverageTests {
                 "\(off)m flag-off depth, whichever is larger) — actual improvement was only " +
                 "\(off - on)m. Either fitClothCollisionToMesh regressed on this pose, or one of its " +
                 "two mechanisms (measured radii, segment collision) stopped contributing.")
+
+            if family == "Hair" {
+                XCTAssertLessThan(on, Self.hairAbsoluteBound,
+                    "\(chainLabel)/Hair: flag-on worst penetration (\(on)m) must be below the " +
+                    "absolute combined-mechanism bound \(Self.hairAbsoluteBound)m — derived on " +
+                    "armsCrossed from radii-only 0.0111m and segments-only 0.0160m (see " +
+                    "hairAbsoluteBound's doc comment); this bound is only reachable with BOTH " +
+                    "measured-radius flooring and segment collision live, so a value at or above " +
+                    "it means one of the two mechanisms silently stopped contributing even though " +
+                    "the looser relative margin above didn't catch it.")
+            }
         }
     }
 
