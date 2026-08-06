@@ -74,17 +74,27 @@ extension SkinMeshCoverageTests {
         return handBones.contains(region) ? handTolerance : bodyTolerance
     }
 
-    /// Query set per spec §6: hair / skirt / hood / sleeve chains, roots exempt,
-    /// NEVER Bust. Bust joints sit inside the chest by construction, and the
-    /// moment the torso is in the oracle they report deep permanent penetration
-    /// that swamps the millimetre-scale finger signal.
+    /// Query set: ALL spring chains except those inside the body BY
+    /// CONSTRUCTION, roots exempt. Bust is the only current exclusion — Bust
+    /// joints sit inside the chest by construction, and the moment the torso
+    /// is in the oracle they report deep permanent penetration that swamps
+    /// the millimetre-scale finger signal.
+    ///
+    /// This was originally an allowlist (hair/skirt/hood/sleeve), inherited
+    /// from the #309 cloth work where the subject was hair and skirts. That
+    /// silently dropped `CatTail`, `CatEar`, and `TopsUpperArm` — real
+    /// simulated appendages that can and do penetrate the body — from
+    /// coverage entirely, which is how a cat-tail-through-hand defect went
+    /// unmeasured. A denylist means every new chain type is queried by
+    /// default; add an exclusion here only when a chain is INSIDE the body BY
+    /// CONSTRUCTION (like Bust), never because a chain "isn't the kind of
+    /// thing that usually penetrates."
     private func querySet(_ model: VRMModel) -> [(node: Int, radius: Float, chain: String)] {
         guard let springBone = model.springBone else { return [] }
         var out: [(Int, Float, String)] = []
         for spring in springBone.springs {
             let name = (spring.name ?? "").lowercased()
-            guard name.contains("hair") || name.contains("skirt")
-                || name.contains("hood") || name.contains("sleeve") else { continue }
+            guard !name.contains("bust") else { continue }
             for (i, joint) in spring.joints.enumerated() where i > 0 {
                 out.append((joint.node, joint.hitRadius, spring.name ?? "?"))
             }
@@ -92,6 +102,22 @@ extension SkinMeshCoverageTests {
         return out
     }
 
+    /// Regression guard for #381 (hands/fingers penetrating simulated
+    /// appendages): asserts no spring-simulated joint — hair, skirt, sleeve,
+    /// cat tail/ear, or any other non-Bust chain — penetrates a hand or
+    /// finger region of the skinned body mesh beyond tolerance.
+    ///
+    /// The defect this guards against (a cat tail passing through the hand
+    /// and forearm, fingers emerging on the far side) is NOT reproducible on
+    /// the bundled `AvatarSample_U` fixture: measured here across every
+    /// non-Bust chain (`Hair`, `Skirt`, `Sleeve`, `CatTail`, `CatEar`,
+    /// `TopsUpperArm`) at both single-joint and 5-point-per-segment density,
+    /// U's tail hangs clear of the hand. It was observed on a machine-local
+    /// host avatar (`modelH-final.vrm`, not part of this repository) via
+    /// direct video review, not measured through this harness. This test
+    /// therefore passes today on the bundled fixture and exists to fire the
+    /// day a chain penetrates a hand region here — whether from a fixture
+    /// swap, a pose change, or a genuine regression.
     @MainActor func testHandsDoNotPenetrateTheDress() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
         let path = getTestModelPath("AvatarSample_U_1.0.vrm.glb")
@@ -114,7 +140,7 @@ extension SkinMeshCoverageTests {
         player.play()
 
         let queries = querySet(model)
-        XCTAssertFalse(queries.isEmpty, "the fixture must simulate hair/skirt/sleeve chains")
+        XCTAssertFalse(queries.isEmpty, "the fixture must simulate spring chains")
 
         let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: 64, height: 64, mipmapped: false)
@@ -179,12 +205,11 @@ extension SkinMeshCoverageTests {
             "worst hand penetration \(String(format: "%.4f", $0.depth))m at \($0.region.map { "\($0)" } ?? "?") from chain \($0.chain)"
         } ?? "no hand-region penetration above \(Self.handTolerance)m"
 
-        // The deliverable is a RECORDED FAILURE, pinned to the hand region so
-        // the marker is not satisfied by penetration anywhere else. When SP2/SP3
-        // fix it, XCTExpectFailure itself fails ("expected failure not
-        // observed") and forces removal of this marker.
-        XCTExpectFailure("#381: hands/fingers penetrate the dress. \(handReport). "
-                         + "Contact-region baselines: \(baselines)")
-        XCTAssertNil(worstHand, handReport)
+        // A real regression guard, not an expected failure: no chain (of any
+        // name, per the denylist querySet above) currently penetrates a hand
+        // or finger region on the bundled fixture beyond tolerance. If this
+        // ever fails, `handReport` and `baselines` name the offending chain,
+        // its depth, and every other chain's worst contact for context.
+        XCTAssertNil(worstHand, "#381: \(handReport). Contact-region baselines: \(baselines)")
     }
 }
