@@ -1462,6 +1462,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var cachedDummyView: DummyView?
     private var cachedDummyViewSize: (Int, Int)?
 
+    /// Viewport size for ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``,
+    /// which bypasses the `MTKView` plumbing entirely.
+    private var offscreenViewportSize: CGSize?
+
+    /// Thread-safe offscreen draw for render loops that don't run on the main
+    /// actor (e.g. a CompositorServices frame loop on visionOS). Identical to
+    /// ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``
+    /// but passes the viewport size explicitly instead of routing it through
+    /// an `MTKView`, so it is callable from any thread. Not reentrant: call
+    /// from a single render thread.
+    public func drawOffscreen(to colorTexture: MTLTexture, depth: MTLTexture, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
+        offscreenViewportSize = CGSize(width: colorTexture.width, height: colorTexture.height)
+        defer { offscreenViewportSize = nil }
+        drawCore(in: nil, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
+    }
+
     /// Renders the VRM model to the view.
     ///
     /// Call this method once per frame from your `MTKViewDelegate.draw(in:)` implementation.
@@ -1488,7 +1504,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         drawCore(in: view, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
     }
 
-    private func drawCore(in view: MTKView, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
+    private func drawCore(in view: MTKView?, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
         // DEBUG: Confirm we're in drawCore
         if frameCounter <= 2 || frameCounter % 60 == 0 {
             vrmLog("[VRMRenderer] drawCore() executing, frame \(frameCounter)")
@@ -1843,12 +1859,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Ambient color default is set in Uniforms struct initialization
         // Get viewport size from view
         let viewportSize: CGSize
-        if let dummyView = view as? DummyView {
+        if let explicitSize = offscreenViewportSize {
+            // drawOffscreen(to:...) path — no view involved at all
+            viewportSize = explicitSize
+        } else if let dummyView = view as? DummyView {
             // DummyView's drawableSize is nonisolated, safe to access directly
             viewportSize = dummyView.drawableSize
-        } else {
+        } else if let view {
             // Real MTKView requires main actor isolation
             viewportSize = MainActor.assumeIsolated { view.drawableSize }
+        } else {
+            viewportSize = .zero
         }
         uniforms.viewportSize = SIMD2<Float>(Float(viewportSize.width), Float(viewportSize.height))
         // Set debug mode (0=off, 1=UV, 2=hasBaseColorTexture, 3=baseColorFactor)
@@ -3971,10 +3992,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
         }
 
-        // Add command buffer completion handler for error checking and semaphore signaling
+        // Add command buffer completion handler for error checking and semaphore signaling.
+        // The semaphore is captured STRONGLY (not through weak self): if the
+        // renderer's last reference drops while this frame is still on the GPU
+        // (host tears down its render loop — e.g. a visionOS immersive space
+        // closing), a `self?.…signal()` would be skipped and the semaphore
+        // would be deallocated below its creation value, which libdispatch
+        // traps on ("BUG IN CLIENT OF LIBDISPATCH: Semaphore object
+        // deallocated while in use"). Holding it here keeps it alive until
+        // every outstanding wait has been balanced.
+        let inflight = inflightSemaphore
         commandBuffer.addCompletedHandler { [weak self] buffer in
             // Signal that this frame's uniform buffer is available again
-            self?.inflightSemaphore.signal()
+            inflight.signal()
 
             // Record GPU timing if performance tracking is enabled
             if let tracker = self?.performanceTracker {
