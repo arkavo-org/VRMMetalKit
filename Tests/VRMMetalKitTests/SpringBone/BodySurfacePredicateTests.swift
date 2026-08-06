@@ -152,6 +152,36 @@ final class BodySurfacePredicateTests: XCTestCase {
             ])
     }
 
+    /// AvatarSample_M is the coverage fixture for cloth-collision fidelity: the
+    /// only redistributable rig with a wide dress at hand height (Skirt ×24).
+    @MainActor func testInventoryExactSetIsPinnedForAvatarSampleM() async throws {
+        let model = try await load("AvatarSample_M_1.0.vrm")
+        assertPinnedInventory(model: model, fixture: "AvatarSample_M",
+            expectedIncluded: [
+                "N00_000_00_Body_00_SKIN (Instance):8728",
+                "N00_000_00_Face_00_SKIN (Instance):4097",
+            ],
+            expectedExcluded: [
+                "N00_000_00_EyeHighlight_00_EYE (Instance)",
+                "N00_000_00_EyeIris_00_EYE (Instance)",
+                "N00_000_00_EyeWhite_00_EYE (Instance)",
+                "N00_000_00_FaceBrow_00_FACE (Instance)",
+                "N00_000_00_FaceEyeline_00_FACE (Instance)",
+                "N00_000_00_FaceMouth_00_FACE (Instance)",
+                "N00_000_00_HairBack_00_HAIR (Instance)",
+                "N00_000_Hair_00_HAIR_01 (Instance)",
+                "N00_000_Hair_00_HAIR_02 (Instance)",
+                "N00_002_03_Tops_01_CLOTH_01 (Instance)",
+                "N00_002_03_Tops_01_CLOTH_02 (Instance)",
+                "N00_002_03_Tops_01_CLOTH_03 (Instance)",
+                "N00_002_03_Tops_01_CLOTH_04 (Instance)",
+                "N00_008_01_Shoes_01_CLOTH_01 (Instance)",
+                "N00_008_01_Shoes_01_CLOTH_02 (Instance)",
+                "N00_010_01_Onepiece_00_CLOTH_01 (Instance)",
+                "N00_010_01_Onepiece_00_CLOTH_02 (Instance)",
+            ])
+    }
+
     @MainActor func testOracleBuildsFromRig() async throws {
         let model = try await load(testVRM10Filename)
         let oracle = try XCTUnwrap(SkinMeshOracle.build(model: model))
