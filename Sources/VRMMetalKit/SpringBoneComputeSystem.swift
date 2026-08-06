@@ -1006,14 +1006,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Segment-collision snapshot (cloth-collision-fidelity Task 4): copy
         // bonePosCurr into the immutable per-substep snapshot the segment
-        // kernels read for the PARENT endpoint. Always dispatched (cheap,
-        // independent of the flag) so it precedes EVERY collide dispatch
-        // below — the segment kernels themselves gate on
-        // `globalParams.segmentCollision`, so an unused snapshot when the
-        // flag is off is a harmless no-op read.
-        computeEncoder.setComputePipelineState(snapshotPositionsPipeline)
-        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-        computeEncoder.memoryBarrier(scope: .buffers)
+        // kernels read for the PARENT endpoint. Gated on the same flag as the
+        // segment dispatches below so flag-off does zero extra GPU work; it
+        // must still precede EVERY collide dispatch (existing + segment), so
+        // it stays here, before the three untouched endpoint kernels.
+        if globalParams.segmentCollision != 0 {
+            computeEncoder.setComputePipelineState(snapshotPositionsPipeline)
+            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            computeEncoder.memoryBarrier(scope: .buffers)
+        }
 
         // Collision resolution (step 3: push tips out of colliders)
         // VRM spec: collision runs AFTER distance constraint and is the FINAL step
