@@ -134,6 +134,9 @@ func printUsage() {
                                 with the imbalance (arm counterbalance; crowd only)
         --stagger-gain G        Override the shove gain (metres of CoM offset per
                                 metre of penetration; default 6.0; crowd only)
+        --fit-cloth-collision   Measure and floor spring-joint collision radii from
+                                skinned mesh extent at load time (opt-in cloth-collision
+                                fidelity; VRMLoadingOptions.fitClothCollisionToMesh)
         --spring-gravity <M>    Downward spring-bone gravity (app-layer). Auto-applied
                                 to rigs that author none (e.g. AvatarSample); 0 disables.
         --realtime              Use the async spring path a live app uses (sleep gate
@@ -207,6 +210,7 @@ struct RenderOptions {
     var staggerGain: Float? = nil       // shoveGain override (calibration knob)
     var springGravity: Float? = nil     // Override app-layer spring gravity (nil = auto)
     var dumpColliders: Bool = false     // Print the spring-bone collider setup and exit
+    var fitClothCollision: Bool = false // Measure/floor spring-joint collision radii from skinned mesh extent
 }
 
 /// Diagnostics go to stderr so a typo'd option stays visible when stdout is
@@ -347,6 +351,8 @@ func parseArguments() -> RenderOptions? {
             options.postural = true
         case "--stagger":
             options.stagger = true
+        case "--fit-cloth-collision":
+            options.fitClothCollision = true
         case "--stagger-gain":
             i += 1
             guard i < args.count else { missingValueError(for: arg) }
@@ -772,7 +778,9 @@ struct VRMVideoRendererCLI {
         // Load VRM model
         print("📦 Loading VRM model...")
         let modelURL = URL(fileURLWithPath: options.vrmPath)
-        let model = try await VRMModel.load(from: modelURL, device: device)
+        let model = try await VRMModel.load(
+            from: modelURL, device: device,
+            options: VRMLoadingOptions(fitClothCollisionToMesh: options.fitClothCollision))
         print("   ✅ Loaded: \(model.meta.name ?? "Unnamed")")
 
         // Optionally scale every MToon material's outline width
