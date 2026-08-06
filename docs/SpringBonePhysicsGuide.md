@@ -129,10 +129,11 @@ VRM authors often specify very small collision radii (`hitRadius`) for hair and 
 Enable the flag during model loading:
 
 ```swift
-var options = VRMLoadingOptions()
-options.fitClothCollisionToMesh = true
-let model = try await VRMModel.load(from: url, options: options)
+let options = VRMLoadingOptions(fitClothCollisionToMesh: true)
+let model = try await VRMModel.load(from: url, device: device, options: options)
 ```
+
+The `device:` argument is required — without it the GPU spring system never initializes, so the flag silently has no effect.
 
 With the flag enabled:
 
@@ -151,7 +152,7 @@ The authored `hitRadius` is never changed—only the effective simulation value 
 
 This follows the #326 principle: **never silently reinterpret authored physics**. Although the measured mesh dimensions are objective facts, a model author may have had reasons to specify small radii (style, performance tuning). This feature requires explicit consent via the loading option.
 
-Flag-off behavior is unchanged: authored values are used exactly as specified, and segment collision is disabled. All existing validation gates certify that flag-off paths are bit-exact identical to the baseline.
+Flag-off behavior is unchanged: authored values are used exactly as specified, and segment collision is disabled. Bit-exactness of the flag-off path is certified by one dedicated baseline (`SpringBoneBitBaselineTests`, AvatarSample_A, ultra quality, armsCrossed pose, 90 frames). The per-tier CSV comparisons elsewhere in the suite are a looser ≤1 mm mean-per-axis envelope, not a bit-exactness certification.
 
 ### Performance
 
@@ -170,20 +171,19 @@ On a typical avatar with hair and cloth (AvatarSample_M):
 |------|------------------|---------------|-------------|
 | Hair penetration (armsCrossed) | 21.3 mm | 8.4 mm | 60% reduction |
 | Hair penetration (armsAtSides) | 26.6 mm | 8.4 mm | 68% reduction |
-| Skirt penetration | Similar improvements | Measured per-chain | |
+| Skirt penetration | 0.0000 m (both poses) | 0.0000 m (both poses) | N/A — already clean on this fixture |
 
-Both measurement and segment collision are necessary—each alone reduces penetration by ~40–50%, but the combination achieves the 60–68% reduction needed to meet visual quality standards.
+Skirt measured zero penetration flag-off on both poses of this fixture, so there was nothing for the flag to improve — the gate for skirt is clean-stays-clean, not before/after reduction. The 60–68% reduction is a Hair-only result. Both measurement and segment collision are necessary to get there—each alone reduces Hair penetration by ~40–50%, but the combination achieves the 60–68% reduction needed to meet visual quality standards.
 
 ### Adoption Example
 
 ```swift
 // Load model with cloth-collision fidelity enabled
-var options = VRMLoadingOptions()
-options.fitClothCollisionToMesh = true
+let options = VRMLoadingOptions(fitClothCollisionToMesh: true)
 
 do {
-    let model = try await VRMModel.load(from: modelURL, options: options)
-    renderer.load(model: model)
+    let model = try await VRMModel.load(from: modelURL, device: device, options: options)
+    renderer.loadModel(model)
 } catch {
     print("Failed to load model: \(error.localizedDescription)")
 }
