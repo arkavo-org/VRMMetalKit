@@ -54,6 +54,7 @@ struct SpringBoneParams {
     uint numCapsules;
     uint numPlanes;
     uint settlingFrames;  // Frames remaining in settling period
+    uint segmentCollision; // Segment (parent-child span) collision enable; unused by these kernels
 };
 
 struct BoneParams {
