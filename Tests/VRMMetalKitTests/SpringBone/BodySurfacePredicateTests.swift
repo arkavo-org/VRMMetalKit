@@ -73,8 +73,18 @@ final class BodySurfacePredicateTests: XCTestCase {
     /// coverage fails loudly) and the excluded set (so a rename or predicate
     /// change that starts flooding garment surfaces into the oracle fails
     /// loudly too, not just a silently-passing non-empty check).
+    /// - Parameter expectedBoundaryEdgeCount: Sum of `boundaryEdgeCount` across
+    ///   every included (SKIN) primitive, pinned per fixture. The body surface
+    ///   assembled from SKIN-only primitives is OPEN — eye sockets are holes,
+    ///   and geometry under garments (CLOTH/HAIR) is deleted rather than
+    ///   double-skinned — so signed inside/outside classification near those
+    ///   rims is one-sided, not a defect to fix. Pinning the count makes any
+    ///   drift in mesh topology (a re-export, a UV seam change that alters
+    ///   triangulation) show up as a loud diff here instead of a silent shift
+    ///   in oracle behaviour near an opening.
     private func assertPinnedInventory(model: VRMModel, fixture: String,
                                        expectedIncluded: [String], expectedExcluded: [String],
+                                       expectedBoundaryEdgeCount: Int,
                                        file: StaticString = #filePath, line: UInt = #line) {
         let inv = BodySurfacePredicate.inventory(model: model)
         for entry in inv {
@@ -87,6 +97,7 @@ final class BodySurfacePredicateTests: XCTestCase {
         let excluded = allMaterialNames(model: model)
             .filter { !BodySurfacePredicate.includes(materialName: $0) }
             .sorted()
+        let boundaryEdgeCount = inv.reduce(0) { $0 + $1.boundaryEdgeCount }
         print("[BODYSURFACE] \(fixture) included=\(included)")
         print("[BODYSURFACE] \(fixture) boundaryEdges=\(inv.map { "\($0.materialName):\($0.boundaryEdgeCount)" })")
         XCTAssertEqual(included, expectedIncluded.sorted(),
@@ -96,6 +107,12 @@ final class BodySurfacePredicateTests: XCTestCase {
         XCTAssertEqual(excluded, expectedExcluded.sorted(),
                        "\(fixture): excluded set drifted from the pinned set — a predicate that " +
                        "starts flooding garment surfaces into the oracle must fail here",
+                       file: file, line: line)
+        XCTAssertEqual(boundaryEdgeCount, expectedBoundaryEdgeCount,
+                       "\(fixture): total boundary-edge count across included SKIN primitives drifted " +
+                       "from the pinned value \(expectedBoundaryEdgeCount) — the body surface is open " +
+                       "by design (eye sockets, under-garment deletion), so this pin exists to make " +
+                       "topology drift loud rather than to demand a closed mesh",
                        file: file, line: line)
     }
 
@@ -120,7 +137,8 @@ final class BodySurfacePredicateTests: XCTestCase {
                 "N00_001_01_Shoes_01_CLOTH (Instance)",
                 "N00_001_02_Bottoms_01_CLOTH (Instance)",
                 "N00_005_01_Tops_01_CLOTH (Instance)",
-            ])
+            ],
+            expectedBoundaryEdgeCount: 1630)
     }
 
     @MainActor func testInventoryExactSetIsPinnedForAvatarSampleU() async throws {
@@ -149,7 +167,8 @@ final class BodySurfacePredicateTests: XCTestCase {
                 "N00_007_01_Tops_01_CLOTH (Instance)",
                 "N00_008_01_Shoes_01_CLOTH (Instance)",
                 "N00_010_01_Onepiece_00_CLOTH (Instance)",
-            ])
+            ],
+            expectedBoundaryEdgeCount: 2008)
     }
 
     /// AvatarSample_M is the coverage fixture for cloth-collision fidelity: the
@@ -179,7 +198,8 @@ final class BodySurfacePredicateTests: XCTestCase {
                 "N00_008_01_Shoes_01_CLOTH_02 (Instance)",
                 "N00_010_01_Onepiece_00_CLOTH_01 (Instance)",
                 "N00_010_01_Onepiece_00_CLOTH_02 (Instance)",
-            ])
+            ],
+            expectedBoundaryEdgeCount: 1680)
     }
 
     @MainActor func testOracleBuildsFromRig() async throws {

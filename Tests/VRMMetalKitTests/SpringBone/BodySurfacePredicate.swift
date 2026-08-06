@@ -37,13 +37,24 @@ import simd
 /// Face mesh's SKIN primitives.
 enum BodySurfacePredicate {
 
+    /// The rule as implemented: a material qualifies iff its uppercased name
+    /// contains "SKIN" and does NOT contain "HAIR". This is a substring test,
+    /// not a mutually-exclusive category check — a hypothetical material named
+    /// e.g. "SKIN_CLOTH_TRIM" would be accepted, since it contains "SKIN" and
+    /// not "HAIR". No VRM fixture in this suite exercises that overlap.
     static func includes(materialName: String?) -> Bool {
         guard let raw = materialName?.uppercased() else { return false }
         if raw.contains("HAIR") { return false }
         return raw.contains("SKIN")
     }
 
-    static func inventory(model: VRMModel) -> [BodySurfaceInventory] {
+    /// - Parameter computeBoundaryEdgeCount: When `false`, skips the boundary-edge
+    ///   scan (and the `readIndices` pass it requires) for every entry, filling
+    ///   `boundaryEdgeCount` with 0. `SkinMeshOracle.build(model:)` never reads
+    ///   this field and re-reads indices itself to build triangles, so it opts
+    ///   out to avoid scanning each primitive's indices twice. Callers that
+    ///   need the count (`BodySurfacePredicateTests`) use the default.
+    static func inventory(model: VRMModel, computeBoundaryEdgeCount: Bool = true) -> [BodySurfaceInventory] {
         var out: [BodySurfaceInventory] = []
         for (mi, mesh) in model.meshes.enumerated() {
             for (pi, primitive) in mesh.primitives.enumerated() {
@@ -56,7 +67,7 @@ enum BodySurfacePredicate {
                     primitiveIndex: pi,
                     materialName: name,
                     vertexCount: primitive.vertexCount,
-                    boundaryEdgeCount: boundaryEdgeCount(of: primitive),
+                    boundaryEdgeCount: computeBoundaryEdgeCount ? boundaryEdgeCount(of: primitive) : 0,
                     isTriangleTopology: primitive.primitiveType == .triangle))
             }
         }

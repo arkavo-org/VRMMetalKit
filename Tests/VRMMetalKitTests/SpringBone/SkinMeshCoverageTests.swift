@@ -373,6 +373,13 @@ extension SkinMeshCoverageTests {
     /// if the underlying spring solver changes in a way that shifts these
     /// numbers — e.g. a future fix to the phantom-velocity coast noted in
     /// `measureWorstPenetrationPerFamily`'s doc comment.
+    ///
+    /// Risk: on this machine's GPU the combined-mechanism measurement was
+    /// 0.0084m against this 0.010m bound — 16% headroom. The bound is
+    /// solver- and silicon-coupled (XPBD substep ordering, float rounding),
+    /// so it may not hold bit-for-bit on other hardware. If it flakes
+    /// elsewhere, RE-DERIVE the bound from fresh sabotage cycles on that
+    /// hardware — never just nudge the constant to make CI pass.
     private static let hairAbsoluteBound: Float = 0.010
 
     /// Margin: `max(0.002, 0.2 * flagOff.worst)` — 2mm or 20% of the recorded
@@ -401,6 +408,10 @@ extension SkinMeshCoverageTests {
                 chainLabel, family, off, on))
 
             if off <= 1e-9 {
+                // Skirt carries no signal on this fixture: 0.0000 m worst penetration
+                // flag-off on BOTH poses, so there is nothing for the flag to improve.
+                // This branch is a clean-stays-clean assertion only — it does not, and
+                // cannot, demonstrate that fitClothCollisionToMesh helps Skirt.
                 XCTAssertLessThanOrEqual(on, Self.bodyTolerance,
                     "\(chainLabel)/\(family): already clean flag-off (0m worst penetration) and must " +
                     "stay clean flag-on — got \(on)m")

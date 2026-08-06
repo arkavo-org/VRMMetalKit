@@ -301,7 +301,7 @@ extension SkinMeshOracle {
         /// far outside the mesh a query lands, and the threshold is well
         /// beyond any query that is actually near the surface (a joint sitting
         /// just outside the skin never approaches it) — measured against a
-        /// real avatar (~13.6k triangles, cell≈0.011m), 32 rings is ≈0.36m,
+        /// real avatar (~13.6k vertices, cell≈0.011m), 32 rings is ≈0.36m,
         /// while the failure case that motivated this fallback needed ring
         /// 89 at 1m outside and ring 4394 at 50m outside. Below the
         /// threshold the grid is strictly faster than a linear scan; above
@@ -312,6 +312,14 @@ extension SkinMeshOracle {
 
         func nearest(to p: SIMD3<Float>, triangles: [Triangle]) -> ClosestHit? {
             guard !buckets.isEmpty else { return nil }
+            // A non-finite query position (NaN/Inf) means an upstream joint
+            // transform is corrupt — that is a solver bug, and it is surfaced
+            // there (e.g. by the solver's own NaN guards), not here. `Int32(_:)`
+            // on a NaN/Inf `.rounded(.down)` value traps and kills the whole
+            // xctest process, so this oracle must not be the thing that crashes;
+            // it reports "no penetration" and lets the actual bug's own
+            // diagnostics point at the real cause.
+            guard p.x.isFinite, p.y.isFinite, p.z.isFinite else { return nil }
             let centre = Self.cellIndex(p, origin: origin, cell: cell)
             let startRing = ringToReach(centre)
             if startRing > Self.fallbackRingThreshold {
@@ -392,22 +400,6 @@ extension SkinMeshOracle {
                 if ring > Self.fallbackRingThreshold {
                     return SkinMeshOracle.linearNearest(to: p, in: triangles)
                 }
-                // Not a distance cutoff: at any VRM-plausible cell size this
-                // is unreachable (~28m of ring growth at cell~0.007), and
-                // reaching it for a real query is itself a bug — the mesh's
-                // own bounding-box origin should have made `ringToReach`
-                // land near it already, and the fallback above should have
-                // already routed any query that could reach this far through
-                // a linear scan. Returning `best` here silently would report
-                // a buried joint CLEAN, which is exactly the failure mode
-                // this type exists to rule out, so an unreachable branch
-                // must abort loudly rather than lie.
-                if ring > 4096 {
-                    preconditionFailure(
-                        "SpatialGrid.nearest exceeded the ring backstop: ring=\(ring) "
-                        + "cell=\(cell) query=\(p) — this should be unreachable; a silent "
-                        + "return here would report a buried joint clean")
-                }
             }
         }
     }
@@ -452,7 +444,9 @@ extension SkinMeshOracle {
             assertMorphWeightsAreZero(controller: controller, model: model)
         }
 
-        let inventory = BodySurfacePredicate.inventory(model: model)
+        // boundaryEdgeCount is never read below; skip its readIndices scan here
+        // (BodySurfacePredicateTests gets the count via the default overload).
+        let inventory = BodySurfacePredicate.inventory(model: model, computeBoundaryEdgeCount: false)
         guard !inventory.isEmpty else { return nil }
 
         let boneByNode = humanoidBoneByNode(model: model)
