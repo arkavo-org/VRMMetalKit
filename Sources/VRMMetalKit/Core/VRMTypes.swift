@@ -826,6 +826,12 @@ public struct VRMSpringJoint {
     /// `0` (default) means no limit — the joint swings freely.
     public var angleLimit: Float = 0.0
 
+    /// Effective collision radius used by the simulator when
+    /// `VRMLoadingOptions.fitClothCollisionToMesh` measured this joint at load.
+    /// `nil` means "use the authored `hitRadius`". The authored value is never
+    /// mutated (spec §2): this field sits beside it, inspectable.
+    public var effectiveHitRadius: Float? = nil
+
     /// Creates a spring-bone joint bound to the given node.
     public init(node: Int) {
         self.node = node
