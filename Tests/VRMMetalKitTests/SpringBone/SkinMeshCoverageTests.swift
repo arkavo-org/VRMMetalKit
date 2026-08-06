@@ -213,3 +213,204 @@ extension SkinMeshCoverageTests {
         XCTAssertNil(worstHand, "#381: \(handReport). Contact-region baselines: \(baselines)")
     }
 }
+
+extension SkinMeshCoverageTests {
+
+    /// Oracle improvement gate (cloth-collision-fidelity spec §6.3): proves,
+    /// on a real avatar, that `VRMLoadingOptions.fitClothCollisionToMesh`
+    /// measurably reduces cloth-into-body penetration rather than merely
+    /// changing numbers. `AvatarSample_M_1.0.vrm`'s non-Bust springs are all
+    /// named either `Hair` or `Skirt` (verified against the fixture's
+    /// `VRMC_springBone` spring list) — those are the two chain families
+    /// this file's denylist `querySet` reaches for M.
+    private static func chainFamily(_ chainName: String) -> String {
+        let lower = chainName.lowercased()
+        if lower.contains("hair") { return "Hair" }
+        if lower.contains("skirt") { return "Skirt" }
+        return chainName
+    }
+
+    /// Same denylist as `querySet` (every spring chain except Bust, which sits
+    /// inside the chest by construction) but measured at the radius the SIM
+    /// actually used: `effectiveHitRadius` when `fitClothCollisionToMesh`
+    /// raised it, else the authored `hitRadius`. Flag-off and flag-on runs
+    /// therefore query at different radii by design — the question this gate
+    /// answers is whether the simulated configuration penetrates the body,
+    /// not whether some fixed radius does. `chain` is qualified with the
+    /// spring's index so per-chain printing can distinguish the 24 identically
+    /// named `Skirt` springs (and 10 `Hair` springs) from one another.
+    private func effectiveQuerySet(_ model: VRMModel) -> [(node: Int, radius: Float, chain: String)] {
+        guard let springBone = model.springBone else { return [] }
+        var out: [(Int, Float, String)] = []
+        for (si, spring) in springBone.springs.enumerated() {
+            let name = (spring.name ?? "").lowercased()
+            guard !name.contains("bust") else { continue }
+            let label = "\(spring.name ?? "?")#\(si)"
+            for (i, joint) in spring.joints.enumerated() where i > 0 {
+                out.append((joint.node, joint.effectiveHitRadius ?? joint.hitRadius, label))
+            }
+        }
+        return out
+    }
+
+    private struct OraclePassResult {
+        /// Keyed by the qualified per-spring label (`"Skirt#7"`), the
+        /// feature's headline per-chain evidence.
+        var worstPerChain: [String: Float] = [:]
+        /// Keyed by family (`"Hair"`, `"Skirt"`), what the improvement
+        /// assertion is measured against.
+        var worstPerFamily: [String: Float] = [:]
+    }
+
+    /// Loads `AvatarSample_M_1.0.vrm` fresh with `fitClothCollisionToMesh`
+    /// set to `flagOn`, runs `pose`, and measures worst oracle penetration
+    /// per chain over the settled second half of the run — same 150-frame
+    /// @30fps cadence, offscreen harness, and settled-half window as
+    /// `testHandsDoNotPenetrateTheDress`, so a phantom-velocity coast after
+    /// hard contact (a pre-existing solver defect, not this gate's subject)
+    /// is measured past, not into.
+    @MainActor
+    private func measureWorstPenetrationPerFamily(
+        pose: StressPose, flagOn: Bool, device: MTLDevice
+    ) async throws -> OraclePassResult {
+        let path = getTestModelPath("AvatarSample_M_1.0.vrm")
+        try requireFixture(path, hint: "AvatarSample_M_1.0.vrm")
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: true, fitClothCollisionToMesh: flagOn))
+
+        var config = RendererConfig()
+        config.sampleCount = 1
+        config.strict = .off
+        config.synchronousSpringBone = true
+        let renderer = VRMRenderer(device: device, config: config)
+        renderer.loadModel(model)
+        renderer.enableSpringBone = true
+        renderer.viewMatrix = matrix_identity_float4x4
+        renderer.projectionMatrix = matrix_identity_float4x4
+
+        let player = AnimationPlayer()
+        player.load(StressPoseFactory.clip(pose, duration: 5))
+        player.play()
+
+        let queries = effectiveQuerySet(model)
+        XCTAssertFalse(queries.isEmpty, "the fixture must simulate spring chains")
+
+        let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: 64, height: 64, mipmapped: false)
+        colorDesc.usage = [.renderTarget, .shaderRead]; colorDesc.storageMode = .private
+        let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float, width: 64, height: 64, mipmapped: false)
+        depthDesc.usage = .renderTarget; depthDesc.storageMode = .private
+        guard let colorTex = device.makeTexture(descriptor: colorDesc),
+              let depthTex = device.makeTexture(descriptor: depthDesc),
+              let queue = device.makeCommandQueue() else { throw XCTSkip("Could not allocate Metal resources") }
+
+        let frameCount = 150, fps: Float = 30
+        var result = OraclePassResult()
+        // Seed every chain/family the query set actually reaches at zero, so a
+        // chain (or a whole family, e.g. Skirt on the arm poses) that never
+        // penetrates above tolerance still reports an explicit 0.000m rather
+        // than silently dropping out of the printed table and the "stays
+        // clean" assertion.
+        for q in queries {
+            result.worstPerChain[q.chain] = result.worstPerChain[q.chain] ?? 0
+            result.worstPerFamily[Self.chainFamily(q.chain)] = result.worstPerFamily[Self.chainFamily(q.chain)] ?? 0
+        }
+
+        for frame in 0..<frameCount {
+            player.update(deltaTime: 1 / fps, model: model)
+            guard let cb = queue.makeCommandBuffer() else { break }
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = colorTex
+            rpd.colorAttachments[0].loadAction = .clear
+            rpd.colorAttachments[0].storeAction = .store
+            rpd.depthAttachment.texture = depthTex
+            rpd.depthAttachment.loadAction = .clear
+            rpd.depthAttachment.clearDepth = 1.0
+            rpd.depthAttachment.storeAction = .dontCare
+            renderer.drawOffscreenHeadless(to: colorTex, depth: depthTex,
+                                           commandBuffer: cb, renderPassDescriptor: rpd)
+            cb.commit()
+            while cb.status != .completed && cb.status != .error { await Task.yield() }
+            guard frame >= frameCount / 2 else { continue }
+
+            guard let oracle = SkinMeshOracle.build(model: model) else {
+                XCTFail("oracle failed to build — the predicate found no body surface")
+                return result
+            }
+            for q in queries where q.node >= 0 && q.node < model.nodes.count {
+                let node = model.nodes[q.node]
+                var samples: [SIMD3<Float>] = [node.worldPosition]
+                if let parent = node.parent {
+                    let a = parent.worldPosition, b = node.worldPosition
+                    for k in 1..<5 { samples.append(a + (b - a) * (Float(k) / 5)) }
+                }
+                for s in samples {
+                    guard let pen = oracle.penetration(of: s, radius: q.radius) else { continue }
+                    guard pen.depth > Self.tolerance(for: pen.region) else { continue }
+                    result.worstPerChain[q.chain] = max(result.worstPerChain[q.chain] ?? 0, pen.depth)
+                    let family = Self.chainFamily(q.chain)
+                    result.worstPerFamily[family] = max(result.worstPerFamily[family] ?? 0, pen.depth)
+                }
+            }
+        }
+        return result
+    }
+
+    /// Margin: `max(0.002, 0.2 * flagOff.worst)` — 2mm or 20% of the recorded
+    /// flag-off depth, whichever is larger — below the flag-off depth, for
+    /// every family that was non-zero flag-off. A family already clean
+    /// flag-off (no penetration above tolerance anywhere in the run) must
+    /// stay clean flag-on rather than being exempted from the gate.
+    private func assertFlagImprovesPenetration(
+        pose: StressPose, flagOff: OraclePassResult, flagOn: OraclePassResult
+    ) {
+        let chainLabel = "\(pose)"
+        for chain in Set(flagOff.worstPerChain.keys).union(flagOn.worstPerChain.keys).sorted() {
+            let off = flagOff.worstPerChain[chain] ?? 0
+            let on = flagOn.worstPerChain[chain] ?? 0
+            print(String(format: "[ORACLEGATE-CHAIN] pose=%@ chain=%@ flagOff=%.4fm flagOn=%.4fm",
+                chainLabel, chain, off, on))
+        }
+
+        let families = Set(flagOff.worstPerFamily.keys).union(flagOn.worstPerFamily.keys)
+        XCTAssertFalse(families.isEmpty, "\(chainLabel): no chain family produced any query result")
+
+        for family in families.sorted() {
+            let off = flagOff.worstPerFamily[family] ?? 0
+            let on = flagOn.worstPerFamily[family] ?? 0
+            print(String(format: "[ORACLEGATE-FAMILY] pose=%@ family=%@ flagOff=%.4fm flagOn=%.4fm",
+                chainLabel, family, off, on))
+
+            if off <= 1e-9 {
+                XCTAssertLessThanOrEqual(on, Self.bodyTolerance,
+                    "\(chainLabel)/\(family): already clean flag-off (0m worst penetration) and must " +
+                    "stay clean flag-on — got \(on)m")
+                continue
+            }
+            let margin = max(0.002, 0.2 * off)
+            XCTAssertLessThan(on, off - margin,
+                "\(chainLabel)/\(family): flag-on worst penetration (\(on)m) must be below flag-off " +
+                "(\(off)m) minus the derived margin \(margin)m (max of 2mm absolute or 20% of the " +
+                "\(off)m flag-off depth, whichever is larger) — actual improvement was only " +
+                "\(off - on)m. Either fitClothCollisionToMesh regressed on this pose, or one of its " +
+                "two mechanisms (measured radii, segment collision) stopped contributing.")
+        }
+    }
+
+    /// One test per pose (spec §6.3 step 1): `armsCrossed`.
+    @MainActor func testArmsCrossedOraclePenetrationImprovesWithFitClothCollisionToMesh() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let flagOff = try await measureWorstPenetrationPerFamily(pose: .armsCrossed, flagOn: false, device: device)
+        let flagOn = try await measureWorstPenetrationPerFamily(pose: .armsCrossed, flagOn: true, device: device)
+        assertFlagImprovesPenetration(pose: .armsCrossed, flagOff: flagOff, flagOn: flagOn)
+    }
+
+    /// One test per pose (spec §6.3 step 1): `armsAtSides`.
+    @MainActor func testArmsAtSidesOraclePenetrationImprovesWithFitClothCollisionToMesh() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let flagOff = try await measureWorstPenetrationPerFamily(pose: .armsAtSides, flagOn: false, device: device)
+        let flagOn = try await measureWorstPenetrationPerFamily(pose: .armsAtSides, flagOn: true, device: device)
+        assertFlagImprovesPenetration(pose: .armsAtSides, flagOff: flagOff, flagOn: flagOn)
+    }
+}
