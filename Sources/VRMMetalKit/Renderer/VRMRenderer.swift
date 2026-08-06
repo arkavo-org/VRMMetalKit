@@ -1456,26 +1456,45 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             cachedDummyViewSize = (w, h)
         }
         vrmLog("[VRMRenderer] drawOffscreenHeadless called - size: \(w)x\(h)")
-        drawCore(in: view, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
+        drawCore(viewport: .view(view), commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
     }
 
     private var cachedDummyView: DummyView?
     private var cachedDummyViewSize: (Int, Int)?
 
-    /// Viewport size for ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``,
-    /// which bypasses the `MTKView` plumbing entirely.
-    private var offscreenViewportSize: CGSize?
+    /// Where ``drawCore(viewport:commandBuffer:renderPassDescriptor:)`` sources
+    /// the frame's viewport size.
+    ///
+    /// Modelled as a sum type rather than an optional `MTKView` plus an
+    /// optional size so that "exactly one of the two is present" is enforced by
+    /// the type rather than by convention: there is no fourth case to fall
+    /// through to, and no per-frame renderer state for concurrent entry points
+    /// to race on.
+    private enum ViewportSource {
+        case view(MTKView)
+        case explicit(CGSize)
+    }
 
     /// Thread-safe offscreen draw for render loops that don't run on the main
     /// actor (e.g. a CompositorServices frame loop on visionOS). Identical to
     /// ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``
     /// but passes the viewport size explicitly instead of routing it through
-    /// an `MTKView`, so it is callable from any thread. Not reentrant: call
-    /// from a single render thread.
+    /// an `MTKView`, so it is callable from any thread.
+    ///
+    /// The colour and depth attachments come from `renderPassDescriptor`;
+    /// `colorTexture` supplies the viewport dimensions and `depth` is accepted
+    /// for symmetry with ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``.
+    ///
+    /// - Important: Not reentrant. The renderer expects a single frame
+    ///   producer — the in-flight ring (uniform buffers + `inflightSemaphore`)
+    ///   assumes one thread issues frames. "Any thread" means "any one thread",
+    ///   the same expectation `MTKViewDelegate.draw(in:)` carries, minus the
+    ///   main-actor pin.
     public func drawOffscreen(to colorTexture: MTLTexture, depth: MTLTexture, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
-        offscreenViewportSize = CGSize(width: colorTexture.width, height: colorTexture.height)
-        defer { offscreenViewportSize = nil }
-        drawCore(in: nil, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
+        drawCore(
+            viewport: .explicit(CGSize(width: colorTexture.width, height: colorTexture.height)),
+            commandBuffer: commandBuffer,
+            renderPassDescriptor: renderPassDescriptor)
     }
 
     /// Renders the VRM model to the view.
@@ -1501,10 +1520,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///
     /// - Important: Ensure `viewMatrix` and `projectionMatrix` are set before calling.
     @MainActor public func draw(in view: MTKView, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
-        drawCore(in: view, commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
+        drawCore(viewport: .view(view), commandBuffer: commandBuffer, renderPassDescriptor: renderPassDescriptor)
     }
 
-    private func drawCore(in view: MTKView?, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
+    private func drawCore(viewport: ViewportSource, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
         // DEBUG: Confirm we're in drawCore
         if frameCounter <= 2 || frameCounter % 60 == 0 {
             vrmLog("[VRMRenderer] drawCore() executing, frame \(frameCounter)")
@@ -1859,17 +1878,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Ambient color default is set in Uniforms struct initialization
         // Get viewport size from view
         let viewportSize: CGSize
-        if let explicitSize = offscreenViewportSize {
-            // drawOffscreen(to:...) path — no view involved at all
-            viewportSize = explicitSize
-        } else if let dummyView = view as? DummyView {
-            // DummyView's drawableSize is nonisolated, safe to access directly
-            viewportSize = dummyView.drawableSize
-        } else if let view {
-            // Real MTKView requires main actor isolation
-            viewportSize = MainActor.assumeIsolated { view.drawableSize }
-        } else {
-            viewportSize = .zero
+        switch viewport {
+        case .explicit(let size):
+            // drawOffscreen(to:...) path — no view involved at all, so nothing
+            // here touches the main actor.
+            viewportSize = size
+        case .view(let view):
+            if let dummyView = view as? DummyView {
+                // DummyView's drawableSize is nonisolated, safe to access directly
+                viewportSize = dummyView.drawableSize
+            } else {
+                // Real MTKView requires main actor isolation. Only reachable
+                // from the @MainActor entry points, which is why the explicit
+                // case above must not route through here.
+                viewportSize = MainActor.assumeIsolated { view.drawableSize }
+            }
         }
         uniforms.viewportSize = SIMD2<Float>(Float(viewportSize.width), Float(viewportSize.height))
         // Set debug mode (0=off, 1=UV, 2=hasBaseColorTexture, 3=baseColorFactor)

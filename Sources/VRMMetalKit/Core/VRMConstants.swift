@@ -45,11 +45,22 @@ public enum VRMConstants {
         /// Maximum number of morph targets simultaneously active during vertex shading.
         public static let maxActiveMorphs: Int = 8
 
-        /// Maximum number of morph targets supported per mesh. This is a
-        /// sanity cap against malicious files, not a hardware limit — keep it
-        /// comfortably above real avatars: avatars made for VRChat can be
-        /// can be baked with blendshape sets of 150+ targets (expression
-        /// binds observed at index 150), which a 64 cap silently discarded.
+        /// Highest addressable morph index, and therefore the length (in
+        /// floats) of the dense weights buffer.
+        ///
+        /// This is a *bounds check on expression binds*, not a resource cap and
+        /// not a hardware limit. Its safety role is to keep a bind's
+        /// `morphIndex` inside the weights buffer, which is allocated from this
+        /// same constant — the two must always move together. It does **not**
+        /// bound how much morph geometry a file can load: the loader never
+        /// consults it, and the morphed position/normal buffers are sized from
+        /// vertex counts. Raising it therefore does not widen the memory
+        /// exposure of a hostile file.
+        ///
+        /// Keep it comfortably above real avatars: avatars made for VRChat can
+        /// be baked with blendshape sets of 150+ targets (expression binds
+        /// observed at index 150), which a 64 cap silently discarded — every
+        /// emotion preset dropped, leaving the face static.
         public static let maxMorphTargets: Int = 256
 
         /// Active-morph count at which the renderer switches from CPU to GPU morph evaluation.
