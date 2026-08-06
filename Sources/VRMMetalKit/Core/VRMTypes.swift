@@ -830,7 +830,12 @@ public struct VRMSpringJoint {
     /// `VRMLoadingOptions.fitClothCollisionToMesh` measured this joint at load.
     /// `nil` means "use the authored `hitRadius`". The authored value is never
     /// mutated (spec §2): this field sits beside it, inspectable.
-    public var effectiveHitRadius: Float? = nil
+    ///
+    /// Settable only from inside the module: a host application must not be
+    /// able to raise simulated collision radii with the flag off — that would
+    /// breach the #326 opt-in boundary (never silently reinterpret authored
+    /// physics). Only the measurement path (flag on, at load time) writes this.
+    public internal(set) var effectiveHitRadius: Float? = nil
 
     /// Creates a spring-bone joint bound to the given node.
     public init(node: Int) {
