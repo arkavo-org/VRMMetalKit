@@ -212,6 +212,29 @@ public final class VRMPipelineCache: Sendable {
         }
     }
 
+    /// Whether this platform can serialise an `MTLBinaryArchive` to disk.
+    ///
+    /// `false` on the iOS/tvOS/watchOS simulator, whose Metal loader has no
+    /// target GPU architecture to pack a slice for: `MTLBinaryArchive.serialize(to:)`
+    /// trips `+[MTLLoader sliceIDForDevice:legacyDriverVersion:airntDriverVersion:]:
+    /// failed assertion 'Target device architecture is nil'` and aborts the
+    /// process with `SIGABRT`. That is an assertion, not an `NSError`, so it is
+    /// uncatchable — no `try?` at any call site can defend against it, which is
+    /// why persistence must be refused up front rather than attempted and
+    /// recovered from. `makeBinaryArchive` and `addRenderPipelineFunctions`
+    /// both succeed there; only serialisation traps.
+    ///
+    /// Metal exposes no runtime capability query for this, so the compile-time
+    /// environment check is the only available detection. Consumers can read
+    /// this instead of writing their own `#if targetEnvironment(simulator)`.
+    public static var isPersistentArchiveSupported: Bool {
+        #if targetEnvironment(simulator)
+        return false
+        #else
+        return true
+        #endif
+    }
+
     /// Enables on-disk pipeline persistence, loading any archive already cached
     /// for this device + shader build.
     ///
@@ -219,6 +242,10 @@ public final class VRMPipelineCache: Sendable {
     /// builds from the archive when the matching function set is present and
     /// records new builds into it; call ``flushPersistentArchive()`` to write
     /// the accumulated archive back to disk (e.g. after first-model load).
+    ///
+    /// Silently degrades to plain in-memory caching where
+    /// ``isPersistentArchiveSupported`` is `false`; ``getStatistics()`` reports
+    /// `persistentArchiveEnabled == false` in that case.
     ///
     /// - Parameters:
     ///   - device: The `MTLDevice` the archive is built against.
@@ -229,6 +256,10 @@ public final class VRMPipelineCache: Sendable {
     /// - Throws: the underlying Metal error if an existing archive file is
     ///   incompatible (wrong GPU family) or corrupt.
     public func enablePersistentArchive(device: MTLDevice, directory: URL, shaderHash: String) throws {
+        guard Self.isPersistentArchiveSupported else {
+            vrmLog("[VRMPipelineCache] Pipeline archive unavailable on the simulator (serialisation aborts); using in-memory cache.")
+            return
+        }
         let url = PipelineBinaryArchive.cacheURL(
             in: directory, deviceName: device.name, shaderHash: shaderHash)
         let archive = try PipelineBinaryArchive(device: device, url: url)
@@ -243,6 +274,11 @@ public final class VRMPipelineCache: Sendable {
     /// Writes the in-memory archive to disk when new pipelines have been
     /// recorded since the last flush. No-op when persistence is disabled, the
     /// archive was preloaded unchanged, or nothing new was built.
+    ///
+    /// Also a no-op where ``isPersistentArchiveSupported`` is `false`, because
+    /// ``enablePersistentArchive(device:directory:shaderHash:)`` never installs
+    /// an archive there — reaching Metal's serialiser on the simulator would
+    /// abort the process rather than throw.
     ///
     /// - Returns: `true` if the archive was actually serialized, `false` if the
     ///   flush was a no-op.
