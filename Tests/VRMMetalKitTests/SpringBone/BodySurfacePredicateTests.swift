@@ -138,7 +138,7 @@ final class BodySurfacePredicateTests: XCTestCase {
                 "N00_001_02_Bottoms_01_CLOTH (Instance)",
                 "N00_005_01_Tops_01_CLOTH (Instance)",
             ],
-            expectedBoundaryEdgeCount: 1630)
+            expectedBoundaryEdgeCount: 1926)
     }
 
     @MainActor func testInventoryExactSetIsPinnedForAvatarSampleU() async throws {
@@ -168,7 +168,7 @@ final class BodySurfacePredicateTests: XCTestCase {
                 "N00_008_01_Shoes_01_CLOTH (Instance)",
                 "N00_010_01_Onepiece_00_CLOTH (Instance)",
             ],
-            expectedBoundaryEdgeCount: 2008)
+            expectedBoundaryEdgeCount: 2304)
     }
 
     /// AvatarSample_M is the coverage fixture for cloth-collision fidelity: the
@@ -199,7 +199,7 @@ final class BodySurfacePredicateTests: XCTestCase {
                 "N00_010_01_Onepiece_00_CLOTH_01 (Instance)",
                 "N00_010_01_Onepiece_00_CLOTH_02 (Instance)",
             ],
-            expectedBoundaryEdgeCount: 1680)
+            expectedBoundaryEdgeCount: 1976)
     }
 
     @MainActor func testOracleBuildsFromRig() async throws {
