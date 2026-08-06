@@ -59,10 +59,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var collideSpheresPipeline: MTLComputePipelineState?
     private var collideCapsulesPipeline: MTLComputePipelineState?
     private var collidePlanesPipeline: MTLComputePipelineState?
+    /// Snapshot + three segment-collision kernels (cloth-collision-fidelity).
+    /// Created lazily on first flag-on dispatch (`ensureSegmentCollisionPipelines`),
+    /// not at `init`, so the default flag-off path pays zero pipeline-compile
+    /// cold-start cost. `nil` until then.
     private var snapshotPositionsPipeline: MTLComputePipelineState?
     private var collideSegmentSpheresPipeline: MTLComputePipelineState?
     private var collideSegmentCapsulesPipeline: MTLComputePipelineState?
     private var collideSegmentPlanesPipeline: MTLComputePipelineState?
+    /// Retained so `ensureSegmentCollisionPipelines` can resolve the segment
+    /// kernel functions and build their pipelines lazily, after `init` has
+    /// already returned. Always set once `init` succeeds.
+    private var metalLibrary: MTLLibrary?
 
     /// Test-only override for segment (parent-child span) collision (issue
     /// cloth-collision-fidelity, Task 4). `nil` (default) follows
@@ -336,14 +344,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               let collideSpheresFunction = library.makeFunction(name: "springBoneCollideSpheres"),
               let collideCapsulesFunction = library.makeFunction(name: "springBoneCollideCapsules"),
               let collidePlanesFunction = library.makeFunction(name: "springBoneCollidePlanes"),
-              let centerDeltaFunction = library.makeFunction(name: "springBoneApplyCenterDelta"),
-              let snapshotPositionsFunction = library.makeFunction(name: "springBoneSnapshotPositions"),
-              let collideSegmentSpheresFunction = library.makeFunction(name: "springBoneCollideSegmentSpheres"),
-              let collideSegmentCapsulesFunction = library.makeFunction(name: "springBoneCollideSegmentCapsules"),
-              let collideSegmentPlanesFunction = library.makeFunction(name: "springBoneCollideSegmentPlanes") else {
+              let centerDeltaFunction = library.makeFunction(name: "springBoneApplyCenterDelta") else {
             vrmLog("[SpringBone] ❌ Failed to find shader functions in library")
             throw SpringBoneError.failedToLoadShaders
         }
+
+        // The four segment-collision pipelines (snapshot + 3 segment kernels)
+        // are built lazily by `ensureSegmentCollisionPipelines` on first
+        // flag-on dispatch, not here — see that method's doc comment.
+        self.metalLibrary = library
 
         #if DEBUG
         let makePipeline: (any MTLFunction) throws -> any MTLComputePipelineState = { fn in
@@ -359,10 +368,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         collideCapsulesPipeline = try makePipeline(collideCapsulesFunction)
         collidePlanesPipeline = try makePipeline(collidePlanesFunction)
         centerDeltaPipeline = try makePipeline(centerDeltaFunction)
-        snapshotPositionsPipeline = try makePipeline(snapshotPositionsFunction)
-        collideSegmentSpheresPipeline = try makePipeline(collideSegmentSpheresFunction)
-        collideSegmentCapsulesPipeline = try makePipeline(collideSegmentCapsulesFunction)
-        collideSegmentPlanesPipeline = try makePipeline(collideSegmentPlanesFunction)
         #else
         kinematicPipeline = try device.makeComputePipelineState(function: kinematicFunction)
         predictPipeline = try device.makeComputePipelineState(function: predictFunction)
@@ -371,15 +376,61 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         collideCapsulesPipeline = try device.makeComputePipelineState(function: collideCapsulesFunction)
         collidePlanesPipeline = try device.makeComputePipelineState(function: collidePlanesFunction)
         centerDeltaPipeline = try device.makeComputePipelineState(function: centerDeltaFunction)
-        snapshotPositionsPipeline = try device.makeComputePipelineState(function: snapshotPositionsFunction)
-        collideSegmentSpheresPipeline = try device.makeComputePipelineState(function: collideSegmentSpheresFunction)
-        collideSegmentCapsulesPipeline = try device.makeComputePipelineState(function: collideSegmentCapsulesFunction)
-        collideSegmentPlanesPipeline = try device.makeComputePipelineState(function: collideSegmentPlanesFunction)
         #endif
 
         // Create global params buffer
         globalParamsBuffer = device.makeBuffer(length: MemoryLayout<SpringBoneGlobalParams>.stride, options: [.storageModeShared])
         globalParamsBuffer?.label = "SpringBone GlobalParams"
+    }
+
+    /// Builds the snapshot + three segment-collision pipelines on first
+    /// flag-on dispatch. `init` intentionally skips these four (cf. the
+    /// repo's pipeline-binary-archive history on cold-compile cost): the
+    /// default (flag-off) avatar load and simulate path never touches
+    /// `fitClothCollisionToMesh`, so it should not pay to compile kernels it
+    /// will never dispatch. Idempotent — a no-op once the pipelines exist.
+    ///
+    /// Failure here stays loud, matching `init`'s behaviour: by the time this
+    /// is called, `globalParams.segmentCollision != 0`, i.e. the caller
+    /// explicitly opted into segment collision. Silently skipping creation
+    /// and returning would let the physics step continue with the flag
+    /// nominally on but segment collision quietly absent — the fidelity
+    /// improvement the caller asked for would vanish without any signal.
+    private func ensureSegmentCollisionPipelines() {
+        guard snapshotPositionsPipeline == nil else { return }
+        guard let library = metalLibrary else {
+            preconditionFailure("SpringBoneComputeSystem: metal library unavailable for lazy " +
+                "segment-collision pipeline creation")
+        }
+        guard let snapshotPositionsFunction = library.makeFunction(name: "springBoneSnapshotPositions"),
+              let collideSegmentSpheresFunction = library.makeFunction(name: "springBoneCollideSegmentSpheres"),
+              let collideSegmentCapsulesFunction = library.makeFunction(name: "springBoneCollideSegmentCapsules"),
+              let collideSegmentPlanesFunction = library.makeFunction(name: "springBoneCollideSegmentPlanes") else {
+            preconditionFailure("SpringBoneComputeSystem: segment-collision shader functions missing " +
+                "from library")
+        }
+        do {
+            #if DEBUG
+            let makePipeline: (any MTLFunction) throws -> any MTLComputePipelineState = { [device] fn in
+                let desc = MTLComputePipelineDescriptor()
+                desc.computeFunction = fn
+                desc.shaderValidation = .enabled
+                return try device.makeComputePipelineState(descriptor: desc, options: [], reflection: nil)
+            }
+            snapshotPositionsPipeline = try makePipeline(snapshotPositionsFunction)
+            collideSegmentSpheresPipeline = try makePipeline(collideSegmentSpheresFunction)
+            collideSegmentCapsulesPipeline = try makePipeline(collideSegmentCapsulesFunction)
+            collideSegmentPlanesPipeline = try makePipeline(collideSegmentPlanesFunction)
+            #else
+            snapshotPositionsPipeline = try device.makeComputePipelineState(function: snapshotPositionsFunction)
+            collideSegmentSpheresPipeline = try device.makeComputePipelineState(function: collideSegmentSpheresFunction)
+            collideSegmentCapsulesPipeline = try device.makeComputePipelineState(function: collideSegmentCapsulesFunction)
+            collideSegmentPlanesPipeline = try device.makeComputePipelineState(function: collideSegmentPlanesFunction)
+            #endif
+        } catch {
+            preconditionFailure("SpringBoneComputeSystem: failed to create segment-collision pipeline " +
+                "state: \(error)")
+        }
     }
 
     private var updateCounter = 0
@@ -790,12 +841,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               let distancePipeline = distancePipeline,
               let collideSpheresPipeline = collideSpheresPipeline,
               let collideCapsulesPipeline = collideCapsulesPipeline,
-              let collidePlanesPipeline = collidePlanesPipeline,
-              let snapshotPositionsPipeline = snapshotPositionsPipeline,
-              let collideSegmentSpheresPipeline = collideSegmentSpheresPipeline,
-              let collideSegmentCapsulesPipeline = collideSegmentCapsulesPipeline,
-              let collideSegmentPlanesPipeline = collideSegmentPlanesPipeline else {
+              let collidePlanesPipeline = collidePlanesPipeline else {
             return
+        }
+        // Lazily materialize the segment-collision pipelines only when this
+        // substep actually needs them — see `ensureSegmentCollisionPipelines`.
+        if globalParams.segmentCollision != 0 {
+            ensureSegmentCollisionPipelines()
         }
         // If a host-owned buffer was passed in, encode into it (no commit).
         // Otherwise fall back to legacy per-substep buffer with own commit.
@@ -919,7 +971,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // segment dispatches below so flag-off does zero extra GPU work; it
         // must still precede EVERY collide dispatch (existing + segment), so
         // it stays here, before the three untouched endpoint kernels.
-        if globalParams.segmentCollision != 0 {
+        if globalParams.segmentCollision != 0, let snapshotPositionsPipeline = snapshotPositionsPipeline {
             computeEncoder.setComputePipelineState(snapshotPositionsPipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
@@ -958,19 +1010,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // the flag resolves off — the kernels also self-guard on the same
         // field, belt and braces.
         if globalParams.segmentCollision != 0 {
-            if globalParams.numSpheres > 0 {
+            if globalParams.numSpheres > 0, let collideSegmentSpheresPipeline = collideSegmentSpheresPipeline {
                 computeEncoder.setComputePipelineState(collideSegmentSpheresPipeline)
                 computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
                 computeEncoder.memoryBarrier(scope: .buffers)
             }
 
-            if globalParams.numCapsules > 0 {
+            if globalParams.numCapsules > 0, let collideSegmentCapsulesPipeline = collideSegmentCapsulesPipeline {
                 computeEncoder.setComputePipelineState(collideSegmentCapsulesPipeline)
                 computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
                 computeEncoder.memoryBarrier(scope: .buffers)
             }
 
-            if globalParams.numPlanes > 0 {
+            if globalParams.numPlanes > 0, let collideSegmentPlanesPipeline = collideSegmentPlanesPipeline {
                 computeEncoder.setComputePipelineState(collideSegmentPlanesPipeline)
                 computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
                 computeEncoder.memoryBarrier(scope: .buffers)
