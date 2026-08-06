@@ -43,7 +43,16 @@ public struct JointRadiusMeasurement {
 /// extent without ever mutating the authored field (spec §2/§3).
 public enum SpringBoneJointRadiusMeasure {
 
+    /// Test-only kill switch (cloth-collision-fidelity, Task 5 dual sabotage,
+    /// spec §6.3): when true, `measure` returns `[]` unconditionally, as if
+    /// no joint could ever be measured. Lets the oracle improvement gate
+    /// prove that the measured-radius half of the fidelity claim actually
+    /// contributes to the reduction, rather than segment collision alone
+    /// doing all the work.
+    nonisolated(unsafe) static var measurementDisabledForTesting = false
+
     public static func measure(model: VRMModel, percentile: Float = 0.65) -> [JointRadiusMeasurement] {
+        guard !measurementDisabledForTesting else { return [] }
         guard let springBone = model.springBone else { return [] }
 
         // One pass over every skinned primitive: bucket world-space positions
