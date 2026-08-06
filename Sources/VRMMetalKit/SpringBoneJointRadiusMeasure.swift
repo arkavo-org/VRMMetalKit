@@ -60,10 +60,21 @@ public enum SpringBoneJointRadiusMeasure {
         // hair and garment materials included; this measures the cloth itself.
         var vertsByNode: [Int: [SIMD3<Float>]] = [:]
         for (mi, mesh) in model.meshes.enumerated() {
+            // Single-instance assumption: `first(where:)` binds a mesh to the
+            // first node that references it. VRM avatars don't instance skinned
+            // meshes across multiple nodes, so this holds in practice; a
+            // multi-instanced mesh would have every vertex measured against
+            // only that first instance's skin/palette, not each instance's own.
             guard let node = model.nodes.first(where: { $0.mesh == mi }),
                   let skinIndex = node.skin, skinIndex >= 0, skinIndex < model.skins.count else { continue }
             let skin = model.skins[skinIndex]
-            let palette = skin.joints.indices.map { skin.joints[$0].worldMatrix * skin.inverseBindMatrices[$0] }
+            // Identity fallback for a joint index beyond a malformed skin's IBM
+            // count — matches the loader's own absent-accessor behavior rather
+            // than trusting `inverseBindMatrices.count == joints.count`.
+            let palette = skin.joints.indices.map { i -> simd_float4x4 in
+                let ibm = i < skin.inverseBindMatrices.count ? skin.inverseBindMatrices[i] : matrix_identity_float4x4
+                return skin.joints[i].worldMatrix * ibm
+            }
             let slotToNode: [Int] = skin.joints.map { j in
                 model.nodes.firstIndex(where: { $0 === j }) ?? -1
             }

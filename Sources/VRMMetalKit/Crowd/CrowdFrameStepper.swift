@@ -101,13 +101,14 @@ public final class CrowdFrameStepper {
     ///     `nil` ⇒ off.
     ///
     /// Ownership note: every `avatars[i].player` has `solvesConstraints` forced to
-    /// `false` here, permanently, as a side effect — S4 (`PoseStage.constrain`) owns
-    /// node-constraint solving for the lifetime of this stepper, so the player must
-    /// not also solve at S0 against a different, unpropagated pose. The flag is
-    /// never restored. Passing a player to `CrowdFrameStepper` is an ownership
-    /// transfer: a caller that later drives the same `AnimationPlayer` directly
-    /// (e.g. via `avatarsForCamera`) will find constraint solving silently off on
-    /// that path too, and must re-enable it if that direct use needs it.
+    /// `false` here as a side effect — S4 (`PoseStage.constrain`) owns node-constraint
+    /// solving for the lifetime of this stepper, so the player must not also solve
+    /// at S0 against a different, unpropagated pose. This is a *borrow*, not a
+    /// permanent taking: each player's prior value is recorded and restored in
+    /// `deinit` (`restoreSolvesConstraints`), so a caller that drives the same
+    /// `AnimationPlayer` directly (e.g. via `avatarsForCamera`) sees the flag
+    /// silently off only while this stepper is alive, not after it is released.
+    /// `PlayerOwnershipTests` covers both directions.
     public init(avatars: [Avatar], driver: CrowdMotionDriver, group: SpringBoneContactGroup?, fps: Float,
                 bodyContactMargin: Float? = nil, postural: PosturalContactParams? = nil,
                 stagger: StaggerShoveParams? = nil, armCounterbalance: ArmCounterbalanceParams? = nil) {

@@ -64,6 +64,14 @@ public struct PipelineAvatar {
     /// `PipelineAvatar` is a direct-`PoseStage` user in this sense, not just
     /// `CrowdFrameStepper`'s — the invariant holds unconditionally rather than
     /// only where a caller remembered to set the flag by hand.
+    ///
+    /// Unlike `CrowdFrameStepper`, this type has no teardown hook to hand the
+    /// mutation back — `PipelineAvatar` is a value type, so there is no `deinit`
+    /// to restore it. A host that constructs one directly (outside
+    /// `CrowdFrameStepper`) and later drives the same `player` itself takes on
+    /// the permanent side effect; if restoration on teardown matters, go through
+    /// `CrowdFrameStepper`, which records each player's prior value and restores
+    /// it in its own `deinit` (see `restoreSolvesConstraints`).
     public init(index: Int, model: VRMModel, player: AnimationPlayer,
                 baseTranslations: [ObjectIdentifier: SIMD3<Float>],
                 posturalLayer: PosturalContactLayer? = nil,
