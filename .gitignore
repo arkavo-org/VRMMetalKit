@@ -20,6 +20,7 @@ VRMA_Locomotion_Pack/
 # Bundled VRM test fixtures (licenses permit redistribution; see LICENSE-MODELS.md)
 !/AvatarSample_A_0.0.vrm.glb
 !/AvatarSample_A_1.0.vrm.glb
+!/AvatarSample_M_1.0.vrm
 !/AvatarSample_U_1.0.vrm.glb
 # Reference animation bundled for the CI benchmark gate (redistribution permitted)
 !/VRMA_01.vrma
