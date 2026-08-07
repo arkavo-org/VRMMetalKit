@@ -6,7 +6,7 @@ A high-performance Swift Package for loading and rendering 3D assets on Apple's 
 - **GLTFMetalKit** — glTF 2.0 PBR renderer for static / skinned / morphed / animated assets. Targets the inanimate-objects half of the ecosystem (props, scenery, items) and clears the Khronos Sample Assets credibility bar (PBR + IBL + skinning + morph + animation + KHR_lights_punctual + KHR_materials_unlit).
 
 [![Swift](https://img.shields.io/badge/Swift-6.2-orange.svg)](https://swift.org)
-[![Platforms](https://img.shields.io/badge/Platforms-macOS%2026%2B%20%7C%20iOS%2026%2B-blue.svg)](https://developer.apple.com)
+[![Platforms](https://img.shields.io/badge/Platforms-macOS%2026%2B%20%7C%20iOS%2026%2B%20%7C%20visionOS%2026%2B-blue.svg)](https://developer.apple.com)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Models License](https://img.shields.io/badge/Models-VPL%201.0-green.svg)](LICENSE-MODELS.md)
 
