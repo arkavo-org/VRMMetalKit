@@ -844,6 +844,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` documents.
     var specializedMToonPipelines: [SpecializedMToonPipelineKey: MTLRenderPipelineState?] = [:]
 
+    /// The ``VRMPipelineCache/generation`` `specializedMToonPipelines` was
+    /// populated at. When the shared cache is cleared the generation moves and
+    /// the memo is dropped, so `clearCache()` releases the states this renderer
+    /// retains and a recompiled shader library is picked up.
+    var specializedMToonPipelinesGeneration: UInt64 = VRMPipelineCache.shared.generation
+
     /// Hips world position captured at `loadModel` (rest pose). Anchors the
     /// skinned-primitive cull volume — see `SkinnedCullBounds.cullModelMatrix`.
     private var restHipsWorldPosition: SIMD3<Float>?

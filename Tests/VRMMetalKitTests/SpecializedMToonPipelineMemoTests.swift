@@ -80,11 +80,18 @@ final class SpecializedMToonPipelineMemoTests: XCTestCase {
         ) else {
             throw XCTSkip("MToon specialization unavailable on this device")
         }
-        let blend = renderer.specializedMToonPipelineState(isSkinned: false, features: features(alphaMode: 2))
-        let skinned = renderer.specializedMToonPipelineState(isSkinned: true, features: features(alphaMode: 0))
-        let noBaseColor = renderer.specializedMToonPipelineState(
-            isSkinned: false, features: features(alphaMode: 0, baseColor: false)
-        )
+        // Compilation failures are deliberately not negatively cached, so a
+        // variant that fails to compile leaves no memo entry. Skip rather than
+        // report a key collapse the memo did not actually make.
+        guard
+            let blend = renderer.specializedMToonPipelineState(isSkinned: false, features: features(alphaMode: 2)),
+            let skinned = renderer.specializedMToonPipelineState(isSkinned: true, features: features(alphaMode: 0)),
+            let noBaseColor = renderer.specializedMToonPipelineState(
+                isSkinned: false, features: features(alphaMode: 0, baseColor: false)
+            )
+        else {
+            throw XCTSkip("An MToon variant failed to compile on this device")
+        }
 
         XCTAssertEqual(
             renderer.specializedMToonPipelines.count, 4,
@@ -132,6 +139,56 @@ final class SpecializedMToonPipelineMemoTests: XCTestCase {
         XCTAssertEqual(
             rendererA.specializedMToonPipelines.count, 3,
             "Changing sampleCount must miss the memo — rasterSampleCount affects compilation."
+        )
+    }
+
+    /// `useMaterialFlags` selects the dynamic fallback shader, so it must reach
+    /// the shared cache's key too — not just the memo's. When only the memo
+    /// carries it, the two variants build distinct memo entries that both
+    /// resolve the same shared-cache string and are handed the same compiled
+    /// pipeline, which is the wrong-pipeline bug the memo key exists to prevent.
+    func testUseMaterialFlagsDiscriminatesSharedCacheKey() throws {
+        let renderer = VRMRenderer(device: device, config: RendererConfig())
+
+        guard
+            let specialized = renderer.specializedMToonPipelineState(
+                isSkinned: false, features: MToonFunctionConstantKey(useMaterialFlags: false)
+            ),
+            let dynamic = renderer.specializedMToonPipelineState(
+                isSkinned: false, features: MToonFunctionConstantKey(useMaterialFlags: true)
+            )
+        else {
+            throw XCTSkip("MToon specialization unavailable on this device")
+        }
+
+        XCTAssertEqual(renderer.specializedMToonPipelines.count, 2)
+        XCTAssertFalse(
+            specialized === dynamic,
+            "useMaterialFlags changes the compiled fragment shader, so the two variants "
+                + "must not collide on one shared-cache entry."
+        )
+    }
+
+    /// ``VRMPipelineCache/clearCache()`` is documented for memory-pressure
+    /// response and for forcing a shader reload during development. The memo
+    /// must not survive it: holding the entries would retain the very pipeline
+    /// states the caller asked to release, and would keep serving the
+    /// pre-clear specialization after a recompiled metallib is loaded.
+    func testClearCacheInvalidatesMemo() throws {
+        let renderer = VRMRenderer(device: device, config: RendererConfig())
+
+        guard renderer.specializedMToonPipelineState(isSkinned: false, features: features()) != nil else {
+            throw XCTSkip("MToon specialization unavailable on this device")
+        }
+        _ = renderer.specializedMToonPipelineState(isSkinned: true, features: features())
+        XCTAssertEqual(renderer.specializedMToonPipelines.count, 2)
+
+        VRMPipelineCache.shared.clearCache()
+
+        _ = renderer.specializedMToonPipelineState(isSkinned: false, features: features())
+        XCTAssertEqual(
+            renderer.specializedMToonPipelines.count, 1,
+            "clearCache() must drop the memo, leaving only the entry rebuilt after it."
         )
     }
 

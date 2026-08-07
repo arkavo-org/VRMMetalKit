@@ -763,6 +763,15 @@ extension VRMRenderer {
         isSkinned: Bool,
         features: MToonFunctionConstantKey
     ) -> MTLRenderPipelineState? {
+        // A cleared shared cache invalidates the memo: keeping the entries would
+        // retain states `clearCache()` was called to release, and would keep
+        // serving the old specialization after a shader reload.
+        let generation = VRMPipelineCache.shared.generation
+        if generation != specializedMToonPipelinesGeneration {
+            specializedMToonPipelines.removeAll(keepingCapacity: true)
+            specializedMToonPipelinesGeneration = generation
+        }
+
         let memoKey = SpecializedMToonPipelineKey(
             features: features,
             isSkinned: isSkinned,
@@ -773,9 +782,14 @@ extension VRMRenderer {
             return memoized
         }
 
-        // Build a compact integer bitfield key instead of multiple string interpolations
-        // Bit layout: [skinned:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][alpha:4]
+        // Build a compact integer bitfield key instead of multiple string interpolations.
+        // Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][alpha:4]
+        // Every field of `features` must appear here: this key is what the
+        // shared cache uses for identity, so a field carried by the memo key
+        // but dropped here lets two distinct memo entries collide on one
+        // compiled pipeline.
         var bits: UInt32 = isSkinned ? 1 : 0
+        bits = (bits << 1) | (features.useMaterialFlags ? 1 : 0)
         bits = (bits << 1) | (features.hasBaseColorTexture ? 1 : 0)
         bits = (bits << 1) | (features.hasShadeMultiplyTexture ? 1 : 0)
         bits = (bits << 1) | (features.hasShadingShiftTexture ? 1 : 0)
