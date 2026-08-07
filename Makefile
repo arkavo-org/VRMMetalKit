@@ -1,14 +1,16 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate
 
 help:
 	@echo "VRMMetalKit Build Targets:"
-	@echo "  make shaders       - Compile all three VRMMetalKit metallib slices (macOS / iOS / iOS Simulator)"
+	@echo "  make shaders       - Compile all five VRMMetalKit metallib slices (macOS / iOS / iOS Sim / visionOS / visionOS Sim)"
 	@echo "  make shaders-macos - Compile only the macOS slice (FP16)"
 	@echo "  make shaders-ios   - Compile only the iOS device slice (FP16)"
 	@echo "  make shaders-iossim- Compile only the iOS Simulator slice (FP16)"
+	@echo "  make shaders-visionos    - Compile only the visionOS device slice (FP16)"
+	@echo "  make shaders-visionossim - Compile only the visionOS Simulator slice (FP16)"
 	@echo "  make gltf-shaders  - Compile GLTFMetalKit (PBR) shaders into metallib"
 	@echo "  make clean         - Remove temporary build files"
 	@echo "  make test          - Run Swift tests"
@@ -19,13 +21,17 @@ help:
 	@echo "  make docs          - Preview documentation locally"
 	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
 
-# Compile all VRM Metal shaders into three SDK-specific metallibs:
+# Compile all VRM Metal shaders into five SDK-specific metallibs:
 #   - macosx          (FP16; supersedes PR #279's FP32 safe-default — measured
 #                      via gpudebug on M4: -5.8% encoder time and fragment
 #                      occupancy 21%→71% at 2048px, with the full MToon
 #                      conformance battery pixel-clean)
 #   - iphoneos        (FP16, mobile double-rate payoff)
 #   - iphonesimulator (FP16, simulator-native; fixes nil-pipeline error)
+#   - xros            (FP16; Vision Pro is the same Apple-Silicon GPU class
+#                      as iOS, so the double-rate payoff carries over)
+#   - xrsimulator     (FP16, simulator-native — without it visionOS falls
+#                      through to the macOS slice and pipeline creation fails)
 # -Wall -Wextra enables the common clang warning classes; -Werror promotes
 # them to hard errors so the CI Shaders job (and local `make shaders`)
 # catches issues like unused functions, writable-buffer aliasing, and
@@ -38,7 +44,7 @@ help:
 # explicit -std pin is the only protection. Bump it deliberately, together
 # with the platforms floor in Package.swift.
 MSL_STD := -std=metal4.0
-shaders: shaders-macos shaders-ios shaders-iossim
+shaders: shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim
 	@echo "✅ All shader slices built"
 
 shaders-macos:
@@ -82,6 +88,34 @@ shaders-iossim:
 		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
 	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib"
 	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
+
+shaders-visionos:
+	@echo "🔨 Compiling visionOS device shaders (FP16)..."
+	@mkdir -p /tmp/vrm-shaders-visionos
+	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
+		echo "  Compiling $$file..."; \
+		xcrun -sdk xros metal -Wall -Wextra -Werror $(MSL_STD) \
+			-mtargetos=xros26.0 -DMTOON_USE_HALF_PRECISION=1 \
+			-c $$file -o /tmp/vrm-shaders-visionos/$$(basename $$file .metal).air || exit 1; \
+	done
+	@xcrun -sdk xros metallib /tmp/vrm-shaders-visionos/*.air \
+		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOS.metallib
+	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOS.metallib"
+	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOS.metallib
+
+shaders-visionossim:
+	@echo "🔨 Compiling visionOS Simulator shaders (FP16)..."
+	@mkdir -p /tmp/vrm-shaders-visionossim
+	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
+		echo "  Compiling $$file..."; \
+		xcrun -sdk xrsimulator metal -Wall -Wextra -Werror $(MSL_STD) \
+			-mtargetos=xros26.0-simulator -DMTOON_USE_HALF_PRECISION=1 \
+			-c $$file -o /tmp/vrm-shaders-visionossim/$$(basename $$file .metal).air || exit 1; \
+	done
+	@xcrun -sdk xrsimulator metallib /tmp/vrm-shaders-visionossim/*.air \
+		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOSSimulator.metallib
+	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOSSimulator.metallib"
+	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOSSimulator.metallib
 
 # Compile GLTFMetalKit PBR shaders into a separate metallib so the
 # inanimate-object renderer can load them without dragging the MToon /
