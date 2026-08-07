@@ -33,6 +33,8 @@ tmp/
 !Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
 !Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOS.metallib
 !Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
+!Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOS.metallib
+!Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOSSimulator.metallib
 !Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
 !Tests/GLTFMetalKitTests/TestData/Box.glb
 !Tests/GLTFMetalKitTests/TestData/BoxTextured.glb
