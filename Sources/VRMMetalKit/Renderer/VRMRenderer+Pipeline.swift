@@ -763,6 +763,16 @@ extension VRMRenderer {
         isSkinned: Bool,
         features: MToonFunctionConstantKey
     ) -> MTLRenderPipelineState? {
+        let memoKey = SpecializedMToonPipelineKey(
+            features: features,
+            isSkinned: isSkinned,
+            colorPixelFormat: config.colorPixelFormat,
+            sampleCount: config.sampleCount
+        )
+        if let memoized = specializedMToonPipelines[memoKey] {
+            return memoized
+        }
+
         // Build a compact integer bitfield key instead of multiple string interpolations
         // Bit layout: [skinned:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][alpha:4]
         var bits: UInt32 = isSkinned ? 1 : 0
@@ -785,15 +795,28 @@ extension VRMRenderer {
                 isSkinned: isSkinned,
                 features: features
             )
-            return try VRMPipelineCache.shared.getPipelineState(
+            let state = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: descriptor,
                 key: key
             )
+            specializedMToonPipelines[memoKey] = state
+            return state
         } catch {
             vrmLog("[VRMRenderer] Failed to create specialized MToon pipeline, falling back: \(error)")
+            specializedMToonPipelines[memoKey] = MTLRenderPipelineState?.none
             return nil
         }
+    }
+
+    /// Identity of a specialized MToon PSO: every input that changes what
+    /// Metal compiles. `features` covers the function constants and alpha
+    /// mode, the rest cover the descriptor's render-target configuration.
+    struct SpecializedMToonPipelineKey: Hashable {
+        let features: MToonFunctionConstantKey
+        let isSkinned: Bool
+        let colorPixelFormat: MTLPixelFormat
+        let sampleCount: Int
     }
 
 

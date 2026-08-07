@@ -824,6 +824,18 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var cachedRenderItems: [RenderItem]?
     private var cacheNeedsRebuild = true
 
+    /// Resolved specialized-MToon PSOs, keyed by everything that affects
+    /// compilation. `nil` values are negative cache entries so a variant that
+    /// failed to specialize is not retried on every subsequent draw.
+    ///
+    /// The shared `VRMPipelineCache` can only be consulted with a fully built
+    /// `MTLRenderPipelineDescriptor`, and building one calls
+    /// `MTLLibrary.makeFunction(name:constantValues:)` — Metal hashes the
+    /// constant payload and validates its on-disk function cache there. On a
+    /// cache hit that whole descriptor is then discarded, so the cost was paid
+    /// once per draw per frame. This memo answers before the descriptor exists.
+    var specializedMToonPipelines: [SpecializedMToonPipelineKey: MTLRenderPipelineState?] = [:]
+
     /// Hips world position captured at `loadModel` (rest pose). Anchors the
     /// skinned-primitive cull volume — see `SkinnedCullBounds.cullModelMatrix`.
     private var restHipsWorldPosition: SIMD3<Float>?
