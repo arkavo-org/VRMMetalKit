@@ -464,12 +464,12 @@ public struct DriverStatistics: Sendable {
 // MARK: - Conditional Logging
 
 #if VRM_METALKIT_ENABLE_LOGS
-func vrmLog(_ message: String) {
-    print("[VRMMetalKit] \(message)")
+func vrmLog(_ message: @autoclosure () -> String) {
+    print("[VRMMetalKit] \(message())")
 }
 #else
 @inline(__always)
-func vrmLog(_ message: String) { }
+func vrmLog(_ message: @autoclosure () -> String) { }
 #endif
 
 // MARK: - Always-On Error Logging
