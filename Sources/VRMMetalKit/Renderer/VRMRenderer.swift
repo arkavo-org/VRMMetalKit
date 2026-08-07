@@ -825,8 +825,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var cacheNeedsRebuild = true
 
     /// Resolved specialized-MToon PSOs, keyed by everything that affects
-    /// compilation. `nil` values are negative cache entries so a variant that
-    /// failed to specialize is not retried on every subsequent draw.
+    /// compilation.
     ///
     /// The shared `VRMPipelineCache` can only be consulted with a fully built
     /// `MTLRenderPipelineDescriptor`, and building one calls
@@ -834,6 +833,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// constant payload and validates its on-disk function cache there. On a
     /// cache hit that whole descriptor is then discarded, so the cost was paid
     /// once per draw per frame. This memo answers before the descriptor exists.
+    ///
+    /// A `nil` value is a negative entry, recorded only for failures that are
+    /// deterministic for the key (missing library or shader function). Failures
+    /// from pipeline compilation itself are left uncached so a transient device
+    /// error cannot permanently pin a variant to the fallback pipeline.
+    ///
+    /// Unsynchronized, like `cachedRenderItems` and the in-flight uniform ring
+    /// alongside it: the renderer is a single-frame-producer object, as
+    /// ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` documents.
     var specializedMToonPipelines: [SpecializedMToonPipelineKey: MTLRenderPipelineState?] = [:]
 
     /// Hips world position captured at `loadModel` (rest pose). Anchors the

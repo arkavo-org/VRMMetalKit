@@ -788,13 +788,26 @@ extension VRMRenderer {
         bits = (bits << 4) | (UInt32(features.alphaMode) & 0xF)
         let key = "mtfc_\(bits)_\(config.colorPixelFormat.rawValue)_\(config.sampleCount)"
 
+        let descriptor: MTLRenderPipelineDescriptor
         do {
             let library = try VRMPipelineCache.shared.getLibrary(device: device)
-            let descriptor = try makeMToonSpecializedDescriptor(
+            descriptor = try makeMToonSpecializedDescriptor(
                 library: library,
                 isSkinned: isSkinned,
                 features: features
             )
+        } catch {
+            // Resolving the library and its functions depends only on the
+            // bundled metallib and this key's constant payload, so the failure
+            // is deterministic: it will fail identically on every later draw.
+            // Cache the miss so the fallback pipeline is chosen without
+            // retrying a build that cannot start succeeding.
+            vrmLog("[VRMRenderer] Failed to build specialized MToon descriptor, falling back: \(error)")
+            specializedMToonPipelines[memoKey] = MTLRenderPipelineState?.none
+            return nil
+        }
+
+        do {
             let state = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: descriptor,
@@ -803,8 +816,14 @@ extension VRMRenderer {
             specializedMToonPipelines[memoKey] = state
             return state
         } catch {
-            vrmLog("[VRMRenderer] Failed to create specialized MToon pipeline, falling back: \(error)")
-            specializedMToonPipelines[memoKey] = MTLRenderPipelineState?.none
+            // Pipeline compilation depends on live device state, so this can
+            // fail transiently (memory pressure, a recoverable driver error).
+            // Deliberately *not* negatively cached: a transient failure must
+            // not permanently pin this variant to the fallback pipeline for
+            // the renderer's lifetime. The retry costs a rebuilt descriptor
+            // per draw, which is the pre-memo behaviour and only applies while
+            // compilation keeps failing.
+            vrmLog("[VRMRenderer] Failed to compile specialized MToon pipeline, falling back: \(error)")
             return nil
         }
     }
