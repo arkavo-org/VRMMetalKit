@@ -85,6 +85,19 @@ public final class VRMPipelineCache: Sendable {
 
     private let _state: Mutex<State>
 
+    /// Bumped by ``clearCache()``. Callers that memoize pipeline states outside
+    /// this cache compare it against the value their memo was populated at and
+    /// drop the memo when it moves, so ``clearCache()`` reclaims their retained
+    /// states and a reloaded shader library is picked up. Held in an atomic
+    /// rather than `State` so a memo can check it per draw without taking the
+    /// `Mutex` — the lock avoidance is the whole point of memoizing.
+    private let _generation = Atomic<UInt64>(0)
+
+    /// Monotonic counter identifying the current cache contents. See ``clearCache()``.
+    public var generation: UInt64 {
+        _generation.load(ordering: .relaxed)
+    }
+
     /// Creates an isolated cache. Production code uses the ``shared`` singleton;
     /// this initialiser exists so tests (and hosts wanting a private cache) can
     /// own cache state without polluting the process-wide instance.
@@ -327,6 +340,11 @@ public final class VRMPipelineCache: Sendable {
     /// The next call to ``getLibrary(device:)`` or ``getPipelineState(device:descriptor:key:)``
     /// will rebuild from scratch. Useful for memory pressure response,
     /// test isolation, and forcing a shader reload during development.
+    ///
+    /// This also bumps ``generation``, which invalidates the per-renderer memo
+    /// of specialized MToon pipelines on each live ``VRMRenderer`` at its next
+    /// draw. Pipeline states a renderer built during `init` and holds in stored
+    /// properties are unaffected and stay alive until that renderer is released.
     public func clearCache() {
         _state.withLock { state in
             let libraryCount = state.libraries.count
@@ -337,6 +355,7 @@ public final class VRMPipelineCache: Sendable {
 
             vrmLog("[VRMPipelineCache] 🗑️ Cache cleared: \(libraryCount) libraries, \(pipelineCount) pipeline states")
         }
+        _generation.wrappingAdd(1, ordering: .relaxed)
     }
 
     /// Returns a snapshot of current cache occupancy. Useful for diagnostics dashboards.

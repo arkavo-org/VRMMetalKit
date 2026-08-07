@@ -763,9 +763,33 @@ extension VRMRenderer {
         isSkinned: Bool,
         features: MToonFunctionConstantKey
     ) -> MTLRenderPipelineState? {
-        // Build a compact integer bitfield key instead of multiple string interpolations
-        // Bit layout: [skinned:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][alpha:4]
+        // A cleared shared cache invalidates the memo: keeping the entries would
+        // retain states `clearCache()` was called to release, and would keep
+        // serving the old specialization after a shader reload.
+        let generation = VRMPipelineCache.shared.generation
+        if generation != specializedMToonPipelinesGeneration {
+            specializedMToonPipelines.removeAll(keepingCapacity: true)
+            specializedMToonPipelinesGeneration = generation
+        }
+
+        let memoKey = SpecializedMToonPipelineKey(
+            features: features,
+            isSkinned: isSkinned,
+            colorPixelFormat: config.colorPixelFormat,
+            sampleCount: config.sampleCount
+        )
+        if let memoized = specializedMToonPipelines[memoKey] {
+            return memoized
+        }
+
+        // Build a compact integer bitfield key instead of multiple string interpolations.
+        // Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][alpha:4]
+        // Every field of `features` must appear here: this key is what the
+        // shared cache uses for identity, so a field carried by the memo key
+        // but dropped here lets two distinct memo entries collide on one
+        // compiled pipeline.
         var bits: UInt32 = isSkinned ? 1 : 0
+        bits = (bits << 1) | (features.useMaterialFlags ? 1 : 0)
         bits = (bits << 1) | (features.hasBaseColorTexture ? 1 : 0)
         bits = (bits << 1) | (features.hasShadeMultiplyTexture ? 1 : 0)
         bits = (bits << 1) | (features.hasShadingShiftTexture ? 1 : 0)
@@ -778,22 +802,54 @@ extension VRMRenderer {
         bits = (bits << 4) | (UInt32(features.alphaMode) & 0xF)
         let key = "mtfc_\(bits)_\(config.colorPixelFormat.rawValue)_\(config.sampleCount)"
 
+        let descriptor: MTLRenderPipelineDescriptor
         do {
             let library = try VRMPipelineCache.shared.getLibrary(device: device)
-            let descriptor = try makeMToonSpecializedDescriptor(
+            descriptor = try makeMToonSpecializedDescriptor(
                 library: library,
                 isSkinned: isSkinned,
                 features: features
             )
-            return try VRMPipelineCache.shared.getPipelineState(
+        } catch {
+            // Resolving the library and its functions depends only on the
+            // bundled metallib and this key's constant payload, so the failure
+            // is deterministic: it will fail identically on every later draw.
+            // Cache the miss so the fallback pipeline is chosen without
+            // retrying a build that cannot start succeeding.
+            vrmLog("[VRMRenderer] Failed to build specialized MToon descriptor, falling back: \(error)")
+            specializedMToonPipelines[memoKey] = MTLRenderPipelineState?.none
+            return nil
+        }
+
+        do {
+            let state = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: descriptor,
                 key: key
             )
+            specializedMToonPipelines[memoKey] = state
+            return state
         } catch {
-            vrmLog("[VRMRenderer] Failed to create specialized MToon pipeline, falling back: \(error)")
+            // Pipeline compilation depends on live device state, so this can
+            // fail transiently (memory pressure, a recoverable driver error).
+            // Deliberately *not* negatively cached: a transient failure must
+            // not permanently pin this variant to the fallback pipeline for
+            // the renderer's lifetime. The retry costs a rebuilt descriptor
+            // per draw, which is the pre-memo behaviour and only applies while
+            // compilation keeps failing.
+            vrmLog("[VRMRenderer] Failed to compile specialized MToon pipeline, falling back: \(error)")
             return nil
         }
+    }
+
+    /// Identity of a specialized MToon PSO: every input that changes what
+    /// Metal compiles. `features` covers the function constants and alpha
+    /// mode, the rest cover the descriptor's render-target configuration.
+    struct SpecializedMToonPipelineKey: Hashable {
+        let features: MToonFunctionConstantKey
+        let isSkinned: Bool
+        let colorPixelFormat: MTLPixelFormat
+        let sampleCount: Int
     }
 
 

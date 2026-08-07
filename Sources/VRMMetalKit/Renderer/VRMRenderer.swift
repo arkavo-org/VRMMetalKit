@@ -824,6 +824,32 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var cachedRenderItems: [RenderItem]?
     private var cacheNeedsRebuild = true
 
+    /// Resolved specialized-MToon PSOs, keyed by everything that affects
+    /// compilation.
+    ///
+    /// The shared `VRMPipelineCache` can only be consulted with a fully built
+    /// `MTLRenderPipelineDescriptor`, and building one calls
+    /// `MTLLibrary.makeFunction(name:constantValues:)` — Metal hashes the
+    /// constant payload and validates its on-disk function cache there. On a
+    /// cache hit that whole descriptor is then discarded, so the cost was paid
+    /// once per draw per frame. This memo answers before the descriptor exists.
+    ///
+    /// A `nil` value is a negative entry, recorded only for failures that are
+    /// deterministic for the key (missing library or shader function). Failures
+    /// from pipeline compilation itself are left uncached so a transient device
+    /// error cannot permanently pin a variant to the fallback pipeline.
+    ///
+    /// Unsynchronized, like `cachedRenderItems` and the in-flight uniform ring
+    /// alongside it: the renderer is a single-frame-producer object, as
+    /// ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` documents.
+    var specializedMToonPipelines: [SpecializedMToonPipelineKey: MTLRenderPipelineState?] = [:]
+
+    /// The ``VRMPipelineCache/generation`` `specializedMToonPipelines` was
+    /// populated at. When the shared cache is cleared the generation moves and
+    /// the memo is dropped, so `clearCache()` releases the states this renderer
+    /// retains and a recompiled shader library is picked up.
+    var specializedMToonPipelinesGeneration: UInt64 = VRMPipelineCache.shared.generation
+
     /// Hips world position captured at `loadModel` (rest pose). Anchors the
     /// skinned-primitive cull volume — see `SkinnedCullBounds.cullModelMatrix`.
     private var restHipsWorldPosition: SIMD3<Float>?
