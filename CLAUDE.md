@@ -2,7 +2,7 @@
 
 ## Project Overview
 **VRMMetalKit** is a high-performance Swift Package for loading, rendering, and animating VRM 1.0 avatars using Apple's Metal framework.
-- **Target:** macOS 26+, iOS 26+
+- **Target:** macOS 26+, iOS 26+, visionOS 26+
 - **Language:** Swift 6.2
 - **Repo:** [https://github.com/arkavo-org/VRMMetalKit](https://github.com/arkavo-org/VRMMetalKit)
 

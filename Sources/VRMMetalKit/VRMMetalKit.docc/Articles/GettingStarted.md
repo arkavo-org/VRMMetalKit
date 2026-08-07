@@ -6,7 +6,13 @@ Set up a Metal-backed VRM renderer in under twenty lines of Swift.
 
 This article walks through the minimum integration: adding the package, loading a VRM 1.0 avatar from disk, and drawing it into an `MTKView`. It's aimed at developers who already have a Metal-based app and want to drop in a VRM runtime without reaching for a higher-level engine.
 
-VRMMetalKit targets **macOS 26+** and **iOS 26+** and is written in **Swift 6.2** with strict concurrency. The public surface is `Sendable`-aware, but the renderer itself is main-actor-bound — keep that in mind when wiring it into your view hierarchy. Once you have a basic frame on screen, see the sister articles linked at the bottom for animation, ARKit driving, physics, and validation.
+VRMMetalKit targets **macOS 26+**, **iOS 26+**, and **visionOS 26+**, and is written in **Swift 6.2** with strict concurrency. The public surface is `Sendable`-aware. The `MTKView` entry points — ``VRMRenderer/draw(in:commandBuffer:renderPassDescriptor:)`` and ``VRMRenderer/drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)`` — are main-actor-bound, so keep that in mind when wiring the renderer into your view hierarchy. Once you have a basic frame on screen, see the sister articles linked at the bottom for animation, ARKit driving, physics, and validation.
+
+### On visionOS
+
+There is no `MTKView` in an immersive scene, so drive the renderer with ``VRMRenderer/drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` instead. It is nonisolated and callable from a CompositorServices frame loop off the main actor — issue one call per eye against that frame's drawable, sharing a single simulation step. It is not reentrant: use a single render thread.
+
+visionOS support is currently **build-verified in CI**. The dedicated visionOS shader slice has not landed yet, so visionOS falls back to the macOS `.metallib` slice and rendering is not yet validated to the same bar as macOS and iOS — see [issue #87](https://github.com/arkavo-org/VRMMetalKit/issues/87).
 
 ## Add the package
 
