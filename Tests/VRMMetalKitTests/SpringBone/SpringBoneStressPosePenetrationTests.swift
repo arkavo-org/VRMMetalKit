@@ -363,21 +363,42 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
     /// re-penetrates the LIMB oracle by shedding the re-entry momentum against
     /// the authored torso/body colliders it does touch.
     ///
-    /// Pre-fix this metric was 18/180 penetrating frames; the velocity
-    /// correction drops it to a deterministic floor of 13/180.
+    /// BASELINE RE-DERIVED FOR #396/#397. Before per-substep buffer segmentation
+    /// the floor here was 13/180 (against 18/180 with the correction disabled).
+    /// It is now 19/180, and the bound moved 16 → 19 to match. That is a real
+    /// shift in this configuration, not a slipped guard, and the measurements
+    /// behind it are on #397:
     ///
-    /// CONTENTION ROBUSTNESS: the measurement is GPU-nondeterministic — Metal
-    /// compute reductions / fast-math produce slightly different floats per run,
-    /// and under the `--num-workers 14` parallel harness other GPU-heavy test
-    /// classes contend for the device, widening the jitter (the single-run frame
-    /// count flickers 13↔18 and can cross a fixed bound). XCTest under SPM has no
-    /// serial-test-plan mechanism to isolate this test from that contention, so
-    /// we strip the jitter statistically instead: take the MINIMUM re-entry count
-    /// over a few runs. The minimum is the contention-free floor a serial run
-    /// would yield, and it preserves the signal — a genuine regression raises the
-    /// deterministic floor (the pre-fix value was 24+ when swept CCD wrongly
-    /// engaged on authored colliders), so the min still trips the bound. Bound
-    /// stays at 16: if the floor regresses to ≥17 the inward-velocity bleed has
+    /// - The correction still engages. On post-#396 code, stubbing
+    ///   `applyVelocityCorrection` to an early return gives 23/180 against
+    ///   19/180 with it intact — a 4-frame benefit, versus 5 frames before.
+    /// - This test runs `augment: false`, so no synthetic colliders and no swept
+    ///   CCD (CLAUDE.md §4). It is the coarse-collider repro configuration, not
+    ///   the one #309/#313 shipped. On the augmented path
+    ///   (`testU_armSwing_armColliders_catapultStaysBounded`) the same change
+    ///   took re-entry from 24–27 frames to a flat 9, peak unchanged.
+    /// - Why coarse got worse: the pre-#396 collapse had every substep read the
+    ///   collider at its END-of-frame position, which during a fast swing put it
+    ///   ahead of its true mid-frame location and caught cloth early — an
+    ///   accidental, crude CCD. Correct per-substep interpolation removes that,
+    ///   exposing the ordinary discrete tunneling the synthetic colliders exist
+    ///   to fix.
+    ///
+    /// So a floor of 19 here reflects this configuration losing an accidental
+    /// mitigation it was never supposed to depend on, while the configuration
+    /// that replaced it improved ~3x.
+    ///
+    /// CONTENTION ROBUSTNESS: the min-over-3 below predates #396, when this
+    /// measurement was GPU-nondeterministic and the single-run count flickered
+    /// 13↔18. Segmenting removed the substep race (#394) and the metric is now
+    /// bit-identical run to run — 19/180 with the same peak on every serial run
+    /// measured. The min is kept because it costs little and has not been
+    /// re-validated under `--num-workers 14` contention; if it proves redundant
+    /// there, collapsing this to a single run is a safe simplification.
+    ///
+    /// A genuine regression still raises the floor (the value was 24+ when swept
+    /// CCD wrongly engaged on authored colliders), so the min still trips the
+    /// bound: if the floor regresses to ≥20 the inward-velocity bleed has
     /// stopped engaging.
     @MainActor
     func testU_armSwing_velocityCorrection_reducesReentryFrames() async throws {
@@ -392,8 +413,8 @@ final class SpringBoneStressPosePenetrationTests: XCTestCase {
             if frames < minFrames { minFrames = frames; peakAtMin = peak }
         }
         print("[#313 guard] U armSwing velocity-correction LIMB min frames=\(minFrames)/\(total) peak@min=\(peakAtMin)m")
-        XCTAssertLessThanOrEqual(minFrames, 16,
-            "Post-collision velocity correction (#313) must keep the contention-free floor of sleeve/hair arm re-entry frames below the 18/180 pre-fix baseline (min over 3 runs was \(minFrames)/\(total)). A regression here means the inward-velocity bleed stopped engaging.")
+        XCTAssertLessThanOrEqual(minFrames, 19,
+            "Post-collision velocity correction (#313) must keep the contention-free floor of sleeve/hair arm re-entry frames at or below the 19/180 post-#396 baseline (min over 3 runs was \(minFrames)/\(total)). A regression here means the inward-velocity bleed stopped engaging — check it against the 23/180 correction-disabled figure on #397 before re-baselining again.")
     }
 
     /// AvatarSample_U skirt vs LEG oracle under a fast oscillating knee-raise
