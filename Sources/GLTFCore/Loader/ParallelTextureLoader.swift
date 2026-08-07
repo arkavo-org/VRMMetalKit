@@ -268,26 +268,13 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         let width = cgImage.width
         let height = cgImage.height
         let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
-        
-        let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: pixelFormat,
-            width: width,
-            height: height,
-            mipmapped: false
-        )
-        textureDescriptor.usage = [.shaderRead]
-        textureDescriptor.storageMode = .shared
-        
-        guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
-            return nil
-        }
-        
+
         let bytesPerRow = width * 4
         guard let bitmapData = malloc(height * bytesPerRow) else {
             return nil
         }
         defer { free(bitmapData) }
-        
+
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         guard let context = CGContext(
             data: bitmapData,
@@ -300,18 +287,18 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         ) else {
             return nil
         }
-        
+
         context.setBlendMode(.copy)
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        
-        texture.replace(
-            region: MTLRegionMake2D(0, 0, width, height),
-            mipmapLevel: 0,
-            withBytes: bitmapData,
-            bytesPerRow: bytesPerRow
+
+        // Unpremultiplies before upload (the pipelines blend with
+        // straight-alpha factors). See TextureUploader.
+        return TextureUploader.makeTexture(
+            premultipliedData: bitmapData,
+            width: width, height: height,
+            pixelFormat: pixelFormat,
+            device: device
         )
-        
-        return texture
     }
 }
 
