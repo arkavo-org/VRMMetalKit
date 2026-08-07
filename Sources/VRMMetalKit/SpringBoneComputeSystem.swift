@@ -126,13 +126,23 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // Interpolation state for smooth substep updates (prevents temporal aliasing / "hair explosion")
     private var previousRootPositions: [SIMD3<Float>] = []
     private var targetRootPositions: [SIMD3<Float>] = []
-    private var frameSubstepCount: Int = 0
+    /// Internal (not private) so tests can see how many substeps the last frame ran.
+    var frameSubstepCount: Int = 0
     private var lastFrameSubstepCount: Int = 1
     private var currentSubstepIndex: Int = 0
 
     /// Minimum alignment required for buffer offsets in Metal (typically 256 bytes for macOS x86/general safety)
     private static let kMetalBufferOffsetAlignment = 256
     
+    /// Stride in bytes for each substep slot of `globalParamsBuffer`. The
+    /// kernels bind it as `constant SpringBoneParams&`, so each slot must start
+    /// on a 256-byte boundary (VMK#396).
+    /// Internal (not private) so tests can locate a substep's slot.
+    var globalParamsStride: Int {
+        let raw = MemoryLayout<SpringBoneGlobalParams>.stride
+        return (raw + Self.kMetalBufferOffsetAlignment - 1) & ~(Self.kMetalBufferOffsetAlignment - 1)
+    }
+
     /// Stride in bytes for each substep of animated root positions, aligned to 256 bytes.
     private var alignedStepLength: Int {
         let raw = MemoryLayout<SIMD3<Float>>.stride * rootBoneIndices.count
@@ -140,8 +150,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
 
     // World bind direction interpolation (prevents rotational explosions during fast turns)
-    private var previousWorldBindDirections: [SIMD3<Float>] = []
-    private var targetWorldBindDirections: [SIMD3<Float>] = []
+    /// Internal (not private) so tests can recompute the expected per-substep
+    /// interpolation and check it against the slot the GPU actually read.
+    var previousWorldBindDirections: [SIMD3<Float>] = []
+    var targetWorldBindDirections: [SIMD3<Float>] = []
 
     // Collider transform interpolation (prevents collision snapping during fast rotations)
     private var previousSphereColliders: [SphereCollider] = []
@@ -354,7 +366,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         #endif
 
         // Create global params buffer
-        globalParamsBuffer = device.makeBuffer(length: MemoryLayout<SpringBoneGlobalParams>.stride, options: [.storageModeShared])
+        globalParamsBuffer = device.makeBuffer(length: globalParamsStride * VRMConstants.Physics.maxSubstepsPerFrame,
+                                               options: [.storageModeShared])
         globalParamsBuffer?.label = "SpringBone GlobalParams"
     }
 
@@ -411,22 +424,39 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var capsules = foreign.capsules
         capsules.append(contentsOf: external.capsules)
 
+        // The tail is written once per frame while `interpolateColliders`
+        // rewrites only the [0, active) prefix per substep, so the tail has to
+        // land in every substep slot this frame will dispatch (VMK#396).
+        //
+        // Bounded to `frameSubstepCount` rather than the full slot count: the
+        // substep loop dispatches exactly [0, frameSubstepCount) — the same
+        // invariant `t = (currentSubstepIndex + 1) / frameSubstepCount` already
+        // depends on — and this runs every frame, so slots above that are never
+        // read before being rewritten. Broadcasting all 10 multiplied the tail
+        // memcpy by up to 10x per frame in crowd/external-collider scenes.
+        let slotsThisFrame = max(1, frameSubstepCount)
         if let buf = buffers.sphereColliders, !spheres.isEmpty {
-            let ptr = buf.contents().bindMemory(to: SphereCollider.self, capacity: buffers.sphereCapacity)
-            for (i, s) in spheres.enumerated() {
-                // Re-tag the foreign group in place, preserving every other field
-                // (radius, inside, and the per-partner responseScale — subsystem 4).
-                var tagged = s
-                tagged.groupMask = 1 << foreignColliderGroupIndex
-                ptr[buffers.numSpheres + i] = tagged
+            for slot in 0..<slotsThisFrame {
+                let ptr = buf.contents().advanced(by: slot * buffers.sphereColliderStride)
+                    .bindMemory(to: SphereCollider.self, capacity: buffers.sphereCapacity)
+                for (i, s) in spheres.enumerated() {
+                    // Re-tag the foreign group in place, preserving every other field
+                    // (radius, inside, and the per-partner responseScale — subsystem 4).
+                    var tagged = s
+                    tagged.groupMask = 1 << foreignColliderGroupIndex
+                    ptr[buffers.numSpheres + i] = tagged
+                }
             }
         }
         if let buf = buffers.capsuleColliders, !capsules.isEmpty {
-            let ptr = buf.contents().bindMemory(to: CapsuleCollider.self, capacity: buffers.capsuleCapacity)
-            for (i, c) in capsules.enumerated() {
-                var tagged = c
-                tagged.groupMask = 1 << foreignColliderGroupIndex
-                ptr[buffers.numCapsules + i] = tagged
+            for slot in 0..<slotsThisFrame {
+                let ptr = buf.contents().advanced(by: slot * buffers.capsuleColliderStride)
+                    .bindMemory(to: CapsuleCollider.self, capacity: buffers.capsuleCapacity)
+                for (i, c) in capsules.enumerated() {
+                    var tagged = c
+                    tagged.groupMask = 1 << foreignColliderGroupIndex
+                    ptr[buffers.numCapsules + i] = tagged
+                }
             }
         }
         activeForeignSpheres = spheres.count
@@ -648,12 +678,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 model.springBoneGlobalParams?.settlingFrames = params.settlingFrames
             }
 
-            // Copy updated params to GPU
-            globalParamsBuffer?.contents().copyMemory(from: &params, byteCount: MemoryLayout<SpringBoneGlobalParams>.stride)
+            // Copy updated params into THIS substep's slot. Writing a single
+            // shared region would either race the in-flight previous substep
+            // (self-committed path) or be overwritten before any substep runs
+            // (shared-buffer path) — VMK#396.
+            let currentSubstepIdx = stepsThisFrame - 1
+            globalParamsBuffer?.contents()
+                .advanced(by: currentSubstepIdx * globalParamsStride)
+                .copyMemory(from: &params, byteCount: MemoryLayout<SpringBoneGlobalParams>.stride)
 
             // Interpolate ALL transforms for this substep (smooth motion instead of teleportation)
             // Includes: root positions, world bind directions, collider transforms
-            let currentSubstepIdx = stepsThisFrame - 1
             if VRMConstants.Physics.enableRootInterpolation && frameSubstepCount > 0 {
                 // t goes from 1/N to N/N across substeps (reaches 1.0 on last substep)
                 let t = Float(currentSubstepIndex + 1) / Float(frameSubstepCount)
@@ -794,15 +829,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         computeEncoder.setBuffer(buffers.bonePosPrev, offset: 0, index: 0)
         computeEncoder.setBuffer(buffers.bonePosCurr, offset: 0, index: 1)
         computeEncoder.setBuffer(buffers.boneParams, offset: 0, index: 2)
-        computeEncoder.setBuffer(globalParamsBuffer, offset: 0, index: 3)
+        computeEncoder.setBuffer(globalParamsBuffer, offset: substepIndex * globalParamsStride, index: 3)
         computeEncoder.setBuffer(buffers.restLengths, offset: 0, index: 4)
 
+        // Colliders and bindDirections are rewritten per substep, so each
+        // dispatch must read its own slot (VMK#396).
         if let sphereColliders = buffers.sphereColliders, globalParams.numSpheres > 0 {
-            computeEncoder.setBuffer(sphereColliders, offset: 0, index: 5)
+            computeEncoder.setBuffer(sphereColliders,
+                                     offset: substepIndex * buffers.sphereColliderStride, index: 5)
         }
 
         if let capsuleColliders = buffers.capsuleColliders, globalParams.numCapsules > 0 {
-            computeEncoder.setBuffer(capsuleColliders, offset: 0, index: 6)
+            computeEncoder.setBuffer(capsuleColliders,
+                                     offset: substepIndex * buffers.capsuleColliderStride, index: 6)
         }
 
         if let planeColliders = buffers.planeColliders, globalParams.numPlanes > 0 {
@@ -814,7 +853,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // with world-space bind directions interpolated from parent bone rotations.
         // This prevents rotational snapping during fast character turns.
         if let bindDirections = buffers.bindDirections {
-            computeEncoder.setBuffer(bindDirections, offset: 0, index: 11)
+            computeEncoder.setBuffer(bindDirections,
+                                     offset: substepIndex * buffers.bindDirectionsStride, index: 11)
         }
 
         // First update kinematic root bones with animated positions.
@@ -2533,10 +2573,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     ///   - t: Interpolation factor [0, 1] where 0 = previous frame, 1 = current frame target
     ///   - buffers: The spring bone buffers holding the GPU structures
     ///   - substepIndex: Current substep index of the frame
-    private func interpolateAllTransforms(t: Float, buffers: SpringBoneBuffers, substepIndex: Int) {
+    /// Internal (not private) so tests can drive one substep's interpolation
+    /// directly and inspect the slot it wrote.
+    func interpolateAllTransforms(t: Float, buffers: SpringBoneBuffers, substepIndex: Int) {
         interpolateRootPositions(t: t, substepIndex: substepIndex)
-        interpolateWorldBindDirections(t: t, buffers: buffers)
-        interpolateColliders(t: t, buffers: buffers)
+        interpolateWorldBindDirections(t: t, buffers: buffers, substepIndex: substepIndex)
+        interpolateColliders(t: t, buffers: buffers, substepIndex: substepIndex)
     }
 
     /// Interpolates root positions for the current substep
@@ -2558,12 +2600,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     /// Interpolates world bind directions using normalized linear interpolation (nlerp)
     /// This prevents rotational snapping during fast character turns
-    private func interpolateWorldBindDirections(t: Float, buffers: SpringBoneBuffers) {
+    private func interpolateWorldBindDirections(t: Float, buffers: SpringBoneBuffers, substepIndex: Int) {
         guard previousWorldBindDirections.count == targetWorldBindDirections.count,
               let bindDirectionsBuffer = buffers.bindDirections,
               !previousWorldBindDirections.isEmpty else { return }
 
-        let ptr = bindDirectionsBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: previousWorldBindDirections.count)
+        let ptr = bindDirectionsBuffer.contents()
+            .advanced(by: substepIndex * buffers.bindDirectionsStride)
+            .bindMemory(to: SIMD3<Float>.self, capacity: previousWorldBindDirections.count)
         for i in 0..<previousWorldBindDirections.count {
             // Normalized linear interpolation (nlerp) for direction vectors
             let interpolated = simd_mix(previousWorldBindDirections[i], targetWorldBindDirections[i], SIMD3<Float>(repeating: t))
@@ -2574,12 +2618,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     /// Interpolates collider transforms for the current substep
     /// Prevents collision geometry from snapping during fast rotations
-    private func interpolateColliders(t: Float, buffers: SpringBoneBuffers) {
+    private func interpolateColliders(t: Float, buffers: SpringBoneBuffers, substepIndex: Int) {
         // Interpolate sphere colliders
         if previousSphereColliders.count == targetSphereColliders.count,
            let sphereBuffer = buffers.sphereColliders,
            !previousSphereColliders.isEmpty {
-            let ptr = sphereBuffer.contents().bindMemory(to: SphereCollider.self, capacity: previousSphereColliders.count)
+            let ptr = sphereBuffer.contents()
+                .advanced(by: substepIndex * buffers.sphereColliderStride)
+                .bindMemory(to: SphereCollider.self, capacity: previousSphereColliders.count)
             for i in 0..<previousSphereColliders.count {
                 let prev = previousSphereColliders[i]
                 let target = targetSphereColliders[i]
@@ -2596,7 +2642,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if previousCapsuleColliders.count == targetCapsuleColliders.count,
            let capsuleBuffer = buffers.capsuleColliders,
            !previousCapsuleColliders.isEmpty {
-            let ptr = capsuleBuffer.contents().bindMemory(to: CapsuleCollider.self, capacity: previousCapsuleColliders.count)
+            let ptr = capsuleBuffer.contents()
+                .advanced(by: substepIndex * buffers.capsuleColliderStride)
+                .bindMemory(to: CapsuleCollider.self, capacity: previousCapsuleColliders.count)
             for i in 0..<previousCapsuleColliders.count {
                 let prev = previousCapsuleColliders[i]
                 let target = targetCapsuleColliders[i]
@@ -2958,7 +3006,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 globalParams.settlingFrames = params.settlingFrames
             }
 
-            // Copy params to GPU
+            // Copy params to GPU. Warmup dispatches with substepIndex 0, so
+            // slot 0 is the one the kernels read.
             globalParamsBuffer?.contents().copyMemory(from: &params, byteCount: MemoryLayout<SpringBoneGlobalParams>.stride)
 
             // Execute XPBD pipeline

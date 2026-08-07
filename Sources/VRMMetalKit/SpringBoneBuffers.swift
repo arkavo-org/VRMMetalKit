@@ -54,6 +54,32 @@ public final class SpringBoneBuffers: @unchecked Sendable {
     var capsuleColliders: MTLBuffer?
     var planeColliders: MTLBuffer?
 
+    /// Number of per-substep slots allocated in `bindDirections`,
+    /// `sphereColliders` and `capsuleColliders`.
+    ///
+    /// These three are rewritten from the host inside the substep loop, and the
+    /// kernels bind them in the `constant` address space. A single region is
+    /// therefore unsafe: on the self-committed path substep i+1's host write
+    /// lands while substep i is still reading (VMK#394), and on the
+    /// shared-buffer path every substep reads the last write because nothing
+    /// has executed yet. One slot per substep, bound at `slotIndex * stride`,
+    /// removes both (VMK#396) — the same treatment `animatedRootPositions`
+    /// already had from #278.
+    static let substepSlots = VRMConstants.Physics.maxSubstepsPerFrame
+
+    /// `constant`-address-space bindings require 256-byte aligned offsets.
+    private static let bufferOffsetAlignment = 256
+
+    private static func alignedStride(_ raw: Int) -> Int {
+        (raw + bufferOffsetAlignment - 1) & ~(bufferOffsetAlignment - 1)
+    }
+
+    /// Byte distance between consecutive substep slots. Zero-length regions
+    /// keep a zero stride so an unallocated buffer never produces an offset.
+    private(set) var bindDirectionsStride: Int = 0
+    private(set) var sphereColliderStride: Int = 0
+    private(set) var capsuleColliderStride: Int = 0
+
     var numBones: Int = 0
     var numSpheres: Int = 0
     var numCapsules: Int = 0
@@ -93,16 +119,24 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         boneParams?.label = "SpringBone BoneParams"
         restLengths = device.makeBuffer(length: restLengthSize, options: [.storageModeShared])
         restLengths?.label = "SpringBone RestLengths"
-        bindDirections = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])  // SIMD3<Float> per bone
+        // One slot per substep for the three host-rewritten regions (VMK#396).
+        bindDirectionsStride = bonePosSize > 0 ? Self.alignedStride(bonePosSize) : 0
+        sphereColliderStride = sphereColliderSize > 0 ? Self.alignedStride(sphereColliderSize) : 0
+        capsuleColliderStride = capsuleColliderSize > 0 ? Self.alignedStride(capsuleColliderSize) : 0
+
+        bindDirections = device.makeBuffer(length: max(bindDirectionsStride * Self.substepSlots, 1),
+                                           options: [.storageModeShared])  // SIMD3<Float> per bone, per substep
         bindDirections?.label = "SpringBone BindDirections"
 
         if sphereCapacity > 0 {
-            sphereColliders = device.makeBuffer(length: sphereColliderSize, options: [.storageModeShared])
+            sphereColliders = device.makeBuffer(length: sphereColliderStride * Self.substepSlots,
+                                                options: [.storageModeShared])
             sphereColliders?.label = "SpringBone SphereColliders"
         }
 
         if capsuleCapacity > 0 {
-            capsuleColliders = device.makeBuffer(length: capsuleColliderSize, options: [.storageModeShared])
+            capsuleColliders = device.makeBuffer(length: capsuleColliderStride * Self.substepSlots,
+                                                 options: [.storageModeShared])
             capsuleColliders?.label = "SpringBone CapsuleColliders"
         }
 
@@ -142,7 +176,8 @@ public final class SpringBoneBuffers: @unchecked Sendable {
             return
         }
 
-        let ptr = bindDirections?.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+        guard let base = bindDirections?.contents() else { return }
+        var validated = directions
         for i in 0..<numBones {
             var dir = directions[i]
             // Validate: ensure no NaN and normalize if needed
@@ -155,7 +190,15 @@ public final class SpringBoneBuffers: @unchecked Sendable {
             } else if abs(len - 1.0) > 0.01 {
                 dir = dir / len // Normalize
             }
-            ptr?[i] = dir
+            validated[i] = dir
+        }
+        // Not a per-substep write, so it must land in every substep slot —
+        // otherwise substeps past the first read whatever the previous frame
+        // left there (VMK#396).
+        for slot in 0..<Self.substepSlots {
+            let ptr = base.advanced(by: slot * bindDirectionsStride)
+                .bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+            for i in 0..<numBones { ptr[i] = validated[i] }
         }
     }
 
@@ -166,7 +209,11 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         }
 
         if let buffer = sphereColliders, numSpheres > 0 {
-            buffer.contents().copyMemory(from: colliders, byteCount: MemoryLayout<SphereCollider>.stride * numSpheres)
+            let bytes = MemoryLayout<SphereCollider>.stride * numSpheres
+            for slot in 0..<Self.substepSlots {
+                buffer.contents().advanced(by: slot * sphereColliderStride)
+                    .copyMemory(from: colliders, byteCount: bytes)
+            }
         }
     }
 
@@ -177,7 +224,11 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         }
 
         if let buffer = capsuleColliders, numCapsules > 0 {
-            buffer.contents().copyMemory(from: colliders, byteCount: MemoryLayout<CapsuleCollider>.stride * numCapsules)
+            let bytes = MemoryLayout<CapsuleCollider>.stride * numCapsules
+            for slot in 0..<Self.substepSlots {
+                buffer.contents().advanced(by: slot * capsuleColliderStride)
+                    .copyMemory(from: colliders, byteCount: bytes)
+            }
         }
     }
 
