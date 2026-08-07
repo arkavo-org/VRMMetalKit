@@ -71,6 +71,11 @@ let package = Package(
                 .copy("Resources/VRMMetalKitShaders.metallib"),
                 .copy("Resources/VRMMetalKitShaders_iOS.metallib"),
                 .copy("Resources/VRMMetalKitShaders_iOSSimulator.metallib")
+            ],
+            swiftSettings: [
+                .enableUpcomingFeature("InferIsolatedConformances"),
+                .enableUpcomingFeature("ImmutableWeakCaptures"),
+                .enableUpcomingFeature("MemberImportVisibility")
             ]
         ),
         .executableTarget(

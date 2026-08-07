@@ -14,6 +14,7 @@
 // limitations under the License.
 
 import Foundation
+import Metal
 
 /// Diagnostic snapshot of a model's materials: per-material details plus a coarse summary.
 ///
