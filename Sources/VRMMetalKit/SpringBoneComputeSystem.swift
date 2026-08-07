@@ -59,6 +59,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var collideSpheresPipeline: MTLComputePipelineState?
     private var collideCapsulesPipeline: MTLComputePipelineState?
     private var collidePlanesPipeline: MTLComputePipelineState?
+    /// Snapshot + three segment-collision kernels (cloth-collision-fidelity).
+    /// Created lazily on first flag-on dispatch (`ensureSegmentCollisionPipelines`),
+    /// not at `init`, so the default flag-off path pays zero pipeline-compile
+    /// cold-start cost. `nil` until then.
+    private var snapshotPositionsPipeline: MTLComputePipelineState?
+    private var collideSegmentSpheresPipeline: MTLComputePipelineState?
+    private var collideSegmentCapsulesPipeline: MTLComputePipelineState?
+    private var collideSegmentPlanesPipeline: MTLComputePipelineState?
+    /// Retained so `ensureSegmentCollisionPipelines` can resolve the segment
+    /// kernel functions and build their pipelines lazily, after `init` has
+    /// already returned. Always set once `init` succeeds.
+    private var metalLibrary: MTLLibrary?
+
+    /// Test-only override for segment (parent-child span) collision (issue
+    /// cloth-collision-fidelity, Task 4). `nil` (default) follows
+    /// `model.fitClothCollisionToMesh`; a non-nil value wins regardless of the
+    /// model's flag, letting tests exercise the segment kernels without
+    /// routing a synthetic model through `VRMModel.load`'s loader-only
+    /// `fitClothCollisionToMesh` plumbing.
+    var segmentCollisionEnabledForTesting: Bool?
 
     /// Per-frame global params uploaded to the GPU each substep. `internal` (not
     /// `private`) so tests can inspect the actually-uploaded values (e.g. the
@@ -329,6 +349,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             throw SpringBoneError.failedToLoadShaders
         }
 
+        // The four segment-collision pipelines (snapshot + 3 segment kernels)
+        // are built lazily by `ensureSegmentCollisionPipelines` on first
+        // flag-on dispatch, not here — see that method's doc comment.
+        self.metalLibrary = library
+
         #if DEBUG
         let makePipeline: (any MTLFunction) throws -> any MTLComputePipelineState = { fn in
             let desc = MTLComputePipelineDescriptor()
@@ -356,6 +381,56 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Create global params buffer
         globalParamsBuffer = device.makeBuffer(length: MemoryLayout<SpringBoneGlobalParams>.stride, options: [.storageModeShared])
         globalParamsBuffer?.label = "SpringBone GlobalParams"
+    }
+
+    /// Builds the snapshot + three segment-collision pipelines on first
+    /// flag-on dispatch. `init` intentionally skips these four (cf. the
+    /// repo's pipeline-binary-archive history on cold-compile cost): the
+    /// default (flag-off) avatar load and simulate path never touches
+    /// `fitClothCollisionToMesh`, so it should not pay to compile kernels it
+    /// will never dispatch. Idempotent — a no-op once the pipelines exist.
+    ///
+    /// Failure here stays loud, matching `init`'s behaviour: by the time this
+    /// is called, `globalParams.segmentCollision != 0`, i.e. the caller
+    /// explicitly opted into segment collision. Silently skipping creation
+    /// and returning would let the physics step continue with the flag
+    /// nominally on but segment collision quietly absent — the fidelity
+    /// improvement the caller asked for would vanish without any signal.
+    private func ensureSegmentCollisionPipelines() {
+        guard snapshotPositionsPipeline == nil else { return }
+        guard let library = metalLibrary else {
+            preconditionFailure("SpringBoneComputeSystem: metal library unavailable for lazy " +
+                "segment-collision pipeline creation")
+        }
+        guard let snapshotPositionsFunction = library.makeFunction(name: "springBoneSnapshotPositions"),
+              let collideSegmentSpheresFunction = library.makeFunction(name: "springBoneCollideSegmentSpheres"),
+              let collideSegmentCapsulesFunction = library.makeFunction(name: "springBoneCollideSegmentCapsules"),
+              let collideSegmentPlanesFunction = library.makeFunction(name: "springBoneCollideSegmentPlanes") else {
+            preconditionFailure("SpringBoneComputeSystem: segment-collision shader functions missing " +
+                "from library")
+        }
+        do {
+            #if DEBUG
+            let makePipeline: (any MTLFunction) throws -> any MTLComputePipelineState = { [device] fn in
+                let desc = MTLComputePipelineDescriptor()
+                desc.computeFunction = fn
+                desc.shaderValidation = .enabled
+                return try device.makeComputePipelineState(descriptor: desc, options: [], reflection: nil)
+            }
+            snapshotPositionsPipeline = try makePipeline(snapshotPositionsFunction)
+            collideSegmentSpheresPipeline = try makePipeline(collideSegmentSpheresFunction)
+            collideSegmentCapsulesPipeline = try makePipeline(collideSegmentCapsulesFunction)
+            collideSegmentPlanesPipeline = try makePipeline(collideSegmentPlanesFunction)
+            #else
+            snapshotPositionsPipeline = try device.makeComputePipelineState(function: snapshotPositionsFunction)
+            collideSegmentSpheresPipeline = try device.makeComputePipelineState(function: collideSegmentSpheresFunction)
+            collideSegmentCapsulesPipeline = try device.makeComputePipelineState(function: collideSegmentCapsulesFunction)
+            collideSegmentPlanesPipeline = try device.makeComputePipelineState(function: collideSegmentPlanesFunction)
+            #endif
+        } catch {
+            preconditionFailure("SpringBoneComputeSystem: failed to create segment-collision pipeline " +
+                "state: \(error)")
+        }
     }
 
     private var updateCounter = 0
@@ -641,6 +716,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             params.numSpheres = UInt32(buffers.numSpheres + activeForeignSpheres)
             params.numCapsules = UInt32(buffers.numCapsules + activeForeignCapsules)
 
+            // Segment (parent-child span) collision opt-in (cloth-collision-
+            // fidelity Task 4): the test hook wins over the model's flag when
+            // set, so synthetic test models (which never route through
+            // `VRMModel.load`'s loader-only `fitClothCollisionToMesh`
+            // plumbing) can still exercise the segment kernels.
+            params.segmentCollision = (segmentCollisionEnabledForTesting ?? model.fitClothCollisionToMesh) ? 1 : 0
+
             // Decrement settling frames counter (allows bones to settle with gravity before inertia compensation)
             if params.settlingFrames > 0 {
                 params.settlingFrames -= 1
@@ -762,6 +844,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               let collidePlanesPipeline = collidePlanesPipeline else {
             return
         }
+        // Lazily materialize the segment-collision pipelines only when this
+        // substep actually needs them — see `ensureSegmentCollisionPipelines`.
+        if globalParams.segmentCollision != 0 {
+            ensureSegmentCollisionPipelines()
+        }
         // If a host-owned buffer was passed in, encode into it (no commit).
         // Otherwise fall back to legacy per-substep buffer with own commit.
         let usingSharedBuffer = sharedCommandBuffer != nil
@@ -796,6 +883,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         computeEncoder.setBuffer(buffers.boneParams, offset: 0, index: 2)
         computeEncoder.setBuffer(globalParamsBuffer, offset: 0, index: 3)
         computeEncoder.setBuffer(buffers.restLengths, offset: 0, index: 4)
+        computeEncoder.setBuffer(buffers.bonePosSnapshot, offset: 0, index: 16)
 
         if let sphereColliders = buffers.sphereColliders, globalParams.numSpheres > 0 {
             computeEncoder.setBuffer(sphereColliders, offset: 0, index: 5)
@@ -877,6 +965,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.memoryBarrier(scope: .buffers)
         }
 
+        // Segment-collision snapshot (cloth-collision-fidelity Task 4): copy
+        // bonePosCurr into the immutable per-substep snapshot the segment
+        // kernels read for the PARENT endpoint. Gated on the same flag as the
+        // segment dispatches below so flag-off does zero extra GPU work; it
+        // must still precede EVERY collide dispatch (existing + segment), so
+        // it stays here, before the three untouched endpoint kernels.
+        if globalParams.segmentCollision != 0, let snapshotPositionsPipeline = snapshotPositionsPipeline {
+            computeEncoder.setComputePipelineState(snapshotPositionsPipeline)
+            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            computeEncoder.memoryBarrier(scope: .buffers)
+        }
+
         // Collision resolution (step 3: push tips out of colliders)
         // VRM spec: collision runs AFTER distance constraint and is the FINAL step
         // This prevents distance constraint from pulling hair back into colliders
@@ -902,6 +1002,31 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.setComputePipelineState(collidePlanesPipeline)
             computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
+        }
+
+        // Segment (parent-child span) collision (cloth-collision-fidelity
+        // Task 4): additive pass after the three endpoint kernels above,
+        // opt-in via `globalParams.segmentCollision`. Skipped entirely when
+        // the flag resolves off — the kernels also self-guard on the same
+        // field, belt and braces.
+        if globalParams.segmentCollision != 0 {
+            if globalParams.numSpheres > 0, let collideSegmentSpheresPipeline = collideSegmentSpheresPipeline {
+                computeEncoder.setComputePipelineState(collideSegmentSpheresPipeline)
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+                computeEncoder.memoryBarrier(scope: .buffers)
+            }
+
+            if globalParams.numCapsules > 0, let collideSegmentCapsulesPipeline = collideSegmentCapsulesPipeline {
+                computeEncoder.setComputePipelineState(collideSegmentCapsulesPipeline)
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+                computeEncoder.memoryBarrier(scope: .buffers)
+            }
+
+            if globalParams.numPlanes > 0, let collideSegmentPlanesPipeline = collideSegmentPlanesPipeline {
+                computeEncoder.setComputePipelineState(collideSegmentPlanesPipeline)
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+                computeEncoder.memoryBarrier(scope: .buffers)
+            }
         }
 
         computeEncoder.endEncoding()
@@ -1484,7 +1609,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let params = BoneParams(
                     stiffness: clamped.stiffness,
                     drag: clamped.dragForce,
-                    radius: joint.hitRadius,
+                    radius: joint.effectiveHitRadius ?? joint.hitRadius,
                     // Only set parent for non-root bones within the same chain
                     parentIndex: parentIdx < 0 ? 0xFFFFFFFF : UInt32(parentIdx),
                     gravityPower: clamped.gravityPower,
@@ -2895,6 +3020,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // never diverge if warmup is ever invoked after a foreign injection.
         globalParams.numSpheres = UInt32(buffers.numSpheres + activeForeignSpheres)
         globalParams.numCapsules = UInt32(buffers.numCapsules + activeForeignCapsules)
+        // Keep warmup's segment-collision gate consistent with update()'s
+        // expression (same test-hook-wins-over-model-flag precedence).
+        globalParams.segmentCollision = (segmentCollisionEnabledForTesting ?? model.fitClothCollisionToMesh) ? 1 : 0
 
         // Step 1: Capture current animated positions for root bones
         guard let springBone = model.springBone else { return }

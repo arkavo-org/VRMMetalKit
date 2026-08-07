@@ -80,6 +80,16 @@ root. ``AnimationPlayer/isLooping`` defaults to `true` (the clip wraps at
 its duration), and ``AnimationPlayer/speed`` defaults to `1.0`. Scale tracks
 and non-`Hips` translation tracks are intentionally ignored.
 
+## Constraint solving and the stage pipeline
+
+`AnimationPlayer.update(deltaTime:model:)` solves VRM node constraints itself by
+default (`solvesConstraints == true`), which is what direct callers want: the
+returned pose is constraint-resolved without further work. Callers running the
+stage pipeline set `solvesConstraints = false`, because the pipeline runs the
+solve at S4 on the *final* pose — after limb IK — so twist bones follow the
+IK-modified wrist rather than the raw animation. Validators, benchmarks, and
+tests that exercise `AnimationPlayer` in isolation keep the default.
+
 ## Topics
 
 ### Loading

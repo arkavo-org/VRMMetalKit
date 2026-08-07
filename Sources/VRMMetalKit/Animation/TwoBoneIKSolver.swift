@@ -25,13 +25,32 @@ import simd
 /// - Target distance: from root (hip) to target foot position
 ///
 /// The pole vector constrains the knee bend direction (typically forward).
+///
+/// **Frame warning:** `solve()`'s returned rotations are WORLD-frame, not
+/// bone-local, and are built on the assumption that the bone's bind rest
+/// direction is world +Y and that the bone's parent chain carries no
+/// rotation. Assigning them directly as a node's local `.rotation` is only
+/// correct when both of those hold — which they do not for a typical
+/// humanoid rig (a resting thigh points roughly −Y, and hip/upper-leg bones
+/// commonly carry non-identity bind rotations), and the mismatch compounds
+/// with any parent-chain rotation (e.g. a yawed root). `IKLayer` does not
+/// call this function for that reason: it builds bone-local rotations
+/// directly from each bone's actual bind rest direction and parent world
+/// rotation (`IKLayer.solveIKForLeg`, mirroring
+/// `CaptureStepController.placeAnkle`). This type currently has no
+/// production callers; a future caller MUST perform the same rest-direction
+/// and parent-rotation conversion before assigning these rotations to a rig.
 public struct TwoBoneIKSolver {
 
-    /// Result of an IK solve containing rotations for root and mid joints
+    /// Result of an IK solve containing rotations for root and mid joints.
+    ///
+    /// Both rotations are WORLD-frame (see the frame warning on
+    /// `TwoBoneIKSolver`), not bone-local — despite the parameter names
+    /// `rootRotation`/`midRotation` naming the joints they correspond to.
     public struct SolveResult {
-        /// Local rotation for root joint (hip)
+        /// World-frame rotation corresponding to the root joint (hip).
         public let rootRotation: simd_quatf
-        /// Local rotation for mid joint (knee)
+        /// World-frame rotation corresponding to the mid joint (knee).
         public let midRotation: simd_quatf
 
         /// Creates a solve result with the given root and mid joint rotations.
@@ -51,7 +70,8 @@ public struct TwoBoneIKSolver {
     ///   - poleVector: Direction for mid joint bend (knee direction), normalized
     ///   - upperLength: Optional override for upper bone length (auto-calculated if nil)
     ///   - lowerLength: Optional override for lower bone length (auto-calculated if nil)
-    /// - Returns: SolveResult with rotations, or nil if solve fails
+    /// - Returns: SolveResult with WORLD-frame rotations (see the frame
+    ///   warning on `TwoBoneIKSolver`), or nil if solve fails
     public static func solve(
         rootPos: SIMD3<Float>,
         midPos: SIMD3<Float>,
@@ -113,6 +133,19 @@ public struct TwoBoneIKSolver {
     /// Calculate bone length between two joints
     public static func boneLength(from: SIMD3<Float>, to: SIMD3<Float>) -> Float {
         simd_length(to - from)
+    }
+
+    /// Orthonormalized rotation quaternion from a (possibly scaled) world
+    /// matrix, or identity when `m` is `nil` (a node with no parent). Shared
+    /// by every caller that needs to convert a world-frame direction into a
+    /// bone's parent-relative local frame (`IKLayer.solveIKForLeg`,
+    /// `CaptureStepController.placeAnkle`).
+    static func worldRotation(_ m: simd_float4x4?) -> simd_quatf {
+        guard let m = m else { return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) }
+        let c0 = simd_normalize(SIMD3<Float>(m[0][0], m[0][1], m[0][2]))
+        let c1 = simd_normalize(SIMD3<Float>(m[1][0], m[1][1], m[1][2]))
+        let c2 = simd_normalize(SIMD3<Float>(m[2][0], m[2][1], m[2][2]))
+        return simd_quatf(simd_float3x3(c0, c1, c2))
     }
 
     private static func rotationFromAxisAngle(axis: SIMD3<Float>, angle: Float) -> simd_quatf {

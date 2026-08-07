@@ -1,0 +1,248 @@
+//
+// Copyright 2025 Arkavo
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+import XCTest
+import Metal
+import simd
+@testable import VRMMetalKit
+
+/// C1's gate: the stage extraction is pure code motion, proven over N-frame
+/// sequences rather than single frames. Evolving state — counterbalance decay,
+/// the shove offset, the contact latch — diverges only over time, so a
+/// single-frame identity check can pass while the trajectory forks.
+///
+/// The gate compares against a fixture committed BEFORE the extraction
+/// (`Tests/VRMMetalKitTests/Fixtures/PipelineBaseline/`), not against a second
+/// same-process run of the current code: two runs of identical post-refactor
+/// code agreeing with each other proves determinism, not that the refactor
+/// preserved behaviour. Byte-identity against a pre-refactor baseline is the
+/// only thing that proves that.
+///
+/// Matrix: {stagger-off, stagger-on-pre-contact, stagger-on-post-contact}
+/// × {single-avatar, crowd}. Each cell records a 60-frame sequence and compares
+/// it against the committed baseline captured before extraction.
+final class StageExtractionGateTests: XCTestCase {
+
+    @MainActor private func avatar(_ device: MTLDevice, index: Int, count: Int) async throws
+        -> CrowdFrameStepper.Avatar {
+        let path = getTestVRM10ModelPath(); try requireFixture(path, hint: testVRM10Filename)
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: false))
+        var config = RendererConfig(); config.synchronousSpringBone = true
+        let r = VRMRenderer(device: device, config: config)
+        r.loadModel(model)
+        for root in model.nodes where root.parent == nil {
+            root.rotation = CrowdPlacement.facing(avatarIndex: index, avatarCount: count)
+        }
+        model.updateNodeTransforms()
+        return CrowdFrameStepper.Avatar(renderer: r, model: model, player: AnimationPlayer(), index: index)
+    }
+
+    /// Constant half-separation: zero scripted root motion, so contact state is
+    /// controlled purely by the separation value.
+    private func holdDriver(halfSep: Float) -> CrowdMotionDriver {
+        CrowdMotionDriver(startSep: halfSep, holdSep: halfSep,
+                          approachStart: 0.0, approachEnd: 0.01, holdEnd: 1.0, partEnd: 1.0)
+    }
+
+    /// One matrix cell: builds a stepper, runs 60 frames, returns each avatar's sequence.
+    @MainActor private func runCell(device: MTLDevice, avatarCount: Int,
+                                    stagger: StaggerShoveParams?, halfSep: Float)
+        async throws -> [[PoseSample]] {
+        var built: [CrowdFrameStepper.Avatar] = []
+        for i in 0..<avatarCount {
+            built.append(try await avatar(device, index: i, count: avatarCount))
+        }
+        let stepper = CrowdFrameStepper(avatars: built, driver: holdDriver(halfSep: halfSep),
+                                        group: nil, fps: 60,
+                                        postural: PosturalContactParams(),
+                                        stagger: stagger,
+                                        armCounterbalance: ArmCounterbalanceParams())
+        return try captureSequence(frames: 60,
+                                   step: { f in stepper.step(frameTime: Float(f) / 60.0) },
+                                   models: built.map { $0.model })
+    }
+
+    private static let cells: [(String, Int, StaggerShoveParams?, Float)] = [
+        ("stagger-off/single",           1, nil,                     1.0),
+        ("stagger-off/crowd",            2, nil,                     1.0),
+        ("stagger-on-pre-contact/single", 1, StaggerShoveParams(),   1.0),
+        ("stagger-on-pre-contact/crowd",  2, StaggerShoveParams(),   1.0),
+        ("stagger-on-post-contact/single", 1, StaggerShoveParams(),  0.12),
+        ("stagger-on-post-contact/crowd",  2, StaggerShoveParams(),  0.12),
+    ]
+
+    /// Resolves a committed baseline, preferring the test bundle over the source
+    /// tree.
+    ///
+    /// Xcode Cloud runs the bundle without the repository checked out at the
+    /// path `getProjectRoot()` derives, so a source-tree-only lookup fails there
+    /// with all six cells "missing" while passing locally. The bundle copy
+    /// (`Package.swift` → `.copy("Fixtures")`) is what makes the gate portable;
+    /// the source-tree fallback keeps `PIPELINE_BASELINE_GENERATE=1` writing
+    /// back to the checkout rather than into a build product.
+    private func fixturePath(for label: String) -> String {
+        let slug = label.replacingOccurrences(of: "/", with: "_")
+        if let root = Bundle.module.resourceURL {
+            let bundled = root
+                .appendingPathComponent("Fixtures/PipelineBaseline")
+                .appendingPathComponent("\(slug).txt")
+            if FileManager.default.fileExists(atPath: bundled.path) { return bundled.path }
+        }
+        return sourceTreeFixturePath(for: label)
+    }
+
+    /// The checkout location, used for regeneration and as the fallback when the
+    /// bundle has no copy.
+    private func sourceTreeFixturePath(for label: String) -> String {
+        let slug = label.replacingOccurrences(of: "/", with: "_")
+        return "\(getProjectRoot())/Tests/VRMMetalKitTests/Fixtures/PipelineBaseline/\(slug).txt"
+    }
+
+    /// Runs the full 3×2 matrix and asserts every cell is byte-identical to the
+    /// committed pre-extraction baseline. This is the real C1 gate: it catches
+    /// any drift the refactor introduced, because determinism against a fixed
+    /// prior baseline is exactly what code motion must preserve.
+    @MainActor func testMatrixMatchesCommittedBaseline() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+
+        for (label, count, stagger, halfSep) in Self.cells {
+            let path = fixturePath(for: label)
+            guard FileManager.default.fileExists(atPath: path) else {
+                XCTFail("missing committed baseline fixture for \(label) at \(path)")
+                continue
+            }
+            let baseline = try PipelineBaselineFixture.read(fromFile: path)
+            let current = try await runCell(device: device, avatarCount: count, stagger: stagger, halfSep: halfSep)
+            assertSequencesIdentical(baseline, current, label)
+        }
+    }
+
+    /// The post-contact cells must actually reach contact, else the matrix's
+    /// third regime is vacuous and the gate silently tests nothing.
+    @MainActor func testPostContactCellReachesContact() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0, count: 2)
+        let b = try await avatar(device, index: 1, count: 2)
+        let stepper = CrowdFrameStepper(avatars: [a, b], driver: holdDriver(halfSep: 0.12),
+                                        group: nil, fps: 60, stagger: StaggerShoveParams())
+        for f in 0..<60 { stepper.step(frameTime: Float(f) / 60.0) }
+        let solver = try XCTUnwrap(stepper.staggerSolver(forAvatar: 0))
+        XCTAssertNotEqual(solver.offset, .zero,
+                          "half-separation 0.12 must drive the shove off zero, else the post-contact regime is untested")
+    }
+
+    /// Regenerates the committed baseline fixtures from the currently checked
+    /// out sources. Opt-in and skipped by default: this must only ever be run
+    /// against unmodified, pre-extraction sources (Phase A of the C1 task).
+    /// Running it after the extraction would silently destroy the only
+    /// evidence the gate produces by baking the post-refactor output back in
+    /// as the "baseline" it is supposed to be checked against.
+    @MainActor func testGenerateBaselineFixtures() async throws {
+        guard ProcessInfo.processInfo.environment["PIPELINE_BASELINE_GENERATE"] == "1" else {
+            throw XCTSkip("baseline generation is opt-in; set PIPELINE_BASELINE_GENERATE=1 to run it")
+        }
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+
+        let dir = "\(getProjectRoot())/Tests/VRMMetalKitTests/Fixtures/PipelineBaseline"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        for (label, count, stagger, halfSep) in Self.cells {
+            let sequences = try await runCell(device: device, avatarCount: count, stagger: stagger, halfSep: halfSep)
+            try PipelineBaselineFixture.write(sequences, toFile: sourceTreeFixturePath(for: label))
+        }
+    }
+}
+
+extension StageExtractionGateTests {
+    /// C4's accounting check: this pins the ACTUAL measured propagation count in
+    /// the pipeline's most demanding regime (matching the fixture's
+    /// "stagger-on-post-contact" cells) — not the brief's five-call guess,
+    /// which predates the `place`/`displace` split and undercounts
+    /// `CaptureStepController`'s own two internal propagations.
+    ///
+    /// The floor here is 7, not 2: `place`(1) and `compose`(1) each gate a
+    /// world-space read in the very next stage (postural lean reads the
+    /// placement; `displace`'s penetration read reads the lean), `displace`(1)
+    /// is S2's mandated exit refresh, `CaptureStepController.update` internally
+    /// propagates twice or its own restore/apply steps (out of this file's
+    /// scope — see `PoseStage.limbSolve`'s doc comment), `armLayer`(1) is
+    /// required by S4's aim-constraint precondition, and the scheduler's
+    /// commit(1) is the mandated end-of-frame refresh. The one genuine
+    /// duplicate this task found — `limbSolve`'s own propagate immediately
+    /// after `stepper.update`, which repeated a walk `CaptureStepController`
+    /// had just done itself — is gone; it does not move this total because
+    /// this fixture has zero VRM node constraints, so `constrain`'s deleted
+    /// conditional propagate (which used to cost 0 here) and the new
+    /// unconditional commit (which always costs 1) net to +1, cancelling the
+    /// duplicate's -1. A constraint-bearing avatar nets an actual reduction.
+    @MainActor func testPropagationCountPerAvatarPerFrame() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0, count: 2)
+        let b = try await avatar(device, index: 1, count: 2)
+        let stepper = CrowdFrameStepper(avatars: [a, b], driver: holdDriver(halfSep: 0.12),
+                                        group: nil, fps: 60,
+                                        postural: PosturalContactParams(),
+                                        stagger: StaggerShoveParams(),
+                                        armCounterbalance: ArmCounterbalanceParams())
+        // Warm the stagger channel so `staggerActive` is true and `limbSolve`'s
+        // capture-step + arm-layer branches are actually exercised, matching the
+        // regime the fixture's "stagger-on-post-contact" cells run in
+        // (`testPostContactCellReachesContact` establishes 60 frames reaches it).
+        for f in 0..<60 { stepper.step(frameTime: Float(f) / 60.0) }
+        VRMModel.propagationCountForTesting = 0
+        stepper.step(frameTime: 60.0 / 60.0)
+        XCTAssertEqual(VRMModel.propagationCountForTesting % 2, 0,
+                       "both avatars are in the same symmetric contact state, so the total must split evenly")
+        XCTAssertEqual(VRMModel.propagationCountForTesting / 2, 7,
+                       "the active-regime floor: place + compose + displace + " +
+                       "CaptureStepController's own restore/apply + armLayer + the end-of-frame commit")
+    }
+
+    /// Isolates the one genuine duplicate C4 removed: before this task,
+    /// `limbSolve` called `updateNodeTransforms()` a third time immediately
+    /// after `stepper.update(...)`, repeating a walk `CaptureStepController`
+    /// had just finished doing itself (its `update` ends every return path
+    /// with its own propagate — see `CaptureStepController.swift:174,183`).
+    /// With no `armLayer` configured, this call is `limbSolve`'s only work,
+    /// so the count pins directly to `CaptureStepController`'s own two calls.
+    @MainActor func testLimbSolveDoesNotRepeatCaptureStepControllersOwnPropagation() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0, count: 1)
+        var avatarState = PipelineAvatar(index: 0, model: a.model, player: a.player, baseTranslations: [:],
+                                         captureStepper: CaptureStepController(), staggerActive: true)
+        let snapshot = FrozenSnapshot(torsos: [:], indices: [0])
+        VRMModel.propagationCountForTesting = 0
+        PoseStage.limbSolve(avatar: &avatarState, partners: snapshot, dt: 1.0 / 60.0)
+        XCTAssertEqual(VRMModel.propagationCountForTesting, 2,
+                       "CaptureStepController.update's own restore+apply propagations should be the only ones")
+    }
+}
+
+extension StageExtractionGateTests {
+    /// The write-guard must fire when a root moves after S2 and stay silent
+    /// otherwise. Tested on the detector itself rather than by tripping it in a
+    /// live pipeline, because tripping it in debug builds aborts the process.
+    @MainActor func testRootWriteGuardDetectsMovement() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let a = try await avatar(device, index: 0, count: 1)
+        let before = PoseStage.rootTranslations(of: a.model)
+        XCTAssertTrue(PoseStage.rootsUnchanged(a.model, since: before))
+        for root in a.model.nodes where root.parent == nil {
+            root.translation.x += 0.001
+        }
+        XCTAssertFalse(PoseStage.rootsUnchanged(a.model, since: before))
+    }
+}

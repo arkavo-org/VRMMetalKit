@@ -60,8 +60,10 @@ Both fixtures below are redistributed in this repository under permissive licens
 |---|---|---|---|
 | `AvatarSample_A_0.0.vrm.glb` | VRM 0.x | `licenseName: CC_BY`; `commercialUssageName: Allow` | Creative Commons Attribution — redistribution permitted with credit to the original author. |
 | `AvatarSample_A_1.0.vrm.glb` | VRM 1.0 | `licenseUrl: https://vrm.dev/licenses/1.0/`; `allowRedistribution: true`; `modification: allowModificationRedistribution`; commercial: `corporation` | VRM Platform License 1.0 with explicit redistribution permission. |
+| `AvatarSample_M_1.0.vrm` | VRM 1.0 | `licenseUrl: https://vrm.dev/licenses/1.0/`; `allowRedistribution: true`; `modification: allowModificationRedistribution`; commercial: `corporation` | VRM Platform License 1.0 with explicit redistribution permission. Cloth-collision fidelity coverage fixture (wide dress at hand height). |
+| `AvatarSample_U_1.0.vrm.glb` | VRM 1.0 | `licenseUrl: https://vrm.dev/licenses/1.0/`; `allowRedistribution: true`; `modification: allowModificationRedistribution`; commercial: `corporation` | VRM Platform License 1.0 with explicit redistribution permission. |
 
-**Attribution**: AvatarSample_A © pixiv VRoid Project. Used under CC BY (0.x) / VPL 1.0 (1.0) for testing and demonstration.
+**Attribution**: AvatarSample_A © pixiv VRoid Project; AvatarSample_M © pixiv VRoid Project; AvatarSample_U © pixiv VRoid Project. Used under CC BY (0.x) / VPL 1.0 (1.0) for testing and demonstration.
 
 ## More Information
 

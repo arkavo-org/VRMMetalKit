@@ -115,6 +115,16 @@ public final class AnimationPlayer: @unchecked Sendable {
     private var hasLoggedFirstFrame = false
     private let constraintSolver = ConstraintSolver()
 
+    /// Whether `update(deltaTime:model:)` solves VRM node constraints itself.
+    ///
+    /// Defaults to `true`, which is the correct contract for callers that drive
+    /// `AnimationPlayer` directly and expect a constraint-resolved pose —
+    /// validators, benchmarks, and the isolation test suites, none of which run
+    /// the stage pipeline. The pipeline sets this to `false` and runs the solve
+    /// at S4 instead, on the final pose, so twist bones track the posed skeleton
+    /// rather than the raw animation.
+    public var solvesConstraints: Bool = true
+
     /// Creates an idle player. No clip is loaded until ``load(_:)`` is called.
     public init() {}
 
@@ -267,8 +277,8 @@ public final class AnimationPlayer: @unchecked Sendable {
             //    frame's animated source-node poses, not last frame's stale world matrices.
             model.updateNodeTransforms()
 
-            // 5. Solve node constraints (twist bones, aim, rotation).
-            if !model.nodeConstraints.isEmpty {
+            // 6. Solve node constraints (twist bones, aim, rotation).
+            if solvesConstraints && !model.nodeConstraints.isEmpty {
                 constraintSolver.solve(constraints: model.nodeConstraints, nodes: model.nodes)
                 // Re-propagate so descendants of constrained nodes see the constraint output.
                 model.updateNodeTransforms()

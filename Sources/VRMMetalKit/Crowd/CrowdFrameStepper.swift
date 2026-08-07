@@ -42,59 +42,46 @@ public final class CrowdFrameStepper {
     private let driver: CrowdMotionDriver
     private let group: SpringBoneContactGroup?
     private let dt: Float
-    private let baseTranslations: [Int: [ObjectIdentifier: SIMD3<Float>]]
 
     /// Max torso-capsule overlap allowed by the contact-aware clamp (Component A,
     /// design §2). `nil` ⇒ clamp off (the driver's raw separation passes through).
     private let bodyContactMargin: Float?
-    /// Per-avatar postural yield layers (Component B), keyed by avatar index.
-    /// Empty ⇒ postural yield off. Fed each frame with the nearest partner torso.
-    private let posturalLayers: [Int: PosturalContactLayer]
     /// The half-separation actually applied last frame — the radius the clamp's
     /// one-frame-lagged torso snapshot was measured at (design §2/§4).
     public private(set) var lastAppliedHalfSeparation: Float?
-    /// Stagger shove tuning (design 2026-07-07 §3). `nil` ⇒ stagger off; the
-    /// solver/controller dictionaries below stay empty and Phase 0e is skipped.
+    /// Stagger shove tuning (design 2026-07-07 §3). `nil` ⇒ stagger off; S2's
+    /// second beat is skipped.
     private let staggerParams: StaggerShoveParams?
-    /// Per-avatar shove solvers / capture-step controllers, keyed by avatar index.
-    private var staggerSolvers: [Int: StaggerShoveSolver] = [:]
-    private var captureSteppers: [Int: CaptureStepController] = [:]
-    /// Per-avatar arm-counterbalance layers, keyed by avatar index. Empty ⇒ brace
-    /// off. Driven by the capture-step controller's own balance read (Phase 0f),
-    /// so the brace tracks the imbalance transient and releases as the step
-    /// restores the margin — never a latched pose.
-    private let armLayers: [Int: ArmCounterbalanceLayer]
-    /// Balance residual (metres of CoM outside the support base) that maps to a
-    /// full brace. Sized against the measured stagger peaks (≈0.05 m under-capacity,
-    /// ≈0.076 m over-capacity — StaggerShoveIntegrationTests) so a hard shove reads
-    /// as a near-full brace and the step's contraction releases it.
-    private static let fullBraceResidual: Float = 0.08
-    /// Avatars whose stagger channel has activated (first frame with depth > 0).
-    /// Dormant avatars are byte-identical to the stagger-off path, so Phase 0b's
-    /// scripted approach never reads as a CoM disturbance.
-    private var staggerActive: Set<Int> = []
+    /// Every avatar's mutable per-frame pipeline state (S0–S3), keyed by
+    /// position, in the same order as `avatars`.
+    /// Players whose `solvesConstraints` this stepper disabled, with the value it
+    /// found. Ownership of a caller-supplied `AnimationPlayer` is borrowed for the
+    /// stepper's lifetime, not taken permanently.
+    private var restoreSolvesConstraints: [(AnimationPlayer, Bool)] = []
+
+    private var pipelineAvatars: [PipelineAvatar]
 
     /// The avatars, exposed so a host can set a shared camera on each renderer.
     public var avatarsForCamera: [Avatar] { avatars }
 
     /// The postural yield layer for `avatarIndex`, if postural yield is enabled.
     public func posturalLayer(forAvatar avatarIndex: Int) -> PosturalContactLayer? {
-        posturalLayers[avatarIndex]
+        pipelineAvatars.first { $0.index == avatarIndex }?.posturalLayer
     }
 
     /// The stagger shove solver state for `avatarIndex` (a copy), if stagger is enabled.
     public func staggerSolver(forAvatar avatarIndex: Int) -> StaggerShoveSolver? {
-        staggerSolvers[avatarIndex]
+        pipelineAvatars.first { $0.index == avatarIndex }?.staggerSolver
     }
 
     /// The capture-step controller for `avatarIndex`, if stagger is enabled.
     public func captureStepController(forAvatar avatarIndex: Int) -> CaptureStepController? {
-        captureSteppers[avatarIndex]
+        pipelineAvatars.first { $0.index == avatarIndex }?.captureStepper
     }
 
     /// The arm-counterbalance layer for `avatarIndex`, if the brace is enabled.
     public func armCounterbalanceLayer(forAvatar avatarIndex: Int) -> ArmCounterbalanceLayer? {
-        armLayers[avatarIndex]
+        pipelineAvatars.first { $0.index == avatarIndex }?.armLayer
     }
 
     /// - Parameters:
@@ -112,6 +99,16 @@ public final class CrowdFrameStepper {
     ///     channel (its `CaptureStepController` provides the balance read); with
     ///     stagger off the layers exist but never see a non-zero intensity.
     ///     `nil` ⇒ off.
+    ///
+    /// Ownership note: every `avatars[i].player` has `solvesConstraints` forced to
+    /// `false` here as a side effect — S4 (`PoseStage.constrain`) owns node-constraint
+    /// solving for the lifetime of this stepper, so the player must not also solve
+    /// at S0 against a different, unpropagated pose. This is a *borrow*, not a
+    /// permanent taking: each player's prior value is recorded and restored in
+    /// `deinit` (`restoreSolvesConstraints`), so a caller that drives the same
+    /// `AnimationPlayer` directly (e.g. via `avatarsForCamera`) sees the flag
+    /// silently off only while this stepper is alive, not after it is released.
+    /// `PlayerOwnershipTests` covers both directions.
     public init(avatars: [Avatar], driver: CrowdMotionDriver, group: SpringBoneContactGroup?, fps: Float,
                 bodyContactMargin: Float? = nil, postural: PosturalContactParams? = nil,
                 stagger: StaggerShoveParams? = nil, armCounterbalance: ArmCounterbalanceParams? = nil) {
@@ -120,49 +117,67 @@ public final class CrowdFrameStepper {
         self.group = group
         self.dt = fps > 0 ? 1.0 / fps : 1.0 / 60.0
         self.bodyContactMargin = bodyContactMargin
-        if let postural = postural {
-            var layers: [Int: PosturalContactLayer] = [:]
-            for avatar in avatars {
+        self.staggerParams = stagger
+        // Borrowed, not taken: record each caller-supplied player's prior
+        // `solvesConstraints` so `deinit` restores it.
+        self.restoreSolvesConstraints = avatars.map { ($0.player, $0.player.solvesConstraints) }
+        self.pipelineAvatars = avatars.map { avatar in
+            // Snapshot each root's authored (bind) translation so scripted
+            // motion is applied additively and never loses the model's base pose.
+            var baseTranslations: [ObjectIdentifier: SIMD3<Float>] = [:]
+            for root in avatar.model.nodes where root.parent == nil {
+                baseTranslations[ObjectIdentifier(root)] = root.translation
+            }
+
+            let posturalLayer: PosturalContactLayer?
+            if let postural = postural {
                 let layer = PosturalContactLayer(params: postural)
                 layer.initialize(with: avatar.model)
-                layers[avatar.index] = layer
+                posturalLayer = layer
+            } else {
+                posturalLayer = nil
             }
-            self.posturalLayers = layers
-        } else {
-            self.posturalLayers = [:]
-        }
-        self.staggerParams = stagger
-        if let stagger = stagger {
-            for avatar in avatars {
-                staggerSolvers[avatar.index] = StaggerShoveSolver(params: stagger)
+
+            let staggerSolver: StaggerShoveSolver?
+            let captureStepper: CaptureStepController?
+            if let stagger = stagger {
+                staggerSolver = StaggerShoveSolver(params: stagger)
                 var stepParams = CaptureStepParams()
                 stepParams.captureDistance = CaptureStepParams.committedCaptureDistanceMax
                 stepParams.stepDamping = CaptureStepParams.committedStepDampingMin
-                captureSteppers[avatar.index] = CaptureStepController(params: stepParams)
+                captureStepper = CaptureStepController(params: stepParams)
+            } else {
+                staggerSolver = nil
+                captureStepper = nil
             }
-        }
-        if let armCounterbalance = armCounterbalance {
-            var layers: [Int: ArmCounterbalanceLayer] = [:]
-            for avatar in avatars {
+
+            let armLayer: ArmCounterbalanceLayer?
+            if let armCounterbalance = armCounterbalance {
                 let layer = ArmCounterbalanceLayer(params: armCounterbalance)
                 layer.initialize(with: avatar.model)
-                layers[avatar.index] = layer
+                armLayer = layer
+            } else {
+                armLayer = nil
             }
-            self.armLayers = layers
-        } else {
-            self.armLayers = [:]
+
+            // S4 (PoseStage.constrain) solves node constraints on the final pipeline
+            // pose; AnimationPlayer's own solve, which would run on the raw sampled
+            // pose at S0, is disabled to avoid solving twice against two different poses.
+            // The prior value is captured so `deinit` can hand the caller's player
+            // back as it was found — `avatarsForCamera` returns these instances, and
+            // a host that later drives one directly would otherwise silently lose
+            // twist/aim constraint solving with no runtime signal.
+            avatar.player.solvesConstraints = false
+
+            return PipelineAvatar(index: avatar.index, model: avatar.model, player: avatar.player,
+                                  baseTranslations: baseTranslations, posturalLayer: posturalLayer,
+                                  armLayer: armLayer, captureStepper: captureStepper,
+                                  staggerSolver: staggerSolver, staggerActive: false)
         }
-        // Snapshot each root's authored (bind) translation so scripted motion is
-        // applied additively and never loses the model's base pose.
-        var bases: [Int: [ObjectIdentifier: SIMD3<Float>]] = [:]
-        for avatar in avatars {
-            var perRoot: [ObjectIdentifier: SIMD3<Float>] = [:]
-            for root in avatar.model.nodes where root.parent == nil {
-                perRoot[ObjectIdentifier(root)] = root.translation
-            }
-            bases[avatar.index] = perRoot
-        }
-        self.baseTranslations = bases
+    }
+
+    deinit {
+        for (player, prior) in restoreSolvesConstraints { player.solvesConstraints = prior }
     }
 
     /// Phase 0 (pose all) + Phase 1+2 (exchange). `frameTime` is normalized [0,1].
@@ -173,7 +188,8 @@ public final class CrowdFrameStepper {
         // world matrices — the one-frame-lagged partner geometry (design §4) both
         // the clamp and the postural feed read. Gathered only when a component
         // needs it, so the default path stays untouched.
-        let needsTorsos = bodyContactMargin != nil || !posturalLayers.isEmpty || staggerParams != nil
+        let hasPostural = pipelineAvatars.contains { $0.posturalLayer != nil }
+        let needsTorsos = bodyContactMargin != nil || hasPostural || staggerParams != nil
         var torsos: [Int: CapsuleCollider] = [:]
         if needsTorsos {
             for avatar in avatars {
@@ -203,113 +219,34 @@ public final class CrowdFrameStepper {
         }
         lastAppliedHalfSeparation = halfSep
 
-        // Component B: feed each avatar's layer its nearest partner's torso (lag).
-        if !posturalLayers.isEmpty {
-            for avatar in avatars {
-                posturalLayers[avatar.index]?.partnerTorso =
-                    nearestPartnerTorso(of: avatar.index, torsos: torsos)
-            }
-        }
+        let snapshot = FrozenSnapshot(torsos: torsos, indices: avatars.map { $0.index })
 
-        for avatar in avatars {
-            // Phase 0a: animation (applies to bones + internal updateNodeTransforms).
-            avatar.player.update(deltaTime: dt, model: avatar.model)
-            // Phase 0b: scripted placement/motion on the scene root(s), via T/R/S.
-            let offset = CrowdPlacement.rootTranslation(
-                avatarIndex: avatar.index, avatarCount: avatars.count, halfSeparation: halfSep)
-            let bases = baseTranslations[avatar.index] ?? [:]
-            for root in avatar.model.nodes where root.parent == nil {
-                let base = bases[ObjectIdentifier(root)] ?? .zero
-                root.translation = base + offset
-            }
-            // Phase 0c: propagate root motion into world matrices for the snapshot.
-            avatar.model.updateNodeTransforms()
-            // Phase 0d: postural yield in the kinematic phase — writes the leaned
-            // spine/chest BEFORE the spring solver (in drawComposite) runs, so the
-            // chest's spring bones inherit the lean (design §3/§3.1). Direct
-            // post-multiply onto the animated pose, then re-propagate for the snapshot.
-            if let layer = posturalLayers[avatar.index] {
-                layer.update(deltaTime: dt, context: AnimationContext())
-                layer.applyDirect(to: avatar.model)
-                avatar.model.updateNodeTransforms()
-            }
-            // Phase 0e: stagger shove + capture step (design 2026-07-07 §3).
-            // Dormant until this avatar's first contact so Phase 0b's scripted
-            // approach never reads as a CoM disturbance; from onset, the
-            // rate-limited shove displaces the scene root and the capture-step
-            // controller absorbs it by holding the planted feet and stepping.
-            // Runs after 0d so the penetration signal is the lean-relieved one
-            // and the spring snapshot sees the stepped pose.
-            // Depth is the torso-pair surface overlap -- the same quantity
-            // Component A's clamp measures -- rather than the chest point's
-            // penetration into the partner capsule: the chest bone lies ON its
-            // own torso capsule axis (torsoCollider is spine->chest), so that
-            // signal is structurally zero at the clamp's contact floor, where
-            // depth = bodyContactMargin. `mine` is recomputed fresh from this
-            // avatar's just-updated pose (not the one-frame-stale `torsos`
-            // snapshot) so it reflects 0d's lean and never spuriously overlaps
-            // the partner's equally-stale pre-placement pose on frame 0; the
-            // partner side stays on the stale snapshot by design (§4 lag).
-            if staggerParams != nil {
-                var depth: Float = 0
-                var pushDirXZ = SIMD2<Float>.zero
-                if let partner = nearestPartnerTorso(of: avatar.index, torsos: torsos),
-                   let mine = SpringBoneContactColliderSet.worldTorsoCapsule(model: avatar.model) {
-                    let pts = CrowdContactClamp.closestPoints(mine.p0, mine.p1, partner.p0, partner.p1)
-                    depth = max(0, mine.radius + partner.radius - simd_length(pts.onA - pts.onB))
-                    let away = pts.onA - pts.onB
-                    pushDirXZ = SIMD2<Float>(away.x, away.z)
-                }
-                if depth > 0 { staggerActive.insert(avatar.index) }
-                if staggerActive.contains(avatar.index) {
-                    let offset = staggerSolvers[avatar.index]?.update(depth: depth, pushDirXZ: pushDirXZ, dt: dt) ?? .zero
-                    if offset != .zero {
-                        for root in avatar.model.nodes where root.parent == nil {
-                            root.translation.x += offset.x
-                            root.translation.z += offset.y
-                        }
-                        avatar.model.updateNodeTransforms()
-                    }
-                    // The controller seeds itself from the current ankle worlds on
-                    // its first update — the contact-onset seeding the design's
-                    // activation rule requires.
-                    captureSteppers[avatar.index]?.update(deltaTime: dt, model: avatar.model)
-                    avatar.model.updateNodeTransforms()
-                    // Phase 0f: arm counterbalance. Driven by the controller's own
-                    // balance read, so the brace engages with the imbalance
-                    // transient and RELEASES as the capture step restores the
-                    // margin — intensity is this frame's residual, never a latched
-                    // state. Runs after 0e so the brace sits on the stepped pose
-                    // and the snapshot sees the braced arms.
-                    if let layer = armLayers[avatar.index] {
-                        let balance = captureSteppers[avatar.index]?.lastBalance
-                        let residual = max(0, -(balance?.margin ?? 0))
-                        layer.intensity = min(residual / Self.fullBraceResidual, 1)
-                        layer.fallDirXZ = balance?.imbalanceDirection ?? .zero
-                        layer.update(deltaTime: dt, context: AnimationContext())
-                        layer.applyDirect(to: avatar.model)
-                        avatar.model.updateNodeTransforms()
-                    }
-                }
-            }
+        for i in pipelineAvatars.indices {
+            let placement = CrowdPlacement.rootTranslation(
+                avatarIndex: pipelineAvatars[i].index, avatarCount: avatars.count, halfSeparation: halfSep)
+            PoseStage.sample(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt)
+            PoseStage.place(avatar: &pipelineAvatars[i], placement: placement)
+            PoseStage.compose(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt)
+            PoseStage.displace(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt,
+                               staggerEnabled: staggerParams != nil)
+            #if DEBUG
+            let rootsAfterDisplace = PoseStage.rootTranslations(of: pipelineAvatars[i].model)
+            #endif
+            PoseStage.limbSolve(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt)
+            #if DEBUG
+            PoseStage.debugAssertRootsUnchanged(avatar: pipelineAvatars[i], since: rootsAfterDisplace)
+            #endif
+            PoseStage.constrain(avatar: &pipelineAvatars[i], partners: snapshot, dt: dt)
+            // The frame's commit propagation: `constrain` deliberately does not
+            // re-propagate after solving (see its doc comment), so this is the
+            // one guaranteed refresh downstream readers (the renderer's
+            // skinning, `group?.exchange()`'s spring-bone snapshot, next
+            // frame's `place`) can rely on without needing to know which S1–S4
+            // branches ran this frame.
+            pipelineAvatars[i].model.updateNodeTransforms()
         }
         // Phase 1+2: snapshot all (post-motion, post-yield poses), inject union-minus-self.
         group?.exchange()
-    }
-
-    /// The nearest OTHER avatar's torso capsule to `avatarIndex`, by capsule-midpoint
-    /// distance. `nil` when this or every other avatar lacks a torso.
-    private func nearestPartnerTorso(of avatarIndex: Int, torsos: [Int: CapsuleCollider]) -> CapsuleCollider? {
-        guard let mine = torsos[avatarIndex] else { return nil }
-        let myMid = (mine.p0 + mine.p1) * 0.5
-        var best: CapsuleCollider?
-        var bestDist = Float.greatestFiniteMagnitude
-        for avatar in avatars where avatar.index != avatarIndex {
-            guard let t = torsos[avatar.index] else { continue }
-            let d = simd_length((t.p0 + t.p1) * 0.5 - myMid)
-            if d < bestDist { bestDist = d; best = t }
-        }
-        return best
     }
 
     /// Phase 3: composite every avatar into `color`/`depth`. Each avatar is a

@@ -113,6 +113,84 @@ The normal defines which side of the plane is "solid":
 
 ---
 
+## Cloth-Collision Fidelity
+
+### What It Does
+
+VRM authors often specify very small collision radii (`hitRadius`) for hair and cloth to approximate the visible mesh dimensions—but these authored values may be zero or nearly zero, especially from VRoid. This leaves two problems:
+
+1. **Cloth-self collision proxy is too small** — a 3mm hair collision sphere slides past a 28mm arm collider while the visible card passes straight through.
+2. **The space between joints doesn't collide** — waist-length hair chains have 4–5 joints; a forearm can slip *between* joints untouched.
+
+**Cloth-Collision Fidelity** addresses both by measuring the actual mesh extent skinned to each joint and colliding the segment between parent and child joints, not just the joint sphere.
+
+### How It Works
+
+Enable the flag during model loading:
+
+```swift
+let options = VRMLoadingOptions(fitClothCollisionToMesh: true)
+let model = try await VRMModel.load(from: url, device: device, options: options)
+```
+
+The `device:` argument is required — without it the GPU spring system never initializes, so the flag silently has no effect.
+
+With the flag enabled:
+
+1. **Measured radii:** At load time, the system measures the half-extent of mesh geometry dominantly skinned to each spring joint. The effective collision radius is computed as:
+
+```
+effectiveHitRadius = max(authored, min(measured, ceiling))
+ceiling = min(0.05 m, 0.75 × ‖joint − parent‖)
+```
+
+The authored `hitRadius` is never changed—only the effective simulation value is adjusted. Radii are floored (never reduced), and a ceiling prevents any single measurement from creating permanent self-collision. Joints with sparse skinning inherit the nearest ancestor's measurement.
+
+2. **Segment collision:** Spring chains now collide the segment between parent and child joints as a capsule, not just the endpoints. The radius of the segment is the maximum of the parent's and child's effective radii. This fills the gap between joints that sphere-at-joint cannot cover.
+
+### Why Opt-In
+
+This follows the #326 principle: **never silently reinterpret authored physics**. Although the measured mesh dimensions are objective facts, a model author may have had reasons to specify small radii (style, performance tuning). This feature requires explicit consent via the loading option.
+
+Flag-off behavior is unchanged: authored values are used exactly as specified, and segment collision is disabled. Bit-exactness of the flag-off path is certified by one dedicated baseline (`SpringBoneBitBaselineTests`, AvatarSample_A, ultra quality, armsCrossed pose, 90 frames). The per-tier CSV comparisons elsewhere in the suite are a looser ≤1 mm mean-per-axis envelope, not a bit-exactness certification.
+
+### Performance
+
+On modern Apple Silicon, the additional collision checks cost approximately **1.2–1.6×** the base physics time, depending on avatar complexity and quality tier. For high-fidelity avatars, this cost stays well within acceptable bounds:
+
+- **Ultra quality:** ~1.23–1.60× base cost (e.g., from 2ms to 2.5ms)
+- **Extreme quality:** ~1.52–1.58× base cost
+
+This is significantly less than the cost of increasing constraint iterations.
+
+### Results
+
+On a typical avatar with hair and cloth (AvatarSample_M):
+
+| Case | Without Fidelity | With Fidelity | Improvement |
+|------|------------------|---------------|-------------|
+| Hair penetration (armsCrossed) | 21.3 mm | 8.4 mm | 60% reduction |
+| Hair penetration (armsAtSides) | 26.6 mm | 8.4 mm | 68% reduction |
+| Skirt penetration | 0.0000 m (both poses) | 0.0000 m (both poses) | N/A — already clean on this fixture |
+
+Skirt measured zero penetration flag-off on both poses of this fixture, so there was nothing for the flag to improve — the gate for skirt is clean-stays-clean, not before/after reduction. The 60–68% reduction is a Hair-only result. Both measurement and segment collision are necessary to get there—each alone reduces Hair penetration by ~40–50%, but the combination achieves the 60–68% reduction needed to meet visual quality standards.
+
+### Adoption Example
+
+```swift
+// Load model with cloth-collision fidelity enabled
+let options = VRMLoadingOptions(fitClothCollisionToMesh: true)
+
+do {
+    let model = try await VRMModel.load(from: modelURL, device: device, options: options)
+    renderer.loadModel(model)
+} catch {
+    print("Failed to load model: \(error.localizedDescription)")
+}
+```
+
+---
+
 ## Multi-Iteration Constraint Solving
 
 ### What It Does

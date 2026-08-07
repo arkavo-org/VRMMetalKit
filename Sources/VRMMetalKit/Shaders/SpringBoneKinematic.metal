@@ -31,6 +31,7 @@ struct SpringBoneParams {
     uint numCapsules;     // offset 60
     uint numPlanes;       // offset 64
     uint settlingFrames;  // offset 68 - frames remaining in settling period
+    uint segmentCollision; // offset 72 - segment (parent-child span) collision enable; unused by this kernel
 };
 
 struct BoneParams {
