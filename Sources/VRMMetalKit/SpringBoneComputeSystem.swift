@@ -426,9 +426,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // The tail is written once per frame while `interpolateColliders`
         // rewrites only the [0, active) prefix per substep, so the tail has to
-        // land in every substep slot to survive the frame (VMK#396).
+        // land in every substep slot this frame will dispatch (VMK#396).
+        //
+        // Bounded to `frameSubstepCount` rather than the full slot count: the
+        // substep loop dispatches exactly [0, frameSubstepCount) — the same
+        // invariant `t = (currentSubstepIndex + 1) / frameSubstepCount` already
+        // depends on — and this runs every frame, so slots above that are never
+        // read before being rewritten. Broadcasting all 10 multiplied the tail
+        // memcpy by up to 10x per frame in crowd/external-collider scenes.
+        let slotsThisFrame = max(1, frameSubstepCount)
         if let buf = buffers.sphereColliders, !spheres.isEmpty {
-            for slot in 0..<SpringBoneBuffers.substepSlots {
+            for slot in 0..<slotsThisFrame {
                 let ptr = buf.contents().advanced(by: slot * buffers.sphereColliderStride)
                     .bindMemory(to: SphereCollider.self, capacity: buffers.sphereCapacity)
                 for (i, s) in spheres.enumerated() {
@@ -441,7 +449,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
         if let buf = buffers.capsuleColliders, !capsules.isEmpty {
-            for slot in 0..<SpringBoneBuffers.substepSlots {
+            for slot in 0..<slotsThisFrame {
                 let ptr = buf.contents().advanced(by: slot * buffers.capsuleColliderStride)
                     .bindMemory(to: CapsuleCollider.self, capacity: buffers.capsuleCapacity)
                 for (i, c) in capsules.enumerated() {
