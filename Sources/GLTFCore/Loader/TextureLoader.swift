@@ -271,69 +271,17 @@ public class TextureLoader {
 
         let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
 
-        // Create a bitmap context and draw the image
-        let bytesPerRow = width * 4
-        vrmLog("[TextureLoader] Allocating bitmap data: \(height * bytesPerRow) bytes...")
-        let bitmapData = malloc(height * bytesPerRow)
-        defer { free(bitmapData) }
-
-        guard let bitmapData = bitmapData else {
-            vrmLog("[TextureLoader] Failed to allocate bitmap data")
-            return nil
-        }
-        vrmLog("[TextureLoader] Bitmap data allocated")
-
-        vrmLog("[TextureLoader] Creating CGContext...")
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-
-        // premultipliedLast preserves the alpha channel in RGBA layout.
-        // IMPORTANT: Must use .copy blend mode when drawing to avoid
-        // source-over compositing which destroys alpha=0 pixels.
-        guard let context = CGContext(
-            data: bitmapData,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            vrmLog("[TextureLoader] Failed to create bitmap context")
-            return nil
-        }
-        vrmLog("[TextureLoader] CGContext created with premultiplied alpha")
-
-        vrmLog("[TextureLoader] Drawing image to context...")
-        context.setBlendMode(.copy)
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        vrmLog("[TextureLoader] Image drawn")
-
-        // Unpremultiplies before upload (the pipelines blend with
-        // straight-alpha factors). See TextureUploader.
+        // Decodes straight-alpha (the pipelines blend with straight-alpha
+        // factors). See TextureUploader.
         vrmLog("[TextureLoader] Uploading texture...")
         guard let texture = TextureUploader.makeTexture(
-            bitmapData: bitmapData,
-            width: width, height: height,
+            cgImage: cgImage,
             pixelFormat: pixelFormat,
             device: device
         ) else {
             vrmLog("[TextureLoader] Failed to create texture")
             return nil
         }
-        vrmLog("[TextureLoader] Texture data replaced")
-
-        // DEBUG: Sample first uploaded (straight-alpha) pixel to check for extreme values
-        #if DEBUG
-        let firstPixel = bitmapData.assumingMemoryBound(to: UInt8.self)
-        let r = Float(firstPixel[0]) / 255.0
-        let g = Float(firstPixel[1]) / 255.0
-        let b = Float(firstPixel[2]) / 255.0
-        let a = Float(firstPixel[3]) / 255.0
-        vrmLog("[TextureLoader] First uploaded pixel RGBA: (\(String(format: "%.3f", r)), \(String(format: "%.3f", g)), \(String(format: "%.3f", b)), \(String(format: "%.3f", a)))")
-        if r > 1.0 || g > 1.0 || b > 1.0 {
-            vrmLog("  ⚠️ WARNING: Pixel values exceed 1.0!")
-        }
-        #endif
 
         vrmLog("[TextureLoader] Texture created successfully")
         return texture
