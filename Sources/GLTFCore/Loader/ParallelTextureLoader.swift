@@ -265,37 +265,12 @@ public final class ParallelTextureLoader: @unchecked Sendable {
             )
         }
         
-        let width = cgImage.width
-        let height = cgImage.height
         let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
 
-        let bytesPerRow = width * 4
-        guard let bitmapData = malloc(height * bytesPerRow) else {
-            return nil
-        }
-        defer { free(bitmapData) }
-
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(
-            data: bitmapData,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return nil
-        }
-
-        context.setBlendMode(.copy)
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-
-        // Unpremultiplies before upload (the pipelines blend with
-        // straight-alpha factors). See TextureUploader.
+        // Decodes straight-alpha (the pipelines blend with straight-alpha
+        // factors). See TextureUploader.
         return TextureUploader.makeTexture(
-            bitmapData: bitmapData,
-            width: width, height: height,
+            cgImage: cgImage,
             pixelFormat: pixelFormat,
             device: device
         )
