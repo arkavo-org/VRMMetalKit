@@ -269,23 +269,7 @@ public class TextureLoader {
         let height = cgImage.height
         vrmLog("[TextureLoader] Image size: \(width)x\(height)")
 
-        vrmLog("[TextureLoader] Creating texture descriptor...")
         let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
-        let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: pixelFormat,
-            width: width,
-            height: height,
-            mipmapped: false
-        )
-        textureDescriptor.usage = [.shaderRead]
-        textureDescriptor.storageMode = .shared
-
-        vrmLog("[TextureLoader] Creating Metal texture...")
-        guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
-            vrmLog("[TextureLoader] Failed to create texture")
-            return nil
-        }
-        vrmLog("[TextureLoader] Metal texture created")
 
         // Create a bitmap context and draw the image
         let bytesPerRow = width * 4
@@ -324,24 +308,28 @@ public class TextureLoader {
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
         vrmLog("[TextureLoader] Image drawn")
 
-        // Copy the data to the texture
-        vrmLog("[TextureLoader] Replacing texture data...")
-        texture.replace(
-            region: MTLRegionMake2D(0, 0, width, height),
-            mipmapLevel: 0,
-            withBytes: bitmapData,
-            bytesPerRow: bytesPerRow
-        )
+        // Unpremultiplies before upload (the pipelines blend with
+        // straight-alpha factors). See TextureUploader.
+        vrmLog("[TextureLoader] Uploading texture...")
+        guard let texture = TextureUploader.makeTexture(
+            bitmapData: bitmapData,
+            width: width, height: height,
+            pixelFormat: pixelFormat,
+            device: device
+        ) else {
+            vrmLog("[TextureLoader] Failed to create texture")
+            return nil
+        }
         vrmLog("[TextureLoader] Texture data replaced")
 
-        // DEBUG: Sample first pixel to check for extreme values
+        // DEBUG: Sample first uploaded (straight-alpha) pixel to check for extreme values
         #if DEBUG
         let firstPixel = bitmapData.assumingMemoryBound(to: UInt8.self)
         let r = Float(firstPixel[0]) / 255.0
         let g = Float(firstPixel[1]) / 255.0
         let b = Float(firstPixel[2]) / 255.0
         let a = Float(firstPixel[3]) / 255.0
-        vrmLog("[TextureLoader] First pixel RGBA: (\(String(format: "%.3f", r)), \(String(format: "%.3f", g)), \(String(format: "%.3f", b)), \(String(format: "%.3f", a)))")
+        vrmLog("[TextureLoader] First uploaded pixel RGBA: (\(String(format: "%.3f", r)), \(String(format: "%.3f", g)), \(String(format: "%.3f", b)), \(String(format: "%.3f", a)))")
         if r > 1.0 || g > 1.0 || b > 1.0 {
             vrmLog("  ⚠️ WARNING: Pixel values exceed 1.0!")
         }
