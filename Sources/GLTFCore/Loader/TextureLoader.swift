@@ -312,7 +312,7 @@ public class TextureLoader {
         // straight-alpha factors). See TextureUploader.
         vrmLog("[TextureLoader] Uploading texture...")
         guard let texture = TextureUploader.makeTexture(
-            premultipliedData: bitmapData,
+            bitmapData: bitmapData,
             width: width, height: height,
             pixelFormat: pixelFormat,
             device: device
@@ -322,14 +322,14 @@ public class TextureLoader {
         }
         vrmLog("[TextureLoader] Texture data replaced")
 
-        // DEBUG: Sample first pixel to check for extreme values
+        // DEBUG: Sample first uploaded (straight-alpha) pixel to check for extreme values
         #if DEBUG
         let firstPixel = bitmapData.assumingMemoryBound(to: UInt8.self)
         let r = Float(firstPixel[0]) / 255.0
         let g = Float(firstPixel[1]) / 255.0
         let b = Float(firstPixel[2]) / 255.0
         let a = Float(firstPixel[3]) / 255.0
-        vrmLog("[TextureLoader] First pixel RGBA: (\(String(format: "%.3f", r)), \(String(format: "%.3f", g)), \(String(format: "%.3f", b)), \(String(format: "%.3f", a)))")
+        vrmLog("[TextureLoader] First uploaded pixel RGBA: (\(String(format: "%.3f", r)), \(String(format: "%.3f", g)), \(String(format: "%.3f", b)), \(String(format: "%.3f", a)))")
         if r > 1.0 || g > 1.0 || b > 1.0 {
             vrmLog("  ⚠️ WARNING: Pixel values exceed 1.0!")
         }

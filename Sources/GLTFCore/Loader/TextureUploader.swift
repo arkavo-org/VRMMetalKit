@@ -36,15 +36,16 @@ enum TextureUploader {
     /// unpremultiplying it on the way in.
     ///
     /// - Parameters:
-    ///   - premultipliedData: Bitmap as decoded by `CGContext` with
+    ///   - bitmapData: Bitmap as decoded by `CGContext` with
     ///     `.premultipliedLast` (RGBA, 4 bytes per pixel, tightly packed rows).
+    ///     Unpremultiplied in place; on return it holds straight alpha.
     ///   - width: Bitmap width in pixels.
     ///   - height: Bitmap height in pixels.
     ///   - pixelFormat: `.rgba8Unorm` or `.rgba8Unorm_srgb`.
     ///   - device: Device to allocate on.
     /// - Returns: A texture holding the straight-alpha image, or `nil` on
-    ///   allocation failure.
-    static func makeTexture(premultipliedData: UnsafeMutableRawPointer,
+    ///   allocation or unpremultiply failure.
+    static func makeTexture(bitmapData: UnsafeMutableRawPointer,
                             width: Int, height: Int,
                             pixelFormat: MTLPixelFormat,
                             device: MTLDevice) -> MTLTexture? {
@@ -58,20 +59,18 @@ enum TextureUploader {
         descriptor.storageMode = .shared
         guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
 
-        var premul = vImage_Buffer(data: premultipliedData,
+        // vImageUnpremultiplyData_RGBA8888 operates in place when source and
+        // destination share `data` and `rowBytes`.
+        var buffer = vImage_Buffer(data: bitmapData,
                                    height: vImagePixelCount(height),
                                    width: vImagePixelCount(width),
                                    rowBytes: width * 4)
-        guard let scratch = malloc(height * width * 4) else { return nil }
-        defer { free(scratch) }
-        var straight = vImage_Buffer(data: scratch,
-                                     height: premul.height,
-                                     width: premul.width,
-                                     rowBytes: width * 4)
-        vImageUnpremultiplyData_RGBA8888(&premul, &straight, vImage_Flags(kvImageNoFlags))
+        let status = vImageUnpremultiplyData_RGBA8888(&buffer, &buffer, vImage_Flags(kvImageNoFlags))
+        guard status == kvImageNoError else { return nil }
+
         texture.replace(region: MTLRegionMake2D(0, 0, width, height),
                         mipmapLevel: 0,
-                        withBytes: scratch,
+                        withBytes: bitmapData,
                         bytesPerRow: width * 4)
         return texture
     }

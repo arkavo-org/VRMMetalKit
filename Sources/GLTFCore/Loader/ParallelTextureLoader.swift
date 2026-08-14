@@ -294,7 +294,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         // Unpremultiplies before upload (the pipelines blend with
         // straight-alpha factors). See TextureUploader.
         return TextureUploader.makeTexture(
-            premultipliedData: bitmapData,
+            bitmapData: bitmapData,
             width: width, height: height,
             pixelFormat: pixelFormat,
             device: device

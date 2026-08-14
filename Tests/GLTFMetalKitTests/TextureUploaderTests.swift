@@ -71,7 +71,7 @@ final class TextureUploaderTests: XCTestCase {
         var bytes = premultiplied
         let texture = bytes.withUnsafeMutableBytes { buf in
             TextureUploader.makeTexture(
-                premultipliedData: buf.baseAddress!,
+                bitmapData: buf.baseAddress!,
                 width: width, height: height,
                 pixelFormat: .rgba8Unorm, device: device)
         }
