@@ -31,6 +31,21 @@ func makePerspective(fovyRadians: Float, aspectRatio: Float, nearZ: Float, farZ:
     )
 }
 
+/// Composes a standard projection into its Metal-convention reverse-Z
+/// counterpart (near → 1, far → 0) by remapping clip z → w − z. x, y, and
+/// w are untouched, so rasterization is bit-identical and only the depth
+/// mapping mirrors. Projection-agnostic: works on any matrix whose clip z
+/// spans [0, w].
+func reverseZProjection(_ projection: float4x4) -> float4x4 {
+    let flip = float4x4(
+        SIMD4<Float>(1, 0, 0, 0),
+        SIMD4<Float>(0, 1, 0, 0),
+        SIMD4<Float>(0, 0, -1, 0),
+        SIMD4<Float>(0, 0, 1, 1)
+    )
+    return flip * projection
+}
+
 // MARK: - Dummy View for Headless Rendering
 
 class DummyView: MTKView {

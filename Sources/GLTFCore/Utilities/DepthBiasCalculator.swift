@@ -126,19 +126,48 @@ public final class DepthBiasCalculator {
     /// Clamp prevents excessive bias that could cause visual artifacts.
     public var clamp: Float { 0.1 }
     
+    /// Resolves the full bias triple for an encode under the given depth
+    /// direction.
+    ///
+    /// The bias table itself is direction-agnostic — its magnitudes answer
+    /// "how far apart should these layers be". The sign is applied here, at
+    /// the edge where values meet an encoder: under reverse-Z the depth axis
+    /// inverts, so bias, slope scale, and clamp are all negated to preserve
+    /// the intended push direction (a negative clamp is a lower bound per
+    /// Metal semantics).
+    ///
+    /// - Parameters:
+    ///   - materialName: Name of the material being rendered
+    ///   - isOverlay: Whether this is an overlay material
+    ///   - reverseZ: Whether the target render pass uses reverse-Z depth
+    public func resolvedDepthBias(
+        for materialName: String,
+        isOverlay: Bool,
+        reverseZ: Bool = false
+    ) -> (bias: Float, slopeScale: Float, clamp: Float) {
+        let sign: Float = reverseZ ? -1 : 1
+        return (depthBias(for: materialName, isOverlay: isOverlay) * sign,
+                slopeScale * sign,
+                clamp * sign)
+    }
+
     /// Sets up depth bias on a render encoder for a material
     ///
     /// - Parameters:
     ///   - encoder: The render command encoder
     ///   - materialName: Name of the material being rendered
     ///   - isOverlay: Whether this is an overlay material
+    ///   - reverseZ: Whether the target render pass uses reverse-Z depth —
+    ///     pass the renderer's `useReverseZ` here, or the bias pushes the
+    ///     wrong way and coplanar overlays resolve behind their base.
     public func applyDepthBias(
         to encoder: MTLRenderCommandEncoder,
         for materialName: String,
-        isOverlay: Bool
+        isOverlay: Bool,
+        reverseZ: Bool = false
     ) {
-        let bias = depthBias(for: materialName, isOverlay: isOverlay)
-        encoder.setDepthBias(bias, slopeScale: slopeScale, clamp: clamp)
+        let resolved = resolvedDepthBias(for: materialName, isOverlay: isOverlay, reverseZ: reverseZ)
+        encoder.setDepthBias(resolved.bias, slopeScale: resolved.slopeScale, clamp: resolved.clamp)
     }
     
     // MARK: - Private Methods

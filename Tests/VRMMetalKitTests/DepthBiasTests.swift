@@ -167,6 +167,32 @@ final class DepthBiasTests: XCTestCase {
             "Overlay should have positive depth bias")
     }
     
+    /// The bias TABLE is direction-agnostic — its magnitudes answer "how
+    /// far apart". The sign belongs to encode time, where the values meet a
+    /// depth direction: under reverse-Z all three components negate (the
+    /// negated clamp is a lower bound per Metal semantics), so a coplanar
+    /// overlay keeps its intended push direction. The `reverseZ` default of
+    /// `false` keeps every existing caller's behavior identical.
+    func testResolvedDepthBiasNegatesUnderReverseZ() {
+        let config = RendererConfig(strict: .off)
+        let renderer = VRMRenderer(device: device, config: config)
+        let calculator = renderer.depthBiasCalculator
+
+        let standard = calculator.resolvedDepthBias(for: "EyeHighlight", isOverlay: true)
+        let reversed = calculator.resolvedDepthBias(for: "EyeHighlight", isOverlay: true, reverseZ: true)
+
+        XCTAssertGreaterThan(standard.bias, 0, "overlay bias should push toward camera under standard Z")
+        XCTAssertEqual(reversed.bias, -standard.bias, "reverse-Z must negate the bias")
+        XCTAssertEqual(reversed.slopeScale, -standard.slopeScale, "reverse-Z must negate the slope scale")
+        XCTAssertEqual(reversed.clamp, -standard.clamp, "reverse-Z must negate the clamp (lower bound)")
+
+        // The default resolution is exactly the table values — the sign
+        // parameter changes direction, never magnitude.
+        XCTAssertEqual(standard.bias, calculator.depthBias(for: "EyeHighlight", isOverlay: true))
+        XCTAssertEqual(standard.slopeScale, calculator.slopeScale)
+        XCTAssertEqual(standard.clamp, calculator.clamp)
+    }
+
     /// Test 6: Depth bias configuration is exposed in RendererConfig
     ///
     /// Users should be able to tune depth bias globally via configuration.
