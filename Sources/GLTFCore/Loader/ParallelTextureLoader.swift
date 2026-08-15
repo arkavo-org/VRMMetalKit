@@ -170,7 +170,14 @@ public final class ParallelTextureLoader: @unchecked Sendable {
             return nil
         }
         
-        return try await createTexture(from: imageData, textureIndex: index, sRGB: sRGB)
+        // Whether to build a mip chain is the sampler's call; whether alpha
+        // weights it is the material's.
+        let sampler = gltfTexture.sampler.flatMap { document.samplers?[safe: $0] }
+        let mipmapped = TextureLoader.samplerRequestsMipmaps(sampler)
+        let alphaIsCoverage = TextureLoader.textureAlphaIsCoverage(index, in: document)
+
+        return try await createTexture(from: imageData, textureIndex: index, sRGB: sRGB,
+                                       mipmapped: mipmapped, alphaIsCoverage: alphaIsCoverage)
     }
     
     private func loadImageFromBufferView(_ bufferViewIndex: Int, textureIndex: Int) throws -> Data {
@@ -255,7 +262,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         return try Data(contentsOf: fileURL)
     }
     
-    private func createTexture(from imageData: Data, textureIndex: Int, sRGB: Bool) async throws -> MTLTexture? {
+    private func createTexture(from imageData: Data, textureIndex: Int, sRGB: Bool, mipmapped: Bool, alphaIsCoverage: Bool) async throws -> MTLTexture? {
         guard let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
             throw GLTFError.invalidImageData(
@@ -268,11 +275,15 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
 
         // Decodes straight-alpha (the pipelines blend with straight-alpha
-        // factors). See TextureUploader.
+        // factors); the sampler decides whether a mip chain is built and the
+        // material's use of the texture whether alpha weights it. See
+        // TextureUploader / TextureMipUploader.
         return TextureUploader.makeTexture(
             cgImage: cgImage,
             pixelFormat: pixelFormat,
-            device: device
+            device: device,
+            mipmapped: mipmapped,
+            alphaIsCoverage: alphaIsCoverage
         )
     }
 }
