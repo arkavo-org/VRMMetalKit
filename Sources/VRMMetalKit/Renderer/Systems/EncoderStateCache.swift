@@ -38,6 +38,8 @@ final class EncoderStateCache {
     private var vertexBuffers: [(buffer: MTLBuffer, offset: Int)?] = Array(repeating: nil, count: slotCount)
     private var fragmentBuffers: [(buffer: MTLBuffer, offset: Int)?] = Array(repeating: nil, count: slotCount)
     private var fragmentTextures: [MTLTexture?] = Array(repeating: nil, count: slotCount)
+    private var vertexSamplers: [MTLSamplerState?] = Array(repeating: nil, count: slotCount)
+    private var fragmentSamplers: [MTLSamplerState?] = Array(repeating: nil, count: slotCount)
 
     var skippedCalls: Int = 0
     var emittedCalls: Int = 0
@@ -52,6 +54,8 @@ final class EncoderStateCache {
         for i in 0..<vertexBuffers.count { vertexBuffers[i] = nil }
         for i in 0..<fragmentBuffers.count { fragmentBuffers[i] = nil }
         for i in 0..<fragmentTextures.count { fragmentTextures[i] = nil }
+        for i in 0..<vertexSamplers.count { vertexSamplers[i] = nil }
+        for i in 0..<fragmentSamplers.count { fragmentSamplers[i] = nil }
         skippedCalls = 0
         emittedCalls = 0
     }
@@ -172,6 +176,36 @@ final class EncoderStateCache {
         }
         encoder.setFragmentTexture(texture, index: index)
         fragmentTextures[index] = texture
+        emittedCalls &+= 1
+    }
+
+    func setFragmentSamplerState(_ encoder: MTLRenderCommandEncoder, _ sampler: MTLSamplerState?, index: Int) {
+        guard index >= 0 && index < fragmentSamplers.count else {
+            encoder.setFragmentSamplerState(sampler, index: index)
+            emittedCalls &+= 1
+            return
+        }
+        if fragmentSamplers[index] === sampler {
+            skippedCalls &+= 1
+            return
+        }
+        encoder.setFragmentSamplerState(sampler, index: index)
+        fragmentSamplers[index] = sampler
+        emittedCalls &+= 1
+    }
+
+    func setVertexSamplerState(_ encoder: MTLRenderCommandEncoder, _ sampler: MTLSamplerState?, index: Int) {
+        guard index >= 0 && index < vertexSamplers.count else {
+            encoder.setVertexSamplerState(sampler, index: index)
+            emittedCalls &+= 1
+            return
+        }
+        if vertexSamplers[index] === sampler {
+            skippedCalls &+= 1
+            return
+        }
+        encoder.setVertexSamplerState(sampler, index: index)
+        vertexSamplers[index] = sampler
         emittedCalls &+= 1
     }
 }

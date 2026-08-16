@@ -316,6 +316,18 @@ public struct GLTFRenderableMaterial {
     public var normalTexture: MTLTexture?
     public var occlusionTexture: MTLTexture?
     public var emissiveTexture: MTLTexture?
+    /// Sampler for the color-space slots (base color, emissive), resolved
+    /// from the base color texture's glTF sampler. `nil` falls back to the
+    /// renderer's linear/repeat default.
+    ///
+    /// The PBR fragment function has one sampler per texture *role*, not per
+    /// texture, so a material whose base color and emissive maps name
+    /// different glTF samplers is sampled with the base color's.
+    public var colorSampler: MTLSamplerState?
+    /// Sampler for the data slots (metallic-roughness, normal, occlusion),
+    /// resolved from the first of those textures the material binds. `nil`
+    /// falls back to the renderer's linear/repeat default.
+    public var linearSampler: MTLSamplerState?
 
     public init(
         uniforms: GLTFMaterialUniforms = GLTFMaterialUniforms(),
@@ -323,7 +335,9 @@ public struct GLTFRenderableMaterial {
         metallicRoughnessTexture: MTLTexture? = nil,
         normalTexture: MTLTexture? = nil,
         occlusionTexture: MTLTexture? = nil,
-        emissiveTexture: MTLTexture? = nil
+        emissiveTexture: MTLTexture? = nil,
+        colorSampler: MTLSamplerState? = nil,
+        linearSampler: MTLSamplerState? = nil
     ) {
         self.uniforms = uniforms
         self.baseColorTexture = baseColorTexture
@@ -331,6 +345,8 @@ public struct GLTFRenderableMaterial {
         self.normalTexture = normalTexture
         self.occlusionTexture = occlusionTexture
         self.emissiveTexture = emissiveTexture
+        self.colorSampler = colorSampler
+        self.linearSampler = linearSampler
     }
 }
 

@@ -646,8 +646,11 @@ public class VRMModel: @unchecked Sendable {
         }
         
         if let device = device {
+            // One state per distinct glTF sampler, shared across the
+            // textures that name it (see GLTFSamplerCache).
+            let samplerCache = GLTFSamplerCache(device: device)
             let useParallelLoading = context?.options.optimizations.contains(.parallelTextureLoading) ?? false
-            
+
             if useParallelLoading && textureCount > 1 {
                 // Use parallel texture loader for better performance
                 if !skipLogging {
@@ -682,6 +685,7 @@ public class VRMModel: @unchecked Sendable {
                     if let mtlTexture = loadedTextures[textureIndex] {
                         let vrmTexture = VRMTexture(name: textureName)
                         vrmTexture.mtlTexture = mtlTexture
+                        vrmTexture.sampler = samplerCache.samplerState(forTextureAt: textureIndex, in: gltf)
                         textures.append(vrmTexture)
                         loadedCount += 1
                     } else {
@@ -709,6 +713,7 @@ public class VRMModel: @unchecked Sendable {
                     if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
                         let vrmTexture = VRMTexture(name: textureName)
                         vrmTexture.mtlTexture = mtlTexture
+                        vrmTexture.sampler = samplerCache.samplerState(forTextureAt: textureIndex, in: gltf)
                         textures.append(vrmTexture)
                     } else {
                         textures.append(VRMTexture(name: textureName))

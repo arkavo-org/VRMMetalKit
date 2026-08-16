@@ -1383,7 +1383,11 @@ public class VRMSkin {
 public class VRMTexture {
     /// Decoded GPU texture; `nil` if loading failed or was deferred.
     public var mtlTexture: MTLTexture?
-    /// Optional sampler override; renderer uses a default linear-wrap sampler when nil.
+    /// Sampler state resolved from the source glTF sampler — wrap mode per
+    /// axis plus the magnification and minification filters it asked for.
+    /// Shared between textures whose samplers resolve to the same
+    /// descriptor. The renderer falls back to a linear/repeat sampler when
+    /// nil (no device at load time, or a texture that failed to decode).
     public var sampler: MTLSamplerState?
     /// Source texture name from glTF, when available.
     public let name: String?
