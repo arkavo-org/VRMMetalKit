@@ -1,0 +1,46 @@
+name: VRMVisionHost
+options:
+  bundleIdPrefix: org.arkavo
+  deploymentTarget:
+    visionOS: "26.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+packages:
+  VRMMetalKit:
+    path: ..
+
+targets:
+  VRMVisionHost:
+    type: application
+    platform: visionOS
+    info:
+      path: Info.plist
+      properties:
+        CFBundleName: VRMVisionHost
+        NSWorldSensingUsageDescription: Places the avatar in the room around you.
+        # Launch straight into the immersive space — no window. Without this
+        # role the app opens a plain WindowGroup and the avatar would render
+        # into a flat panel instead of the room.
+        UIApplicationSceneManifest:
+          UIApplicationPreferredDefaultSceneSessionRole: CPSceneSessionRoleImmersiveSpaceApplication
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations:
+            CPSceneSessionRoleImmersiveSpaceApplication:
+              - UISceneInitialImmersionStyle: UIImmersionStyleFull
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.arkavo.VRMVisionHost
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "7"
+    sources:
+      - path: Sources
+      # The avatar is the repository-root fixture, referenced in place
+      # rather than duplicated here. It is gitignored, so a fresh clone must
+      # supply it before building — see README.md.
+      - path: ../AvatarSample_U_1.0.vrm.glb
+        buildPhase: resources
+    dependencies:
+      - package: VRMMetalKit
+        product: VRMMetalKit
