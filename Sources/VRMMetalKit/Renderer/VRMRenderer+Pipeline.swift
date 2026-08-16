@@ -125,10 +125,18 @@ extension VRMRenderer {
     }
 
     func setupCachedStates() {
+        // Depth compare direction: standard Z (compare .less, clear 1.0) by default;
+        // reverse-Z (compare .greater, clear 0.0) when `useReverseZ` is set — required
+        // for CompositorServices drawables on visionOS, whose projection matrices map
+        // far→0. The matching clear-depth value lives in the caller's render pass
+        // descriptor.
+        let lessish: MTLCompareFunction = useReverseZ ? .greater : .less
+        let lessEqualish: MTLCompareFunction = useReverseZ ? .greaterEqual : .lessEqual
+
         // Pre-create depth stencil states
         // Opaque/Mask state
         let opaqueDepthDescriptor = MTLDepthStencilDescriptor()
-        opaqueDepthDescriptor.depthCompareFunction = .less
+        opaqueDepthDescriptor.depthCompareFunction = lessish
         opaqueDepthDescriptor.isDepthWriteEnabled = true
         if let state = device.makeDepthStencilState(descriptor: opaqueDepthDescriptor) {
             depthStencilStates["opaque"] = state
@@ -137,7 +145,7 @@ extension VRMRenderer {
 
         // Blend state (no depth write)
         let blendDepthDescriptor = MTLDepthStencilDescriptor()
-        blendDepthDescriptor.depthCompareFunction = .lessEqual
+        blendDepthDescriptor.depthCompareFunction = lessEqualish
         blendDepthDescriptor.isDepthWriteEnabled = false
         if let state = device.makeDepthStencilState(descriptor: blendDepthDescriptor) {
             depthStencilStates["blend"] = state
@@ -153,7 +161,7 @@ extension VRMRenderer {
 
         // Face materials depth state - more permissive to avoid z-fighting
         let faceDepthDescriptor = MTLDepthStencilDescriptor()
-        faceDepthDescriptor.depthCompareFunction = .lessEqual  // More permissive than .less
+        faceDepthDescriptor.depthCompareFunction = lessEqualish  // More permissive than .less
         faceDepthDescriptor.isDepthWriteEnabled = true
         if let state = device.makeDepthStencilState(descriptor: faceDepthDescriptor) {
             depthStencilStates["face"] = state
@@ -162,7 +170,7 @@ extension VRMRenderer {
         // Face overlay depth state - for materials that render on top of face skin (mouth, eyebrows)
         // Uses lessEqual (wins at equal depth) but doesn't write depth to avoid Z-fighting
         let faceOverlayDescriptor = MTLDepthStencilDescriptor()
-        faceOverlayDescriptor.depthCompareFunction = .lessEqual
+        faceOverlayDescriptor.depthCompareFunction = lessEqualish
         faceOverlayDescriptor.isDepthWriteEnabled = false  // Don't write - prevents Z-fighting
         if let state = device.makeDepthStencilState(descriptor: faceOverlayDescriptor) {
             depthStencilStates["faceOverlay"] = state
@@ -170,7 +178,7 @@ extension VRMRenderer {
 
         // Depth prepass: write opaque depth ahead of the main pass (same as opaque).
         let prepassDescriptor = MTLDepthStencilDescriptor()
-        prepassDescriptor.depthCompareFunction = .less
+        prepassDescriptor.depthCompareFunction = lessish
         prepassDescriptor.isDepthWriteEnabled = true
         if let state = device.makeDepthStencilState(descriptor: prepassDescriptor) {
             depthStencilStates["prepass"] = state
@@ -181,11 +189,30 @@ extension VRMRenderer {
         // fragments). `.lessEqual` (not `.equal`) tolerates depth-bias / tiny
         // differences without dropping visible fragments.
         let opaqueEqualDescriptor = MTLDepthStencilDescriptor()
-        opaqueEqualDescriptor.depthCompareFunction = .lessEqual
+        opaqueEqualDescriptor.depthCompareFunction = lessEqualish
         opaqueEqualDescriptor.isDepthWriteEnabled = false
         if let state = device.makeDepthStencilState(descriptor: opaqueEqualDescriptor) {
             depthStencilStates["opaqueEqual"] = state
         }
+
+        #if DEBUG
+        // MTLDepthStencilState cannot be introspected after creation, so a
+        // wrong compare direction in ONE state above is invisible to any
+        // render-level test whose asset happens to cover that state's pixels
+        // another way. Record what each descriptor actually asked for;
+        // ReverseZPixelIdentityTests.testEveryDepthStateFlipsItsCompareDirection
+        // pins the full table in both directions.
+        depthCompareByKey = [
+            "opaque": opaqueDepthDescriptor.depthCompareFunction,
+            "mask": opaqueDepthDescriptor.depthCompareFunction,
+            "blend": blendDepthDescriptor.depthCompareFunction,
+            "always": alwaysDepthDescriptor.depthCompareFunction,
+            "face": faceDepthDescriptor.depthCompareFunction,
+            "faceOverlay": faceOverlayDescriptor.depthCompareFunction,
+            "prepass": prepassDescriptor.depthCompareFunction,
+            "opaqueEqual": opaqueEqualDescriptor.depthCompareFunction,
+        ]
+        #endif
 
         // Pre-create sampler states
         let samplerDescriptor = MTLSamplerDescriptor()
