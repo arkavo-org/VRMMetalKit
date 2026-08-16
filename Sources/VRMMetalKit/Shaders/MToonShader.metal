@@ -204,6 +204,9 @@ constant uint fc_alphaMode [[function_constant(10)]];
 // Outline width multiplier texture presence
 constant bool fc_hasOutlineWidthMultiplyTexture [[function_constant(11)]];
 
+// Parametric rim color presence
+constant bool fc_hasParametricRim [[function_constant(12)]];
+
 // KHR_texture_transform: apply static scale, rotation and offset to UV
 // Must be applied BEFORE animateUV (transform is static; UV animation is dynamic on top)
 static inline float2 applyTextureTransform(float2 uv, constant MToonMaterial& material) {
@@ -567,6 +570,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  bool effectiveHasEmissiveTexture = fc_useMaterialFlags ? (material.hasEmissiveTexture > 0) : fc_hasEmissiveTexture;
  bool effectiveHasOcclusionTexture = fc_useMaterialFlags ? (material.hasOcclusionTexture > 0) : fc_hasOcclusionTexture;
  bool effectiveHasUvAnimationMaskTexture = fc_useMaterialFlags ? (material.hasUvAnimationMaskTexture > 0) : fc_hasUvAnimationMaskTexture;
+ bool effectiveHasParametricRim = fc_useMaterialFlags ? (material.parametricRimColorR > 0.0 || material.parametricRimColorG > 0.0 || material.parametricRimColorB > 0.0) : fc_hasParametricRim;
  uint effectiveAlphaMode = fc_useMaterialFlags ? material.alphaMode : fc_alphaMode;
 
  // Choose UV coordinates (animated or static)
@@ -825,8 +829,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // extraction); `viewDirection` is already world-space. This block mirrors
  // the `additiveDirectionalRim` path's coordinate-space handling below.
  mtoon_float3 rimColor = mtoon_float3(0.0);
- mtoon_float3 parametricRimColorFactor = mtoon_float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
- if (any(parametricRimColorFactor > 0.0)) {
+ if (effectiveHasParametricRim) {
+     mtoon_float3 parametricRimColorFactor = mtoon_float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
      float3 Nrim = normalize(in.worldNormal);
      if (!isFrontFace) Nrim = -Nrim;
      float3 Vrim = normalize(in.viewDirection);
