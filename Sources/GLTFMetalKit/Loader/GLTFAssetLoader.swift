@@ -738,14 +738,21 @@ public final class GLTFAssetLoader {
         // The shader has one sampler per texture role, so each role takes
         // the sampler of the texture that most defines it: base color for
         // the color slots, the first bound data map for the linear ones.
-        func sampler(_ textureIndex: Int?) -> MTLSamplerState? {
-            guard let samplerCache, let document, let textureIndex else { return nil }
-            return samplerCache.samplerState(forTextureAt: textureIndex, in: document)
+        // Only textures that actually decoded are considered — a reference
+        // that failed to load binds the fallback texture, so letting it
+        // claim the slot's sampler would sample a loaded neighbour (say
+        // emissive) through the wrap mode of a texture that never bound.
+        func sampler(_ candidates: [Int?]) -> MTLSamplerState? {
+            guard let samplerCache, let document else { return nil }
+            for case let index? in candidates where textures[index] != nil {
+                return samplerCache.samplerState(forTextureAt: index, in: document)
+            }
+            return nil
         }
-        let colorSampler = sampler(pbr?.baseColorTexture?.index ?? gltf.emissiveTexture?.index)
-        let linearSampler = sampler(pbr?.metallicRoughnessTexture?.index
-                                    ?? gltf.normalTexture?.index
-                                    ?? gltf.occlusionTexture?.index)
+        let colorSampler = sampler([pbr?.baseColorTexture?.index, gltf.emissiveTexture?.index])
+        let linearSampler = sampler([pbr?.metallicRoughnessTexture?.index,
+                                     gltf.normalTexture?.index,
+                                     gltf.occlusionTexture?.index])
 
         return GLTFRenderableMaterial(
             uniforms: uniforms,

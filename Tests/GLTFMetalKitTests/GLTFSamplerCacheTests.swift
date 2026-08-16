@@ -208,8 +208,9 @@ final class GLTFSamplerCacheTests: XCTestCase {
         let document = try JSONDecoder().decode(GLTFDocument.self, from: Data(json.utf8))
         let gltfMaterial = try XCTUnwrap(document.materials?.first)
         let cache = GLTFSamplerCache(device: device)
+        let loaded = [0: try stubTexture(device), 1: try stubTexture(device)]
 
-        let material = GLTFAssetLoader.makeMaterial(from: gltfMaterial, textures: [:],
+        let material = GLTFAssetLoader.makeMaterial(from: gltfMaterial, textures: loaded,
                                                     samplerCache: cache, document: document)
         XCTAssertTrue(material.colorSampler === cache.samplerState(forTextureAt: 0, in: document),
                       "the color slots take the base color texture's sampler")
@@ -217,6 +218,45 @@ final class GLTFSamplerCacheTests: XCTestCase {
                       "the data slots take the normal map's sampler")
         XCTAssertFalse(material.colorSampler === material.linearSampler,
                        "the two roles name different glTF samplers here")
+    }
+
+    /// A texture reference that failed to decode binds the renderer's
+    /// fallback texture, so it must not claim its slot's sampler either:
+    /// the role falls through to the next candidate that actually loaded.
+    /// Otherwise a loaded emissive map is sampled through the wrap mode of
+    /// a base color texture that never bound.
+    func testSamplerRoleSkipsTexturesThatFailedToLoad() throws {
+        let device = try metalDevice()
+        let json = """
+        {"asset": {"version": "2.0"},
+         "images": [{"uri": "data:image/png;base64,"}],
+         "samplers": [{"magFilter": 9729, "minFilter": 9729, "wrapS": 33071, "wrapT": 33071},
+                      {"magFilter": 9728, "minFilter": 9987, "wrapS": 33648, "wrapT": 10497}],
+         "textures": [{"sampler": 0, "source": 0}, {"sampler": 1, "source": 0}],
+         "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}},
+                        "emissiveTexture": {"index": 1}}]}
+        """
+        let document = try JSONDecoder().decode(GLTFDocument.self, from: Data(json.utf8))
+        let gltfMaterial = try XCTUnwrap(document.materials?.first)
+        let cache = GLTFSamplerCache(device: device)
+
+        // Texture 0 (base color) failed to decode; texture 1 (emissive) did not.
+        let material = GLTFAssetLoader.makeMaterial(from: gltfMaterial,
+                                                    textures: [1: try stubTexture(device)],
+                                                    samplerCache: cache, document: document)
+
+        XCTAssertTrue(material.colorSampler === cache.samplerState(forTextureAt: 1, in: document),
+                      "the color slot must take the emissive sampler — base color never bound")
+        XCTAssertFalse(material.colorSampler === cache.samplerState(forTextureAt: 0, in: document),
+                       "a texture that failed to load must not supply its slot's sampler")
+        XCTAssertNil(material.linearSampler,
+                     "no data map loaded, so the data slots stay on the renderer default")
+    }
+
+    private func stubTexture(_ device: MTLDevice) throws -> MTLTexture {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        return try XCTUnwrap(device.makeTexture(descriptor: descriptor))
     }
 
     /// A material with no textures — and any material built without a
