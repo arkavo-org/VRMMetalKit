@@ -14,6 +14,25 @@ Progresses #399, which asks for a visionOS sample host. This provides the
 host and a way to look at it by hand — it does not yet add the automated
 render assertion that issue also wants.
 
+## Credit
+
+**This host is a thin app on top of [@enitimeago](https://github.com/enitimeago)'s
+work — they built everything that makes visionOS rendering possible here.**
+
+- **[#395](https://github.com/arkavo-org/VRMMetalKit/pull/395)** added the
+  `xros` and `xrsimulator` metallib slices, the Makefile targets that build
+  them, and the runtime selection that picks the right one. Without it there
+  are no shaders to run on visionOS at all.
+- **[#403](https://github.com/arkavo-org/VRMMetalKit/pull/403)** added
+  `VRMRenderer.useReverseZ`. CompositorServices is reverse-Z, so this is not
+  a nicety: with standard-Z compares against a `0.0` clear, the depth test
+  rejects every fragment and the room stays empty. That PR also worked out
+  the depth-bias polarity flip and pinned the whole thing with a
+  pixel-identity test.
+
+Both landed before this host existed, written against the spec rather than
+against a running visionOS app. Everything below is the easy half.
+
 ## Running it
 
 ```bash
