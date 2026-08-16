@@ -163,6 +163,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var previousPlaneColliders: [PlaneCollider] = []
     private var targetPlaneColliders: [PlaneCollider] = []
 
+    // Collider group mapping is static after load; rebuild only if the spring-bone
+    // configuration changes (which is extremely rare at runtime).
+    private var cachedColliderToGroupMask: [Int: UInt32]?
+    private var cachedColliderGroupCount: Int = -1
+    private var cachedColliderCount: Int = -1
+
     // Cached model scale for scale-aware thresholds
     private var cachedModelScale: Float = 1.0
 
@@ -2466,13 +2472,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Build collider-to-group-MEMBERSHIP mapping (OR of every group's bit —
         // a collider in several groups must be visible to springs referencing
         // ANY of them). Clamp each bit to 31 so the shader's `1u << bit` is
-        // well-defined (UB at >=32).
-        var colliderToGroupMask: [Int: UInt32] = [:]
-        for (groupIndex, group) in springBone.colliderGroups.enumerated() {
-            let bit = UInt32(1 << min(groupIndex, 31))
-            for colliderIndex in group.colliders {
-                colliderToGroupMask[colliderIndex, default: 0] |= bit
+        // well-defined (UB at >=32). The mapping is static after load, so it is
+        // cached and rebuilt only when the spring-bone configuration changes.
+        let colliderToGroupMask: [Int: UInt32]
+        if let cached = cachedColliderToGroupMask,
+           cachedColliderGroupCount == springBone.colliderGroups.count,
+           cachedColliderCount == springBone.colliders.count {
+            colliderToGroupMask = cached
+        } else {
+            var map: [Int: UInt32] = [:]
+            for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+                let bit = UInt32(1 << min(groupIndex, 31))
+                for colliderIndex in group.colliders {
+                    map[colliderIndex, default: 0] |= bit
+                }
             }
+            cachedColliderToGroupMask = map
+            cachedColliderGroupCount = springBone.colliderGroups.count
+            cachedColliderCount = springBone.colliders.count
+            colliderToGroupMask = map
         }
 
         targetSphereColliders.removeAll(keepingCapacity: true)
