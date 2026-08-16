@@ -104,8 +104,68 @@ public class TextureLoader {
             return nil
         }
 
+        // Whether to build a mip chain is the sampler's call.
+        let sampler = gltfTexture.sampler.flatMap { document.samplers?[safe: $0] }
+        let mipmapped = TextureLoader.samplerRequestsMipmaps(sampler)
+
         // Create texture from image data
-        return try await createTexture(from: imageData, mimeType: image.mimeType, textureIndex: index, sRGB: sRGB)
+        return try await createTexture(from: imageData, mimeType: image.mimeType, textureIndex: index,
+                                       sRGB: sRGB, mipmapped: mipmapped,
+                                       alphaIsCoverage: Self.textureAlphaIsCoverage(index, in: document))
+    }
+
+    /// Whether a texture's alpha channel is coverage — i.e. whether the mip
+    /// chain should weight RGB by alpha (see ``TextureMipUploader``).
+    ///
+    /// True iff some material binds the texture as `baseColorTexture` with
+    /// `alphaMode` `MASK` or `BLEND` — the only slot where glTF gives alpha
+    /// coverage semantics. `OPAQUE` base color ignores alpha by spec, and
+    /// metallic-roughness / occlusion / normal / emissive carry data (or
+    /// nothing) in alpha, so weighting by it would bias or erase real
+    /// channels. Materials that don't state `alphaMode` are `OPAQUE`
+    /// (spec default). A texture nobody binds as base color — including
+    /// extension-only slots such as MToon's shade/matcap/rim maps — filters
+    /// independently. (VRoid often binds one image as both base color and
+    /// MToon shade; it is then weighted, which is harmless: the shade map's
+    /// alpha is unused and the two are sampled at the same UVs, where the
+    /// base color's alpha already governs visibility.) Only the glTF
+    /// `alphaMode` is consulted — a VRM 0.x material that states its
+    /// transparency solely in `materialProperties` degrades to independent
+    /// filtering, i.e. GPU-mipgen behavior, never data loss.
+    public static func textureAlphaIsCoverage(_ index: Int, in document: GLTFDocument) -> Bool {
+        for material in document.materials ?? [] {
+            guard material.pbrMetallicRoughness?.baseColorTexture?.index == index else { continue }
+            switch material.alphaMode {
+            case "MASK", "BLEND":
+                return true
+            default:
+                continue
+            }
+        }
+        return false
+    }
+
+    /// Whether a glTF sampler asks for a mip chain.
+    ///
+    /// `minFilter` `9984`–`9987` (`*_MIPMAP_*`) requests one; `9728` NEAREST
+    /// and `9729` LINEAR explicitly decline one. An absent sampler or absent
+    /// `minFilter` leaves the choice to the runtime (per the glTF spec) —
+    /// default to mipmapping, matching ``createSampler(from:)``'s existing
+    /// trilinear default for the same cases, so a chain always backs the
+    /// sampler state we build; three.js's GLTFLoader defaults an undefined
+    /// `minFilter` the same way (LinearMipmapLinear). This is a deliberate
+    /// runtime default, not reference parity: UniVRM v0.131.2 deserializes
+    /// an omitted `minFilter` to NEAREST (no mips), and a texture with no
+    /// `sampler` field uses `samplers[0]` if the array exists (its
+    /// non-nullable int defaults to 0) and Bilinear+mips only when it
+    /// doesn't.
+    public static func samplerRequestsMipmaps(_ sampler: GLTFSampler?) -> Bool {
+        switch sampler?.minFilter {
+        case 9728, 9729:
+            return false
+        default:
+            return true
+        }
     }
 
     private func loadImageFromBufferView(_ bufferViewIndex: Int, textureIndex: Int) throws -> Data {
@@ -219,11 +279,12 @@ public class TextureLoader {
         }
     }
 
-    private func createTexture(from imageData: Data, mimeType: String?, textureIndex: Int, sRGB: Bool) async throws -> MTLTexture? {
+    private func createTexture(from imageData: Data, mimeType: String?, textureIndex: Int, sRGB: Bool, mipmapped: Bool, alphaIsCoverage: Bool) async throws -> MTLTexture? {
         // Try using CGImage directly to avoid MTKTextureLoader async crash
         if let cgImage = createCGImage(from: imageData) {
             do {
-                let texture = try createTexture(from: cgImage, textureIndex: textureIndex, sRGB: sRGB)
+                let texture = try createTexture(from: cgImage, textureIndex: textureIndex, sRGB: sRGB,
+                                                mipmapped: mipmapped, alphaIsCoverage: alphaIsCoverage)
                 return texture
             } catch {
                 vrmLog("[TextureLoader] Failed to create texture from CGImage: \(error)")
@@ -258,8 +319,8 @@ public class TextureLoader {
         return cgImage
     }
 
-    private func createTexture(from cgImage: CGImage, textureIndex: Int, sRGB: Bool) throws -> MTLTexture? {
-        vrmLog("[TextureLoader] createTexture(from CGImage) called, sRGB=\(sRGB)")
+    private func createTexture(from cgImage: CGImage, textureIndex: Int, sRGB: Bool, mipmapped: Bool, alphaIsCoverage: Bool) throws -> MTLTexture? {
+        vrmLog("[TextureLoader] createTexture(from CGImage) called, sRGB=\(sRGB), mipmapped=\(mipmapped), alphaIsCoverage=\(alphaIsCoverage)")
 
         // MTKTextureLoader seems to crash when called from background async context
         // Let's create the texture manually instead
@@ -272,12 +333,16 @@ public class TextureLoader {
         let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
 
         // Decodes straight-alpha (the pipelines blend with straight-alpha
-        // factors). See TextureUploader.
+        // factors); the sampler decides whether a mip chain is built and the
+        // material's use of the texture whether alpha weights it. See
+        // TextureUploader / TextureMipUploader.
         vrmLog("[TextureLoader] Uploading texture...")
         guard let texture = TextureUploader.makeTexture(
             cgImage: cgImage,
             pixelFormat: pixelFormat,
-            device: device
+            device: device,
+            mipmapped: mipmapped,
+            alphaIsCoverage: alphaIsCoverage
         ) else {
             vrmLog("[TextureLoader] Failed to create texture")
             return nil

@@ -45,27 +45,43 @@ enum TextureUploader {
     ///   - cgImage: Decoded image, typically from `CGImageSource`.
     ///   - pixelFormat: `.rgba8Unorm` or `.rgba8Unorm_srgb`.
     ///   - device: Device to allocate on.
+    ///   - mipmapped: Build a full mip chain (the glTF sampler's call — see
+    ///     ``TextureLoader/samplerRequestsMipmaps(_:)``). Level 0 stores the
+    ///     decoded bytes either way; see ``TextureMipUploader`` for how the
+    ///     chain keeps straight alpha without transparent-texel bleed.
+    ///   - alphaIsCoverage: When building a chain, weight RGB by alpha
+    ///     (base color of a MASK/BLEND material — see
+    ///     ``TextureLoader/textureAlphaIsCoverage(_:in:)``); otherwise
+    ///     every channel filters independently. Ignored without a chain.
     /// - Returns: A texture holding the straight-alpha image, or `nil` if
     ///   both the straight decode and the premultiplied fallback fail.
     static func makeTexture(cgImage: CGImage,
                             pixelFormat: MTLPixelFormat,
-                            device: MTLDevice) -> MTLTexture? {
+                            device: MTLDevice,
+                            mipmapped: Bool = false,
+                            alphaIsCoverage: Bool = false) -> MTLTexture? {
         if let texture = makeTextureFromStraightDecode(cgImage: cgImage,
                                                        pixelFormat: pixelFormat,
-                                                       device: device) {
+                                                       device: device,
+                                                       mipmapped: mipmapped,
+                                                       alphaIsCoverage: alphaIsCoverage) {
             return texture
         }
         vrmLog("[TextureUploader] Straight decode unavailable for this image; falling back to premultiplied context")
         return makeTextureFromPremultipliedContext(cgImage: cgImage,
                                                    pixelFormat: pixelFormat,
-                                                   device: device)
+                                                   device: device,
+                                                   mipmapped: mipmapped,
+                                                   alphaIsCoverage: alphaIsCoverage)
     }
 
     /// Decodes directly into unpremultiplied RGBA8888, so the stored bytes
     /// are the bytes the source image holds.
     private static func makeTextureFromStraightDecode(cgImage: CGImage,
                                                       pixelFormat: MTLPixelFormat,
-                                                      device: MTLDevice) -> MTLTexture? {
+                                                      device: MTLDevice,
+                                                      mipmapped: Bool,
+                                                      alphaIsCoverage: Bool) -> MTLTexture? {
         guard var format = vImage_CGImageFormat(
             bitsPerComponent: 8,
             bitsPerPixel: 32,
@@ -81,19 +97,23 @@ enum TextureUploader {
         guard status == kvImageNoError, let data = buffer.data else { return nil }
         defer { free(data) }
 
-        return makeTexture(bytes: data,
-                           width: Int(buffer.width),
-                           height: Int(buffer.height),
-                           bytesPerRow: buffer.rowBytes,
-                           pixelFormat: pixelFormat,
-                           device: device)
+        return upload(straightBytes: data,
+                      width: Int(buffer.width),
+                      height: Int(buffer.height),
+                      bytesPerRow: buffer.rowBytes,
+                      pixelFormat: pixelFormat,
+                      device: device,
+                      mipmapped: mipmapped,
+                      alphaIsCoverage: alphaIsCoverage)
     }
 
     /// Draws into a premultiplied bitmap context and unpremultiplies, for
     /// images `vImageBuffer_InitWithCGImage` cannot convert.
     private static func makeTextureFromPremultipliedContext(cgImage: CGImage,
                                                             pixelFormat: MTLPixelFormat,
-                                                            device: MTLDevice) -> MTLTexture? {
+                                                            device: MTLDevice,
+                                                            mipmapped: Bool,
+                                                            alphaIsCoverage: Bool) -> MTLTexture? {
         let width = cgImage.width
         let height = cgImage.height
         let bytesPerRow = width * 4
@@ -116,7 +136,9 @@ enum TextureUploader {
         return makeTexture(bitmapData: bitmapData,
                            width: width, height: height,
                            pixelFormat: pixelFormat,
-                           device: device)
+                           device: device,
+                           mipmapped: mipmapped,
+                           alphaIsCoverage: alphaIsCoverage)
     }
 
     /// Unpremultiplies `bitmapData` in place and uploads it.
@@ -129,12 +151,16 @@ enum TextureUploader {
     ///   - height: Bitmap height in pixels.
     ///   - pixelFormat: `.rgba8Unorm` or `.rgba8Unorm_srgb`.
     ///   - device: Device to allocate on.
+    ///   - mipmapped: Build a full mip chain (see ``makeTexture(cgImage:pixelFormat:device:mipmapped:alphaIsCoverage:)``).
+    ///   - alphaIsCoverage: Weight RGB by alpha when building the chain.
     /// - Returns: A texture holding the straight-alpha image, or `nil` on
     ///   allocation or unpremultiply failure.
     static func makeTexture(bitmapData: UnsafeMutableRawPointer,
                             width: Int, height: Int,
                             pixelFormat: MTLPixelFormat,
-                            device: MTLDevice) -> MTLTexture? {
+                            device: MTLDevice,
+                            mipmapped: Bool = false,
+                            alphaIsCoverage: Bool = false) -> MTLTexture? {
         // vImageUnpremultiplyData_RGBA8888 operates in place when source and
         // destination share `data` and `rowBytes`.
         var buffer = vImage_Buffer(data: bitmapData,
@@ -144,11 +170,37 @@ enum TextureUploader {
         let status = vImageUnpremultiplyData_RGBA8888(&buffer, &buffer, vImage_Flags(kvImageNoFlags))
         guard status == kvImageNoError else { return nil }
 
-        return makeTexture(bytes: bitmapData,
-                           width: width, height: height,
-                           bytesPerRow: width * 4,
-                           pixelFormat: pixelFormat,
-                           device: device)
+        return upload(straightBytes: bitmapData,
+                      width: width, height: height,
+                      bytesPerRow: width * 4,
+                      pixelFormat: pixelFormat,
+                      device: device,
+                      mipmapped: mipmapped,
+                      alphaIsCoverage: alphaIsCoverage)
+    }
+
+    /// Both decode paths land here with straight-alpha bytes; the sampler's
+    /// mip request picks the uploader, and the material's use of the texture
+    /// says whether alpha weights the chain.
+    private static func upload(straightBytes: UnsafeMutableRawPointer,
+                               width: Int, height: Int,
+                               bytesPerRow: Int,
+                               pixelFormat: MTLPixelFormat,
+                               device: MTLDevice,
+                               mipmapped: Bool,
+                               alphaIsCoverage: Bool) -> MTLTexture? {
+        mipmapped
+            ? TextureMipUploader.makeTexture(straightData: straightBytes,
+                                             width: width, height: height,
+                                             bytesPerRow: bytesPerRow,
+                                             pixelFormat: pixelFormat,
+                                             alphaIsCoverage: alphaIsCoverage,
+                                             device: device)
+            : makeTexture(bytes: straightBytes,
+                          width: width, height: height,
+                          bytesPerRow: bytesPerRow,
+                          pixelFormat: pixelFormat,
+                          device: device)
     }
 
     private static func makeTexture(bytes: UnsafeMutableRawPointer,
