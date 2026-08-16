@@ -70,27 +70,31 @@ final class ImmersiveRenderer: @unchecked Sendable {
         self.commandQueue = queue
     }
 
+    /// Starts world tracking, loads the avatar, then hands the frame loop to a
+    /// dedicated thread. The load is awaited here rather than bridged into the
+    /// render thread with a semaphore, so no cooperative-pool thread is ever
+    /// blocked and the loop starts with a renderer already in hand.
     func start() {
-        Thread {
-            self.run()
-        }.start()
-    }
-
-    private func run() {
-        Task {
+        Task { [self] in
             do {
                 try await arSession.run([worldTracking])
             } catch {
-                NSLog("[VisionHost] World tracking unavailable: \(error) — falling back to a fixed viewpoint")
+                NSLog("[VisionHost] World tracking unavailable: \(error) — rendering from a fixed viewpoint")
             }
-        }
 
-        do {
-            renderer = try loadAvatar()
-        } catch {
-            NSLog("[VisionHost] Avatar load failed: \(error)")
-            return
+            let prepared: VRMRenderer
+            do {
+                prepared = try await loadAvatar()
+            } catch {
+                NSLog("[VisionHost] Avatar load failed: \(error)")
+                return
+            }
+            Thread { self.run(prepared) }.start()
         }
+    }
+
+    private func run(_ prepared: VRMRenderer) {
+        renderer = prepared
 
         while true {
             switch layerRenderer.state {
@@ -109,14 +113,18 @@ final class ImmersiveRenderer: @unchecked Sendable {
 
     // MARK: - Setup
 
-    private func loadAvatar() throws -> VRMRenderer {
-        guard let url = Bundle.main.url(forResource: "AvatarSample_U_1.0", withExtension: "vrm.glb")
-                ?? Bundle.main.url(forResource: "AvatarSample_U_1.0.vrm", withExtension: "glb") else {
-            throw HostError.avatarMissing
+    private func loadAvatar() async throws -> VRMRenderer {
+        // Xcode's resource processing has been seen to spell a `.vrm.glb`
+        // resource either way, so both forms are tried and both are named in
+        // the error — a bundle-naming change should say what it looked for.
+        let candidates = [("AvatarSample_U_1.0", "vrm.glb"), ("AvatarSample_U_1.0.vrm", "glb")]
+        guard let url = candidates.lazy
+            .compactMap({ Bundle.main.url(forResource: $0.0, withExtension: $0.1) })
+            .first else {
+            throw HostError.avatarMissing(candidates.map { "\($0.0).\($0.1)" })
         }
 
-        let loadDevice = device
-        let model = try awaitBlocking { try await VRMModel.load(from: url, device: loadDevice) }
+        let model = try await VRMModel.load(from: url, device: device)
 
         let renderer = VRMRenderer(device: device, config: RendererConfig(strict: .off))
         renderer.useReverseZ = true
@@ -151,7 +159,13 @@ final class ImmersiveRenderer: @unchecked Sendable {
         defer { frame.endSubmission() }
 
         let drawables = frame.queryDrawables()
-        guard let drawable = drawables.first, let renderer else { return }
+        guard !drawables.isEmpty, let renderer else { return }
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+
+        // Every drawable the frame hands back is presented. Today's layouts
+        // return exactly one, but a configuration that returns a drawable per
+        // eye would otherwise leave the second eye black.
+        for drawable in drawables {
 
         let sinceEpoch = LayerRenderer.Clock.Instant.epoch
             .duration(to: drawable.frameTiming.trackableAnchorTime)
@@ -167,8 +181,6 @@ final class ImmersiveRenderer: @unchecked Sendable {
             NSLog("[VisionHost] device at (\(eye.x), \(eye.y), \(eye.z)) — placing avatar feet at y=\(floorY!)")
         }
         frameIndex &+= 1
-
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         // With no device anchor the viewer would sit at the floor origin,
         // eye-to-eye with the avatar's shins. Fall back to a seated eye
@@ -195,7 +207,9 @@ final class ImmersiveRenderer: @unchecked Sendable {
                 renderPassDescriptor: passDescriptor(color: color, depth: depth, slice: map.sliceIndex))
         }
 
-        drawable.encodePresent(commandBuffer: commandBuffer)
+            drawable.encodePresent(commandBuffer: commandBuffer)
+        }
+
         commandBuffer.commit()
     }
 
@@ -220,32 +234,14 @@ final class ImmersiveRenderer: @unchecked Sendable {
     // MARK: - Helpers
 
     private enum HostError: Error, LocalizedError {
-        case avatarMissing
+        case avatarMissing([String])
 
         var errorDescription: String? {
-            "AvatarSample_U_1.0.vrm.glb is not in the app bundle. It is committed at the repository root; check that VisionHost/project.yml still references it and re-run `xcodegen generate`."
+            guard case .avatarMissing(let tried) = self else { return nil }
+            return "AvatarSample_U_1.0.vrm.glb is not in the app bundle (looked for \(tried.joined(separator: ", "))). It is committed at the repository root; check that VisionHost/project.yml still references it and re-run `xcodegen generate`."
         }
     }
 
-    private func awaitBlocking<T: Sendable>(_ body: @escaping @Sendable () async throws -> T) throws -> T {
-        let semaphore = DispatchSemaphore(value: 0)
-        let result = UncheckedBox<Result<T, Error>?>(nil)
-        Task {
-            do { result.value = .success(try await body()) }
-            catch { result.value = .failure(error) }
-            semaphore.signal()
-        }
-        semaphore.wait()
-        switch result.value! {
-        case .success(let value): return value
-        case .failure(let error): throw error
-        }
-    }
-
-    private final class UncheckedBox<T>: @unchecked Sendable {
-        var value: T
-        init(_ value: T) { self.value = value }
-    }
 }
 
 private func translation(_ t: SIMD3<Float>) -> matrix_float4x4 {
