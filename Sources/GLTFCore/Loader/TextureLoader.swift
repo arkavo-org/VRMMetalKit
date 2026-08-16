@@ -360,82 +360,13 @@ public class TextureLoader {
     /// equivalents. Default sampling is bilinear with mipmaps and repeat
     /// wrap on both axes. Max anisotropy is always 16.
     ///
+    /// Allocates a fresh state per call. Renderers that need one state per
+    /// texture should go through ``GLTFSamplerCache`` instead, which shares
+    /// states between samplers that resolve to the same descriptor.
+    ///
     /// - Parameter gltfSampler: Source sampler, or `nil` to request defaults.
     /// - Returns: The configured `MTLSamplerState`, or `nil` if Metal allocation fails.
     public func createSampler(from gltfSampler: GLTFSampler?) -> MTLSamplerState? {
-        let descriptor = MTLSamplerDescriptor()
-
-        if let sampler = gltfSampler {
-            // Min filter
-            switch sampler.minFilter {
-            case 9728: // NEAREST
-                descriptor.minFilter = .nearest
-                descriptor.mipFilter = .notMipmapped
-            case 9729: // LINEAR
-                descriptor.minFilter = .linear
-                descriptor.mipFilter = .notMipmapped
-            case 9984: // NEAREST_MIPMAP_NEAREST
-                descriptor.minFilter = .nearest
-                descriptor.mipFilter = .nearest
-            case 9985: // LINEAR_MIPMAP_NEAREST
-                descriptor.minFilter = .linear
-                descriptor.mipFilter = .nearest
-            case 9986: // NEAREST_MIPMAP_LINEAR
-                descriptor.minFilter = .nearest
-                descriptor.mipFilter = .linear
-            case 9987: // LINEAR_MIPMAP_LINEAR
-                descriptor.minFilter = .linear
-                descriptor.mipFilter = .linear
-            default:
-                descriptor.minFilter = .linear
-                descriptor.mipFilter = .linear
-            }
-
-            // Mag filter
-            switch sampler.magFilter {
-            case 9728: // NEAREST
-                descriptor.magFilter = .nearest
-            case 9729: // LINEAR
-                descriptor.magFilter = .linear
-            default:
-                descriptor.magFilter = .linear
-            }
-
-            // Wrap S
-            switch sampler.wrapS {
-            case 33071: // CLAMP_TO_EDGE
-                descriptor.sAddressMode = .clampToEdge
-            case 33648: // MIRRORED_REPEAT
-                descriptor.sAddressMode = .mirrorRepeat
-            case 10497: // REPEAT
-                descriptor.sAddressMode = .repeat
-            default:
-                descriptor.sAddressMode = .repeat
-            }
-
-            // Wrap T
-            switch sampler.wrapT {
-            case 33071: // CLAMP_TO_EDGE
-                descriptor.tAddressMode = .clampToEdge
-            case 33648: // MIRRORED_REPEAT
-                descriptor.tAddressMode = .mirrorRepeat
-            case 10497: // REPEAT
-                descriptor.tAddressMode = .repeat
-            default:
-                descriptor.tAddressMode = .repeat
-            }
-        } else {
-            // Default sampler settings
-            descriptor.minFilter = .linear
-            descriptor.magFilter = .linear
-            descriptor.mipFilter = .linear
-            descriptor.sAddressMode = .repeat
-            descriptor.tAddressMode = .repeat
-        }
-
-        descriptor.maxAnisotropy = 16
-        descriptor.normalizedCoordinates = true
-
-        return device.makeSamplerState(descriptor: descriptor)
+        device.makeSamplerState(descriptor: GLTFSamplerCache.descriptor(for: gltfSampler))
     }
 }

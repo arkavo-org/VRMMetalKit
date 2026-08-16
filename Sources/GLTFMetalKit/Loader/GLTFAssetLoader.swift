@@ -333,8 +333,10 @@ public final class GLTFAssetLoader {
 
         // --- Material decoding -------------------------------------------------
 
+        let samplerCache = GLTFSamplerCache(device: device)
         let runtimeMaterials = (document.materials ?? []).map { gltfMaterial in
-            Self.makeMaterial(from: gltfMaterial, textures: textureMap)
+            Self.makeMaterial(from: gltfMaterial, textures: textureMap,
+                              samplerCache: samplerCache, document: document)
         }
         let defaultMaterial = GLTFRenderableMaterial(uniforms: GLTFMaterialUniforms())
 
@@ -628,7 +630,9 @@ public final class GLTFAssetLoader {
 
     internal static func makeMaterial(
         from gltf: GLTFMaterial,
-        textures: [Int: MTLTexture]
+        textures: [Int: MTLTexture],
+        samplerCache: GLTFSamplerCache? = nil,
+        document: GLTFDocument? = nil
     ) -> GLTFRenderableMaterial {
         let pbr = gltf.pbrMetallicRoughness
 
@@ -731,13 +735,27 @@ public final class GLTFAssetLoader {
             textureTransformRotation: transformRotation
         )
 
+        // The shader has one sampler per texture role, so each role takes
+        // the sampler of the texture that most defines it: base color for
+        // the color slots, the first bound data map for the linear ones.
+        func sampler(_ textureIndex: Int?) -> MTLSamplerState? {
+            guard let samplerCache, let document, let textureIndex else { return nil }
+            return samplerCache.samplerState(forTextureAt: textureIndex, in: document)
+        }
+        let colorSampler = sampler(pbr?.baseColorTexture?.index ?? gltf.emissiveTexture?.index)
+        let linearSampler = sampler(pbr?.metallicRoughnessTexture?.index
+                                    ?? gltf.normalTexture?.index
+                                    ?? gltf.occlusionTexture?.index)
+
         return GLTFRenderableMaterial(
             uniforms: uniforms,
             baseColorTexture: baseColorTexture,
             metallicRoughnessTexture: mrTexture,
             normalTexture: normalTexture,
             occlusionTexture: occlusionTexture,
-            emissiveTexture: emissiveTexture
+            emissiveTexture: emissiveTexture,
+            colorSampler: colorSampler,
+            linearSampler: linearSampler
         )
     }
 

@@ -2410,9 +2410,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 hasSkinning: hasSkinning)
         }
 
-        // Set sampler state once before the draw loop (never changes between draws)
+        // Baseline sampler for draws whose material binds no base color
+        // texture; materials that do override it per draw below.
         if let cachedSampler = samplerStates["default"] {
-            encoder.setFragmentSamplerState(cachedSampler, index: 0)
+            encoderStateCache.setFragmentSamplerState(encoder, cachedSampler, index: 0)
         }
 
         for (index, item) in itemsToRender.enumerated() {
@@ -3170,6 +3171,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // vrmLog("  - Matcap factor: \(mtoon.matcapFactor)")
                         // vrmLog("  - Rim color: \(mtoon.parametricRimColorFactor)")
                     }
+
+                    // The MToon fragment function samples every slot through
+                    // sampler(0), so one sampler serves the draw: the base
+                    // color texture's, which is the material's primary map
+                    // and the one whose wrap mode is observable in the
+                    // silhouette.
+                    encoderStateCache.setFragmentSamplerState(
+                        encoder,
+                        material.baseColorTexture?.sampler ?? samplerStates["default"],
+                        index: 0)
 
                     // Bind textures in MToon order
                     // Index 0: Base color texture
@@ -4378,9 +4389,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                textureIndex < model.textures.count,
                let mtlTexture = model.textures[textureIndex].mtlTexture {
                 encoder.setVertexTexture(mtlTexture, index: 0)
-                if let cachedSampler = samplerStates["default"] {
-                    encoder.setVertexSamplerState(cachedSampler, index: 0)
-                }
+                encoderStateCache.setVertexSamplerState(
+                    encoder,
+                    model.textures[textureIndex].sampler ?? samplerStates["default"],
+                    index: 0)
             }
 
             // Set joint matrices for skinned meshes

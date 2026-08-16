@@ -395,14 +395,16 @@ public final class GLTFRenderer: @unchecked Sendable {
         // `setRenderPipelineState` calls when consecutive draws share it.
         var currentPipeline: MTLRenderPipelineState? = nil
 
-        // Samplers — allocated once in `init` and cached on the renderer.
-        let colorSampler = colorSamplerState
-        let linearSampler = linearSamplerState
-        let environmentSampler = environmentSamplerState
-
-        encoder.setFragmentSamplerState(colorSampler,       index: GLTFShaderBindings.colorSampler)
-        encoder.setFragmentSamplerState(linearSampler,      index: GLTFShaderBindings.linearSampler)
-        encoder.setFragmentSamplerState(environmentSampler, index: GLTFShaderBindings.environmentSampler)
+        // Environment sampling is renderer-owned — no glTF sampler behind
+        // it — so its state is bound once for the whole batch. The color
+        // and linear slots follow the material's glTF samplers and are
+        // bound per draw, with these as the fallback for materials that
+        // carry none.
+        let defaultColorSampler = colorSamplerState
+        let defaultLinearSampler = linearSamplerState
+        encoder.setFragmentSamplerState(environmentSamplerState, index: GLTFShaderBindings.environmentSampler)
+        var boundColorSampler: MTLSamplerState? = nil
+        var boundLinearSampler: MTLSamplerState? = nil
 
         // Environment bindings are scene-wide.
         encoder.setFragmentTexture(environment.diffuse,  index: GLTFShaderBindings.diffuseEnvironmentTexture)
@@ -466,6 +468,17 @@ public final class GLTFRenderer: @unchecked Sendable {
 
             var material = call.material.uniforms
             encoder.setFragmentBytes(&material, length: MemoryLayout<GLTFMaterialUniforms>.stride, index: GLTFShaderBindings.materialUniforms)
+
+            let callColorSampler = call.material.colorSampler ?? defaultColorSampler
+            if callColorSampler !== boundColorSampler {
+                encoder.setFragmentSamplerState(callColorSampler, index: GLTFShaderBindings.colorSampler)
+                boundColorSampler = callColorSampler
+            }
+            let callLinearSampler = call.material.linearSampler ?? defaultLinearSampler
+            if callLinearSampler !== boundLinearSampler {
+                encoder.setFragmentSamplerState(callLinearSampler, index: GLTFShaderBindings.linearSampler)
+                boundLinearSampler = callLinearSampler
+            }
 
             encoder.setFragmentTexture(call.material.baseColorTexture         ?? defaultColor,  index: GLTFShaderBindings.baseColorTexture)
             encoder.setFragmentTexture(call.material.metallicRoughnessTexture ?? defaultLinear, index: GLTFShaderBindings.metallicRoughnessTexture)
