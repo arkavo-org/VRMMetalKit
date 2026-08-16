@@ -21,13 +21,15 @@ targets:
         NSWorldSensingUsageDescription: Places the avatar in the room around you.
         # Launch straight into the immersive space — no window. Without this
         # role the app opens a plain WindowGroup and the avatar would render
-        # into a flat panel instead of the room.
+        # into a flat panel instead of the room. Mixed immersion composites
+        # the avatar over passthrough, so it stands in the real room rather
+        # than in a black void.
         UIApplicationSceneManifest:
           UIApplicationPreferredDefaultSceneSessionRole: CPSceneSessionRoleImmersiveSpaceApplication
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations:
             CPSceneSessionRoleImmersiveSpaceApplication:
-              - UISceneInitialImmersionStyle: UIImmersionStyleFull
+              - UISceneInitialImmersionStyle: UIImmersionStyleMixed
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.arkavo.VRMVisionHost

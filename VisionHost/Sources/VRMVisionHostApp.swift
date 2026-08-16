@@ -23,6 +23,12 @@ import CompositorServices
 /// The app declares `CPSceneSessionRoleImmersiveSpaceApplication` as its
 /// preferred scene role, so it launches straight into the immersive space —
 /// the avatar stands in the room rather than inside a window.
+///
+/// Immersion is `.mixed`, so the avatar composites over passthrough: the
+/// surroundings stay visible and the avatar shares the room, rather than
+/// replacing it with a black void. The render pass clears colour to
+/// transparent black for exactly this reason — an opaque clear would paint
+/// over passthrough and give back the fully immersive look.
 @main
 struct VRMVisionHostApp: App {
     var body: some Scene {
@@ -31,7 +37,7 @@ struct VRMVisionHostApp: App {
                 ImmersiveRenderer(layerRenderer: layerRenderer).start()
             }
         }
-        .immersionStyle(selection: .constant(.full), in: .full)
+        .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }
 }
 
