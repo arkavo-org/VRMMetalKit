@@ -1,8 +1,14 @@
 # VRMVisionHost
 
-A minimal visionOS sample host that renders a VRM avatar into a **fully
-immersive space** with Metal, through CompositorServices. The avatar stands
-in the room; there is no window.
+A minimal visionOS sample host that renders a VRM avatar into an **immersive
+space** with Metal, through CompositorServices. Immersion is `.mixed`, so the
+avatar composites over passthrough and shares the room with you rather than
+replacing it — AR, not VR. There is no window.
+
+![AvatarSample_U standing in the visionOS simulator's living room, composited over passthrough](docs/mixed-immersion.png)
+
+*`AvatarSample_U` in the visionOS 26.5 simulator. The room is passthrough;
+the avatar is VRMMetalKit rendering through CompositorServices.*
 
 Progresses #399, which asks for a visionOS sample host. This provides the
 host and a way to look at it by hand — it does not yet add the automated
@@ -38,6 +44,10 @@ head-locked one would not move.
   `CPSceneSessionRoleImmersiveSpaceApplication` as the preferred scene
   session role, so the app opens straight into an `ImmersiveSpace`
   containing a `CompositorLayer`. No `WindowGroup` is ever created.
+- **Mixed, not full.** The immersion style is `.mixed`, so passthrough stays
+  visible behind the avatar. This works because the render pass clears
+  colour to *transparent* black — an opaque clear would paint over
+  passthrough and give back the fully immersive look.
 - **Reverse-Z.** CompositorServices works in reverse-Z: the SDK documents
   `cp_drawable_get_depth_range` as returning "values in reverse-z ordering,
   with the value for the far plane in the vector's `x` property and the
