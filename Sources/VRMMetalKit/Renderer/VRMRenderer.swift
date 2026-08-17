@@ -281,13 +281,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let nearZ: Float = 0.1
             let farZ: Float = 100.0
             let depth = farZ - nearZ
-            // Metal uses reverse-Z with NDC Z in [0, 1]
-            // Maps nearZ -> 1.0, farZ -> 0.0 in clip space
+            // Metal's standard clip range, NDC Z in [0, 1]: nearZ -> 0, farZ -> 1.
+            // Eye-space z is NEGATIVE here, matching the perspective branch below
+            // (right-handed, camera looking down -Z), so the z row is
+            // ndc_z = (-z_eye - nearZ) / depth. Reverse-Z is the separate opt-in
+            // `useReverseZ`, which flips the depth-compare functions, not this matrix.
             return matrix_float4x4(columns: (
                 SIMD4<Float>(2.0 / width, 0, 0, 0),
                 SIMD4<Float>(0, 2.0 / height, 0, 0),
                 SIMD4<Float>(0, 0, -1.0 / depth, 0),
-                SIMD4<Float>(0, 0, farZ / depth, 1)
+                SIMD4<Float>(0, 0, -nearZ / depth, 1)
             ))
         } else {
             // Convert FOV from degrees to radians
