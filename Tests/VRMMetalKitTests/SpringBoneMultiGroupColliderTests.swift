@@ -301,4 +301,101 @@ final class SpringBoneMultiGroupColliderTests: XCTestCase {
         }
         print("[#415] max joint delta under swing, dedup vs per-group upload: \(maxDelta) m")
     }
+
+    // MARK: - Where per-group application WOULD bite: ordering, not repetition
+
+    /// Two overlapping colliders, `X` in both referenced groups and `Y` in the
+    /// first only. Three uploads of the same scene:
+    ///
+    ///   A  dedup (today)              [X(0b11), Y(0b01)]
+    ///   B  per-group, collider-major  [X(0b01), X(0b10), Y(0b01)]
+    ///   C  per-group, group-major     [X(0b01), Y(0b01), X(0b10)]   <- UniVRM's order
+    ///
+    /// B keeps the repeats adjacent, so the second `X` still resolves a joint
+    /// that nothing has moved since — inert, exactly as in the single-collider
+    /// case. C is the order UniVRM's `.SelectMany(group => group.Colliders)`
+    /// produces: `Y` pushes the joint back into `X` before `X` is applied again,
+    /// so the trailing entry does real work.
+    ///
+    /// This is what actually separates the reference behaviour from VMK's on a
+    /// real avatar — collider *ordering*, not the repetition itself.
+    func testGroupMajorOrderingIsWhatMakesRepetitionObservable() throws {
+        func buildOverlapping(colliders: [(offsetX: Float, group: Int)],
+                              groupCount: Int) throws -> VRMModel {
+            let builder = VRMBuilder()
+            let model = try builder.setSkeleton(.defaultHumanoid).build()
+            model.nodes.removeAll()
+            var previousNode: VRMNode? = nil
+            for i in 0..<4 {
+                let localY: Float = (i == 0) ? 1.0 : -0.1
+                let gltfNode = try makeGLTFNode(name: "joint_\(i)", translation: SIMD3<Float>(0, localY, 0))
+                let node = VRMNode(index: i, gltfNode: gltfNode)
+                if let parent = previousNode { node.parent = parent; parent.children.append(node) }
+                model.nodes.append(node)
+                previousNode = node
+            }
+            for node in model.nodes where node.parent == nil { node.updateWorldTransform() }
+
+            var springBone = VRMSpringBone()
+            var groups: [[Int]] = Array(repeating: [], count: groupCount)
+            for (i, c) in colliders.enumerated() {
+                springBone.colliders.append(VRMCollider(
+                    node: 0,
+                    shape: .sphere(offset: SIMD3<Float>(c.offsetX, -0.2, 0), radius: 0.06)))
+                groups[c.group].append(i)
+            }
+            springBone.colliderGroups = groups.enumerated().map {
+                VRMColliderGroup(name: "G\($0.offset)", colliders: $0.element)
+            }
+
+            var joints: [VRMSpringJoint] = []
+            for i in 0..<4 {
+                var joint = VRMSpringJoint(node: i)
+                joint.hitRadius = 0.02
+                joint.stiffness = 0.5
+                joint.gravityPower = 0.5
+                joint.gravityDir = SIMD3<Float>(0, -1, 0)
+                joint.dragForce = 0.4
+                joints.append(joint)
+            }
+            var spring = VRMSpring(name: "TestSpring")
+            spring.joints = joints
+            spring.colliderGroups = Array(0..<groupCount)
+            springBone.springs = [spring]
+            model.springBone = springBone
+            model.device = device
+
+            let n = colliders.count
+            let buffers = SpringBoneBuffers(device: device)
+            buffers.allocateBuffers(numBones: 4, numSpheres: n, numCapsules: 0, numPlanes: 0)
+            model.springBoneBuffers = buffers
+            model.springBoneGlobalParams = SpringBoneGlobalParams(
+                gravity: SIMD3<Float>(0, -9.8, 0), dtSub: Float(1.0 / 120.0),
+                windAmplitude: 0, windFrequency: 0, windPhase: 0,
+                windDirection: SIMD3<Float>(1, 0, 0), substeps: 1,
+                numBones: 4, numSpheres: UInt32(n), numCapsules: 0, numPlanes: 0)
+            return model
+        }
+
+        // X at +0.05, Y at -0.05 — overlapping, so push-out from one re-enters the other.
+        let a = try buildOverlapping(colliders: [(0.05, 0), (-0.05, 0)], groupCount: 2)
+        a.springBone?.colliderGroups[1] = VRMColliderGroup(name: "G1", colliders: [0])  // X also in group 1
+        let b = try buildOverlapping(colliders: [(0.05, 0), (0.05, 1), (-0.05, 0)], groupCount: 2)
+        let c = try buildOverlapping(colliders: [(0.05, 0), (-0.05, 0), (0.05, 1)], groupCount: 2)
+
+        let posA = try simulate(a, frames: 90)
+        let posB = try simulate(b, frames: 90)
+        let posC = try simulate(c, frames: 90)
+
+        let deltaAB = zip(posA, posB).map { simd_distance($0, $1) }.max() ?? 0
+        let deltaAC = zip(posA, posC).map { simd_distance($0, $1) }.max() ?? 0
+        print("[#415] overlapping colliders — dedup vs collider-major: \(deltaAB) m, dedup vs group-major: \(deltaAC) m")
+
+        XCTAssertLessThan(deltaAB, 1e-6,
+            "collider-major duplication keeps the repeats adjacent, so it stays inert")
+        XCTAssertGreaterThan(deltaAC, 1e-5,
+            "group-major duplication (UniVRM's order) interleaves the repeat after another "
+            + "collider has moved the joint, so it must do real work — if this is inert too, "
+            + "the ordering analysis in #415's response is wrong")
+    }
 }
