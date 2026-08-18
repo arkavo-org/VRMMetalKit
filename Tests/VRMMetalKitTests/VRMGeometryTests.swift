@@ -219,13 +219,10 @@ final class VRMGeometryTests: XCTestCase {
     // MARK: - Joint Sanitization Tests
 
     func testJointIndexSanitization() {
-        // Simulate joint indices with sentinel values
-        let joints: [UInt32] = [0, 1, 65535, 3]  // 65535 is sentinel
-        let maxValidJoint: UInt32 = 255
-
+        let joints: [UInt32] = [0, 1, 65535, 3, 257, 266]
         var sanitizedCount = 0
         let sanitized = joints.map { joint -> UInt32 in
-            if joint > maxValidJoint {
+            if isSentinelJointIndex(joint) {
                 sanitizedCount += 1
                 return 0
             }
@@ -233,24 +230,18 @@ final class VRMGeometryTests: XCTestCase {
         }
 
         XCTAssertEqual(sanitizedCount, 1)
-        XCTAssertEqual(sanitized, [0, 1, 0, 3])  // 65535 clamped to 0
+        XCTAssertEqual(sanitized, [0, 1, 0, 3, 257, 266],
+                       "Only 65535 is a sentinel; palette indices above 255 must be kept")
     }
 
     func testJointIndexNoSanitizationNeeded() {
-        let joints: [UInt32] = [0, 1, 2, 3, 10, 20]
-        let maxValidJoint: UInt32 = 255
-
-        var sanitizedCount = 0
-        let sanitized = joints.map { joint -> UInt32 in
-            if joint > maxValidJoint {
-                sanitizedCount += 1
-                return 0
-            }
-            return joint
-        }
-
-        XCTAssertEqual(sanitizedCount, 0)
-        XCTAssertEqual(sanitized, joints)
+        let joints: [UInt32] = [0, 1, 2, 3, 10, 20, 216, 257]
+        XCTAssertFalse(joints.contains(where: isSentinelJointIndex))
+        XCTAssertTrue(isSentinelJointIndex(65535))
+        XCTAssertTrue(isSentinelJointIndex(UInt32.max))
+        XCTAssertFalse(isSentinelJointIndex(255))
+        XCTAssertFalse(isSentinelJointIndex(256))
+        XCTAssertFalse(isSentinelJointIndex(1023))
     }
 
     // MARK: - Index Consistency Audit Tests

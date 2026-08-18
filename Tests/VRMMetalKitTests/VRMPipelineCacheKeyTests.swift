@@ -210,12 +210,7 @@ final class VRMPipelineCacheKeyTests: XCTestCase {
             verts[i].texCoord = SIMD2<Float>(0, 0)
             verts[i].color = SIMD4<Float>(1, 1, 1, 1)
         }
-        primitive.vertexCount = 3
-        primitive.vertexBuffer = device.makeBuffer(
-            bytes: verts,
-            length: 3 * MemoryLayout<VRMVertex>.stride,
-            options: .storageModeShared
-        )
+        primitive.uploadVertices(verts, device: device)
         primitive.localMin = SIMD3<Float>(-0.9, -0.9, 0)
         primitive.localMax = SIMD3<Float>( 0.9,  0.9, 0)
         let indices: [UInt16] = [0, 1, 2]

@@ -109,7 +109,7 @@ struct MToonMaterial {
  float parametricRimLiftFactor;             // 4 bytes
  float rimLightingMixFactor;                // 4 bytes
  int hasRimMultiplyTexture;                 // 4 bytes
- float _padding1;                           // 4 bytes padding
+ float mergedOutline;                       // 4 bytes: >0.5 = instanced hull in this draw
 
  // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
  float outlineWidthFactor;                  // 4 bytes
@@ -176,6 +176,7 @@ struct VertexOut {
  float4 color;
  float3 viewDirection;
  float3 viewNormal; // For MatCap sampling
+ uint instanceId;   // 0 = shaded surface, 1 = inverted-hull outline
 };
 
 // MARK: - Function constants for per-material MToon specialization
@@ -206,6 +207,14 @@ constant bool fc_hasOutlineWidthMultiplyTexture [[function_constant(11)]];
 
 // Parametric rim color presence
 constant bool fc_hasParametricRim [[function_constant(12)]];
+
+// Active 3-point lights, 1...3. Unused fill/rim lights are compiled out
+// of specialized pipelines (issue #361). The fallback path always uses 3.
+constant uint fc_lightCount [[function_constant(13)]];
+
+static inline uint mtoonEffectiveLightCount() {
+    return fc_useMaterialFlags ? 3u : max(1u, min(fc_lightCount, 3u));
+}
 
 // KHR_texture_transform: apply static scale, rotation and offset to UV
 // Must be applied BEFORE animateUV (transform is static; UV animation is dynamic on top)
@@ -267,6 +276,39 @@ static inline bool needsViewDirection(constant MToonMaterial& material, constant
  return hasParametricRim(material) || uniforms.debugUVs == 10;
 }
 
+// Inverted-hull extrusion used by the dedicated outline vertex and by
+// instance_id == 1 of the merged color+outline draw.
+static inline void applyMToonOutlineExtrusion(
+    thread float3& worldPos,
+    thread float4& clipPos,
+    float3 worldNormal,
+    float2 texCoord,
+    constant Uniforms& uniforms,
+    constant MToonMaterial& material,
+    texture2d<float> outlineWidthMultiplyTexture,
+    sampler textureSampler,
+    bool hasMultiplyTexture
+) {
+ float outlineWidth = material.outlineWidthFactor;
+ if (hasMultiplyTexture) {
+ outlineWidth *= outlineWidthMultiplyTexture.sample(textureSampler, texCoord).g;
+ }
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+ if (material.outlineMode == 1.0) {
+ float distanceScale = length(worldPos - cameraPos) * 0.01;
+ worldPos += normalize(worldNormal) * outlineWidth * distanceScale;
+ clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * float4(worldPos, 1.0);
+ } else if (material.outlineMode == 2.0) {
+ float3 viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(worldNormal, 0.0)).xyz);
+ float2 screenNormal = normalize(viewNormal.xy);
+ float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
+ clipPos.xy += screenNormal * outlineWidth * pixelsToNDC * clipPos.w;
+ }
+}
+
 // VRM 1.0 MToon spec uses linearstep for toon shading
 // Creates sharp anime-style shadow boundaries (not smooth gradients)
 static inline float linearstep(float a, float b, float t) {
@@ -314,8 +356,12 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
                        constant MToonMaterial& material [[buffer(8)]],
                        device const float3* morphedPositions [[buffer(20)]],
                        constant uint& hasMorphed [[buffer(22)]],
-                       uint vertexID [[vertex_id]]) {
+                       texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
+                       sampler outlineWidthSampler [[sampler(0)]],
+                       uint vertexID [[vertex_id]],
+                       uint instanceId [[instance_id]]) {
  VertexOut out;
+ out.instanceId = instanceId;
 
  // Use morphed positions if available, otherwise use original
  float3 morphedPosition;
@@ -369,6 +415,13 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  out.viewDirection = normalize(cameraPos - out.worldPosition);
  } else {
  out.viewDirection = float3(0.0, 0.0, 1.0);
+ }
+
+ if (instanceId == 1u) {
+ applyMToonOutlineExtrusion(out.worldPosition, out.position, out.worldNormal,
+                            out.texCoord, uniforms, material,
+                            outlineWidthMultiplyTexture, outlineWidthSampler,
+                            material.hasOutlineWidthMultiplyTexture > 0);
  }
 
  return out;
@@ -527,6 +580,46 @@ static float4 mtoon_debug_visualize(
     return float4(1.0, 0.0, 1.0, 1.0); // magenta = unknown debug mode
 }
 
+// Isolated debug fragment so production `mtoon_fragment_v2` does not keep
+// the ~180-line visualize cascade in its instruction stream (#361).
+fragment float4 mtoon_fragment_debug(VertexOut in [[stage_in]],
+                        bool isFrontFace [[front_facing]],
+                        constant MToonMaterial& material [[buffer(8)]],
+                        constant Uniforms& uniforms [[buffer(1)]],
+                        texture2d<half> baseColorTexture [[texture(0)]],
+                        texture2d<half> shadeMultiplyTexture [[texture(1)]],
+                        texture2d<half> matcapTexture [[texture(5)]],
+                        sampler textureSampler [[sampler(0)]]) {
+    return mtoon_debug_visualize(in, isFrontFace, material, uniforms,
+                                 baseColorTexture, shadeMultiplyTexture,
+                                 matcapTexture, textureSampler);
+}
+
+static inline void accumulateMToonDirectLight(
+    thread mtoon_float3& litAcc,
+    thread mtoon_float3& lightingAcc,
+    mtoon_float3 normal,
+    mtoon_float3 shadeColor,
+    mtoon_float3 litAlbedo,
+    mtoon_float shadingShift,
+    mtoon_float toony,
+    mtoon_float intensity,
+    mtoon_float totalIntensity,
+    float3 lightDirectionFrom,
+    float3 lightColor,
+    int vrmVersion
+) {
+    if (intensity <= 0.0) return;
+    mtoon_float rawNdotL = dot(normal, mtoon_float3(-lightDirectionFrom));
+    mtoon_float NdotL = (vrmVersion == 1) ? rawNdotL : rawNdotL * 0.5 + 0.5;
+    mtoon_float shading = NdotL + shadingShift;
+    mtoon_float shadowStep = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading);
+    mtoon_float weight = intensity / totalIntensity;
+    float3 safeLightColor = clamp(lightColor, 0.0f, 65500.0f);
+    litAcc += mix(shadeColor, litAlbedo, shadowStep) * mtoon_float3(safeLightColor) * weight;
+    lightingAcc += shadowStep * weight * mtoon_float3(safeLightColor);
+}
+
 // Fragment shader with complete MToon 1.0 shading
 // VERSION 2: Fixed white textures
 fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
@@ -549,11 +642,17 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
                         texture2d<half> occlusionTexture [[texture(8)]],
                         sampler textureSampler [[sampler(0)]]) {
 
- // Debug modes are cold in production; keep the normal path to one branch.
- if (uniforms.debugUVs != 0) {
-     return mtoon_debug_visualize(in, isFrontFace, material, uniforms,
-                                  baseColorTexture, shadeMultiplyTexture,
-                                  matcapTexture, textureSampler);
+ if (in.instanceId == 1u) {
+     if (isFrontFace) discard_fragment();
+     float3 outlineColor = float3(material.outlineColorR, material.outlineColorG, material.outlineColorB);
+     if (material.outlineLightingMixFactor < 1.0) {
+         float3 lightInfluence = uniforms.lightColor.xyz * uniforms.ambientColor.xyz;
+         outlineColor = mix(outlineColor * lightInfluence, outlineColor, material.outlineLightingMixFactor);
+     }
+     return float4(outlineColor, 1.0);
+ }
+ if (material.mergedOutline > 0.5 && !isFrontFace) {
+     discard_fragment();
  }
 
  // Resolve effective feature flags for the main shading path. When
@@ -630,11 +729,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  mtoon_float3 normal = mtoon_float3(normalize(in.worldNormal));
  mtoon_float3 viewNormal = mtoon_float3(in.viewNormal);
 
- bool normalWasFlipped = false;
  if (!isFrontFace) {
      normal = -normal;
      viewNormal = -viewNormal;
-     normalWasFlipped = true;
  }
 
  if (effectiveHasNormalTexture) {
@@ -666,11 +763,6 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      normal = mtoon_float3(normalize(TBN * float3(nMap)));
  }
 
- // DEBUG: Show magenta where normal was flipped (enable with debugUVs=11)
- if (uniforms.debugUVs == 11 && normalWasFlipped) {
-     return float4(1.0, 0.0, 1.0, 1.0);  // Magenta for flipped normals
- }
-
  // Shading shift calculation
  mtoon_float shadingShift = mtoon_float(material.shadingShiftFactor);
  if (effectiveHasShadingShiftTexture) {
@@ -681,11 +773,13 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // MToon toon shading with energy-conserving 3-point lighting
  mtoon_float toony = mtoon_float(material.shadingToonyFactor);
 
- // Use pre-calculated intensities from CPU (stored in lightColor.w)
+ // Use pre-calculated intensities from CPU (stored in lightColor.w).
+ // Specialized pipelines compile only the first `nLights` slots (#361).
  constexpr mtoon_float MIN_TOTAL_INTENSITY = 0.001;
+ uint nLights = mtoonEffectiveLightCount();
  mtoon_float intensity0 = mtoon_float(uniforms.lightColor.w);
- mtoon_float intensity1 = mtoon_float(uniforms.light1Color.w);
- mtoon_float intensity2 = mtoon_float(uniforms.light2Color.w);
+ mtoon_float intensity1 = nLights > 1 ? mtoon_float(uniforms.light1Color.w) : mtoon_float(0.0);
+ mtoon_float intensity2 = nLights > 2 ? mtoon_float(uniforms.light2Color.w) : mtoon_float(0.0);
  mtoon_float totalIntensity = max(intensity0 + intensity1 + intensity2, MIN_TOTAL_INTENSITY);
 
  // Calculate weighted light contributions with version-aware shading formula.
@@ -693,49 +787,26 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // matching the MToon 1.0 spec and three-vrm's implementation.
  // VRM 0.x: Half-Lambert remap (`NdotL * 0.5 + 0.5`) preserves the look of
  // legacy assets whose `shadingShiftFactor` was authored for [0,1] input.
- // `lighting{i}` is the pre-albedo radiance term captured alongside `lit{i}`
- // so the rim modulator can multiply by `directLight + indirectLight` per
- // MToon-1.0 (vrm-conformance #228, matches UniVRM's `directLightingFactor`).
- mtoon_float3 lit0 = mtoon_float3(0.0);
- mtoon_float3 lighting0 = mtoon_float3(0.0);
- if (intensity0 > 0.0) {
-     // Light direction convention: negate because uniforms stores direction FROM light,
-     // but NdotL calculation needs direction TO light.
-     // VRM 1.0 uses raw dot(N,L) (spec); VRM 0.x uses Half-Lambert remap.
-     mtoon_float rawNdotL = dot(normal, mtoon_float3(-uniforms.lightDirection.xyz));
-     mtoon_float NdotL = (uniforms.vrmVersion == 1) ? rawNdotL : rawNdotL * 0.5 + 0.5;
-     mtoon_float shading0 = NdotL + shadingShift;
-     mtoon_float shadowStep = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading0);
-     mtoon_float weight = intensity0 / totalIntensity;
-     float3 safeLightColor = clamp(uniforms.lightColor.xyz, 0.0f, 65500.0f);
-     lit0 = mix(shadeColor, baseColor.rgb, shadowStep) * mtoon_float3(safeLightColor) * weight;
-     lighting0 = shadowStep * weight * mtoon_float3(safeLightColor);
+ // `lightingAcc` is the pre-albedo radiance term so the rim modulator can
+ // multiply by `directLight + indirectLight` per MToon-1.0
+ // (vrm-conformance #228, matches UniVRM's `directLightingFactor`).
+ mtoon_float3 litAcc = mtoon_float3(0.0);
+ mtoon_float3 lightingAcc = mtoon_float3(0.0);
+ accumulateMToonDirectLight(litAcc, lightingAcc, normal, shadeColor, baseColor.rgb,
+                            shadingShift, toony, intensity0, totalIntensity,
+                            uniforms.lightDirection.xyz, uniforms.lightColor.xyz,
+                            uniforms.vrmVersion);
+ if (nLights > 1) {
+     accumulateMToonDirectLight(litAcc, lightingAcc, normal, shadeColor, baseColor.rgb,
+                                shadingShift, toony, intensity1, totalIntensity,
+                                uniforms.light1Direction.xyz, uniforms.light1Color.xyz,
+                                uniforms.vrmVersion);
  }
-
- mtoon_float3 lit1 = mtoon_float3(0.0);
- mtoon_float3 lighting1 = mtoon_float3(0.0);
- if (intensity1 > 0.0) {
-     mtoon_float rawNdotL1 = dot(normal, mtoon_float3(-uniforms.light1Direction.xyz));
-     mtoon_float NdotL1 = (uniforms.vrmVersion == 1) ? rawNdotL1 : rawNdotL1 * 0.5 + 0.5;
-     mtoon_float shading1 = NdotL1 + shadingShift;
-     mtoon_float shadowStep1 = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading1);
-     mtoon_float weight1 = intensity1 / totalIntensity;
-     float3 safeLight1Color = clamp(uniforms.light1Color.xyz, 0.0f, 65500.0f);
-     lit1 = mix(shadeColor, baseColor.rgb, shadowStep1) * mtoon_float3(safeLight1Color) * weight1;
-     lighting1 = shadowStep1 * weight1 * mtoon_float3(safeLight1Color);
- }
-
- mtoon_float3 lit2 = mtoon_float3(0.0);
- mtoon_float3 lighting2 = mtoon_float3(0.0);
- if (intensity2 > 0.0) {
-     mtoon_float rawNdotL2 = dot(normal, mtoon_float3(-uniforms.light2Direction.xyz));
-     mtoon_float NdotL2 = (uniforms.vrmVersion == 1) ? rawNdotL2 : rawNdotL2 * 0.5 + 0.5;
-     mtoon_float shading2 = NdotL2 + shadingShift;
-     mtoon_float shadowStep2 = linearstep(mtoon_float(-1.0) + toony, mtoon_float(1.0) - toony, shading2);
-     mtoon_float weight2 = intensity2 / totalIntensity;
-     float3 safeLight2Color = clamp(uniforms.light2Color.xyz, 0.0f, 65500.0f);
-     lit2 = mix(shadeColor, baseColor.rgb, shadowStep2) * mtoon_float3(safeLight2Color) * weight2;
-     lighting2 = shadowStep2 * weight2 * mtoon_float3(safeLight2Color);
+ if (nLights > 2) {
+     accumulateMToonDirectLight(litAcc, lightingAcc, normal, shadeColor, baseColor.rgb,
+                                shadingShift, toony, intensity2, totalIntensity,
+                                uniforms.light2Direction.xyz, uniforms.light2Color.xyz,
+                                uniforms.vrmVersion);
  }
 
  // Accumulate weighted contributions (manual normalization factor allows artistic control).
@@ -746,12 +817,12 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // visible hemisphere and collapsing the soft Lambert gradient at low
  // `shadingToonyFactor` (vrm-conformance #205). `setLightNormalizationMode(.manual(f))`
  // multiplies on top — `.manual(1.0)` is now ~1/π × the pre-#205 brightness.
- mtoon_float3 litColor = (lit0 + lit1 + lit2) * mtoon_float(uniforms.lightNormalizationFactor) * mtoon_float(BRDF_LAMBERT_NORM);
+ mtoon_float3 litColor = litAcc * mtoon_float(uniforms.lightNormalizationFactor) * mtoon_float(BRDF_LAMBERT_NORM);
 
  // Aggregate pre-albedo radiance for the rim modulator. No /π — UniVRM's
  // `directLightingFactor` doesn't apply the Lambert BRDF normalization to
  // the rim path (rim is a stylistic edge highlight, not a diffuse BRDF).
- mtoon_float3 directLight = (lighting0 + lighting1 + lighting2) * mtoon_float(uniforms.lightNormalizationFactor);
+ mtoon_float3 directLight = lightingAcc * mtoon_float(uniforms.lightNormalizationFactor);
 
  // Indirect diffuse — KNOWN DEVIATION FROM MToon 1.0 SPEC.
  //
@@ -877,28 +948,18 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
          mtoon_float NdotL = saturate(dot(Nworld, mtoon_float3(-uniforms.lightDirection.xyz)));
          dirRim += fresnel * NdotL * mtoon_float3(uniforms.lightColor.xyz) * intensity0;
      }
-     if (intensity1 > 0.0) {
+     if (nLights > 1 && intensity1 > 0.0) {
          mtoon_float NdotL = saturate(dot(Nworld, mtoon_float3(-uniforms.light1Direction.xyz)));
          dirRim += fresnel * NdotL * mtoon_float3(uniforms.light1Color.xyz) * intensity1;
      }
-     if (intensity2 > 0.0) {
+     if (nLights > 2 && intensity2 > 0.0) {
          mtoon_float NdotL = saturate(dot(Nworld, mtoon_float3(-uniforms.light2Direction.xyz)));
          dirRim += fresnel * NdotL * mtoon_float3(uniforms.light2Color.xyz) * intensity2;
      }
      litColor += dirRim;
  }
 
- // DEBUG 35: Final lit color before gamma/sRGB conversion
- if (uniforms.debugUVs == 35) {
-     return float4(float3(litColor), 1.0);
- }
-
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)
- // Debug mode 9: Show litColor before saturation (scaled down to see overbright)
- if (uniforms.debugUVs == 9) {
-     return float4(float3(litColor * 0.25), 1.0);  // Scale by 0.25 to see values > 1
- }
-
  // Minimum light floor to prevent completely black surfaces
  // This handles edge cases where NdotL is negative for all lights and ambient is zero
  mtoon_float3 minLight = baseColor.rgb * mtoon_float(0.08);  // 8% of base color as minimum
@@ -928,6 +989,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
                                texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
                                sampler textureSampler [[sampler(0)]]) {
  VertexOut out;
+ out.instanceId = 0;
 
  // Resolve effective feature flags (see the equivalent block in the
  // fragment shader). For the fallback path the uniform-buffer flags are

@@ -54,9 +54,12 @@ kernel void springBonePredict(
     constant SpringBoneParams& globalParams [[buffer(3)]],
     constant float* restLengths [[buffer(4)]],
     constant float3* bindDirections [[buffer(11)]],
+    constant uint* boneChainIndex [[buffer(16)]],
+    constant uint* chainSleep [[buffer(17)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones) return;
+    if (chainSleep[boneChainIndex[id]] != 0) return;
 
     // Skip prediction for root bones - they are kinematically driven
     uint parentIndex = boneParams[id].parentIndex;

@@ -54,6 +54,11 @@ public final class ParallelTextureLoader: @unchecked Sendable {
 
     private let maxConcurrentLoads: Int
 
+    /// When `true`, sRGB color textures are re-encoded as BC7 at load
+    /// (``VRMLoadingOptimization/aggressiveTextureCompression``). Linear
+    /// maps are never compressed.
+    public var compressColorTextures: Bool = false
+
     /// Creates a loader bound to a Metal device, parsed document, and buffer loader.
     ///
     /// - Parameters:
@@ -283,7 +288,8 @@ public final class ParallelTextureLoader: @unchecked Sendable {
             pixelFormat: pixelFormat,
             device: device,
             mipmapped: mipmapped,
-            alphaIsCoverage: alphaIsCoverage
+            alphaIsCoverage: alphaIsCoverage,
+            blockCompress: compressColorTextures && sRGB
         )
     }
 }

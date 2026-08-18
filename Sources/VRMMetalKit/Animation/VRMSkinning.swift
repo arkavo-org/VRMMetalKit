@@ -31,12 +31,10 @@ import simd
 /// shared buffer rather than allocating per-skin buffers.
 ///
 /// ### Joint cap and padding
-/// The buffer is padded to at least 256 matrices so the shader's
-/// `min(jointIndex, jointCount - 1)` clamp is always in-bounds for
-/// malformed meshes referencing joints beyond their declared palette.
-/// The renderer assumes per-skin joint counts of at most 256 (see
-/// README), but larger skins are accepted by the buffer allocator
-/// without runtime validation.
+/// The buffer is padded to at least ``VRMConstants/Animation/maxJointCount``
+/// matrices so the shader's last-resort joint-index clamp is always
+/// in-bounds for malformed meshes referencing joints beyond their
+/// declared palette. Per-skin counts may exceed 256 (VRoid cloth).
 ///
 /// ### Rigid fallback
 /// ``identityJointMatricesBuffer`` is a separate read-only buffer of
@@ -71,6 +69,8 @@ public class VRMSkinningSystem {
     // Dirty tracking: only recompute joint matrices when a skin's joints may have changed.
     private var skinDirty: [Int: Bool] = [:]
     private var skinCount: Int = 0
+    /// Last mixed joint ``VRMNode/worldGeneration`` seen by ``markSkinsDirtyIfJointsMoved(_:)``.
+    private var lastJointGeneration: [Int: UInt64] = [:]
 
     /// A/B test hook: when set to a skin index, ``updateJointMatrices(for:skinIndex:)`` writes identity matrices for that skin instead of the computed palette.
     public var testIdentityPalette: Int? = nil
@@ -106,13 +106,14 @@ public class VRMSkinningSystem {
 
         totalMatrixCount = currentOffset
         skinCount = skins.count
+        lastJointGeneration.removeAll(keepingCapacity: true)
         for index in skins.indices {
             skinDirty[index] = true
         }
 
         // Allocate the large buffer for all skins
-        // CRITICAL: Pad to at least 256 matrices so shader clamp to 255 is always safe
-        let minMatrixCount = 256
+        // Pad so the shader's last-resort clamp (maxJointCount - 1) is in-bounds.
+        let minMatrixCount = VRMConstants.Animation.maxJointCount
         let paddedMatrixCount = max(totalMatrixCount, minMatrixCount)
         let totalBufferSize = paddedMatrixCount * matrixSize
         jointMatricesBuffer = device.makeBuffer(length: totalBufferSize, options: .storageModeShared)
@@ -255,6 +256,26 @@ public class VRMSkinningSystem {
         }
     }
 
+    /// Marks a skin dirty only when one of its joints published a new world matrix.
+    ///
+    /// Call once per frame instead of ``markAllSkinsDirty()`` so idle or
+    /// half-animated avatars skip the `world × IBM` upload for skins that
+    /// did not move.
+    public func markSkinsDirtyIfJointsMoved(_ skins: [VRMSkin]) {
+        for (index, skin) in skins.enumerated() {
+            var generation: UInt64 = 0
+            skin.joints.withUnsafeBufferPointer { joints in
+                for joint in joints {
+                    generation = generation &* 16_777_619 &+ joint.worldGeneration
+                }
+            }
+            if lastJointGeneration[index] != generation {
+                skinDirty[index] = true
+                lastJointGeneration[index] = generation
+            }
+        }
+    }
+
     /// Logs a warning if `skinIndex` was not updated for `frameNumber`.
     ///
     /// Does not throw; intended as a diagnostic gate before a draw call.
@@ -337,8 +358,8 @@ public class VRMSkinningSystem {
 
     /// Read back and validate vertex skinning attributes
     public func validateVertexAttributes(primitive: VRMPrimitive, meshName: String, paletteCount: Int) {
-        guard let vertexBuffer = primitive.vertexBuffer else {
-            vrmLog("❌ [VALIDATION] Mesh '\(meshName)': No vertex buffer!")
+        guard let attributeBuffer = primitive.attributeBuffer else {
+            vrmLog("❌ [VALIDATION] Mesh '\(meshName)': No attribute buffer!")
             return
         }
 
@@ -348,8 +369,8 @@ public class VRMSkinningSystem {
         }
 
         let vertexCount = primitive.vertexCount
-        let stride = 96 // VRMVertex stride
-        let pointer = vertexBuffer.contents()
+        let stride = MemoryLayout<VRMAttributeVertex>.stride
+        let pointer = attributeBuffer.contents()
 
         var maxJoint: UInt32 = 0
         var minJoint: UInt32 = UInt32.max
@@ -360,21 +381,17 @@ public class VRMSkinningSystem {
         vrmLog("📊 [VERTEX VALIDATION] Mesh '\(meshName)' - Scanning \(min(128, vertexCount)) vertices:")
         vrmLog("   Palette size: \(paletteCount) joints")
 
-        // Use dynamic MemoryLayout to get correct offsets (critical for avoiding wedge artifacts)
-        let jointsOffset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
-        let weightsOffset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
+        let jointsOffset = MemoryLayout<VRMAttributeVertex>.offset(of: \.joints)!
+        let weightsOffset = MemoryLayout<VRMAttributeVertex>.offset(of: \.weights)!
 
         vrmLog("📐 [VERTEX LAYOUT] joints offset: \(jointsOffset), weights offset: \(weightsOffset), stride: \(stride)")
 
-        // Scan first 128 vertices (or all if fewer)
         for i in 0..<min(128, vertexCount) {
             let offset = i * stride
 
-            // Use dynamic offsets instead of hardcoded values
             let jointsPtr = pointer.advanced(by: offset + jointsOffset).assumingMemoryBound(to: UInt32.self)
             let joints = [jointsPtr[0], jointsPtr[1], jointsPtr[2], jointsPtr[3]]
 
-            // Use dynamic offsets instead of hardcoded values
             let weightsPtr = pointer.advanced(by: offset + weightsOffset).assumingMemoryBound(to: Float.self)
             let weights = [weightsPtr[0], weightsPtr[1], weightsPtr[2], weightsPtr[3]]
 

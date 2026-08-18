@@ -208,7 +208,9 @@ public enum VRMConstants {
     /// Animation defaults (joint capacity, playback speed).
     public enum Animation {
         /// Maximum number of joints supported per skinned mesh.
-        public static let maxJointCount: Int = 256
+        /// VRoid skirt/cloth chains routinely push palettes past 256
+        /// (AvatarSample_U is 276; rightLowerLeg sits at 257).
+        public static let maxJointCount: Int = 1024
 
         /// Default animation playback rate multiplier (1.0 = real-time).
         public static let defaultPlaybackSpeed: Float = 1.0

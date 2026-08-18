@@ -46,6 +46,11 @@ public class TextureLoader {
     private let document: GLTFDocument
     private let baseURL: URL?
 
+    /// When `true`, sRGB color textures are re-encoded as BC7 at load
+    /// (``VRMLoadingOptimization/aggressiveTextureCompression``). Linear
+    /// maps are never compressed.
+    public var compressColorTextures: Bool = false
+
     /// Creates a loader bound to a Metal device, parsed document, and an existing ``BufferLoader``.
     ///
     /// - Parameters:
@@ -300,6 +305,10 @@ public class TextureLoader {
 
         do {
             let texture = try await textureLoader.newTexture(data: imageData, options: options)
+            if compressColorTextures && sRGB,
+               let compressed = TextureBlockCompressor.compress(texture, device: device) {
+                return compressed
+            }
             return texture
         } catch {
             vrmLog("[TextureLoader] Failed to create texture: \(error)")
@@ -342,7 +351,8 @@ public class TextureLoader {
             pixelFormat: pixelFormat,
             device: device,
             mipmapped: mipmapped,
-            alphaIsCoverage: alphaIsCoverage
+            alphaIsCoverage: alphaIsCoverage,
+            blockCompress: compressColorTextures && sRGB
         ) else {
             vrmLog("[TextureLoader] Failed to create texture")
             return nil

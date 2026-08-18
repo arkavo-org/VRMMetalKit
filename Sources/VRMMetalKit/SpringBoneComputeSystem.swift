@@ -180,17 +180,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Per-chain contiguous bone ranges derived from `rootBoneIndices`. Used to
     /// attribute motion to individual spring chains for per-chain sleep decisions.
     private var chainRanges: [Range<Int>] = []
-    /// Per-chain sleep flags. A chain sleeps when its bones have remained below
-    /// `sleepThreshold` for `sleepDelayFrames` consecutive frames.
-    private var chainSleepState: [Bool] = []
-    /// Consecutive frames below threshold for each chain.
-    private var chainSleepCounter: [Int] = []
+    /// Per-chain collider-group masks (same bits written into `BoneParams`).
+    private var chainColliderMasks: [UInt32] = []
+    /// Honest sleep/wake policy. Velocities come from completed GPU snapshots.
+    private var sleepGate = SpringBoneSleepGate(chainCount: 0)
     /// Velocity threshold in units/sec below which a chain may fall asleep.
     private var sleepThreshold: Float = 0.001
     /// Number of consecutive frames below threshold required before sleeping.
     private var sleepDelayFrames: Int = 5
     /// Number of bones currently considered asleep.
-    public private(set) var sleepingBoneCount: Int = 0
+    public var sleepingBoneCount: Int { sleepGate.sleepingBoneCount }
+    /// Test hook: per-chain asleep flags.
+    var testChainAsleep: [Bool] { sleepGate.asleep }
+    /// Per-bone chain index and per-chain sleep flag, bound at buffers 16/17.
+    private var boneChainIndexBuffer: MTLBuffer?
+    private var chainSleepBuffer: MTLBuffer?
     /// Previous-frame target transforms for wake-on-motion detection.
     private var previousRootPositionsForSleep: [SIMD3<Float>] = []
     private var previousSphereCollidersForSleep: [SphereCollider] = []
@@ -282,6 +286,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     // Readback + synchronization (protected by snapshotLock)
     private let snapshotLock = NSLock()
     private var latestPositionsSnapshot: [SIMD3<Float>] = []
+    /// Last completed `bonePosPrev` (GPU-done). Sleep velocities use this pair.
+    private var latestPrevPositionsSnapshot: [SIMD3<Float>] = []
+    /// Per-chain max velocities from the last completed command buffer.
+    private var completedChainVelocities: [Float] = []
     private var simulationFrameCounter: UInt64 = 0
     private var latestCompletedFrame: UInt64 = 0
     private var lastAppliedFrame: UInt64 = 0
@@ -620,23 +628,33 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // encoding each frame can perturb dispatch timing enough to break it.
         let sleepGateEnabled = commandBuffer != nil
         if sleepGateEnabled {
-            let chainVelocities = computeChainMaxVelocities(buffers: buffers)
-            let wakeDetected = detectWakeConditions(model: model,
-                                                    buffers: buffers,
-                                                    globalParams: globalParams,
-                                                    foreign: clampedForeign,
-                                                    external: clampedExternal)
-            updateSleepState(velocities: chainVelocities, wakeDetected: wakeDetected)
+            snapshotLock.lock()
+            let snapshotVelocities = completedChainVelocities
+            snapshotLock.unlock()
+            let velocities: [Float]
+            if snapshotVelocities.count == chainRanges.count {
+                velocities = snapshotVelocities
+            } else {
+                // No completed frame yet — stay awake. Do not contents() in-flight bonePos*.
+                velocities = SpringBoneSleepGate.chainMaxVelocities(
+                    curr: [], prev: [], ranges: chainRanges, invDt: 1)
+            }
+            let wakeMask = computeWakeMask(globalParams: globalParams,
+                                           foreign: clampedForeign,
+                                           external: clampedExternal)
+            sleepGate.apply(velocities: velocities,
+                            wakeMask: wakeMask,
+                            ranges: chainRanges,
+                            threshold: sleepThreshold,
+                            delay: sleepDelayFrames)
+            uploadChainSleepFlags()
         } else {
             // Offline/sync path: keep everything awake and don't touch GPU buffers
             // for heuristic reads.
-            for i in chainSleepState.indices {
-                chainSleepState[i] = false
-            }
-            sleepingBoneCount = 0
+            sleepGate.wakeAll()
         }
 
-        let allChainsAsleep = sleepGateEnabled && !chainSleepState.isEmpty && chainSleepState.allSatisfy { $0 }
+        let allChainsAsleep = sleepGateEnabled && sleepGate.allAsleep
 
         // Write this frame's foreign colliders into the reserved tail once. The
         // tail persists across substeps (interpolate only rewrites the prefix).
@@ -832,6 +850,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         computeEncoder.label = "SpringBone Compute"
 
         // Set buffers
+        computeEncoder.setBuffer(boneChainIndexBuffer, offset: 0, index: 16)
+        computeEncoder.setBuffer(chainSleepBuffer, offset: 0, index: 17)
         computeEncoder.setBuffer(buffers.bonePosPrev, offset: 0, index: 0)
         computeEncoder.setBuffer(buffers.bonePosCurr, offset: 0, index: 1)
         computeEncoder.setBuffer(buffers.boneParams, offset: 0, index: 2)
@@ -956,6 +976,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let frameID = simulationFrameCounter
 
         let capturedBonePosCurr = buffers.bonePosCurr
+        let capturedBonePosPrev = buffers.bonePosPrev
         let capturedNumBones = buffers.numBones
 
         // For self-owned command buffers, allocate a semaphore so callers can
@@ -989,7 +1010,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     return
                 }
 
-                self.captureCompletedPositions(bonePosCurr: capturedBonePosCurr, numBones: capturedNumBones, frameID: frameID)
+                self.captureCompletedPositions(bonePosCurr: capturedBonePosCurr,
+                                               bonePosPrev: capturedBonePosPrev,
+                                               numBones: capturedNumBones,
+                                               frameID: frameID)
             }
         }
 
@@ -1028,13 +1052,32 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     private func wakeAllChains() {
         forceWakePending = false
-        for i in chainSleepState.indices {
-            chainSleepState[i] = false
+        sleepGate.wakeAll()
+        uploadChainSleepFlags()
+    }
+
+    private func allocateSleepBuffers(numBones: Int, chainCount: Int) {
+        boneChainIndexBuffer = nil
+        chainSleepBuffer = nil
+        guard numBones > 0, chainCount > 0 else { return }
+
+        var indices = [UInt32](repeating: 0, count: numBones)
+        for (chain, range) in chainRanges.enumerated() {
+            for bone in range where bone < numBones {
+                indices[bone] = UInt32(chain)
+            }
         }
-        for i in chainSleepCounter.indices {
-            chainSleepCounter[i] = 0
+        let indexBytes = indices.count * MemoryLayout<UInt32>.stride
+        if let buffer = device.makeBuffer(bytes: indices, length: indexBytes, options: [.storageModeShared]) {
+            buffer.label = "SpringBone BoneChainIndex"
+            boneChainIndexBuffer = buffer
         }
-        sleepingBoneCount = 0
+        let sleepBytes = chainCount * MemoryLayout<UInt32>.stride
+        if let buffer = device.makeBuffer(length: sleepBytes, options: [.storageModeShared]) {
+            buffer.label = "SpringBone ChainSleep"
+            memset(buffer.contents(), 0, sleepBytes)
+            chainSleepBuffer = buffer
+        }
     }
 
     private func computeChainRanges(numBones: Int) -> [Range<Int>] {
@@ -1047,146 +1090,82 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         return ranges
     }
 
-    private func computeChainMaxVelocities(buffers: SpringBoneBuffers) -> [Float] {
-        guard let bonePosCurr = buffers.bonePosCurr,
-              let bonePosPrev = buffers.bonePosPrev,
-              buffers.numBones > 0,
-              !chainRanges.isEmpty,
-              quality.substepRateHz > 0 else {
-            return Array(repeating: Float.greatestFiniteMagnitude, count: chainRanges.count)
-        }
-
-        // `bonePosCurr` holds the position at the end of the last substep and
-        // `bonePosPrev` holds the position at its start, so the displacement
-        // between them is over one substep. Convert to units/sec for the gate.
-        let substepDt = Float(1.0 / quality.substepRateHz)
-        let invSubstepDt = 1.0 / substepDt
-
-        let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
-        let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
-
-        var maxVelocities = [Float](repeating: 0, count: chainRanges.count)
-        for (index, range) in chainRanges.enumerated() {
-            var maxVel: Float = 0
-            for i in range {
-                guard i < buffers.numBones else { break }
-                let displacement = simd_length(currPtr[i] - prevPtr[i])
-                maxVel = max(maxVel, displacement * invSubstepDt)
-            }
-            maxVelocities[index] = maxVel
-        }
-        return maxVelocities
-    }
-
-    private func detectWakeConditions(model: VRMModel,
-                                      buffers: SpringBoneBuffers,
-                                      globalParams: SpringBoneGlobalParams,
-                                      foreign: ForeignColliderSnapshot,
-                                      external: ForeignColliderSnapshot) -> Bool {
+    /// Builds a per-chain wake mask from completed-frame heuristics.
+    /// Global events (settling, quality, wind/force, explicit wake) wake every
+    /// chain. Root and collider motion wake only the chains they actually affect.
+    private func computeWakeMask(globalParams: SpringBoneGlobalParams,
+                                 foreign: ForeignColliderSnapshot,
+                                 external: ForeignColliderSnapshot) -> [Bool] {
+        var globalWake = false
         if forceWakePending {
-            return true
+            forceWakePending = false
+            globalWake = true
         }
-
-        // Still in startup settling period - don't sleep yet.
         if globalParams.settlingFrames > 0 {
-            return true
+            globalWake = true
         }
-
-        // Quality preset change forces a wake so the new substep rate/iterations
-        // take effect immediately.
         if let prevQuality = previousQualityForSleep, prevQuality != quality {
-            return true
+            globalWake = true
         }
-
-        let motionThreshold = sleepThreshold * max(cachedModelScale, VRMConstants.Physics.minScaleForThreshold)
-
-        // Root bone motion above threshold wakes every chain.
-        if !previousRootPositionsForSleep.isEmpty,
-           previousRootPositionsForSleep.count == targetRootPositions.count {
-            for i in 0..<targetRootPositions.count {
-                if simd_distance(targetRootPositions[i], previousRootPositionsForSleep[i]) > motionThreshold {
-                    return true
-                }
-            }
-        }
-
-        // Collider motion/scale changes wake physics.
-        if collidersMoved(previous: previousSphereCollidersForSleep,
-                          current: targetSphereColliders,
-                          threshold: motionThreshold) {
-            return true
-        }
-        if collidersMoved(previous: previousCapsuleCollidersForSleep,
-                          current: targetCapsuleColliders,
-                          threshold: motionThreshold) {
-            return true
-        }
-        if planesMoved(previous: previousPlaneCollidersForSleep,
-                       current: targetPlaneColliders,
-                       threshold: motionThreshold) {
-            return true
-        }
-
-        // Foreign (cross-avatar) and external (rigid-body prop) colliders wake
-        // physics too: a settled avatar must react to a partner leaning in or a
-        // prop penetrating — the own-motion checks above never see them (F1).
-        // `foreign`/`external` are the CLAMPED sets (the exact colliders
-        // `writeForeignTail` applies this frame), so colliders beyond the
-        // reserved budget can't wake a sleeping avatar they will never touch.
-        //
-        // Only when the foreign group slot was actually reserved: with >=30
-        // authored collider groups `writeForeignTail` carves out the bit and drops
-        // ALL foreign/external colliders, so waking for a change we will never apply
-        // is pure churn (wake→resim→resleep every frame a partner moves, yet zero
-        // foreign collision). Mirror the tail-write guard here.
-        if foreignColliderGroupIndex != 0xFFFFFFFF {
-            if foreignCollidersChanged(previous: previousForeignForSleep,
-                                       current: foreign,
-                                       threshold: motionThreshold) {
-                return true
-            }
-            if foreignCollidersChanged(previous: previousExternalForSleep,
-                                       current: external,
-                                       threshold: motionThreshold) {
-                return true
-            }
-        }
-
-        // External force / wind / character-velocity / drag changes wake physics.
         if let prev = previousGlobalParamsForSleep {
             if simd_distance(prev.gravity, globalParams.gravity) > 0.001 ||
                abs(prev.windAmplitude - globalParams.windAmplitude) > 0.001 ||
                simd_distance(prev.windDirection, globalParams.windDirection) > 0.01 ||
                simd_distance(prev.externalVelocity, globalParams.externalVelocity) > 0.001 ||
                abs(prev.dragMultiplier - globalParams.dragMultiplier) > 0.001 {
-                return true
+                globalWake = true
             }
         }
 
-        return false
-    }
+        var movedRoots: [Int] = []
+        var movedColliderMasks: [UInt32] = []
+        if !globalWake {
+            let motionThreshold = sleepThreshold * max(cachedModelScale, VRMConstants.Physics.minScaleForThreshold)
 
-    private func collidersMoved(previous: [SphereCollider], current: [SphereCollider], threshold: Float) -> Bool {
-        guard previous.count == current.count, !previous.isEmpty else { return false }
-        for i in 0..<previous.count {
-            if simd_distance(previous[i].center, current[i].center) > threshold ||
-               abs(previous[i].radius - current[i].radius) > threshold {
-                return true
+            if !previousRootPositionsForSleep.isEmpty,
+               previousRootPositionsForSleep.count == targetRootPositions.count {
+                for i in 0..<targetRootPositions.count {
+                    if simd_distance(targetRootPositions[i], previousRootPositionsForSleep[i]) > motionThreshold {
+                        movedRoots.append(i)
+                    }
+                }
+            }
+
+            movedColliderMasks.append(contentsOf: movedSphereMasks(
+                previous: previousSphereCollidersForSleep,
+                current: targetSphereColliders,
+                threshold: motionThreshold))
+            movedColliderMasks.append(contentsOf: movedCapsuleMasks(
+                previous: previousCapsuleCollidersForSleep,
+                current: targetCapsuleColliders,
+                threshold: motionThreshold))
+            movedColliderMasks.append(contentsOf: movedPlaneMasks(
+                previous: previousPlaneCollidersForSleep,
+                current: targetPlaneColliders,
+                threshold: motionThreshold))
+
+            if foreignColliderGroupIndex != 0xFFFFFFFF {
+                let foreignBit: UInt32 = 1 << foreignColliderGroupIndex
+                if foreignCollidersChanged(previous: previousForeignForSleep,
+                                           current: foreign,
+                                           threshold: motionThreshold) {
+                    movedColliderMasks.append(foreignBit)
+                }
+                if foreignCollidersChanged(previous: previousExternalForSleep,
+                                           current: external,
+                                           threshold: motionThreshold) {
+                    movedColliderMasks.append(foreignBit)
+                }
             }
         }
-        return false
-    }
 
-    private func collidersMoved(previous: [CapsuleCollider], current: [CapsuleCollider], threshold: Float) -> Bool {
-        guard previous.count == current.count, !previous.isEmpty else { return false }
-        for i in 0..<previous.count {
-            if simd_distance(previous[i].p0, current[i].p0) > threshold ||
-               simd_distance(previous[i].p1, current[i].p1) > threshold ||
-               abs(previous[i].radius - current[i].radius) > threshold {
-                return true
-            }
-        }
-        return false
+        return SpringBoneSleepGate.wakeMask(
+            chainCount: chainRanges.count,
+            globalWake: globalWake,
+            movedRootIndices: movedRoots,
+            movedColliderMasks: movedColliderMasks,
+            chainColliderMasks: chainColliderMasks
+        )
     }
 
     /// Foreign (cross-avatar / external) colliders wake physics like authored
@@ -1218,45 +1197,50 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         return false
     }
 
-    private func planesMoved(previous: [PlaneCollider], current: [PlaneCollider], threshold: Float) -> Bool {
-        guard previous.count == current.count, !previous.isEmpty else { return false }
-        for i in 0..<previous.count {
-            if simd_distance(previous[i].point, current[i].point) > threshold ||
-               simd_distance(previous[i].normal, current[i].normal) > 0.01 {
-                return true
+    private func movedSphereMasks(previous: [SphereCollider], current: [SphereCollider], threshold: Float) -> [UInt32] {
+        if previous.count != current.count { return previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF] }
+        var masks: [UInt32] = []
+        for i in previous.indices {
+            if simd_distance(previous[i].center, current[i].center) > threshold ||
+               abs(previous[i].radius - current[i].radius) > threshold {
+                masks.append(current[i].groupMask)
             }
         }
-        return false
+        return masks
     }
 
-    private func updateSleepState(velocities: [Float], wakeDetected: Bool) {
-        guard velocities.count == chainRanges.count else { return }
-
-        if wakeDetected {
-            wakeAllChains()
-            return
-        }
-
-        var asleepCount = 0
-        for i in 0..<velocities.count {
-            if chainSleepState[i] {
-                let range = chainRanges[i]
-                asleepCount += range.count
-                continue
-            }
-
-            if velocities[i] < sleepThreshold {
-                chainSleepCounter[i] += 1
-                if chainSleepCounter[i] >= sleepDelayFrames {
-                    chainSleepState[i] = true
-                    let range = chainRanges[i]
-                    asleepCount += range.count
-                }
-            } else {
-                chainSleepCounter[i] = 0
+    private func movedCapsuleMasks(previous: [CapsuleCollider], current: [CapsuleCollider], threshold: Float) -> [UInt32] {
+        if previous.count != current.count { return previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF] }
+        var masks: [UInt32] = []
+        for i in previous.indices {
+            if simd_distance(previous[i].p0, current[i].p0) > threshold ||
+               simd_distance(previous[i].p1, current[i].p1) > threshold ||
+               abs(previous[i].radius - current[i].radius) > threshold {
+                masks.append(current[i].groupMask)
             }
         }
-        sleepingBoneCount = asleepCount
+        return masks
+    }
+
+    private func movedPlaneMasks(previous: [PlaneCollider], current: [PlaneCollider], threshold: Float) -> [UInt32] {
+        if previous.count != current.count { return previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF] }
+        var masks: [UInt32] = []
+        for i in previous.indices {
+            if simd_distance(previous[i].point, current[i].point) > threshold ||
+               simd_distance(previous[i].normal, current[i].normal) > 0.01 {
+                masks.append(current[i].groupMask)
+            }
+        }
+        return masks
+    }
+
+    private func uploadChainSleepFlags() {
+        guard let buffer = chainSleepBuffer, !sleepGate.asleep.isEmpty else { return }
+        let count = sleepGate.asleep.count
+        let pointer = buffer.contents().bindMemory(to: UInt32.self, capacity: count)
+        for i in 0..<count {
+            pointer[i] = sleepGate.asleep[i] ? 1 : 0
+        }
     }
 
     private func captureSleepSnapshots(model: VRMModel, globalParams: SpringBoneGlobalParams,
@@ -1461,6 +1445,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Process spring chains to extract bone parameters
         var boneIndex = 0
         rootBoneIndices = []
+        chainColliderMasks = []
 
         // Track chains with all-zero gravityPower for auto-fix
         var chainGravityPowers: [[Float]] = []
@@ -1499,6 +1484,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             if (spring.name ?? "").lowercased().contains("bust") {
                 colliderGroupMask &= ~syntheticGroupBit
             }
+            chainColliderMasks.append(colliderGroupMask)
 
             for joint in spring.joints {
                 chainGravityPower.append(joint.gravityPower)
@@ -1596,9 +1582,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Build contiguous per-chain bone ranges from root indices for sleep-gate tracking.
         chainRanges = computeChainRanges(numBones: boneIndex)
-        chainSleepState = Array(repeating: false, count: chainRanges.count)
-        chainSleepCounter = Array(repeating: 0, count: chainRanges.count)
-        sleepingBoneCount = 0
+        sleepGate = SpringBoneSleepGate(chainCount: chainRanges.count)
+        allocateSleepBuffers(numBones: boneIndex, chainCount: chainRanges.count)
 
         // NOTE: Auto-fix for zero gravityPower removed - it was overriding intentional zero gravity
         // Real VRM files with broken physics should be fixed at the source or use a dedicated flag
@@ -1884,6 +1869,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         snapshotLock.lock()
         latestPositionsSnapshot.removeAll(keepingCapacity: true)
+        latestPrevPositionsSnapshot.removeAll(keepingCapacity: true)
+        completedChainVelocities.removeAll(keepingCapacity: true)
         latestCompletedFrame = 0
         lastAppliedFrame = 0
         snapshotLock.unlock()
@@ -2082,7 +2069,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         previousPlaneColliders = targetPlaneColliders
     }
 
-    private func captureCompletedPositions(bonePosCurr: MTLBuffer?, numBones: Int, frameID: UInt64) {
+    private func captureCompletedPositions(bonePosCurr: MTLBuffer?,
+                                           bonePosPrev: MTLBuffer? = nil,
+                                           numBones: Int,
+                                           frameID: UInt64) {
         guard let bonePosCurr = bonePosCurr, numBones > 0 else {
             return
         }
@@ -2097,6 +2087,24 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         latestPositionsSnapshot.withUnsafeMutableBufferPointer { destination in
             guard let dst = destination.baseAddress else { return }
             dst.update(from: sourcePointer, count: numBones)
+        }
+
+        if let bonePosPrev {
+            if latestPrevPositionsSnapshot.count != numBones {
+                latestPrevPositionsSnapshot = Array(repeating: SIMD3<Float>(repeating: 0), count: numBones)
+            }
+            let prevPointer = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+            latestPrevPositionsSnapshot.withUnsafeMutableBufferPointer { destination in
+                guard let dst = destination.baseAddress else { return }
+                dst.update(from: prevPointer, count: numBones)
+            }
+            let invDt = quality.substepRateHz > 0 ? Float(quality.substepRateHz) : 1
+            completedChainVelocities = SpringBoneSleepGate.chainMaxVelocities(
+                curr: latestPositionsSnapshot,
+                prev: latestPrevPositionsSnapshot,
+                ranges: chainRanges,
+                invDt: invDt
+            )
         }
 
         // NaN safety: filter out corrupted positions and replace with safe fallback
@@ -2129,8 +2137,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // When every chain is asleep the GPU positions are unchanged from the
         // previous applied frame, so skip the CPU readback and node writeback.
-        let allChainsAsleep = !chainSleepState.isEmpty && chainSleepState.allSatisfy { $0 }
-        if allChainsAsleep {
+        if sleepGate.allAsleep {
             return
         }
 
@@ -2162,7 +2169,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             // Skip the CPU writeback for chains that are fully asleep; their
             // node transforms are unchanged from the previous frame.
-            if chainIndex < chainSleepState.count && chainSleepState[chainIndex] {
+            if chainIndex < sleepGate.asleep.count && sleepGate.asleep[chainIndex] {
                 globalBoneIndex += spring.joints.count
                 continue
             }
@@ -2930,6 +2937,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Reset readback state
         snapshotLock.lock()
         latestPositionsSnapshot.removeAll(keepingCapacity: true)
+        latestPrevPositionsSnapshot.removeAll(keepingCapacity: true)
+        completedChainVelocities.removeAll(keepingCapacity: true)
         latestCompletedFrame = 0
         lastAppliedFrame = 0
         snapshotLock.unlock()
@@ -3116,6 +3125,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             if anyGravity {
                 snapshotLock.lock()
                 latestPositionsSnapshot = settledPositions
+                latestPrevPositionsSnapshot = settledPositions
+                completedChainVelocities = Array(repeating: 0, count: chainRanges.count)
                 latestCompletedFrame = 1
                 lastAppliedFrame = 0
                 snapshotLock.unlock()

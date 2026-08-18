@@ -48,6 +48,25 @@ xcrun simctl launch --console-pty booted org.arkavo.VRMVisionHost
 xcrun simctl io booted screenshot /tmp/vision.png
 ```
 
+## GPU bench (xrsimulator)
+
+Same stereo offscreen path as `VRMBenchmark --mode visionos`, plus a compositor-loop sample, on the simulator Metal device:
+
+```bash
+cd VisionHost
+xcodegen generate
+xcodebuild -project VRMVisionHost.xcodeproj -scheme VRMVisionHost \
+  -destination 'platform=visionOS Simulator,name=Apple Vision Pro,OS=26.5' \
+  -configuration Release -derivedDataPath ./DerivedData build
+
+xcrun simctl boot 'Apple Vision Pro'
+xcrun simctl install booted DerivedData/Build/Products/Release-xrsimulator/VRMVisionHost.app
+SIMCTL_CHILD_VRM_VISIONOS_BENCH=both \
+  xcrun simctl launch --console-pty booted org.arkavo.VRMVisionHost
+```
+
+JSON lands in the app Documents container (`bench-visionos-xrsimulator.json`). This is still the simulator GPU, not a Vision Pro.
+
 The Xcode project, the generated `Info.plist`, and `DerivedData/` are all
 build products and are gitignored — `xcodegen generate` recreates them.
 
@@ -73,13 +92,15 @@ head-locked one would not move.
   value for the near plane in the vector's `y`". The host therefore sets
   `VRMRenderer.useReverseZ` and clears depth to `0.0`. Without both, the
   depth test rejects every fragment and nothing appears.
-- **One draw per view.** Each view supplies its own projection from
-  `drawable.computeProjection(viewIndex:)` and a view matrix derived from
-  the device anchor, and renders through
-  `VRMRenderer.drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`,
-  which is documented for non-main-actor render loops. Attachments are
-  selected via `view.textureMap`, so the code works under either the
-  `layered` or `dedicated` layout.
+- **One simulation, one raster per view.** Each view supplies its own
+  projection from `drawable.computeProjection(viewIndex:)` and a view
+  matrix derived from the device anchor. The host calls
+  `VRMRenderer.encodeCompositorViews(commandBuffer:views:)`, which runs
+  morphs, SpringBone, and the inflight-slot wait once, then encodes each
+  eye. That is the preferred submit path — calling `drawOffscreen` once
+  per eye still works, but it double-steps physics and consumes two
+  triple-buffer slots. Attachments are selected via `view.textureMap`,
+  so the code works under either the `layered` or `dedicated` layout.
 - **Placement.** The avatar stands 1.5 m in front of the viewer. Floor
   height comes from the first tracked device pose rather than assuming the
   session origin is on the floor — in the simulator the origin is the head
@@ -87,14 +108,32 @@ head-locked one would not move.
   avatar's shins.
 - **Lighting is set explicitly.** VRMMetalKit does not supply default
   lights; a renderer with none draws the avatar black.
+- **LookAt tracks the wearer's eyes.** Each compositor view is one eye
+  pose. The host aims at the midpoint of those origins in avatar space
+  (`VRMLookAtTarget.user`) and **turns the head** toward that point
+  (clamped ~±50° yaw). AvatarSample_U authors bone look-at with only
+  8–12° of eye travel — eyes alone still read as staring forward once
+  the avatar is off to one side. Residual aim stays on the eye bones.
+  Raw gaze (where the wearer is looking) is not available to a
+  third-party Metal host.
+- **Playlist + blink.** `AvatarDirector` cycles bundled standing VRMA
+  clips (idle, look-around, greet, relax, think, in-place `VRMA_01`)
+  with a 0.75 s slerp crossfade, and blinks on the render thread. The
+  offscreen GPU bench still uses its own model and a single clip;
+  compositor sampling after that includes the director, so animation
+  cost is in those numbers.
+- **SpringBone + app-layer gravity.** AvatarSample joints author
+  `gravityPower = 0`; bind direction for a high ponytail is straight up.
+  The host sets `springBoneGlobalParams.gravity = (0, -2, 0)` — the same
+  `ExternalForce` a real app is expected to provide — then warms physics
+  up so hair drapes before the first frame.
 
 ## Known limits
 
-- Spring-bone physics is stepped inside the renderer's draw call, so the
-  two per-frame view draws step it twice. The second step is harmless today
-  only because the step uses a wall-clock delta and the second draw follows
-  microseconds after the first. A host that needs exact physics pacing
-  should not rely on that.
+- Spring-bone and morph compute run once per compositor frame (via
+  `encodeCompositorViews`). Older hosts that called `drawOffscreen` per
+  eye stepped physics twice. The GPU bench loads a separate model so it
+  cannot leave the live rig in a posed rest state.
 - No gesture input, no foveation, no MSAA (drawable textures are
   single-sampled).
 - Only tested in the simulator. The floor-height derivation in particular

@@ -454,6 +454,7 @@ final class LightingTestRenderer {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let pipelineState: MTLRenderPipelineState
+    let debugPipelineState: MTLRenderPipelineState
     let colorTexture: MTLTexture
     let depthTexture: MTLTexture
     let width: Int
@@ -540,6 +541,13 @@ final class LightingTestRenderer {
         pipelineDesc.vertexDescriptor = vertexDescriptor
 
         self.pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
+
+        guard let debugFragment = library.makeFunction(name: "mtoon_fragment_debug") else {
+            throw LightingTestError.shaderFunctionNotFound
+        }
+        let debugDesc = pipelineDesc.copy() as! MTLRenderPipelineDescriptor
+        debugDesc.fragmentFunction = debugFragment
+        self.debugPipelineState = try device.makeRenderPipelineState(descriptor: debugDesc)
 
         // Create sphere geometry
         let (vertices, indices) = Self.createSphere(radius: 0.5, segments: 32)
@@ -636,7 +644,7 @@ final class LightingTestRenderer {
             throw LightingTestError.encoderCreationFailed
         }
 
-        encoder.setRenderPipelineState(pipelineState)
+        encoder.setRenderPipelineState(uniforms.debugUVs != 0 ? debugPipelineState : pipelineState)
         encoder.setCullMode(.back)
         encoder.setFrontFacing(.counterClockwise)
 

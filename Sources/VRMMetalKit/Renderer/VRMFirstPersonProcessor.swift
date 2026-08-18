@@ -118,15 +118,15 @@ public func processFirstPersonAutoFlags(model: VRMModel, device: MTLDevice) {
                   primitive.vertexCount > 0 else { continue }
 
             if let headJoint = headJointUInt {
-                let vertices = vertexBuffer.contents().bindMemory(
-                    to: VRMVertex.self,
+                let attributes = (primitive.attributeBuffer ?? vertexBuffer).contents().bindMemory(
+                    to: VRMAttributeVertex.self,
                     capacity: primitive.vertexCount
                 )
                 var joints = [SIMD4<UInt32>](repeating: .zero, count: primitive.vertexCount)
                 var weights = [SIMD4<Float>](repeating: .zero, count: primitive.vertexCount)
                 for i in 0..<primitive.vertexCount {
-                    joints[i] = vertices[i].joints
-                    weights[i] = vertices[i].weights
+                    joints[i] = attributes[i].joints
+                    weights[i] = attributes[i].weights
                 }
                 primitive.firstPersonHiddenFlags = VRMPrimitive.computeFirstPersonHiddenFlags(
                     joints: joints,

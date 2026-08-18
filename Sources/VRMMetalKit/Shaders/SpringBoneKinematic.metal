@@ -63,9 +63,11 @@ kernel void springBoneKinematic(
     constant uint* rootBoneIndices [[buffer(9)]],
     constant uint& numRootBones [[buffer(10)]],
     constant float3* animatedRootPositionsPrev [[buffer(12)]],
+    constant uint* chainSleep [[buffer(17)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= numRootBones) return;
+    if (chainSleep[id] != 0) return;
 
     uint boneIndex = rootBoneIndices[id];
     float3 animatedPos = animatedRootPositions[id];

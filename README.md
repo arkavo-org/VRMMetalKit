@@ -16,7 +16,7 @@ A high-performance Swift Package for loading and rendering 3D assets on Apple's 
 - **VRM 1.0 Specification Support** — full VRMC_vrm with VRM 0.0 fallback, MToon shader, 55 humanoid bones, 18 facial expressions, and complete metadata.
 - **Animation System** — VRMA loader with rest-pose retargeting, humanoid bone mapping, non-humanoid node animation, and an AnimationPlayer with looping and speed control.
 - **GPU-Accelerated Physics** — SpringBone XPBD simulation in Metal compute shaders at fixed 120Hz substeps, with sphere/capsule colliders.
-- **Advanced Rendering** — MToon NPR with matcap, rim, and outline passes; GPU morph targets; skinning up to 256 joints; triple-buffered uniforms.
+- **Advanced Rendering** — MToon NPR with matcap, rim, and outline passes; GPU morph targets; skinning up to 1024 joints; triple-buffered uniforms.
 - **Performance & Debugging** — built-in metrics, three-level StrictMode validation, and zero-cost conditional debug logging.
 
 ### GLTFMetalKit *(new)*

@@ -495,9 +495,8 @@ final class SkinningTests: XCTestCase {
             for primitive in mesh.primitives {
                 // Access vertex buffer if available
                 if let vertexBuffer = primitive.vertexBuffer {
-                    let vertexStride = MemoryLayout<VRMVertex>.stride
-                    let count = vertexBuffer.length / vertexStride
-                    let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: count)
+                    let vertices = primitive.interleavedVertices()
+                    let count = vertices.count
 
                     for i in 0..<count {
                         let pos = vertices[i].position
@@ -703,9 +702,8 @@ final class SkinningTests: XCTestCase {
                     continue
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 // Find the max joint index referenced
                 var maxJointIndex: UInt32 = 0
@@ -764,9 +762,8 @@ final class SkinningTests: XCTestCase {
                     continue
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<vertexCount {
                     let weights = vertices[i].weights
@@ -830,10 +827,9 @@ final class SkinningTests: XCTestCase {
 
         for (meshIndex, mesh) in model.meshes.enumerated() {
             for (primIndex, primitive) in mesh.primitives.enumerated() {
-                guard let vertexBuffer = primitive.vertexBuffer else { continue }
+                guard primitive.vertexBuffer != nil else { continue }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
+                let vertexCount = primitive.vertexCount
                 totalVertices += vertexCount
 
                 // Look for clothing-related meshes (cardigan, shirt, etc.)
@@ -868,9 +864,8 @@ final class SkinningTests: XCTestCase {
                 guard primitive.hasJoints,
                       let vertexBuffer = primitive.vertexBuffer else { continue }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<vertexCount {
                     let v = vertices[i]
@@ -956,9 +951,8 @@ final class SkinningTests: XCTestCase {
                 guard primitive.hasJoints,
                       let vertexBuffer = primitive.vertexBuffer else { continue }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<vertexCount {
                     let v = vertices[i]
@@ -1095,9 +1089,8 @@ final class SkinningTests: XCTestCase {
                 guard primitive.hasJoints,
                       let vertexBuffer = primitive.vertexBuffer else { continue }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 // Sample every 100th vertex for performance
                 for i in stride(from: 0, to: vertexCount, by: 100) {
@@ -1138,12 +1131,9 @@ final class SkinningTests: XCTestCase {
                     continue
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
                 guard vertexCount > 0 else { continue }
-
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
 
                 // Sample a few vertices and verify data is sensible
                 var minPos = SIMD3<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
