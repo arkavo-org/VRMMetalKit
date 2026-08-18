@@ -38,6 +38,8 @@ struct BenchmarkOptions {
     var enableSpringBone: Bool = false
     var wireframe: Bool = false
     var depthPrepass: Bool = false
+    var crowdCount: Int = 128  // --count: max avatars for `--mode crowd` sweep
+    var crowdStack: Bool = false  // --stack: overlap avatars (heavy occlusion) to gauge #199 value
     var lighting: String = "standard"
     var debugUVs: Int32 = 0
     var cameraOffsetY: Float = 0  // Shift camera target/eye in Y to push avatar off-screen for cull tests
@@ -153,6 +155,11 @@ func parseArguments() -> BenchmarkOptions? {
             opts.wireframe = true
         case "--depth-prepass":
             opts.depthPrepass = true
+        case "--count":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.crowdCount = Int(v) ?? opts.crowdCount
+        case "--stack":
+            opts.crowdStack = true
         case "--lighting":
             guard let v = nextValue(for: a) else { return nil }
             opts.lighting = v.lowercased()
@@ -240,6 +247,12 @@ func lookAtMatrix(eye: SIMD3<Float>, center: SIMD3<Float>, up: SIMD3<Float>) -> 
     r.columns.2 = SIMD4<Float>(s.z, u.z, -f.z, 0)
     r.columns.3 = SIMD4<Float>(-simd_dot(s, eye), -simd_dot(u, eye), simd_dot(f, eye), 1)
     return r
+}
+
+func translationMatrix(_ t: SIMD3<Float>) -> matrix_float4x4 {
+    var m = matrix_identity_float4x4
+    m.columns.3 = SIMD4<Float>(t.x, t.y, t.z, 1)
+    return m
 }
 
 func perspectiveMatrix(fovRadians: Float, aspect: Float, near: Float, far: Float) -> matrix_float4x4 {
@@ -663,8 +676,157 @@ struct VRMBenchmarkCLI {
             exit(finalizeReport(opts: opts, report: report))
         }
 
+        if opts.mode == "crowd" {
+            // Crowd load test: how many avatars can the current single-avatar-per-
+            // renderer architecture draw within the frame budget, before #199
+            // (occlusion culling) is needed? N renderers SHARE one loaded model
+            // (1x geometry memory); each draws once per frame into a SHARED
+            // color+depth target (depth stored between draws so avatars occlude each
+            // other naturally). Per-avatar placement is baked into the view matrix
+            // (view_i = globalView * translate(gridOffset_i)) with a SHARED
+            // projection, so depth stays consistent across the crowd. Static pose
+            // (no animation/spring) to isolate render throughput. Sweeps N upward.
+            let maxN = max(1, opts.crowdCount)
+            let cols = Int(ceil(Double(maxN).squareRoot()))
+            let spacing: Float = 0.7
+
+            let aspect = Float(opts.width) / Float(opts.height)
+            let projection = perspectiveMatrix(
+                fovRadians: 50.0 * .pi / 180.0, aspect: aspect, near: 0.05, far: 200.0)
+            // Camera pulled back + up to frame a grid that grows with the crowd.
+            let span = Float(cols) * spacing
+            let globalView = lookAtMatrix(
+                eye: SIMD3<Float>(0, 1.3 + span * 0.4, 1.8 + span * 0.9),
+                center: SIMD3<Float>(0, 1.0, -span * 0.5),
+                up: SIMD3<Float>(0, 1, 0))
+
+            func gridOffset(_ i: Int) -> SIMD3<Float> {
+                if opts.crowdStack {
+                    // Stack avatars almost on top of each other along depth, so all
+                    // but the front are heavily occluded. If cost is still linear
+                    // here, the renderer does NO occlusion culling and #199 would
+                    // recover the occluded avatars' cost.
+                    return SIMD3<Float>(0, 0, -Float(i) * 0.02)
+                }
+                let gx = i % cols, gy = i / cols
+                return SIMD3<Float>((Float(gx) - Float(cols - 1) / 2) * spacing,
+                                    0,
+                                    -Float(gy) * spacing)
+            }
+
+            // Build maxN renderers sharing the one model.
+            print("Building \(maxN) renderers (shared model)…")
+            var renderers: [VRMRenderer] = []
+            renderers.reserveCapacity(maxN)
+            for i in 0..<maxN {
+                var c = RendererConfig()
+                c.sampleCount = opts.sampleCount
+                c.strict = .off
+                let r = VRMRenderer(device: device, config: c)
+                r.loadModel(model)
+                r.enableSpringBone = false
+                r.skipPreDrawTransformUpdate = true
+                r.setLight(0, direction: SIMD3<Float>(-0.2, 0.5, -0.85),
+                           color: SIMD3<Float>(1, 1, 1), intensity: 0.3183)
+                r.disableLight(1)
+                r.setLight(2, direction: SIMD3<Float>(0, 0.2, 1),
+                           color: SIMD3<Float>(1, 1, 1), intensity: 0.0955)
+                r.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
+                r.setLightNormalizationMode(.radiometric)
+                r.projectionMatrix = projection
+                r.viewMatrix = simd_mul(globalView, translationMatrix(gridOffset(i)))
+                renderers.append(r)
+            }
+
+            // Shared offscreen targets (depth must be stored to chain draws).
+            let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .rgba8Unorm, width: opts.width, height: opts.height, mipmapped: false)
+            colorDesc.usage = [.renderTarget, .shaderRead]
+            colorDesc.storageMode = .private
+            let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .depth32Float, width: opts.width, height: opts.height, mipmapped: false)
+            depthDesc.usage = .renderTarget
+            depthDesc.storageMode = .private
+            guard let colorTex = device.makeTexture(descriptor: colorDesc),
+                  let depthTex = device.makeTexture(descriptor: depthDesc) else {
+                print("ERROR: failed to create crowd render targets"); exit(1)
+            }
+
+            func renderCrowdFrame(_ n: Int) -> Double {
+                var ms = 0.0
+                autoreleasepool {
+                    guard let cb = commandQueue.makeCommandBuffer() else { return }
+                    let t0 = CACurrentMediaTime()
+                    for i in 0..<n {
+                        let rpd = MTLRenderPassDescriptor()
+                        rpd.colorAttachments[0].texture = colorTex
+                        rpd.colorAttachments[0].loadAction = (i == 0) ? .clear : .load
+                        rpd.colorAttachments[0].storeAction = .store
+                        rpd.colorAttachments[0].clearColor = MTLClearColor(red: 0.12, green: 0.14, blue: 0.18, alpha: 1)
+                        rpd.depthAttachment.texture = depthTex
+                        rpd.depthAttachment.loadAction = (i == 0) ? .clear : .load
+                        rpd.depthAttachment.storeAction = .store
+                        rpd.depthAttachment.clearDepth = 1.0
+                        renderers[i].drawOffscreenHeadless(
+                            to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
+                    }
+                    cb.commit()
+                    cb.waitUntilCompleted()
+                    ms = (CACurrentMediaTime() - t0) * 1000.0
+                }
+                return ms
+            }
+
+            // Sweep N upward (1,2,4,8,… up to maxN), measuring frame time per N.
+            var sweep: [Int] = []
+            var n = 1
+            while n < maxN { sweep.append(n); n *= 2 }
+            sweep.append(maxN)
+
+            print("""
+
+            ======================================================================
+            VRMMetalKit Crowd Load Test — \(opts.label)
+            ======================================================================
+            Model        : \(url.lastPathComponent)
+            Resolution   : \(opts.width)x\(opts.height) (MSAA \(opts.sampleCount)x)
+            Architecture : single-avatar-per-renderer, shared model, shared depth, static pose
+            Per N: \(opts.warmup) warmup + \(opts.frames) measured frames
+            ----------------------------------------------------------------------
+              avatars    median ms     p95 ms       FPS    60fps  120fps
+            ----------------------------------------------------------------------
+            """)
+
+            var lastUnder60 = 0, lastUnder120 = 0
+            for count in sweep {
+                for _ in 0..<opts.warmup { _ = renderCrowdFrame(count) }
+                var samples: [Double] = []; samples.reserveCapacity(opts.frames)
+                for _ in 0..<opts.frames { samples.append(renderCrowdFrame(count)) }
+                let s = FrameStats.compute(samples)
+                let fps = 1000.0 / max(s.medianMs, 0.0001)
+                let ok60 = s.medianMs <= (1000.0 / 60.0)
+                let ok120 = s.medianMs <= (1000.0 / 120.0)
+                if ok60 { lastUnder60 = count }
+                if ok120 { lastUnder120 = count }
+                print(String(format: "  %7d   %9.3f   %9.3f   %7.1f    %@     %@",
+                             count, s.medianMs, s.p95Ms, fps,
+                             ok60 ? "✓" : "✗", ok120 ? "✓" : "✗"))
+            }
+            print("""
+            ----------------------------------------------------------------------
+            Max crowd @ 60fps (16.67ms): ~\(lastUnder60) avatars
+            Max crowd @ 120fps (8.33ms): ~\(lastUnder120) avatars
+            (No occlusion culling today — cost is ~linear in visible avatars. #199
+             would help only when avatars occlude each other; this grid keeps most
+             visible, so it is close to the worst case for raw throughput.)
+            ======================================================================
+
+            """)
+            exit(0)
+        }
+
         guard opts.mode == "render" else {
-            print("ERROR: unknown --mode \(opts.mode). Expected render, animation, transforms, or load.")
+            print("ERROR: unknown --mode \(opts.mode). Expected render, animation, transforms, load, or crowd.")
             exit(1)
         }
 
