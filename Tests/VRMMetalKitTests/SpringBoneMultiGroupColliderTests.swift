@@ -53,14 +53,24 @@ final class SpringBoneMultiGroupColliderTests: XCTestCase {
 
     // MARK: - Rig
 
+    /// How the collider reachable from the spring is registered.
+    private enum ColliderLayout {
+        /// No colliders at all. Buffers are allocated with `numSpheres: 0` so
+        /// `update()` computes `params.numSpheres == 0` and skips the collide
+        /// dispatch entirely — the control must be collider-free by
+        /// construction, not by the sphere slot happening to read as zeroed.
+        case none
+        /// One collider, member of both groups — today's upload, one entry
+        /// masked `0b11`.
+        case shared
+        /// Two identical colliders, one per group — the per-group upload #415
+        /// asks for, two entries masked `0b01` and `0b10`.
+        case perGroup
+    }
+
     /// One sphere collider sitting against a 4-joint hanging chain, reachable
     /// through two collider groups that the spring references.
-    ///
-    /// - Parameter duplicatePerGroup: `false` builds the collider once and lets
-    ///   it be a member of both groups — today's upload, one entry masked
-    ///   `0b11`. `true` builds two identical colliders, one per group — the
-    ///   per-group upload #415 asks for, two entries masked `0b01` and `0b10`.
-    private func buildChain(duplicatePerGroup: Bool) throws -> VRMModel {
+    private func buildChain(_ layout: ColliderLayout) throws -> VRMModel {
         let builder = VRMBuilder()
         let model = try builder.setSkeleton(.defaultHumanoid).build()
 
@@ -89,7 +99,17 @@ final class SpringBoneMultiGroupColliderTests: XCTestCase {
         let shape = VRMColliderShape.sphere(offset: SIMD3<Float>(0.02, -0.25, 0), radius: 0.08)
 
         var springBone = VRMSpringBone()
-        if duplicatePerGroup {
+        switch layout {
+        case .none:
+            springBone.colliders = []
+            springBone.colliderGroups = []
+        case .shared:
+            springBone.colliders = [VRMCollider(node: 0, shape: shape)]
+            springBone.colliderGroups = [
+                VRMColliderGroup(name: "G0", colliders: [0]),
+                VRMColliderGroup(name: "G1", colliders: [0]),
+            ]
+        case .perGroup:
             springBone.colliders = [
                 VRMCollider(node: 0, shape: shape),
                 VRMCollider(node: 0, shape: shape),
@@ -97,12 +117,6 @@ final class SpringBoneMultiGroupColliderTests: XCTestCase {
             springBone.colliderGroups = [
                 VRMColliderGroup(name: "G0", colliders: [0]),
                 VRMColliderGroup(name: "G1", colliders: [1]),
-            ]
-        } else {
-            springBone.colliders = [VRMCollider(node: 0, shape: shape)]
-            springBone.colliderGroups = [
-                VRMColliderGroup(name: "G0", colliders: [0]),
-                VRMColliderGroup(name: "G1", colliders: [0]),
             ]
         }
 
@@ -118,12 +132,15 @@ final class SpringBoneMultiGroupColliderTests: XCTestCase {
         }
         var spring = VRMSpring(name: "TestSpring")
         spring.joints = joints
-        spring.colliderGroups = [0, 1]          // references BOTH groups
+        // References BOTH groups (none exist in the `.none` control, which
+        // leaves the mask at the collide-with-everything default — so nothing
+        // but the absent dispatch suppresses collision there).
+        spring.colliderGroups = layout == .none ? [] : [0, 1]
         springBone.springs = [spring]
         model.springBone = springBone
         model.device = device
 
-        let sphereCount = duplicatePerGroup ? 2 : 1
+        let sphereCount = springBone.colliders.count
         let buffers = SpringBoneBuffers(device: device)
         buffers.allocateBuffers(numBones: boneCount, numSpheres: sphereCount,
                                 numCapsules: 0, numPlanes: 0)
@@ -185,8 +202,8 @@ final class SpringBoneMultiGroupColliderTests: XCTestCase {
     /// Guards the measurement below against passing trivially. If both variants
     /// uploaded the same buffer, equal bone positions would prove nothing.
     func testVariantsUploadStructurallyDifferentColliderBuffers() throws {
-        let deduped = try buildChain(duplicatePerGroup: false)
-        let perGroup = try buildChain(duplicatePerGroup: true)
+        let deduped = try buildChain(.shared)
+        let perGroup = try buildChain(.perGroup)
         let system = try SpringBoneComputeSystem(device: device)
         try system.populateSpringBoneData(model: deduped)
         let system2 = try SpringBoneComputeSystem(device: device)
@@ -211,15 +228,16 @@ final class SpringBoneMultiGroupColliderTests: XCTestCase {
 
     /// The bone must actually be in contact, or "no difference" would just mean
     /// "no collision happened".
+    ///
+    /// The control allocates zero sphere slots rather than muting a collider,
+    /// so the collide kernel is never dispatched. Muting via
+    /// `springBoneGlobalParams.numSpheres` would not work — `update()`
+    /// recomputes that field from `buffers.numSpheres` every substep — and
+    /// clearing `springBone.colliders` alone leaves an allocated, never-written
+    /// sphere slot that the kernel still reads.
     func testColliderIsEngaged() throws {
-        let withCollider = try simulate(try buildChain(duplicatePerGroup: false), frames: 60)
-
-        let free = try buildChain(duplicatePerGroup: false)
-        free.springBone?.colliderGroups = []
-        free.springBone?.springs[0].colliderGroups = []
-        free.springBone?.colliders = []
-        free.springBoneGlobalParams?.numSpheres = 0
-        let without = try simulate(free, frames: 60)
+        let withCollider = try simulate(try buildChain(.shared), frames: 60)
+        let without = try simulate(try buildChain(.none), frames: 60)
 
         XCTAssertEqual(withCollider.count, without.count)
         let moved = zip(withCollider, without).map { simd_distance($0, $1) }.max() ?? 0
@@ -240,8 +258,8 @@ final class SpringBoneMultiGroupColliderTests: XCTestCase {
     /// becomes both implementable and observable, and this test should be
     /// inverted into the acceptance test the issue specifies.
     func testPerGroupDuplicationDoesNotChangeSimulationResult() throws {
-        let deduped = try simulate(try buildChain(duplicatePerGroup: false), frames: 60)
-        let perGroup = try simulate(try buildChain(duplicatePerGroup: true), frames: 60)
+        let deduped = try simulate(try buildChain(.shared), frames: 60)
+        let perGroup = try simulate(try buildChain(.perGroup), frames: 60)
 
         XCTAssertEqual(deduped.count, perGroup.count)
         XCTAssertFalse(deduped.isEmpty, "simulation produced no bone positions")
@@ -288,8 +306,8 @@ final class SpringBoneMultiGroupColliderTests: XCTestCase {
             return Array(UnsafeBufferPointer(start: ptr, count: buffers.numBones))
         }
 
-        let deduped = try swing(try buildChain(duplicatePerGroup: false), frames: 90)
-        let perGroup = try swing(try buildChain(duplicatePerGroup: true), frames: 90)
+        let deduped = try swing(try buildChain(.shared), frames: 90)
+        let perGroup = try swing(try buildChain(.perGroup), frames: 90)
 
         XCTAssertFalse(deduped.isEmpty, "simulation produced no bone positions")
         var maxDelta: Float = 0
