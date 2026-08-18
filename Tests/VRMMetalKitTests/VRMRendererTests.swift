@@ -125,14 +125,12 @@ final class VRMRendererTests: XCTestCase {
         let farZ: Float = 100.0
         let depth = farZ - nearZ
 
-        // Pins the current Z scale/offset coefficients only; it does not
-        // assert which clip-space convention (standard vs. reverse) they
-        // represent. The offset below is the coefficient issue #408 is about
-        // — the orthographic branch disagrees with the perspective branch
-        // about the sign of eye-space z — so fixing #408 updates this
-        // expectation.
+        // Pins the Z scale/offset coefficients only. What they MEAN — near -> 0,
+        // far -> 1, linear in between — is asserted behaviourally in
+        // `ProjectionDepthMappingTests`, which is what caught #408; coefficient
+        // pins like this one passed against the broken matrix.
         XCTAssertEqual(matrix.columns.2.z, -1.0 / depth, accuracy: 0.001, "Z scaling should be -1.0/depth")
-        XCTAssertEqual(matrix.columns.3.z, farZ / depth, accuracy: 0.001, "Z offset should be farZ/depth")
+        XCTAssertEqual(matrix.columns.3.z, -nearZ / depth, accuracy: 0.001, "Z offset should be -nearZ/depth")
     }
 
     /// Test orthographic projection with different aspect ratios
