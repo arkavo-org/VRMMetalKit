@@ -240,26 +240,40 @@ final class BalanceModelTests: XCTestCase {
         let a = try XCTUnwrap(BalanceModel.evaluate(model: model))
         let b = try XCTUnwrap(BalanceModel.evaluate(model: model))
 
-        // Tolerance, not exact equality — and the tolerance is NOT covering for
-        // `evaluate`. On a fixed model `evaluate` is bit-stable (measured 200/200
-        // identical, and `centerOfMass` returns identical bits for the same input
-        // dictionary), so it is not the source of variance here.
+        // Tolerance, not exact equality. This assertion flaked under `--parallel`
+        // (~1 run in 5) with the two results differing in x and z only:
+        //   x -2.3213427e-09 vs -1.3928055e-09,  z 8.1586203e-4 vs 8.158621e-4.
         //
-        // What varies is upstream: loading the same file twice in one process can
-        // produce node world transforms differing at ~1e-7 relative — the loader's
-        // per-load ordering, timing-dependent and TSAN-clean. `evaluate` faithfully
-        // propagates that jitter, and `centerOfMass.x` is where it shows, being a
-        // near-total cancellation that lands around 1e-9. Asserting exact equality
-        // therefore pinned the loader's float noise, not this function's
-        // determinism, and flaked under `--parallel`.
+        // What is established by measurement:
+        //   * `evaluate` is bit-stable on a fixed model — 0 mismatches in 20,000
+        //     consecutive call pairs, and 0 in 300 fresh-load-then-evaluate-twice
+        //     rounds. `centerOfMass` returns identical bits for the same input
+        //     dictionary, and `effectiveFractions` iteration order is stable.
+        //   * Loading the SAME file twice in one process can produce node world
+        //     transforms differing at ~1e-7 relative (hips-derived CoM y of
+        //     0.95468193 vs 0.95468205 across loads in a single process, so not
+        //     hash-seed ordering). Timing-dependent, and TSAN-clean over this
+        //     suite — benign per-load variance, not a race.
+        //   * `centerOfMass.x` is a near-total left/right cancellation landing
+        //     around 1e-9, so ~1e-7 input noise rewrites its low bits entirely
+        //     while leaving y unchanged — matching the observed failure exactly.
         //
-        // 1e-6 sits well above the observed jitter and far below any real
-        // nondeterminism in the weighting or fold logic, which would move the CoM
-        // by centimetres. Do not tighten this back to XCTAssertEqual.
+        // What is NOT established: the precise mechanism by which two calls on a
+        // SINGLE already-loaded model diverged. This test loads once, and the
+        // reproduction attempts above could not make one model disagree with
+        // itself. So the loader jitter above explains the magnitude and the
+        // affected components, but not yet how it reached these two calls.
+        //
+        // The tolerance is therefore deliberately robust to both readings rather
+        // than tuned to a confirmed cause. 1e-6 sits well above the observed
+        // ~1e-7 jitter and far below any real nondeterminism in the weighting or
+        // fold logic, which would move the CoM by centimetres. Do not tighten
+        // this back to XCTAssertEqual; if you can reproduce a single-model
+        // divergence, that is a genuine bug worth filing rather than pinning.
         XCTAssertLessThan(simd_distance(a.centerOfMass, b.centerOfMass), 1e-6,
                           "deterministic: \(a.centerOfMass) vs \(b.centerOfMass)")
-        // `margin` derives from `comGround` — the same x/z — so it carries the same
-        // jitter and needs the same treatment.
+        // `margin` derives from `comGround` — the same x/z — so it carries the
+        // same exposure and needs the same treatment before it flakes too.
         XCTAssertEqual(a.margin, b.margin, accuracy: 1e-6)
         // Exact: this compares stored values that nothing recomputes, so it is not
         // exposed to the jitter above.
