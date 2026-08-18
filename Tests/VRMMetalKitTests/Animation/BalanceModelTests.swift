@@ -240,36 +240,14 @@ final class BalanceModelTests: XCTestCase {
         let a = try XCTUnwrap(BalanceModel.evaluate(model: model))
         let b = try XCTUnwrap(BalanceModel.evaluate(model: model))
 
-        // Tolerance, not exact equality. This assertion flaked under `--parallel`
-        // (~1 run in 5) with the two results differing in x and z only:
-        //   x -2.3213427e-09 vs -1.3928055e-09,  z 8.1586203e-4 vs 8.158621e-4.
-        //
-        // What is established by measurement:
-        //   * `evaluate` is bit-stable on a fixed model — 0 mismatches in 20,000
-        //     consecutive call pairs, and 0 in 300 fresh-load-then-evaluate-twice
-        //     rounds. `centerOfMass` returns identical bits for the same input
-        //     dictionary, and `effectiveFractions` iteration order is stable.
-        //   * Loading the SAME file twice in one process can produce node world
-        //     transforms differing at ~1e-7 relative (hips-derived CoM y of
-        //     0.95468193 vs 0.95468205 across loads in a single process, so not
-        //     hash-seed ordering). Timing-dependent, and TSAN-clean over this
-        //     suite — benign per-load variance, not a race.
-        //   * `centerOfMass.x` is a near-total left/right cancellation landing
-        //     around 1e-9, so ~1e-7 input noise rewrites its low bits entirely
-        //     while leaving y unchanged — matching the observed failure exactly.
-        //
-        // What is NOT established: the precise mechanism by which two calls on a
-        // SINGLE already-loaded model diverged. This test loads once, and the
-        // reproduction attempts above could not make one model disagree with
-        // itself. So the loader jitter above explains the magnitude and the
-        // affected components, but not yet how it reached these two calls.
-        //
-        // The tolerance is therefore deliberately robust to both readings rather
-        // than tuned to a confirmed cause. 1e-6 sits well above the observed
-        // ~1e-7 jitter and far below any real nondeterminism in the weighting or
-        // fold logic, which would move the CoM by centimetres. Do not tighten
-        // this back to XCTAssertEqual; if you can reproduce a single-model
-        // divergence, that is a genuine bug worth filing rather than pinning.
+        // Tolerance, not exact equality: reloading the same VRM can yield node
+        // transforms differing at ~1e-7, and centerOfMass.x is a near-total
+        // left/right cancellation landing around 1e-9, so that input noise
+        // rewrites its low bits entirely. 1e-6 sits above the jitter and far
+        // below any real nondeterminism in the weighting or fold logic, which
+        // would move the CoM by centimetres. Do not tighten back to
+        // XCTAssertEqual — a reproducible single-model divergence is a bug to
+        // file, not something to pin here.
         XCTAssertLessThan(simd_distance(a.centerOfMass, b.centerOfMass), 1e-6,
                           "deterministic: \(a.centerOfMass) vs \(b.centerOfMass)")
         // `margin` derives from `comGround` — the same x/z — so it carries the
