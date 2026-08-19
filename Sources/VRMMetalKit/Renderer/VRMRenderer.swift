@@ -1297,9 +1297,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // has an empty active set.
         var morphComputeEncoder: MTLComputeCommandEncoder?
 
-        // Tracks whether any primitive was skipped due to encoder-creation or
-        // compute-dispatch failure, leaving morphedBuffers partial relative to
-        // the fingerprint being computed.
+        // Tracks whether any primitive was skipped due to missing GPU buffers,
+        // encoder-creation failure, or compute-dispatch failure, leaving
+        // morphedBuffers partial relative to the fingerprint being computed.
         var hadPartialFailure = false
 
         // Capture the single primitive that needs first-frame GPU validation so the
@@ -1330,6 +1330,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if primitive.morphPositionsSoA == nil {
                         vrmLog("[VRMRenderer] ❌ No morphPositionsSoA for primitive with \(primitive.morphTargets.count) morphs")
                     }
+                    hadPartialFailure = true
                     continue
                 }
 

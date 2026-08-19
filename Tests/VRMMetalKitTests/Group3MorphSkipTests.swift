@@ -43,6 +43,25 @@ final class Group3MorphSkipTests: XCTestCase {
         )
     }
 
+    /// A `nil` previous fingerprint is the invalidation sentinel a caller writes
+    /// after a partial compute failure (VMK PR #420 review, task 2): the fix
+    /// relies on `nil` never matching *any* current fingerprint, so a caller
+    /// can force a re-dispatch on the next frame regardless of what value the
+    /// weights happen to hash to (including zero and the maximum representable
+    /// value, and even if a prior frame's recorded fingerprint happened to be 0).
+    func testGateNeverReusesWhenPreviousFingerprintIsNil() {
+        let candidateFingerprints: [UInt64] = [0, 1, 42, UInt64.max]
+        for fingerprint in candidateFingerprints {
+            XCTAssertFalse(
+                MorphComputeGate.shouldReusePreviousOutput(
+                    currentFingerprint: fingerprint,
+                    previousFingerprint: nil
+                ),
+                "nil previousFingerprint (the invalidation sentinel) must never match currentFingerprint \(fingerprint)"
+            )
+        }
+    }
+
     func testFingerprintStableWhenWeightsDoNotChange() {
         let controller = VRMExpressionController()
         var expression = VRMExpression(preset: .happy)
