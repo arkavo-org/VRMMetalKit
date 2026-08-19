@@ -14,15 +14,25 @@
 // limitations under the License.
 //
 
-/// Policy for the Guilty Gear-style MToon outline merge: one
-/// `drawIndexed(..., instanceCount: 2)` where instance 0 is the shaded
-/// surface and instance 1 is the inverted hull.
+/// Policy for the Guilty Gear-style MToon outline merge: the inverted hull
+/// rides along with the material's color draw, reusing its pipeline and every
+/// buffer/texture binding instead of being re-encoded by the dedicated outline
+/// pass.
+///
+/// The hull is its own `drawIndexed` — `instanceCount: 1`, `baseInstance:
+/// hullInstanceID` so `[[instance_id]]` reports the hull — rather than a second
+/// instance of the color draw. Metal has no per-instance depth-stencil state,
+/// and a hull that inherits a depth-writing color state stamps depth into a
+/// band outside the silhouette at the material's sort position, clipping every
+/// later draw that lands in that band.
 public enum MToonOutlineDraw {
-    /// `[[instance_id]]` of the inverted-hull instance.
+    /// `[[instance_id]]` the hull draw reports, via `baseInstance`.
     public static let hullInstanceID: UInt32 = 1
 
-    /// Instance count when color and outline share a draw.
-    public static let mergedInstanceCount: Int = 2
+    /// Depth-stencil state key the hull must bind, whatever depth policy the
+    /// material's own draw uses: test `.lessEqual`, never write. Shared by the
+    /// merged hull draw and the dedicated outline pass so the two cannot drift.
+    public static let hullDepthStateKey = "blend"
 
     /// Index-buffer byte offset for an outline (or merged) draw. Must match
     /// the color draw — never hardcode `0`.
@@ -30,14 +40,9 @@ public enum MToonOutlineDraw {
         primitive.indexBufferOffset
     }
 
-    /// `2` when the hull is instanced into the color draw, else `1`.
-    public static func instanceCount(mergingOutline: Bool) -> Int {
-        mergingOutline ? mergedInstanceCount : 1
-    }
-
     /// Merge only when the outline would actually draw and the mesh is
     /// single-sided. Double-sided materials keep the dedicated outline pass
-    /// so both faces stay visible on instance 0.
+    /// so both faces stay visible on the color draw.
     public static func shouldMerge(
         globalOutlineWidth: Float,
         mtoon: VRMMToonMaterial?,

@@ -972,6 +972,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// cannot be introspected, so this is the only way to pin the
     /// direction table (see `setupCachedStates`).
     var depthCompareByKey: [String: MTLCompareFunction] = [:]
+    /// Whether each cached state was created with depth writes enabled, keyed
+    /// like `depthStencilStates`. Same test-only rationale as
+    /// `depthCompareByKey`.
+    var depthWriteByKey: [String: Bool] = [:]
     #endif
     var samplerStates: [String: MTLSamplerState] = [:]
     private var lastPipelineState: MTLRenderPipelineState?
@@ -3782,17 +3786,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     globalOutlineWidth: outlineWidth,
                     mtoon: drawMaterial?.mtoon,
                     isDoubleSided: isDoubleSided)
-                if mergeOutline {
-                    mtoonUniforms.mergedOutline = 1
-                    mtoonUniforms.outlineWidthFactor *= outlineWidth / 0.02
-                    let globalColor = outlineColor
-                    if globalColor.x > 0 || globalColor.y > 0 || globalColor.z > 0 {
-                        mtoonUniforms.outlineColorFactor = globalColor
-                    }
-                    encoderStateCache.setCullMode(encoder, .none)
-                } else {
-                    mtoonUniforms.mergedOutline = 0
-                }
                 bindOutlineWidthVertexTexture(
                     encoder: encoder,
                     mtoon: drawMaterial?.mtoon,
@@ -4089,12 +4082,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         indexCount: primitive.indexCount,
                         indexType: primitive.indexType,
                         indexBuffer: indexBuffer,
-                        indexBufferOffset: MToonOutlineDraw.indexBufferOffset(for: primitive),
-                        instanceCount: MToonOutlineDraw.instanceCount(mergingOutline: mergeOutline)
+                        indexBufferOffset: MToonOutlineDraw.indexBufferOffset(for: primitive)
                     )
                 totalPrimitivesDrawn += 1
                 totalTriangles += primitive.indexCount / 3
                 performanceTracker?.recordDrawCall(triangles: primitive.indexCount / 3, vertices: primitive.vertexCount)
+
+                if mergeOutline {
+                    encodeMergedOutlineHull(
+                        encoder: encoder,
+                        primitive: primitive,
+                        indexBuffer: indexBuffer,
+                        materialIndex: primitive.materialIndex,
+                        baseUniforms: mtoonUniforms)
+                    // Counted like the dedicated outline pass counts its draws:
+                    // the tracker sees a real GPU draw, the primitive/triangle
+                    // tallies stay a count of scene primitives.
+                    performanceTracker?.recordDrawCall(triangles: primitive.indexCount / 3, vertices: primitive.vertexCount)
+                }
             } else {
                 // Validate draw call in strict mode
                 if config.strict != .off {
@@ -4404,6 +4409,63 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return texture
     }
 
+    /// Issues the inverted hull for a material whose outline is merged into its
+    /// color draw. The hull reuses the color draw's pipeline and every binding
+    /// it just made; only the material uniforms, the depth-stencil state, the
+    /// cull mode and the depth bias differ.
+    ///
+    /// It is a separate draw rather than a second instance because Metal binds
+    /// one depth-stencil state per draw: the hull must test `.lessEqual` and
+    /// never write, exactly as the dedicated outline pass does, while the color
+    /// draw keeps whatever depth policy its alpha mode / face category chose.
+    /// Every following state is re-bound by the next loop iteration, and the
+    /// encoder ends right after the dedicated outline pass, so nothing here
+    /// needs restoring.
+    private func encodeMergedOutlineHull(
+        encoder: MTLRenderCommandEncoder,
+        primitive: VRMPrimitive,
+        indexBuffer: MTLBuffer,
+        materialIndex: Int?,
+        baseUniforms: MToonMaterialUniforms
+    ) {
+        guard let hullDepthState = depthStencilStates[MToonOutlineDraw.hullDepthStateKey] else { return }
+
+        var hullUniforms = baseUniforms
+        hullUniforms.outlineWidthFactor *= outlineWidth / 0.02
+        let globalColor = outlineColor
+        if globalColor.x > 0 || globalColor.y > 0 || globalColor.z > 0 {
+            hullUniforms.outlineColorFactor = globalColor
+        }
+        if let materialIndex,
+           expressionController?.hasMaterialColorOverrides == true,
+           let outlineOverride = expressionController?.getMaterialColorOverride(
+               materialIndex: materialIndex, type: .outlineColor) {
+            hullUniforms.outlineColorFactor = SIMD3<Float>(outlineOverride.x, outlineOverride.y, outlineOverride.z)
+        }
+
+        encoderStateCache.setDepthStencilState(encoder, hullDepthState)
+        encoderStateCache.setCullMode(encoder, .front)
+        applyDepthBias(encoder, 0.0, slopeScale: 0.0, clamp: 0.0)
+
+        encoder.setVertexBytes(&hullUniforms,
+                               length: MemoryLayout<MToonMaterialUniforms>.stride,
+                               index: 8)
+        encoder.setFragmentBytes(&hullUniforms,
+                                 length: MemoryLayout<MToonMaterialUniforms>.stride,
+                                 index: 8)
+
+        encoder.drawIndexedPrimitives(
+            type: primitive.primitiveType,
+            indexCount: primitive.indexCount,
+            indexType: primitive.indexType,
+            indexBuffer: indexBuffer,
+            indexBufferOffset: MToonOutlineDraw.indexBufferOffset(for: primitive),
+            instanceCount: 1,
+            baseVertex: 0,
+            baseInstance: Int(MToonOutlineDraw.hullInstanceID)
+        )
+    }
+
     private func renderMToonOutlines(
         encoder: MTLRenderCommandEncoder,
         renderItems: [RenderItem],
@@ -4431,7 +4493,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Set depth state for outlines (test depth but don't write)
         // Prevents outlines from incorrectly writing to depth buffer
-        if let outlineDepthState = depthStencilStates["blend"] {
+        if let outlineDepthState = depthStencilStates[MToonOutlineDraw.hullDepthStateKey] {
             encoderStateCache.setDepthStencilState(encoder,outlineDepthState)
         }
 

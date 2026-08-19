@@ -212,6 +212,16 @@ extension VRMRenderer {
             "prepass": prepassDescriptor.depthCompareFunction,
             "opaqueEqual": opaqueEqualDescriptor.depthCompareFunction,
         ]
+        depthWriteByKey = [
+            "opaque": opaqueDepthDescriptor.isDepthWriteEnabled,
+            "mask": opaqueDepthDescriptor.isDepthWriteEnabled,
+            "blend": blendDepthDescriptor.isDepthWriteEnabled,
+            "always": alwaysDepthDescriptor.isDepthWriteEnabled,
+            "face": faceDepthDescriptor.isDepthWriteEnabled,
+            "faceOverlay": faceOverlayDescriptor.isDepthWriteEnabled,
+            "prepass": prepassDescriptor.isDepthWriteEnabled,
+            "opaqueEqual": opaqueEqualDescriptor.isDepthWriteEnabled,
+        ]
         #endif
 
         // Pre-create sampler states
