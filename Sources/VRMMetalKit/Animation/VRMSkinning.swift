@@ -31,10 +31,13 @@ import simd
 /// shared buffer rather than allocating per-skin buffers.
 ///
 /// ### Joint cap and padding
-/// The buffer is padded to at least ``VRMConstants/Animation/maxJointCount``
-/// matrices so the shader's last-resort joint-index clamp is always
-/// in-bounds for malformed meshes referencing joints beyond their
-/// declared palette. Per-skin counts may exceed 256 (VRoid cloth).
+/// Draws bind the buffer at their own skin's slice base, so the shader's
+/// last-resort joint-index clamp (`maxJointCount - 1`) resolves relative to
+/// that offset, not to 0. The buffer therefore carries a tail of
+/// ``VRMConstants/Animation/maxJointCount`` identity matrices *after* the
+/// live matrices, keeping `anySkinOffset + maxJointCount - 1` in-bounds for
+/// malformed meshes referencing joints beyond their declared palette.
+/// Per-skin counts may exceed 256 (VRoid cloth).
 ///
 /// ### Rigid fallback
 /// ``identityJointMatricesBuffer`` is a separate read-only buffer of
@@ -111,10 +114,12 @@ public class VRMSkinningSystem {
             skinDirty[index] = true
         }
 
-        // Allocate the large buffer for all skins
-        // Pad so the shader's last-resort clamp (maxJointCount - 1) is in-bounds.
-        let minMatrixCount = VRMConstants.Animation.maxJointCount
-        let paddedMatrixCount = max(totalMatrixCount, minMatrixCount)
+        // Allocate the large buffer for all skins.
+        // Every draw binds this buffer at its own skin's slice base, so the
+        // shader's last-resort clamp (maxJointCount - 1) indexes relative to
+        // that offset. A tail of maxJointCount matrices after the live range
+        // keeps the clamp in-bounds for EVERY skin's offset, not just skin 0's.
+        let paddedMatrixCount = totalMatrixCount + VRMConstants.Animation.maxJointCount
         let totalBufferSize = paddedMatrixCount * matrixSize
         jointMatricesBuffer = device.makeBuffer(length: totalBufferSize, options: .storageModeShared)
         vrmLog("[SKINNING] Allocated buffer for \(totalMatrixCount) matrices (padded to \(paddedMatrixCount), \(totalBufferSize) bytes)")

@@ -4282,6 +4282,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let meshUsesSkinning = primitive.hasJoints && primitive.hasWeights
             let isSkinned = (nodeHasSkin || meshUsesSkinning) && hasSkinning
 
+            // Same palette-size guard as the main pass: the palette is bound at
+            // the skin's slice base, so a primitive needing more joints than the
+            // bound skin has reads past that slice.
+            if isSkinned {
+                let guardSkinIndex = item.node.skin ?? (meshUsesSkinning ? 0 : -1)
+                if guardSkinIndex >= 0, guardSkinIndex < model.skins.count,
+                   primitive.requiredPaletteSize > model.skins[guardSkinIndex].joints.count {
+                    if frameCounter < 2 {
+                        fputs("⚠️ [VRMRenderer] Skin palette too small — skipping depth-prepass draw. " +
+                              "Node '\(item.node.name ?? "?")' mesh '\(item.mesh.name ?? "?")': " +
+                              "needs ≥\(primitive.requiredPaletteSize) joints, bound skin \(guardSkinIndex) " +
+                              "'\(model.skins[guardSkinIndex].name ?? "?")' has \(model.skins[guardSkinIndex].joints.count). " +
+                              "Check node.skin assignment in the VRM file.\n", stderr)
+                    }
+                    continue
+                }
+            }
+
             // Frustum cull identically to the main pass.
             let cullModel: matrix_float4x4
             let cullMin: SIMD3<Float>
@@ -4457,6 +4475,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let nodeHasSkin = item.node.skin != nil && hasSkinning
             let meshUsesSkinning = primitive.hasJoints && primitive.hasWeights
             let isSkinned = (nodeHasSkin || meshUsesSkinning) && hasSkinning
+
+            // Same palette-size guard as the main pass: the palette is bound at
+            // the skin's slice base, so a primitive needing more joints than the
+            // bound skin has reads past that slice.
+            if isSkinned, let guardSkinIndex = item.node.skin, guardSkinIndex < model.skins.count {
+                let guardSkin = model.skins[guardSkinIndex]
+                if primitive.requiredPaletteSize > guardSkin.joints.count {
+                    if frameCounter < 2 {
+                        fputs("⚠️ [VRMRenderer] Skin palette too small — skipping outline draw. " +
+                              "Node '\(item.node.name ?? "?")' mesh '\(item.mesh.name ?? "?")': " +
+                              "needs ≥\(primitive.requiredPaletteSize) joints, bound skin \(guardSkinIndex) " +
+                              "'\(guardSkin.name ?? "?")' has \(guardSkin.joints.count). " +
+                              "Check node.skin assignment in the VRM file.\n", stderr)
+                    }
+                    continue
+                }
+            }
 
             // Frustum cull: skip outline draw if primitive's world AABB is outside view.
             // Use inflated model bounds for skinned, primitive local bounds for rigid.
