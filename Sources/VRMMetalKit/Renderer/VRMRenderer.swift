@@ -4523,7 +4523,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 continue
             }
 
-            // Already instanced into the color draw.
+            // The color pass owns this primitive's hull: it encodes the hull as
+            // its own draw right after the color draw, or — in a frame using
+            // the debug fragment, which has no outline branch — deliberately
+            // encodes no hull at all. Either way this pass must not add one.
             if MToonOutlineDraw.shouldMerge(
                 globalOutlineWidth: outlineWidth,
                 mtoon: mtoon,

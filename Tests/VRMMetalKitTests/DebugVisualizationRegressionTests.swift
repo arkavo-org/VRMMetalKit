@@ -99,15 +99,8 @@ final class DebugVisualizationRegressionTests: XCTestCase {
                 "returning nil leaves them shaded in a debug frame.")
         }
 
-        var expectedFeatures = MToonFunctionConstantKey(material: mtoon)
-        expectedFeatures.lightCount = MToonLightSpecialization.count(
-            keyIntensity: renderer.uniforms.lightColor_packed.w,
-            fillIntensity: renderer.uniforms.light1Color_packed.w,
-            rimIntensity: renderer.uniforms.light2Color_packed.w
-        )
-        expectedFeatures.debugVisualization = true
         let expected = renderer.specializedMToonPipelineState(
-            isSkinned: false, features: expectedFeatures)
+            isSkinned: false, features: featureKey(on: renderer, material: mtoon, debug: true))
         XCTAssertTrue(resolved === expected,
             "The A2C MASK draw must bind the debug-fragment PSO for its feature key.")
     }
@@ -132,26 +125,51 @@ final class DebugVisualizationRegressionTests: XCTestCase {
 
     /// Modes served by the production fragment must keep the material's own
     /// PSO — binding the debug fragment for them is what produced magenta.
+    ///
+    /// Asserted by object identity, not by label: the descriptor label
+    /// (`VRMRenderer+Pipeline.swift`) folds only alpha mode and light count, so
+    /// the production and debug variants of one material share it.
     func testProductionFragmentModeKeepsTheShadedPipeline() throws {
         let mtoon = MToonMaterialUniforms()
+        let renderer = VRMRenderer(device: device, config: RendererConfig())
+        renderer.debugUVs = 11
 
-        var config = RendererConfig()
-        let shaded = VRMRenderer(device: device, config: config)
-        shaded.debugUVs = 0
-        guard let production = shaded.specializedMToonPipelineIfAvailable(
+        guard let resolved = renderer.specializedMToonPipelineIfAvailable(
             isSkinned: false, materialAlphaMode: "opaque", mtoonUniforms: mtoon
         ) else {
             throw XCTSkip("MToon specialization unavailable on this device")
         }
 
-        config = RendererConfig()
-        let debug11 = VRMRenderer(device: device, config: config)
-        debug11.debugUVs = 11
-        let resolved = debug11.specializedMToonPipelineIfAvailable(
-            isSkinned: false, materialAlphaMode: "opaque", mtoonUniforms: mtoon)
-        XCTAssertNotNil(resolved)
-        XCTAssertEqual(resolved?.label, production.label,
+        let production = renderer.specializedMToonPipelineState(
+            isSkinned: false, features: featureKey(on: renderer, material: mtoon, debug: false))
+        let debug = renderer.specializedMToonPipelineState(
+            isSkinned: false, features: featureKey(on: renderer, material: mtoon, debug: true))
+
+        XCTAssertNotNil(production)
+        XCTAssertFalse(production === debug,
+            "Control: debugVisualization is folded into the cache key, so the two variants " +
+            "must be distinct objects — otherwise the assertions below prove nothing.")
+        XCTAssertTrue(resolved === production,
             "Mode 11 must stay on the production fragment; the debug fragment has no case for it.")
+        XCTAssertFalse(resolved === debug,
+            "Mode 11 resolved to mtoon_fragment_debug, which renders the 'unknown mode' magenta.")
+    }
+
+    /// The feature key `specializedMToonPipelineIfAvailable` builds internally,
+    /// so tests can resolve the exact PSO a draw should have bound.
+    private func featureKey(
+        on renderer: VRMRenderer,
+        material: MToonMaterialUniforms,
+        debug: Bool
+    ) -> MToonFunctionConstantKey {
+        var features = MToonFunctionConstantKey(material: material)
+        features.lightCount = MToonLightSpecialization.count(
+            keyIntensity: renderer.uniforms.lightColor_packed.w,
+            fillIntensity: renderer.uniforms.light1Color_packed.w,
+            rimIntensity: renderer.uniforms.light2Color_packed.w
+        )
+        features.debugVisualization = debug
+        return features
     }
 
     // MARK: - Regression 3: no debug-coloured outline shell
