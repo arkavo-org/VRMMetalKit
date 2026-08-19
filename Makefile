@@ -1,7 +1,7 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-visionos bench-visionos-sim
 
 help:
 	@echo "VRMMetalKit Build Targets:"
@@ -18,6 +18,8 @@ help:
 	@echo "  make gputrace-baseline - Capture a .gputrace matching the VRMBenchmark baseline (animated + spring, 1024px)"
 	@echo "  make bench-baseline - Record the authoritative perf baseline (run on the dedicated perf machine)"
 	@echo "  make bench-gate    - Gate the current build against baselines/baseline.json (perf machine only)"
+	@echo "  make bench-visionos - Stereo reverse-Z compositor-shaped bench (preferred vs host submit)"
+	@echo "  make bench-visionos-sim - Same bench on the visionOS Simulator GPU (Apple Vision Pro 26.5)"
 	@echo "  make docs          - Preview documentation locally"
 	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
 
@@ -208,6 +210,52 @@ bench-gate:
 	@echo "🚦  Gating current build against $(BENCH_BASELINE)..."
 	@swift build -c release --product VRMBenchmark
 	@.build/release/VRMBenchmark $(BENCH_VRM) $(BENCH_ARGS) --label gate-$$(hostname -s) --baseline $(BENCH_BASELINE)
+
+# Compositor-shaped stereo bench (Mac stand-in for visionOS). Does not
+# replace bench-gate. Preferred submit simulates once; host submit is the
+# older per-eye drawOffscreen path.
+BENCH_VISIONOS_VRM ?= AvatarSample_U_1.0.vrm.glb
+BENCH_VISIONOS_ARGS = --mode visionos --frames 200 --warmup 30 --vrma $(BENCH_VRMA) --spring-bone --fps 90
+
+bench-visionos:
+	@echo "🥽  visionOS-shaped stereo bench (preferred, then host)..."
+	@swift build -c release --product VRMBenchmark
+	@mkdir -p perf-review-output
+	@.build/release/VRMBenchmark $(BENCH_VISIONOS_VRM) $(BENCH_VISIONOS_ARGS) \
+		--visionos-submit preferred --label visionos-preferred-$$(hostname -s) \
+		--json perf-review-output/bench-visionos-preferred.json
+	@.build/release/VRMBenchmark $(BENCH_VISIONOS_VRM) $(BENCH_VISIONOS_ARGS) \
+		--visionos-submit host --label visionos-host-$$(hostname -s) \
+		--json perf-review-output/bench-visionos-host.json
+
+# Offscreen + compositor sample on the visionOS Simulator GPU (not a Vision Pro).
+BENCH_VISIONOS_SIM ?= Apple Vision Pro
+BENCH_VISIONOS_SIM_OS ?= 26.5
+bench-visionos-sim:
+	@echo "🥽  visionOS Simulator GPU bench..."
+	@cd VisionHost && xcodegen generate
+	@xcodebuild -project VisionHost/VRMVisionHost.xcodeproj -scheme VRMVisionHost \
+		-destination 'platform=visionOS Simulator,name=$(BENCH_VISIONOS_SIM),OS=$(BENCH_VISIONOS_SIM_OS)' \
+		-configuration Release -derivedDataPath VisionHost/DerivedData build
+	@xcrun simctl boot "$(BENCH_VISIONOS_SIM)" || true
+	@xcrun simctl install booted \
+		VisionHost/DerivedData/Build/Products/Release-xrsimulator/VRMVisionHost.app
+	@mkdir -p perf-review-output
+	@SIMCTL_CHILD_VRM_VISIONOS_BENCH=both \
+		xcrun simctl launch --stdout=$(CURDIR)/perf-review-output/visionos-sim-stdout.log \
+		--stderr=$(CURDIR)/perf-review-output/visionos-sim-stderr.log \
+		booted org.arkavo.VRMVisionHost
+	@echo "⏳ waiting for bench JSON (offscreen + compositor sample)..."
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+		DATA=$$(xcrun simctl get_app_container booted org.arkavo.VRMVisionHost data 2>/dev/null); \
+		if [ -n "$$DATA" ] && [ -f "$$DATA/Documents/bench-visionos-xrsimulator.json" ]; then \
+			cp "$$DATA/Documents/bench-visionos-xrsimulator.json" perf-review-output/; \
+			echo "✅ wrote perf-review-output/bench-visionos-xrsimulator.json"; \
+			exit 0; \
+		fi; \
+		sleep 5; \
+	done; \
+	echo "⚠️  JSON not ready; check perf-review-output/visionos-sim-stdout.log"
 
 # Build the package
 build:

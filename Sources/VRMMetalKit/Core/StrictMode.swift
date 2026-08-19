@@ -332,8 +332,10 @@ public enum StrictModeError: LocalizedError {
 /// slots are namespaced by comment groups below. Changes here must be
 /// mirrored in the corresponding `.metal` shaders.
 public struct ResourceIndices {
-    /// Vertex shader: vertex buffer (positions, normals, UVs, joints, weights).
+    /// Vertex shader: position-only stream (`VRMPositionVertex`).
     public static let vertexBuffer = 0
+    /// Vertex shader: attribute stream (`VRMAttributeVertex`).
+    public static let attributeBuffer = 3
     /// Vertex shader: per-frame uniform buffer.
     public static let uniformsBuffer = 1
     /// Vertex shader: legacy skin-data buffer; retained for backward compatibility, currently unused.

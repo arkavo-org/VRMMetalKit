@@ -17,6 +17,7 @@
 import ARKit
 import CompositorServices
 import Metal
+import QuartzCore
 import VRMMetalKit
 import simd
 
@@ -31,9 +32,10 @@ import simd
 /// (the far plane under that mapping) rather than `1.0`.
 ///
 /// ## Threading
-/// The loop runs on its own thread, never the main actor, and draws through
-/// ``VRMRenderer/drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``
-/// which is documented for exactly this use.
+/// The loop runs on its own thread, never the main actor, and submits through
+/// ``VRMRenderer/encodeCompositorViews(commandBuffer:views:)`` (simulate once,
+/// raster per eye). ``VRMRenderer/drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``
+/// remains the single-view primitive those views are encoded with.
 /// All mutable state is confined to the single render thread started by
 /// ``start()``, which is why the unchecked conformance is safe — the same
 /// reasoning `VRMRenderer` itself is declared under.
@@ -46,7 +48,18 @@ final class ImmersiveRenderer: @unchecked Sendable {
     private let worldTracking = WorldTrackingProvider()
 
     private var renderer: VRMRenderer?
+    private var model: VRMModel?
+    private var director: AvatarDirector?
+    private var lastDirectorTime: CFTimeInterval = 0
     private var frameIndex = 0
+    private let benchCompositor = VisionOSGPUBench.isRequested
+    private let compositorGPU = GPUTimeBox()
+    private var compositorEncode: [Double] = []
+    private var compositorMeasured = 0
+    private var compositorDumped = false
+    private var loggedDrawable = false
+    private var headLookYaw: Float = 0
+    private var headLookPitch: Float = 0
     /// Floor height taken from the first tracked device pose, so the avatar
     /// stands at the viewer's feet rather than at whatever the session
     /// origin happens to be.
@@ -124,11 +137,34 @@ final class ImmersiveRenderer: @unchecked Sendable {
             throw HostError.avatarMissing(candidates.map { "\($0.0).\($0.1)" })
         }
 
+        // The GPU bench mutates spring-bone rest state. Give it its own
+        // model so the live avatar does not inherit a posed or exploded rig.
+        if VisionOSGPUBench.isRequested {
+            let benchModel = try await VRMModel.load(from: url, device: device)
+            applyDefaultSpringGravity(to: benchModel)
+            VisionOSGPUBench.run(device: device, model: benchModel)
+        }
+
         let model = try await VRMModel.load(from: url, device: device)
+        applyDefaultSpringGravity(to: model)
+
+        NSLog("[VisionHost] Metal device: \(device.name) registry=\(device.registryID)")
 
         let renderer = VRMRenderer(device: device, config: RendererConfig(strict: .off))
         renderer.useReverseZ = true
+        // AvatarSample hair authors gravityPower = 0; bind direction is
+        // straight up. Physics + the app-layer ExternalForce above is what
+        // drapes it. LookAt is created disabled inside loadModel.
+        renderer.enableSpringBone = true
         renderer.loadModel(model)
+        if let lookAt = renderer.lookAtController {
+            lookAt.enabled = true
+            lookAt.target = .user
+            lookAt.saccadeEnabled = false
+        }
+        self.model = model
+        let director = AvatarDirector(model: model)
+        self.director = director
 
         // Lighting is an app-layer responsibility — a renderer with no lights
         // set draws the avatar black, which reads like a depth bug.
@@ -140,7 +176,7 @@ final class ImmersiveRenderer: @unchecked Sendable {
         renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
         renderer.setLightNormalizationMode(.radiometric)
 
-        NSLog("[VisionHost] Avatar ready — reverse-Z enabled, layout \(layerRenderer.configuration.layout)")
+        NSLog("[VisionHost] Avatar ready — reverse-Z, spring gravity, lookAt.userEyes, \(director.clipCount) clips, layout \(layerRenderer.configuration.layout)")
         return renderer
     }
 
@@ -150,6 +186,17 @@ final class ImmersiveRenderer: @unchecked Sendable {
         guard let frame = layerRenderer.queryNextFrame() else { return }
 
         frame.startUpdate()
+        let now = CACurrentMediaTime()
+        let dt: Float
+        if lastDirectorTime == 0 {
+            dt = Float(1.0 / VisionOSStereoLayout.cadenceHz)
+        } else {
+            dt = min(Float(now - lastDirectorTime), 1.0 / 15.0)
+        }
+        lastDirectorTime = now
+        if let director, let model, let renderer {
+            director.update(deltaTime: dt, model: model, expressions: renderer.expressionController)
+        }
         frame.endUpdate()
 
         guard let timing = frame.predictTiming() else { return }
@@ -161,6 +208,16 @@ final class ImmersiveRenderer: @unchecked Sendable {
         let drawables = frame.queryDrawables()
         guard !drawables.isEmpty, let renderer else { return }
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
+
+        let encodeStart = benchCompositor ? CACurrentMediaTime() : 0
+        if benchCompositor && !compositorDumped {
+            commandBuffer.addCompletedHandler { [compositorGPU] buffer in
+                let gpu = (buffer.gpuEndTime - buffer.gpuStartTime) * 1000
+                if buffer.gpuStartTime.isFinite, buffer.gpuEndTime.isFinite, gpu >= 0, gpu < 10_000 {
+                    compositorGPU.append(gpu)
+                }
+            }
+        }
 
         // Every drawable the frame hands back is presented. Today's layouts
         // return exactly one, but a configuration that returns a drawable per
@@ -190,27 +247,131 @@ final class ImmersiveRenderer: @unchecked Sendable {
         let originFromAvatar = translation(
             SIMD3<Float>(avatarPosition.x, floorY ?? avatarPosition.y, avatarPosition.z))
 
+        var views: [CompositorViewTarget] = []
+        views.reserveCapacity(drawable.views.count)
         for viewIndex in drawable.views.indices {
             let view = drawable.views[viewIndex]
             let map = view.textureMap
             let color = drawable.colorTextures[map.textureIndex]
             let depth = drawable.depthTextures[map.textureIndex]
-
             let originFromView = originFromDevice * view.transform
-            renderer.viewMatrix = originFromView.inverse * originFromAvatar
-            renderer.projectionMatrix = drawable.computeProjection(viewIndex: viewIndex)
-
-            renderer.drawOffscreen(
-                to: color,
-                depth: depth,
-                commandBuffer: commandBuffer,
-                renderPassDescriptor: passDescriptor(color: color, depth: depth, slice: map.sliceIndex))
+            if !loggedDrawable {
+                NSLog("[VisionHost] drawable \(color.width)x\(color.height) views=\(drawable.views.count) layout=\(layerRenderer.configuration.layout) slice=\(map.sliceIndex)")
+                loggedDrawable = true
+            }
+            views.append(CompositorViewTarget(
+                colorTexture: color,
+                depthTexture: depth,
+                renderPassDescriptor: passDescriptor(color: color, depth: depth, slice: map.sliceIndex),
+                viewMatrix: originFromView.inverse * originFromAvatar,
+                projectionMatrix: drawable.computeProjection(viewIndex: viewIndex)))
         }
+        // Wearer-eye midpoint in avatar space, then turn the head toward
+        // it. Avatar U's authored eye range is only ~8–12°, so eyes-only
+        // look-at still reads as "staring forward" once the avatar is off
+        // to one side.
+        let userInAvatar = userEyeMidpoint(inAvatarSpace: views)
+        if let model, let userInAvatar {
+            turnHead(toward: userInAvatar, model: model, deltaTime: dt)
+        }
+        aimLookAt(atUserInAvatar: userInAvatar, renderer: renderer)
+        // Preferred submit: morphs / SpringBone / inflight slot once, then
+        // one raster per eye. Per-eye `drawOffscreen` is still valid but
+        // double-steps physics and burns two triple-buffer slots.
+        renderer.encodeCompositorViews(commandBuffer: commandBuffer, views: views)
 
             drawable.encodePresent(commandBuffer: commandBuffer)
         }
 
         commandBuffer.commit()
+
+        if benchCompositor && !compositorDumped {
+            compositorEncode.append((CACurrentMediaTime() - encodeStart) * 1000)
+            compositorMeasured += 1
+            let warmup = 30
+            let measure = Int(ProcessInfo.processInfo.environment["VRM_VISIONOS_BENCH_FRAMES"] ?? "") ?? 80
+            if compositorMeasured == warmup + measure {
+                commandBuffer.waitUntilCompleted()
+                dumpCompositorBench()
+            }
+        }
+    }
+
+    private func dumpCompositorBench() {
+        compositorDumped = true
+        let gpu = compositorGPU.snapshot()
+        let encode = compositorEncode.suffix(compositorEncode.count >= 30 ? compositorEncode.count - 30 : 0)
+        func median(_ xs: ArraySlice<Double>) -> Double {
+            let s = xs.sorted()
+            return s.isEmpty ? 0 : s[s.count / 2]
+        }
+        func p95(_ xs: ArraySlice<Double>) -> Double {
+            let s = xs.sorted()
+            guard !s.isEmpty else { return 0 }
+            return s[min(s.count - 1, Int((Double(s.count) * 0.95).rounded(.down)))]
+        }
+        let gpuSlice = gpu.suffix(gpu.count >= 30 ? gpu.count - 30 : 0)
+        NSLog("""
+        [VisionOSGPUBench] compositor sample — \(device.name)
+          encode median \(String(format: "%.3f", median(encode))) ms  p95 \(String(format: "%.3f", p95(encode))) ms
+          gpu    median \(String(format: "%.3f", median(gpuSlice))) ms  p95 \(String(format: "%.3f", p95(gpuSlice))) ms
+          frames \(encode.count)
+        """)
+    }
+
+    /// Midpoint of compositor view origins, in avatar space (the same
+    /// space as `VRMNode.worldMatrix`).
+    private func userEyeMidpoint(inAvatarSpace views: [CompositorViewTarget]) -> SIMD3<Float>? {
+        guard !views.isEmpty else { return nil }
+        var sum = SIMD3<Float>.zero
+        for view in views {
+            let inv = view.viewMatrix.inverse
+            sum += SIMD3<Float>(inv.columns.3.x, inv.columns.3.y, inv.columns.3.z)
+        }
+        return sum / Float(views.count)
+    }
+
+    /// Yaws / pitches the head toward the wearer. Clamped so a side view
+    /// still looks like eye contact; blended over ~8 Hz so it does not
+    /// fight the playlist with pops.
+    private func turnHead(toward userInAvatar: SIMD3<Float>, model: VRMModel, deltaTime: Float) {
+        guard let headIndex = model.humanoid?.getBoneNode(.head),
+              headIndex >= 0, headIndex < model.nodes.count else { return }
+        let head = model.nodes[headIndex]
+        let parentWorld = head.parent?.worldMatrix ?? matrix_identity_float4x4
+        let userInParent4 = parentWorld.inverse * SIMD4<Float>(userInAvatar, 1)
+        let toUser = SIMD3<Float>(userInParent4.x, userInParent4.y, userInParent4.z) - head.translation
+        let distance = simd_length(toUser)
+        guard distance > 0.05 else { return }
+
+        let desiredYaw = atan2(toUser.x, toUser.z)
+        let desiredPitch = atan2(toUser.y, hypot(toUser.x, toUser.z))
+        let maxYaw: Float = 0.9
+        let maxPitch: Float = 0.35
+        let targetYaw = simd_clamp(desiredYaw, -maxYaw, maxYaw)
+        let targetPitch = simd_clamp(desiredPitch, -maxPitch, maxPitch)
+
+        let follow = 1 - exp(-max(deltaTime, 1e-4) * 8)
+        headLookYaw += (targetYaw - headLookYaw) * follow
+        headLookPitch += (targetPitch - headLookPitch) * follow
+
+        let yawQ = simd_quatf(angle: headLookYaw, axis: SIMD3<Float>(0, 1, 0))
+        let pitchQ = simd_quatf(angle: -headLookPitch, axis: SIMD3<Float>(1, 0, 0))
+        head.rotation = yawQ * pitchQ * head.initialRotation
+        head.updateLocalMatrix()
+        model.updateNodeTransforms()
+    }
+
+    /// Sets look-at to the wearer's eye midpoint. Uses
+    /// ``VRMLookAtTarget/user`` so ``VRMRenderer`` cannot overwrite it
+    /// with the first-eye camera extracted from `viewMatrix`.
+    private func aimLookAt(atUserInAvatar user: SIMD3<Float>?, renderer: VRMRenderer) {
+        guard let lookAt = renderer.lookAtController, let user else { return }
+        lookAt.enabled = true
+        lookAt.smoothing = 0.05
+        lookAt.userPosition = user
+        lookAt.cameraPosition = user
+        lookAt.target = .user
     }
 
     /// Clears depth to `0.0` — the far plane under the compositor's reverse-Z
@@ -248,4 +409,16 @@ private func translation(_ t: SIMD3<Float>) -> matrix_float4x4 {
     var m = matrix_identity_float4x4
     m.columns.3 = SIMD4<Float>(t.x, t.y, t.z, 1)
     return m
+}
+
+/// App-layer `ExternalForce` (VRMC_springBone-1.0). AvatarSample joints
+/// author `gravityPower = 0`, so hair otherwise settles along the bind
+/// direction — a high ponytail, straight up. Matches VRMVideoRenderer.
+private let defaultSpringGravityMagnitude: Float = 2.0
+
+private func applyDefaultSpringGravity(to model: VRMModel) {
+    let maxAuthored = (model.springBone?.springs ?? [])
+        .flatMap { $0.joints }.map(\.gravityPower).max() ?? 0
+    guard maxAuthored < 0.001 else { return }
+    model.springBoneGlobalParams?.gravity = SIMD3<Float>(0, -defaultSpringGravityMagnitude, 0)
 }

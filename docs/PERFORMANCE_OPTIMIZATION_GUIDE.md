@@ -95,9 +95,9 @@ let options = VRMLoadingOptions(
 - **Warning**: May break models using secondary UVs
 
 ### `.aggressiveTextureCompression`
-- **Impact**: Faster upload, lower quality
-- **Use when**: Memory is constrained
-- **Warning**: May reduce visual quality
+- **Impact**: ~4× less GPU texture bandwidth (BC7 at 8 bpp vs RGBA8). Load CPU goes up.
+- **Use when**: GPU texture cache is the limiter (crowd, 1024², battery).
+- **Warning**: Pixel-near, not bit-identical. Color textures only; mean AE ≤ 3/255. Linear maps stay RGBA8. No-ops if the device cannot sample BC.
 
 ## Performance by Model Type
 
@@ -322,6 +322,36 @@ class ModelLoader: ObservableObject {
     }
 }
 ```
+
+## visionOS / CompositorServices
+
+CompositorServices mixed immersion is the preferred *container* for a
+visionOS avatar: layered or dedicated drawables, reverse-Z, stored depth,
+transparent color clear (passthrough), no `waitUntilCompleted`.
+
+The preferred *submit* is `VRMRenderer.encodeCompositorViews` — one
+simulation (morphs, SpringBone, skin palettes, inflight slot) and one
+raster per eye. Calling `drawOffscreen` once per eye still works, but it
+double-steps physics and burns two triple-buffer slots.
+
+```swift
+renderer.encodeCompositorViews(commandBuffer: commandBuffer, views: views)
+drawable.encodePresent(commandBuffer: commandBuffer)
+commandBuffer.commit()
+```
+
+Mac stand-in (does not replace `make bench-gate`):
+
+```bash
+make bench-visionos
+# or
+swift run -c release VRMBenchmark AvatarSample_U_1.0.vrm.glb \
+  --mode visionos --visionos-submit preferred --vrma VRMA_01.vrma \
+  --spring-bone --frames 200
+```
+
+`--visionos-submit host` is the older per-eye `drawOffscreen` path, kept
+so the two can be compared on the same machine.
 
 ## Performance Targets
 

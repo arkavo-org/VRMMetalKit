@@ -212,6 +212,16 @@ extension VRMRenderer {
             "prepass": prepassDescriptor.depthCompareFunction,
             "opaqueEqual": opaqueEqualDescriptor.depthCompareFunction,
         ]
+        depthWriteByKey = [
+            "opaque": opaqueDepthDescriptor.isDepthWriteEnabled,
+            "mask": opaqueDepthDescriptor.isDepthWriteEnabled,
+            "blend": blendDepthDescriptor.isDepthWriteEnabled,
+            "always": alwaysDepthDescriptor.isDepthWriteEnabled,
+            "face": faceDepthDescriptor.isDepthWriteEnabled,
+            "faceOverlay": faceOverlayDescriptor.isDepthWriteEnabled,
+            "prepass": prepassDescriptor.isDepthWriteEnabled,
+            "opaqueEqual": opaqueEqualDescriptor.isDepthWriteEnabled,
+        ]
         #endif
 
         // Pre-create sampler states
@@ -263,37 +273,8 @@ extension VRMRenderer {
                 throw StrictModeError.missingFragmentFunction(name: "mtoon_fragment_v2")
             }
 
-            // Create vertex descriptor
             let vertexDescriptor = MTLVertexDescriptor()
-
-            // Use compiler-accurate offsets (fixes alignment padding issues)
-            let posOffset = MemoryLayout<VRMVertex>.offset(of: \.position)!
-            let normOffset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
-            let texOffset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
-            let colorOffset = MemoryLayout<VRMVertex>.offset(of: \.color)!
-            let stride = MemoryLayout<VRMVertex>.stride
-
-            // Position
-            vertexDescriptor.attributes[0].format = .float3
-            vertexDescriptor.attributes[0].offset = posOffset
-            vertexDescriptor.attributes[0].bufferIndex = 0
-
-            // Normal
-            vertexDescriptor.attributes[1].format = .float3
-            vertexDescriptor.attributes[1].offset = normOffset
-            vertexDescriptor.attributes[1].bufferIndex = 0
-
-            // TexCoord
-            vertexDescriptor.attributes[2].format = .float2
-            vertexDescriptor.attributes[2].offset = texOffset
-            vertexDescriptor.attributes[2].bufferIndex = 0
-
-            // Color
-            vertexDescriptor.attributes[3].format = .float4
-            vertexDescriptor.attributes[3].offset = colorOffset
-            vertexDescriptor.attributes[3].bufferIndex = 0
-
-            vertexDescriptor.layouts[0].stride = stride
+            VRMVertexStreams.applyMainPass(to: vertexDescriptor, skinned: false)
 
             // Create base pipeline descriptor
             let basePipelineDescriptor = MTLRenderPipelineDescriptor()
@@ -414,10 +395,7 @@ extension VRMRenderer {
             // Non-skinned depth-prepass pipeline: position-only, no fragment.
             if let depthVertexFunc = library.makeFunction(name: "mtoon_depth_vertex") {
                 let depthVD = MTLVertexDescriptor()
-                depthVD.attributes[0].format = .float3
-                depthVD.attributes[0].offset = MemoryLayout<VRMVertex>.offset(of: \.position)!
-                depthVD.attributes[0].bufferIndex = 0
-                depthVD.layouts[0].stride = MemoryLayout<VRMVertex>.stride
+                VRMVertexStreams.applyDepth(to: depthVD, skinned: false)
 
                 let depthDescriptor = MTLRenderPipelineDescriptor()
                 depthDescriptor.label = "mtoon_depth_prepass"
@@ -503,53 +481,11 @@ extension VRMRenderer {
             }
 
             let vertexDescriptor = MTLVertexDescriptor()
+            VRMVertexStreams.applyMainPass(to: vertexDescriptor, skinned: true)
 
-            // 🎯 CRITICAL FIX: Use compiler-accurate offsets instead of manual calculations
-            let posOffset = MemoryLayout<VRMVertex>.offset(of: \.position)!
-            let normOffset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
-            let texOffset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
-            let colorOffset = MemoryLayout<VRMVertex>.offset(of: \.color)!
-            let jointsOffset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
-            let weightsOffset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
-            let stride = MemoryLayout<VRMVertex>.stride
-
-            // 📐 DIAGNOSTIC: Log actual offsets for debugging wedge artifact
-            vrmLog("📐 [VERTEX LAYOUT] MToon Skinned Pipeline:")
-            vrmLog("   position: \(posOffset), normal: \(normOffset), texCoord: \(texOffset)")
-            vrmLog("   color: \(colorOffset), joints: \(jointsOffset), weights: \(weightsOffset)")
-            vrmLog("   stride: \(stride)")
-
-            // Position
-            vertexDescriptor.attributes[0].format = .float3
-            vertexDescriptor.attributes[0].offset = posOffset
-            vertexDescriptor.attributes[0].bufferIndex = 0
-
-            // Normal
-            vertexDescriptor.attributes[1].format = .float3
-            vertexDescriptor.attributes[1].offset = normOffset
-            vertexDescriptor.attributes[1].bufferIndex = 0
-
-            // TexCoord
-            vertexDescriptor.attributes[2].format = .float2
-            vertexDescriptor.attributes[2].offset = texOffset
-            vertexDescriptor.attributes[2].bufferIndex = 0
-
-            // Color
-            vertexDescriptor.attributes[3].format = .float4
-            vertexDescriptor.attributes[3].offset = colorOffset
-            vertexDescriptor.attributes[3].bufferIndex = 0
-
-            // Joints
-            vertexDescriptor.attributes[4].format = .uint4
-            vertexDescriptor.attributes[4].offset = jointsOffset
-            vertexDescriptor.attributes[4].bufferIndex = 0
-
-            // Weights
-            vertexDescriptor.attributes[5].format = .float4
-            vertexDescriptor.attributes[5].offset = weightsOffset
-            vertexDescriptor.attributes[5].bufferIndex = 0
-
-            vertexDescriptor.layouts[0].stride = stride
+            vrmLog("📐 [VERTEX LAYOUT] MToon Skinned Pipeline (split streams):")
+            vrmLog("   position stride: \(MemoryLayout<VRMPositionVertex>.stride)")
+            vrmLog("   attribute stride: \(MemoryLayout<VRMAttributeVertex>.stride)")
 
             // Create base skinned pipeline descriptor
             let basePipelineDescriptor = MTLRenderPipelineDescriptor()
@@ -652,16 +588,7 @@ extension VRMRenderer {
             // (drops normal/uv/color), no fragment, depth attachment only.
             if let depthVertexFunc = library.makeFunction(name: "skinned_mtoon_depth_vertex") {
                 let depthVD = MTLVertexDescriptor()
-                depthVD.attributes[0].format = .float3
-                depthVD.attributes[0].offset = posOffset
-                depthVD.attributes[0].bufferIndex = 0
-                depthVD.attributes[4].format = .uint4
-                depthVD.attributes[4].offset = jointsOffset
-                depthVD.attributes[4].bufferIndex = 0
-                depthVD.attributes[5].format = .float4
-                depthVD.attributes[5].offset = weightsOffset
-                depthVD.attributes[5].bufferIndex = 0
-                depthVD.layouts[0].stride = stride
+                VRMVertexStreams.applyDepth(to: depthVD, skinned: true)
 
                 let depthDescriptor = MTLRenderPipelineDescriptor()
                 depthDescriptor.label = "mtoon_skinned_depth_prepass"
@@ -709,55 +636,29 @@ extension VRMRenderer {
         features: MToonFunctionConstantKey
     ) throws -> MTLRenderPipelineDescriptor {
         let vertexDescriptor = MTLVertexDescriptor()
-
-        // Position
-        vertexDescriptor.attributes[0].format = .float3
-        vertexDescriptor.attributes[0].offset = MemoryLayout<VRMVertex>.offset(of: \.position)!
-        vertexDescriptor.attributes[0].bufferIndex = 0
-
-        // Normal
-        vertexDescriptor.attributes[1].format = .float3
-        vertexDescriptor.attributes[1].offset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
-        vertexDescriptor.attributes[1].bufferIndex = 0
-
-        // TexCoord
-        vertexDescriptor.attributes[2].format = .float2
-        vertexDescriptor.attributes[2].offset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
-        vertexDescriptor.attributes[2].bufferIndex = 0
-
-        // Color
-        vertexDescriptor.attributes[3].format = .float4
-        vertexDescriptor.attributes[3].offset = MemoryLayout<VRMVertex>.offset(of: \.color)!
-        vertexDescriptor.attributes[3].bufferIndex = 0
-
-        if isSkinned {
-            // Joints
-            vertexDescriptor.attributes[4].format = .uint4
-            vertexDescriptor.attributes[4].offset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
-            vertexDescriptor.attributes[4].bufferIndex = 0
-
-            // Weights
-            vertexDescriptor.attributes[5].format = .float4
-            vertexDescriptor.attributes[5].offset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
-            vertexDescriptor.attributes[5].bufferIndex = 0
-        }
-
-        vertexDescriptor.layouts[0].stride = MemoryLayout<VRMVertex>.stride
+        VRMVertexStreams.applyMainPass(to: vertexDescriptor, skinned: isSkinned)
 
         let vertexFunctionName = isSkinned ? "skinned_mtoon_vertex" : "mtoon_vertex"
         guard let vertexFunction = library.makeFunction(name: vertexFunctionName) else {
             throw StrictModeError.missingVertexFunction(name: vertexFunctionName)
         }
 
-        guard let fragmentFunction = try? library.makeFunction(
-            name: "mtoon_fragment_v2",
-            constantValues: features.makeFunctionConstantValues()
-        ) else {
-            throw StrictModeError.missingFragmentFunction(name: "mtoon_fragment_v2")
+        let fragmentFunction: MTLFunction?
+        if features.debugVisualization {
+            fragmentFunction = library.makeFunction(name: "mtoon_fragment_debug")
+        } else {
+            fragmentFunction = try? library.makeFunction(
+                name: "mtoon_fragment_v2",
+                constantValues: features.makeFunctionConstantValues()
+            )
+        }
+        guard let fragmentFunction else {
+            throw StrictModeError.missingFragmentFunction(
+                name: features.debugVisualization ? "mtoon_fragment_debug" : "mtoon_fragment_v2")
         }
 
         let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.label = "mtoon_\(isSkinned ? "skinned" : "non_skinned")_fc_\(features.alphaMode)"
+        descriptor.label = "mtoon_\(isSkinned ? "skinned" : "non_skinned")_fc_\(features.alphaMode)_L\(features.lightCount)"
         descriptor.vertexFunction = vertexFunction
         descriptor.fragmentFunction = fragmentFunction
         descriptor.vertexDescriptor = vertexDescriptor
@@ -809,26 +710,15 @@ extension VRMRenderer {
             return memoized
         }
 
-        // Build a compact integer bitfield key instead of multiple string interpolations.
-        // Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4]
-        // Every field of `features` must appear here: this key is what the
-        // shared cache uses for identity, so a field carried by the memo key
-        // but dropped here lets two distinct memo entries collide on one
-        // compiled pipeline.
-        var bits: UInt32 = isSkinned ? 1 : 0
-        bits = (bits << 1) | (features.useMaterialFlags ? 1 : 0)
-        bits = (bits << 1) | (features.hasBaseColorTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasShadeMultiplyTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasShadingShiftTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasNormalTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasMatcapTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasRimMultiplyTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasEmissiveTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasOcclusionTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasUvAnimationMaskTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasParametricRim ? 1 : 0)
-        bits = (bits << 4) | (UInt32(features.alphaMode) & 0xF)
-        let key = "mtfc_\(bits)_\(config.colorPixelFormat.rawValue)_\(config.sampleCount)"
+        // The memo key carries every field of `features`; the string below is
+        // what the *shared* cache uses for identity, so it must fold in the
+        // same fields or two distinct memo entries collide on one compiled
+        // pipeline. See `MToonFunctionConstantKey.sharedCacheKey`.
+        let key = features.sharedCacheKey(
+            isSkinned: isSkinned,
+            colorPixelFormat: config.colorPixelFormat,
+            sampleCount: config.sampleCount
+        )
 
         let descriptor: MTLRenderPipelineDescriptor
         do {

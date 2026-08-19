@@ -53,26 +53,33 @@ enum TextureUploader {
     ///     (base color of a MASK/BLEND material — see
     ///     ``TextureLoader/textureAlphaIsCoverage(_:in:)``); otherwise
     ///     every channel filters independently. Ignored without a chain.
+    ///   - blockCompress: When `true` and the device can sample BC,
+    ///     re-encode the uploaded RGBA8 as BC7 (issue #359). Linear
+    ///     callers should leave this off.
     /// - Returns: A texture holding the straight-alpha image, or `nil` if
     ///   both the straight decode and the premultiplied fallback fail.
     static func makeTexture(cgImage: CGImage,
                             pixelFormat: MTLPixelFormat,
                             device: MTLDevice,
                             mipmapped: Bool = false,
-                            alphaIsCoverage: Bool = false) -> MTLTexture? {
-        if let texture = makeTextureFromStraightDecode(cgImage: cgImage,
+                            alphaIsCoverage: Bool = false,
+                            blockCompress: Bool = false) -> MTLTexture? {
+        let texture: MTLTexture?
+        if let decoded = makeTextureFromStraightDecode(cgImage: cgImage,
                                                        pixelFormat: pixelFormat,
                                                        device: device,
                                                        mipmapped: mipmapped,
                                                        alphaIsCoverage: alphaIsCoverage) {
-            return texture
+            texture = decoded
+        } else {
+            vrmLog("[TextureUploader] Straight decode unavailable for this image; falling back to premultiplied context")
+            texture = makeTextureFromPremultipliedContext(cgImage: cgImage,
+                                                          pixelFormat: pixelFormat,
+                                                          device: device,
+                                                          mipmapped: mipmapped,
+                                                          alphaIsCoverage: alphaIsCoverage)
         }
-        vrmLog("[TextureUploader] Straight decode unavailable for this image; falling back to premultiplied context")
-        return makeTextureFromPremultipliedContext(cgImage: cgImage,
-                                                   pixelFormat: pixelFormat,
-                                                   device: device,
-                                                   mipmapped: mipmapped,
-                                                   alphaIsCoverage: alphaIsCoverage)
+        return finalize(texture, blockCompress: blockCompress, device: device)
     }
 
     /// Decodes directly into unpremultiplied RGBA8888, so the stored bytes
@@ -153,6 +160,8 @@ enum TextureUploader {
     ///   - device: Device to allocate on.
     ///   - mipmapped: Build a full mip chain (see ``makeTexture(cgImage:pixelFormat:device:mipmapped:alphaIsCoverage:)``).
     ///   - alphaIsCoverage: Weight RGB by alpha when building the chain.
+    ///   - blockCompress: When `true` and the device can sample BC,
+    ///     re-encode the uploaded RGBA8 as BC7.
     /// - Returns: A texture holding the straight-alpha image, or `nil` on
     ///   allocation or unpremultiply failure.
     static func makeTexture(bitmapData: UnsafeMutableRawPointer,
@@ -160,7 +169,8 @@ enum TextureUploader {
                             pixelFormat: MTLPixelFormat,
                             device: MTLDevice,
                             mipmapped: Bool = false,
-                            alphaIsCoverage: Bool = false) -> MTLTexture? {
+                            alphaIsCoverage: Bool = false,
+                            blockCompress: Bool = false) -> MTLTexture? {
         // vImageUnpremultiplyData_RGBA8888 operates in place when source and
         // destination share `data` and `rowBytes`.
         var buffer = vImage_Buffer(data: bitmapData,
@@ -170,13 +180,27 @@ enum TextureUploader {
         let status = vImageUnpremultiplyData_RGBA8888(&buffer, &buffer, vImage_Flags(kvImageNoFlags))
         guard status == kvImageNoError else { return nil }
 
-        return upload(straightBytes: bitmapData,
-                      width: width, height: height,
-                      bytesPerRow: width * 4,
-                      pixelFormat: pixelFormat,
-                      device: device,
-                      mipmapped: mipmapped,
-                      alphaIsCoverage: alphaIsCoverage)
+        return finalize(
+            upload(straightBytes: bitmapData,
+                   width: width, height: height,
+                   bytesPerRow: width * 4,
+                   pixelFormat: pixelFormat,
+                   device: device,
+                   mipmapped: mipmapped,
+                   alphaIsCoverage: alphaIsCoverage),
+            blockCompress: blockCompress,
+            device: device
+        )
+    }
+
+    private static func finalize(_ texture: MTLTexture?,
+                                 blockCompress: Bool,
+                                 device: MTLDevice) -> MTLTexture? {
+        guard let texture else { return nil }
+        if blockCompress, let compressed = TextureBlockCompressor.compress(texture, device: device) {
+            return compressed
+        }
+        return texture
     }
 
     /// Both decode paths land here with straight-alpha bytes; the sampler's

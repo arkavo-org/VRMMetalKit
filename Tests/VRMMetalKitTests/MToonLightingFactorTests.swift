@@ -454,6 +454,7 @@ final class LightingTestRenderer {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let pipelineState: MTLRenderPipelineState
+    let debugPipelineState: MTLRenderPipelineState
     let colorTexture: MTLTexture
     let depthTexture: MTLTexture
     let width: Int
@@ -541,6 +542,13 @@ final class LightingTestRenderer {
 
         self.pipelineState = try device.makeRenderPipelineState(descriptor: pipelineDesc)
 
+        guard let debugFragment = library.makeFunction(name: "mtoon_fragment_debug") else {
+            throw LightingTestError.shaderFunctionNotFound
+        }
+        let debugDesc = pipelineDesc.copy() as! MTLRenderPipelineDescriptor
+        debugDesc.fragmentFunction = debugFragment
+        self.debugPipelineState = try device.makeRenderPipelineState(descriptor: debugDesc)
+
         // Create sphere geometry
         let (vertices, indices) = Self.createSphere(radius: 0.5, segments: 32)
 
@@ -554,16 +562,24 @@ final class LightingTestRenderer {
         self.indexCount = indices.count
     }
 
-    /// Render with a specific debug mode (e.g., mode 15 for lightingFactor visualization)
+    /// Render with a specific debug mode (e.g., mode 15 for lightingFactor visualization).
+    ///
+    /// Pass `cullMode: .front` to render the sphere's back faces — the only way
+    /// to observe a flipped-normal fragment on closed geometry.
     func renderWithDebugMode(
         _ debugMode: Int32,
         material: MToonMaterialUniforms,
-        lightDir: SIMD3<Float>
+        lightDir: SIMD3<Float>,
+        ambientColor: SIMD3<Float>? = nil,
+        cullMode: MTLCullMode = .back
     ) throws -> Data {
         var uniforms = createUniforms(lightDir: lightDir, debugMode: debugMode)
+        if let ambientColor {
+            uniforms.ambientColor = ambientColor
+        }
         var materialCopy = material
 
-        return try renderInternal(uniforms: &uniforms, material: &materialCopy)
+        return try renderInternal(uniforms: &uniforms, material: &materialCopy, cullMode: cullMode)
     }
 
     /// Render with normal lighting (no debug mode)
@@ -617,7 +633,11 @@ final class LightingTestRenderer {
         return uniforms
     }
 
-    func renderInternal(uniforms: inout Uniforms, material: inout MToonMaterialUniforms) throws -> Data {
+    func renderInternal(
+        uniforms: inout Uniforms,
+        material: inout MToonMaterialUniforms,
+        cullMode: MTLCullMode = .back
+    ) throws -> Data {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else {
             throw LightingTestError.commandBufferCreationFailed
         }
@@ -636,8 +656,11 @@ final class LightingTestRenderer {
             throw LightingTestError.encoderCreationFailed
         }
 
-        encoder.setRenderPipelineState(pipelineState)
-        encoder.setCullMode(.back)
+        // Same routing the renderer uses: modes answered inside the production
+        // fragment must not be sent to `mtoon_fragment_debug`.
+        encoder.setRenderPipelineState(
+            MToonDebugMode.usesDebugFragment(uniforms.debugUVs) ? debugPipelineState : pipelineState)
+        encoder.setCullMode(cullMode)
         encoder.setFrontFacing(.counterClockwise)
 
         encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)

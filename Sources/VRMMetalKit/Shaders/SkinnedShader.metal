@@ -19,6 +19,10 @@
 using namespace metal;
 
 constant float WEIGHT_THRESHOLD = 0.001;
+// Last-resort OOB guard. Must be >= the largest legal palette index we
+// accept (VRMConstants.Animation.maxJointCount - 1). Do not use 255:
+// VRoid skirt/cloth joints push the right shin/foot past that.
+constant uint kMaxSafeJointIndex = 1023;
 
 // --- #197 Dual-quaternion skinning (opt-in, quality-above-reference) ----------
 // LBS linearly blends joint MATRICES, which loses volume at high-deformation
@@ -159,7 +163,7 @@ struct MToonMaterial {
  float parametricRimLiftFactor;             // 4 bytes
  float rimLightingMixFactor;                // 4 bytes
  int hasRimMultiplyTexture;                 // 4 bytes
- float _padding1;                           // 4 bytes padding
+ float mergedOutline;                       // 4 bytes: >0.5 = instanced hull in this draw
 
  // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
  float outlineWidthFactor;                  // 4 bytes
@@ -229,6 +233,7 @@ struct VertexOut {
  float4 color;
  float3 viewDirection;
  float3 viewNormal; // For MatCap sampling
+ uint instanceId;
 };
 
 static inline bool hasParametricRim(constant MToonMaterial& material) {
@@ -244,6 +249,37 @@ static inline bool needsViewNormal(constant MToonMaterial& material, constant Un
 
 static inline bool needsViewDirection(constant MToonMaterial& material, constant Uniforms& uniforms) {
  return hasParametricRim(material) || uniforms.debugUVs == 10;
+}
+
+static inline void applyMToonOutlineExtrusion(
+    thread float3& worldPos,
+    thread float4& clipPos,
+    float3 worldNormal,
+    float2 texCoord,
+    constant Uniforms& uniforms,
+    constant MToonMaterial& material,
+    texture2d<float> outlineWidthMultiplyTexture,
+    sampler textureSampler,
+    bool hasMultiplyTexture
+) {
+ float outlineWidth = material.outlineWidthFactor;
+ if (hasMultiplyTexture) {
+ outlineWidth *= outlineWidthMultiplyTexture.sample(textureSampler, texCoord).g;
+ }
+ float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                   uniforms.viewMatrix[1].xyz,
+                                   uniforms.viewMatrix[2].xyz);
+ float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+ if (material.outlineMode == 1.0) {
+ float distanceScale = length(worldPos - cameraPos) * 0.01;
+ worldPos += normalize(worldNormal) * outlineWidth * distanceScale;
+ clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * float4(worldPos, 1.0);
+ } else if (material.outlineMode == 2.0) {
+ float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
+ float2 screenNormal = normalize(viewNormal.xy);
+ float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
+ clipPos.xy += screenNormal * outlineWidth * pixelsToNDC * clipPos.w;
+ }
 }
 
 // Shared skinning: morph fetch + weight normalisation/gating + LBS/DQS blend +
@@ -274,8 +310,7 @@ static inline void vrm_skin(float3 basePosition,
 
  float threshold = WEIGHT_THRESHOLD;
 
- // Safe buffer limit: clamp to 255 to prevent reading garbage memory
- uint maxJoint = 255;
+ uint maxJoint = kMaxSafeJointIndex;
  uint4 safeJoints = min(joints, uint4(maxJoint));
 
  // Threshold-gate the (normalized) weights using RAW weights.
@@ -359,8 +394,12 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                device const float3* morphedPositions [[buffer(20)]],
                                constant uint& hasMorphed [[buffer(22)]],
                                device const uint8_t* firstPersonHiddenFlags [[buffer(26)]],
-                               uint vertexID [[vertex_id]]) {
+                               texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
+                               sampler outlineWidthSampler [[sampler(0)]],
+                               uint vertexID [[vertex_id]],
+                               uint instanceId [[instance_id]]) {
  VertexOut out;
+ out.instanceId = instanceId;
 
  // Use morphed positions if available, otherwise use original
  float3 basePosition;
@@ -420,6 +459,13 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
      out.position = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped by homogeneous divide
  }
 
+ if (instanceId == 1u) {
+ applyMToonOutlineExtrusion(out.worldPosition, out.position, out.worldNormal,
+                            out.texCoord, uniforms, material,
+                            outlineWidthMultiplyTexture, outlineWidthSampler,
+                            material.hasOutlineWidthMultiplyTexture > 0);
+ }
+
  return out;
 }
 
@@ -429,6 +475,7 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
                          constant float4x4* jointMatrices [[buffer(25)]],
                          [[maybe_unused]] uint vertexID [[vertex_id]]) {
  VertexOut out;
+ out.instanceId = 0;
 
  // Store RAW weights for threshold check
  float4 rawWeights = in.weights;
@@ -447,7 +494,7 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
  float threshold = WEIGHT_THRESHOLD;
 
  // Safe buffer limit: clamp to 255 to prevent reading garbage memory
- uint maxJoint = 255;
+ uint maxJoint = kMaxSafeJointIndex;
  uint4 safeJoints = min(in.joints, uint4(maxJoint));
 
  if (rawWeights[0] > threshold) {
@@ -517,6 +564,7 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
                                               constant MToonMaterial& material [[buffer(8)]],
                                               constant float4x4* jointMatrices [[buffer(25)]]) {
  VertexOut out;
+ out.instanceId = 0;
 
  // Store RAW weights for threshold check
  float4 rawWeights = in.weights;
@@ -534,7 +582,7 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  float threshold = WEIGHT_THRESHOLD;
 
  // Safe buffer limit: clamp to 255 to prevent reading garbage memory
- uint maxJoint = 255;
+ uint maxJoint = kMaxSafeJointIndex;
  uint4 safeJoints = min(in.joints, uint4(maxJoint));
 
  float4 gatedWeights = float4(

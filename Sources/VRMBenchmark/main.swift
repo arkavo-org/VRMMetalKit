@@ -50,6 +50,8 @@ struct BenchmarkOptions {
     var archiveDir: String? = nil            // --archive-dir DIR (pipeline mode)
     var avatarCount: Int = 1                  // --avatar-count N (Game of Mods multi-avatar)
     var avatarSpacing: Float = 1.2            // --avatar-spacing M (meters between avatars)
+    var visionOSSubmit: String = "preferred"  // preferred | host
+    var visionOSViews: Int = 2
 }
 
 func usage() {
@@ -64,8 +66,9 @@ func usage() {
                        animation playback so skinning and spring physics
                        do real work each frame (recommended).
       --mode NAME      Benchmark mode: render, animation, transforms, load,
-                       pipeline (default render). 'pipeline' needs no input
-                       model — it times cold vs warm pipeline-state builds.
+                       pipeline, visionos (default render). 'pipeline' needs
+                       no input model. 'visionos' is a stereo reverse-Z
+                       compositor-shaped offscreen path (see --visionos-submit).
       --loading NAME   Loading options preset: default, safe, or max
                        (default default).
       --frames N       Number of measured frames (default 500)
@@ -97,6 +100,9 @@ func usage() {
                          N copies of the model are placed in a row; tests
                          multi-avatar throughput for Game of Mods.
       --avatar-spacing M Distance between avatars in meters (default 1.2).
+      --visionos-submit S  preferred (simulate once, raster per eye) or
+                         host (one drawOffscreen per eye). Default preferred.
+      --visionos-views N Stereo view count for --mode visionos (default 2).
 
     Recommended invocation:
       swift run -c release VRMBenchmark <vrm-path> --vrma <vrma-path> --frames 500
@@ -200,6 +206,12 @@ func parseArguments() -> BenchmarkOptions? {
         case "--avatar-spacing":
             guard let v = nextValue(for: a) else { return nil }
             opts.avatarSpacing = Float(v) ?? 1.2
+        case "--visionos-submit":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.visionOSSubmit = v.lowercased()
+        case "--visionos-views":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.visionOSViews = max(1, Int(v) ?? 2)
         case "--threshold":
             guard let v = nextValue(for: a) else { return nil }
             let parts = v.split(separator: ":").map(String.init)
@@ -323,7 +335,7 @@ func printCompactStats(label: String, samples: [Double]) {
 
 // MARK: - JSON report helpers
 
-private func snapshot(_ s: FrameStats) -> BenchmarkReport.FrameStatsSnapshot {
+func snapshot(_ s: FrameStats) -> BenchmarkReport.FrameStatsSnapshot {
     BenchmarkReport.FrameStatsSnapshot(
         count: s.count,
         minMs: s.minMs,
@@ -349,7 +361,7 @@ private func systemDescriptor() -> BenchmarkReport.System {
         host: ProcessInfo.processInfo.hostName)
 }
 
-private func makeReport(
+func makeReport(
     opts: BenchmarkOptions,
     stats: [String: BenchmarkReport.FrameStatsSnapshot]
 ) -> BenchmarkReport {
@@ -367,8 +379,8 @@ private func makeReport(
             height: opts.height,
             sampleCount: opts.sampleCount,
             loading: opts.loadingPreset,
-            springBoneQuality: opts.mode == "render" ? opts.springBoneQuality : nil,
-            lighting: opts.mode == "render" ? opts.lighting : nil),
+            springBoneQuality: (opts.mode == "render" || opts.mode == "visionos") ? opts.springBoneQuality : nil,
+            lighting: (opts.mode == "render" || opts.mode == "visionos") ? opts.lighting : nil),
         system: systemDescriptor(),
         stats: stats)
 }
@@ -376,7 +388,7 @@ private func makeReport(
 /// Writes the JSON report to `--json` destination (file path or stdout) and,
 /// if `--baseline` was supplied, loads the baseline and compares. Returns the
 /// process exit code (0 = pass, 1 = regression).
-private func finalizeReport(opts: BenchmarkOptions, report: BenchmarkReport) -> Int32 {
+func finalizeReport(opts: BenchmarkOptions, report: BenchmarkReport) -> Int32 {
     // 1. Emit JSON (file or stdout) if requested.
     if let dest = opts.jsonOutPath {
         do {
@@ -663,8 +675,20 @@ struct VRMBenchmarkCLI {
             exit(finalizeReport(opts: opts, report: report))
         }
 
+        if opts.mode == "visionos" {
+            runVisionOSBenchmark(
+                opts: opts,
+                device: device,
+                commandQueue: commandQueue,
+                model: model,
+                player: player,
+                loadMs: loadMs,
+                animDurationSec: animDurationSec)
+            return
+        }
+
         guard opts.mode == "render" else {
-            print("ERROR: unknown --mode \(opts.mode). Expected render, animation, transforms, or load.")
+            print("ERROR: unknown --mode \(opts.mode). Expected render, animation, transforms, load, or visionos.")
             exit(1)
         }
 

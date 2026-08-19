@@ -118,7 +118,8 @@ public struct MToonMaterialUniforms {
     public var rimLightingMixFactor: Float = 1.0
     /// Non-zero if a rim-multiply texture is bound for this material.
     public var hasRimMultiplyTexture: Int32 = 0
-    private var _padding1: Float = 0.0
+    /// >0.5 when this draw instances the inverted hull (`instance_id == 1`).
+    public var mergedOutline: Float = 0.0
 
     // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
 
@@ -403,6 +404,18 @@ public enum MToonOutlineWidthMode: String {
 /// ``useMaterialFlags`` sentinel selects the dynamic fallback path that reads
 /// feature flags from the uniform buffer at runtime, matching the historical
 /// behavior.
+/// How many of the 3-point lights the specialized MToon fragment compiles.
+public enum MToonLightSpecialization: Sendable {
+    public static let maxLights: UInt8 = 3
+
+    /// Highest occupied slot in 0...2, or 1 when every light is off.
+    public static func count(keyIntensity: Float, fillIntensity: Float, rimIntensity: Float) -> UInt8 {
+        if rimIntensity > 0 { return 3 }
+        if fillIntensity > 0 { return 2 }
+        return 1
+    }
+}
+
 public struct MToonFunctionConstantKey: Hashable, Sendable {
     /// When `true`, the shader reads feature flags from the uniform buffer
     /// instead of the function constants. This is the dynamic fallback path.
@@ -426,6 +439,13 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
     /// 0=OPAQUE, 1=MASK, 2=BLEND, 3=MASK_A2C.
     public var alphaMode: UInt8
 
+    /// Compiled 3-point light count, 1...3. Fallback path ignores this and
+    /// always evaluates three slots.
+    public var lightCount: UInt8
+
+    /// Selects `mtoon_fragment_debug` instead of the production fragment.
+    public var debugVisualization: Bool
+
     public init(
         useMaterialFlags: Bool = false,
         hasBaseColorTexture: Bool = false,
@@ -438,7 +458,9 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         hasOcclusionTexture: Bool = false,
         hasUvAnimationMaskTexture: Bool = false,
         hasParametricRim: Bool = false,
-        alphaMode: UInt8 = 0
+        alphaMode: UInt8 = 0,
+        lightCount: UInt8 = MToonLightSpecialization.maxLights,
+        debugVisualization: Bool = false
     ) {
         self.useMaterialFlags = useMaterialFlags
         self.hasBaseColorTexture = hasBaseColorTexture
@@ -452,6 +474,8 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.hasUvAnimationMaskTexture = hasUvAnimationMaskTexture
         self.hasParametricRim = hasParametricRim
         self.alphaMode = alphaMode
+        self.lightCount = lightCount
+        self.debugVisualization = debugVisualization
     }
 
     /// The dynamic fallback key that preserves pre-specialization behavior.
@@ -472,6 +496,8 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         let rim = material.parametricRimColorFactor
         self.hasParametricRim = rim.x != 0.0 || rim.y != 0.0 || rim.z != 0.0
         self.alphaMode = UInt8(material.alphaMode)
+        self.lightCount = MToonLightSpecialization.maxLights
+        self.debugVisualization = false
     }
 
     /// Builds the Metal function-constant payload for this key.
@@ -517,6 +543,47 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         var hasParametricRim = self.hasParametricRim
         values.setConstantValue(&hasParametricRim, type: .bool, index: 12)
 
+        var lightCount = UInt32(max(1, min(self.lightCount, MToonLightSpecialization.maxLights)))
+        values.setConstantValue(&lightCount, type: .uint, index: 13)
+
         return values
+    }
+
+    /// Builds the compact integer bitfield that forms the shared
+    /// ``VRMPipelineCache`` string key's identity for a compiled pipeline
+    /// variant. Every field of `self` must appear here: this key is what the
+    /// shared cache uses for identity, so a field dropped here lets two
+    /// distinct variants collide on one compiled pipeline.
+    ///
+    /// Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4][lights:2][debug:1]
+    func sharedCacheKeyBits(isSkinned: Bool) -> UInt32 {
+        var bits: UInt32 = isSkinned ? 1 : 0
+        bits = (bits << 1) | (useMaterialFlags ? 1 : 0)
+        bits = (bits << 1) | (hasBaseColorTexture ? 1 : 0)
+        bits = (bits << 1) | (hasShadeMultiplyTexture ? 1 : 0)
+        bits = (bits << 1) | (hasShadingShiftTexture ? 1 : 0)
+        bits = (bits << 1) | (hasNormalTexture ? 1 : 0)
+        bits = (bits << 1) | (hasMatcapTexture ? 1 : 0)
+        bits = (bits << 1) | (hasRimMultiplyTexture ? 1 : 0)
+        bits = (bits << 1) | (hasEmissiveTexture ? 1 : 0)
+        bits = (bits << 1) | (hasOcclusionTexture ? 1 : 0)
+        bits = (bits << 1) | (hasUvAnimationMaskTexture ? 1 : 0)
+        bits = (bits << 1) | (hasParametricRim ? 1 : 0)
+        bits = (bits << 4) | (UInt32(alphaMode) & 0xF)
+        // Folded as the clamped value actually compiled by
+        // `makeFunctionConstantValues`, not the raw field: an out-of-contract
+        // `lightCount` (outside 1...3) must key identically to its clamp
+        // target so it reuses that pipeline instead of manufacturing a
+        // spurious cache entry for a variant Metal never compiles.
+        let clampedLightCount = UInt32(max(1, min(lightCount, MToonLightSpecialization.maxLights)))
+        bits = (bits << 2) | (clampedLightCount & 0x3)
+        bits = (bits << 1) | (debugVisualization ? 1 : 0)
+        return bits
+    }
+
+    /// The shared ``VRMPipelineCache`` string key for a compiled pipeline
+    /// variant of this feature set at the given render-target configuration.
+    func sharedCacheKey(isSkinned: Bool, colorPixelFormat: MTLPixelFormat, sampleCount: Int) -> String {
+        "mtfc_\(sharedCacheKeyBits(isSkinned: isSkinned))_\(colorPixelFormat.rawValue)_\(sampleCount)"
     }
 }

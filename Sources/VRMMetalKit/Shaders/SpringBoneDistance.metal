@@ -50,9 +50,12 @@ kernel void springBoneDistance(
     constant float* restLengths [[buffer(4)]],
     constant SpringBoneParams& globalParams [[buffer(3)]],
     constant float3* bindDirections [[buffer(11)]],
+    constant uint* boneChainIndex [[buffer(16)]],
+    constant uint* chainSleep [[buffer(17)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones) return;
+    if (chainSleep[boneChainIndex[id]] != 0) return;
 
     uint parentIndex = boneParams[id].parentIndex;
     if (parentIndex == 0xFFFFFFFF) return; // Skip root bones

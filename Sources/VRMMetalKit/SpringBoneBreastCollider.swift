@@ -70,10 +70,9 @@ enum SpringBoneBreastCollider {
 
         var sideVerts: [[SIMD3<Float>]] = Array(repeating: [], count: sides.count)
         for primitive in model.meshes[meshIndex].primitives {
-            guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0 else { continue }
-            let ptr = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
-            for vi in 0..<primitive.vertexCount {
-                let v = ptr[vi]
+            let verts = primitive.interleavedVertices()
+            guard !verts.isEmpty else { continue }
+            for v in verts {
                 let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
                 let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
                 var domSlot = -1
@@ -202,10 +201,9 @@ enum SpringBoneBreastCollider {
 
             var verts: [SIMD3<Float>] = []
             for primitive in model.meshes[meshIndex].primitives {
-                guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0 else { continue }
-                let ptr = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
-                for vi in 0..<primitive.vertexCount {
-                    let v = ptr[vi]
+                let loaded = primitive.interleavedVertices()
+                guard !loaded.isEmpty else { continue }
+                for v in loaded {
                     let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
                     let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
                     var domSlot = -1
@@ -265,10 +263,9 @@ enum SpringBoneBreastCollider {
         }
         var dists: [Float] = []
         for primitive in model.meshes[meshIndex].primitives {
-            guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0 else { continue }
-            let ptr = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
-            for vi in 0..<primitive.vertexCount {
-                let v = ptr[vi]
+            let loaded = primitive.interleavedVertices()
+            guard !loaded.isEmpty else { continue }
+            for v in loaded {
                 let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
                 let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
                 var domSlot = -1

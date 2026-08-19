@@ -87,7 +87,19 @@ import QuartzCore  // For CACurrentMediaTime
 /// contexts (e.g., captured by `Task`), but the encode-side methods are
 /// pinned to the main actor — ``draw(in:commandBuffer:renderPassDescriptor:)``
 /// and ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``
-/// are both `@MainActor`. Animation updates running concurrently on the same
+/// are both `@MainActor`. ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``
+/// and ``encodeCompositorViews(commandBuffer:views:)`` are the off-thread
+/// compositor entry points.
+///
+/// Whichever entry point a host picks, exactly one of them drives a given
+/// renderer instance, from one thread. They all funnel into the same
+/// unsynchronized per-frame state — the inflight ring, the uniform-buffer
+/// index, ``viewMatrix``/``projectionMatrix``, the compositor deferral flags —
+/// so mixing them (a `@MainActor` preview calling `draw(in:)` while a
+/// CompositorServices thread calls `encodeCompositorViews` on the same object)
+/// interleaves those writes mid-frame. Two render loops means two renderers.
+///
+/// Animation updates running concurrently on the same
 /// ``VRMModel`` from a background actor remain safe because the renderer
 /// cooperates with the model's internal `NSLock` (the same lock
 /// ``AnimationPlayer`` acquires), so the scene graph stays consistent during
@@ -447,6 +459,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         lightNormalizationMode = mode
     }
 
+    /// 1×1 white (G=1) so merged-outline vertex shaders can always bind
+    /// `texture(0)` even when the material has no multiply map.
+    private var outlineWidthFallbackTexture: MTLTexture?
+
     // Pipeline states for MToon outline rendering
     var mtoonOutlinePipelineState: MTLRenderPipelineState?
     var mtoonSkinnedOutlinePipelineState: MTLRenderPipelineState?
@@ -492,7 +508,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public var morphTargetSystem: VRMMorphTargetSystem?
     /// Expression controller responsible for aggregating per-expression weights into morph weights.
     /// Auto-created in ``init(device:config:)``.
-    public var expressionController: VRMExpressionController?
+    ///
+    /// Reassigning this drops the cached morph output. The fingerprint that
+    /// gates that cache is computed from the controller's weights, so a new
+    /// controller with coincidentally equal weights would otherwise be handed
+    /// buffers built for the old one's expression set.
+    public var expressionController: VRMExpressionController? {
+        didSet {
+            morphedBuffers.removeAll(keepingCapacity: true)
+            lastMorphWeightsFingerprint = nil
+        }
+    }
 
     /// Look-at controller that drives eye-bone rotations to track a world-space target. Auto-created in ``init(device:config:)``.
     public var lookAtController: VRMLookAtController?
@@ -751,9 +777,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Prefer ``AnimationPlayer`` for new code; set this to `false` only when restoring the legacy path.
     public var disableLegacyAnimation: Bool = true
 
-    /// When `true` (the default), the renderer assumes the avatar's joints may be animated each frame
-    /// and marks all skin palettes dirty before updating them. Set to `false` for a static avatar to
-    /// skip joint-matrix recomputation after the first frame.
+    /// When `true` (the default), the renderer rebuilds a skin palette only if
+    /// one of that skin's joints published a new world matrix this frame.
+    /// Set to `false` for a static avatar to skip recomputation after the
+    /// first upload (even if a host later moves a joint without flipping this
+    /// flag back on).
     public var isAnimationActive: Bool = true
 
     // Triple-buffered uniforms for avoiding CPU-GPU sync
@@ -762,6 +790,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     private var currentUniformBufferIndex = 0
     var uniforms = Uniforms()
     let inflightSemaphore: DispatchSemaphore
+
+    /// When true, `drawCore` skips inflight wait, morphs, SpringBone, and
+    /// skin rebuild — used for the second+ eye of ``encodeCompositorViews``.
+    private var compositorSkipSimulation = false
+    /// When true, `drawCore` does not increment the frame counter or attach
+    /// the inflight completion handler; ``finishDeferredCompositorFrame`` does.
+    private var compositorDeferCompletion = false
+    private var compositorHeldSlot = false
+    private var compositorMorphedBuffers: [MorphKey: MTLBuffer] = [:]
 
     // MARK: - Camera
 
@@ -872,6 +909,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // per-frame dictionary allocation. Keys are primitiveIndex.
     private var viewZByIndex: [Float] = []
     private var morphedBuffers: [MorphKey: MTLBuffer] = [:]
+    /// Expression-weight fingerprint that produced ``morphedBuffers``.
+    private var lastMorphWeightsFingerprint: UInt64?
 
     /// Render-order slot for a NON-face material, from its alpha mode and VRM
     /// `renderQueue`. Lower sorts (and draws) earlier.
@@ -953,6 +992,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// cannot be introspected, so this is the only way to pin the
     /// direction table (see `setupCachedStates`).
     var depthCompareByKey: [String: MTLCompareFunction] = [:]
+    /// Whether each cached state was created with depth writes enabled, keyed
+    /// like `depthStencilStates`. Same test-only rationale as
+    /// `depthCompareByKey`.
+    var depthWriteByKey: [String: Bool] = [:]
     #endif
     var samplerStates: [String: MTLSamplerState] = [:]
     private var lastPipelineState: MTLRenderPipelineState?
@@ -1096,6 +1139,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // PERFORMANCE: Invalidate cached render items when model changes
         cacheNeedsRebuild = true
         cachedRenderItems = nil
+        morphedBuffers.removeAll(keepingCapacity: true)
+        lastMorphWeightsFingerprint = nil
 
         // Rest-pose hips anchor for the skinned-primitive frustum cull
         // (#301): each frame the inflated rest bounds are translated by the
@@ -1195,9 +1240,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     // MARK: - Compute Pass for Morphs
 
-    private func applyMorphTargetsCompute(commandBuffer: MTLCommandBuffer) -> [MorphKey: MTLBuffer] {
+    /// Package-visible (not `private`) so tests can drive the fingerprint/gate
+    /// bookkeeping directly across frames without a full render pass.
+    func applyMorphTargetsCompute(commandBuffer: MTLCommandBuffer) -> [MorphKey: MTLBuffer] {
         guard let model = model,
               let morphTargetSystem = morphTargetSystem else { return [:] }
+
+        var currentFingerprint: UInt64?
+        if let controller = expressionController {
+            let fingerprint = controller.morphWeightsFingerprint()
+            currentFingerprint = fingerprint
+            if MorphComputeGate.shouldReusePreviousOutput(
+                currentFingerprint: fingerprint,
+                previousFingerprint: lastMorphWeightsFingerprint
+            ) {
+                return morphedBuffers
+            }
+        }
 
         // Decide if compute path is needed (presence of any morphs > 0 or >8 targets anywhere)
         var needsComputePath = false
@@ -1246,6 +1305,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             if frameCounter % 60 == 0 {
                 vrmLog("[VRMRenderer] Skipping compute pass - no active morphs and <=8 morphs per primitive")
             }
+            morphedBuffers.removeAll(keepingCapacity: true)
+            if let fingerprint = currentFingerprint {
+                lastMorphWeightsFingerprint = fingerprint
+            }
             return [:]
         }
 
@@ -1257,6 +1320,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Created lazily so we don't emit an empty compute pass when every primitive
         // has an empty active set.
         var morphComputeEncoder: MTLComputeCommandEncoder?
+
+        // Tracks whether any primitive was skipped due to missing GPU buffers,
+        // encoder-creation failure, or compute-dispatch failure, leaving
+        // morphedBuffers partial relative to the fingerprint being computed.
+        var hadPartialFailure = false
 
         // Capture the single primitive that needs first-frame GPU validation so the
         // readback blit can run after the batched compute encoder has ended.
@@ -1286,6 +1354,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if primitive.morphPositionsSoA == nil {
                         vrmLog("[VRMRenderer] ❌ No morphPositionsSoA for primitive with \(primitive.morphTargets.count) morphs")
                     }
+                    hadPartialFailure = true
                     continue
                 }
 
@@ -1320,6 +1389,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if morphComputeEncoder == nil {
                     guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
                         vrmLog("[VRMRenderer] ❌ Failed to create batched morph compute encoder")
+                        hadPartialFailure = true
                         continue
                     }
                     encoder.label = "Morph Accumulate (batched)"
@@ -1364,6 +1434,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                 } else {
                     vrmLog("[VRMRenderer] ❌ FAILED to apply compute morphs for primitive with \(primitive.morphTargets.count) morphs")
+                    hadPartialFailure = true
                 }
             }
         }
@@ -1471,6 +1542,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
         }
 
+        // Only record the fingerprint when morphedBuffers is complete for it;
+        // a partial failure invalidates the recorded fingerprint so the next
+        // frame re-dispatches instead of reusing an incomplete dict via the gate.
+        if let fingerprint = currentFingerprint {
+            lastMorphWeightsFingerprint = hadPartialFailure ? nil : fingerprint
+        }
+
         // Return morphed buffers to be used in render pass
         return morphedBuffers
     }
@@ -1554,6 +1632,49 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             renderPassDescriptor: renderPassDescriptor)
     }
 
+    /// One stereo / multi-view compositor frame: view-independent work
+    /// (morphs, SpringBone, skin palettes, inflight slot) runs once, then
+    /// each view rasters with its own matrices and attachments.
+    ///
+    /// This is the preferred visionOS submit path. Calling
+    /// ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` once
+    /// per eye is still correct, but it double-steps physics, double-waits
+    /// the inflight ring, and double-encodes compute.
+    ///
+    /// - Important: One frame producer per renderer, same as
+    ///   ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``. This
+    ///   drives a whole frame — it sets ``viewMatrix``/``projectionMatrix`` per
+    ///   view and walks the inflight ring and the deferred-completion flags —
+    ///   none of which is synchronized. A second thread calling
+    ///   ``draw(in:commandBuffer:renderPassDescriptor:)`` or
+    ///   ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` on the
+    ///   *same* renderer while this is in flight interleaves those mutations and
+    ///   yields wrong per-eye matrices or an unbalanced inflight semaphore. Give
+    ///   a preview or debug view its own ``VRMRenderer``.
+    public func encodeCompositorViews(
+        commandBuffer: MTLCommandBuffer,
+        views: [CompositorViewTarget]
+    ) {
+        guard !views.isEmpty else { return }
+        compositorDeferCompletion = true
+        compositorHeldSlot = false
+        defer {
+            compositorDeferCompletion = false
+            compositorSkipSimulation = false
+        }
+        for (index, view) in views.enumerated() {
+            compositorSkipSimulation = index > 0
+            viewMatrix = view.viewMatrix
+            projectionMatrix = view.projectionMatrix
+            drawOffscreen(
+                to: view.colorTexture,
+                depth: view.depthTexture,
+                commandBuffer: commandBuffer,
+                renderPassDescriptor: view.renderPassDescriptor)
+        }
+        finishDeferredCompositorFrame(commandBuffer: commandBuffer)
+    }
+
     /// Renders the VRM model to the view.
     ///
     /// Call this method once per frame from your `MTKViewDelegate.draw(in:)` implementation.
@@ -1587,24 +1708,35 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             vrmLog("[VRMRenderer] useOrthographic = \(useOrthographic)")
         }
 
-        // Wait for a free uniform buffer (triple buffering sync)
-        _ = inflightSemaphore.wait(timeout: .distantFuture)
-
-        // Optionally disable legacy animation state to prevent conflicts with AnimationPlayer
-        if disableLegacyAnimation && animationState != nil {
-            if frameCounter == 0 { vrmLog("[VRMRenderer] Disabling legacy animationState (prefer AnimationPlayer)") }
-            animationState = nil
+        let simulate = !compositorSkipSimulation
+        if simulate {
+            // Wait for a free uniform buffer (triple buffering sync)
+            _ = inflightSemaphore.wait(timeout: .distantFuture)
+            if compositorDeferCompletion {
+                compositorHeldSlot = true
+            }
         }
 
-        // Start performance tracking
-        performanceTracker?.beginFrame()
+        if simulate {
+            // Optionally disable legacy animation state to prevent conflicts with AnimationPlayer
+            if disableLegacyAnimation && animationState != nil {
+                if frameCounter == 0 { vrmLog("[VRMRenderer] Disabling legacy animationState (prefer AnimationPlayer)") }
+                animationState = nil
+            }
 
-        // Start frame validation
-        strictValidator?.beginFrame()
+            // Start performance tracking
+            performanceTracker?.beginFrame()
+
+            // Start frame validation
+            strictValidator?.beginFrame()
+        }
 
         guard let model = model else {
             vrmLog("[VRMRenderer] No model loaded!")
-            inflightSemaphore.signal()
+            if simulate {
+                inflightSemaphore.signal()
+                compositorHeldSlot = false
+            }
             return
         }
 
@@ -1614,31 +1746,36 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         vrmLog("[VRMRenderer] Model has \(model.nodes.count) nodes, \(model.meshes.count) meshes")
 
-        // CRITICAL: Update world transforms for all nodes.
-        // This must be done before rendering to calculate proper positions UNLESS the
-        // host has already done it (e.g. via AnimationPlayer.update, which calls
-        // model.updateNodeTransforms internally). Hosts that always tick per-frame can
-        // opt out via `skipPreDrawTransformUpdate`.
-        if !skipPreDrawTransformUpdate {
-            for node in model.nodes where node.parent == nil {
-                node.updateWorldTransform()
+        if simulate {
+            // CRITICAL: Update world transforms for all nodes.
+            // This must be done before rendering to calculate proper positions UNLESS the
+            // host has already done it (e.g. via AnimationPlayer.update, which calls
+            // model.updateNodeTransforms internally). Hosts that always tick per-frame can
+            // opt out via `skipPreDrawTransformUpdate`.
+            if !skipPreDrawTransformUpdate {
+                for node in model.nodes where node.parent == nil {
+                    node.updateWorldTransform()
+                }
             }
-        }
 
-        // DEBUG: Check if transforms are actually set
-        if frameCounter <= 2 {
-            for (idx, node) in model.nodes.prefix(5).enumerated() {
-                let local = node.localMatrix.columns.3
-                let world = node.worldMatrix.columns.3
-                vrmLog("[TRANSFORM DEBUG] Node \(idx) '\(node.name ?? "unnamed")': local=(\(local.x),\(local.y),\(local.z)) world=(\(world.x),\(world.y),\(world.z))")
+            // DEBUG: Check if transforms are actually set
+            if frameCounter <= 2 {
+                for (idx, node) in model.nodes.prefix(5).enumerated() {
+                    let local = node.localMatrix.columns.3
+                    let world = node.worldMatrix.columns.3
+                    vrmLog("[TRANSFORM DEBUG] Node \(idx) '\(node.name ?? "unnamed")': local=(\(local.x),\(local.y),\(local.z)) world=(\(world.x),\(world.y),\(world.z))")
+                }
             }
-        }
 
-        // Get the next uniform buffer in the ring
-        currentUniformBufferIndex = (currentUniformBufferIndex + 1) % Self.maxBufferedFrames
+            // Get the next uniform buffer in the ring
+            currentUniformBufferIndex = (currentUniformBufferIndex + 1) % Self.maxBufferedFrames
+        }
         guard currentUniformBufferIndex < uniformsBuffers.count else {
             vrmLog("[VRMRenderer] No uniform buffer available at index \(currentUniformBufferIndex)")
-            inflightSemaphore.signal()
+            if simulate {
+                inflightSemaphore.signal()
+                compositorHeldSlot = false
+            }
             return
         }
         let uniformsBuffer = uniformsBuffers[currentUniformBufferIndex]
@@ -1653,7 +1790,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             } catch {
                 if config.strict == .fail {
-                    inflightSemaphore.signal()
+                    if simulate {
+                        inflightSemaphore.signal()
+                        compositorHeldSlot = false
+                    }
                     vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
                     // The slot is released; encoding the frame anyway would
                     // double-signal once the command buffer completes.
@@ -1667,17 +1807,27 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // the bundled metallib didn't load — issue #336). Skip the frame
             // loudly instead of wedging the host in an assert at first draw.
             guard pipelinesReadyForDraw() else {
-                inflightSemaphore.signal()
+                if simulate {
+                    inflightSemaphore.signal()
+                    compositorHeldSlot = false
+                }
                 return
             }
         }
 
         // Run compute pass for morphs BEFORE render encoder
-        performanceTracker?.beginPhase(.morphSetup)
-        let morphedBuffers = applyMorphTargetsCompute(commandBuffer: commandBuffer)
-        performanceTracker?.endPhase(.morphSetup)
-        if !morphedBuffers.isEmpty {
-            performanceTracker?.recordMorphCompute()
+        let morphedBuffers: [MorphKey: MTLBuffer]
+        if simulate {
+            performanceTracker?.beginPhase(.morphSetup)
+            let computed = applyMorphTargetsCompute(commandBuffer: commandBuffer)
+            performanceTracker?.endPhase(.morphSetup)
+            if !computed.isEmpty {
+                performanceTracker?.recordMorphCompute()
+            }
+            compositorMorphedBuffers = computed
+            morphedBuffers = computed
+        } else {
+            morphedBuffers = compositorMorphedBuffers
         }
 
         // Debug: Log morphed buffer count
@@ -1693,6 +1843,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             hasLoggedSpringBone = true
         }
 
+        var frameDeltaTime: Float = 1.0 / 60.0
+        if simulate {
         // Calculate actual deltaTime. `simulationDeltaTime` is the
         // explicit offline-rendering escape: when set, use it directly
         // so tests / video extractors / conformance harnesses get a
@@ -1722,6 +1874,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Clamp deltaTime to reasonable values (prevent huge jumps)
             clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
         }
+        frameDeltaTime = clampedDeltaTime
 
         // Update SpringBone GPU physics BEFORE the render encoder is created.
         // Spring-bone now shares the renderer's command buffer (audit's #2 bottleneck
@@ -1777,6 +1930,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
             performanceTracker?.endPhase(.springBone)
         }
+        } // simulate: deltaTime + SpringBone
+
+        let hasSkinning = !model.skins.isEmpty
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             if config.strict != .off {
@@ -1795,6 +1951,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         var totalPrimitivesDrawn = 0
         var totalTriangles = 0
 
+        if simulate {
         // Update LookAt controller
         if let lookAtController = lookAtController, lookAtController.enabled {
             // Extract camera position from view matrix
@@ -1808,7 +1965,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             )
 
             lookAtController.cameraPosition = cameraPos
-            lookAtController.update(deltaTime: clampedDeltaTime)
+            lookAtController.update(deltaTime: frameDeltaTime)
 
             // Apply LookAt to animation state if in bone mode
             if let animationState = animationState,
@@ -1844,8 +2001,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Reset skinning cache at frame boundary
             skinningSystem?.beginFrame()
 
-            // When animation is active, joints may have changed; mark all skins dirty.
-            if isAnimationActive || animationState != nil {
+            // Rebuild only skins whose joints actually moved. The legacy
+            // `animationState` path still dirties every skin because it can
+            // write joints without going through `updateWorldTransform`.
+            if isAnimationActive {
+                skinningSystem?.markSkinsDirtyIfJointsMoved(model.skins)
+            }
+            if animationState != nil {
                 skinningSystem?.markAllSkinsDirty()
             }
 
@@ -1885,6 +2047,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             vrmLog("[UPDATE ORDER] All skins updated, now starting draw calls")
         }
+        } // simulate: lookAt + skin palettes
 
         // We'll set the pipeline per-mesh based on whether it has a skin
         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
@@ -2635,7 +2798,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         vrmLog("")
                         vrmLog("📍 [VERTEX POSITION CHECK] Sampling positions referenced by first 24 indices:")
 
-                        let verts = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: prim.vertexCount)
+                        let verts = vertexBuffer.contents().bindMemory(to: VRMPositionVertex.self, capacity: prim.vertexCount)
                         var extremeFound = false
 
                         for (i, idx) in indices.prefix(12).enumerated() {
@@ -2843,8 +3006,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
 
             if let morphedPosBuffer {
-                // CORRECT BINDING: Original vertex buffer at stage_in (index 0) for UVs/normals/etc.
+                // Position stream at 0, attributes at 3; morphed positions replace
+                // stage_in position when the flag is set.
                 encoderStateCache.setVertexBuffer(encoder, vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
+                bindAttributeStream(encoder, primitive: primitive)
 
                 // Morphed positions as shader expects
                 encoderStateCache.setVertexBuffer(encoder, morphedPosBuffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
@@ -2858,8 +3023,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLog("[VRMRenderer] BINDING morphed buffer: mesh='\(meshName)' draw=\(drawIndex) bufferSize=\(morphedPosBuffer.length) vertices=\(primitive.vertexCount)")
                 }
             } else {
-                // No morphed positions - use original vertex buffer for all attributes
                 encoderStateCache.setVertexBuffer(encoder, vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
+                bindAttributeStream(encoder, primitive: primitive)
 
                 // Bind a small dummy buffer to satisfy Metal debug validation, and set flag=0
                 if emptyFloat3Buffer == nil {
@@ -3588,7 +3753,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // should not accidentally become MASK_A2C. Placed before the
             // indexed/non-indexed split so both draw paths see the
             // override.
-            if mtoonUniforms.alphaMode == 1 {
+            // The debug fragment is never built with alpha-to-coverage enabled,
+            // so remapping to MASK_A2C there would only drop the cutout discard
+            // the debug modes rely on.
+            if mtoonUniforms.alphaMode == 1, !MToonDebugMode.usesDebugFragment(debugUVs) {
                 mtoonUniforms.alphaMode = alphaModeForUniform(
                     alphaMode: "mask",
                     isSkinned: isSkinned
@@ -3644,6 +3812,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                 }
 
+                let drawMaterial: VRMMaterial? = {
+                    guard let idx = primitive.materialIndex, idx < model.materials.count else { return nil }
+                    return model.materials[idx]
+                }()
+                let mergeOutline = MToonOutlineDraw.shouldMerge(
+                    globalOutlineWidth: outlineWidth,
+                    mtoon: drawMaterial?.mtoon,
+                    isDoubleSided: isDoubleSided)
+                bindOutlineWidthVertexTexture(
+                    encoder: encoder,
+                    mtoon: drawMaterial?.mtoon,
+                    model: model)
+
                 // Set MToon material uniforms
                 // Note: Both vertex and fragment shaders expect MToonMaterial at buffer(8)
                 // Encode uniforms
@@ -3664,28 +3845,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
 
                 // PHASE 4: Diagnose face geometry issues (artifact is PART OF FACE)
-                if isFaceMaterial && frameCounter == 0, let vertexBuffer = primitive.vertexBuffer {
-                    let stride = 96  // VRMVertex stride
-                    let pointer = vertexBuffer.contents()
-                    var minPos = SIMD3<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-                    var maxPos = SIMD3<Float>(-Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)
-
-                    // Find bounds of face geometry
-                    for i in 0..<primitive.vertexCount {
-                        let offset = i * stride
-                        let posPtr = pointer.advanced(by: offset).assumingMemoryBound(to: Float.self)
-                        let pos = SIMD3<Float>(posPtr[0], posPtr[1], posPtr[2])
-                        minPos = simd_min(minPos, pos)
-                        maxPos = simd_max(maxPos, pos)
-                    }
-
-                    let center = (minPos + maxPos) * 0.5
-                    let size = maxPos - minPos
-
+                if isFaceMaterial && frameCounter == 0, let vertexBuffer = primitive.vertexBuffer,
+                   let bounds = FaceGeometryDiagnostic.computeBounds(vertexBuffer: vertexBuffer, vertexCount: primitive.vertexCount) {
                     vrmLog("📐 [FACE GEOMETRY] '\(item.mesh.name ?? "unnamed")'")
-                    vrmLog("    - Center: (\(center.x), \(center.y), \(center.z))")
-                    vrmLog("    - Size: (\(size.x), \(size.y), \(size.z))")
-                    vrmLog("    - Bounds: [\(minPos.x) to \(maxPos.x), \(minPos.y) to \(maxPos.y), \(minPos.z) to \(maxPos.z)]")
+                    vrmLog("    - Center: (\(bounds.center.x), \(bounds.center.y), \(bounds.center.z))")
+                    vrmLog("    - Size: (\(bounds.size.x), \(bounds.size.y), \(bounds.size.z))")
+                    vrmLog("    - Bounds: [\(bounds.min.x) to \(bounds.max.x), \(bounds.min.y) to \(bounds.max.y), \(bounds.min.z) to \(bounds.max.z)]")
                     vrmLog("    - Vertex count: \(primitive.vertexCount)")
                     vrmLog("    - Node world transform: \(item.node.worldMatrix.columns.3)")
                 }
@@ -3813,35 +3978,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             continue
                         }
 
-                        // Condition 2: Sample vertices to verify joint indices are in palette range.
-                        // The vertex joint data is static, so the check result is deterministic —
-                        // but this guardrail prevents out-of-bounds GPU joint-palette reads on
-                        // malformed models, so the validation must run every frame. Only the
-                        // diagnostic logging is gated behind frameCounter < 2.
-                        if let vertexBuffer = prim.vertexBuffer, prim.hasJoints {
-                            let verts = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: min(10, prim.vertexCount))
-                            var sampleMaxJoint: UInt32 = 0
-                            let samplesToCheck = min(10, prim.vertexCount)
-
-                            for i in 0..<samplesToCheck {
-                                let v = verts[i]
-                                sampleMaxJoint = max(sampleMaxJoint, v.joints.x, v.joints.y, v.joints.z, v.joints.w)
-                            }
-
-                            if Int(sampleMaxJoint) >= paletteCount {
-                                if frameCounter < 2 {
-                                    fputs("⚠️ [VRMRenderer] Joint index out of palette range — skipping draw. " +
-                                          "Node '\(item.node.name ?? "?")' mesh '\(meshName)' prim \(meshPrimIndex): " +
-                                          "maxJoint=\(sampleMaxJoint) >= paletteCount=\(paletteCount) for bound skin \(skinIndex).\n", stderr)
-                                }
-                                continue
-                            }
-
-                            // Log success for first few frames
-                            if frameCounter < 2 {
-                                vrmLog("[SKIN OK] draw=\(drawIndex) node='\(item.node.name ?? "?")' mesh='\(meshName)' skin=\(skinIndex): required=\(required), palette=\(paletteCount), sample_max=\(sampleMaxJoint) ✅")
-                            }
-                        }
+                        // Full-mesh `requiredPaletteSize` (computed at load) already
+                        // covers every vertex. A per-draw 10-vertex sample was a
+                        // weaker, more expensive check of the same static data.
                     }
 
                     // Edge case: node.skin == nil but primitive has JOINTS_0
@@ -3856,7 +3995,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         vrmLog("\n[FACE DATA DUMP] Material: '\(item.materialName)'")
                         vrmLog("[FACE DATA DUMP] Primitive: vertices=\(primitive.vertexCount), indices=\(primitive.indexCount), indexType=\(primitive.indexType)")
 
-                        let vertexPointer = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
+                        let vertices = primitive.interleavedVertices()
 
                         // Handle both uint16 and uint32 index types
                         // Use offset even though it should be 0 for safety
@@ -3866,7 +4005,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             for i in 0..<min(5, primitive.indexCount) {
                                 let index = indexPointer[i]
                                 if Int(index) < primitive.vertexCount {
-                                    let vertex = vertexPointer[Int(index)]
+                                    let vertex = vertices[Int(index)]
                                     vrmLog("  - Index[\(i)]=\(index) -> Pos=\(vertex.position), UV=\(vertex.texCoord), Normal=\(vertex.normal)")
                                 } else {
                                     vrmLog("  - Index[\(i)]=\(index) -> OUT OF BOUNDS (vertexCount=\(primitive.vertexCount))")
@@ -3878,7 +4017,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             for i in 0..<min(5, primitive.indexCount) {
                                 let index = indexPointer[i]
                                 if Int(index) < primitive.vertexCount {
-                                    let vertex = vertexPointer[Int(index)]
+                                    let vertex = vertices[Int(index)]
                                     vrmLog("  - Index[\(i)]=\(index) -> Pos=\(vertex.position), UV=\(vertex.texCoord), Normal=\(vertex.normal)")
                                 } else {
                                     vrmLog("  - Index[\(i)]=\(index) -> OUT OF BOUNDS (vertexCount=\(primitive.vertexCount))")
@@ -3977,11 +4116,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         indexCount: primitive.indexCount,
                         indexType: primitive.indexType,
                         indexBuffer: indexBuffer,
-                        indexBufferOffset: primitive.indexBufferOffset
+                        indexBufferOffset: MToonOutlineDraw.indexBufferOffset(for: primitive)
                     )
                 totalPrimitivesDrawn += 1
                 totalTriangles += primitive.indexCount / 3
                 performanceTracker?.recordDrawCall(triangles: primitive.indexCount / 3, vertices: primitive.vertexCount)
+
+                if MToonOutlineDraw.shouldEncodeMergedHull(merged: mergeOutline, debugMode: debugUVs) {
+                    encodeMergedOutlineHull(
+                        encoder: encoder,
+                        primitive: primitive,
+                        indexBuffer: indexBuffer,
+                        materialIndex: primitive.materialIndex,
+                        baseUniforms: mtoonUniforms)
+                    // Counted like the dedicated outline pass counts its draws:
+                    // the tracker sees a real GPU draw, the primitive/triangle
+                    // tallies stay a count of scene primitives.
+                    performanceTracker?.recordDrawCall(triangles: primitive.indexCount / 3, vertices: primitive.vertexCount)
+                }
             } else {
                 // Validate draw call in strict mode
                 if config.strict != .off {
@@ -4026,7 +4178,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Log rendering statistics periodically
-        frameCounter += 1
+        if !compositorDeferCompletion {
+            frameCounter += 1
+        }
 
         // DEBUG: Log animation transforms every second
         if frameCounter % 60 == 0 {
@@ -4061,6 +4215,36 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         performanceTracker?.endPhase(.commandEncode)
         encoder.endEncoding()
 
+        if compositorDeferCompletion {
+            return
+        }
+
+        finishOffscreenFrame(commandBuffer: commandBuffer)
+    }
+
+    private func finishDeferredCompositorFrame(commandBuffer: MTLCommandBuffer) {
+        // `compositorHeldSlot` is the frame's "view 0 got past every early-return
+        // guard" flag. Each guard in `drawCore` (no model, no uniform buffer,
+        // strict-mode validation failure) signals the inflight semaphore itself
+        // and clears the flag, so gating `finishOffscreenFrame` on it is what
+        // keeps a bailed-out frame from double-signalling.
+        //
+        // `frameCounter` is deliberately NOT gated the same way: it counts
+        // submitted compositor frames, once per `encodeCompositorViews` call
+        // rather than once per eye — the property
+        // `testEncodeCompositorViewsTwoViewsDoesNotDeadlock` pins. Its only
+        // consumers are debug-log cadence checks, so counting a frame that bailed
+        // is intended, not an oversight.
+        frameCounter += 1
+        if compositorHeldSlot {
+            finishOffscreenFrame(commandBuffer: commandBuffer)
+        }
+        compositorMorphedBuffers = [:]
+        compositorHeldSlot = false
+    }
+
+    /// Ends frame bookkeeping and attaches the inflight-slot completion handler.
+    private func finishOffscreenFrame(commandBuffer: MTLCommandBuffer) {
         // End performance tracking
         performanceTracker?.endFrame()
 
@@ -4149,6 +4333,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let meshUsesSkinning = primitive.hasJoints && primitive.hasWeights
             let isSkinned = (nodeHasSkin || meshUsesSkinning) && hasSkinning
 
+            // Same palette-size guard as the main pass: the palette is bound at
+            // the skin's slice base, so a primitive needing more joints than the
+            // bound skin has reads past that slice.
+            if isSkinned {
+                let guardSkinIndex = item.node.skin ?? (meshUsesSkinning ? 0 : -1)
+                if guardSkinIndex >= 0, guardSkinIndex < model.skins.count,
+                   primitive.requiredPaletteSize > model.skins[guardSkinIndex].joints.count {
+                    if frameCounter < 2 {
+                        fputs("⚠️ [VRMRenderer] Skin palette too small — skipping depth-prepass draw. " +
+                              "Node '\(item.node.name ?? "?")' mesh '\(item.mesh.name ?? "?")': " +
+                              "needs ≥\(primitive.requiredPaletteSize) joints, bound skin \(guardSkinIndex) " +
+                              "'\(model.skins[guardSkinIndex].name ?? "?")' has \(model.skins[guardSkinIndex].joints.count). " +
+                              "Check node.skin assignment in the VRM file.\n", stderr)
+                    }
+                    continue
+                }
+            }
+
             // Frustum cull identically to the main pass.
             let cullModel: matrix_float4x4
             let cullMin: SIMD3<Float>
@@ -4169,6 +4371,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             uniforms.modelMatrix = isSkinned ? matrix_identity_float4x4 : item.node.worldMatrix
 
             encoder.setVertexBuffer(vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
+            if isSkinned {
+                bindAttributeStream(encoder, primitive: primitive)
+            }
 
             let stableKey: MorphKey = (UInt64(item.meshIndex) << 32) | UInt64(item.primIdxInMesh)
             if let morphedPosBuffer = morphedBuffers[stableKey] {
@@ -4218,6 +4423,95 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         return issued
     }
 
+    private func bindOutlineWidthVertexTexture(
+        encoder: MTLRenderCommandEncoder,
+        mtoon: VRMMToonMaterial?,
+        model: VRMModel
+    ) {
+        let texture: MTLTexture?
+        let sampler: MTLSamplerState?
+        if let textureIndex = mtoon?.outlineWidthMultiplyTexture,
+           textureIndex < model.textures.count,
+           let mtlTexture = model.textures[textureIndex].mtlTexture {
+            texture = mtlTexture
+            sampler = model.textures[textureIndex].sampler ?? samplerStates["default"]
+        } else {
+            texture = outlineWidthFallbackTexture ?? makeOutlineWidthFallbackTexture()
+            sampler = samplerStates["default"]
+        }
+        encoder.setVertexTexture(texture, index: 0)
+        encoderStateCache.setVertexSamplerState(encoder, sampler, index: 0)
+    }
+
+    private func makeOutlineWidthFallbackTexture() -> MTLTexture? {
+        if let existing = outlineWidthFallbackTexture { return existing }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        var pixel: [UInt8] = [255, 255, 255, 255]
+        texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &pixel, bytesPerRow: 4)
+        outlineWidthFallbackTexture = texture
+        return texture
+    }
+
+    /// Issues the inverted hull for a material whose outline is merged into its
+    /// color draw. The hull reuses the color draw's pipeline and every binding
+    /// it just made; only the material uniforms, the depth-stencil state, the
+    /// cull mode and the depth bias differ.
+    ///
+    /// It is a separate draw rather than a second instance because Metal binds
+    /// one depth-stencil state per draw: the hull must test `.lessEqual` and
+    /// never write, exactly as the dedicated outline pass does, while the color
+    /// draw keeps whatever depth policy its alpha mode / face category chose.
+    /// Every following state is re-bound by the next loop iteration, and the
+    /// encoder ends right after the dedicated outline pass, so nothing here
+    /// needs restoring.
+    private func encodeMergedOutlineHull(
+        encoder: MTLRenderCommandEncoder,
+        primitive: VRMPrimitive,
+        indexBuffer: MTLBuffer,
+        materialIndex: Int?,
+        baseUniforms: MToonMaterialUniforms
+    ) {
+        guard let hullDepthState = depthStencilStates[MToonOutlineDraw.hullDepthStateKey] else { return }
+
+        var hullUniforms = baseUniforms
+        hullUniforms.outlineWidthFactor *= outlineWidth / 0.02
+        let globalColor = outlineColor
+        if globalColor.x > 0 || globalColor.y > 0 || globalColor.z > 0 {
+            hullUniforms.outlineColorFactor = globalColor
+        }
+        if let materialIndex,
+           expressionController?.hasMaterialColorOverrides == true,
+           let outlineOverride = expressionController?.getMaterialColorOverride(
+               materialIndex: materialIndex, type: .outlineColor) {
+            hullUniforms.outlineColorFactor = SIMD3<Float>(outlineOverride.x, outlineOverride.y, outlineOverride.z)
+        }
+
+        encoderStateCache.setDepthStencilState(encoder, hullDepthState)
+        encoderStateCache.setCullMode(encoder, .front)
+        applyDepthBias(encoder, 0.0, slopeScale: 0.0, clamp: 0.0)
+
+        encoder.setVertexBytes(&hullUniforms,
+                               length: MemoryLayout<MToonMaterialUniforms>.stride,
+                               index: 8)
+        encoder.setFragmentBytes(&hullUniforms,
+                                 length: MemoryLayout<MToonMaterialUniforms>.stride,
+                                 index: 8)
+
+        encoder.drawIndexedPrimitives(
+            type: primitive.primitiveType,
+            indexCount: primitive.indexCount,
+            indexType: primitive.indexType,
+            indexBuffer: indexBuffer,
+            indexBufferOffset: MToonOutlineDraw.indexBufferOffset(for: primitive),
+            instanceCount: 1,
+            baseVertex: 0,
+            baseInstance: Int(MToonOutlineDraw.hullInstanceID)
+        )
+    }
+
     private func renderMToonOutlines(
         encoder: MTLRenderCommandEncoder,
         renderItems: [RenderItem],
@@ -4245,7 +4539,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
         // Set depth state for outlines (test depth but don't write)
         // Prevents outlines from incorrectly writing to depth buffer
-        if let outlineDepthState = depthStencilStates["blend"] {
+        if let outlineDepthState = depthStencilStates[MToonOutlineDraw.hullDepthStateKey] {
             encoderStateCache.setDepthStencilState(encoder,outlineDepthState)
         }
 
@@ -4272,6 +4566,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 continue
             }
 
+            // The color pass owns this primitive's hull: it encodes the hull as
+            // its own draw right after the color draw, or — in a frame using
+            // the debug fragment, which has no outline branch — deliberately
+            // encodes no hull at all. Either way this pass must not add one.
+            if MToonOutlineDraw.shouldMerge(
+                globalOutlineWidth: outlineWidth,
+                mtoon: mtoon,
+                isDoubleSided: item.effectiveDoubleSided) {
+                continue
+            }
+
             guard let vertexBuffer = primitive.vertexBuffer,
                   let indexBuffer = primitive.indexBuffer else {
                 continue
@@ -4281,6 +4586,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let nodeHasSkin = item.node.skin != nil && hasSkinning
             let meshUsesSkinning = primitive.hasJoints && primitive.hasWeights
             let isSkinned = (nodeHasSkin || meshUsesSkinning) && hasSkinning
+
+            // Same palette-size guard as the main pass: the palette is bound at
+            // the skin's slice base, so a primitive needing more joints than the
+            // bound skin has reads past that slice.
+            if isSkinned, let guardSkinIndex = item.node.skin, guardSkinIndex < model.skins.count {
+                let guardSkin = model.skins[guardSkinIndex]
+                if primitive.requiredPaletteSize > guardSkin.joints.count {
+                    if frameCounter < 2 {
+                        fputs("⚠️ [VRMRenderer] Skin palette too small — skipping outline draw. " +
+                              "Node '\(item.node.name ?? "?")' mesh '\(item.mesh.name ?? "?")': " +
+                              "needs ≥\(primitive.requiredPaletteSize) joints, bound skin \(guardSkinIndex) " +
+                              "'\(guardSkin.name ?? "?")' has \(guardSkin.joints.count). " +
+                              "Check node.skin assignment in the VRM file.\n", stderr)
+                    }
+                    continue
+                }
+            }
 
             // Frustum cull: skip outline draw if primitive's world AABB is outside view.
             // Use inflated model bounds for skinned, primitive local bounds for rigid.
@@ -4324,8 +4646,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // bit-identical — this only removes no-op state calls.
             encoderStateCache.setRenderPipelineState(encoder, pipeline)
 
-            // Set vertex buffer
-            encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+            encoder.setVertexBuffer(vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
+            bindAttributeStream(encoder, primitive: primitive)
 
             // Per-draw modelMatrix: skinned outlines bake transforms into the
             // joint palette (so modelMatrix stays identity); rigid outlines need
@@ -4406,7 +4728,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 indexCount: primitive.indexCount,
                 indexType: primitive.indexType,
                 indexBuffer: indexBuffer,
-                indexBufferOffset: 0
+                indexBufferOffset: MToonOutlineDraw.indexBufferOffset(for: primitive)
             )
 
             // Count the outline pass in the performance tracker. The main
@@ -4432,10 +4754,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
+    private func bindAttributeStream(_ encoder: MTLRenderCommandEncoder, primitive: VRMPrimitive) {
+        if let attributes = primitive.attributeBuffer {
+            encoderStateCache.setVertexBuffer(encoder, attributes, offset: 0, index: ResourceIndices.attributeBuffer)
+        }
+    }
+
     // MARK: - Skinning Input Validation
 
     private func validateSkinningInputs(primitive: VRMPrimitive, paletteCount: Int, meshName: String, materialName: String, skinIndex: Int) {
-        // Log vertex descriptor info on first call
+        // Joint / weight data is static after load. Sample once and reuse.
+        let sample = SkinningInputValidator.resolve(
+            cache: &primitive.skinningInputSample,
+            vertexBuffer: primitive.attributeBuffer,
+            vertexCount: primitive.vertexCount,
+            paletteCount: paletteCount
+        )
+        guard let sample else { return }
+
         if frameCounter < 2 {
             vrmLog("\n[VERTEX DESCRIPTOR] Mesh '\(meshName)':")
             vrmLog("  - Vertex count: \(primitive.vertexCount)")
@@ -4444,58 +4780,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             vrmLog("  - Primitive type: \(primitive.primitiveType)")
             vrmLog("  - Has joints: \(primitive.hasJoints)")
             vrmLog("  - Has weights: \(primitive.hasWeights)")
-            vrmLog("  - Vertex stride: \(MemoryLayout<VRMVertex>.stride) bytes")
-            vrmLog("  - VRMVertex layout:")
-            vrmLog("    • position: offset \(MemoryLayout.offset(of: \VRMVertex.position) ?? -1), size \(MemoryLayout<SIMD3<Float>>.size)")
-            vrmLog("    • normal: offset \(MemoryLayout.offset(of: \VRMVertex.normal) ?? -1), size \(MemoryLayout<SIMD3<Float>>.size)")
-            vrmLog("    • texCoord: offset \(MemoryLayout.offset(of: \VRMVertex.texCoord) ?? -1), size \(MemoryLayout<SIMD2<Float>>.size)")
-            vrmLog("    • color: offset \(MemoryLayout.offset(of: \VRMVertex.color) ?? -1), size \(MemoryLayout<SIMD4<Float>>.size)")
-            vrmLog("    • joints: offset \(MemoryLayout.offset(of: \VRMVertex.joints) ?? -1), size \(MemoryLayout<SIMD4<UInt16>>.size)")
-            vrmLog("    • weights: offset \(MemoryLayout.offset(of: \VRMVertex.weights) ?? -1), size \(MemoryLayout<SIMD4<Float>>.size)")
+            vrmLog("  - Position stride: \(MemoryLayout<VRMPositionVertex>.stride) bytes")
+            vrmLog("  - Attribute stride: \(MemoryLayout<VRMAttributeVertex>.stride) bytes")
         }
 
-        // Sample first 8 vertices to validate joints/weights
-        let sampleCount = min(8, primitive.vertexCount)
-
-        // Get vertex data pointers
-        guard let vertexBuffer = primitive.vertexBuffer else { return }
-
-        let vertexPointer = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
-
-        for i in 0..<sampleCount {
-            let vertex = vertexPointer[i]
-
-            // Check joint indices are within palette bounds
-            let joints = vertex.joints
-            let maxJoint = Int(max(joints.x, joints.y, joints.z, joints.w))
-
-            if maxJoint >= paletteCount {
-                // Log but don't crash - Iron Dome should have caught this, but log as warning
-                vrmLog("⚠️ [JOINTS BOUNDS] Mesh '\(meshName)' material '\(materialName)' skin \(skinIndex):")
-                vrmLog("   Vertex \(i) has joint index \(maxJoint) >= palette count \(paletteCount)")
-                vrmLog("   Joints: [\(joints.x), \(joints.y), \(joints.z), \(joints.w)]")
-                vrmLog("   → Iron Dome should have sanitized this. Check sanitizeAllMeshJoints() was called.")
-                // Don't crash - just log the issue
-            }
-
-            // Check weights sum to ~1.0
-            let weights = vertex.weights
-            let weightSum = weights.x + weights.y + weights.z + weights.w
-
-            if weightSum < 0.99 || weightSum > 1.01 {
-                // Log but don't crash - weight normalization issues are common
-                if frameCounter < 2 {
-                    vrmLog("⚠️ [WEIGHTS SUM] Mesh '\(meshName)' material '\(materialName)' skin \(skinIndex):")
-                    vrmLog("   Vertex \(i) weights sum to \(weightSum) (expected ~1.0)")
-                    vrmLog("   Weights: [\(weights.x), \(weights.y), \(weights.z), \(weights.w)]")
-                }
-                // Don't crash - GPU shaders can handle unnormalized weights
-            }
+        if sample.hasOutOfRangeJoint {
+            vrmLog("⚠️ [JOINTS BOUNDS] Mesh '\(meshName)' material '\(materialName)' skin \(skinIndex):")
+            vrmLog("   max joint index \(sample.maxJointIndex) >= palette count \(paletteCount)")
+            vrmLog("   → Iron Dome should have sanitized this. Check sanitizeAllMeshJoints() was called.")
         }
 
-        // Log validation success on first frame
+        if sample.hasUnnormalizedWeight && frameCounter < 2 {
+            vrmLog("⚠️ [WEIGHTS SUM] Mesh '\(meshName)' material '\(materialName)' skin \(skinIndex):")
+            vrmLog("   Sampled \(sample.sampledVertexCount) vertices; at least one weight sum is outside [0.99, 1.01]")
+        }
+
         if frameCounter < 2 {
-            vrmLog("✅ [SKINNING VALIDATION] Mesh '\(meshName)' skin \(skinIndex): \(sampleCount) vertices valid")
+            vrmLog("✅ [SKINNING VALIDATION] Mesh '\(meshName)' skin \(skinIndex): \(sample.sampledVertexCount) vertices sampled")
         }
     }
 
@@ -4617,17 +4918,30 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// alpha-to-coverage pipeline, and for any alpha-mode value outside the
     /// OPAQUE/MASK/BLEND range, so those paths continue to use the existing
     /// fallback PSOs.
+    ///
+    /// A debug visualization outranks that skip: it must reach every material
+    /// the mode used to cover, or the frame mixes debug-coloured and shaded
+    /// surfaces and misleads the diagnosis it exists for. Modes answered inside
+    /// the production fragment (``MToonDebugMode``) take the ordinary path.
     func specializedMToonPipelineIfAvailable(
         isSkinned: Bool,
         materialAlphaMode: String,
         mtoonUniforms: MToonMaterialUniforms
     ) -> MTLRenderPipelineState? {
-        guard config.enableMToonFunctionConstants else { return nil }
+        var features = MToonFunctionConstantKey(material: mtoonUniforms)
+        features.lightCount = MToonLightSpecialization.count(
+            keyIntensity: uniforms.lightColor_packed.w,
+            fillIntensity: uniforms.light1Color_packed.w,
+            rimIntensity: uniforms.light2Color_packed.w
+        )
+        if MToonDebugMode.usesDebugFragment(debugUVs) {
+            features.debugVisualization = true
+            return specializedMToonPipelineState(isSkinned: isSkinned, features: features)
+        }
 
         let usingA2C = materialAlphaMode == "mask" && config.alphaToCoverageForMASK && usesMultisampling
         guard !usingA2C, mtoonUniforms.alphaMode <= 2 else { return nil }
-
-        let features = MToonFunctionConstantKey(material: mtoonUniforms)
+        guard config.enableMToonFunctionConstants else { return nil }
         return specializedMToonPipelineState(isSkinned: isSkinned, features: features)
     }
 

@@ -43,6 +43,22 @@ targets:
       # supply it before building — see README.md.
       - path: ../AvatarSample_U_1.0.vrm.glb
         buildPhase: resources
+      - path: ../VRMA_01.vrma
+        buildPhase: resources
+      - path: ../VRMA_Avatar_Mega_Pack/Neutral_Idle.vrma
+        buildPhase: resources
+      - path: ../VRMA_Avatar_Mega_Pack/Neutral_Idle2.vrma
+        buildPhase: resources
+      - path: ../VRMA_Avatar_Mega_Pack/LookAround.vrma
+        buildPhase: resources
+      - path: ../VRMA_Avatar_Mega_Pack/Relax.vrma
+        buildPhase: resources
+      - path: ../VRMA_Avatar_Mega_Pack/Thinking.vrma
+        buildPhase: resources
+      - path: ../VRMA_Avatar_Mega_Pack/VRoid_Greeting.vrma
+        buildPhase: resources
+      - path: ../VRMA_Avatar_Mega_Pack/Action_Greeting.vrma
+        buildPhase: resources
     dependencies:
       - package: VRMMetalKit
         product: VRMMetalKit

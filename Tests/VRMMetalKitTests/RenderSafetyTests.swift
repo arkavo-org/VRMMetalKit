@@ -134,9 +134,8 @@ final class RenderSafetyTests: XCTestCase {
                     }
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<vertexCount {
                     let joints = vertices[i].joints
@@ -195,9 +194,8 @@ final class RenderSafetyTests: XCTestCase {
                     }
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<vertexCount {
                     let joints = vertices[i].joints
@@ -289,25 +287,16 @@ final class RenderSafetyTests: XCTestCase {
                     continue
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let rawPointer = vertexBuffer.contents()
-
-                // Read joints at the expected offset
-                let jointsOffset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<min(vertexCount, 1000) { // Sample first 1000 vertices
                     totalChecked += 1
-
-                    let vertexBase = rawPointer.advanced(by: i * vertexStride)
-                    let jointsPointer = vertexBase.advanced(by: jointsOffset)
-                        .assumingMemoryBound(to: UInt32.self)
-
-                    // Read the 4 joint indices
-                    let j0 = jointsPointer[0]
-                    let j1 = jointsPointer[1]
-                    let j2 = jointsPointer[2]
-                    let j3 = jointsPointer[3]
+                    let joints = vertices[i].joints
+                    let j0 = joints.x
+                    let j1 = joints.y
+                    let j2 = joints.z
+                    let j3 = joints.w
 
                     // HEURISTIC: Joint indices should be small numbers (typically 0-255 for humanoids)
                     // If we see huge numbers like 3,000,000, we're reading garbage
@@ -354,9 +343,8 @@ final class RenderSafetyTests: XCTestCase {
                     continue
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<vertexCount {
                     let joints = vertices[i].joints
@@ -415,9 +403,8 @@ final class RenderSafetyTests: XCTestCase {
                     continue
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<vertexCount {
                     let joints = vertices[i].joints
@@ -596,9 +583,8 @@ final class RenderSafetyTests: XCTestCase {
                     continue
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<vertexCount {
                     let joints = vertices[i].joints
@@ -650,9 +636,8 @@ final class RenderSafetyTests: XCTestCase {
                     continue
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 for i in 0..<vertexCount {
                     totalChecked += 1
@@ -703,9 +688,8 @@ final class RenderSafetyTests: XCTestCase {
                     continue
                 }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 // Create identity matrices for all possible joints
                 let maxJoints = max(primitive.requiredPaletteSize, 256)
@@ -889,9 +873,8 @@ final class RenderSafetyTests: XCTestCase {
                 guard primitive.hasJoints,
                       let vertexBuffer = primitive.vertexBuffer else { continue }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 var maxDisplacement: Float = 0
                 var worstVertex = 0
@@ -993,9 +976,8 @@ final class RenderSafetyTests: XCTestCase {
                 guard primitive.hasJoints,
                       let vertexBuffer = primitive.vertexBuffer else { continue }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 var maxDisplacement: Float = 0
                 var worstVertex = 0
@@ -1115,9 +1097,8 @@ final class RenderSafetyTests: XCTestCase {
                 guard primitive.hasJoints,
                       let vertexBuffer = primitive.vertexBuffer else { continue }
 
-                let vertexStride = MemoryLayout<VRMVertex>.stride
-                let vertexCount = vertexBuffer.length / vertexStride
-                let vertices = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                let vertices = primitive.interleavedVertices()
+                let vertexCount = vertices.count
 
                 var maxDisplacement: Float = 0
                 var worstVertex = 0
@@ -1262,9 +1243,8 @@ final class RenderSafetyTests: XCTestCase {
             for (primIndex, primitive) in mesh.primitives.enumerated() {
                 guard primitive.hasJoints, let vb = primitive.vertexBuffer else { continue }
 
-                let stride = MemoryLayout<VRMVertex>.stride
-                let count = vb.length / stride
-                let verts = vb.contents().bindMemory(to: VRMVertex.self, capacity: count)
+                let verts = primitive.interleavedVertices()
+                let count = verts.count
 
                 var zeroWeightCount = 0
                 for i in 0..<count {
@@ -1287,9 +1267,8 @@ final class RenderSafetyTests: XCTestCase {
             for (primIndex, primitive) in mesh.primitives.enumerated() {
                 guard primitive.hasJoints, let vb = primitive.vertexBuffer else { continue }
 
-                let stride = MemoryLayout<VRMVertex>.stride
-                let count = vb.length / stride
-                let verts = vb.contents().bindMemory(to: VRMVertex.self, capacity: count)
+                let verts = primitive.interleavedVertices()
+                let count = verts.count
 
                 var maxJoint: UInt32 = 0
                 for i in 0..<count {
@@ -1343,9 +1322,8 @@ final class RenderSafetyTests: XCTestCase {
         for mesh in model.meshes {
             for primitive in mesh.primitives {
                 guard primitive.hasJoints, let vb = primitive.vertexBuffer else { continue }
-                let stride = MemoryLayout<VRMVertex>.stride
-                let count = vb.length / stride
-                let verts = vb.contents().bindMemory(to: VRMVertex.self, capacity: count)
+                let verts = primitive.interleavedVertices()
+                let count = verts.count
                 for i in 0..<count {
                     let j = verts[i].joints
                     let w = verts[i].weights
@@ -1372,9 +1350,8 @@ final class RenderSafetyTests: XCTestCase {
         for mesh in model.meshes {
             for primitive in mesh.primitives {
                 guard primitive.hasWeights, let vb = primitive.vertexBuffer else { continue }
-                let stride = MemoryLayout<VRMVertex>.stride
-                let count = vb.length / stride
-                let verts = vb.contents().bindMemory(to: VRMVertex.self, capacity: count)
+                let verts = primitive.interleavedVertices()
+                let count = verts.count
                 for i in 0..<count {
                     totalVerts += 1
                     let w = verts[i].weights
@@ -1399,9 +1376,8 @@ final class RenderSafetyTests: XCTestCase {
             for primitive in mesh.primitives {
                 guard primitive.hasJoints, let vb = primitive.vertexBuffer else { continue }
                 let jointCount = primitive.requiredPaletteSize
-                let stride = MemoryLayout<VRMVertex>.stride
-                let count = vb.length / stride
-                let verts = vb.contents().bindMemory(to: VRMVertex.self, capacity: count)
+                let verts = primitive.interleavedVertices()
+                let count = verts.count
                 for i in 0..<count {
                     let j = verts[i].joints
                     let w = verts[i].weights
