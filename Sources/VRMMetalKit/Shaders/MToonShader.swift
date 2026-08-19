@@ -548,4 +548,42 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
 
         return values
     }
+
+    /// Builds the compact integer bitfield that forms the shared
+    /// ``VRMPipelineCache`` string key's identity for a compiled pipeline
+    /// variant. Every field of `self` must appear here: this key is what the
+    /// shared cache uses for identity, so a field dropped here lets two
+    /// distinct variants collide on one compiled pipeline.
+    ///
+    /// Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4][lights:2][debug:1]
+    func sharedCacheKeyBits(isSkinned: Bool) -> UInt32 {
+        var bits: UInt32 = isSkinned ? 1 : 0
+        bits = (bits << 1) | (useMaterialFlags ? 1 : 0)
+        bits = (bits << 1) | (hasBaseColorTexture ? 1 : 0)
+        bits = (bits << 1) | (hasShadeMultiplyTexture ? 1 : 0)
+        bits = (bits << 1) | (hasShadingShiftTexture ? 1 : 0)
+        bits = (bits << 1) | (hasNormalTexture ? 1 : 0)
+        bits = (bits << 1) | (hasMatcapTexture ? 1 : 0)
+        bits = (bits << 1) | (hasRimMultiplyTexture ? 1 : 0)
+        bits = (bits << 1) | (hasEmissiveTexture ? 1 : 0)
+        bits = (bits << 1) | (hasOcclusionTexture ? 1 : 0)
+        bits = (bits << 1) | (hasUvAnimationMaskTexture ? 1 : 0)
+        bits = (bits << 1) | (hasParametricRim ? 1 : 0)
+        bits = (bits << 4) | (UInt32(alphaMode) & 0xF)
+        // Folded as the clamped value actually compiled by
+        // `makeFunctionConstantValues`, not the raw field: an out-of-contract
+        // `lightCount` (outside 1...3) must key identically to its clamp
+        // target so it reuses that pipeline instead of manufacturing a
+        // spurious cache entry for a variant Metal never compiles.
+        let clampedLightCount = UInt32(max(1, min(lightCount, MToonLightSpecialization.maxLights)))
+        bits = (bits << 2) | (clampedLightCount & 0x3)
+        bits = (bits << 1) | (debugVisualization ? 1 : 0)
+        return bits
+    }
+
+    /// The shared ``VRMPipelineCache`` string key for a compiled pipeline
+    /// variant of this feature set at the given render-target configuration.
+    func sharedCacheKey(isSkinned: Bool, colorPixelFormat: MTLPixelFormat, sampleCount: Int) -> String {
+        "mtfc_\(sharedCacheKeyBits(isSkinned: isSkinned))_\(colorPixelFormat.rawValue)_\(sampleCount)"
+    }
 }

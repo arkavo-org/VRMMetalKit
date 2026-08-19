@@ -169,6 +169,55 @@ final class SpecializedMToonPipelineMemoTests: XCTestCase {
         )
     }
 
+    /// `lightCount` and `debugVisualization` were added to
+    /// ``MToonFunctionConstantKey`` without being folded into the shared
+    /// cache's bitfield key, so two variants differing only in one of these
+    /// fields built distinct memo entries that both resolved the same
+    /// shared-cache string and were handed the same compiled pipeline — the
+    /// wrong-pipeline-returned bug class this memo key exists to prevent, one
+    /// layer up from ``VRMPipelineCacheKeyTests``.
+    func testLightCountAndDebugVisualizationDiscriminateSharedCacheKey() throws {
+        let renderer = VRMRenderer(device: device, config: RendererConfig())
+
+        guard
+            let oneLight = renderer.specializedMToonPipelineState(
+                isSkinned: false,
+                features: MToonFunctionConstantKey(hasBaseColorTexture: true, alphaMode: 0, lightCount: 1)
+            ),
+            let threeLights = renderer.specializedMToonPipelineState(
+                isSkinned: false,
+                features: MToonFunctionConstantKey(hasBaseColorTexture: true, alphaMode: 0, lightCount: 3)
+            ),
+            let production = renderer.specializedMToonPipelineState(
+                isSkinned: false,
+                features: MToonFunctionConstantKey(
+                    hasBaseColorTexture: true, hasNormalTexture: true, alphaMode: 0, debugVisualization: false)
+            ),
+            let debug = renderer.specializedMToonPipelineState(
+                isSkinned: false,
+                features: MToonFunctionConstantKey(
+                    hasBaseColorTexture: true, hasNormalTexture: true, alphaMode: 0, debugVisualization: true)
+            )
+        else {
+            throw XCTSkip("An MToon variant failed to compile on this device")
+        }
+
+        XCTAssertEqual(
+            renderer.specializedMToonPipelines.count, 4,
+            "lightCount and debugVisualization must each discriminate memo entries."
+        )
+        XCTAssertFalse(
+            oneLight === threeLights,
+            "lightCount=1 and lightCount=3 compile different fragment specializations " +
+                "and must not resolve to the same shared-cache pipeline."
+        )
+        XCTAssertFalse(
+            production === debug,
+            "debugVisualization selects mtoon_fragment_debug and must not resolve to the " +
+                "same shared-cache pipeline as the production fragment."
+        )
+    }
+
     /// ``VRMPipelineCache/clearCache()`` is documented for memory-pressure
     /// response and for forcing a shader reload during development. The memo
     /// must not survive it: holding the entries would retain the very pipeline

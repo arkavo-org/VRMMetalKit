@@ -700,26 +700,15 @@ extension VRMRenderer {
             return memoized
         }
 
-        // Build a compact integer bitfield key instead of multiple string interpolations.
-        // Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4]
-        // Every field of `features` must appear here: this key is what the
-        // shared cache uses for identity, so a field carried by the memo key
-        // but dropped here lets two distinct memo entries collide on one
-        // compiled pipeline.
-        var bits: UInt32 = isSkinned ? 1 : 0
-        bits = (bits << 1) | (features.useMaterialFlags ? 1 : 0)
-        bits = (bits << 1) | (features.hasBaseColorTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasShadeMultiplyTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasShadingShiftTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasNormalTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasMatcapTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasRimMultiplyTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasEmissiveTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasOcclusionTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasUvAnimationMaskTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasParametricRim ? 1 : 0)
-        bits = (bits << 4) | (UInt32(features.alphaMode) & 0xF)
-        let key = "mtfc_\(bits)_\(config.colorPixelFormat.rawValue)_\(config.sampleCount)"
+        // The memo key carries every field of `features`; the string below is
+        // what the *shared* cache uses for identity, so it must fold in the
+        // same fields or two distinct memo entries collide on one compiled
+        // pipeline. See `MToonFunctionConstantKey.sharedCacheKey`.
+        let key = features.sharedCacheKey(
+            isSkinned: isSkinned,
+            colorPixelFormat: config.colorPixelFormat,
+            sampleCount: config.sampleCount
+        )
 
         let descriptor: MTLRenderPipelineDescriptor
         do {
