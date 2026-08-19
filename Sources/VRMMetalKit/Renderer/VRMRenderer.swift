@@ -3796,28 +3796,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
 
                 // PHASE 4: Diagnose face geometry issues (artifact is PART OF FACE)
-                if isFaceMaterial && frameCounter == 0, let vertexBuffer = primitive.vertexBuffer {
-                    let stride = 96  // VRMVertex stride
-                    let pointer = vertexBuffer.contents()
-                    var minPos = SIMD3<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-                    var maxPos = SIMD3<Float>(-Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)
-
-                    // Find bounds of face geometry
-                    for i in 0..<primitive.vertexCount {
-                        let offset = i * stride
-                        let posPtr = pointer.advanced(by: offset).assumingMemoryBound(to: Float.self)
-                        let pos = SIMD3<Float>(posPtr[0], posPtr[1], posPtr[2])
-                        minPos = simd_min(minPos, pos)
-                        maxPos = simd_max(maxPos, pos)
-                    }
-
-                    let center = (minPos + maxPos) * 0.5
-                    let size = maxPos - minPos
-
+                if isFaceMaterial && frameCounter == 0, let vertexBuffer = primitive.vertexBuffer,
+                   let bounds = FaceGeometryDiagnostic.computeBounds(vertexBuffer: vertexBuffer, vertexCount: primitive.vertexCount) {
                     vrmLog("📐 [FACE GEOMETRY] '\(item.mesh.name ?? "unnamed")'")
-                    vrmLog("    - Center: (\(center.x), \(center.y), \(center.z))")
-                    vrmLog("    - Size: (\(size.x), \(size.y), \(size.z))")
-                    vrmLog("    - Bounds: [\(minPos.x) to \(maxPos.x), \(minPos.y) to \(maxPos.y), \(minPos.z) to \(maxPos.z)]")
+                    vrmLog("    - Center: (\(bounds.center.x), \(bounds.center.y), \(bounds.center.z))")
+                    vrmLog("    - Size: (\(bounds.size.x), \(bounds.size.y), \(bounds.size.z))")
+                    vrmLog("    - Bounds: [\(bounds.min.x) to \(bounds.max.x), \(bounds.min.y) to \(bounds.max.y), \(bounds.min.z) to \(bounds.max.z)]")
                     vrmLog("    - Vertex count: \(primitive.vertexCount)")
                     vrmLog("    - Node world transform: \(item.node.worldMatrix.columns.3)")
                 }
