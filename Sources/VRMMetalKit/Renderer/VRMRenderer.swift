@@ -89,7 +89,17 @@ import QuartzCore  // For CACurrentMediaTime
 /// and ``drawOffscreenHeadless(to:depth:commandBuffer:renderPassDescriptor:)``
 /// are both `@MainActor`. ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``
 /// and ``encodeCompositorViews(commandBuffer:views:)`` are the off-thread
-/// compositor entry points. Animation updates running concurrently on the same
+/// compositor entry points.
+///
+/// Whichever entry point a host picks, exactly one of them drives a given
+/// renderer instance, from one thread. They all funnel into the same
+/// unsynchronized per-frame state — the inflight ring, the uniform-buffer
+/// index, ``viewMatrix``/``projectionMatrix``, the compositor deferral flags —
+/// so mixing them (a `@MainActor` preview calling `draw(in:)` while a
+/// CompositorServices thread calls `encodeCompositorViews` on the same object)
+/// interleaves those writes mid-frame. Two render loops means two renderers.
+///
+/// Animation updates running concurrently on the same
 /// ``VRMModel`` from a background actor remain safe because the renderer
 /// cooperates with the model's internal `NSLock` (the same lock
 /// ``AnimationPlayer`` acquires), so the scene graph stays consistent during
@@ -498,7 +508,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     public var morphTargetSystem: VRMMorphTargetSystem?
     /// Expression controller responsible for aggregating per-expression weights into morph weights.
     /// Auto-created in ``init(device:config:)``.
-    public var expressionController: VRMExpressionController?
+    ///
+    /// Reassigning this drops the cached morph output. The fingerprint that
+    /// gates that cache is computed from the controller's weights, so a new
+    /// controller with coincidentally equal weights would otherwise be handed
+    /// buffers built for the old one's expression set.
+    public var expressionController: VRMExpressionController? {
+        didSet {
+            morphedBuffers.removeAll(keepingCapacity: true)
+            lastMorphWeightsFingerprint = nil
+        }
+    }
 
     /// Look-at controller that drives eye-bone rotations to track a world-space target. Auto-created in ``init(device:config:)``.
     public var lookAtController: VRMLookAtController?
@@ -1620,6 +1640,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` once
     /// per eye is still correct, but it double-steps physics, double-waits
     /// the inflight ring, and double-encodes compute.
+    ///
+    /// - Important: One frame producer per renderer, same as
+    ///   ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)``. This
+    ///   drives a whole frame — it sets ``viewMatrix``/``projectionMatrix`` per
+    ///   view and walks the inflight ring and the deferred-completion flags —
+    ///   none of which is synchronized. A second thread calling
+    ///   ``draw(in:commandBuffer:renderPassDescriptor:)`` or
+    ///   ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` on the
+    ///   *same* renderer while this is in flight interleaves those mutations and
+    ///   yields wrong per-eye matrices or an unbalanced inflight semaphore. Give
+    ///   a preview or debug view its own ``VRMRenderer``.
     public func encodeCompositorViews(
         commandBuffer: MTLCommandBuffer,
         views: [CompositorViewTarget]
@@ -4192,6 +4223,18 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     private func finishDeferredCompositorFrame(commandBuffer: MTLCommandBuffer) {
+        // `compositorHeldSlot` is the frame's "view 0 got past every early-return
+        // guard" flag. Each guard in `drawCore` (no model, no uniform buffer,
+        // strict-mode validation failure) signals the inflight semaphore itself
+        // and clears the flag, so gating `finishOffscreenFrame` on it is what
+        // keeps a bailed-out frame from double-signalling.
+        //
+        // `frameCounter` is deliberately NOT gated the same way: it counts
+        // submitted compositor frames, once per `encodeCompositorViews` call
+        // rather than once per eye — the property
+        // `testEncodeCompositorViewsTwoViewsDoesNotDeadlock` pins. Its only
+        // consumers are debug-log cadence checks, so counting a frame that bailed
+        // is intended, not an oversight.
         frameCounter += 1
         if compositorHeldSlot {
             finishOffscreenFrame(commandBuffer: commandBuffer)
