@@ -302,7 +302,7 @@ static inline void applyMToonOutlineExtrusion(
  worldPos += normalize(worldNormal) * outlineWidth * distanceScale;
  clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * float4(worldPos, 1.0);
  } else if (material.outlineMode == 2.0) {
- float3 viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(worldNormal, 0.0)).xyz);
+ float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
  float2 screenNormal = normalize(viewNormal.xy);
  float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
  clipPos.xy += screenNormal * outlineWidth * pixelsToNDC * clipPos.w;
