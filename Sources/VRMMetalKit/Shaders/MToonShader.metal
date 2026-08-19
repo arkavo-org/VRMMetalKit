@@ -430,6 +430,10 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
 // Debug visualization helper — isolated in its own function so the main
 // fragment shader's register count and instruction footprint stay lean
 // in production (debugUVs == 0 means this is never called).
+//
+// Modes 11 and 35 are deliberately absent: they visualize state that only
+// exists part way through production shading, so `mtoon_fragment_v2` answers
+// them and `MToonDebugMode` keeps their draws off this fragment.
 static float4 mtoon_debug_visualize(
     VertexOut in,
     bool isFrontFace,
@@ -763,6 +767,14 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      normal = mtoon_float3(normalize(TBN * float3(nMap)));
  }
 
+ // Debug 11: magenta where the normal was flipped for a back face, normal
+ // shading everywhere else. Answered here rather than in
+ // `mtoon_debug_visualize` because the fall-through half of the mode *is* the
+ // production shading path.
+ if (uniforms.debugUVs == 11 && !isFrontFace) {
+     return float4(1.0, 0.0, 1.0, 1.0);
+ }
+
  // Shading shift calculation
  mtoon_float shadingShift = mtoon_float(material.shadingShiftFactor);
  if (effectiveHasShadingShiftTexture) {
@@ -957,6 +969,13 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
          dirRim += fresnel * NdotL * mtoon_float3(uniforms.light2Color.xyz) * intensity2;
      }
      litColor += dirRim;
+ }
+
+ // Debug 35: the accumulated lit color, read before the minimum-light floor
+ // and the final saturate below — the state this mode exists to expose, which
+ // only lives inside this fragment.
+ if (uniforms.debugUVs == 35) {
+     return float4(float3(litColor), 1.0);
  }
 
  #if 1  // ENABLED: Full MToon lighting for all materials (textured and non-textured)

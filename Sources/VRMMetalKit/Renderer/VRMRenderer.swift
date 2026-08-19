@@ -3722,7 +3722,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // should not accidentally become MASK_A2C. Placed before the
             // indexed/non-indexed split so both draw paths see the
             // override.
-            if mtoonUniforms.alphaMode == 1 {
+            // The debug fragment is never built with alpha-to-coverage enabled,
+            // so remapping to MASK_A2C there would only drop the cutout discard
+            // the debug modes rely on.
+            if mtoonUniforms.alphaMode == 1, !MToonDebugMode.usesDebugFragment(debugUVs) {
                 mtoonUniforms.alphaMode = alphaModeForUniform(
                     alphaMode: "mask",
                     isSkinned: isSkinned
@@ -4088,7 +4091,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 totalTriangles += primitive.indexCount / 3
                 performanceTracker?.recordDrawCall(triangles: primitive.indexCount / 3, vertices: primitive.vertexCount)
 
-                if mergeOutline {
+                if MToonOutlineDraw.shouldEncodeMergedHull(merged: mergeOutline, debugMode: debugUVs) {
                     encodeMergedOutlineHull(
                         encoder: encoder,
                         primitive: primitive,
@@ -4869,24 +4872,29 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// alpha-to-coverage pipeline, and for any alpha-mode value outside the
     /// OPAQUE/MASK/BLEND range, so those paths continue to use the existing
     /// fallback PSOs.
+    ///
+    /// A debug visualization outranks that skip: it must reach every material
+    /// the mode used to cover, or the frame mixes debug-coloured and shaded
+    /// surfaces and misleads the diagnosis it exists for. Modes answered inside
+    /// the production fragment (``MToonDebugMode``) take the ordinary path.
     func specializedMToonPipelineIfAvailable(
         isSkinned: Bool,
         materialAlphaMode: String,
         mtoonUniforms: MToonMaterialUniforms
     ) -> MTLRenderPipelineState? {
-        let usingA2C = materialAlphaMode == "mask" && config.alphaToCoverageForMASK && usesMultisampling
-        guard !usingA2C, mtoonUniforms.alphaMode <= 2 else { return nil }
-
         var features = MToonFunctionConstantKey(material: mtoonUniforms)
         features.lightCount = MToonLightSpecialization.count(
             keyIntensity: uniforms.lightColor_packed.w,
             fillIntensity: uniforms.light1Color_packed.w,
             rimIntensity: uniforms.light2Color_packed.w
         )
-        if debugUVs != 0 {
+        if MToonDebugMode.usesDebugFragment(debugUVs) {
             features.debugVisualization = true
             return specializedMToonPipelineState(isSkinned: isSkinned, features: features)
         }
+
+        let usingA2C = materialAlphaMode == "mask" && config.alphaToCoverageForMASK && usesMultisampling
+        guard !usingA2C, mtoonUniforms.alphaMode <= 2 else { return nil }
         guard config.enableMToonFunctionConstants else { return nil }
         return specializedMToonPipelineState(isSkinned: isSkinned, features: features)
     }

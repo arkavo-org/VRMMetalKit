@@ -57,4 +57,18 @@ public enum MToonOutlineDraw {
         }
         return true
     }
+
+    /// Whether the merged hull draw is actually encoded for a primitive that
+    /// ``shouldMerge(globalOutlineWidth:mtoon:isDoubleSided:)`` accepted.
+    ///
+    /// A debug visualization that binds `mtoon_fragment_debug` has no outline
+    /// branch — the hull would come back filled with the debug color and hide
+    /// the avatar behind an opaque shell — so the hull is dropped for those
+    /// modes. `shouldMerge` still reports `true`, which keeps the dedicated
+    /// outline pass skipping the primitive instead of drawing a second shell.
+    /// Modes served by the production fragment (``MToonDebugMode``) keep their
+    /// hull: that fragment shades `instance_id == 1` as the outline.
+    public static func shouldEncodeMergedHull(merged: Bool, debugMode: Int32) -> Bool {
+        merged && !MToonDebugMode.usesDebugFragment(debugMode)
+    }
 }
