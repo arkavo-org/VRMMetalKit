@@ -1216,19 +1216,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     // MARK: - Compute Pass for Morphs
 
-    private func applyMorphTargetsCompute(commandBuffer: MTLCommandBuffer) -> [MorphKey: MTLBuffer] {
+    /// Package-visible (not `private`) so tests can drive the fingerprint/gate
+    /// bookkeeping directly across frames without a full render pass.
+    func applyMorphTargetsCompute(commandBuffer: MTLCommandBuffer) -> [MorphKey: MTLBuffer] {
         guard let model = model,
               let morphTargetSystem = morphTargetSystem else { return [:] }
 
+        var currentFingerprint: UInt64?
         if let controller = expressionController {
             let fingerprint = controller.morphWeightsFingerprint()
+            currentFingerprint = fingerprint
             if MorphComputeGate.shouldReusePreviousOutput(
                 currentFingerprint: fingerprint,
                 previousFingerprint: lastMorphWeightsFingerprint
             ) {
                 return morphedBuffers
             }
-            lastMorphWeightsFingerprint = fingerprint
         }
 
         // Decide if compute path is needed (presence of any morphs > 0 or >8 targets anywhere)
@@ -1278,6 +1281,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             if frameCounter % 60 == 0 {
                 vrmLog("[VRMRenderer] Skipping compute pass - no active morphs and <=8 morphs per primitive")
             }
+            morphedBuffers.removeAll(keepingCapacity: true)
+            if let fingerprint = currentFingerprint {
+                lastMorphWeightsFingerprint = fingerprint
+            }
             return [:]
         }
 
@@ -1289,6 +1296,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Created lazily so we don't emit an empty compute pass when every primitive
         // has an empty active set.
         var morphComputeEncoder: MTLComputeCommandEncoder?
+
+        // Tracks whether any primitive was skipped due to encoder-creation or
+        // compute-dispatch failure, leaving morphedBuffers partial relative to
+        // the fingerprint being computed.
+        var hadPartialFailure = false
 
         // Capture the single primitive that needs first-frame GPU validation so the
         // readback blit can run after the batched compute encoder has ended.
@@ -1352,6 +1364,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if morphComputeEncoder == nil {
                     guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
                         vrmLog("[VRMRenderer] ❌ Failed to create batched morph compute encoder")
+                        hadPartialFailure = true
                         continue
                     }
                     encoder.label = "Morph Accumulate (batched)"
@@ -1396,6 +1409,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                 } else {
                     vrmLog("[VRMRenderer] ❌ FAILED to apply compute morphs for primitive with \(primitive.morphTargets.count) morphs")
+                    hadPartialFailure = true
                 }
             }
         }
@@ -1501,6 +1515,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     #endif
                 }
             }
+        }
+
+        // Only record the fingerprint when morphedBuffers is complete for it;
+        // a partial failure invalidates the recorded fingerprint so the next
+        // frame re-dispatches instead of reusing an incomplete dict via the gate.
+        if let fingerprint = currentFingerprint {
+            lastMorphWeightsFingerprint = hadPartialFailure ? nil : fingerprint
         }
 
         // Return morphed buffers to be used in render pass
