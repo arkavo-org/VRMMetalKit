@@ -282,9 +282,15 @@ final class JointPaletteBoundsTests: XCTestCase {
     }
 
     /// Renders one frame and returns the depth attachment contents.
+    ///
+    /// The depth target is private and comes back through a blit into a shared
+    /// buffer rather than `getBytes`. A CPU-visible depth texture is invalid on
+    /// iOS: `MTLTextureDescriptor` validation aborts the process inside
+    /// `makeTexture` instead of returning nil, so there is nothing to guard on.
     private func renderDepth(model: VRMModel, depthPrepass: Bool) throws -> [Float] {
         let renderer = makeRenderer(model: model, depthPrepass: depthPrepass)
         let size = Self.renderSize
+        let bytesPerRow = size * MemoryLayout<Float>.stride
 
         let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: size, height: size, mipmapped: false)
@@ -292,14 +298,15 @@ final class JointPaletteBoundsTests: XCTestCase {
         colorDesc.storageMode = .shared
         let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .depth32Float, width: size, height: size, mipmapped: false)
-        depthDesc.usage = [.renderTarget, .shaderRead]
-        depthDesc.storageMode = .shared
+        depthDesc.usage = .renderTarget
+        depthDesc.storageMode = .private
 
         guard let colorTex = device.makeTexture(descriptor: colorDesc),
               let depthTex = device.makeTexture(descriptor: depthDesc),
+              let readback = device.makeBuffer(length: bytesPerRow * size, options: .storageModeShared),
               let queue = device.makeCommandQueue(),
               let cb = queue.makeCommandBuffer() else {
-            throw XCTSkip("Could not allocate shared-storage render targets on this device")
+            throw XCTSkip("Could not allocate render targets on this device")
         }
 
         let rpd = MTLRenderPassDescriptor()
@@ -314,17 +321,26 @@ final class JointPaletteBoundsTests: XCTestCase {
 
         renderer.drawOffscreenHeadless(
             to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
+
+        guard let blit = cb.makeBlitCommandEncoder() else {
+            throw XCTSkip("Could not create a blit encoder for depth readback")
+        }
+        blit.copy(from: depthTex,
+                  sourceSlice: 0,
+                  sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: size, height: size, depth: 1),
+                  to: readback,
+                  destinationOffset: 0,
+                  destinationBytesPerRow: bytesPerRow,
+                  destinationBytesPerImage: bytesPerRow * size)
+        blit.endEncoding()
+
         cb.commit()
         cb.waitUntilCompleted()
 
-        var depths = [Float](repeating: 0, count: size * size)
-        depths.withUnsafeMutableBytes { buf in
-            depthTex.getBytes(buf.baseAddress!,
-                              bytesPerRow: size * MemoryLayout<Float>.stride,
-                              from: MTLRegionMake2D(0, 0, size, size),
-                              mipmapLevel: 0)
-        }
-        return depths
+        let pointer = readback.contents().bindMemory(to: Float.self, capacity: size * size)
+        return Array(UnsafeBufferPointer(start: pointer, count: size * size))
     }
 
     /// Renders one frame and returns the recorded draw-call count.
