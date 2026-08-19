@@ -297,7 +297,100 @@ final class SpringBoneComputeSystemTests: XCTestCase {
         XCTAssertEqual(system.testChainAsleep.count, 2)
     }
 
+    // MARK: - Sleep Flag GPU Upload Tests
+
+    /// `warmupPhysics` dispatches `executeXPBDStep` directly, bypassing
+    /// `update()` entirely, so it never touches `chainSleepBuffer`. If a prior
+    /// async-path frame left stale sleep=1 flags in the GPU buffer, warmup's
+    /// kernels early-out on those chains while the CPU believes everything is
+    /// awake. The buffer must be zeroed before warmup dispatches any kernel.
+    func testWarmupPhysicsPropagatesSleepFlagsToGPUBuffer() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createModelForSleepFlagTest()
+        try system.populateSpringBoneData(model: model)
+
+        system.testCorruptChainSleepBuffer()
+        XCTAssertEqual(system.testChainSleepBufferFlags, [1, 1],
+                       "sanity: buffer corrupted before warmup runs")
+
+        system.warmupPhysics(model: model, steps: 1)
+
+        XCTAssertEqual(system.testChainSleepBufferFlags, [0, 0],
+                       "warmupPhysics must zero stale GPU sleep flags before dispatching kernels")
+    }
+
+    /// The offline/synchronous `update()` path (commandBuffer == nil) calls
+    /// `sleepGate.wakeAll()` without `uploadChainSleepFlags()`. If the CPU
+    /// sleep gate wakes but the GPU buffer keeps stale sleep=1 flags, the
+    /// spring kernels early-out for chains the CPU believes are awake.
+    func testSynchronousUpdatePropagatesSleepFlagsToGPUBuffer() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createModelForSleepFlagTest()
+        try system.populateSpringBoneData(model: model)
+
+        system.testCorruptChainSleepBuffer()
+        XCTAssertEqual(system.testChainSleepBufferFlags, [1, 1],
+                       "sanity: buffer corrupted before the synchronous update runs")
+
+        // commandBuffer: nil selects the offline/synchronous path.
+        system.update(model: model, deltaTime: 1.0 / 60.0)
+
+        XCTAssertEqual(system.testChainSleepBufferFlags, [0, 0],
+                       "synchronous update() must zero stale GPU sleep flags before dispatching kernels")
+    }
+
     // MARK: - Helper Methods
+
+    /// Builds a two-chain model with `springBoneGlobalParams` populated (both
+    /// `warmupPhysics` and the synchronous `update()` path require it).
+    private func createModelForSleepFlagTest() throws -> VRMModel {
+        let builder = VRMBuilder()
+        let model = try builder.setSkeleton(.defaultHumanoid).build()
+        model.device = device
+
+        var joint0 = VRMSpringJoint(node: 0)
+        joint0.hitRadius = 0.05
+        joint0.stiffness = 1.0
+        joint0.gravityPower = 0.5
+        joint0.gravityDir = [0, -1, 0]
+        joint0.dragForce = 0.4
+        var spring0 = VRMSpring(name: "Chain0")
+        spring0.joints = [joint0]
+
+        var joint1 = VRMSpringJoint(node: 1)
+        joint1.hitRadius = 0.05
+        joint1.stiffness = 1.0
+        joint1.gravityPower = 0.5
+        joint1.gravityDir = [0, -1, 0]
+        joint1.dragForce = 0.4
+        var spring1 = VRMSpring(name: "Chain1")
+        spring1.joints = [joint1]
+
+        var springBone = VRMSpringBone()
+        springBone.springs = [spring0, spring1]
+        model.springBone = springBone
+
+        let buffers = SpringBoneBuffers(device: device)
+        buffers.allocateBuffers(numBones: 2, numSpheres: 0, numCapsules: 0)
+        model.springBoneBuffers = buffers
+
+        model.springBoneGlobalParams = SpringBoneGlobalParams(
+            gravity: SIMD3<Float>(0, 0, 0),
+            dtSub: Float(1.0 / 120.0),
+            windAmplitude: 0.0,
+            windFrequency: 0.0,
+            windPhase: 0.0,
+            windDirection: SIMD3<Float>(1, 0, 0),
+            substeps: 1,
+            numBones: 2,
+            numSpheres: 0,
+            numCapsules: 0,
+            numPlanes: 0,
+            settlingFrames: 0
+        )
+
+        return model
+    }
 
     /// Builds a model with three springs in source order [non-empty, EMPTY,
     /// non-empty], matching what `VRMExtensionParser` produces for a spring

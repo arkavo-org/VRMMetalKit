@@ -205,6 +205,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let pointer = buffer.contents().bindMemory(to: UInt32.self, capacity: count)
         return (0..<count).map { pointer[$0] }
     }
+    /// Test hook: writes stale sleep=1 flags directly into `chainSleepBuffer`
+    /// without touching CPU-side `sleepGate`, reproducing the state a prior
+    /// async-path frame would have left behind — used to test that wake/warmup
+    /// entry points propagate flags to the GPU buffer before kernels run.
+    func testCorruptChainSleepBuffer() {
+        guard let buffer = chainSleepBuffer else { return }
+        let count = sleepGate.asleep.count
+        guard count > 0 else { return }
+        let pointer = buffer.contents().bindMemory(to: UInt32.self, capacity: count)
+        for i in 0..<count { pointer[i] = 1 }
+    }
     /// Previous-frame target transforms for wake-on-motion detection.
     private var previousRootPositionsForSleep: [SIMD3<Float>] = []
     private var previousSphereCollidersForSleep: [SphereCollider] = []
@@ -659,9 +670,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                             delay: sleepDelayFrames)
             uploadChainSleepFlags()
         } else {
-            // Offline/sync path: keep everything awake and don't touch GPU buffers
-            // for heuristic reads.
-            sleepGate.wakeAll()
+            // Offline/sync path: keep everything awake and skip the heuristic
+            // GPU reads used to decide sleep. The GPU-side chainSleepBuffer
+            // still needs the wake propagated — a prior async-path frame on
+            // this same system may have left stale sleep=1 flags there, which
+            // would make every spring kernel early-out on those chains while
+            // the CPU (sleepGate) believes them awake.
+            wakeAllChains()
         }
 
         let allChainsAsleep = sleepGateEnabled && sleepGate.allAsleep
@@ -2993,6 +3008,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // never diverge if warmup is ever invoked after a foreign injection.
         globalParams.numSpheres = UInt32(buffers.numSpheres + activeForeignSpheres)
         globalParams.numCapsules = UInt32(buffers.numCapsules + activeForeignCapsules)
+
+        // Warmup dispatches executeXPBDStep directly, bypassing update()
+        // entirely — so it never reaches update()'s sleep-gate handling. A
+        // prior async-path frame on this same system may have left stale
+        // sleep=1 flags in chainSleepBuffer; without this, every spring
+        // kernel below early-outs on those chains while warmup's CPU-side
+        // state assumes all chains are being simulated.
+        wakeAllChains()
 
         // Step 1: Capture current animated positions for root bones
         guard let springBone = model.springBone else { return }
