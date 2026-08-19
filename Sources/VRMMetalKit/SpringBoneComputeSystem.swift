@@ -192,9 +192,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     public var sleepingBoneCount: Int { sleepGate.sleepingBoneCount }
     /// Test hook: per-chain asleep flags.
     var testChainAsleep: [Bool] { sleepGate.asleep }
+    /// Test hook: per-chain collider-group masks, same indexing as `testChainAsleep`.
+    var testChainColliderMasks: [UInt32] { chainColliderMasks }
     /// Per-bone chain index and per-chain sleep flag, bound at buffers 16/17.
     private var boneChainIndexBuffer: MTLBuffer?
     private var chainSleepBuffer: MTLBuffer?
+    /// Test hook: reads the GPU-visible `chainSleepBuffer` back on the host.
+    var testChainSleepBufferFlags: [UInt32] {
+        guard let buffer = chainSleepBuffer else { return [] }
+        let count = sleepGate.asleep.count
+        guard count > 0 else { return [] }
+        let pointer = buffer.contents().bindMemory(to: UInt32.self, capacity: count)
+        return (0..<count).map { pointer[$0] }
+    }
     /// Previous-frame target transforms for wake-on-motion detection.
     private var previousRootPositionsForSleep: [SIMD3<Float>] = []
     private var previousSphereCollidersForSleep: [SphereCollider] = []
@@ -1451,6 +1461,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var chainGravityPowers: [[Float]] = []
 
         for spring in springBone.springs {
+            // VRMExtensionParser lets a spring with zero joints through
+            // unfiltered (every joint dict missing "node"). `chainRanges` /
+            // `sleepGate` / `rootBoneIndices` only grow for springs that
+            // contribute at least one bone, so a per-spring array must skip
+            // empty springs too or every later chain's index shifts by one.
+            guard !spring.joints.isEmpty else { continue }
+
             var jointIndexInChain = 0
             var chainGravityPower: [Float] = []
 
@@ -2164,8 +2181,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // spring per frame; springs typically hold 5-30 joints.
         var globalBoneIndex = 0
         chainNodePositions.reserveCapacity(32)
-        for (chainIndex, spring) in springBone.springs.enumerated() {
+        // `chainIndex` must track NON-EMPTY springs only, matching how
+        // `sleepGate`/`chainColliderMasks` are indexed in populateSpringBoneData
+        // — a zero-joint spring earlier in `springs` must not shift this.
+        var chainIndex = 0
+        for spring in springBone.springs {
+            guard !spring.joints.isEmpty else { continue }
             guard globalBoneIndex < positions.count else { break }
+            defer { chainIndex += 1 }
 
             // Skip the CPU writeback for chains that are fully asleep; their
             // node transforms are unchanged from the previous frame.

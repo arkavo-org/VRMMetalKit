@@ -255,7 +255,96 @@ final class SpringBoneComputeSystemTests: XCTestCase {
         }
     }
 
+    // MARK: - Zero-Joint Spring Indexing Tests
+
+    /// A zero-joint spring (VRMExtensionParser lets one through when every
+    /// joint dict in the source data is missing "node") must not shift the
+    /// per-chain collider-mask/sleep indexing of the springs that follow it.
+    /// `chainColliderMasks`/`sleepGate` are built per NON-EMPTY spring, so the
+    /// third spring here (chain index 1) must map to its OWN collider mask,
+    /// not the empty middle spring's.
+    func testZeroJointSpringDoesNotShiftChainColliderMaskIndexing() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createModelWithZeroJointSpring()
+        try system.populateSpringBoneData(model: model)
+
+        XCTAssertEqual(system.testChainColliderMasks.count, 2,
+                       "only the two non-empty springs form chains; the empty spring must not add a mask entry")
+        XCTAssertEqual(system.testChainAsleep.count, 2,
+                       "only the two non-empty springs form chains")
+
+        // Chain 1 (the third spring, "AfterEmpty") authored group bit 7 (0x80).
+        // The empty spring authored group bit 15 (0x8000) — it must NOT leak
+        // into chain 1's mask.
+        let chain1Mask = system.testChainColliderMasks[1]
+        XCTAssertNotEqual(chain1Mask & (1 << 7), 0,
+                          "chain 1 must carry its own spring's authored collider-group bit")
+        XCTAssertEqual(chain1Mask & (1 << 15), 0,
+                       "chain 1 must not carry the empty spring's collider-group bit")
+    }
+
+    /// Same misalignment, exercised through `writeBonesToNodes`'s sleep-skip
+    /// check: `sleepGate.asleep[chainIndex]` must be indexed by non-empty
+    /// spring position, matching `testChainAsleep`, not raw `springs` position.
+    func testZeroJointSpringDoesNotShiftSleepIndexing() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createModelWithZeroJointSpring()
+        try system.populateSpringBoneData(model: model)
+
+        // Two chains total (the two non-empty springs). writeBonesToNodes must
+        // not crash indexing sleepGate.asleep by raw spring position (3 springs).
+        system.writeBonesToNodes(model: model)
+        XCTAssertEqual(system.testChainAsleep.count, 2)
+    }
+
     // MARK: - Helper Methods
+
+    /// Builds a model with three springs in source order [non-empty, EMPTY,
+    /// non-empty], matching what `VRMExtensionParser` produces for a spring
+    /// whose joints all lack a "node" field.
+    private func createModelWithZeroJointSpring() throws -> VRMModel {
+        let builder = VRMBuilder()
+        let model = try builder.setSkeleton(.defaultHumanoid).build()
+        model.device = device
+
+        var joint0 = VRMSpringJoint(node: 0)
+        joint0.hitRadius = 0.05
+        joint0.stiffness = 1.0
+        joint0.gravityPower = 0.5
+        joint0.gravityDir = [0, -1, 0]
+        joint0.dragForce = 0.4
+
+        var firstSpring = VRMSpring(name: "BeforeEmpty")
+        firstSpring.joints = [joint0]
+        firstSpring.colliderGroups = [3]
+
+        var emptySpring = VRMSpring(name: "EmptySpring")
+        emptySpring.joints = []
+        emptySpring.colliderGroups = [15]
+
+        var joint1 = VRMSpringJoint(node: 1)
+        joint1.hitRadius = 0.05
+        joint1.stiffness = 1.0
+        joint1.gravityPower = 0.5
+        joint1.gravityDir = [0, -1, 0]
+        joint1.dragForce = 0.4
+
+        var thirdSpring = VRMSpring(name: "AfterEmpty")
+        thirdSpring.joints = [joint1]
+        thirdSpring.colliderGroups = [7]
+
+        var springBone = VRMSpringBone()
+        springBone.springs = [firstSpring, emptySpring, thirdSpring]
+        model.springBone = springBone
+
+        let buffers = SpringBoneBuffers(device: device)
+        buffers.allocateBuffers(numBones: 2, numSpheres: 0, numCapsules: 0)
+        model.springBoneBuffers = buffers
+
+        return model
+    }
+
+    // MARK: - Original Helper Methods
 
     /// Create a minimal VRM model with a single spring bone for testing
     private func createMinimalSpringBoneModel() throws -> VRMModel {
