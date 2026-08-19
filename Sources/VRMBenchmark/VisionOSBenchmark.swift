@@ -79,8 +79,12 @@ func runVisionOSBenchmark(
     renderer.simulationDeltaTime = 1.0 / VisionOSStereoLayout.cadenceHz
 
     let aspect = Float(width) / Float(height)
-    let projection = perspectiveMatrix(
-        fovRadians: 45.0 * .pi / 180.0, aspect: aspect, near: 0.01, far: 100.0)
+    // Reverse-Z, matching the live ImmersiveRenderer path (which sources
+    // its projection from `drawable.computeProjection`): an OpenGL-style
+    // matrix here would invert the `.greater` depth compare `useReverseZ`
+    // installs below.
+    let projection = reverseZProjection(makePerspective(
+        fovyRadians: 45.0 * .pi / 180.0, aspectRatio: aspect, nearZ: 0.01, farZ: 100.0))
     let centerView = lookAtMatrix(
         eye: SIMD3<Float>(0, 1.3, 1.8),
         center: SIMD3<Float>(0, 1.3, 0),

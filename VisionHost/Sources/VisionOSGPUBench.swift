@@ -122,7 +122,12 @@ enum VisionOSGPUBench {
         renderer.setLightNormalizationMode(.radiometric)
 
         let aspect = Float(width) / Float(height)
-        let projection = perspectiveMatrix(fovRadians: 45 * .pi / 180, aspect: aspect, near: 0.01, far: 100)
+        // Reverse-Z, matching the live ImmersiveRenderer path (which
+        // sources its projection from `drawable.computeProjection`): an
+        // OpenGL-style matrix here would invert the `.greater` depth
+        // compare `useReverseZ` installs above.
+        let projection = reverseZProjection(makePerspective(
+            fovyRadians: 45 * .pi / 180, aspectRatio: aspect, nearZ: 0.01, farZ: 100))
         let centerView = lookAtMatrix(
             eye: SIMD3<Float>(0, 1.3, 1.8),
             center: SIMD3<Float>(0, 1.3, 0),
@@ -359,16 +364,6 @@ enum VisionOSGPUBench {
         r.columns.1 = SIMD4<Float>(s.y, u.y, -f.y, 0)
         r.columns.2 = SIMD4<Float>(s.z, u.z, -f.z, 0)
         r.columns.3 = SIMD4<Float>(-simd_dot(s, eye), -simd_dot(u, eye), simd_dot(f, eye), 1)
-        return r
-    }
-
-    private static func perspectiveMatrix(fovRadians: Float, aspect: Float, near: Float, far: Float) -> matrix_float4x4 {
-        let t = tan(fovRadians / 2)
-        var r = matrix_float4x4()
-        r.columns.0 = SIMD4<Float>(1 / (aspect * t), 0, 0, 0)
-        r.columns.1 = SIMD4<Float>(0, 1 / t, 0, 0)
-        r.columns.2 = SIMD4<Float>(0, 0, -(far + near) / (far - near), -1)
-        r.columns.3 = SIMD4<Float>(0, 0, -(2 * far * near) / (far - near), 0)
         return r
     }
 }
