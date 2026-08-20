@@ -868,6 +868,20 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// is true.
     public var additiveDirectionalRimPower: Float = 5.0
 
+    /// Progress-driven spawn effect (VMK#materialize). `nil` (default) or a
+    /// value with `progress >= 1` renders identically to no effect. The caller
+    /// owns the ramp: set the struct each frame with an advancing `progress`.
+    public var materialization: VRMMaterialization?
+
+    /// True while an active materialization uses fragment discard. The opaque
+    /// depth prepass is skipped in this state: prepass depth for pixels the
+    /// colour pass then discards would linger in the depth buffer and occlude
+    /// later draws.
+    var materializationUsesDiscard: Bool {
+        guard let mat = materialization else { return false }
+        return mat.clampedProgress < 1.0 && mat.style.usesDiscard
+    }
+
     // Frame counter for debug logging
     var frameCounter = 0
 
@@ -2147,6 +2161,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Camera mode for first-person vertex culling (0 = third-person, 1 = first-person).
         uniforms.cameraMode = cameraMode == .firstPerson ? 1 : 0
 
+        // Materialization spawn effect (VMK#materialize). progress >= 1 or a
+        // nil struct uploads the inert sentinel (x = 1, style = 0).
+        if let mat = materialization, mat.clampedProgress < 1.0 {
+            uniforms.materializeParams = SIMD4<Float>(
+                mat.clampedProgress,
+                Float(mat.style.rawValue),
+                mat.heightRange.lowerBound,
+                mat.heightRange.upperBound)
+            uniforms.materializeColor_packed = SIMD4<Float>(
+                mat.color.x, mat.color.y, mat.color.z, mat.seed)
+            let origin = mat.resolvedOrigin
+            uniforms.materializeOrigin_packed = SIMD4<Float>(
+                origin.x, origin.y, origin.z, 0)
+        } else {
+            uniforms.materializeParams = SIMD4<Float>(1.0, 0.0, 0.0, 1.0)
+        }
+
         // #197 opt-in dual-quaternion skinning (default off = LBS reference).
         uniforms.useDualQuaternionSkinning = config.dualQuaternionSkinning ? 1.0 : 0.0
 
@@ -2561,7 +2592,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // non-face opaque main draws switch to `.lessEqual` + no-write so early-Z
         // rejects occluded fragments instead of re-writing depth.
         var depthPrepassRan = false
-        if config.enableDepthPrepass {
+        if config.enableDepthPrepass && !materializationUsesDiscard {
             depthPrepassRan = renderDepthPrepass(
                 encoder: encoder,
                 itemsToRender: itemsToRender,

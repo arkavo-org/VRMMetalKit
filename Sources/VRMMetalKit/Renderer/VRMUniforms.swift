@@ -59,7 +59,18 @@ struct Uniforms {
     var additiveDirectionalRimPower: Float = 5                    // 4 bytes, offset 424
     /// 0 = third-person (default), 1 = first-person. Controls per-vertex head-bone culling.
     var cameraMode: UInt32 = 0                                    // 4 bytes, offset 428
-    // Total: 432 bytes (27 x 16-byte blocks)
+
+    // Materialization (avatar spawn effect) — VMK#materialize.
+    /// x = progress (0…1; >= 1 disables), y = style (VRMMaterializationStyle
+    /// rawValue; 0 = off), z = world-space min Y, w = world-space max Y of the
+    /// body, used to normalise the vertical sweep.
+    var materializeParams = SIMD4<Float>(1.0, 0.0, 0.0, 1.0)      // 16 bytes, offset 432
+    /// xyz = accent colour for edge glow / shell / glyphs, w = per-avatar seed.
+    var materializeColor_packed = SIMD4<Float>(0.0, 1.0, 1.0, 0.0) // 16 bytes, offset 448
+    /// xyz = world-space focus point for radial styles (chrome / hex / frost),
+    /// w = reserved.
+    var materializeOrigin_packed = SIMD4<Float>(0.0, 0.85, 0.0, 0.0) // 16 bytes, offset 464
+    // Total: 480 bytes (30 x 16-byte blocks)
 
     // Computed properties for easy access
     var lightDirection: SIMD3<Float> {
