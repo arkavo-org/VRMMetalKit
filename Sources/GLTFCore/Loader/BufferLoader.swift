@@ -208,8 +208,10 @@ public class BufferLoader: @unchecked Sendable {
                 var packed = [Float](repeating: 0, count: accessor.count * components)
                 packed.withUnsafeMutableBytes { dst in
                     data.withUnsafeBytes { src in
-                        memcpy(dst.baseAddress!, src.baseAddress! + combinedOffset,
-                               accessor.count * components * MemoryLayout<Float>.size)
+                        dst.baseAddress!.copyMemory(
+                            from: src.baseAddress! + combinedOffset,
+                            byteCount: accessor.count * components * MemoryLayout<Float>.size
+                        )
                     }
                 }
                 result = packed
@@ -292,8 +294,10 @@ public class BufferLoader: @unchecked Sendable {
                 var packed = [UInt32](repeating: 0, count: accessor.count * components)
                 packed.withUnsafeMutableBytes { dst in
                     data.withUnsafeBytes { src in
-                        memcpy(dst.baseAddress!, src.baseAddress! + combinedOffset,
-                               accessor.count * components * MemoryLayout<UInt32>.size)
+                        dst.baseAddress!.copyMemory(
+                            from: src.baseAddress! + combinedOffset,
+                            byteCount: accessor.count * components * MemoryLayout<UInt32>.size
+                        )
                     }
                 }
                 result = packed
