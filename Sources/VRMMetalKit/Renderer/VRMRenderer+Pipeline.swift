@@ -36,7 +36,11 @@ extension VRMRenderer {
     /// expected, because the cache returned a `.bgra8Unorm` pipeline for a
     /// `.rgba8Unorm_srgb` render target).
     func pipelineKey(_ name: String) -> String {
-        return "\(name)|fmt=\(config.colorPixelFormat.rawValue)|samples=\(config.sampleCount)"
+        // enableMaterialization changes the compiled fragment (function
+        // constant 14) — without it in the key, a flag-on pipeline compiled
+        // by one renderer would be served from the shared cache to a flag-off
+        // renderer and vice versa.
+        return "\(name)|fmt=\(config.colorPixelFormat.rawValue)|samples=\(config.sampleCount)|mat=\(config.enableMaterialization ? 1 : 0)"
     }
 
     /// Enables the process-wide pipeline binary archive when
@@ -107,6 +111,15 @@ extension VRMRenderer {
                 }
             }
         }
+    }
+
+    /// The dynamic-fallback function-constant key, with renderer-config
+    /// options (materialization support) folded in so fallback pipelines
+    /// specialize consistently with the per-material path.
+    func fallbackConstantKey() -> MToonFunctionConstantKey {
+        var key = MToonFunctionConstantKey.fallback
+        key.enableMaterialization = config.enableMaterialization
+        return key
     }
 
     func setupTripleBuffering() {
@@ -261,7 +274,7 @@ extension VRMRenderer {
             vrmLog("[SHADER DEBUG] Looking for fragment function: mtoon_fragment_v2")
             let fragmentFunction = try? library.makeFunction(
                 name: "mtoon_fragment_v2",
-                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
             )
             vrmLog("[SHADER DEBUG] Fragment function found: \(fragmentFunction != nil)")
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
@@ -364,9 +377,14 @@ extension VRMRenderer {
             // build it with the fallback key to preserve the dynamic uniform path.
             let outlineVertexFunction = try? library.makeFunction(
                 name: "mtoon_outline_vertex",
-                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
             )
-            let outlineFragmentFunction = library.makeFunction(name: "mtoon_outline_fragment")
+            // The outline fragment references fc_materializationEnabled via
+            // mat_resolve, so it must also be built specialized.
+            let outlineFragmentFunction = try? library.makeFunction(
+                name: "mtoon_outline_fragment",
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
+            )
             if let outlineVertexFunc = outlineVertexFunction,
                let outlineFragmentFunc = outlineFragmentFunction {
                 let outlineDescriptor = MTLRenderPipelineDescriptor()
@@ -469,7 +487,7 @@ extension VRMRenderer {
             // read feature flags from the uniform buffer.
             let fragmentFunction = try? library.makeFunction(
                 name: "mtoon_fragment_v2",
-                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
             )
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
             guard let fragmentFunc = fragmentFunction else {
@@ -556,9 +574,12 @@ extension VRMRenderer {
             // reading feature flags from the uniform buffer.
             let skinnedOutlineVertexFunction = try? library.makeFunction(
                 name: "skinned_mtoon_outline_vertex",
-                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
             )
-            let skinnedOutlineFragmentFunction = library.makeFunction(name: "mtoon_outline_fragment")
+            let skinnedOutlineFragmentFunction = try? library.makeFunction(
+                name: "mtoon_outline_fragment",
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
+            )
             if let skinnedOutlineVertexFunc = skinnedOutlineVertexFunction,
                let skinnedOutlineFragmentFunc = skinnedOutlineFragmentFunction {
                 let skinnedOutlineDescriptor = MTLRenderPipelineDescriptor()

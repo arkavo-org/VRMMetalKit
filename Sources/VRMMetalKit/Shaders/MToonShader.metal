@@ -67,6 +67,10 @@ struct Uniforms {
  float additiveDirectionalRimEnabled;  // 0 = off (legacy), >0.5 = enable additive directional rim
  float additiveDirectionalRimPower;    // Fresnel exponent for the additive rim (typical 4..12)
  uint cameraMode;             // 0 = third-person, 1 = first-person
+ // Materialization spawn effect (VMK#materialize)
+ float4 materializeParams;    // x = progress (>=1 off), y = style, z = min Y, w = max Y (world)
+ float4 materializeColor;     // xyz = accent color, w = per-avatar seed
+ float4 materializeOrigin;    // xyz = world focus point (radial styles), w = reserved
 };
 
 // Use packed_float3 to match Swift's Float component layout (no 16-byte alignment)
@@ -212,6 +216,14 @@ constant bool fc_hasParametricRim [[function_constant(12)]];
 // of specialized pipelines (issue #361). The fallback path always uses 3.
 constant uint fc_lightCount [[function_constant(13)]];
 
+// Materialization spawn effect (VMK#materialize): when false, the whole
+// mat_resolve block dead-strips from the specialized fragment. Defaults to
+// true when the constant is not provided so externally-built pipelines keep
+// the pre-specialization behavior.
+constant bool fc_materializationEnabled [[function_constant(14)]];
+constant bool fc_hasMaterialization = is_function_constant_defined(fc_materializationEnabled)
+    ? fc_materializationEnabled : true;
+
 static inline uint mtoonEffectiveLightCount() {
     return fc_useMaterialFlags ? 3u : max(1u, min(fc_lightCount, 3u));
 }
@@ -273,7 +285,9 @@ static inline bool needsViewNormal(constant MToonMaterial& material, constant Un
 }
 
 static inline bool needsViewDirection(constant MToonMaterial& material, constant Uniforms& uniforms) {
- return hasParametricRim(material) || uniforms.debugUVs == 10;
+ // Spawn styles that fresnel against V; dummy interpolator is (0,0,1).
+ return hasParametricRim(material) || uniforms.debugUVs == 10
+     || (uniforms.materializeParams.y > 0.5 && uniforms.materializeParams.x < 1.0);
 }
 
 // Inverted-hull extrusion used by the dedicated outline vertex and by
@@ -624,6 +638,303 @@ static inline void accumulateMToonDirectLight(
     lightingAcc += shadowStep * weight * mtoon_float3(safeLightColor);
 }
 
+// MARK: - Materialization spawn effect (VMK#materialize)
+//
+// Field m vs progress t. `killed` (not discard_fragment here) so the
+// fragment can return before shading. Emissive band where t − m < ε;
+// ghost shell where m − t < δ.
+
+// Cheap hashes for materialization noise. Deterministic per (position, seed)
+// so patterns are stable across the frames of one spawn.
+static inline float mat_hash21(float2 p) {
+    p = fract(p * float2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+static inline float mat_hash31(float3 p) {
+    // Hoskins hash13: intermediates stay small enough that fract() keeps
+    // fractional bits (a large-product hash degenerates to 0 in float).
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+
+// 2D Worley/Voronoi: F1 (distance to nearest feature), F2 (second nearest),
+// and the winning cell id. Distances are in cell units (cell size 1).
+static void mat_worley(float2 p, float seed,
+                       thread float& F1, thread float& F2, thread float2& cellId) {
+    float2 ip = floor(p);
+    F1 = 1e9; F2 = 1e9; cellId = ip;
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            float2 c = ip + float2(dx, dy);
+            float2 fp = c + float2(mat_hash21(c + seed), mat_hash21(c + seed + 17.0));
+            float d = distance(p, fp);
+            if (d < F1) { F2 = F1; F1 = d; cellId = c; }
+            else        { F2 = min(F2, d); }
+        }
+    }
+}
+
+// Pointy-top hex tiling (iq). Returns the cell id; borderDist is positive
+// inside the hex, 0 at the border, in the same units as p.
+static float2 mat_hexCell(float2 p, thread float& borderDist) {
+    const float2 s = float2(1.0, 1.7320508);
+    float4 hC = floor(float4(p, p - float2(0.5, 1.0)) / s.xyxy) + 0.5;
+    float4 h = float4(p - hC.xy * s, p - (hC.zw + 0.5) * s);
+    bool a = dot(h.xy, h.xy) < dot(h.zw, h.zw);
+    float2 off = a ? h.xy : h.zw;
+    float2 id  = a ? hC.xy : hC.zw + 0.5;
+    float2 q = abs(off);
+    borderDist = 0.5 - max(dot(q, normalize(s)), q.x);
+    return id;
+}
+
+// Dominant-axis planar projection of a world position — a one-sample stand-in
+// for triplanar mapping, good enough for effect fields (hex/worley cells).
+static float2 mat_dominantPlane(float3 wp, float3 wn) {
+    float3 an = abs(wn);
+    if (an.y >= an.x && an.y >= an.z) { return wp.xz; }
+    if (an.x >= an.z)                 { return wp.zy; }
+    return wp.xy;
+}
+
+// Per-fragment materialization state, resolved before shading so discard
+// styles skip the whole lighting path for not-yet-materialized pixels.
+struct MatState {
+    bool active;         // effect running this frame
+    bool killed;         // caller must discard_fragment and return
+    bool shell;          // render as unlit accent shell (ghost preview)
+    float3 shellColor;   // color for the shell early-out
+    float edge;          // 0..1 additive mask near the materialization front
+    float3 edgeColor;    // band tint (accent by default; white-hot for flashes)
+    float2 uvShift;      // horizontal slice tearing / signal jitter
+    float brightness;    // scanline/flicker multiplier
+    float overlayMix;    // 0..1 blend of overlayColor over the lit result
+    float3 overlayColor; // chrome mirror / frost ice replacement surface
+};
+
+// World-space V from the view matrix — independent of the vertex interpolator,
+// which is dummy (0,0,1) unless needsViewDirection is true.
+static inline float3 mat_viewDir(constant Uniforms& uniforms, float3 worldPos) {
+    float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
+                                     uniforms.viewMatrix[1].xyz,
+                                     uniforms.viewMatrix[2].xyz);
+    float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
+    return normalize(cameraPos - worldPos);
+}
+
+// Computes discard + state for all styles. `progress` doubles as the time
+// base: it advances linearly over the spawn (the renderer does not tick
+// `material.time`), so pulses are expressed in progress-space.
+static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOutlineInstance) {
+    MatState st;
+    st.active = false;
+    st.killed = false;
+    st.shell = false;
+    st.shellColor = float3(0.0);
+    st.edge = 0.0;
+    st.edgeColor = float3(0.0);
+    st.uvShift = float2(0.0);
+    st.brightness = 1.0;
+    st.overlayMix = 0.0;
+    st.overlayColor = float3(0.0);
+    // Compile-time gate: pipelines specialized without materialization
+    // dead-strip everything below (and, through constant propagation, the
+    // shell/composite consumers in the fragment).
+    if (!fc_hasMaterialization) { return st; }
+
+    float4 mp = uniforms.materializeParams;
+    int style = int(mp.y + 0.5);
+    if (style == 0 || mp.x >= 1.0) { return st; }
+    st.active = true;
+
+    float t = clamp(mp.x, 0.0, 1.0);
+    float heightSpan = max(mp.w - mp.z, 1e-4);
+    float hNorm = saturate((in.worldPosition.y - mp.z) / heightSpan);
+    float seed = uniforms.materializeColor.w;
+    float3 accent = uniforms.materializeColor.xyz;
+    float3 origin = uniforms.materializeOrigin.xyz;
+    st.edgeColor = accent;
+
+    if (style == 1) {
+        float n = mat_hash21(floor(in.worldPosition.xz * 90.0) + floor(in.worldPosition.yy * 140.0) + seed);
+        float m = hNorm * 0.7 + n * 0.3;
+        float front = t * 1.15;
+        if (m > front) { st.killed = true; return st; }
+        st.edge = 1.0 - saturate((front - m) / 0.08);
+    } else if (style == 2) {
+        float front = t * 1.1;
+        if (hNorm > front) {
+            if (isOutlineInstance) { st.killed = true; return st; }
+            float3 N = normalize(in.worldNormal);
+            float3 V = mat_viewDir(uniforms, in.worldPosition);
+            float fresnel = pow(saturate(1.0 - abs(dot(N, V))), 1.6);
+            if (fresnel < 0.18) { st.killed = true; return st; }
+            float pulse = 0.75 + 0.25 * sin(t * 55.0 + hNorm * 20.0);
+            st.shell = true;
+            st.shellColor = accent * fresnel * pulse * 1.6;
+            return st;
+        }
+        st.edge = 1.0 - saturate((front - hNorm) / 0.05);
+    } else if (style == 3) {
+        float col = floor(in.position.x / 6.0);
+        float r = mat_hash21(float2(col, seed));
+        float front = saturate(t * 1.35 - r * 0.35);
+        if (hNorm > front) {
+            if (isOutlineInstance) { st.killed = true; return st; }
+            float streak = mat_hash21(float2(col, floor(in.position.y / 6.0 - t * 260.0)));
+            if (streak < 0.92) { st.killed = true; return st; }
+            float glyphFlicker = 0.6 + 0.4 * mat_hash21(float2(col, floor(t * 160.0)));
+            st.shell = true;
+            st.shellColor = accent * glyphFlicker;
+            return st;
+        }
+        st.edge = 1.0 - saturate((front - hNorm) / 0.10);
+    } else if (style == 4) {
+        // Glitch never discards — tearing/scanlines decay as t → 1.
+        float instability = 1.0 - t;
+        float band = floor(hNorm * 28.0);
+        float rb = mat_hash21(float2(band, floor(t * 110.0) + seed));
+        if (rb > 1.0 - 0.35 * instability) {
+            st.uvShift.x = (rb - 0.5) * 0.12 * instability;
+        }
+        float scan = 0.85 + 0.15 * sin(in.position.y * 1.9 + t * 200.0);
+        float flick = mix(1.0, 0.55 + 0.45 * mat_hash21(float2(floor(t * 130.0), seed)), instability);
+        st.brightness = mix(1.0, scan * flick, instability);
+        st.edge = 0.35 * instability;
+    } else if (style == 5) {
+        float3 cell = floor(in.worldPosition * 18.0);
+        float m = mat_hash31(cell + seed) * 0.9 + hNorm * 0.1;
+        float front = t * 1.08;
+        if (m > front) { st.killed = true; return st; }
+        float flash = 1.0 - saturate((front - m) / 0.05);
+        st.edge = flash;
+        st.edgeColor = mix(accent, float3(1.6), flash * flash);
+    } else if (style == 6) {
+        float3 wp = in.worldPosition * 24.0;
+        float3 g = abs(fract(wp) - 0.5);
+        float3 fw = max(fwidth(wp), 0.0001);
+        float3 lineD = g / fw;
+        float wire = 1.0 - saturate(min(min(lineD.x, lineD.y), lineD.z) - 1.0);
+        float distToWire = min(min(g.x, g.y), g.z);
+        float flood = saturate((t - 0.4) / 0.4) * 0.5;
+        if (t < 0.4 || distToWire > flood) {
+            if (wire < 0.5) { st.killed = true; return st; }
+            if (isOutlineInstance) { st.killed = true; return st; }
+            st.shell = true;
+            st.shellColor = accent * (1.2 + 0.5 * sin(t * 40.0 + hNorm * 12.0));
+            return st;
+        }
+        float lineFade = 1.0 - saturate((t - 0.8) / 0.2);
+        st.edge = max(wire * lineFade,
+                      1.0 - saturate((flood - distToWire) / 0.06));
+    } else if (style == 7) {
+        float maxR = heightSpan * 1.3;
+        float m = distance(in.worldPosition, origin) / maxR;
+        float front = t * 1.05;
+        if (m > front) { st.killed = true; return st; }
+        float bead = 1.0 - saturate((front - m) / 0.04);
+        float mirrorness = saturate(1.0 - (front - m) / 0.45);
+        float3 N = normalize(in.worldNormal);
+        float3 V = mat_viewDir(uniforms, in.worldPosition);
+        float3 R = reflect(-V, N);
+        float fres = pow(1.0 - saturate(abs(dot(N, V))), 3.0);
+        float3 chromeCol = mix(float3(0.18, 0.19, 0.22),
+                               float3(0.90, 0.95, 1.05),
+                               saturate(R.y * 0.8 + 0.55));
+        chromeCol += fres * 0.5;
+        st.overlayColor = chromeCol * accent;
+        st.overlayMix = mirrorness;
+        st.edge = bead;
+        st.edgeColor = float3(1.5);
+    } else if (style == 8) {
+        float slab = floor(hNorm * 14.0);
+        float m = mat_hash21(float2(slab, seed));
+        float front = t * 1.1;
+        if (m > front) { st.killed = true; return st; }
+        float flash = 1.0 - saturate((front - m) / 0.07);
+        st.edge = flash;
+        st.edgeColor = mix(accent, float3(1.5), flash);
+    } else if (style == 9) {
+        float2 p = mat_dominantPlane(in.worldPosition, in.worldNormal) * 14.0;
+        float borderDist;
+        float2 cellId = mat_hexCell(p, borderDist);
+        float maxR = heightSpan * 1.3;
+        float m = distance(in.worldPosition, origin) / maxR
+                + mat_hash21(cellId + seed) * 0.15;
+        float front = t * 1.15;
+        if (m > front) { st.killed = true; return st; }
+        float landing = 1.0 - saturate((front - m) / 0.12);
+        float lattice = 1.0 - saturate(borderDist / 0.12);
+        float cool = saturate((front - m) / 0.5);
+        st.edge = max(landing * 0.8, lattice * (1.0 - cool * 0.85));
+    } else if (style == 10) {
+        float2 pix = floor(in.position.xy / 2.0);
+        float frame = floor(t * 40.0);
+        float n = mat_hash21(pix + float2(frame * 13.7, seed));
+        float gate = smoothstep(0.0, 0.85, t);
+        if (n > gate + 0.02) { st.killed = true; return st; }
+        st.uvShift.x = (mat_hash21(float2(floor(in.position.y / 3.0), frame)) - 0.5)
+                     * 0.05 * (1.0 - t);
+        float bar = fract(hNorm - t * 2.5);
+        float hum = smoothstep(0.95, 1.0, bar) * (1.0 - t);
+        st.edge = hum * 0.8 + 0.15 * (1.0 - t);
+        st.brightness = mix(0.75 + 0.25 * mat_hash21(float2(frame, seed)), 1.0, t);
+    } else if (style == 11) {
+        float bestD = 1e9;
+        for (int i = 0; i < 4; i++) {
+            float3 sp = origin
+                + (float3(mat_hash21(float2(i, seed)),
+                          mat_hash21(float2(i + 7, seed)),
+                          mat_hash21(float2(i + 13, seed))) - 0.5)
+                * float3(heightSpan * 0.35, heightSpan, heightSpan * 0.25);
+            bestD = min(bestD, distance(in.worldPosition, sp));
+        }
+        float2 p = mat_dominantPlane(in.worldPosition, in.worldNormal) * 16.0;
+        float F1, F2; float2 cellId;
+        mat_worley(p, seed, F1, F2, cellId);
+        float facet = mat_hash21(cellId + seed + 31.0);
+        float m = bestD / (heightSpan * 0.9) + (facet - 0.5) * 0.12;
+        float front = t * 1.15;
+        if (m > front) { st.killed = true; return st; }
+        float frontBand = 1.0 - saturate((front - m) / 0.08);
+        float sparkle = step(0.92, mat_hash21(cellId + floor(t * 30.0))) * frontBand;
+        float clarity = saturate((front - m) / 0.5);
+        float3 N = normalize(in.worldNormal);
+        float3 V = mat_viewDir(uniforms, in.worldPosition);
+        float fres = pow(1.0 - saturate(abs(dot(N, V))), 2.0);
+        st.overlayColor = accent * 0.9 + fres * 0.8 + (F2 - F1) * 0.15;
+        st.overlayMix = (1.0 - clarity) * 0.85;
+        st.edge = frontBand * 0.7 + sparkle;
+        st.edgeColor = mix(accent, float3(1.4), sparkle);
+    } else if (style == 12) {
+        float2 p = mat_dominantPlane(in.worldPosition, in.worldNormal) * 6.0;
+        float F1, F2; float2 cellId;
+        mat_worley(p, seed, F1, F2, cellId);
+        float fillOrder = mat_hash21(cellId + seed);
+        float fillPhase = saturate((t - 0.55) / 0.45);
+        if (fillOrder >= fillPhase * 1.05) {
+            float starPhase = smoothstep(0.0, 0.30, t);
+            float edgePhase = smoothstep(0.30, 0.60, t);
+            float star = 1.0 - saturate(F1 / 0.10);
+            float edgeLine = 1.0 - saturate((F2 - F1) / 0.05);
+            float lum = star * star * starPhase * 2.0 + edgeLine * edgePhase * 0.9;
+            if (lum < 0.05) { st.killed = true; return st; }
+            if (isOutlineInstance) { st.killed = true; return st; }
+            st.shell = true;
+            st.shellColor = accent * lum * (0.8 + 0.4 * sin(t * 30.0 + fillOrder * 20.0));
+            return st;
+        }
+        float landing = 1.0 - saturate((fillPhase * 1.05 - fillOrder) / 0.1);
+        float edgeLine = 1.0 - saturate((F2 - F1) / 0.05);
+        st.edge = landing * 0.7 + edgeLine * 0.5 * (1.0 - fillPhase);
+    }
+    return st;
+}
+
+
 // Fragment shader with complete MToon 1.0 shading
 // VERSION 2: Fixed white textures
 fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
@@ -645,6 +956,34 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
                         texture2d<half> uvAnimationMaskTexture [[texture(7)]],
                         texture2d<half> occlusionTexture [[texture(8)]],
                         sampler textureSampler [[sampler(0)]]) {
+
+ // Materialization runs first so not-yet-materialized pixels (including the
+ // merged-outline hull) discard before any shading work; the tron/rain
+ // "shell" regions return an unlit accent early. discard_fragment does not
+ // return — `killed` is the control-flow signal.
+ MatState mat = mat_resolve(uniforms, in, in.instanceId == 1u);
+ if (mat.killed) { discard_fragment(); return float4(0.0); }
+ if (mat.shell) {
+     bool shellHasBaseColor = fc_useMaterialFlags ? (material.hasBaseColorTexture > 0) : fc_hasBaseColorTexture;
+     uint shellAlphaMode = fc_useMaterialFlags ? material.alphaMode : fc_alphaMode;
+     float2 shellUV = in.texCoord;
+     if (material.uvOffsetX != 0.0 || material.uvOffsetY != 0.0 || material.uvScale != 1.0) {
+         shellUV = shellUV * material.uvScale + float2(material.uvOffsetX, material.uvOffsetY);
+     }
+     shellUV += mat.uvShift;
+     float shellAlpha = float(material.baseColorFactor.w);
+     if (shellHasBaseColor) {
+         shellAlpha *= float(baseColorTexture.sample(textureSampler, shellUV).a);
+     }
+     if (shellAlphaMode == 0) {
+         return float4(mat.shellColor, 1.0);
+     }
+     if (shellAlphaMode == 1) {
+         if (shellAlpha < material.alphaCutoff) { discard_fragment(); return float4(0.0); }
+         return float4(mat.shellColor, 1.0);
+     }
+     return float4(mat.shellColor, shellAlpha);
+ }
 
  if (in.instanceId == 1u) {
      if (isFrontFace) discard_fragment();
@@ -692,6 +1031,9 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
         material.uvAnimationRotationSpeedFactor != 0.0) {
  uv = in.animatedTexCoord;
  }
+
+ // Glitch materialization: horizontal slice tearing on all texture reads.
+ uv += mat.uvShift;
 
  // Sample base color
  mtoon_float4 baseColor = mtoon_float4(material.baseColorFactor);
@@ -996,6 +1338,16 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  return float4(float(in.joints[0]) / 255.0, in.weights[0], 0.0, 1.0);
  #endif
 
+ // Materialization composite: overlay surface (chrome mirror / frost ice),
+ // scanline/flicker attenuation, then the additive band at the front.
+ if (mat.active) {
+     float3 outColor = float3(litColor);
+     outColor = mix(outColor, mat.overlayColor, saturate(mat.overlayMix));
+     outColor *= mat.brightness;
+     outColor += mat.edgeColor * mat.edge * 1.8;
+     return float4(saturate(outColor), float(baseColor.a));
+ }
+
  // Use the alpha from baseColor which has been corrected for OPAQUE mode
  return float4(float3(litColor), float(baseColor.a));
  #endif
@@ -1092,6 +1444,11 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 fragment float4 mtoon_outline_fragment([[maybe_unused]] VertexOut in [[stage_in]],
                                 constant MToonMaterial& material [[buffer(8)]],
                                 constant Uniforms& uniforms [[buffer(1)]]) {
+ // Materialization: outlines dissolve with the body — treat the dedicated
+ // outline pass like the merged-outline hull (discard-only, no shell/edge).
+ MatState mat = mat_resolve(uniforms, in, true);
+ if (mat.killed || mat.shell) { discard_fragment(); return float4(0.0); }
+
  float3 outlineColor = float3(material.outlineColorR, material.outlineColorG, material.outlineColorB);
 
  // Apply outline lighting mix

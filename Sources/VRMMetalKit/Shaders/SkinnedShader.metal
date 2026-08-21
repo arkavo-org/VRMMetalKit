@@ -121,6 +121,10 @@ struct Uniforms {
  float additiveDirectionalRimEnabled;
  float additiveDirectionalRimPower;
  uint cameraMode;
+ // Materialization spawn effect (VMK#materialize)
+ float4 materializeParams;    // x = progress (>=1 off), y = style, z = min Y, w = max Y (world)
+ float4 materializeColor;     // xyz = accent color, w = per-avatar seed
+ float4 materializeOrigin;    // xyz = world focus point (radial styles), w = reserved
 };
 
 // Use packed floats to match Swift struct layout (192 bytes total)
@@ -248,7 +252,8 @@ static inline bool needsViewNormal(constant MToonMaterial& material, constant Un
 }
 
 static inline bool needsViewDirection(constant MToonMaterial& material, constant Uniforms& uniforms) {
- return hasParametricRim(material) || uniforms.debugUVs == 10;
+ return hasParametricRim(material) || uniforms.debugUVs == 10
+     || (uniforms.materializeParams.y > 0.5 && uniforms.materializeParams.x < 1.0);
 }
 
 static inline void applyMToonOutlineExtrusion(

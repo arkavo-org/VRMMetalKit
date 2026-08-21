@@ -446,6 +446,12 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
     /// Selects `mtoon_fragment_debug` instead of the production fragment.
     public var debugVisualization: Bool
 
+    /// When `false` (the default), the materialization spawn-effect block
+    /// (VMK#materialize) is dead-stripped from the specialized fragment —
+    /// zero register/instruction cost for pipelines that never spawn-animate.
+    /// Renderers with `RendererConfig.enableMaterialization` compile it in.
+    public var enableMaterialization: Bool
+
     public init(
         useMaterialFlags: Bool = false,
         hasBaseColorTexture: Bool = false,
@@ -460,7 +466,8 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         hasParametricRim: Bool = false,
         alphaMode: UInt8 = 0,
         lightCount: UInt8 = MToonLightSpecialization.maxLights,
-        debugVisualization: Bool = false
+        debugVisualization: Bool = false,
+        enableMaterialization: Bool = false
     ) {
         self.useMaterialFlags = useMaterialFlags
         self.hasBaseColorTexture = hasBaseColorTexture
@@ -476,6 +483,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.alphaMode = alphaMode
         self.lightCount = lightCount
         self.debugVisualization = debugVisualization
+        self.enableMaterialization = enableMaterialization
     }
 
     /// The dynamic fallback key that preserves pre-specialization behavior.
@@ -498,6 +506,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.alphaMode = UInt8(material.alphaMode)
         self.lightCount = MToonLightSpecialization.maxLights
         self.debugVisualization = false
+        self.enableMaterialization = false
     }
 
     /// Builds the Metal function-constant payload for this key.
@@ -546,6 +555,9 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         var lightCount = UInt32(max(1, min(self.lightCount, MToonLightSpecialization.maxLights)))
         values.setConstantValue(&lightCount, type: .uint, index: 13)
 
+        var enableMaterialization = self.enableMaterialization
+        values.setConstantValue(&enableMaterialization, type: .bool, index: 14)
+
         return values
     }
 
@@ -555,7 +567,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
     /// shared cache uses for identity, so a field dropped here lets two
     /// distinct variants collide on one compiled pipeline.
     ///
-    /// Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4][lights:2][debug:1]
+    /// Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4][lights:2][debug:1][mat:1]
     func sharedCacheKeyBits(isSkinned: Bool) -> UInt32 {
         var bits: UInt32 = isSkinned ? 1 : 0
         bits = (bits << 1) | (useMaterialFlags ? 1 : 0)
@@ -578,6 +590,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         let clampedLightCount = UInt32(max(1, min(lightCount, MToonLightSpecialization.maxLights)))
         bits = (bits << 2) | (clampedLightCount & 0x3)
         bits = (bits << 1) | (debugVisualization ? 1 : 0)
+        bits = (bits << 1) | (enableMaterialization ? 1 : 0)
         return bits
     }
 
