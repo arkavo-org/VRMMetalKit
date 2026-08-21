@@ -871,7 +871,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// Progress-driven spawn effect (VMK#materialize). `nil` (default) or a
     /// value with `progress >= 1` renders identically to no effect. The caller
     /// owns the ramp: set the struct each frame with an advancing `progress`.
-    public var materialization: VRMMaterialization?
+    ///
+    /// Requires `RendererConfig.enableMaterialization` — pipelines compiled
+    /// without it dead-strip the effect, so setting this has no visual result.
+    public var materialization: VRMMaterialization? {
+        didSet {
+            if materialization != nil, !config.enableMaterialization,
+               !warnedMaterializationDisabled {
+                warnedMaterializationDisabled = true
+                vrmLog("[VRMRenderer] materialization set but RendererConfig.enableMaterialization is false — the effect is compiled out of this renderer's pipelines")
+            }
+        }
+    }
+    private var warnedMaterializationDisabled = false
 
     /// True while an active materialization uses fragment discard. The opaque
     /// depth prepass is skipped in this state: prepass depth for pixels the
@@ -4960,6 +4972,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         mtoonUniforms: MToonMaterialUniforms
     ) -> MTLRenderPipelineState? {
         var features = MToonFunctionConstantKey(material: mtoonUniforms)
+        features.enableMaterialization = config.enableMaterialization
         features.lightCount = MToonLightSpecialization.count(
             keyIntensity: uniforms.lightColor_packed.w,
             fillIntensity: uniforms.light1Color_packed.w,

@@ -154,6 +154,14 @@ public struct RendererConfig {
     /// flags from the uniform buffer at runtime.
     public var enableMToonFunctionConstants: Bool = true
 
+    /// Opt-in materialization spawn effects (VMK#materialize). When `false`
+    /// (default), the materialization block is dead-stripped from every
+    /// compiled MToon fragment via function constant — zero register or
+    /// instruction cost — and ``VRMRenderer/materialization`` has no visual
+    /// effect. Set `true` on renderers that spawn-animate (e.g. a staging
+    /// surface); set like ``enableDepthPrepass``, after init.
+    public var enableMaterialization: Bool = false
+
     /// Creates a renderer configuration. Defaults match the production baseline.
     public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false, dualQuaternionSkinning: Bool = false, enableMToonFunctionConstants: Bool = true) {
         self.strict = strict

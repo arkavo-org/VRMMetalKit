@@ -216,6 +216,14 @@ constant bool fc_hasParametricRim [[function_constant(12)]];
 // of specialized pipelines (issue #361). The fallback path always uses 3.
 constant uint fc_lightCount [[function_constant(13)]];
 
+// Materialization spawn effect (VMK#materialize): when false, the whole
+// mat_resolve block dead-strips from the specialized fragment. Defaults to
+// true when the constant is not provided so externally-built pipelines keep
+// the pre-specialization behavior.
+constant bool fc_materializationEnabled [[function_constant(14)]];
+constant bool fc_hasMaterialization = is_function_constant_defined(fc_materializationEnabled)
+    ? fc_materializationEnabled : true;
+
 static inline uint mtoonEffectiveLightCount() {
     return fc_useMaterialFlags ? 3u : max(1u, min(fc_lightCount, 3u));
 }
@@ -720,6 +728,10 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
     st.brightness = 1.0;
     st.overlayMix = 0.0;
     st.overlayColor = float3(0.0);
+    // Compile-time gate: pipelines specialized without materialization
+    // dead-strip everything below (and, through constant propagation, the
+    // shell/composite consumers in the fragment).
+    if (!fc_hasMaterialization) { return st; }
 
     float4 mp = uniforms.materializeParams;
     int style = int(mp.y + 0.5);

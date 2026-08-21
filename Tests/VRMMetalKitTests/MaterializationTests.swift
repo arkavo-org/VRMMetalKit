@@ -57,7 +57,8 @@ final class MaterializationTests: XCTestCase {
     // MARK: - Render smoke tests (shader compiles, effect changes pixels)
 
     private func render(materialization: VRMMaterialization?,
-                        device: MTLDevice) async throws -> [UInt8] {
+                        device: MTLDevice,
+                        enableMaterialization: Bool = true) async throws -> [UInt8] {
         let path = getTestVRM10ModelPath()
         try requireFixture(path, hint: testVRM10Filename)
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -65,6 +66,7 @@ final class MaterializationTests: XCTestCase {
         config.sampleCount = 1
         config.strict = .off
         config.colorPixelFormat = .rgba8Unorm_srgb
+        config.enableMaterialization = enableMaterialization
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
         let fov: Float = 45.0 * .pi / 180.0
@@ -121,6 +123,23 @@ final class MaterializationTests: XCTestCase {
             XCTAssertLessThan(fraction, 0.001,
                 "style \(style) at progress 1.0 should render identically to no effect")
         }
+    }
+
+    /// A renderer whose config does NOT opt into materialization dead-strips
+    /// the effect via function constant: even an active mid-progress
+    /// materialization must render pixel-identical to a plain frame.
+    func testDisabledConfigStripsEffectEntirely() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal not available")
+        }
+        let reference = try await render(materialization: nil, device: device,
+                                         enableMaterialization: false)
+        let mat = VRMMaterialization(progress: 0.45, style: .dissolve,
+                                     heightRange: 0.0...1.7, seed: 3)
+        let frame = try await render(materialization: mat, device: device,
+                                     enableMaterialization: false)
+        XCTAssertLessThan(differingFraction(reference, frame), 0.001,
+            "materialization must be compiled out when the config flag is off")
     }
 
     /// Near-zero progress on a discard style should leave the frame almost
