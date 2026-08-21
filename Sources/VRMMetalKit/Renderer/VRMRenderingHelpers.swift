@@ -18,7 +18,12 @@ import simd
 
 // MARK: - Projection Matrix Helpers
 
-func makePerspective(fovyRadians: Float, aspectRatio: Float, nearZ: Float, farZ: Float) -> float4x4 {
+/// Builds a Metal-convention forward-Z perspective matrix (clip z spans
+/// [0, w], so ndc z runs near → 0, far → 1 after the divide). Feed the
+/// result to ``reverseZProjection(_:)`` for the reverse-Z counterpart —
+/// applying that flip to any other projection convention (e.g. an OpenGL
+/// matrix whose clip z spans [-w, w]) produces an out-of-range depth.
+public func makePerspective(fovyRadians: Float, aspectRatio: Float, nearZ: Float, farZ: Float) -> float4x4 {
     let ys = 1 / tanf(fovyRadians * 0.5)
     let xs = ys / aspectRatio
     let zs = farZ / (nearZ - farZ)
@@ -29,6 +34,21 @@ func makePerspective(fovyRadians: Float, aspectRatio: Float, nearZ: Float, farZ:
         SIMD4<Float>(0, 0, zs, -1),
         SIMD4<Float>(0, 0, nearZ * zs, 0)
     )
+}
+
+/// Composes a standard projection into its Metal-convention reverse-Z
+/// counterpart (near → 1, far → 0) by remapping clip z → w − z. x, y, and
+/// w are untouched, so rasterization is bit-identical and only the depth
+/// mapping mirrors. Projection-agnostic: works on any matrix whose clip z
+/// spans [0, w].
+public func reverseZProjection(_ projection: float4x4) -> float4x4 {
+    let flip = float4x4(
+        SIMD4<Float>(1, 0, 0, 0),
+        SIMD4<Float>(0, 1, 0, 0),
+        SIMD4<Float>(0, 0, -1, 0),
+        SIMD4<Float>(0, 0, 1, 1)
+    )
+    return flip * projection
 }
 
 // MARK: - Dummy View for Headless Rendering

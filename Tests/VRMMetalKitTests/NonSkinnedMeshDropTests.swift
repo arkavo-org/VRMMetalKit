@@ -222,12 +222,7 @@ final class NonSkinnedMeshDropTests: XCTestCase {
                 verts[i].weights = SIMD4<Float>(1, 0, 0, 0)
             }
         }
-        primitive.vertexCount = 3
-        primitive.vertexBuffer = device.makeBuffer(
-            bytes: verts,
-            length: 3 * MemoryLayout<VRMVertex>.stride,
-            options: .storageModeShared
-        )
+        primitive.uploadVertices(verts, device: device)
         primitive.localMin = SIMD3<Float>(-0.1, -0.1, 0) + vertexOffset
         primitive.localMax = SIMD3<Float>( 0.1,  0.1, 0) + vertexOffset
 

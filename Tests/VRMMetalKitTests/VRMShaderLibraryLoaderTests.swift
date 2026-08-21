@@ -26,6 +26,10 @@ final class VRMShaderLibraryLoaderTests: XCTestCase {
         let expected = "VRMMetalKitShaders_iOSSimulator"
         #elseif os(iOS)
         let expected = "VRMMetalKitShaders_iOS"
+        #elseif os(visionOS) && targetEnvironment(simulator)
+        let expected = "VRMMetalKitShaders_visionOSSimulator"
+        #elseif os(visionOS)
+        let expected = "VRMMetalKitShaders_visionOS"
         #else
         let expected = "VRMMetalKitShaders"
         #endif

@@ -255,7 +255,189 @@ final class SpringBoneComputeSystemTests: XCTestCase {
         }
     }
 
+    // MARK: - Zero-Joint Spring Indexing Tests
+
+    /// A zero-joint spring (VRMExtensionParser lets one through when every
+    /// joint dict in the source data is missing "node") must not shift the
+    /// per-chain collider-mask/sleep indexing of the springs that follow it.
+    /// `chainColliderMasks`/`sleepGate` are built per NON-EMPTY spring, so the
+    /// third spring here (chain index 1) must map to its OWN collider mask,
+    /// not the empty middle spring's.
+    func testZeroJointSpringDoesNotShiftChainColliderMaskIndexing() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createModelWithZeroJointSpring()
+        try system.populateSpringBoneData(model: model)
+
+        XCTAssertEqual(system.testChainColliderMasks.count, 2,
+                       "only the two non-empty springs form chains; the empty spring must not add a mask entry")
+        XCTAssertEqual(system.testChainAsleep.count, 2,
+                       "only the two non-empty springs form chains")
+
+        // Chain 1 (the third spring, "AfterEmpty") authored group bit 7 (0x80).
+        // The empty spring authored group bit 15 (0x8000) — it must NOT leak
+        // into chain 1's mask.
+        let chain1Mask = system.testChainColliderMasks[1]
+        XCTAssertNotEqual(chain1Mask & (1 << 7), 0,
+                          "chain 1 must carry its own spring's authored collider-group bit")
+        XCTAssertEqual(chain1Mask & (1 << 15), 0,
+                       "chain 1 must not carry the empty spring's collider-group bit")
+    }
+
+    /// Same misalignment, exercised through `writeBonesToNodes`'s sleep-skip
+    /// check: `sleepGate.asleep[chainIndex]` must be indexed by non-empty
+    /// spring position, matching `testChainAsleep`, not raw `springs` position.
+    func testZeroJointSpringDoesNotShiftSleepIndexing() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createModelWithZeroJointSpring()
+        try system.populateSpringBoneData(model: model)
+
+        // Two chains total (the two non-empty springs). writeBonesToNodes must
+        // not crash indexing sleepGate.asleep by raw spring position (3 springs).
+        system.writeBonesToNodes(model: model)
+        XCTAssertEqual(system.testChainAsleep.count, 2)
+    }
+
+    // MARK: - Sleep Flag GPU Upload Tests
+
+    /// `warmupPhysics` dispatches `executeXPBDStep` directly, bypassing
+    /// `update()` entirely, so it never touches `chainSleepBuffer`. If a prior
+    /// async-path frame left stale sleep=1 flags in the GPU buffer, warmup's
+    /// kernels early-out on those chains while the CPU believes everything is
+    /// awake. The buffer must be zeroed before warmup dispatches any kernel.
+    func testWarmupPhysicsPropagatesSleepFlagsToGPUBuffer() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createModelForSleepFlagTest()
+        try system.populateSpringBoneData(model: model)
+
+        system.testCorruptChainSleepBuffer()
+        XCTAssertEqual(system.testChainSleepBufferFlags, [1, 1],
+                       "sanity: buffer corrupted before warmup runs")
+
+        system.warmupPhysics(model: model, steps: 1)
+
+        XCTAssertEqual(system.testChainSleepBufferFlags, [0, 0],
+                       "warmupPhysics must zero stale GPU sleep flags before dispatching kernels")
+    }
+
+    /// The offline/synchronous `update()` path (commandBuffer == nil) calls
+    /// `sleepGate.wakeAll()` without `uploadChainSleepFlags()`. If the CPU
+    /// sleep gate wakes but the GPU buffer keeps stale sleep=1 flags, the
+    /// spring kernels early-out for chains the CPU believes are awake.
+    func testSynchronousUpdatePropagatesSleepFlagsToGPUBuffer() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        let model = try createModelForSleepFlagTest()
+        try system.populateSpringBoneData(model: model)
+
+        system.testCorruptChainSleepBuffer()
+        XCTAssertEqual(system.testChainSleepBufferFlags, [1, 1],
+                       "sanity: buffer corrupted before the synchronous update runs")
+
+        // commandBuffer: nil selects the offline/synchronous path.
+        system.update(model: model, deltaTime: 1.0 / 60.0)
+
+        XCTAssertEqual(system.testChainSleepBufferFlags, [0, 0],
+                       "synchronous update() must zero stale GPU sleep flags before dispatching kernels")
+    }
+
     // MARK: - Helper Methods
+
+    /// Builds a two-chain model with `springBoneGlobalParams` populated (both
+    /// `warmupPhysics` and the synchronous `update()` path require it).
+    private func createModelForSleepFlagTest() throws -> VRMModel {
+        let builder = VRMBuilder()
+        let model = try builder.setSkeleton(.defaultHumanoid).build()
+        model.device = device
+
+        var joint0 = VRMSpringJoint(node: 0)
+        joint0.hitRadius = 0.05
+        joint0.stiffness = 1.0
+        joint0.gravityPower = 0.5
+        joint0.gravityDir = [0, -1, 0]
+        joint0.dragForce = 0.4
+        var spring0 = VRMSpring(name: "Chain0")
+        spring0.joints = [joint0]
+
+        var joint1 = VRMSpringJoint(node: 1)
+        joint1.hitRadius = 0.05
+        joint1.stiffness = 1.0
+        joint1.gravityPower = 0.5
+        joint1.gravityDir = [0, -1, 0]
+        joint1.dragForce = 0.4
+        var spring1 = VRMSpring(name: "Chain1")
+        spring1.joints = [joint1]
+
+        var springBone = VRMSpringBone()
+        springBone.springs = [spring0, spring1]
+        model.springBone = springBone
+
+        let buffers = SpringBoneBuffers(device: device)
+        buffers.allocateBuffers(numBones: 2, numSpheres: 0, numCapsules: 0)
+        model.springBoneBuffers = buffers
+
+        model.springBoneGlobalParams = SpringBoneGlobalParams(
+            gravity: SIMD3<Float>(0, 0, 0),
+            dtSub: Float(1.0 / 120.0),
+            windAmplitude: 0.0,
+            windFrequency: 0.0,
+            windPhase: 0.0,
+            windDirection: SIMD3<Float>(1, 0, 0),
+            substeps: 1,
+            numBones: 2,
+            numSpheres: 0,
+            numCapsules: 0,
+            numPlanes: 0,
+            settlingFrames: 0
+        )
+
+        return model
+    }
+
+    /// Builds a model with three springs in source order [non-empty, EMPTY,
+    /// non-empty], matching what `VRMExtensionParser` produces for a spring
+    /// whose joints all lack a "node" field.
+    private func createModelWithZeroJointSpring() throws -> VRMModel {
+        let builder = VRMBuilder()
+        let model = try builder.setSkeleton(.defaultHumanoid).build()
+        model.device = device
+
+        var joint0 = VRMSpringJoint(node: 0)
+        joint0.hitRadius = 0.05
+        joint0.stiffness = 1.0
+        joint0.gravityPower = 0.5
+        joint0.gravityDir = [0, -1, 0]
+        joint0.dragForce = 0.4
+
+        var firstSpring = VRMSpring(name: "BeforeEmpty")
+        firstSpring.joints = [joint0]
+        firstSpring.colliderGroups = [3]
+
+        var emptySpring = VRMSpring(name: "EmptySpring")
+        emptySpring.joints = []
+        emptySpring.colliderGroups = [15]
+
+        var joint1 = VRMSpringJoint(node: 1)
+        joint1.hitRadius = 0.05
+        joint1.stiffness = 1.0
+        joint1.gravityPower = 0.5
+        joint1.gravityDir = [0, -1, 0]
+        joint1.dragForce = 0.4
+
+        var thirdSpring = VRMSpring(name: "AfterEmpty")
+        thirdSpring.joints = [joint1]
+        thirdSpring.colliderGroups = [7]
+
+        var springBone = VRMSpringBone()
+        springBone.springs = [firstSpring, emptySpring, thirdSpring]
+        model.springBone = springBone
+
+        let buffers = SpringBoneBuffers(device: device)
+        buffers.allocateBuffers(numBones: 2, numSpheres: 0, numCapsules: 0)
+        model.springBoneBuffers = buffers
+
+        return model
+    }
+
+    // MARK: - Original Helper Methods
 
     /// Create a minimal VRM model with a single spring bone for testing
     private func createMinimalSpringBoneModel() throws -> VRMModel {

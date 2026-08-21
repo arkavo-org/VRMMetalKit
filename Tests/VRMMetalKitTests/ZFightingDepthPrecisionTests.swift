@@ -280,29 +280,36 @@ final class ZFightingDepthPrecisionTests: XCTestCase {
 
     // MARK: - Projection Matrix Verification
 
-    func testRendererUsesReverseZ() {
-        // Verify the renderer's projection matrix uses reverse-Z
+    func testPerspectiveMapsFarPlaneToOne() {
+        // makeProjectionMatrix's perspective branch uses Metal's standard
+        // [0, 1] clip-space convention: near -> 0, far -> 1. That mapping is
+        // why zs = far / (near - far) comes out negative here — the negative
+        // sign is a consequence of the standard convention, not evidence of
+        // reverse-Z. (Reverse-Z is a separate, opt-in feature: see
+        // `VRMRenderer.useReverseZ` / `reverseZProjection`.)
         renderer.useOrthographic = false
         let matrix = renderer.makeProjectionMatrix(aspectRatio: 1.0)
 
-        // For reverse-Z perspective: zs = far / (near - far)
-        // This should be negative for reverse-Z
         let zScale = matrix.columns.2.z
 
         XCTAssertLessThan(zScale, 0,
-            "Perspective projection should use reverse-Z (negative Z scale)")
+            "Perspective zs = far / (near - far) should be negative under Metal's standard [0, 1] clip-space convention")
     }
 
-    func testOrthographicUsesReverseZ() {
-        // Verify orthographic projection also uses reverse-Z
+    func testOrthographicZScaleIsNegative() {
+        // zScale = -1 / (far - near) is negative by construction for the
+        // orthographic branch. The sign alone does not indicate reverse-Z —
+        // it does not distinguish a standard [0, 1] clip-space mapping from
+        // a reverse one. This test only pins the coefficient's sign, which
+        // issue #408 (the orthographic branch disagrees with the perspective
+        // branch about the sign of eye-space z) does not change.
         renderer.useOrthographic = true
         let matrix = renderer.makeProjectionMatrix(aspectRatio: 1.0)
 
-        // For reverse-Z orthographic: Z scale should be negative
         let zScale = matrix.columns.2.z
 
         XCTAssertLessThan(zScale, 0,
-            "Orthographic projection should use reverse-Z (negative Z scale)")
+            "Orthographic zScale = -1 / (far - near) should be negative")
     }
 }
 

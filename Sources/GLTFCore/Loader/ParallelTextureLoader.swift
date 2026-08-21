@@ -54,6 +54,11 @@ public final class ParallelTextureLoader: @unchecked Sendable {
 
     private let maxConcurrentLoads: Int
 
+    /// When `true`, sRGB color textures are re-encoded as BC7 at load
+    /// (``VRMLoadingOptimization/aggressiveTextureCompression``). Linear
+    /// maps are never compressed.
+    public var compressColorTextures: Bool = false
+
     /// Creates a loader bound to a Metal device, parsed document, and buffer loader.
     ///
     /// - Parameters:
@@ -170,7 +175,14 @@ public final class ParallelTextureLoader: @unchecked Sendable {
             return nil
         }
         
-        return try await createTexture(from: imageData, textureIndex: index, sRGB: sRGB)
+        // Whether to build a mip chain is the sampler's call; whether alpha
+        // weights it is the material's.
+        let sampler = gltfTexture.sampler.flatMap { document.samplers?[safe: $0] }
+        let mipmapped = TextureLoader.samplerRequestsMipmaps(sampler)
+        let alphaIsCoverage = TextureLoader.textureAlphaIsCoverage(index, in: document)
+
+        return try await createTexture(from: imageData, textureIndex: index, sRGB: sRGB,
+                                       mipmapped: mipmapped, alphaIsCoverage: alphaIsCoverage)
     }
     
     private func loadImageFromBufferView(_ bufferViewIndex: Int, textureIndex: Int) throws -> Data {
@@ -255,7 +267,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         return try Data(contentsOf: fileURL)
     }
     
-    private func createTexture(from imageData: Data, textureIndex: Int, sRGB: Bool) async throws -> MTLTexture? {
+    private func createTexture(from imageData: Data, textureIndex: Int, sRGB: Bool, mipmapped: Bool, alphaIsCoverage: Bool) async throws -> MTLTexture? {
         guard let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil),
               let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
             throw GLTFError.invalidImageData(
@@ -265,53 +277,20 @@ public final class ParallelTextureLoader: @unchecked Sendable {
             )
         }
         
-        let width = cgImage.width
-        let height = cgImage.height
         let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
-        
-        let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
+
+        // Decodes straight-alpha (the pipelines blend with straight-alpha
+        // factors); the sampler decides whether a mip chain is built and the
+        // material's use of the texture whether alpha weights it. See
+        // TextureUploader / TextureMipUploader.
+        return TextureUploader.makeTexture(
+            cgImage: cgImage,
             pixelFormat: pixelFormat,
-            width: width,
-            height: height,
-            mipmapped: false
+            device: device,
+            mipmapped: mipmapped,
+            alphaIsCoverage: alphaIsCoverage,
+            blockCompress: compressColorTextures && sRGB
         )
-        textureDescriptor.usage = [.shaderRead]
-        textureDescriptor.storageMode = .shared
-        
-        guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
-            return nil
-        }
-        
-        let bytesPerRow = width * 4
-        guard let bitmapData = malloc(height * bytesPerRow) else {
-            return nil
-        }
-        defer { free(bitmapData) }
-        
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(
-            data: bitmapData,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            return nil
-        }
-        
-        context.setBlendMode(.copy)
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        
-        texture.replace(
-            region: MTLRegionMake2D(0, 0, width, height),
-            mipmapLevel: 0,
-            withBytes: bitmapData,
-            bytesPerRow: bytesPerRow
-        )
-        
-        return texture
     }
 }
 

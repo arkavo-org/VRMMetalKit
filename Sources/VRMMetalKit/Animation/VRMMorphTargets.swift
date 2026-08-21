@@ -371,11 +371,6 @@ public class VRMMorphTargetSystem {
             return false
         }
 
-        guard let activeSetBuffer = activeSetBuffer else {
-            vrmLog("⚠️ [VRMMorphTargetSystem] Active set buffer not initialized, skipping morph compute")
-            return false
-        }
-
         // Verify delta buffer size matches expected T*V (in DEBUG only)
         #if DEBUG
         let expectedDeltaSize = morphCount * vertexCount * MemoryLayout<SIMD3<Float>>.stride
@@ -397,7 +392,12 @@ public class VRMMorphTargetSystem {
         // Set buffers
         encoder.setBuffer(basePositions, offset: 0, index: 0)
         encoder.setBuffer(deltaPositions, offset: 0, index: 1)
-        encoder.setBuffer(activeSetBuffer, offset: 0, index: 2)
+        // Per-dispatch setBytes so batched primitives do not share one
+        // overwriteable active-set buffer (the GPU sees each draw's set).
+        let activeBytes = MemoryLayout<ActiveMorph>.stride * activeSet.count
+        activeSet.withUnsafeBufferPointer { pointer in
+            encoder.setBytes(pointer.baseAddress!, length: activeBytes, index: 2)
+        }
 
         // Set constants
         var vCount = UInt32(vertexCount)
@@ -560,10 +560,20 @@ public class VRMExpressionController: @unchecked Sendable {
     private var meshMorphWeights: [Int: [Float]] = [:]  // meshIndex -> morph weights for that mesh
     private var cachedMeshMorphWeights: [Int: [Float]] = [:]
     private var weightsDirty = true
+    /// Reused per-mesh read buffers for ``weightsForMesh(_:morphCount:)``.
+    private var weightReadScratch: [Int: [Float]] = [:]
+    private var cachedMorphFingerprint: UInt64 = 0
+    private var morphFingerprintValid = false
 
     // Material color override tracking for expression-driven material colors
     private var materialColorOverrides: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
     private var baseMaterialColors: [Int: [VRMMaterialColorType: SIMD4<Float>]] = [:]
+
+    /// True when at least one material color override is currently active.
+    /// Renderers can use this to short-circuit per-draw override lookups.
+    public var hasMaterialColorOverrides: Bool {
+        return !materialColorOverrides.isEmpty
+    }
 
     /// Creates an empty controller with all preset weights at `0`. Attach a morph-target system via ``setMorphTargetSystem(_:)`` before rendering.
     public init() {
@@ -731,12 +741,9 @@ public class VRMExpressionController: @unchecked Sendable {
     // MARK: - Private Methods
 
     private func updateMorphTargets() {
-        // Rebuild per-mesh weights dynamically from active expressions
-        meshMorphWeights.removeAll()
-        cachedMeshMorphWeights.removeAll()
-
-        // Clear material color overrides for fresh blending
-        materialColorOverrides.removeAll()
+        // Rebuild per-mesh weights dynamically from active expressions.
+        // Keep dictionary storage: this runs every dirty expression frame.
+        resetMorphWeightScratch()
 
         // Build effective weight map after isBinary quantization and group overrides.
         // Collect all registered expressions (preset + custom) for override scanning.
@@ -786,7 +793,20 @@ public class VRMExpressionController: @unchecked Sendable {
         guard weightsDirty else { return }
         updateMorphTargets()
         weightsDirty = false
+        morphFingerprintValid = false
     }
+
+    /// Drops cached per-mesh / material-color scratch. Production rebuilds
+    /// go through this so dictionary storage can be retained across frames.
+    func resetMorphWeightScratch() {
+        meshMorphWeights.removeAll(keepingCapacity: true)
+        cachedMeshMorphWeights.removeAll(keepingCapacity: true)
+        materialColorOverrides.removeAll(keepingCapacity: true)
+    }
+
+    var meshMorphWeightStorageCapacity: Int { meshMorphWeights.capacity }
+    var cachedMeshMorphWeightStorageCapacity: Int { cachedMeshMorphWeights.capacity }
+    var meshMorphWeightCount: Int { meshMorphWeights.count }
 
     /// Applies isBinary quantization and expression-group override semantics in-place.
     ///
@@ -946,12 +966,44 @@ public class VRMExpressionController: @unchecked Sendable {
         guard morphCount > 0 else { return [] }
         ensureWeightsUpdated()
         let source = cachedMeshMorphWeights[meshIndex] ?? []
-        var result = [Float](repeating: 0.0, count: morphCount)
+        // Take the scratch out so CoW does not copy on fill.
+        var scratch = weightReadScratch.removeValue(forKey: meshIndex) ?? []
+        if scratch.count != morphCount {
+            scratch = [Float](repeating: 0, count: morphCount)
+        } else {
+            for i in scratch.indices { scratch[i] = 0 }
+        }
         let copyCount = min(source.count, morphCount)
         for i in 0..<copyCount {
-            result[i] = source[i]
+            scratch[i] = source[i]
         }
-        return result
+        weightReadScratch[meshIndex] = scratch
+        return scratch
+    }
+
+    /// Stable hash of the rebuilt per-mesh morph weights. Unchanged across
+    /// frames that did not mutate expression weights — the renderer uses
+    /// this to skip the morph compute pass (#150).
+    public func morphWeightsFingerprint() -> UInt64 {
+        ensureWeightsUpdated()
+        if !morphFingerprintValid {
+            var hasher = Hasher()
+            for key in cachedMeshMorphWeights.keys.sorted() {
+                hasher.combine(key)
+                if let values = cachedMeshMorphWeights[key] {
+                    for value in values {
+                        hasher.combine(value)
+                    }
+                }
+            }
+            cachedMorphFingerprint = UInt64(bitPattern: Int64(hasher.finalize()))
+            morphFingerprintValid = true
+        }
+        return cachedMorphFingerprint
+    }
+
+    func weightReadScratchCapacity(for meshIndex: Int) -> Int {
+        weightReadScratch[meshIndex]?.capacity ?? 0
     }
 
 

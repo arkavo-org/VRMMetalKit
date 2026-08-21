@@ -70,7 +70,9 @@ let package = Package(
             resources: [
                 .copy("Resources/VRMMetalKitShaders.metallib"),
                 .copy("Resources/VRMMetalKitShaders_iOS.metallib"),
-                .copy("Resources/VRMMetalKitShaders_iOSSimulator.metallib")
+                .copy("Resources/VRMMetalKitShaders_iOSSimulator.metallib"),
+                .copy("Resources/VRMMetalKitShaders_visionOS.metallib"),
+                .copy("Resources/VRMMetalKitShaders_visionOSSimulator.metallib")
             ],
             swiftSettings: [
                 .enableUpcomingFeature("InferIsolatedConformances"),

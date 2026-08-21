@@ -36,7 +36,11 @@ extension VRMRenderer {
     /// expected, because the cache returned a `.bgra8Unorm` pipeline for a
     /// `.rgba8Unorm_srgb` render target).
     func pipelineKey(_ name: String) -> String {
-        return "\(name)|fmt=\(config.colorPixelFormat.rawValue)|samples=\(config.sampleCount)"
+        // enableMaterialization changes the compiled fragment (function
+        // constant 14) — without it in the key, a flag-on pipeline compiled
+        // by one renderer would be served from the shared cache to a flag-off
+        // renderer and vice versa.
+        return "\(name)|fmt=\(config.colorPixelFormat.rawValue)|samples=\(config.sampleCount)|mat=\(config.enableMaterialization ? 1 : 0)"
     }
 
     /// Enables the process-wide pipeline binary archive when
@@ -109,6 +113,15 @@ extension VRMRenderer {
         }
     }
 
+    /// The dynamic-fallback function-constant key, with renderer-config
+    /// options (materialization support) folded in so fallback pipelines
+    /// specialize consistently with the per-material path.
+    func fallbackConstantKey() -> MToonFunctionConstantKey {
+        var key = MToonFunctionConstantKey.fallback
+        key.enableMaterialization = config.enableMaterialization
+        return key
+    }
+
     func setupTripleBuffering() {
         // Create triple-buffered uniform buffers with private storage for GPU efficiency
         let uniformSize = MemoryLayout<Uniforms>.size
@@ -125,10 +138,18 @@ extension VRMRenderer {
     }
 
     func setupCachedStates() {
+        // Depth compare direction: standard Z (compare .less, clear 1.0) by default;
+        // reverse-Z (compare .greater, clear 0.0) when `useReverseZ` is set — required
+        // for CompositorServices drawables on visionOS, whose projection matrices map
+        // far→0. The matching clear-depth value lives in the caller's render pass
+        // descriptor.
+        let lessish: MTLCompareFunction = useReverseZ ? .greater : .less
+        let lessEqualish: MTLCompareFunction = useReverseZ ? .greaterEqual : .lessEqual
+
         // Pre-create depth stencil states
         // Opaque/Mask state
         let opaqueDepthDescriptor = MTLDepthStencilDescriptor()
-        opaqueDepthDescriptor.depthCompareFunction = .less
+        opaqueDepthDescriptor.depthCompareFunction = lessish
         opaqueDepthDescriptor.isDepthWriteEnabled = true
         if let state = device.makeDepthStencilState(descriptor: opaqueDepthDescriptor) {
             depthStencilStates["opaque"] = state
@@ -137,7 +158,7 @@ extension VRMRenderer {
 
         // Blend state (no depth write)
         let blendDepthDescriptor = MTLDepthStencilDescriptor()
-        blendDepthDescriptor.depthCompareFunction = .lessEqual
+        blendDepthDescriptor.depthCompareFunction = lessEqualish
         blendDepthDescriptor.isDepthWriteEnabled = false
         if let state = device.makeDepthStencilState(descriptor: blendDepthDescriptor) {
             depthStencilStates["blend"] = state
@@ -153,7 +174,7 @@ extension VRMRenderer {
 
         // Face materials depth state - more permissive to avoid z-fighting
         let faceDepthDescriptor = MTLDepthStencilDescriptor()
-        faceDepthDescriptor.depthCompareFunction = .lessEqual  // More permissive than .less
+        faceDepthDescriptor.depthCompareFunction = lessEqualish  // More permissive than .less
         faceDepthDescriptor.isDepthWriteEnabled = true
         if let state = device.makeDepthStencilState(descriptor: faceDepthDescriptor) {
             depthStencilStates["face"] = state
@@ -162,7 +183,7 @@ extension VRMRenderer {
         // Face overlay depth state - for materials that render on top of face skin (mouth, eyebrows)
         // Uses lessEqual (wins at equal depth) but doesn't write depth to avoid Z-fighting
         let faceOverlayDescriptor = MTLDepthStencilDescriptor()
-        faceOverlayDescriptor.depthCompareFunction = .lessEqual
+        faceOverlayDescriptor.depthCompareFunction = lessEqualish
         faceOverlayDescriptor.isDepthWriteEnabled = false  // Don't write - prevents Z-fighting
         if let state = device.makeDepthStencilState(descriptor: faceOverlayDescriptor) {
             depthStencilStates["faceOverlay"] = state
@@ -170,7 +191,7 @@ extension VRMRenderer {
 
         // Depth prepass: write opaque depth ahead of the main pass (same as opaque).
         let prepassDescriptor = MTLDepthStencilDescriptor()
-        prepassDescriptor.depthCompareFunction = .less
+        prepassDescriptor.depthCompareFunction = lessish
         prepassDescriptor.isDepthWriteEnabled = true
         if let state = device.makeDepthStencilState(descriptor: prepassDescriptor) {
             depthStencilStates["prepass"] = state
@@ -181,11 +202,40 @@ extension VRMRenderer {
         // fragments). `.lessEqual` (not `.equal`) tolerates depth-bias / tiny
         // differences without dropping visible fragments.
         let opaqueEqualDescriptor = MTLDepthStencilDescriptor()
-        opaqueEqualDescriptor.depthCompareFunction = .lessEqual
+        opaqueEqualDescriptor.depthCompareFunction = lessEqualish
         opaqueEqualDescriptor.isDepthWriteEnabled = false
         if let state = device.makeDepthStencilState(descriptor: opaqueEqualDescriptor) {
             depthStencilStates["opaqueEqual"] = state
         }
+
+        #if DEBUG
+        // MTLDepthStencilState cannot be introspected after creation, so a
+        // wrong compare direction in ONE state above is invisible to any
+        // render-level test whose asset happens to cover that state's pixels
+        // another way. Record what each descriptor actually asked for;
+        // ReverseZPixelIdentityTests.testEveryDepthStateFlipsItsCompareDirection
+        // pins the full table in both directions.
+        depthCompareByKey = [
+            "opaque": opaqueDepthDescriptor.depthCompareFunction,
+            "mask": opaqueDepthDescriptor.depthCompareFunction,
+            "blend": blendDepthDescriptor.depthCompareFunction,
+            "always": alwaysDepthDescriptor.depthCompareFunction,
+            "face": faceDepthDescriptor.depthCompareFunction,
+            "faceOverlay": faceOverlayDescriptor.depthCompareFunction,
+            "prepass": prepassDescriptor.depthCompareFunction,
+            "opaqueEqual": opaqueEqualDescriptor.depthCompareFunction,
+        ]
+        depthWriteByKey = [
+            "opaque": opaqueDepthDescriptor.isDepthWriteEnabled,
+            "mask": opaqueDepthDescriptor.isDepthWriteEnabled,
+            "blend": blendDepthDescriptor.isDepthWriteEnabled,
+            "always": alwaysDepthDescriptor.isDepthWriteEnabled,
+            "face": faceDepthDescriptor.isDepthWriteEnabled,
+            "faceOverlay": faceOverlayDescriptor.isDepthWriteEnabled,
+            "prepass": prepassDescriptor.isDepthWriteEnabled,
+            "opaqueEqual": opaqueEqualDescriptor.isDepthWriteEnabled,
+        ]
+        #endif
 
         // Pre-create sampler states
         let samplerDescriptor = MTLSamplerDescriptor()
@@ -224,7 +274,7 @@ extension VRMRenderer {
             vrmLog("[SHADER DEBUG] Looking for fragment function: mtoon_fragment_v2")
             let fragmentFunction = try? library.makeFunction(
                 name: "mtoon_fragment_v2",
-                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
             )
             vrmLog("[SHADER DEBUG] Fragment function found: \(fragmentFunction != nil)")
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
@@ -236,37 +286,8 @@ extension VRMRenderer {
                 throw StrictModeError.missingFragmentFunction(name: "mtoon_fragment_v2")
             }
 
-            // Create vertex descriptor
             let vertexDescriptor = MTLVertexDescriptor()
-
-            // Use compiler-accurate offsets (fixes alignment padding issues)
-            let posOffset = MemoryLayout<VRMVertex>.offset(of: \.position)!
-            let normOffset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
-            let texOffset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
-            let colorOffset = MemoryLayout<VRMVertex>.offset(of: \.color)!
-            let stride = MemoryLayout<VRMVertex>.stride
-
-            // Position
-            vertexDescriptor.attributes[0].format = .float3
-            vertexDescriptor.attributes[0].offset = posOffset
-            vertexDescriptor.attributes[0].bufferIndex = 0
-
-            // Normal
-            vertexDescriptor.attributes[1].format = .float3
-            vertexDescriptor.attributes[1].offset = normOffset
-            vertexDescriptor.attributes[1].bufferIndex = 0
-
-            // TexCoord
-            vertexDescriptor.attributes[2].format = .float2
-            vertexDescriptor.attributes[2].offset = texOffset
-            vertexDescriptor.attributes[2].bufferIndex = 0
-
-            // Color
-            vertexDescriptor.attributes[3].format = .float4
-            vertexDescriptor.attributes[3].offset = colorOffset
-            vertexDescriptor.attributes[3].bufferIndex = 0
-
-            vertexDescriptor.layouts[0].stride = stride
+            VRMVertexStreams.applyMainPass(to: vertexDescriptor, skinned: false)
 
             // Create base pipeline descriptor
             let basePipelineDescriptor = MTLRenderPipelineDescriptor()
@@ -356,9 +377,14 @@ extension VRMRenderer {
             // build it with the fallback key to preserve the dynamic uniform path.
             let outlineVertexFunction = try? library.makeFunction(
                 name: "mtoon_outline_vertex",
-                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
             )
-            let outlineFragmentFunction = library.makeFunction(name: "mtoon_outline_fragment")
+            // The outline fragment references fc_materializationEnabled via
+            // mat_resolve, so it must also be built specialized.
+            let outlineFragmentFunction = try? library.makeFunction(
+                name: "mtoon_outline_fragment",
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
+            )
             if let outlineVertexFunc = outlineVertexFunction,
                let outlineFragmentFunc = outlineFragmentFunction {
                 let outlineDescriptor = MTLRenderPipelineDescriptor()
@@ -387,10 +413,7 @@ extension VRMRenderer {
             // Non-skinned depth-prepass pipeline: position-only, no fragment.
             if let depthVertexFunc = library.makeFunction(name: "mtoon_depth_vertex") {
                 let depthVD = MTLVertexDescriptor()
-                depthVD.attributes[0].format = .float3
-                depthVD.attributes[0].offset = MemoryLayout<VRMVertex>.offset(of: \.position)!
-                depthVD.attributes[0].bufferIndex = 0
-                depthVD.layouts[0].stride = MemoryLayout<VRMVertex>.stride
+                VRMVertexStreams.applyDepth(to: depthVD, skinned: false)
 
                 let depthDescriptor = MTLRenderPipelineDescriptor()
                 depthDescriptor.label = "mtoon_depth_prepass"
@@ -464,7 +487,7 @@ extension VRMRenderer {
             // read feature flags from the uniform buffer.
             let fragmentFunction = try? library.makeFunction(
                 name: "mtoon_fragment_v2",
-                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
             )
             try strictValidator?.validateFunction(fragmentFunction, name: "mtoon_fragment_v2", type: "fragment")
             guard let fragmentFunc = fragmentFunction else {
@@ -476,53 +499,11 @@ extension VRMRenderer {
             }
 
             let vertexDescriptor = MTLVertexDescriptor()
+            VRMVertexStreams.applyMainPass(to: vertexDescriptor, skinned: true)
 
-            // 🎯 CRITICAL FIX: Use compiler-accurate offsets instead of manual calculations
-            let posOffset = MemoryLayout<VRMVertex>.offset(of: \.position)!
-            let normOffset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
-            let texOffset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
-            let colorOffset = MemoryLayout<VRMVertex>.offset(of: \.color)!
-            let jointsOffset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
-            let weightsOffset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
-            let stride = MemoryLayout<VRMVertex>.stride
-
-            // 📐 DIAGNOSTIC: Log actual offsets for debugging wedge artifact
-            vrmLog("📐 [VERTEX LAYOUT] MToon Skinned Pipeline:")
-            vrmLog("   position: \(posOffset), normal: \(normOffset), texCoord: \(texOffset)")
-            vrmLog("   color: \(colorOffset), joints: \(jointsOffset), weights: \(weightsOffset)")
-            vrmLog("   stride: \(stride)")
-
-            // Position
-            vertexDescriptor.attributes[0].format = .float3
-            vertexDescriptor.attributes[0].offset = posOffset
-            vertexDescriptor.attributes[0].bufferIndex = 0
-
-            // Normal
-            vertexDescriptor.attributes[1].format = .float3
-            vertexDescriptor.attributes[1].offset = normOffset
-            vertexDescriptor.attributes[1].bufferIndex = 0
-
-            // TexCoord
-            vertexDescriptor.attributes[2].format = .float2
-            vertexDescriptor.attributes[2].offset = texOffset
-            vertexDescriptor.attributes[2].bufferIndex = 0
-
-            // Color
-            vertexDescriptor.attributes[3].format = .float4
-            vertexDescriptor.attributes[3].offset = colorOffset
-            vertexDescriptor.attributes[3].bufferIndex = 0
-
-            // Joints
-            vertexDescriptor.attributes[4].format = .uint4
-            vertexDescriptor.attributes[4].offset = jointsOffset
-            vertexDescriptor.attributes[4].bufferIndex = 0
-
-            // Weights
-            vertexDescriptor.attributes[5].format = .float4
-            vertexDescriptor.attributes[5].offset = weightsOffset
-            vertexDescriptor.attributes[5].bufferIndex = 0
-
-            vertexDescriptor.layouts[0].stride = stride
+            vrmLog("📐 [VERTEX LAYOUT] MToon Skinned Pipeline (split streams):")
+            vrmLog("   position stride: \(MemoryLayout<VRMPositionVertex>.stride)")
+            vrmLog("   attribute stride: \(MemoryLayout<VRMAttributeVertex>.stride)")
 
             // Create base skinned pipeline descriptor
             let basePipelineDescriptor = MTLRenderPipelineDescriptor()
@@ -593,9 +574,12 @@ extension VRMRenderer {
             // reading feature flags from the uniform buffer.
             let skinnedOutlineVertexFunction = try? library.makeFunction(
                 name: "skinned_mtoon_outline_vertex",
-                constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
             )
-            let skinnedOutlineFragmentFunction = library.makeFunction(name: "mtoon_outline_fragment")
+            let skinnedOutlineFragmentFunction = try? library.makeFunction(
+                name: "mtoon_outline_fragment",
+                constantValues: fallbackConstantKey().makeFunctionConstantValues()
+            )
             if let skinnedOutlineVertexFunc = skinnedOutlineVertexFunction,
                let skinnedOutlineFragmentFunc = skinnedOutlineFragmentFunction {
                 let skinnedOutlineDescriptor = MTLRenderPipelineDescriptor()
@@ -625,16 +609,7 @@ extension VRMRenderer {
             // (drops normal/uv/color), no fragment, depth attachment only.
             if let depthVertexFunc = library.makeFunction(name: "skinned_mtoon_depth_vertex") {
                 let depthVD = MTLVertexDescriptor()
-                depthVD.attributes[0].format = .float3
-                depthVD.attributes[0].offset = posOffset
-                depthVD.attributes[0].bufferIndex = 0
-                depthVD.attributes[4].format = .uint4
-                depthVD.attributes[4].offset = jointsOffset
-                depthVD.attributes[4].bufferIndex = 0
-                depthVD.attributes[5].format = .float4
-                depthVD.attributes[5].offset = weightsOffset
-                depthVD.attributes[5].bufferIndex = 0
-                depthVD.layouts[0].stride = stride
+                VRMVertexStreams.applyDepth(to: depthVD, skinned: true)
 
                 let depthDescriptor = MTLRenderPipelineDescriptor()
                 depthDescriptor.label = "mtoon_skinned_depth_prepass"
@@ -682,55 +657,29 @@ extension VRMRenderer {
         features: MToonFunctionConstantKey
     ) throws -> MTLRenderPipelineDescriptor {
         let vertexDescriptor = MTLVertexDescriptor()
-
-        // Position
-        vertexDescriptor.attributes[0].format = .float3
-        vertexDescriptor.attributes[0].offset = MemoryLayout<VRMVertex>.offset(of: \.position)!
-        vertexDescriptor.attributes[0].bufferIndex = 0
-
-        // Normal
-        vertexDescriptor.attributes[1].format = .float3
-        vertexDescriptor.attributes[1].offset = MemoryLayout<VRMVertex>.offset(of: \.normal)!
-        vertexDescriptor.attributes[1].bufferIndex = 0
-
-        // TexCoord
-        vertexDescriptor.attributes[2].format = .float2
-        vertexDescriptor.attributes[2].offset = MemoryLayout<VRMVertex>.offset(of: \.texCoord)!
-        vertexDescriptor.attributes[2].bufferIndex = 0
-
-        // Color
-        vertexDescriptor.attributes[3].format = .float4
-        vertexDescriptor.attributes[3].offset = MemoryLayout<VRMVertex>.offset(of: \.color)!
-        vertexDescriptor.attributes[3].bufferIndex = 0
-
-        if isSkinned {
-            // Joints
-            vertexDescriptor.attributes[4].format = .uint4
-            vertexDescriptor.attributes[4].offset = MemoryLayout<VRMVertex>.offset(of: \.joints)!
-            vertexDescriptor.attributes[4].bufferIndex = 0
-
-            // Weights
-            vertexDescriptor.attributes[5].format = .float4
-            vertexDescriptor.attributes[5].offset = MemoryLayout<VRMVertex>.offset(of: \.weights)!
-            vertexDescriptor.attributes[5].bufferIndex = 0
-        }
-
-        vertexDescriptor.layouts[0].stride = MemoryLayout<VRMVertex>.stride
+        VRMVertexStreams.applyMainPass(to: vertexDescriptor, skinned: isSkinned)
 
         let vertexFunctionName = isSkinned ? "skinned_mtoon_vertex" : "mtoon_vertex"
         guard let vertexFunction = library.makeFunction(name: vertexFunctionName) else {
             throw StrictModeError.missingVertexFunction(name: vertexFunctionName)
         }
 
-        guard let fragmentFunction = try? library.makeFunction(
-            name: "mtoon_fragment_v2",
-            constantValues: features.makeFunctionConstantValues()
-        ) else {
-            throw StrictModeError.missingFragmentFunction(name: "mtoon_fragment_v2")
+        let fragmentFunction: MTLFunction?
+        if features.debugVisualization {
+            fragmentFunction = library.makeFunction(name: "mtoon_fragment_debug")
+        } else {
+            fragmentFunction = try? library.makeFunction(
+                name: "mtoon_fragment_v2",
+                constantValues: features.makeFunctionConstantValues()
+            )
+        }
+        guard let fragmentFunction else {
+            throw StrictModeError.missingFragmentFunction(
+                name: features.debugVisualization ? "mtoon_fragment_debug" : "mtoon_fragment_v2")
         }
 
         let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.label = "mtoon_\(isSkinned ? "skinned" : "non_skinned")_fc_\(features.alphaMode)"
+        descriptor.label = "mtoon_\(isSkinned ? "skinned" : "non_skinned")_fc_\(features.alphaMode)_L\(features.lightCount)"
         descriptor.vertexFunction = vertexFunction
         descriptor.fragmentFunction = fragmentFunction
         descriptor.vertexDescriptor = vertexDescriptor
@@ -763,37 +712,83 @@ extension VRMRenderer {
         isSkinned: Bool,
         features: MToonFunctionConstantKey
     ) -> MTLRenderPipelineState? {
-        // Build a compact integer bitfield key instead of multiple string interpolations
-        // Bit layout: [skinned:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][alpha:4]
-        var bits: UInt32 = isSkinned ? 1 : 0
-        bits = (bits << 1) | (features.hasBaseColorTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasShadeMultiplyTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasShadingShiftTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasNormalTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasMatcapTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasRimMultiplyTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasEmissiveTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasOcclusionTexture ? 1 : 0)
-        bits = (bits << 1) | (features.hasUvAnimationMaskTexture ? 1 : 0)
-        bits = (bits << 4) | (UInt32(features.alphaMode) & 0xF)
-        let key = "mtfc_\(bits)_\(config.colorPixelFormat.rawValue)_\(config.sampleCount)"
+        // A cleared shared cache invalidates the memo: keeping the entries would
+        // retain states `clearCache()` was called to release, and would keep
+        // serving the old specialization after a shader reload.
+        let generation = VRMPipelineCache.shared.generation
+        if generation != specializedMToonPipelinesGeneration {
+            specializedMToonPipelines.removeAll(keepingCapacity: true)
+            specializedMToonPipelinesGeneration = generation
+        }
 
+        let memoKey = SpecializedMToonPipelineKey(
+            features: features,
+            isSkinned: isSkinned,
+            colorPixelFormat: config.colorPixelFormat,
+            sampleCount: config.sampleCount
+        )
+        if let memoized = specializedMToonPipelines[memoKey] {
+            return memoized
+        }
+
+        // The memo key carries every field of `features`; the string below is
+        // what the *shared* cache uses for identity, so it must fold in the
+        // same fields or two distinct memo entries collide on one compiled
+        // pipeline. See `MToonFunctionConstantKey.sharedCacheKey`.
+        let key = features.sharedCacheKey(
+            isSkinned: isSkinned,
+            colorPixelFormat: config.colorPixelFormat,
+            sampleCount: config.sampleCount
+        )
+
+        let descriptor: MTLRenderPipelineDescriptor
         do {
             let library = try VRMPipelineCache.shared.getLibrary(device: device)
-            let descriptor = try makeMToonSpecializedDescriptor(
+            descriptor = try makeMToonSpecializedDescriptor(
                 library: library,
                 isSkinned: isSkinned,
                 features: features
             )
-            return try VRMPipelineCache.shared.getPipelineState(
+        } catch {
+            // Resolving the library and its functions depends only on the
+            // bundled metallib and this key's constant payload, so the failure
+            // is deterministic: it will fail identically on every later draw.
+            // Cache the miss so the fallback pipeline is chosen without
+            // retrying a build that cannot start succeeding.
+            vrmLog("[VRMRenderer] Failed to build specialized MToon descriptor, falling back: \(error)")
+            specializedMToonPipelines[memoKey] = MTLRenderPipelineState?.none
+            return nil
+        }
+
+        do {
+            let state = try VRMPipelineCache.shared.getPipelineState(
                 device: device,
                 descriptor: descriptor,
                 key: key
             )
+            specializedMToonPipelines[memoKey] = state
+            return state
         } catch {
-            vrmLog("[VRMRenderer] Failed to create specialized MToon pipeline, falling back: \(error)")
+            // Pipeline compilation depends on live device state, so this can
+            // fail transiently (memory pressure, a recoverable driver error).
+            // Deliberately *not* negatively cached: a transient failure must
+            // not permanently pin this variant to the fallback pipeline for
+            // the renderer's lifetime. The retry costs a rebuilt descriptor
+            // per draw, which is the pre-memo behaviour and only applies while
+            // compilation keeps failing.
+            vrmLog("[VRMRenderer] Failed to compile specialized MToon pipeline, falling back: \(error)")
             return nil
         }
+    }
+
+    /// Identity of a specialized MToon PSO: every input that changes what
+    /// Metal compiles. `features` covers the function constants and alpha
+    /// mode, the rest cover the descriptor's render-target configuration.
+    struct SpecializedMToonPipelineKey: Hashable {
+        let features: MToonFunctionConstantKey
+        let isSkinned: Bool
+        let colorPixelFormat: MTLPixelFormat
+        let sampleCount: Int
     }
 
 

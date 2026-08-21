@@ -40,10 +40,12 @@ enum VRMShaderLibraryLoaderError: Error, LocalizedError {
 
 /// Resolves the correct bundled `.metallib` slice for the current build target and loads it.
 ///
-/// Three slices are shipped as package resources:
+/// Five slices are shipped as package resources:
 /// - `VRMMetalKitShaders.metallib` — macOS
 /// - `VRMMetalKitShaders_iOS.metallib` — iOS device
 /// - `VRMMetalKitShaders_iOSSimulator.metallib` — iOS Simulator
+/// - `VRMMetalKitShaders_visionOS.metallib` — visionOS device
+/// - `VRMMetalKitShaders_visionOSSimulator.metallib` — visionOS Simulator
 ///
 /// ``loadBundledLibrary(device:)`` picks the correct slice at compile time via `#if` and
 /// delegates the `Bundle.module` lookup and `MTLDevice.makeLibrary(URL:)` call.
@@ -54,8 +56,12 @@ enum VRMShaderLibraryLoader {
         return "VRMMetalKitShaders_iOSSimulator"
         #elseif os(iOS)
         return "VRMMetalKitShaders_iOS"
+        #elseif os(visionOS) && targetEnvironment(simulator)
+        return "VRMMetalKitShaders_visionOSSimulator"
+        #elseif os(visionOS)
+        return "VRMMetalKitShaders_visionOS"
         #else
-        // macOS, visionOS, tvOS, macCatalyst — all use the macOS (FP32) slice.
+        // macOS, tvOS, macCatalyst — all use the macOS slice.
         return "VRMMetalKitShaders"
         #endif
     }

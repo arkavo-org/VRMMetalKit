@@ -1,0 +1,110 @@
+name: Claude Code Review
+
+# NOTE ON VERIFYING CHANGES TO THIS FILE. `claude-code-action` refuses to run when this
+# workflow differs from the copy on the default branch (a security property: otherwise any
+# PR could rewrite the reviewer about to review it). Changes here CANNOT be tested on the
+# PR that makes them — the job reports success while skipping the action entirely. Confirm
+# on the next PR after merge, not this one.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # write is required for the action's buffered inline-comment mechanism — with
+      # read the review runs but every comment post is denied and the flush step
+      # ends with "No buffered inline comments".
+      pull-requests: write
+      issues: write # the heartbeat step posts/updates a status comment via the issues API
+      id-token: write
+      actions: read # let the review read CI results on the PR
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # `show_full_output` is deliberately NOT enabled here. It echoes the SDK stream —
+          # including untrusted PR-head file contents — into the run log, and THIS REPOSITORY
+          # IS PUBLIC, so that log is world-readable. The reference configuration this file is
+          # adapted from turns it on and is explicit that doing so is safe only because that
+          # repo is private. If a run needs that level of diagnosis here, read
+          # `claude-execution-output.json` from the run artifacts instead.
+          #
+          # Consolidate any inline FINDINGS into a single PR comment. NOTE: this only merges
+          # comments that exist — it never posts on a zero-finding review, so it is NOT a
+          # per-run heartbeat. The always-on "Post review heartbeat" step below provides that.
+          use_sticky_comment: true
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          # `--comment` IS NOT OPTIONAL AND IS NOT COSMETIC. Step 7 of the plugin's own
+          # command (`plugins/code-review/commands/code-review.md` in anthropics/claude-code)
+          # reads: "If `--comment` argument was NOT provided, stop here. Do not post any
+          # GitHub comments." Without it the review runs fully, prints to a log nobody
+          # watches, and exits green by design.
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
+          # `--allowedTools` IS REQUIRED, and the stock template's single-entry list is why
+          # the first run here did nothing: with only the inline-comment tool allowed, the
+          # reviewer had no Read, no Grep and no Bash, so it could not open the diff at all
+          # and gave up after 2 turns.
+          #
+          # In agent mode (any invocation that passes a `prompt`) this list also decides WHICH
+          # GitHub MCP servers get installed: the action prefix-matches entries (e.g.
+          # `mcp__github_inline_comment__`) to start each server, so an empty list installs no
+          # comment server and the tool the reviewer publishes with does not exist. Entries
+          # must ALSO be exact tool names — `*` is not a wildcard in the permission syntax.
+          #
+          # `Bash(swift:*)` is deliberately absent: the review never needs a build, and the
+          # checkout is untrusted PR head. `head`/`wc`/`sed`/`diff` are read-only in the
+          # shapes a review uses (windowing, sizing and comparing files); note `sed -i` is
+          # not, so this allowlist trusts the reviewer's intent rather than the tool's
+          # inability to write, bounded by the runner being ephemeral. That is NOT a sandbox
+          # claim.
+          claude_args: >-
+            --model claude-opus-5
+            --max-turns 60
+            --allowedTools "Read,Grep,Glob,Bash(gh:*),Bash(git:*),Bash(rg:*),Bash(find:*),Bash(cat:*),Bash(ls:*),Bash(head:*),Bash(wc:*),Bash(sed:*),Bash(diff:*),mcp__github_inline_comment__create_inline_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
+          additional_permissions: |
+            actions: read
+
+      # Guaranteed per-run signal. The code-review plugin only comments on findings, and
+      # use_sticky_comment merely consolidates those — so a clean review posts nothing and a
+      # green check is indistinguishable from a "ran but failed to post" run, which is exactly
+      # what the stock configuration produced on PR #413. This step ALWAYS posts/updates one
+      # sticky comment with the review job's outcome, so a clean pass is visible and a broken
+      # run is obvious.
+      - name: Post review heartbeat
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = '<!-- claude-review-heartbeat -->';
+            const outcome = '${{ steps.claude-review.outcome }}'; // success | failure | cancelled | skipped
+            const sha = (context.payload.pull_request?.head?.sha || context.sha).slice(0, 7);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const emoji = outcome === 'success' ? '✅' : outcome === 'cancelled' || outcome === 'skipped' ? '⚪' : '❌';
+            const body = [
+              marker,
+              `${emoji} **Claude Code Review** ran on \`${sha}\` — result: **${outcome}**.`,
+              '',
+              `Findings (if any) are posted as inline comments; none means the review found nothing to flag. [Run log](${runUrl}).`,
+            ].join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number });
+            const existing = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

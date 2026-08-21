@@ -22,15 +22,19 @@ extension VRMRenderer: MTKViewDelegate {
     ///
     /// Recomputes ``projectionMatrix`` for the new aspect ratio using a 60°
     /// vertical field of view and the renderer's default near/far planes
-    /// (0.1 / 100.0). You typically don't call this directly — `MTKView`
-    /// invokes it whenever the backing layer's drawable size changes.
+    /// (0.1 / 100.0), honoring ``useReverseZ``: installing the standard
+    /// far→1 mapping while the compare functions are `.greater` would
+    /// silently invert occlusion on every resize. You typically don't call
+    /// this directly — `MTKView` invokes it whenever the backing layer's
+    /// drawable size changes.
     ///
     /// - Parameters:
     ///   - view: The `MTKView` whose drawable size changed.
     ///   - size: The new drawable size in pixels.
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         let aspect = Float(size.width / size.height)
-        projectionMatrix = makePerspective(fovyRadians: .pi / 3, aspectRatio: aspect, nearZ: 0.1, farZ: 100.0)
+        let standard = makePerspective(fovyRadians: .pi / 3, aspectRatio: aspect, nearZ: 0.1, farZ: 100.0)
+        projectionMatrix = useReverseZ ? reverseZProjection(standard) : standard
     }
 
     /// `MTKViewDelegate` per-frame draw hook.

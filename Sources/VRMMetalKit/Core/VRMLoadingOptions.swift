@@ -148,7 +148,12 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     /// Suppresses non-error log output during loading.
     public static let skipVerboseLogging = VRMLoadingOptimization(rawValue: 1 << 0)
 
-    /// Enables aggressive texture compression; may slightly reduce visual quality.
+    /// Re-encodes sRGB color textures as BC7 at load time (issue #359).
+    ///
+    /// Trades load CPU for ~4× less GPU texture bandwidth. Linear maps
+    /// (normals, masks) stay RGBA8. Quality is pixel-near, not bit-identical:
+    /// solid colors stay within 1/255; typical albedo mean-absolute error is
+    /// ≤ 3/255 per channel. Devices that cannot sample BC keep RGBA8.
     public static let aggressiveTextureCompression = VRMLoadingOptimization(rawValue: 1 << 1)
 
     /// Skips secondary UV channels (`TEXCOORD_1` and above) when present.

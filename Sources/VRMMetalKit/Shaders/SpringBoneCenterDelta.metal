@@ -47,10 +47,13 @@ kernel void springBoneApplyCenterDelta(
     device float3* bonePosCurr [[buffer(1)]],
     constant CenterDeltaRecord* records [[buffer(13)]],
     constant uint& numRecords [[buffer(14)]],
+    constant uint* boneChainIndex [[buffer(16)]],
+    constant uint* chainSleep [[buffer(17)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= numRecords) return;
     CenterDeltaRecord r = records[id];
+    if (chainSleep[boneChainIndex[r.boneStart]] != 0) return;
     float4x4 d = r.delta;
     for (uint i = r.boneStart; i < r.boneStart + r.boneCount; i++) {
         float4 pc = float4(bonePosCurr[i], 1.0);

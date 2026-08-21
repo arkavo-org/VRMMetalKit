@@ -116,7 +116,7 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertEqual(matrix.columns.1.y, 2.0 / height, accuracy: 0.001, "Y scaling should be 2.0/height")
     }
 
-    /// Test orthographic projection depth mapping (Metal reverse-Z)
+    /// Test orthographic projection depth mapping coefficients
     func testOrthographicDepthMapping() {
         renderer.useOrthographic = true
         let matrix = renderer.makeProjectionMatrix(aspectRatio: 1.0)
@@ -125,9 +125,12 @@ final class VRMRendererTests: XCTestCase {
         let farZ: Float = 100.0
         let depth = farZ - nearZ
 
-        // Metal reverse-Z convention: maps nearZ -> 1.0, farZ -> 0.0 in clip space
+        // Pins the Z scale/offset coefficients only. What they MEAN — near -> 0,
+        // far -> 1, linear in between — is asserted behaviourally in
+        // `ProjectionDepthMappingTests`, which is what caught #408; coefficient
+        // pins like this one passed against the broken matrix.
         XCTAssertEqual(matrix.columns.2.z, -1.0 / depth, accuracy: 0.001, "Z scaling should be -1.0/depth")
-        XCTAssertEqual(matrix.columns.3.z, farZ / depth, accuracy: 0.001, "Z offset should be farZ/depth")
+        XCTAssertEqual(matrix.columns.3.z, -nearZ / depth, accuracy: 0.001, "Z offset should be -nearZ/depth")
     }
 
     /// Test orthographic projection with different aspect ratios
@@ -290,29 +293,31 @@ final class VRMRendererTests: XCTestCase {
         XCTAssertGreaterThan(renderer.orthoSize, 0.0, "orthoSize should not allow negative values")
     }
 
-    /// Test that Metal reverse-Z depth values are correctly mapped
-    func testMetalReverseZDepthMapping() {
-        // Both projection types should use Metal's reverse-Z convention
+    /// Test the Z scale/offset coefficients of both projection branches
+    func testProjectionZScaleCoefficients() {
+        // Pins the current Z scale/offset coefficients of both branches.
+        // This does not assert which clip-space convention (standard vs.
+        // reverse) they represent — see `VRMRenderer.useReverseZ` /
+        // `reverseZProjection` for the actual opt-in reverse-Z feature.
         renderer.useOrthographic = true
         let orthoMatrix = renderer.makeProjectionMatrix(aspectRatio: 1.0)
 
-        // For orthographic: nearZ (0.1) should map to 1.0, farZ (100.0) should map to 0.0
         let nearZ: Float = 0.1
         let farZ: Float = 100.0
         let depth = farZ - nearZ
 
-        // The Z column should use -1.0/depth for reverse mapping
         XCTAssertEqual(orthoMatrix.columns.2.z, -1.0 / depth, accuracy: 0.001,
-                       "Orthographic should use Metal reverse-Z convention")
+                       "Orthographic zScale should be -1.0/depth")
 
-        // Perspective already uses correct Metal convention (verified by existing code)
         renderer.useOrthographic = false
         let perspMatrix = renderer.makeProjectionMatrix(aspectRatio: 1.0)
 
-        // Perspective uses: zs = farZ / (nearZ - farZ)
+        // Perspective uses Metal's standard [0, 1] clip-space convention
+        // (near -> 0, far -> 1); zs = farZ / (nearZ - farZ) is negative as a
+        // consequence of that mapping, not because it is reverse-Z.
         let expectedZs = farZ / (nearZ - farZ)
         XCTAssertEqual(perspMatrix.columns.2.z, expectedZs, accuracy: 0.001,
-                       "Perspective should use Metal reverse-Z convention")
+                       "Perspective zs should equal farZ / (nearZ - farZ)")
     }
 
     // MARK: - Lighting API Tests

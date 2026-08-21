@@ -46,6 +46,11 @@ public class TextureLoader {
     private let document: GLTFDocument
     private let baseURL: URL?
 
+    /// When `true`, sRGB color textures are re-encoded as BC7 at load
+    /// (``VRMLoadingOptimization/aggressiveTextureCompression``). Linear
+    /// maps are never compressed.
+    public var compressColorTextures: Bool = false
+
     /// Creates a loader bound to a Metal device, parsed document, and an existing ``BufferLoader``.
     ///
     /// - Parameters:
@@ -104,8 +109,68 @@ public class TextureLoader {
             return nil
         }
 
+        // Whether to build a mip chain is the sampler's call.
+        let sampler = gltfTexture.sampler.flatMap { document.samplers?[safe: $0] }
+        let mipmapped = TextureLoader.samplerRequestsMipmaps(sampler)
+
         // Create texture from image data
-        return try await createTexture(from: imageData, mimeType: image.mimeType, textureIndex: index, sRGB: sRGB)
+        return try await createTexture(from: imageData, mimeType: image.mimeType, textureIndex: index,
+                                       sRGB: sRGB, mipmapped: mipmapped,
+                                       alphaIsCoverage: Self.textureAlphaIsCoverage(index, in: document))
+    }
+
+    /// Whether a texture's alpha channel is coverage — i.e. whether the mip
+    /// chain should weight RGB by alpha (see ``TextureMipUploader``).
+    ///
+    /// True iff some material binds the texture as `baseColorTexture` with
+    /// `alphaMode` `MASK` or `BLEND` — the only slot where glTF gives alpha
+    /// coverage semantics. `OPAQUE` base color ignores alpha by spec, and
+    /// metallic-roughness / occlusion / normal / emissive carry data (or
+    /// nothing) in alpha, so weighting by it would bias or erase real
+    /// channels. Materials that don't state `alphaMode` are `OPAQUE`
+    /// (spec default). A texture nobody binds as base color — including
+    /// extension-only slots such as MToon's shade/matcap/rim maps — filters
+    /// independently. (VRoid often binds one image as both base color and
+    /// MToon shade; it is then weighted, which is harmless: the shade map's
+    /// alpha is unused and the two are sampled at the same UVs, where the
+    /// base color's alpha already governs visibility.) Only the glTF
+    /// `alphaMode` is consulted — a VRM 0.x material that states its
+    /// transparency solely in `materialProperties` degrades to independent
+    /// filtering, i.e. GPU-mipgen behavior, never data loss.
+    public static func textureAlphaIsCoverage(_ index: Int, in document: GLTFDocument) -> Bool {
+        for material in document.materials ?? [] {
+            guard material.pbrMetallicRoughness?.baseColorTexture?.index == index else { continue }
+            switch material.alphaMode {
+            case "MASK", "BLEND":
+                return true
+            default:
+                continue
+            }
+        }
+        return false
+    }
+
+    /// Whether a glTF sampler asks for a mip chain.
+    ///
+    /// `minFilter` `9984`–`9987` (`*_MIPMAP_*`) requests one; `9728` NEAREST
+    /// and `9729` LINEAR explicitly decline one. An absent sampler or absent
+    /// `minFilter` leaves the choice to the runtime (per the glTF spec) —
+    /// default to mipmapping, matching ``createSampler(from:)``'s existing
+    /// trilinear default for the same cases, so a chain always backs the
+    /// sampler state we build; three.js's GLTFLoader defaults an undefined
+    /// `minFilter` the same way (LinearMipmapLinear). This is a deliberate
+    /// runtime default, not reference parity: UniVRM v0.131.2 deserializes
+    /// an omitted `minFilter` to NEAREST (no mips), and a texture with no
+    /// `sampler` field uses `samplers[0]` if the array exists (its
+    /// non-nullable int defaults to 0) and Bilinear+mips only when it
+    /// doesn't.
+    public static func samplerRequestsMipmaps(_ sampler: GLTFSampler?) -> Bool {
+        switch sampler?.minFilter {
+        case 9728, 9729:
+            return false
+        default:
+            return true
+        }
     }
 
     private func loadImageFromBufferView(_ bufferViewIndex: Int, textureIndex: Int) throws -> Data {
@@ -219,11 +284,12 @@ public class TextureLoader {
         }
     }
 
-    private func createTexture(from imageData: Data, mimeType: String?, textureIndex: Int, sRGB: Bool) async throws -> MTLTexture? {
+    private func createTexture(from imageData: Data, mimeType: String?, textureIndex: Int, sRGB: Bool, mipmapped: Bool, alphaIsCoverage: Bool) async throws -> MTLTexture? {
         // Try using CGImage directly to avoid MTKTextureLoader async crash
         if let cgImage = createCGImage(from: imageData) {
             do {
-                let texture = try createTexture(from: cgImage, textureIndex: textureIndex, sRGB: sRGB)
+                let texture = try createTexture(from: cgImage, textureIndex: textureIndex, sRGB: sRGB,
+                                                mipmapped: mipmapped, alphaIsCoverage: alphaIsCoverage)
                 return texture
             } catch {
                 vrmLog("[TextureLoader] Failed to create texture from CGImage: \(error)")
@@ -239,6 +305,10 @@ public class TextureLoader {
 
         do {
             let texture = try await textureLoader.newTexture(data: imageData, options: options)
+            if compressColorTextures && sRGB,
+               let compressed = TextureBlockCompressor.compress(texture, device: device) {
+                return compressed
+            }
             return texture
         } catch {
             vrmLog("[TextureLoader] Failed to create texture: \(error)")
@@ -258,8 +328,8 @@ public class TextureLoader {
         return cgImage
     }
 
-    private func createTexture(from cgImage: CGImage, textureIndex: Int, sRGB: Bool) throws -> MTLTexture? {
-        vrmLog("[TextureLoader] createTexture(from CGImage) called, sRGB=\(sRGB)")
+    private func createTexture(from cgImage: CGImage, textureIndex: Int, sRGB: Bool, mipmapped: Bool, alphaIsCoverage: Bool) throws -> MTLTexture? {
+        vrmLog("[TextureLoader] createTexture(from CGImage) called, sRGB=\(sRGB), mipmapped=\(mipmapped), alphaIsCoverage=\(alphaIsCoverage)")
 
         // MTKTextureLoader seems to crash when called from background async context
         // Let's create the texture manually instead
@@ -269,83 +339,24 @@ public class TextureLoader {
         let height = cgImage.height
         vrmLog("[TextureLoader] Image size: \(width)x\(height)")
 
-        vrmLog("[TextureLoader] Creating texture descriptor...")
         let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
-        let textureDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: pixelFormat,
-            width: width,
-            height: height,
-            mipmapped: false
-        )
-        textureDescriptor.usage = [.shaderRead]
-        textureDescriptor.storageMode = .shared
 
-        vrmLog("[TextureLoader] Creating Metal texture...")
-        guard let texture = device.makeTexture(descriptor: textureDescriptor) else {
+        // Decodes straight-alpha (the pipelines blend with straight-alpha
+        // factors); the sampler decides whether a mip chain is built and the
+        // material's use of the texture whether alpha weights it. See
+        // TextureUploader / TextureMipUploader.
+        vrmLog("[TextureLoader] Uploading texture...")
+        guard let texture = TextureUploader.makeTexture(
+            cgImage: cgImage,
+            pixelFormat: pixelFormat,
+            device: device,
+            mipmapped: mipmapped,
+            alphaIsCoverage: alphaIsCoverage,
+            blockCompress: compressColorTextures && sRGB
+        ) else {
             vrmLog("[TextureLoader] Failed to create texture")
             return nil
         }
-        vrmLog("[TextureLoader] Metal texture created")
-
-        // Create a bitmap context and draw the image
-        let bytesPerRow = width * 4
-        vrmLog("[TextureLoader] Allocating bitmap data: \(height * bytesPerRow) bytes...")
-        let bitmapData = malloc(height * bytesPerRow)
-        defer { free(bitmapData) }
-
-        guard let bitmapData = bitmapData else {
-            vrmLog("[TextureLoader] Failed to allocate bitmap data")
-            return nil
-        }
-        vrmLog("[TextureLoader] Bitmap data allocated")
-
-        vrmLog("[TextureLoader] Creating CGContext...")
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-
-        // premultipliedLast preserves the alpha channel in RGBA layout.
-        // IMPORTANT: Must use .copy blend mode when drawing to avoid
-        // source-over compositing which destroys alpha=0 pixels.
-        guard let context = CGContext(
-            data: bitmapData,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: bytesPerRow,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            vrmLog("[TextureLoader] Failed to create bitmap context")
-            return nil
-        }
-        vrmLog("[TextureLoader] CGContext created with premultiplied alpha")
-
-        vrmLog("[TextureLoader] Drawing image to context...")
-        context.setBlendMode(.copy)
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
-        vrmLog("[TextureLoader] Image drawn")
-
-        // Copy the data to the texture
-        vrmLog("[TextureLoader] Replacing texture data...")
-        texture.replace(
-            region: MTLRegionMake2D(0, 0, width, height),
-            mipmapLevel: 0,
-            withBytes: bitmapData,
-            bytesPerRow: bytesPerRow
-        )
-        vrmLog("[TextureLoader] Texture data replaced")
-
-        // DEBUG: Sample first pixel to check for extreme values
-        #if DEBUG
-        let firstPixel = bitmapData.assumingMemoryBound(to: UInt8.self)
-        let r = Float(firstPixel[0]) / 255.0
-        let g = Float(firstPixel[1]) / 255.0
-        let b = Float(firstPixel[2]) / 255.0
-        let a = Float(firstPixel[3]) / 255.0
-        vrmLog("[TextureLoader] First pixel RGBA: (\(String(format: "%.3f", r)), \(String(format: "%.3f", g)), \(String(format: "%.3f", b)), \(String(format: "%.3f", a)))")
-        if r > 1.0 || g > 1.0 || b > 1.0 {
-            vrmLog("  ⚠️ WARNING: Pixel values exceed 1.0!")
-        }
-        #endif
 
         vrmLog("[TextureLoader] Texture created successfully")
         return texture
@@ -359,82 +370,13 @@ public class TextureLoader {
     /// equivalents. Default sampling is bilinear with mipmaps and repeat
     /// wrap on both axes. Max anisotropy is always 16.
     ///
+    /// Allocates a fresh state per call. Renderers that need one state per
+    /// texture should go through ``GLTFSamplerCache`` instead, which shares
+    /// states between samplers that resolve to the same descriptor.
+    ///
     /// - Parameter gltfSampler: Source sampler, or `nil` to request defaults.
     /// - Returns: The configured `MTLSamplerState`, or `nil` if Metal allocation fails.
     public func createSampler(from gltfSampler: GLTFSampler?) -> MTLSamplerState? {
-        let descriptor = MTLSamplerDescriptor()
-
-        if let sampler = gltfSampler {
-            // Min filter
-            switch sampler.minFilter {
-            case 9728: // NEAREST
-                descriptor.minFilter = .nearest
-                descriptor.mipFilter = .notMipmapped
-            case 9729: // LINEAR
-                descriptor.minFilter = .linear
-                descriptor.mipFilter = .notMipmapped
-            case 9984: // NEAREST_MIPMAP_NEAREST
-                descriptor.minFilter = .nearest
-                descriptor.mipFilter = .nearest
-            case 9985: // LINEAR_MIPMAP_NEAREST
-                descriptor.minFilter = .linear
-                descriptor.mipFilter = .nearest
-            case 9986: // NEAREST_MIPMAP_LINEAR
-                descriptor.minFilter = .nearest
-                descriptor.mipFilter = .linear
-            case 9987: // LINEAR_MIPMAP_LINEAR
-                descriptor.minFilter = .linear
-                descriptor.mipFilter = .linear
-            default:
-                descriptor.minFilter = .linear
-                descriptor.mipFilter = .linear
-            }
-
-            // Mag filter
-            switch sampler.magFilter {
-            case 9728: // NEAREST
-                descriptor.magFilter = .nearest
-            case 9729: // LINEAR
-                descriptor.magFilter = .linear
-            default:
-                descriptor.magFilter = .linear
-            }
-
-            // Wrap S
-            switch sampler.wrapS {
-            case 33071: // CLAMP_TO_EDGE
-                descriptor.sAddressMode = .clampToEdge
-            case 33648: // MIRRORED_REPEAT
-                descriptor.sAddressMode = .mirrorRepeat
-            case 10497: // REPEAT
-                descriptor.sAddressMode = .repeat
-            default:
-                descriptor.sAddressMode = .repeat
-            }
-
-            // Wrap T
-            switch sampler.wrapT {
-            case 33071: // CLAMP_TO_EDGE
-                descriptor.tAddressMode = .clampToEdge
-            case 33648: // MIRRORED_REPEAT
-                descriptor.tAddressMode = .mirrorRepeat
-            case 10497: // REPEAT
-                descriptor.tAddressMode = .repeat
-            default:
-                descriptor.tAddressMode = .repeat
-            }
-        } else {
-            // Default sampler settings
-            descriptor.minFilter = .linear
-            descriptor.magFilter = .linear
-            descriptor.mipFilter = .linear
-            descriptor.sAddressMode = .repeat
-            descriptor.tAddressMode = .repeat
-        }
-
-        descriptor.maxAnisotropy = 16
-        descriptor.normalizedCoordinates = true
-
-        return device.makeSamplerState(descriptor: descriptor)
+        device.makeSamplerState(descriptor: GLTFSamplerCache.descriptor(for: gltfSampler))
     }
 }

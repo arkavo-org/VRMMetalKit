@@ -1,14 +1,16 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-visionos bench-visionos-sim
 
 help:
 	@echo "VRMMetalKit Build Targets:"
-	@echo "  make shaders       - Compile all three VRMMetalKit metallib slices (macOS / iOS / iOS Simulator)"
+	@echo "  make shaders       - Compile all five VRMMetalKit metallib slices (macOS / iOS / iOS Sim / visionOS / visionOS Sim)"
 	@echo "  make shaders-macos - Compile only the macOS slice (FP16)"
 	@echo "  make shaders-ios   - Compile only the iOS device slice (FP16)"
 	@echo "  make shaders-iossim- Compile only the iOS Simulator slice (FP16)"
+	@echo "  make shaders-visionos    - Compile only the visionOS device slice (FP16)"
+	@echo "  make shaders-visionossim - Compile only the visionOS Simulator slice (FP16)"
 	@echo "  make gltf-shaders  - Compile GLTFMetalKit (PBR) shaders into metallib"
 	@echo "  make clean         - Remove temporary build files"
 	@echo "  make test          - Run Swift tests"
@@ -16,16 +18,22 @@ help:
 	@echo "  make gputrace-baseline - Capture a .gputrace matching the VRMBenchmark baseline (animated + spring, 1024px)"
 	@echo "  make bench-baseline - Record the authoritative perf baseline (run on the dedicated perf machine)"
 	@echo "  make bench-gate    - Gate the current build against baselines/baseline.json (perf machine only)"
+	@echo "  make bench-visionos - Stereo reverse-Z compositor-shaped bench (preferred vs host submit)"
+	@echo "  make bench-visionos-sim - Same bench on the visionOS Simulator GPU (Apple Vision Pro 26.5)"
 	@echo "  make docs          - Preview documentation locally"
 	@echo "  make docs-static   - Generate a static documentation site under .build/docs"
 
-# Compile all VRM Metal shaders into three SDK-specific metallibs:
+# Compile all VRM Metal shaders into five SDK-specific metallibs:
 #   - macosx          (FP16; supersedes PR #279's FP32 safe-default — measured
 #                      via gpudebug on M4: -5.8% encoder time and fragment
 #                      occupancy 21%→71% at 2048px, with the full MToon
 #                      conformance battery pixel-clean)
 #   - iphoneos        (FP16, mobile double-rate payoff)
 #   - iphonesimulator (FP16, simulator-native; fixes nil-pipeline error)
+#   - xros            (FP16; Vision Pro is the same Apple-Silicon GPU class
+#                      as iOS, so the double-rate payoff carries over)
+#   - xrsimulator     (FP16, simulator-native — without it visionOS falls
+#                      through to the macOS slice and pipeline creation fails)
 # -Wall -Wextra enables the common clang warning classes; -Werror promotes
 # them to hard errors so the CI Shaders job (and local `make shaders`)
 # catches issues like unused functions, writable-buffer aliasing, and
@@ -38,7 +46,7 @@ help:
 # explicit -std pin is the only protection. Bump it deliberately, together
 # with the platforms floor in Package.swift.
 MSL_STD := -std=metal4.0
-shaders: shaders-macos shaders-ios shaders-iossim
+shaders: shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim
 	@echo "✅ All shader slices built"
 
 shaders-macos:
@@ -82,6 +90,34 @@ shaders-iossim:
 		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
 	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib"
 	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
+
+shaders-visionos:
+	@echo "🔨 Compiling visionOS device shaders (FP16)..."
+	@mkdir -p /tmp/vrm-shaders-visionos
+	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
+		echo "  Compiling $$file..."; \
+		xcrun -sdk xros metal -Wall -Wextra -Werror $(MSL_STD) \
+			-mtargetos=xros26.0 -DMTOON_USE_HALF_PRECISION=1 \
+			-c $$file -o /tmp/vrm-shaders-visionos/$$(basename $$file .metal).air || exit 1; \
+	done
+	@xcrun -sdk xros metallib /tmp/vrm-shaders-visionos/*.air \
+		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOS.metallib
+	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOS.metallib"
+	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOS.metallib
+
+shaders-visionossim:
+	@echo "🔨 Compiling visionOS Simulator shaders (FP16)..."
+	@mkdir -p /tmp/vrm-shaders-visionossim
+	@for file in Sources/VRMMetalKit/Shaders/*.metal; do \
+		echo "  Compiling $$file..."; \
+		xcrun -sdk xrsimulator metal -Wall -Wextra -Werror $(MSL_STD) \
+			-mtargetos=xros26.0-simulator -DMTOON_USE_HALF_PRECISION=1 \
+			-c $$file -o /tmp/vrm-shaders-visionossim/$$(basename $$file .metal).air || exit 1; \
+	done
+	@xcrun -sdk xrsimulator metallib /tmp/vrm-shaders-visionossim/*.air \
+		-o Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOSSimulator.metallib
+	@echo "📦 Output: Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOSSimulator.metallib"
+	@ls -lh Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOSSimulator.metallib
 
 # Compile GLTFMetalKit PBR shaders into a separate metallib so the
 # inanimate-object renderer can load them without dragging the MToon /
@@ -174,6 +210,52 @@ bench-gate:
 	@echo "🚦  Gating current build against $(BENCH_BASELINE)..."
 	@swift build -c release --product VRMBenchmark
 	@.build/release/VRMBenchmark $(BENCH_VRM) $(BENCH_ARGS) --label gate-$$(hostname -s) --baseline $(BENCH_BASELINE)
+
+# Compositor-shaped stereo bench (Mac stand-in for visionOS). Does not
+# replace bench-gate. Preferred submit simulates once; host submit is the
+# older per-eye drawOffscreen path.
+BENCH_VISIONOS_VRM ?= AvatarSample_U_1.0.vrm.glb
+BENCH_VISIONOS_ARGS = --mode visionos --frames 200 --warmup 30 --vrma $(BENCH_VRMA) --spring-bone --fps 90
+
+bench-visionos:
+	@echo "🥽  visionOS-shaped stereo bench (preferred, then host)..."
+	@swift build -c release --product VRMBenchmark
+	@mkdir -p perf-review-output
+	@.build/release/VRMBenchmark $(BENCH_VISIONOS_VRM) $(BENCH_VISIONOS_ARGS) \
+		--visionos-submit preferred --label visionos-preferred-$$(hostname -s) \
+		--json perf-review-output/bench-visionos-preferred.json
+	@.build/release/VRMBenchmark $(BENCH_VISIONOS_VRM) $(BENCH_VISIONOS_ARGS) \
+		--visionos-submit host --label visionos-host-$$(hostname -s) \
+		--json perf-review-output/bench-visionos-host.json
+
+# Offscreen + compositor sample on the visionOS Simulator GPU (not a Vision Pro).
+BENCH_VISIONOS_SIM ?= Apple Vision Pro
+BENCH_VISIONOS_SIM_OS ?= 26.5
+bench-visionos-sim:
+	@echo "🥽  visionOS Simulator GPU bench..."
+	@cd VisionHost && xcodegen generate
+	@xcodebuild -project VisionHost/VRMVisionHost.xcodeproj -scheme VRMVisionHost \
+		-destination 'platform=visionOS Simulator,name=$(BENCH_VISIONOS_SIM),OS=$(BENCH_VISIONOS_SIM_OS)' \
+		-configuration Release -derivedDataPath VisionHost/DerivedData build
+	@xcrun simctl boot "$(BENCH_VISIONOS_SIM)" || true
+	@xcrun simctl install booted \
+		VisionHost/DerivedData/Build/Products/Release-xrsimulator/VRMVisionHost.app
+	@mkdir -p perf-review-output
+	@SIMCTL_CHILD_VRM_VISIONOS_BENCH=both \
+		xcrun simctl launch --stdout=$(CURDIR)/perf-review-output/visionos-sim-stdout.log \
+		--stderr=$(CURDIR)/perf-review-output/visionos-sim-stderr.log \
+		booted org.arkavo.VRMVisionHost
+	@echo "⏳ waiting for bench JSON (offscreen + compositor sample)..."
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do \
+		DATA=$$(xcrun simctl get_app_container booted org.arkavo.VRMVisionHost data 2>/dev/null); \
+		if [ -n "$$DATA" ] && [ -f "$$DATA/Documents/bench-visionos-xrsimulator.json" ]; then \
+			cp "$$DATA/Documents/bench-visionos-xrsimulator.json" perf-review-output/; \
+			echo "✅ wrote perf-review-output/bench-visionos-xrsimulator.json"; \
+			exit 0; \
+		fi; \
+		sleep 5; \
+	done; \
+	echo "⚠️  JSON not ready; check perf-review-output/visionos-sim-stdout.log"
 
 # Build the package
 build:

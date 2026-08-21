@@ -43,11 +43,10 @@ final class SkinningIdentityFallbackTests: XCTestCase {
         }
 
         // The buffer must be large enough to satisfy the same shader read pattern
-        // as the live joint buffer — at least 256 matrices (matches the existing
-        // padding floor in setupForSkins).
+        // as the live joint buffer (padding floor = maxJointCount).
         let stride = MemoryLayout<float4x4>.stride
-        XCTAssertGreaterThanOrEqual(buffer.length, 256 * stride,
-                                    "Identity joint buffer must hold at least 256 matrices to match shader clamp range")
+        XCTAssertGreaterThanOrEqual(buffer.length, VRMConstants.Animation.maxJointCount * stride,
+                                    "Identity joint buffer must cover the shader last-resort clamp range")
     }
 
     /// Every matrix in the identity buffer must be the identity transform.

@@ -204,7 +204,7 @@ final class SkinReferenceMeasureUtilTests: XCTestCase {
         // integrity fingerprint so both count the exact same vertices.
         if !bodyOnly { return SkinReferenceOracle.allRestPositions(model: model) }
         var out: [SIMD3<Float>] = []
-        let stride = MemoryLayout<VRMVertex>.stride
+        let stride = MemoryLayout<VRMPositionVertex>.stride
         for mesh in model.meshes {
             for prim in mesh.primitives {
                 guard let buf = prim.vertexBuffer, prim.vertexCount > 0 else { continue }
@@ -213,7 +213,7 @@ final class SkinReferenceMeasureUtilTests: XCTestCase {
                 let raw = buf.contents()
                 for i in 0..<prim.vertexCount {
                     let p = raw.advanced(by: i * stride)
-                        .assumingMemoryBound(to: VRMVertex.self).pointee.position
+                        .assumingMemoryBound(to: VRMPositionVertex.self).pointee.position
                     out.append(p)
                 }
             }

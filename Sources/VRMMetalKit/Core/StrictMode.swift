@@ -154,6 +154,17 @@ public struct RendererConfig {
     /// flags from the uniform buffer at runtime.
     public var enableMToonFunctionConstants: Bool = true
 
+    /// Opt-in materialization spawn effects (VMK#materialize). When `false`
+    /// (default), the materialization block is dead-stripped from every
+    /// compiled MToon fragment via function constant — zero register or
+    /// instruction cost — and ``VRMRenderer/materialization`` has no visual
+    /// effect. Set `true` on the `RendererConfig` value passed into
+    /// ``VRMRenderer/init(device:config:)`` (same as ``sampleCount`` /
+    /// ``enablePipelineArchive``). Mutating this on a live renderer only
+    /// affects on-demand specialized variants; fallback pipelines keep the
+    /// init-time constant.
+    public var enableMaterialization: Bool = false
+
     /// Creates a renderer configuration. Defaults match the production baseline.
     public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false, dualQuaternionSkinning: Bool = false, enableMToonFunctionConstants: Bool = true) {
         self.strict = strict
@@ -332,8 +343,10 @@ public enum StrictModeError: LocalizedError {
 /// slots are namespaced by comment groups below. Changes here must be
 /// mirrored in the corresponding `.metal` shaders.
 public struct ResourceIndices {
-    /// Vertex shader: vertex buffer (positions, normals, UVs, joints, weights).
+    /// Vertex shader: position-only stream (`VRMPositionVertex`).
     public static let vertexBuffer = 0
+    /// Vertex shader: attribute stream (`VRMAttributeVertex`).
+    public static let attributeBuffer = 3
     /// Vertex shader: per-frame uniform buffer.
     public static let uniformsBuffer = 1
     /// Vertex shader: legacy skin-data buffer; retained for backward compatibility, currently unused.
@@ -567,9 +580,11 @@ public class StrictValidator {
 /// Any change to a corresponding Metal struct must be mirrored here or the
 /// validator will raise ``StrictModeError/uniformLayoutMismatch(swift:metal:type:)``.
 public struct MetalSizeConstants {
-    /// Byte size of the Metal `Uniforms` struct; kept in sync with `Shaders/VRMShared.h`.
+    /// Byte size of the Metal `Uniforms` struct; kept in sync with the
+    /// `struct Uniforms` definitions in `Shaders/MToonShader.metal` and
+    /// `Shaders/SkinnedShader.metal`.
     /// Validated at runtime by the strict-mode `uniformLayoutMismatch` check.
-    public static let uniformsSize = 432
+    public static let uniformsSize = 480
 
     /// Byte size of the Metal `MToonMaterial` struct (15 blocks × 16 bytes).
     public static let mtoonMaterialSize = 240

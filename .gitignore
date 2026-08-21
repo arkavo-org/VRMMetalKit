@@ -20,6 +20,7 @@ VRMA_Locomotion_Pack/
 # Bundled VRM test fixtures (licenses permit redistribution; see LICENSE-MODELS.md)
 !/AvatarSample_A_0.0.vrm.glb
 !/AvatarSample_A_1.0.vrm.glb
+!/AvatarSample_U_1.0.vrm.glb
 # Reference animation bundled for the CI benchmark gate (redistribution permitted)
 !/VRMA_01.vrma
 # Perf baselines: commit only the canonical gate reference, not ad-hoc runs.
@@ -33,6 +34,8 @@ tmp/
 !Sources/VRMMetalKit/Resources/VRMMetalKitShaders.metallib
 !Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOS.metallib
 !Sources/VRMMetalKit/Resources/VRMMetalKitShaders_iOSSimulator.metallib
+!Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOS.metallib
+!Sources/VRMMetalKit/Resources/VRMMetalKitShaders_visionOSSimulator.metallib
 !Sources/GLTFMetalKit/Resources/GLTFMetalKitShaders.metallib
 !Tests/GLTFMetalKitTests/TestData/Box.glb
 !Tests/GLTFMetalKitTests/TestData/BoxTextured.glb
@@ -65,3 +68,8 @@ tmp/
 # Local renderer output
 /emote-output/
 .bench-out/
+
+# VisionHost build products — `xcodegen generate` recreates them
+/VisionHost/VRMVisionHost.xcodeproj/
+/VisionHost/Info.plist
+/VisionHost/DerivedData/

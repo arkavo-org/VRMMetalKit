@@ -282,7 +282,7 @@ public class VRMModel: @unchecked Sendable {
                 }
 
                 // Map the buffer to read vertex data
-                let bufferPointer = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
+                let bufferPointer = vertexBuffer.contents().bindMemory(to: VRMPositionVertex.self, capacity: primitive.vertexCount)
 
                 // Apply world transform if requested
                 let worldTransform: float4x4
@@ -646,8 +646,13 @@ public class VRMModel: @unchecked Sendable {
         }
         
         if let device = device {
+            // One state per distinct glTF sampler, shared across the
+            // textures that name it (see GLTFSamplerCache).
+            let samplerCache = GLTFSamplerCache(device: device)
             let useParallelLoading = context?.options.optimizations.contains(.parallelTextureLoading) ?? false
-            
+
+            let compressColorTextures = context?.options.optimizations.contains(.aggressiveTextureCompression) ?? false
+
             if useParallelLoading && textureCount > 1 {
                 // Use parallel texture loader for better performance
                 if !skipLogging {
@@ -661,6 +666,7 @@ public class VRMModel: @unchecked Sendable {
                     baseURL: baseURL,
                     maxConcurrentLoads: min(4, textureCount)
                 )
+                parallelLoader.compressColorTextures = compressColorTextures
                 
                 let indices = Array(0..<textureCount)
                 let loadedTextures = await parallelLoader.loadTexturesParallel(
@@ -682,6 +688,7 @@ public class VRMModel: @unchecked Sendable {
                     if let mtlTexture = loadedTextures[textureIndex] {
                         let vrmTexture = VRMTexture(name: textureName)
                         vrmTexture.mtlTexture = mtlTexture
+                        vrmTexture.sampler = samplerCache.samplerState(forTextureAt: textureIndex, in: gltf)
                         textures.append(vrmTexture)
                         loadedCount += 1
                     } else {
@@ -695,6 +702,7 @@ public class VRMModel: @unchecked Sendable {
             } else {
                 // Sequential loading (original implementation)
                 let textureLoader = TextureLoader(device: device, bufferLoader: bufferLoader, document: gltf, baseURL: baseURL)
+                textureLoader.compressColorTextures = compressColorTextures
                 for textureIndex in 0..<textureCount {
                     try await context?.checkCancellation()
                     await context?.updateProgress(
@@ -709,6 +717,7 @@ public class VRMModel: @unchecked Sendable {
                     if let mtlTexture = try await textureLoader.loadTexture(at: textureIndex, sRGB: useSRGB) {
                         let vrmTexture = VRMTexture(name: textureName)
                         vrmTexture.mtlTexture = mtlTexture
+                        vrmTexture.sampler = samplerCache.samplerState(forTextureAt: textureIndex, in: gltf)
                         textures.append(vrmTexture)
                     } else {
                         textures.append(VRMTexture(name: textureName))

@@ -113,9 +113,8 @@ final class ZFightingBugFinderTests: XCTestCase {
         for mesh in model.meshes {
             for prim in mesh.primitives {
                 if let buffer = prim.vertexBuffer {
-                    let vertexStride = MemoryLayout<VRMVertex>.stride
-                    let vertexCount = buffer.length / vertexStride
-                    let vertices = buffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+                    let vertexCount = prim.vertexCount
+                    let vertices = buffer.contents().bindMemory(to: VRMPositionVertex.self, capacity: vertexCount)
                     for i in 0..<min(vertexCount, 1000) {
                         let pos = vertices[i].position
                         minPos = min(minPos, pos)

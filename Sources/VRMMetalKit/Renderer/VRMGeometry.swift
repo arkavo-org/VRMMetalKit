@@ -145,20 +145,23 @@ public class VRMMesh: @unchecked Sendable {
 ///
 /// ## Discussion
 /// `VRMPrimitive` owns all of the per-draw-call GPU resources for a slice of
-/// a mesh — interleaved vertices in ``vertexBuffer``, indices (when present)
-/// in ``indexBuffer``, morph-target deltas (both per-target AoS buffers and
-/// SoA flattened buffers used by the GPU compute path), and first-person
-/// per-vertex visibility flags. Attribute presence is exposed through the
-/// `has*` Booleans so the renderer can route to the correct pipeline (skinned
-/// vs non-skinned, with/without UVs).
+/// a mesh — position-only vertices in ``vertexBuffer``, remaining attributes
+/// in ``attributeBuffer``, indices (when present) in ``indexBuffer``,
+/// morph-target deltas (both per-target AoS buffers and SoA flattened
+/// buffers used by the GPU compute path), and first-person per-vertex
+/// visibility flags. Attribute presence is exposed through the `has*`
+/// Booleans so the renderer can route to the correct pipeline (skinned vs
+/// non-skinned, with/without UVs).
 ///
 /// Primitives are loaded from glTF by ``load(from:document:device:bufferLoader:)``.
 /// During load, joint indices are sanitised to remove sentinel values
 /// (see ``sanitizeJoints(maxJointIndex:)``), and the local-space AABB is
 /// captured into ``localMin``/``localMax`` for frustum culling.
 public class VRMPrimitive: @unchecked Sendable {
-    /// Interleaved vertex buffer in ``VRMVertex`` layout.
+    /// Position-only vertex buffer in ``VRMPositionVertex`` layout.
     public var vertexBuffer: MTLBuffer?
+    /// Normal / UV / color / joints / weights in ``VRMAttributeVertex`` layout.
+    public var attributeBuffer: MTLBuffer?
     /// Index buffer; `nil` for non-indexed primitives.
     public var indexBuffer: MTLBuffer?
     /// Number of vertices in ``vertexBuffer``.
@@ -220,8 +223,46 @@ public class VRMPrimitive: @unchecked Sendable {
     /// GPU buffer mirroring ``firstPersonHiddenFlags``; bound to the vertex shader in first-person mode.
     public var firstPersonHiddenFlagsBuffer: MTLBuffer?
 
+    /// Cached one-shot joint/weight sample. Vertex skinning attributes are
+    /// static after load, so the renderer must not re-walk `vertexBuffer`
+    /// every draw.
+    var skinningInputSample: SkinningInputSample?
+
     /// Creates an empty primitive. Use ``load(from:document:device:bufferLoader:)`` to populate from glTF.
     public init() {}
+
+    /// Uploads a CPU ``VRMVertex`` array as the split GPU streams.
+    public func uploadVertices(_ vertices: [VRMVertex], device: MTLDevice) {
+        vertexCount = vertices.count
+        guard !vertices.isEmpty else {
+            vertexBuffer = nil
+            attributeBuffer = nil
+            return
+        }
+        let (positions, attributes) = VRMVertexStreams.split(vertices)
+        vertexBuffer = positions.withUnsafeBytes { bytes in
+            device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
+        }
+        vertexBuffer?.label = "VRM Positions (mat \(materialIndex.map(String.init) ?? "—"))"
+        attributeBuffer = attributes.withUnsafeBytes { bytes in
+            device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
+        }
+        attributeBuffer?.label = "VRM Attributes (mat \(materialIndex.map(String.init) ?? "—"))"
+    }
+
+    /// Reconstructs interleaved ``VRMVertex`` values from the split GPU streams.
+    public func interleavedVertices() -> [VRMVertex] {
+        guard vertexCount > 0, let vertexBuffer else { return [] }
+        if let attributeBuffer {
+            let positions = vertexBuffer.contents().bindMemory(to: VRMPositionVertex.self, capacity: vertexCount)
+            let attributes = attributeBuffer.contents().bindMemory(to: VRMAttributeVertex.self, capacity: vertexCount)
+            return (0..<vertexCount).map { VRMVertexStreams.join(position: positions[$0], attributes: attributes[$0]) }
+        }
+        return Array(UnsafeBufferPointer(
+            start: vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount),
+            count: vertexCount
+        ))
+    }
 
     /// Loads a primitive from a glTF primitive descriptor: vertices, indices, morph targets, and material reference.
     ///
@@ -318,9 +359,12 @@ public class VRMPrimitive: @unchecked Sendable {
             let joints = try bufferLoader.loadAccessorAsUInt32(jointsAccessorIndex)
             let jointCount = (joints.count / 4) * 4
 
-            // SANITIZE: Clamp sentinel values (65535, -1, etc.) to prevent vertex explosion
-            // VRM models typically have < 256 bones, so anything >= 256 is suspicious
-            let maxValidJoint: UInt32 = 255
+            // SANITIZE: remap exporter sentinels only (UInt16.max / 0xFFFF).
+            // Do not clamp at 255 — VRoid skirt/cloth joints push the palette
+            // past 256, and the right shin/foot often live at 257+. Those are
+            // valid JOINTS_0 values; remapping them to 0 freezes the mesh in
+            // bind pose. Real palette bounds are applied later by
+            // ``sanitizeJoints(maxJointIndex:)`` once the skin size is known.
             var sanitizedCount = 0
 
             vertexData.joints = stride(from: 0, to: jointCount, by: 4).map { i in
@@ -329,11 +373,10 @@ public class VRMPrimitive: @unchecked Sendable {
                 var j2 = joints[i+2]
                 var j3 = joints[i+3]
 
-                // Clamp out-of-bounds indices to 0 (root bone)
-                if j0 > maxValidJoint { j0 = 0; sanitizedCount += 1 }
-                if j1 > maxValidJoint { j1 = 0; sanitizedCount += 1 }
-                if j2 > maxValidJoint { j2 = 0; sanitizedCount += 1 }
-                if j3 > maxValidJoint { j3 = 0; sanitizedCount += 1 }
+                if isSentinelJointIndex(j0) { j0 = 0; sanitizedCount += 1 }
+                if isSentinelJointIndex(j1) { j1 = 0; sanitizedCount += 1 }
+                if isSentinelJointIndex(j2) { j2 = 0; sanitizedCount += 1 }
+                if isSentinelJointIndex(j3) { j3 = 0; sanitizedCount += 1 }
 
                 return SIMD4<UInt32>(j0, j1, j2, j3)
             }
@@ -344,7 +387,7 @@ public class VRMPrimitive: @unchecked Sendable {
             primitive.hasJoints = true
 
             if sanitizedCount > 0 {
-                vrmLog("[VRMPrimitive] ⚠️ SANITIZED \(sanitizedCount) out-of-bounds joint indices (sentinel values like 65535)")
+                vrmLog("[VRMPrimitive] ⚠️ SANITIZED \(sanitizedCount) sentinel joint indices (65535)")
             }
             vrmLog("[VRMPrimitive] JOINTS_0 loaded: \(jointCount/4) vertices, maxJoint=\(maxJoint), requiredPalette=\(primitive.requiredPaletteSize)")
         }
@@ -358,17 +401,8 @@ public class VRMPrimitive: @unchecked Sendable {
             primitive.hasWeights = true
         }
 
-        // Create the single, correctly formatted vertex buffer
         if let device = device {
-            let vertices = vertexData.interleaved()
-            if !vertices.isEmpty {
-                primitive.vertexBuffer = device.makeBuffer(
-                    bytes: vertices,
-                    length: vertices.count * MemoryLayout<VRMVertex>.stride,
-                    options: .storageModeShared
-                )
-                primitive.vertexBuffer?.label = "VRM Vertices (mat \(primitive.materialIndex.map(String.init) ?? "—"))"
-            }
+            primitive.uploadVertices(vertexData.interleaved(), device: device)
         }
 
         // Load morph targets (which depend on the vertex buffer being created)
@@ -575,10 +609,10 @@ public class VRMPrimitive: @unchecked Sendable {
             vrmLog("    - Has colors: \(hasColors)")
 
             // Sample first few vertices to check for anomalies
-            if let buffer = vertexBuffer {
-                let vertices = buffer.contents().bindMemory(to: VRMVertex.self, capacity: min(5, vertexCount))
+            if vertexBuffer != nil {
+                let vertices = interleavedVertices()
                 vrmLog("    - First 5 vertices (or less):")
-                for i in 0..<min(5, vertexCount) {
+                for i in 0..<min(5, vertices.count) {
                     let v = vertices[i]
                     let uvOK = v.texCoord.x >= -0.1 && v.texCoord.x <= 1.1 &&
                               v.texCoord.y >= -0.1 && v.texCoord.y <= 1.1
@@ -702,10 +736,9 @@ public class VRMPrimitive: @unchecked Sendable {
 
         // Create base position buffer from vertex data
         if let vertexBuffer = vertexBuffer {
-            // Extract positions from interleaved vertex buffer
-            let vertexPointer = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+            let positions = vertexBuffer.contents().bindMemory(to: VRMPositionVertex.self, capacity: vertexCount)
+            let attributes = attributeBuffer?.contents().bindMemory(to: VRMAttributeVertex.self, capacity: vertexCount)
 
-            // Create base positions buffer
             let basePositionsSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
             basePositionsBuffer = device.makeBuffer(length: basePositionsSize, options: .storageModeShared)
             basePositionsBuffer?.label = "Morph Base Positions"
@@ -713,11 +746,10 @@ public class VRMPrimitive: @unchecked Sendable {
             if let baseBuffer = basePositionsBuffer {
                 let basePointer = baseBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertexCount)
                 for i in 0..<vertexCount {
-                    basePointer[i] = vertexPointer[i].position
+                    basePointer[i] = positions[i].position
                 }
             }
 
-            // Create base normals buffer if we have normals
             if hasNormals {
                 let baseNormalsSize = vertexCount * MemoryLayout<SIMD3<Float>>.stride
                 baseNormalsBuffer = device.makeBuffer(length: baseNormalsSize, options: .storageModeShared)
@@ -726,7 +758,7 @@ public class VRMPrimitive: @unchecked Sendable {
                 if let normalsBuffer = baseNormalsBuffer {
                     let normalsPointer = normalsBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: vertexCount)
                     for i in 0..<vertexCount {
-                        normalsPointer[i] = vertexPointer[i].normal
+                        normalsPointer[i] = attributes?[i].normal ?? SIMD3<Float>(0, 1, 0)
                     }
                 }
             }
@@ -811,22 +843,19 @@ public class VRMPrimitive: @unchecked Sendable {
     /// - Returns: Number of joints that were sanitized
     @discardableResult
     public func sanitizeJoints(maxJointIndex: Int) -> Int {
-        guard hasJoints, let vertexBuffer = vertexBuffer, vertexCount > 0 else {
+        guard hasJoints, let attributeBuffer, vertexCount > 0 else {
             return 0
         }
 
         let maxValid = UInt32(maxJointIndex)
         var sanitizedCount = 0
 
-        // Get mutable access to vertex buffer
-        let vertexPointer = vertexBuffer.contents().bindMemory(to: VRMVertex.self, capacity: vertexCount)
+        let vertexPointer = attributeBuffer.contents().bindMemory(to: VRMAttributeVertex.self, capacity: vertexCount)
 
         for i in 0..<vertexCount {
             var vertex = vertexPointer[i]
             var modified = false
 
-            // Check and sanitize each joint index
-            // If index is out of bounds or sentinel (65535), remap to joint 0 and zero the weight
             if vertex.joints.x > maxValid || vertex.joints.x == 65535 {
                 vertex.joints.x = 0
                 vertex.weights.x = 0
@@ -852,20 +881,17 @@ public class VRMPrimitive: @unchecked Sendable {
                 sanitizedCount += 1
             }
 
-            // Renormalize weights if any were zeroed
             if modified {
                 let weightSum = vertex.weights.x + vertex.weights.y + vertex.weights.z + vertex.weights.w
                 if weightSum > 0.0001 {
                     vertex.weights = vertex.weights / weightSum
                 } else {
-                    // All weights zeroed - set to 100% root bone
                     vertex.weights = SIMD4<Float>(1, 0, 0, 0)
                 }
                 vertexPointer[i] = vertex
             }
         }
 
-        // Update requiredPaletteSize after sanitization
         if sanitizedCount > 0 {
             var newMaxJoint: UInt32 = 0
             for i in 0..<vertexCount {
@@ -982,11 +1008,11 @@ struct VertexData {
 
 // MARK: - Vertex Structure
 
-/// Interleaved per-vertex layout used by every ``VRMPrimitive`` vertex buffer.
+/// CPU-side interleaved vertex used to construct and inspect mesh data.
 ///
-/// Must stay byte-compatible with the Metal `Vertex` struct in
-/// `Shaders/VRMShared.h`. The strict-mode validator checks the byte size at
-/// runtime via ``MetalSizeConstants/vertexSize``.
+/// GPU storage is split: ``VRMPositionVertex`` in ``VRMPrimitive/vertexBuffer``
+/// and ``VRMAttributeVertex`` in ``VRMPrimitive/attributeBuffer``. Field
+/// values are not quantized.
 public struct VRMVertex {
     /// Object-space position.
     public var position: SIMD3<Float> = [0, 0, 0]
@@ -1039,6 +1065,12 @@ extension MTLPrimitiveType {
         default: self = .triangle
         }
     }
+}
+
+/// Exporter sentinel for "no bone" (`UInt16.max` / 0xFFFF). Values at or
+/// above this are not palette indices. Valid palettes may exceed 255.
+func isSentinelJointIndex(_ index: UInt32) -> Bool {
+    index >= 65535
 }
 
 // MARK: - Metal Format Mapping
@@ -1172,6 +1204,14 @@ public class VRMNode {
     public var localMatrix: float4x4 = matrix_identity_float4x4
     /// `parent.worldMatrix * localMatrix`, recomputed by ``updateWorldTransform()``.
     public var worldMatrix: float4x4 = matrix_identity_float4x4
+    /// Inverse-transpose of the world linear part, cached here so the renderer
+    /// does not recompute it for every primitive drawn from this node.
+    public var normalMatrix: float4x4 = matrix_identity_float4x4
+
+    /// Bumps when ``worldMatrix`` is published or changes. Skinning uses this
+    /// to skip palette rebuilds for joints that have not moved.
+    public internal(set) var worldGeneration: UInt64 = 0
+    private var hasPublishedWorld = false
 
     /// World-space position of this node's origin, extracted from ``worldMatrix``. Used by spring-bone colliders.
     public var worldPosition: SIMD3<Float> {
@@ -1304,10 +1344,17 @@ public class VRMNode {
         }
         #endif
 
+        let newWorld: float4x4
         if let parent = parent {
-            worldMatrix = parent.worldMatrix * localMatrix
+            newWorld = parent.worldMatrix * localMatrix
         } else {
-            worldMatrix = localMatrix
+            newWorld = localMatrix
+        }
+        if !hasPublishedWorld || newWorld != worldMatrix {
+            worldMatrix = newWorld
+            worldGeneration &+= 1
+            hasPublishedWorld = true
+            normalMatrix = AffineNormalMatrix.inverseTranspose(of: newWorld)
         }
 
         for child in children {
@@ -1337,6 +1384,12 @@ public class VRMSkin {
     public var bufferByteOffset: Int = 0
     /// Matrix-count offset of this skin's palette slice (`bufferByteOffset / sizeof(float4x4)`).
     public var matrixOffset: Int = 0
+
+    /// Creates an empty skin. Used by tests and incremental construction;
+    /// production loading goes through ``init(from:nodes:document:bufferLoader:)``.
+    public init(name: String? = nil) {
+        self.name = name
+    }
 
     /// Loads a skin from glTF: resolves joint node references and reads inverse bind matrices.
     ///
@@ -1383,7 +1436,11 @@ public class VRMSkin {
 public class VRMTexture {
     /// Decoded GPU texture; `nil` if loading failed or was deferred.
     public var mtlTexture: MTLTexture?
-    /// Optional sampler override; renderer uses a default linear-wrap sampler when nil.
+    /// Sampler state resolved from the source glTF sampler — wrap mode per
+    /// axis plus the magnification and minification filters it asked for.
+    /// Shared between textures whose samplers resolve to the same
+    /// descriptor. The renderer falls back to a linear/repeat sampler when
+    /// nil (no device at load time, or a texture that failed to decode).
     public var sampler: MTLSamplerState?
     /// Source texture name from glTF, when available.
     public let name: String?

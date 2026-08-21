@@ -379,17 +379,13 @@ final class MouthRenderingTests: XCTestCase {
     }
     
     private func extractUVs(from primitive: VRMPrimitive) async -> [SIMD2<Float>] {
-        guard let vertexBuffer = primitive.vertexBuffer else { return [] }
-        
+        let vertices = primitive.interleavedVertices()
         var uvs: [SIMD2<Float>] = []
-        
         await withCheckedContinuation { continuation in
-            vertexBuffer.contents().withMemoryRebound(to: VRMVertex.self, capacity: primitive.vertexCount) { vertices in
-                for i in 0..<primitive.vertexCount {
-                    uvs.append(vertices[i].texCoord)
-                }
-                continuation.resume()
+            for vertex in vertices {
+                uvs.append(vertex.texCoord)
             }
+            continuation.resume()
         }
         
         return uvs

@@ -59,7 +59,7 @@ final class SpringBoneRotationTests: XCTestCase {
         try system.populateSpringBoneData(model: model)
 
         // Read initial bind direction (should be pointing DOWN in world space)
-        let initialBindDir = readBindDirection(model: model, boneIndex: 1)
+        let initialBindDir = readBindDirection(model: model, system: system, boneIndex: 1)
         print("=== Initial State (No Rotation) ===")
         print("Bind direction: \(formatVector(initialBindDir))")
 
@@ -89,7 +89,7 @@ final class SpringBoneRotationTests: XCTestCase {
         Thread.sleep(forTimeInterval: 0.05)
 
         // Read the bind direction after rotation
-        let rotatedBindDir = readBindDirection(model: model, boneIndex: 1)
+        let rotatedBindDir = readBindDirection(model: model, system: system, boneIndex: 1)
         print("\n=== After 90° Y-Rotation ===")
         print("Bind direction: \(formatVector(rotatedBindDir))")
 
@@ -111,7 +111,7 @@ final class SpringBoneRotationTests: XCTestCase {
         try system.populateSpringBoneData(model: model)
 
         // Verify initial direction is DOWN
-        let initialBindDir = readBindDirection(model: model, boneIndex: 1)
+        let initialBindDir = readBindDirection(model: model, system: system, boneIndex: 1)
         print("=== Z-Axis Rotation Test ===")
         print("Initial bind direction: \(formatVector(initialBindDir))")
 
@@ -138,7 +138,7 @@ final class SpringBoneRotationTests: XCTestCase {
         system.update(model: model, deltaTime: 1.0 / 60.0)
         Thread.sleep(forTimeInterval: 0.05)
 
-        let rotatedBindDir = readBindDirection(model: model, boneIndex: 1)
+        let rotatedBindDir = readBindDirection(model: model, system: system, boneIndex: 1)
         print("After 90° Z-rotation: \(formatVector(rotatedBindDir))")
 
         // After 90° Z-rotation, DOWN (0, -1, 0) should become SIDE (±1, 0, 0)
@@ -201,7 +201,7 @@ final class SpringBoneRotationTests: XCTestCase {
         print("=== Multiple Rotation Test ===")
 
         // Start with initial direction
-        let initial = readBindDirection(model: model, boneIndex: 1)
+        let initial = readBindDirection(model: model, system: system, boneIndex: 1)
         print("Initial: \(formatVector(initial))")
 
         // Rotate in 4 steps of 90° around Z-axis (full 360°)
@@ -220,7 +220,7 @@ final class SpringBoneRotationTests: XCTestCase {
             system.update(model: model, deltaTime: 1.0 / 60.0)
             Thread.sleep(forTimeInterval: 0.02)
 
-            let dir = readBindDirection(model: model, boneIndex: 1)
+            let dir = readBindDirection(model: model, system: system, boneIndex: 1)
             directions.append(dir)
             print("After \(step * 90)°: \(formatVector(dir))")
         }
@@ -344,15 +344,23 @@ final class SpringBoneRotationTests: XCTestCase {
         return try JSONDecoder().decode(GLTFNode.self, from: data)
     }
 
-    /// Read bind direction from the GPU buffer for a specific bone
-    private func readBindDirection(model: VRMModel, boneIndex: Int) -> SIMD3<Float> {
+    /// Read bind direction from the GPU buffer for a specific bone.
+    ///
+    /// `bindDirections` carries one slot per substep (VMK#396); the frame's
+    /// final direction is the one the last substep read, so index by
+    /// `frameSubstepCount - 1` rather than assuming a single region at 0.
+    private func readBindDirection(model: VRMModel, system: SpringBoneComputeSystem,
+                                   boneIndex: Int) -> SIMD3<Float> {
         guard let buffers = model.springBoneBuffers,
               let bindDirectionsBuffer = buffers.bindDirections,
               boneIndex < buffers.numBones else {
             return SIMD3<Float>(0, -1, 0)  // Default
         }
 
-        let ptr = bindDirectionsBuffer.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+        let slot = max(0, min(system.frameSubstepCount - 1, SpringBoneBuffers.substepSlots - 1))
+        let ptr = bindDirectionsBuffer.contents()
+            .advanced(by: slot * buffers.bindDirectionsStride)
+            .bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
         return ptr[boneIndex]
     }
 

@@ -118,6 +118,26 @@ public final class AnimationPlayer: @unchecked Sendable {
     /// Creates an idle player. No clip is loaded until ``load(_:)`` is called.
     public init() {}
 
+    /// Drops the per-frame morph-weight cache. Production `update` goes
+    /// through this so dictionary storage can be retained across frames.
+    func resetMorphWeightCache() {
+        playerLock.withLock {
+            clearMorphWeightCacheLocked()
+        }
+    }
+
+    private func clearMorphWeightCacheLocked() {
+        currentMorphWeights.removeAll(keepingCapacity: true)
+    }
+
+    var morphWeightCacheCapacity: Int {
+        playerLock.withLock { currentMorphWeights.capacity }
+    }
+
+    var morphWeightCacheCount: Int {
+        playerLock.withLock { currentMorphWeights.count }
+    }
+
     /// Loads `clip` and starts playback from time `0`.
     ///
     /// Replaces any previously loaded clip. After this call ``isFinished`` is
@@ -245,7 +265,7 @@ public final class AnimationPlayer: @unchecked Sendable {
             // Actually, currentMorphWeights is read by applyMorphWeights which might be called from another thread.
             // So we should protect it.
             playerLock.withLock {
-                currentMorphWeights.removeAll()
+                clearMorphWeightCacheLocked()
                 for track in clip.morphTracks {
                     let weight = track.sample(at: localTime)
                     currentMorphWeights[track.key] = weight

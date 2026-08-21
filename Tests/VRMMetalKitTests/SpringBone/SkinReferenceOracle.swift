@@ -251,14 +251,14 @@ extension SkinReferenceOracle {
     /// model was loaded without a Metal device).
     static func allRestPositions(model: VRMModel) -> [SIMD3<Float>] {
         var out: [SIMD3<Float>] = []
-        let stride = MemoryLayout<VRMVertex>.stride
+        let stride = MemoryLayout<VRMPositionVertex>.stride
         for mesh in model.meshes {
             for prim in mesh.primitives {
                 guard let buf = prim.vertexBuffer, prim.vertexCount > 0 else { continue }
                 let raw = buf.contents()
                 for i in 0..<prim.vertexCount {
                     let p = raw.advanced(by: i * stride)
-                        .assumingMemoryBound(to: VRMVertex.self).pointee.position
+                        .assumingMemoryBound(to: VRMPositionVertex.self).pointee.position
                     out.append(p)
                 }
             }

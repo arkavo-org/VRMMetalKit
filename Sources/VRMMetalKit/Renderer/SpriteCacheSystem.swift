@@ -27,7 +27,7 @@ import simd
 /// host computes a deterministic ``computePoseHash(characterID:expressionWeights:animationFrame:headRotation:bodyRotation:)``
 /// from the character's current pose, looks it up in the cache, and either
 /// reuses the cached texture or renders a fresh sprite via
-/// ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:completion:renderBlock:)``.
+/// ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:reverseZ:completion:renderBlock:)``.
 ///
 /// Cache entries are evicted LRU once ``maxCacheSize`` or ``maxMemoryBytes``
 /// are exceeded. Rendering can be synchronous (block until GPU finishes) or
@@ -92,7 +92,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
     /// Maximum aggregate GPU memory in bytes before LRU eviction kicks in. Default 256 MB.
     public var maxMemoryBytes: Int = 256 * 1024 * 1024
 
-    /// Default sprite resolution used when ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:completion:renderBlock:)``
+    /// Default sprite resolution used when ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:reverseZ:completion:renderBlock:)``
     /// is called without an explicit `resolution`.
     public var defaultResolution: CGSize = CGSize(width: 512, height: 512)
 
@@ -259,7 +259,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
         }
     }
 
-    /// Adds an externally rendered sprite to the cache (without going through ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:completion:renderBlock:)``).
+    /// Adds an externally rendered sprite to the cache (without going through ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:reverseZ:completion:renderBlock:)``).
     ///
     /// - Parameters:
     ///   - texture: Pre-rendered sprite texture; the cache reads its `width`/`height` for sizing.
@@ -353,6 +353,11 @@ public class SpriteCacheSystem: @unchecked Sendable {
     ///   - waitUntilCompleted: If `true` and no `externalCommandBuffer` provided, blocks until GPU finishes.
     ///     Ignored if `externalCommandBuffer` is provided (blocking with external buffers is caller's responsibility).
     ///     Default is `false` (async).
+    ///   - reverseZ: Clears the sprite's depth attachment to `0.0` instead of `1.0`, matching the
+    ///     `.greater`/`.greaterEqual` compares of ``VRMRenderer/useReverseZ``. Set this whenever the
+    ///     `renderBlock` draws with reverse-Z depth state; leaving it `false` there clears to the
+    ///     reverse-Z far plane, so every fragment fails the depth test and the sprite comes back empty.
+    ///     Default is `false` (standard Z).
     ///   - completion: Optional callback invoked on `callbackQueue` (default `.main`) when render completes.
     ///     Receives `CachedPose?` - `nil` if caching failed.
     ///   - renderBlock: Closure that performs the actual rendering. Receives encoder and target texture.
@@ -369,6 +374,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
         resolution: CGSize? = nil,
         commandBuffer externalCommandBuffer: MTLCommandBuffer? = nil,
         waitUntilCompleted: Bool = false,
+        reverseZ: Bool = false,
         completion: (@Sendable (CachedPose?) -> Void)? = nil,
         renderBlock: @Sendable (MTLRenderCommandEncoder, MTLTexture) -> Void
     ) -> CachedPose? {
@@ -425,7 +431,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
 
         renderPassDescriptor.depthAttachment.texture = depthTexture
         renderPassDescriptor.depthAttachment.loadAction = .clear
-        renderPassDescriptor.depthAttachment.clearDepth = 1.0
+        renderPassDescriptor.depthAttachment.clearDepth = reverseZ ? 0.0 : 1.0
         renderPassDescriptor.depthAttachment.storeAction = .dontCare
 
         guard let commandBuffer = externalCommandBuffer ?? commandQueue.makeCommandBuffer() else {
@@ -533,6 +539,10 @@ public class SpriteCacheSystem: @unchecked Sendable {
     ///   - resolution: Target resolution (nil = 512×512 default)
     ///   - commandBuffer: Optional command buffer for batching (nil = system creates one)
     ///   - waitForCompletion: If `true` with no external buffer, blocks on cache miss. Default `false`.
+    ///   - reverseZ: Clears the sprite's depth attachment to `0.0` instead of `1.0`, for render blocks
+    ///     that draw with the `.greater`/`.greaterEqual` compares of ``VRMRenderer/useReverseZ``.
+    ///     Default is `false` (standard Z). See
+    ///     ``renderToCache(characterID:poseHash:resolution:commandBuffer:waitUntilCompleted:reverseZ:completion:renderBlock:)``.
     ///   - completion: Callback invoked on cache miss after render completes (runs on `callbackQueue`)
     ///   - renderBlock: Rendering closure, called only on cache miss
     ///
@@ -547,6 +557,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
         resolution: CGSize? = nil,
         commandBuffer: MTLCommandBuffer? = nil,
         waitForCompletion: Bool = false,
+        reverseZ: Bool = false,
         completion: (@Sendable (CachedPose?) -> Void)? = nil,
         renderBlock: @Sendable (MTLRenderCommandEncoder, MTLTexture) -> Void
     ) -> CachedPose? {
@@ -562,6 +573,7 @@ public class SpriteCacheSystem: @unchecked Sendable {
             resolution: resolution,
             commandBuffer: commandBuffer,
             waitUntilCompleted: waitForCompletion,
+            reverseZ: reverseZ,
             completion: completion,
             renderBlock: renderBlock
         )

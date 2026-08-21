@@ -52,7 +52,7 @@ final class MToonShaderGPUTests: XCTestCase {
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
     /// Re-baselined to current MToonShader.metal source.
-    static let knownGoodShaderHash = "8250dca58ef35b96d78400d6e85a518fb43bc70e1ca27368c90c9e865740a90b"
+    static let knownGoodShaderHash = "74efa9d2b0d1b11e7b76f3645d1c5b3fd9fdba5bfb054d53380953ee520e6be5"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.
@@ -115,6 +115,7 @@ final class MToonShaderGPUTests: XCTestCase {
         // Verify key MToon functions exist
         XCTAssertTrue(functionNames.contains("mtoon_vertex"), "Missing mtoon_vertex function")
         XCTAssertTrue(functionNames.contains("mtoon_fragment_v2"), "Missing mtoon_fragment_v2 function")
+        XCTAssertTrue(functionNames.contains("mtoon_fragment_debug"), "Missing mtoon_fragment_debug function")
         XCTAssertTrue(functionNames.contains("mtoon_debug_ramp"), "Missing mtoon_debug_ramp function")
 
         // Note: linearstep is inlined, so we can't directly check for it.
@@ -133,6 +134,7 @@ final class MToonShaderGPUTests: XCTestCase {
             // MToonShader.metal
             "mtoon_vertex",
             "mtoon_fragment_v2",
+            "mtoon_fragment_debug",
             "mtoon_outline_vertex",
             "mtoon_outline_fragment",
             // SkinnedShader.metal - CRITICAL for animated VRM rendering
