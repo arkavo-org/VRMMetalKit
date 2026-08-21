@@ -10,9 +10,13 @@ VRMMetalKit targets **macOS 26+**, **iOS 26+**, and **visionOS 26+**, and is wri
 
 ### On visionOS
 
-There is no `MTKView` in an immersive scene, so drive the renderer with ``VRMRenderer/drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` instead. It is nonisolated and callable from a CompositorServices frame loop off the main actor — issue one call per eye against that frame's drawable, sharing a single simulation step. It is not reentrant: use a single render thread.
+There is no `MTKView` in an immersive scene. The host owns CompositorServices (LayerRenderer, per-eye drawables, passthrough) and submits with ``VRMRenderer/encodeCompositorViews(commandBuffer:views:)``: morphs, SpringBone, and skin palettes run once, then each ``CompositorViewTarget`` rasters with its own matrices and attachments.
 
-visionOS support is currently **build-verified in CI**. The dedicated visionOS shader slice has not landed yet, so visionOS falls back to the macOS `.metallib` slice and rendering is not yet validated to the same bar as macOS and iOS — see [issue #87](https://github.com/arkavo-org/VRMMetalKit/issues/87).
+Set ``VRMRenderer/useReverseZ``. CompositorServices projections map far→0; without reverse-Z the depth test rejects every fragment. Clear color to *transparent* black so mixed immersion keeps passthrough.
+
+``VRMRenderer/drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` is still valid as a per-eye fallback, but it double-steps physics and consumes two triple-buffer slots. Neither entry point is reentrant: one frame producer per renderer.
+
+Dedicated `xros` and `xrsimulator` shader slices ship in the package. The in-repo [VisionHost](https://github.com/arkavo-org/VRMMetalKit/tree/main/VisionHost) sample renders an avatar into a mixed-immersion space over passthrough. Remaining coverage gaps — an automated CI render assertion, device (not only simulator) validation — are tracked in [issue #87](https://github.com/arkavo-org/VRMMetalKit/issues/87) and [issue #399](https://github.com/arkavo-org/VRMMetalKit/issues/399). Crowded spatial scenes share the multi-avatar residency work in [issue #337](https://github.com/arkavo-org/VRMMetalKit/issues/337).
 
 ## Add the package
 
@@ -84,6 +88,7 @@ Set the `MTKView`'s delegate to your `AvatarRenderer` instance (with a depth att
 - <doc:SpringBonePhysics> — hair and cloth physics on the GPU
 - <doc:StrictMode> — runtime validation for renderer bindings
 - <doc:MigratingFromVRM0> — handling 0.x files alongside 1.0
+- [visionOS / VisionHost](https://github.com/arkavo-org/VRMMetalKit/tree/main/VisionHost) — mixed-immersion CompositorServices sample
 
 ## Topics
 

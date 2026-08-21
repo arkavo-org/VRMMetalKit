@@ -6,7 +6,7 @@ High-performance loading, rendering, and animation of VRM 1.0 avatars on Apple p
 
 VRMMetalKit is a Swift Package that loads VRM 1.0 (and 0.0 fallback) avatars, renders them with an MToon-compliant non-photorealistic pipeline, plays VRMA animations with humanoid retargeting, simulates SpringBone physics on the GPU, and drives expressions and body pose from ARKit.
 
-Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on macOS 26+, iOS 26+, or visionOS 26+ — for example, a virtual presence app, an avatar-based recording tool, or a creator preview surface that must match VRM 1.0 spec behavior without depending on a web stack.
+Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on macOS 26+, iOS 26+, or visionOS 26+ — for example, a virtual presence app, a mixed-reality companion in an immersive space, an avatar-based recording tool, or a creator preview surface that must match VRM 1.0 spec behavior without depending on a web stack.
 
 ## Topics
 

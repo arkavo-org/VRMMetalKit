@@ -121,6 +121,7 @@ Full API reference, integration guides, and migration notes:
 - **SpringBone Physics** — hair and cloth simulation
 - **Strict Mode** — runtime validation
 - **Migrating from VRM 0.x** — automatic 0.x compatibility notes
+- **[visionOS](#visionos)** — CompositorServices host path, mixed-immersion sample
 
 Or build locally:
 
@@ -128,6 +129,20 @@ Or build locally:
 make docs        # local preview server
 make docs-static # static site under .build/docs
 ```
+
+## visionOS
+
+VRMMetalKit targets **visionOS 26+**. Immersive scenes have no `MTKView`. The host owns CompositorServices and submits with `VRMRenderer.encodeCompositorViews` — one simulation step, then one raster per eye. Reverse-Z is required (`VRMRenderer.useReverseZ`); without it the depth test rejects every fragment.
+
+A mixed-immersion sample composites an avatar over passthrough:
+
+![AvatarSample_U standing in the visionOS simulator's living room, composited over passthrough](VisionHost/docs/mixed-immersion.png)
+
+*`AvatarSample_U` in the visionOS 26.5 simulator. The room is passthrough; the avatar is VRMMetalKit rendering through CompositorServices.* See [`VisionHost`](VisionHost/README.md) to run it.
+
+- [Getting Started — On visionOS](Sources/VRMMetalKit/VRMMetalKit.docc/Articles/GettingStarted.md#on-visionos) — `encodeCompositorViews`, reverse-Z, single render thread
+- [Performance guide](docs/PERFORMANCE_OPTIMIZATION_GUIDE.md#visionos--compositorservices) — preferred submit vs. per-eye `drawOffscreen`, Mac stand-in benchmark
+- Tracking: [issue #87](https://github.com/arkavo-org/VRMMetalKit/issues/87). Automated render assertion: [issue #399](https://github.com/arkavo-org/VRMMetalKit/issues/399). Tens of concurrent avatars in a spatial scene: [issue #337](https://github.com/arkavo-org/VRMMetalKit/issues/337).
 
 ## Used by
 
