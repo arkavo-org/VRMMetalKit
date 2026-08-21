@@ -158,8 +158,11 @@ public struct RendererConfig {
     /// (default), the materialization block is dead-stripped from every
     /// compiled MToon fragment via function constant — zero register or
     /// instruction cost — and ``VRMRenderer/materialization`` has no visual
-    /// effect. Set `true` on renderers that spawn-animate (e.g. a staging
-    /// surface); set like ``enableDepthPrepass``, after init.
+    /// effect. Set `true` on the `RendererConfig` value passed into
+    /// ``VRMRenderer/init(device:config:)`` (same as ``sampleCount`` /
+    /// ``enablePipelineArchive``). Mutating this on a live renderer only
+    /// affects on-demand specialized variants; fallback pipelines keep the
+    /// init-time constant.
     public var enableMaterialization: Bool = false
 
     /// Creates a renderer configuration. Defaults match the production baseline.

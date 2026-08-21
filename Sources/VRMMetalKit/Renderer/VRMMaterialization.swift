@@ -21,8 +21,8 @@ import simd
 /// the MToon fragment ahead of shading: fragments discard where `m > t`
 /// (progress), an emissive band lights where `t − m < ε`, and some styles add
 /// a ghost shell where `m − t < δ` (unlit preview of the not-yet-landed
-/// surface). Styles differ only in the field and in how the landed surface
-/// blends back to lit MToon.
+/// surface). Shell styles (tron, rain, blueprint, constellation) honour MASK
+/// cutoff and BLEND / alpha-to-coverage; they do not force opaque coverage.
 public enum VRMMaterializationStyle: Int32, CaseIterable, Sendable {
     /// Noise-threshold dissolve sweeping bottom-to-top with a glowing edge
     /// band (digital "braindance" build-up).

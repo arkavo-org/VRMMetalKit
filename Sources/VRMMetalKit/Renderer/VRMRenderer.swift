@@ -890,7 +890,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// colour pass then discards would linger in the depth buffer and occlude
     /// later draws.
     var materializationUsesDiscard: Bool {
-        guard let mat = materialization else { return false }
+        guard config.enableMaterialization, let mat = materialization else { return false }
         return mat.clampedProgress < 1.0 && mat.style.usesDiscard
     }
 

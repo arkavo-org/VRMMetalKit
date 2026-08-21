@@ -252,7 +252,8 @@ static inline bool needsViewNormal(constant MToonMaterial& material, constant Un
 }
 
 static inline bool needsViewDirection(constant MToonMaterial& material, constant Uniforms& uniforms) {
- return hasParametricRim(material) || uniforms.debugUVs == 10;
+ return hasParametricRim(material) || uniforms.debugUVs == 10
+     || (uniforms.materializeParams.y > 0.5 && uniforms.materializeParams.x < 1.0);
 }
 
 static inline void applyMToonOutlineExtrusion(

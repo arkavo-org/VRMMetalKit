@@ -156,7 +156,26 @@ final class MToonFunctionConstantKeySharedCacheKeyTests: XCTestCase {
         variant.debugVisualization = true
         XCTAssertNotEqual(key(base), key(variant), "debugVisualization")
 
+        variant = base
+        variant.enableMaterialization = true
+        XCTAssertNotEqual(key(base), key(variant), "enableMaterialization")
+
         let skinned = base.sharedCacheKey(isSkinned: true, colorPixelFormat: .bgra8Unorm, sampleCount: 1)
         XCTAssertNotEqual(key(base), skinned, "isSkinned")
+    }
+
+    /// `enableMaterialization` selects function constant 14 (`fc_materializationEnabled`),
+    /// so keys differing only in this field must produce different shared-cache strings.
+    func testEnableMaterializationDiscriminatesSharedCacheKey() {
+        var off = baseKey()
+        off.enableMaterialization = false
+        var on = baseKey()
+        on.enableMaterialization = true
+        XCTAssertNotEqual(
+            off.sharedCacheKey(isSkinned: false, colorPixelFormat: .bgra8Unorm, sampleCount: 1),
+            on.sharedCacheKey(isSkinned: false, colorPixelFormat: .bgra8Unorm, sampleCount: 1),
+            "enableMaterialization compiles a different fragment specialization " +
+            "and must not collide on one cache key."
+        )
     }
 }

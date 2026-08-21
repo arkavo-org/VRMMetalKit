@@ -54,11 +54,40 @@ final class MaterializationTests: XCTestCase {
         XCTAssertEqual(mat.clampedProgress, 0.0)
     }
 
+    /// Depth-prepass skip must follow the compile-time gate: setting
+    /// `materialization` on a renderer whose pipelines dead-stripped the
+    /// effect must not drop early-Z.
+    func testMaterializationUsesDiscardRequiresConfigFlag() {
+        guard let device = MTLCreateSystemDefaultDevice() else { return }
+
+        var off = RendererConfig()
+        off.enableMaterialization = false
+        let stripped = VRMRenderer(device: device, config: off)
+        stripped.materialization = VRMMaterialization(progress: 0.4, style: .dissolve)
+        XCTAssertFalse(stripped.materializationUsesDiscard,
+                       "compiled-out materialization must not skip the depth prepass")
+
+        var on = RendererConfig()
+        on.enableMaterialization = true
+        let live = VRMRenderer(device: device, config: on)
+        live.materialization = VRMMaterialization(progress: 0.4, style: .dissolve)
+        XCTAssertTrue(live.materializationUsesDiscard)
+        live.materialization = VRMMaterialization(progress: 0.4, style: .glitch)
+        XCTAssertFalse(live.materializationUsesDiscard,
+                       "glitch does not discard, so the prepass should still run")
+        live.materialization = VRMMaterialization(progress: 1.0, style: .dissolve)
+        XCTAssertFalse(live.materializationUsesDiscard)
+        live.materialization = nil
+        XCTAssertFalse(live.materializationUsesDiscard)
+    }
+
     // MARK: - Render smoke tests (shader compiles, effect changes pixels)
 
     private func render(materialization: VRMMaterialization?,
                         device: MTLDevice,
-                        enableMaterialization: Bool = true) async throws -> [UInt8] {
+                        enableMaterialization: Bool = true,
+                        eye: SIMD3<Float> = SIMD3<Float>(0, 1.3, 1.8),
+                        center: SIMD3<Float> = SIMD3<Float>(0, 1.3, 0)) async throws -> [UInt8] {
         let path = getTestVRM10ModelPath()
         try requireFixture(path, hint: testVRM10Filename)
         let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device)
@@ -73,9 +102,7 @@ final class MaterializationTests: XCTestCase {
         renderer.projectionMatrix = RenderTestSupport.makePerspective(
             fovRadians: fov, aspect: 1.0, near: 0.01, far: 100.0)
         renderer.viewMatrix = RenderTestSupport.makeLookAt(
-            eye: SIMD3<Float>(0, 1.3, 1.8),
-            center: SIMD3<Float>(0, 1.3, 0),
-            up: SIMD3<Float>(0, 1, 0))
+            eye: eye, center: center, up: SIMD3<Float>(0, 1, 0))
         renderer.setupBrightToonLighting()
         renderer.materialization = materialization
         return try RenderTestSupport.renderFrame(
@@ -157,5 +184,59 @@ final class MaterializationTests: XCTestCase {
         let fraction = differingFraction(reference, frame)
         XCTAssertGreaterThan(fraction, 0.02,
             "dissolve at progress 0 should remove (most of) the body")
+    }
+
+    /// Tron hologram fresnel is `1 - |N·V|`. Dummy interpolator `(0,0,1)`
+    /// matches a frontal camera and paints camera-facing surfaces as hologram
+    /// from the side. Correct V discards those faces (low fresnel). Measure
+    /// the fraction of *plain-render body pixels* in the upper bbox that
+    /// become clear — not a raw white count, which is similar for any V.
+    func testTronShellUsesCameraViewDirection() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal not available")
+        }
+        let eye = SIMD3<Float>(1.8, 1.3, 0)
+        let center = SIMD3<Float>(0, 1.3, 0)
+        let plain = try await render(materialization: nil, device: device,
+                                     eye: eye, center: center)
+        let mat = VRMMaterialization(progress: 0.45, style: .tron,
+                                     heightRange: 0.0...1.7, seed: 3)
+        let tron = try await render(materialization: mat, device: device,
+                                    eye: eye, center: center)
+        let size = 256
+        func isNearWhite(_ pixels: [UInt8], _ i: Int) -> Bool {
+            pixels[i] > 240 && pixels[i + 1] > 240 && pixels[i + 2] > 240
+        }
+        var minX = size, maxX = 0, minY = size, maxY = 0
+        for y in 0..<size {
+            for x in 0..<size {
+                let i = (y * size + x) * 4
+                if !isNearWhite(plain, i) {
+                    minX = min(minX, x); maxX = max(maxX, x)
+                    minY = min(minY, y); maxY = max(maxY, y)
+                }
+            }
+        }
+        XCTAssertLessThan(minX, maxX, "side-camera plain render should contain the body")
+        // Temple/side of the head: camera-facing, N ≈ +X. Correct V discards
+        // (low fresnel); dummy (0,0,1) holograms (N·Z ≈ 0). Hair cards lower
+        // in the frame face ±Z and hologram either way — do not sample those.
+        let cx = (minX + maxX) / 2
+        let cy = minY + 20
+        var body = 0
+        var discarded = 0
+        for y in (cy - 6)...(cy + 6) {
+            for x in (cx - 6)...(cx + 6) {
+                guard (0..<size).contains(x), (0..<size).contains(y) else { continue }
+                let i = (y * size + x) * 4
+                if isNearWhite(plain, i) { continue }
+                body += 1
+                if isNearWhite(tron, i) { discarded += 1 }
+            }
+        }
+        XCTAssertGreaterThan(body, 20, "head patch should hit the silhouette (bbox \(minX)...\(maxX)x\(minY)...\(maxY))")
+        let fraction = Double(discarded) / Double(body)
+        XCTAssertGreaterThan(fraction, 0.7,
+            "side-camera tron must discard the camera-facing head (dummy V=(0,0,1) paints it as hologram); discarded \(discarded)/\(body) = \(fraction)")
     }
 }
