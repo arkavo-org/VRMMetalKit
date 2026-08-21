@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import Metal
 import simd
 
 /// Mesh-aware breast collider sizing (#377). On VRoid rigs the visible breast
