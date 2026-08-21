@@ -12,7 +12,7 @@ VRMMetalKit targets **macOS 26+**, **iOS 26+**, and **visionOS 26+**, and is wri
 
 There is no `MTKView` in an immersive scene. The host owns CompositorServices (LayerRenderer, per-eye drawables, passthrough) and submits with ``VRMRenderer/encodeCompositorViews(commandBuffer:views:)``: morphs, SpringBone, and skin palettes run once, then each ``CompositorViewTarget`` rasters with its own matrices and attachments.
 
-Set ``VRMRenderer/useReverseZ``. CompositorServices projections map far→0; without reverse-Z the depth test rejects every fragment. Clear color to *transparent* black so mixed immersion keeps passthrough.
+Set ``VRMRenderer/useReverseZ`` *and* clear the depth attachment to `0.0` (Metal defaults to `1.0`). CompositorServices projections map far→0; without both the depth test rejects every fragment. Clear color to *transparent* black so mixed immersion keeps passthrough.
 
 ``VRMRenderer/drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` is still valid as a per-eye fallback, but it double-steps physics and consumes two triple-buffer slots. Neither entry point is reentrant: one frame producer per renderer.
 

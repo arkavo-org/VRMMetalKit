@@ -132,7 +132,7 @@ make docs-static # static site under .build/docs
 
 ## visionOS
 
-VRMMetalKit targets **visionOS 26+**. Immersive scenes have no `MTKView`. The host owns CompositorServices and submits with `VRMRenderer.encodeCompositorViews` — one simulation step, then one raster per eye. Reverse-Z is required (`VRMRenderer.useReverseZ`); without it the depth test rejects every fragment.
+VRMMetalKit targets **visionOS 26+**. Immersive scenes have no `MTKView`. The host owns CompositorServices and submits with `VRMRenderer.encodeCompositorViews` — one simulation step, then one raster per eye. Reverse-Z is required (`VRMRenderer.useReverseZ`) *and* the depth attachment must clear to `0.0` (Metal defaults to `1.0`); without both the depth test rejects every fragment.
 
 A mixed-immersion sample composites an avatar over passthrough:
 
