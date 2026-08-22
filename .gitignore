@@ -67,6 +67,8 @@ tmp/
 
 # Local renderer output
 /emote-output/
+/hound-demo-output/
+/perf-review-output/
 .bench-out/
 
 # VisionHost build products — `xcodegen generate` recreates them
