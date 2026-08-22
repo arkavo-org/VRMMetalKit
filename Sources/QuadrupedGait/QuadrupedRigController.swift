@@ -52,9 +52,16 @@ public struct QuadrupedRigMap: Sendable, Equatable {
 }
 
 /// Errors thrown by ``QuadrupedRigController`` setup.
-public enum QuadrupedRigError: Error, Equatable {
+public enum QuadrupedRigError: Error, Equatable, LocalizedError {
     /// A node name from the rig map was not found in the asset.
     case missingNode(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingNode(let name):
+            return "Rig node '\(name)' was not found in the glTF document. Check QuadrupedRigMap names (Leg_*_Hip, Body, Seat_Mount, …) against GLTFAsset.nodeIndex(named:)."
+        }
+    }
 }
 
 /// How engine joint rotations map onto a node's authored rest rotation.

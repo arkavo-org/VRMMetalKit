@@ -95,6 +95,32 @@ final class GLTFNodePoseEvaluationTests: XCTestCase {
         XCTAssertEqual(actual.z, expected.z, accuracy: 1e-5)
     }
 
+    func testRestPoseDecomposesMatrixNode() async throws {
+        let asset = try await loadFixture()
+        XCTAssertEqual(asset.nodeIndex(named: "matrixChild"), 4)
+        let rest = asset.restPose(ofNode: 4)
+        let t = rest.translation ?? .zero
+        XCTAssertEqual(t.x, 2, accuracy: 1e-5)
+        XCTAssertEqual(t.y, 4, accuracy: 1e-5)
+        XCTAssertEqual(t.z, 6, accuracy: 1e-5)
+        let q = rest.rotation ?? simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+        XCTAssertEqual(q.vector.x, 0, accuracy: 1e-5)
+        XCTAssertEqual(q.vector.y, 0, accuracy: 1e-5)
+        XCTAssertEqual(q.vector.z, 0, accuracy: 1e-5)
+        XCTAssertEqual(abs(q.vector.w), 1, accuracy: 1e-5)
+        let s = rest.scale ?? .zero
+        XCTAssertEqual(s.x, 1, accuracy: 1e-5)
+        XCTAssertEqual(s.y, 1, accuracy: 1e-5)
+        XCTAssertEqual(s.z, 1, accuracy: 1e-5)
+
+        // Empty evaluate must match load-time world translation, not identity.
+        let evaluated = asset.evaluate(poses: [:])
+        let world = translation(of: evaluated.worldMatrices[4])
+        XCTAssertEqual(world.x, 2, accuracy: 1e-5)
+        XCTAssertEqual(world.y, 4, accuracy: 1e-5)
+        XCTAssertEqual(world.z, 6, accuracy: 1e-5)
+    }
+
     func testEmptyPosesReproduceRestDrawCalls() async throws {
         let asset = try await loadFixture()
         let rebuilt = asset.evaluate(poses: [:])
@@ -140,10 +166,20 @@ final class GLTFNodePoseEvaluationTests: XCTestCase {
             "scene": 0,
             "scenes": [["nodes": [0]]],
             "nodes": [
-                ["name": "root", "children": [1, 3]],
+                ["name": "root", "children": [1, 3, 4]],
                 ["name": "childA", "translation": [1.0, 2.0, 3.0], "children": [2]],
                 ["name": "grandchild", "translation": [0.0, 1.0, 0.0], "mesh": 0],
                 ["name": "childB", "translation": [5.0, 0.0, 0.0], "mesh": 0],
+                [
+                    "name": "matrixChild",
+                    "matrix": [
+                        1.0, 0.0, 0.0, 0.0,
+                        0.0, 1.0, 0.0, 0.0,
+                        0.0, 0.0, 1.0, 0.0,
+                        2.0, 4.0, 6.0, 1.0,
+                    ],
+                    "mesh": 0,
+                ],
             ],
             "meshes": [
                 ["primitives": [["attributes": ["POSITION": 0]]]]

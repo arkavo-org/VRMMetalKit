@@ -155,11 +155,11 @@ public enum LocomotionMode: Sendable, Equatable {
 ///   joint angles zero points straight down from its hip pivot.
 /// - Trot pairing: ``LegID/frontLeft`` + ``LegID/rearRight`` share phase 0;
 ///   ``LegID/frontRight`` + ``LegID/rearLeft`` share phase π.
-/// - Foot-fall clamp: whenever the FK paw position penetrates the ground
-///   plane (`hipOffset.y - GaitParameters/standingHeight`), the hip/knee
-///   angles are re-solved with a closed-form 2-bone IK (law of cosines)
-///   against the segment lengths — the body and hip pivots are never
-///   translated. Unreachable targets clamp to full leg extension.
+/// - Foot height: 2-bone IK pushes the paw up to a phase-dependent height
+///   on the ground plane (`hipOffset.y - GaitParameters/standingHeight`).
+///   Stance (`cos(phase) ≤ 0`) plants at the ground; swing lifts by
+///   ``GaitParameters/stepHeight`` at mid-swing. The body and hip pivots
+///   are never translated. Unreachable targets clamp to full extension.
 public struct QuadrupedGaitEngine {
     /// Per-leg segment lengths supplied at init.
     public let segments: [LegID: LegSegmentLengths]
@@ -334,7 +334,10 @@ public struct QuadrupedGaitEngine {
             // Ankle counter-rotates so the paw segment stays level.
             var ankle = -(hip + knee)
 
-            applyGroundClamp(leg: leg, seg: seg, hip: &hip, knee: &knee, ankle: &ankle)
+            applyGroundClamp(
+                leg: leg, seg: seg, legPhase: legPhase, speedNorm: speedNorm,
+                hip: &hip, knee: &knee, ankle: &ankle
+            )
 
             // Mirrored chains: negate all joint angles. Vertical clamp
             // results carry over — paw Y depends only on angle magnitudes
@@ -348,13 +351,15 @@ public struct QuadrupedGaitEngine {
         }
     }
 
-    /// Foot-fall clamp: if the FK paw position is below the ground plane,
-    /// re-solve hip + knee with a closed-form 2-bone IK so the paw rests on
-    /// the ground (ankle keeps the paw level). Targets beyond leg reach are
-    /// clamped to full extension.
+    /// Pushes the paw up to a phase-dependent height: ground during stance,
+    /// `ground + stepHeight` at mid-swing. Only lifts — a paw already above
+    /// the target (short legs / high standing height) is left on the sinusoid.
+    /// Ankle stays level. Targets beyond leg reach clamp to full extension.
     private func applyGroundClamp(
         leg: LegID,
         seg: LegSegmentLengths,
+        legPhase: Float,
+        speedNorm: Float,
         hip: inout Float,
         knee: inout Float,
         ankle: inout Float
@@ -364,6 +369,9 @@ public struct QuadrupedGaitEngine {
         guard seg.upper > 1e-6, seg.lower > 1e-6 else { return }
 
         let groundY = hipOffset.y - parameters.standingHeight
+        // Swing envelope matches the knee-lift sinusoid: cos > 0 is swing.
+        let lift = max(0, cos(legPhase))
+        let targetPawY = groundY + max(parameters.stepHeight, 0) * speedNorm * lift
 
         // Sagittal-plane FK (angles measured from straight-down, positive
         // swinging toward +Z). Segment direction: (z: sin θ, y: -cos θ).
@@ -376,12 +384,12 @@ public struct QuadrupedGaitEngine {
         let pawY = ankleY - seg.paw * cos(pawAngle)
         let pawZ = ankleZ + seg.paw * sin(pawAngle)
 
-        guard pawY < groundY else { return }
+        guard pawY < targetPawY else { return }
 
-        // Target: keep the paw's longitudinal position, lift it to the
-        // ground; the ankle sits one paw-length above (paw stays level).
+        // Keep the paw's longitudinal position; the ankle sits one paw-length
+        // above the target (paw stays level).
         let targetZ = pawZ
-        let targetY = groundY + seg.paw
+        let targetY = targetPawY + seg.paw
 
         let dz = targetZ - hipOffset.z
         let dyDown = hipOffset.y - targetY  // positive when target below hip

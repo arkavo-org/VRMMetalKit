@@ -47,11 +47,9 @@ extension GLTFAsset {
     }
 
     /// Returns the rest-pose local TRS of a node with every component
-    /// filled in — missing document components default to identity (zero
-    /// translation, identity rotation, unit scale). Out-of-range indices
-    /// return the identity pose. Useful for composing runtime overrides
-    /// onto a node's authored transform (e.g. procedural joint rotation
-    /// multiplied onto the rest rotation).
+    /// filled in. Matrix-authored nodes are decomposed; missing TRS
+    /// components default to identity. Out-of-range indices return the
+    /// identity pose.
     public func restPose(ofNode index: Int) -> GLTFNodePose {
         let nodes = _document.nodes ?? []
         guard index >= 0, index < nodes.count else {
@@ -62,6 +60,14 @@ extension GLTFAsset {
             )
         }
         let node = nodes[index]
+        if node.matrix != nil {
+            let trs = GLTFSceneGraph.decompose(GLTFSceneGraph.localMatrix(for: node))
+            return GLTFNodePose(
+                translation: trs.translation,
+                rotation: trs.rotation,
+                scale: trs.scale
+            )
+        }
         var translation = SIMD3<Float>(0, 0, 0)
         var rotation = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         var scale = SIMD3<Float>(1, 1, 1)
@@ -92,20 +98,15 @@ extension GLTFAsset {
     ) -> (drawCalls: [GLTFDrawCall], worldMatrices: [simd_float4x4]) {
         let nodes = _document.nodes ?? []
 
-        // 1. Start from rest-pose TRS for every node.
+        // 1. Start from rest-pose TRS for every node (matrix nodes decomposed).
         var translations = [SIMD3<Float>](repeating: SIMD3<Float>(0, 0, 0), count: nodes.count)
         var rotations = [simd_quatf](repeating: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), count: nodes.count)
         var scales = [SIMD3<Float>](repeating: SIMD3<Float>(1, 1, 1), count: nodes.count)
-        for (i, node) in nodes.enumerated() {
-            if let t = node.translation, t.count >= 3 {
-                translations[i] = SIMD3<Float>(t[0], t[1], t[2])
-            }
-            if let r = node.rotation, r.count >= 4 {
-                rotations[i] = simd_quatf(ix: r[0], iy: r[1], iz: r[2], r: r[3])
-            }
-            if let s = node.scale, s.count >= 3 {
-                scales[i] = SIMD3<Float>(s[0], s[1], s[2])
-            }
+        for i in nodes.indices {
+            let rest = restPose(ofNode: i)
+            translations[i] = rest.translation ?? translations[i]
+            rotations[i] = rest.rotation ?? rotations[i]
+            scales[i] = rest.scale ?? scales[i]
         }
 
         // 2. Apply overrides. A nil component keeps the rest-pose value.

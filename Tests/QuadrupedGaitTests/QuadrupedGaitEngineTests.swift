@@ -80,6 +80,27 @@ final class QuadrupedGaitEngineTests: XCTestCase {
         return (ankleY - seg.paw * cos(pawAngle), ankleZ + seg.paw * sin(pawAngle))
     }
 
+    // MARK: - glTF sagittal mapping
+
+    func testPositiveEngineHipOnGltfDownChainMovesTowardNegativeZ() {
+        // Engine FK uses z += L·sin(θ), so a positive hip swings toward +Z.
+        // The generated hound (and typical glTF) parents a (0, −L, 0) child
+        // through Rx(θ), which yields z' = −L·sin(θ) — toward −Z, the glTF
+        // nose. `.absolute` joint space therefore already maps engine-forward
+        // onto asset-forward; negating walk angles would send the stride
+        // toward the tail.
+        let theta: Float = 0.4
+        let length: Float = 0.55
+        let engineZ = length * sin(theta)
+        XCTAssertGreaterThan(engineZ, 0)
+
+        let hip = simd_quatf(angle: theta, axis: SIMD3<Float>(1, 0, 0))
+        let child = SIMD4<Float>(0, -length, 0, 1)
+        let world = simd_float4x4(hip) * child
+        XCTAssertLessThan(world.z, 0)
+        XCTAssertEqual(world.z, -engineZ, accuracy: 1e-6)
+    }
+
     // MARK: - Trot phase pairing
 
     func testTrotDiagonalPairing() {
@@ -148,6 +169,43 @@ final class QuadrupedGaitEngineTests: XCTestCase {
     }
 
     // MARK: - Foot-fall ground clamp
+
+    func testSwingLiftsPawWhenChainExceedsStandingHeight() {
+        // Demo-like geometry: 1.40 m chain vs 0.90 m standing height. The
+        // unclamped FK paw sits ~0.5 m below the ground at every phase, so a
+        // clamp that only tests pawY < groundY welds every foot to the floor
+        // and stepHeight has no effect.
+        var params = GaitParameters()
+        params.strideLength = 0.8
+        params.stepHeight = 0.15
+        params.strideFrequency = 1.6
+        params.referenceSpeed = 2.0
+        params.standingHeight = 0.90
+        var engine = makeEngine(parameters: params)
+
+        let speed: Float = 2.0
+        engine.update(deltaTime: 0.4, speed: speed, steering: 0, acceleration: 0, mode: .walk)
+        XCTAssertEqual(engine.transitionBlend, 1)
+
+        let groundY = Self.hipOffsets[.frontLeft]!.y - params.standingHeight
+        let dt: Float = 0.008
+        let strideDuration = 1 / (params.strideFrequency * speed / params.referenceSpeed)
+        let steps = Int(strideDuration / dt) + 2
+
+        var minY: Float = .greatestFiniteMagnitude
+        var maxY: Float = -.greatestFiniteMagnitude
+        for _ in 0..<steps {
+            engine.update(deltaTime: dt, speed: speed, steering: 0, acceleration: 0, mode: .walk)
+            let paw = pawPosition(leg: .frontLeft, pose: engine.jointPoses()[.frontLeft]!)
+            minY = min(minY, paw.y)
+            maxY = max(maxY, paw.y)
+            XCTAssertGreaterThanOrEqual(paw.y, groundY - 1e-3)
+        }
+
+        XCTAssertEqual(minY, groundY, accuracy: 0.02, "stance should plant at ground, got minY=\(minY)")
+        XCTAssertEqual(maxY, groundY + params.stepHeight, accuracy: 0.03,
+                       "swing should lift by stepHeight, got maxY=\(maxY) range=\(maxY - minY)")
+    }
 
     func testGroundClampKeepsPawsAboveGround() {
         struct Variant {

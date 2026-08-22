@@ -128,6 +128,22 @@ func printUsage() {
     """)
 }
 
+func consumeValue(_ args: [String], _ i: inout Int, flag: String) throws -> String {
+    i += 1
+    guard i < args.count else {
+        throw HoundDemoError.invalidArguments("\(flag) requires a value")
+    }
+    return args[i]
+}
+
+func consumeFloat(_ args: [String], _ i: inout Int, flag: String) throws -> Float {
+    let raw = try consumeValue(args, &i, flag: flag)
+    guard let value = Float(raw) else {
+        throw HoundDemoError.invalidArguments("\(flag) must be a number, got '\(raw)'")
+    }
+    return value
+}
+
 func parseArguments() throws -> CLIOptions {
     var opts = CLIOptions()
     let args = CommandLine.arguments
@@ -138,33 +154,33 @@ func parseArguments() throws -> CLIOptions {
         case "-h", "--help":
             printUsage(); exit(0)
         case "--mode":
-            i += 1
-            guard i < args.count, let mode = DemoMode(rawValue: args[i]) else {
+            let raw = try consumeValue(args, &i, flag: "--mode")
+            guard let mode = DemoMode(rawValue: raw) else {
                 throw HoundDemoError.invalidArguments("--mode must be drive, walk, or transition")
             }
             opts.mode = mode
         case "--speed":
-            i += 1; opts.speed = Float(args[i])
+            opts.speed = try consumeFloat(args, &i, flag: "--speed")
         case "--time":
-            i += 1; opts.time = Float(args[i]) ?? 0
+            opts.time = try consumeFloat(args, &i, flag: "--time")
         case "--steering":
-            i += 1; opts.steering = Float(args[i]) ?? 0
+            opts.steering = try consumeFloat(args, &i, flag: "--steering")
         case "--accel":
-            i += 1; opts.acceleration = Float(args[i]) ?? 0
+            opts.acceleration = try consumeFloat(args, &i, flag: "--accel")
         case "-o":
-            i += 1; opts.outputPath = args[i]
+            opts.outputPath = try consumeValue(args, &i, flag: "-o")
         case "--size":
-            i += 1
-            let parts = args[i].lowercased().split(separator: "x").compactMap { Int($0) }
+            let raw = try consumeValue(args, &i, flag: "--size")
+            let parts = raw.lowercased().split(separator: "x").compactMap { Int($0) }
             guard parts.count == 2, parts[0] > 0, parts[1] > 0 else {
                 throw HoundDemoError.invalidArguments("--size must be WxH, e.g. 1024x1024")
             }
             opts.width = parts[0]; opts.height = parts[1]
         case "--rider":
-            i += 1; opts.riderPath = args[i]
+            opts.riderPath = try consumeValue(args, &i, flag: "--rider")
         case "--camera":
-            i += 1
-            guard i < args.count, let camera = CameraPreset(rawValue: args[i]) else {
+            let raw = try consumeValue(args, &i, flag: "--camera")
+            guard let camera = CameraPreset(rawValue: raw) else {
                 throw HoundDemoError.invalidArguments("--camera must be side, front, rear, or three-quarter")
             }
             opts.camera = camera
@@ -175,15 +191,21 @@ func parseArguments() throws -> CLIOptions {
         case "--no-ibl":
             opts.enableIBL = false
         case "--msaa":
-            i += 1
-            let n = Int(args[i]) ?? 4
-            opts.sampleCount = [1, 2, 4, 8].contains(n) ? n : 4
+            let raw = try consumeValue(args, &i, flag: "--msaa")
+            guard let n = Int(raw), [1, 2, 4, 8].contains(n) else {
+                throw HoundDemoError.invalidArguments("--msaa must be 1, 2, 4, or 8")
+            }
+            opts.sampleCount = n
         case "--video":
-            i += 1; opts.videoPath = args[i]
+            opts.videoPath = try consumeValue(args, &i, flag: "--video")
         case "--duration":
-            i += 1; opts.duration = Float(args[i])
+            opts.duration = try consumeFloat(args, &i, flag: "--duration")
         case "--fps":
-            i += 1; opts.fps = max(1, Int(args[i]) ?? 60)
+            let raw = try consumeValue(args, &i, flag: "--fps")
+            guard let n = Int(raw), n > 0 else {
+                throw HoundDemoError.invalidArguments("--fps must be a positive integer")
+            }
+            opts.fps = n
         default:
             if !arg.hasPrefix("-"), opts.glbPath.isEmpty {
                 opts.glbPath = arg
@@ -288,13 +310,16 @@ func createPixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
 }
 
 /// Copies the resolved color texture into the pixel buffer's base address.
-/// Leaves the buffer locked; the caller unlocks after appending it.
-func copyTextureToPixelBuffer(_ texture: MTLTexture, to pixelBuffer: CVPixelBuffer) {
-    guard CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess else {
-        return
+/// Locks the buffer for writing; the caller unlocks after appending it.
+func copyTextureToPixelBuffer(_ texture: MTLTexture, to pixelBuffer: CVPixelBuffer) throws {
+    guard CVPixelBufferLockBaseAddress(pixelBuffer, []) == kCVReturnSuccess else {
+        throw HoundDemoError.videoEncodingFailed("CVPixelBufferLockBaseAddress failed")
     }
     let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-    let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer)!
+    guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else {
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
+        throw HoundDemoError.videoEncodingFailed("CVPixelBufferGetBaseAddress returned nil")
+    }
     texture.getBytes(
         baseAddress,
         bytesPerRow: bytesPerRow,
@@ -499,8 +524,9 @@ struct AKIRAHoundDemoCLI {
         // equals that authored fold — so the controller is configured with
         // `.absolute` joint space: engine quaternions replace joint rest
         // rotations exactly, blend 0 reproduces the authored tuck, blend 1
-        // the ground-clamped gait. (Rendering mirrors the engine's sagittal
-        // Z, which leaves ground contact — a Y-only constraint — unaffected.)
+        // the ground-clamped gait. Engine +Z-forward angles map onto this
+        // asset's −Z nose because each bone child sits at local −Y: Rx(+θ)
+        // yields z' = −L·sin(θ). No extra sagittal flip.
         //
         // Stance height is owned by the demo: the engine's bodyPose bobY is a
         // small 2×-frequency oscillation, not the drive→walk body rise. Lift
@@ -840,13 +866,20 @@ struct AKIRAHoundDemoCLI {
                     guard let pixelBuffer = createPixelBuffer(width: opts.width, height: opts.height) else {
                         throw HoundDemoError.textureAllocationFailed
                     }
-                    copyTextureToPixelBuffer(resolveTexture, to: pixelBuffer)
+                    try copyTextureToPixelBuffer(resolveTexture, to: pixelBuffer)
+                    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
                     while !videoWriter.input.isReadyForMoreMediaData {
+                        if videoWriter.writer.status != .writing {
+                            let detail = videoWriter.writer.error?.localizedDescription ?? "writer status \(videoWriter.writer.status.rawValue)"
+                            throw HoundDemoError.videoEncodingFailed(detail)
+                        }
                         await Task.yield()
                     }
                     let presentationTime = CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(fps))
-                    videoWriter.adaptor.append(pixelBuffer, withPresentationTime: presentationTime)
-                    CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+                    guard videoWriter.adaptor.append(pixelBuffer, withPresentationTime: presentationTime) else {
+                        let detail = videoWriter.writer.error?.localizedDescription ?? "adaptor.append rejected frame \(frame)"
+                        throw HoundDemoError.videoEncodingFailed(detail)
+                    }
                 }
             } catch {
                 // Don't leave a truncated, unplayable .mov behind.
