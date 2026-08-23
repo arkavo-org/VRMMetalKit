@@ -456,7 +456,7 @@ extension SkinMeshOracle {
             guard entry.isTriangleTopology else { continue }
             let mesh = model.meshes[entry.meshIndex]
             let primitive = mesh.primitives[entry.primitiveIndex]
-            guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0,
+            guard primitive.vertexBuffer != nil, primitive.vertexCount > 0,
                   let indices = BodySurfacePredicate.readIndices(primitive) else {
                 preconditionFailure(
                     "SkinMeshOracle.build: \(entry.materialName) (mesh \(entry.meshIndex), primitive " +
@@ -473,7 +473,7 @@ extension SkinMeshOracle {
             let palette = skin.joints.indices.map {
                 skin.joints[$0].worldMatrix * skin.inverseBindMatrices[$0]
             }
-            let verts = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
+            let verts = primitive.interleavedVertices()
 
             var unweightedVertexCount = 0
             func world(_ index: UInt32) -> (SIMD3<Float>, VRMHumanoidBone?) {

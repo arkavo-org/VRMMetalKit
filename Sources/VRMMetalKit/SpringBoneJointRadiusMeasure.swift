@@ -79,8 +79,8 @@ public enum SpringBoneJointRadiusMeasure {
                 model.nodes.firstIndex(where: { $0 === j }) ?? -1
             }
             for primitive in mesh.primitives {
-                guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0 else { continue }
-                let verts = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
+                let verts = primitive.interleavedVertices()
+                guard !verts.isEmpty else { continue }
                 for vi in 0..<primitive.vertexCount {
                     let v = verts[vi]
                     let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]

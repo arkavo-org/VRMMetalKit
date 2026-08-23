@@ -189,9 +189,9 @@ final class HairBodyMeshPenetrationDiagnostic: XCTestCase {
             guard let mi = primitive.materialIndex else { continue }
             let matName = (model.materials[mi].name ?? "").uppercased()
             guard (matName.contains("SKIN") || matName.contains("CLOTH")), !matName.contains("HAIR") else { continue }
-            guard let vb = primitive.vertexBuffer, primitive.vertexCount > 0 else { continue }
-            let ptr = vb.contents().bindMemory(to: VRMVertex.self, capacity: primitive.vertexCount)
-            for vi in 0..<primitive.vertexCount {
+            let ptr = primitive.interleavedVertices()
+            guard !ptr.isEmpty else { continue }
+            for vi in 0..<ptr.count {
                 let v = ptr[vi]
                 let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
                 let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
