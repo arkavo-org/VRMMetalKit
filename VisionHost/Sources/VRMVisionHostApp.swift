@@ -41,7 +41,8 @@ struct VRMVisionHostApp: App {
     }
 }
 
-/// Requests a layered drawable with a depth attachment.
+/// Requests a foveated drawable with a depth attachment, at full render
+/// quality, one colour/depth texture per eye.
 ///
 /// The depth format is required: the compositor reprojects rendered frames
 /// using the depth buffer, and VRM rendering is depth-sorted regardless.
@@ -52,6 +53,13 @@ struct VRMVisionHostApp: App {
 /// must be passed into `supportedLayouts` or the layout query ignores the
 /// foveated configuration. Attach each drawable's rasterization rate map
 /// on the pass (`ImmersiveRenderer`) or a foveated drawable rejects it.
+///
+/// The `dedicated` layout is preferred because the host encodes one render
+/// pass per view. A rate map's layers are selected by render-target array
+/// index, which a per-slice pass into a `layered` texture never sets, so a
+/// layered drawable's single two-layer map would foveate both eyes with
+/// the first eye's pattern (and `rasterizationRateMaps` would have one
+/// entry for two views). Dedicated hands back one map per view instead.
 struct AvatarLayerConfiguration: CompositorLayerConfiguration {
     func makeConfiguration(capabilities: LayerRenderer.Capabilities,
                            configuration: inout LayerRenderer.Configuration) {
@@ -67,6 +75,6 @@ struct AvatarLayerConfiguration: CompositorLayerConfiguration {
         let options: LayerRenderer.Capabilities.SupportedLayoutsOptions =
             foveationEnabled ? [.foveationEnabled] : []
         let supported = capabilities.supportedLayouts(options: options)
-        configuration.layout = supported.contains(.layered) ? .layered : .dedicated
+        configuration.layout = supported.contains(.dedicated) ? .dedicated : .layered
     }
 }

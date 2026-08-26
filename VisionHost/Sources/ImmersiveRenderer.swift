@@ -31,6 +31,15 @@ import simd
 /// ``VRMRenderer/useReverseZ`` set and every pass clears depth to `0.0`
 /// (the far plane under that mapping) rather than `1.0`.
 ///
+/// ## Anti-aliasing and foveation
+/// On hardware every eye is rasterized 4x multisampled into memoryless
+/// colour/depth targets that resolve into the drawable at the end of the
+/// pass, with the drawable's rasterization rate map attached so foveation
+/// applies (the simulator gets neither — see ``sampleCount``). The
+/// renderer is only told the sample count (so its pipeline states match
+/// and `MASK` materials get alpha-to-coverage); the targets and the pass
+/// are the host's. See ``passDescriptor(color:depth:slice:rateMap:)``.
+///
 /// ## Threading
 /// The loop runs on its own thread, never the main actor, and submits through
 /// ``VRMRenderer/encodeCompositorViews(commandBuffer:views:)`` (simulate once,
@@ -60,6 +69,11 @@ final class ImmersiveRenderer: @unchecked Sendable {
     private var loggedDrawable = false
     /// One-shot: foveation enabled but a view has no rasterization rate map.
     private var loggedRateMapMismatch = false
+    /// Multisample colour/depth per drawable size. On hardware these are
+    /// memoryless: the samples live in tile memory for the duration of the
+    /// pass and resolve straight into the drawable, so they cost no
+    /// allocation and no bandwidth.
+    private var msaaTargetCache: [String: (color: MTLTexture, depth: MTLTexture)] = [:]
     private var headLookYaw: Float = 0
     private var headLookPitch: Float = 0
     /// Floor height taken from the first tracked device pose, so the avatar
@@ -76,6 +90,16 @@ final class ImmersiveRenderer: @unchecked Sendable {
     /// floor height from the device pose.
     private static let assumedEyeHeight: Float = 1.5
 
+    /// 4x MSAA on hardware. Without it `MASK` cutouts — the lip line, hair
+    /// edges — alpha-test to hard staircases that read as heavy outlines at
+    /// headset resolution, and alpha-to-coverage has nothing to write
+    /// coverage into. `1` where the GPU cannot resolve a multisampled depth
+    /// attachment: the compositor reprojects from the drawable's depth, so
+    /// depth must be resolved, not discarded, and depth resolve is an
+    /// Apple3+ feature. The simulator's GPU is below that and gets the
+    /// single-sample pass; Vision Pro is Apple8+.
+    private let sampleCount: Int
+
     init(layerRenderer: LayerRenderer) {
         self.layerRenderer = layerRenderer
         self.device = layerRenderer.device
@@ -83,6 +107,7 @@ final class ImmersiveRenderer: @unchecked Sendable {
             fatalError("[VisionHost] Metal command queue allocation failed")
         }
         self.commandQueue = queue
+        self.sampleCount = device.supportsFamily(.apple3) ? 4 : 1
     }
 
     /// Starts world tracking, loads the avatar, then hands the frame loop to a
@@ -152,7 +177,16 @@ final class ImmersiveRenderer: @unchecked Sendable {
 
         NSLog("[VisionHost] Metal device: \(device.name) registry=\(device.registryID)")
 
-        let renderer = VRMRenderer(device: device, config: RendererConfig(strict: .off))
+        // The renderer builds its pipeline states from this config, so it must
+        // match the pass the host encodes: the layer's colour format and the
+        // sample count of the host-owned multisample targets. It allocates no
+        // MSAA texture of its own here — `drawOffscreen` draws into whatever
+        // attachments the pass descriptor names.
+        var config = RendererConfig(strict: .off)
+        config.colorPixelFormat = .bgra8Unorm_srgb
+        config.sampleCount = sampleCount
+        config.alphaToCoverageForMASK = sampleCount > 1
+        let renderer = VRMRenderer(device: device, config: config)
         renderer.useReverseZ = true
         // AvatarSample hair authors gravityPower = 0; bind direction is
         // straight up. Physics + the app-layer ExternalForce above is what
@@ -178,7 +212,7 @@ final class ImmersiveRenderer: @unchecked Sendable {
         renderer.setAmbientColor(SIMD3<Float>(0.04, 0.04, 0.04))
         renderer.setLightNormalizationMode(.radiometric)
 
-        NSLog("[VisionHost] Avatar ready — reverse-Z, spring gravity, lookAt.userEyes, \(director.clipCount) clips, layout \(layerRenderer.configuration.layout)")
+        NSLog("[VisionHost] Avatar ready — reverse-Z, \(sampleCount)x MSAA, foveation \(layerRenderer.configuration.isFoveationEnabled ? "on" : "off"), spring gravity, lookAt.userEyes, \(director.clipCount) clips, layout \(layerRenderer.configuration.layout)")
         return renderer
     }
 
@@ -261,7 +295,7 @@ final class ImmersiveRenderer: @unchecked Sendable {
                 ? drawable.rasterizationRateMaps[viewIndex]
                 : nil
             if !loggedDrawable {
-                NSLog("[VisionHost] drawable \(color.width)x\(color.height) views=\(drawable.views.count) maps=\(drawable.rasterizationRateMaps.count) layout=\(layerRenderer.configuration.layout) slice=\(map.sliceIndex) foveation=\(layerRenderer.configuration.isFoveationEnabled) rateMap=\(rateMap != nil)")
+                NSLog("[VisionHost] drawable \(color.width)x\(color.height) views=\(drawable.views.count) maps=\(drawable.rasterizationRateMaps.count) layout=\(layerRenderer.configuration.layout) slice=\(map.sliceIndex) foveation=\(layerRenderer.configuration.isFoveationEnabled) rateMap=\(rateMap != nil) msaa=\(sampleCount)x")
                 loggedDrawable = true
             }
             if layerRenderer.configuration.isFoveationEnabled && rateMap == nil {
@@ -271,11 +305,14 @@ final class ImmersiveRenderer: @unchecked Sendable {
                 }
                 assertionFailure("foveated drawable requires a rasterization rate map per view; maps=\(drawable.rasterizationRateMaps.count) views=\(drawable.views.count) missing view \(viewIndex)")
             }
+            guard let pass = passDescriptor(color: color, depth: depth, slice: map.sliceIndex, rateMap: rateMap) else {
+                NSLog("[VisionHost] multisample targets unavailable for \(color.width)x\(color.height) — skipping view \(viewIndex)")
+                continue
+            }
             views.append(CompositorViewTarget(
                 colorTexture: color,
                 depthTexture: depth,
-                renderPassDescriptor: passDescriptor(
-                    color: color, depth: depth, slice: map.sliceIndex, rateMap: rateMap),
+                renderPassDescriptor: pass,
                 viewMatrix: originFromView.inverse * originFromAvatar,
                 projectionMatrix: drawable.computeProjection(viewIndex: viewIndex)))
         }
@@ -387,28 +424,73 @@ final class ImmersiveRenderer: @unchecked Sendable {
         lookAt.target = .user
     }
 
+    /// Multisample colour/depth for one drawable size, created on first use.
+    private func msaaTargets(width: Int, height: Int) -> (color: MTLTexture, depth: MTLTexture)? {
+        let key = "\(width)x\(height)"
+        if let cached = msaaTargetCache[key] { return cached }
+        func make(_ format: MTLPixelFormat, _ label: String) -> MTLTexture? {
+            let descriptor = MTLTextureDescriptor()
+            descriptor.textureType = .type2DMultisample
+            descriptor.width = width
+            descriptor.height = height
+            descriptor.pixelFormat = format
+            descriptor.sampleCount = sampleCount
+            descriptor.usage = .renderTarget
+            descriptor.storageMode = .memoryless
+            let texture = device.makeTexture(descriptor: descriptor)
+            texture?.label = label
+            return texture
+        }
+        guard let color = make(layerRenderer.configuration.colorFormat, "VisionHost MSAA colour"),
+              let depth = make(layerRenderer.configuration.depthFormat, "VisionHost MSAA depth") else {
+            return nil
+        }
+        msaaTargetCache[key] = (color, depth)
+        return (color, depth)
+    }
+
+    /// Rasterizes into the memoryless multisample targets and resolves into
+    /// the drawable's colour and depth — the compositor reprojects from that
+    /// depth, so it must be resolved, not discarded. With `sampleCount == 1`
+    /// the drawable attachments are drawn into directly.
+    ///
     /// Clears depth to `0.0` — the far plane under the compositor's reverse-Z
     /// range. Clearing to `1.0` here would put every fragment behind the far
-    /// plane and the avatar would never appear.
+    /// plane and the avatar would never appear. The depth resolve picks the
+    /// `.min` sample for the same reason: under reverse-Z that is the
+    /// farthest one, the conservative choice for reprojection.
     private func passDescriptor(
         color: MTLTexture,
         depth: MTLTexture,
         slice: Int,
         rateMap: MTLRasterizationRateMap?
-    ) -> MTLRenderPassDescriptor {
+    ) -> MTLRenderPassDescriptor? {
         let descriptor = MTLRenderPassDescriptor()
-        descriptor.colorAttachments[0].texture = color
-        descriptor.colorAttachments[0].slice = slice
         descriptor.colorAttachments[0].loadAction = .clear
         descriptor.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
-        descriptor.colorAttachments[0].storeAction = .store
-        descriptor.depthAttachment.texture = depth
-        descriptor.depthAttachment.slice = slice
         descriptor.depthAttachment.loadAction = .clear
         descriptor.depthAttachment.clearDepth = 0.0
-        descriptor.depthAttachment.storeAction = .store
         // A foveated drawable rejects the pass unless the rate map is bound.
         descriptor.rasterizationRateMap = rateMap
+        if sampleCount > 1 {
+            guard let msaa = msaaTargets(width: color.width, height: color.height) else { return nil }
+            descriptor.colorAttachments[0].texture = msaa.color
+            descriptor.colorAttachments[0].resolveTexture = color
+            descriptor.colorAttachments[0].resolveSlice = slice
+            descriptor.colorAttachments[0].storeAction = .multisampleResolve
+            descriptor.depthAttachment.texture = msaa.depth
+            descriptor.depthAttachment.resolveTexture = depth
+            descriptor.depthAttachment.resolveSlice = slice
+            descriptor.depthAttachment.storeAction = .multisampleResolve
+            descriptor.depthAttachment.depthResolveFilter = .min
+        } else {
+            descriptor.colorAttachments[0].texture = color
+            descriptor.colorAttachments[0].slice = slice
+            descriptor.colorAttachments[0].storeAction = .store
+            descriptor.depthAttachment.texture = depth
+            descriptor.depthAttachment.slice = slice
+            descriptor.depthAttachment.storeAction = .store
+        }
         return descriptor
     }
 
