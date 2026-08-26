@@ -199,6 +199,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     var testChainAsleep: [Bool] { sleepGate.asleep }
     /// Test hook: per-chain collider-group masks, same indexing as `testChainAsleep`.
     var testChainColliderMasks: [UInt32] { chainColliderMasks }
+    /// Test hook: the per-frame root/collider displacement above which a
+    /// sleeping chain is woken (`sleepThreshold` scaled by model size).
+    var testWakeMotionThreshold: Float {
+        sleepThreshold * max(cachedModelScale, VRMConstants.Physics.minScaleForThreshold)
+    }
     /// Per-bone chain index and per-chain sleep flag, bound at buffers 16/17.
     private var boneChainIndexBuffer: MTLBuffer?
     private var chainSleepBuffer: MTLBuffer?
