@@ -15,6 +15,7 @@
 //
 
 import XCTest
+import Metal
 import simd
 @testable import VRMMetalKit
 
@@ -168,5 +169,150 @@ final class Group4SpringBoneSleepTests: XCTestCase {
             chainColliderMasks: [foreignBit | 0b1, 0b1]
         )
         XCTAssertEqual(mask, [true, false])
+    }
+
+    /// Hosts A/B the async sleep gate by shortening the settle delay.
+    @MainActor
+    func testHostSettableSleepDelayFramesTakesEffect() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let path = getTestVRM10ModelPath()
+        try requireFixture(path, hint: testVRM10Filename)
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        model.updateNodeTransforms()
+        try model.initializeSpringBoneGPUSystem(device: device)
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+        model.springBoneGlobalParams?.settlingFrames = 0
+        system.sleepDelayFrames = 1
+
+        let queue = device.makeCommandQueue()!
+        func stepAsync() {
+            let cb = queue.makeCommandBuffer()!
+            system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: cb)
+            cb.commit()
+            cb.waitUntilCompleted()
+        }
+        var asleep = false
+        for _ in 0..<80 {
+            stepAsync()
+            if system.sleepingBoneCount > 0 { asleep = true; break }
+        }
+        XCTAssertTrue(asleep, "sleepDelayFrames = 1 must still allow a still chain to sleep")
+    }
+
+    /// `sleepThreshold = 0` disables velocity-based sleep so A/B can pin the gate off.
+    @MainActor
+    func testZeroSleepThresholdNeverSleepsFromVelocity() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let path = getTestVRM10ModelPath()
+        try requireFixture(path, hint: testVRM10Filename)
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        model.updateNodeTransforms()
+        try model.initializeSpringBoneGPUSystem(device: device)
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+        model.springBoneGlobalParams?.settlingFrames = 0
+        system.sleepThreshold = 0
+
+        let queue = device.makeCommandQueue()!
+        func stepAsync() {
+            let cb = queue.makeCommandBuffer()!
+            system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: cb)
+            cb.commit()
+            cb.waitUntilCompleted()
+        }
+        for _ in 0..<80 { stepAsync() }
+        XCTAssertEqual(system.sleepingBoneCount, 0,
+                       "sleepThreshold = 0 must not sleep from velocity (A/B off-switch)")
+    }
+
+    /// VRMRenderer is the public seam for the same knobs.
+    func testRendererForwardsSleepGateKnobs() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let renderer = VRMRenderer(device: device)
+        XCTAssertEqual(renderer.springBoneSleepThreshold, 0.001, accuracy: 1e-8)
+        XCTAssertEqual(renderer.springBoneSleepDelayFrames, 5)
+        renderer.springBoneSleepThreshold = 0.01
+        renderer.springBoneSleepDelayFrames = 2
+        XCTAssertEqual(renderer.springBoneSleepThreshold, 0.01, accuracy: 1e-8)
+        XCTAssertEqual(renderer.springBoneSleepDelayFrames, 2)
+        XCTAssertEqual(renderer.springBoneComputeSystem?.sleepThreshold ?? -1, 0.01, accuracy: 1e-8)
+        XCTAssertEqual(renderer.springBoneComputeSystem?.sleepDelayFrames, 2)
+        renderer.springBoneSleepThreshold = -1
+        renderer.springBoneSleepDelayFrames = 0
+        XCTAssertEqual(renderer.springBoneSleepThreshold, 0, accuracy: 1e-8)
+        XCTAssertEqual(renderer.springBoneSleepDelayFrames, 1)
+    }
+
+    /// #87 / #423: a chain that slept while resting on an authored collider must
+    /// wake when that collider moves away. Foreign/external injection already
+    /// has this coverage; authored leave-wake did not.
+    @MainActor
+    func testAsyncAuthoredColliderMotionWakesIntersectingChain() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let path = getTestVRM10ModelPath()
+        try requireFixture(path, hint: testVRM10Filename)
+        let model = try await VRMModel.load(from: URL(fileURLWithPath: path), device: device,
+            options: VRMLoadingOptions(augmentSpringBoneColliders: true))
+        model.updateNodeTransforms()
+        try model.initializeSpringBoneGPUSystem(device: device)
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+        model.springBoneGlobalParams?.settlingFrames = 0
+        let springBone = try XCTUnwrap(model.springBone)
+        XCTAssertFalse(springBone.colliders.isEmpty, "fixture needs authored colliders")
+
+        let queue = device.makeCommandQueue()!
+        func stepAsync() {
+            let cb = queue.makeCommandBuffer()!
+            system.update(model: model, deltaTime: 1.0 / 60.0, commandBuffer: cb)
+            cb.commit()
+            cb.waitUntilCompleted()
+        }
+        var asleepIndices: [Int] = []
+        for _ in 0..<120 {
+            stepAsync()
+            asleepIndices = system.testChainAsleep.enumerated().compactMap { $0.element ? $0.offset : nil }
+            if !asleepIndices.isEmpty { break }
+        }
+        XCTAssertFalse(asleepIndices.isEmpty, "async rest should sleep at least one chain")
+
+        let nonEmptySprings = springBone.springs.filter { !$0.joints.isEmpty }
+        func groupMask(forColliderIndex colliderIndex: Int) -> UInt32 {
+            var mask: UInt32 = 0
+            for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+                if group.colliders.contains(colliderIndex) {
+                    mask |= 1 << min(groupIndex, 31)
+                }
+            }
+            return mask == 0 ? 1 : mask
+        }
+
+        var movedChain: Int?
+        for chain in asleepIndices {
+            guard chain < system.testChainColliderMasks.count, chain < nonEmptySprings.count else { continue }
+            let chainMask = system.testChainColliderMasks[chain]
+            let rootNode = nonEmptySprings[chain].joints.first?.node
+            for (colliderIndex, collider) in springBone.colliders.enumerated() {
+                let colliderMask = groupMask(forColliderIndex: colliderIndex)
+                guard colliderMask & chainMask != 0 else { continue }
+                guard collider.node != rootNode else { continue }
+                guard let node = model.nodes[safe: collider.node] else { continue }
+                node.translation += SIMD3<Float>(0, 0.05, 0)
+                node.updateLocalMatrix()
+                model.updateNodeTransforms()
+                movedChain = chain
+                break
+            }
+            if movedChain != nil { break }
+        }
+        let chain = try XCTUnwrap(movedChain,
+            "need a sleeping chain whose collider-group mask intersects an authored collider on a different node")
+
+        stepAsync()
+        XCTAssertFalse(system.testChainAsleep[chain],
+                       "moved authored collider must wake intersecting chain \(chain)")
     }
 }

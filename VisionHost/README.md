@@ -81,11 +81,24 @@ head-locked one would not move.
 - **Immersive, not windowed.** The `Info.plist` declares
   `CPSceneSessionRoleImmersiveSpaceApplication` as the preferred scene
   session role, so the app opens straight into an `ImmersiveSpace`
-  containing a `CompositorLayer`. No `WindowGroup` is ever created.
+  containing a `CompositorLayer`. No `WindowGroup` is ever created. The
+  Scene Manifest also sets `UISceneInitialImmersionStyle` to
+  `UIImmersionStyleMixed` — without that key the first open ignores the
+  runtime `.immersionStyle`.
 - **Mixed, not full.** The immersion style is `.mixed`, so passthrough stays
   visible behind the avatar. This works because the render pass clears
   colour to *transparent* black — an opaque clear would paint over
-  passthrough and give back the fully immersive look.
+  passthrough and give back the fully immersive look. `.full` is a
+  different compositor contract (alpha < 1 and far-plane depth read as
+  “no content”); this sample does not use it.
+- **Foveation.** `AvatarLayerConfiguration` enables foveation when
+  `capabilities.supportsFoveation` (`isFoveationEnabled`,
+  `maxRenderQuality = 1.0`, layout options `[.foveationEnabled]`) and
+  each pass binds `drawable.rasterizationRateMaps[viewIndex]`. A
+  non-foveated drawable is locked to a soft system default that smears
+  thin line art; a foveated drawable without the rate map rejects the
+  pass. The simulator typically reports no foveation support, so this
+  is a no-op there and required for full quality on device.
 - **Reverse-Z.** CompositorServices works in reverse-Z: the SDK documents
   `cp_drawable_get_depth_range` as returning "values in reverse-z ordering,
   with the value for the far plane in the vector's `x` property and the
@@ -134,8 +147,14 @@ head-locked one would not move.
   `encodeCompositorViews`). Older hosts that called `drawOffscreen` per
   eye stepped physics twice. The GPU bench loads a separate model so it
   cannot leave the live rig in a posed rest state.
-- No gesture input, no foveation, no MSAA (drawable textures are
-  single-sampled).
-- Only tested in the simulator. The floor-height derivation in particular
-  assumes the device pose starts at eye height, which may differ on
-  hardware.
+- No gesture input. Drawable textures are still single-sampled;
+  `config.sampleCount = 4` alone does not produce MSAA on a compositor
+  drawable — the host must allocate memoryless 4× colour+depth targets
+  that resolve into the drawable, with `depthResolveFilter = .min`
+  under reverse-Z. That recipe is documented in GettingStarted, not
+  wired here.
+- Device-validated against `1.1.0` on Vision Pro (see
+  [#87](https://github.com/arkavo-org/VRMMetalKit/issues/87)). The
+  floor-height derivation assumes the first tracked device pose is at
+  eye height. Foveation / full-immersion seals / MSAA follow-ups:
+  [#423](https://github.com/arkavo-org/VRMMetalKit/issues/423).

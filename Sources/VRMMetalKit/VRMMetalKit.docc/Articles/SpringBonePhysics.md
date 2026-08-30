@@ -31,6 +31,8 @@ renderer.applySpringBoneForce(
 
 ``VRMRenderer/resetSpringBone()`` is provided as a stable entry point but is currently a no-op: the GPU pipeline reinitializes whenever a model is loaded.
 
+On the async (shared command-buffer) path, a still chain sleeps after ``VRMRenderer/springBoneSleepDelayFrames`` consecutive frames under ``VRMRenderer/springBoneSleepThreshold`` (defaults 5 frames at 1 mm/s). Sleeping chains skip XPBD until a wake condition fires (root motion, a reachable collider moving, a global param change). The sync/offline path never sleeps, so conformance renders stay bit-deterministic. Set the threshold to `0` to pin the gate off for A/B; raise the delay to make settle slower. ``VRMRenderer/wakeAllBones()`` forces every chain awake on the next update.
+
 ## External and cross-avatar colliders
 
 Two runtime paths let colliders that do not live in the VRM file deflect an avatar's hair and cloth. Both feed foreign, world-space shapes into the live simulation each frame, and both are independent second sources that compose with — rather than replace — the avatar's authored colliders.

@@ -255,14 +255,18 @@ final class ImmersiveRenderer: @unchecked Sendable {
             let color = drawable.colorTextures[map.textureIndex]
             let depth = drawable.depthTextures[map.textureIndex]
             let originFromView = originFromDevice * view.transform
+            let rateMap = viewIndex < drawable.rasterizationRateMaps.count
+                ? drawable.rasterizationRateMaps[viewIndex]
+                : nil
             if !loggedDrawable {
-                NSLog("[VisionHost] drawable \(color.width)x\(color.height) views=\(drawable.views.count) layout=\(layerRenderer.configuration.layout) slice=\(map.sliceIndex)")
+                NSLog("[VisionHost] drawable \(color.width)x\(color.height) views=\(drawable.views.count) layout=\(layerRenderer.configuration.layout) slice=\(map.sliceIndex) foveation=\(layerRenderer.configuration.isFoveationEnabled) rateMap=\(rateMap != nil)")
                 loggedDrawable = true
             }
             views.append(CompositorViewTarget(
                 colorTexture: color,
                 depthTexture: depth,
-                renderPassDescriptor: passDescriptor(color: color, depth: depth, slice: map.sliceIndex),
+                renderPassDescriptor: passDescriptor(
+                    color: color, depth: depth, slice: map.sliceIndex, rateMap: rateMap),
                 viewMatrix: originFromView.inverse * originFromAvatar,
                 projectionMatrix: drawable.computeProjection(viewIndex: viewIndex)))
         }
@@ -377,7 +381,12 @@ final class ImmersiveRenderer: @unchecked Sendable {
     /// Clears depth to `0.0` — the far plane under the compositor's reverse-Z
     /// range. Clearing to `1.0` here would put every fragment behind the far
     /// plane and the avatar would never appear.
-    private func passDescriptor(color: MTLTexture, depth: MTLTexture, slice: Int) -> MTLRenderPassDescriptor {
+    private func passDescriptor(
+        color: MTLTexture,
+        depth: MTLTexture,
+        slice: Int,
+        rateMap: MTLRasterizationRateMap?
+    ) -> MTLRenderPassDescriptor {
         let descriptor = MTLRenderPassDescriptor()
         descriptor.colorAttachments[0].texture = color
         descriptor.colorAttachments[0].slice = slice
@@ -389,6 +398,8 @@ final class ImmersiveRenderer: @unchecked Sendable {
         descriptor.depthAttachment.loadAction = .clear
         descriptor.depthAttachment.clearDepth = 0.0
         descriptor.depthAttachment.storeAction = .store
+        // A foveated drawable rejects the pass unless the rate map is bound.
+        descriptor.rasterizationRateMap = rateMap
         return descriptor
     }
 

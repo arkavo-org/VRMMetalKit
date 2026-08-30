@@ -185,9 +185,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Honest sleep/wake policy. Velocities come from completed GPU snapshots.
     private var sleepGate = SpringBoneSleepGate(chainCount: 0)
     /// Velocity threshold in units/sec below which a chain may fall asleep.
-    private var sleepThreshold: Float = 0.001
+    /// Host-settable via ``VRMRenderer/springBoneSleepThreshold``. Zero disables
+    /// velocity-based sleep (wake conditions still apply).
+    var sleepThreshold: Float = 0.001
     /// Number of consecutive frames below threshold required before sleeping.
-    private var sleepDelayFrames: Int = 5
+    /// Host-settable via ``VRMRenderer/springBoneSleepDelayFrames``.
+    var sleepDelayFrames: Int = 5
     /// Number of bones currently considered asleep.
     public var sleepingBoneCount: Int { sleepGate.sleepingBoneCount }
     /// Test hook: per-chain asleep flags.

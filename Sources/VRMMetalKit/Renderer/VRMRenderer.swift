@@ -616,6 +616,30 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Velocity in m/s below which a spring chain may fall asleep on the
+    /// async (shared command-buffer) path. Default `0.001` (1 mm/s). Set `0`
+    /// to disable velocity-based sleep so a settled chain keeps stepping.
+    /// Negative values clamp to `0`. The sync/offline path never sleeps.
+    ///
+    /// Use with ``springBoneSleepDelayFrames`` to A/B the sleep gate — a
+    /// chain that rested against a collider can otherwise stay frozen if
+    /// the collider later moves under the threshold (#423).
+    public var springBoneSleepThreshold: Float = 0.001 {
+        didSet {
+            if springBoneSleepThreshold < 0 { springBoneSleepThreshold = 0 }
+            springBoneComputeSystem?.sleepThreshold = springBoneSleepThreshold
+        }
+    }
+
+    /// Consecutive below-threshold frames before a still chain sleeps.
+    /// Default `5`. Values below `1` clamp to `1`.
+    public var springBoneSleepDelayFrames: Int = 5 {
+        didSet {
+            if springBoneSleepDelayFrames < 1 { springBoneSleepDelayFrames = 1 }
+            springBoneComputeSystem?.sleepDelayFrames = springBoneSleepDelayFrames
+        }
+    }
+
     /// When `true`, `drawCore` skips the safety-net root-node `updateWorldTransform`
     /// pass before encoding. Set this on hosts that already update world transforms
     /// every frame (e.g. callers that tick `AnimationPlayer.update` per frame, which
@@ -1058,6 +1082,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         self.expressionController = VRMExpressionController()
         do {
             self.springBoneComputeSystem = try SpringBoneComputeSystem(device: device)
+            self.springBoneComputeSystem?.sleepThreshold = max(0, springBoneSleepThreshold)
+            self.springBoneComputeSystem?.sleepDelayFrames = max(1, springBoneSleepDelayFrames)
             vrmLogPhysics("[VRMRenderer] SpringBone GPU compute system created")
         } catch {
             vrmLogPhysics("⚠️ [VRMRenderer] Failed to create SpringBone GPU system: \(error)")
