@@ -138,11 +138,11 @@ A mixed-immersion sample composites an avatar over passthrough:
 
 ![AvatarSample_U standing in the visionOS simulator's living room, composited over passthrough](VisionHost/docs/mixed-immersion.png)
 
-*`AvatarSample_U` in the visionOS 26.5 simulator. The room is passthrough; the avatar is VRMMetalKit rendering through CompositorServices.* See [`VisionHost`](VisionHost/README.md) to run it.
+*`AvatarSample_U` in the visionOS 26.5 simulator. The room is passthrough; the avatar is VRMMetalKit rendering through CompositorServices.* See [`VisionHost`](VisionHost/README.md) to run it. Vision Pro hardware validation of `1.1.0` passed ([#87](https://github.com/arkavo-org/VRMMetalKit/issues/87)).
 
-- [Getting Started — On visionOS](Sources/VRMMetalKit/VRMMetalKit.docc/Articles/GettingStarted.md#on-visionos) — `encodeCompositorViews`, reverse-Z, single render thread
+- [Getting Started — On visionOS](Sources/VRMMetalKit/VRMMetalKit.docc/Articles/GettingStarted.md#on-visionos) — `encodeCompositorViews`, reverse-Z, foveation, MSAA recipe, mixed vs full
 - [Performance guide](docs/PERFORMANCE_OPTIMIZATION_GUIDE.md#visionos--compositorservices) — preferred submit vs. per-eye `drawOffscreen`, Mac stand-in benchmark
-- Tracking: [issue #87](https://github.com/arkavo-org/VRMMetalKit/issues/87). Automated render assertion: [issue #399](https://github.com/arkavo-org/VRMMetalKit/issues/399). Tens of concurrent avatars in a spatial scene: [issue #337](https://github.com/arkavo-org/VRMMetalKit/issues/337).
+- Follow-ups: [issue #423](https://github.com/arkavo-org/VRMMetalKit/issues/423). Automated render assertion: [issue #399](https://github.com/arkavo-org/VRMMetalKit/issues/399). Tens of concurrent avatars in a spatial scene: [issue #337](https://github.com/arkavo-org/VRMMetalKit/issues/337).
 
 ## Used by
 

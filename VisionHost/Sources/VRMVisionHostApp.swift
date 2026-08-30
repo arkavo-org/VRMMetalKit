@@ -45,13 +45,28 @@ struct VRMVisionHostApp: App {
 ///
 /// The depth format is required: the compositor reprojects rendered frames
 /// using the depth buffer, and VRM rendering is depth-sorted regardless.
+///
+/// Foveation is required for full quality on device: a non-foveated drawable
+/// is locked to a soft system default that smears thin line art (MToon
+/// outlines, painted eye detail). The matching `SupportedLayoutsOptions`
+/// must be passed into `supportedLayouts` or the layout query ignores the
+/// foveated configuration. Attach each drawable's rasterization rate map
+/// on the pass (`ImmersiveRenderer`) or a foveated drawable rejects it.
 struct AvatarLayerConfiguration: CompositorLayerConfiguration {
     func makeConfiguration(capabilities: LayerRenderer.Capabilities,
                            configuration: inout LayerRenderer.Configuration) {
         configuration.depthFormat = .depth32Float
         configuration.colorFormat = .bgra8Unorm_srgb
 
-        let supported = capabilities.supportedLayouts(options: [])
+        let foveationEnabled = capabilities.supportsFoveation
+        configuration.isFoveationEnabled = foveationEnabled
+        if foveationEnabled {
+            configuration.maxRenderQuality = LayerRenderer.RenderQuality(1.0)
+        }
+
+        let options: LayerRenderer.Capabilities.SupportedLayoutsOptions =
+            foveationEnabled ? [.foveationEnabled] : []
+        let supported = capabilities.supportedLayouts(options: options)
         configuration.layout = supported.contains(.layered) ? .layered : .dedicated
     }
 }

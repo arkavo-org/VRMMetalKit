@@ -327,7 +327,13 @@ class ModelLoader: ObservableObject {
 
 CompositorServices mixed immersion is the preferred *container* for a
 visionOS avatar: layered or dedicated drawables, reverse-Z, stored depth,
-transparent color clear (passthrough), no `waitUntilCompleted`.
+transparent color clear (passthrough), no `waitUntilCompleted`. Enable
+foveation (`isFoveationEnabled`, `maxRenderQuality = 1.0`) and bind the
+drawable's rasterization rate map on every pass — a non-foveated
+drawable smears thin line art. MSAA is host-owned: memoryless 4×
+colour+depth resolving into the drawable with `depthResolveFilter =
+.min` under reverse-Z; `RendererConfig.sampleCount = 4` only selects
+the pipelines.
 
 The preferred *submit* is `VRMRenderer.encodeCompositorViews` — one
 simulation (morphs, SpringBone, skin palettes, inflight slot) and one

@@ -16,16 +16,23 @@ Set ``VRMRenderer/useReverseZ`` *and* clear the depth attachment to `0.0` (Metal
 
 ``VRMRenderer/drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` is still valid as a per-eye fallback, but it double-steps physics and consumes two triple-buffer slots. Neither entry point is reentrant: one frame producer per renderer.
 
-Dedicated `xros` and `xrsimulator` shader slices ship in the package. The in-repo [VisionHost](https://github.com/arkavo-org/VRMMetalKit/tree/main/VisionHost) sample renders an avatar into a mixed-immersion space over passthrough. Remaining coverage gaps — an automated CI render assertion, device (not only simulator) validation — are tracked in [issue #87](https://github.com/arkavo-org/VRMMetalKit/issues/87) and [issue #399](https://github.com/arkavo-org/VRMMetalKit/issues/399). Crowded spatial scenes share the multi-avatar residency work in [issue #337](https://github.com/arkavo-org/VRMMetalKit/issues/337).
+The host-owned pass descriptor is where device-quality choices live. The library stays a per-view rasterizer.
+
+- **Foveation is required for full quality.** Set `LayerRenderer.Configuration.isFoveationEnabled = true`, `maxRenderQuality = LayerRenderer.RenderQuality(1.0)`, pass `[.foveationEnabled]` into `supportedLayouts`, and bind `pass.rasterizationRateMap = drawable.rasterizationRateMaps[viewIndex]` on every pass. A non-foveated drawable is locked to a soft system default that smears thin line art (MToon outlines, painted eye detail). Without the rate map, a foveated drawable rejects the pass.
+- **MSAA is host-owned.** ``RendererConfig/sampleCount`` `= 4` only selects MSAA pipelines. On a compositor drawable the working recipe is memoryless 4× colour+depth targets that resolve into the drawable textures, with `depthResolveFilter = .min` under reverse-Z (keeps the farthest sample). `encodeCompositorViews` accepts that descriptor as-is.
+- **Mixed vs full.** Transparent colour clear is correct for `.mixed` (passthrough). `.full` treats alpha < 1 and far-plane depth as “no content” and substitutes backdrop per foveation tile — visible as black, gaze-shifting blocks wherever glass blending or alpha-to-coverage leaves alpha < 1. Seal the pass with an alpha-only write of 1.0, then a depth-only write at a finite far depth masked by the depth test.
+- **`UISceneInitialImmersionStyle`** must be declared in the Scene Manifest (`UIImmersionStyleMixed` for mixed). Without it the first open ignores the runtime `.immersionStyle`.
+
+Dedicated `xros` and `xrsimulator` shader slices ship in the package. The in-repo [VisionHost](https://github.com/arkavo-org/VRMMetalKit/tree/main/VisionHost) sample renders an avatar into a mixed-immersion space over passthrough, with foveation enabled when the device supports it. Vision Pro hardware validation of `1.1.0` passed ([#87](https://github.com/arkavo-org/VRMMetalKit/issues/87)); remaining host notes and the sleep-gate A/B knobs are [#423](https://github.com/arkavo-org/VRMMetalKit/issues/423). Automated CI render assertion is [#399](https://github.com/arkavo-org/VRMMetalKit/issues/399). Crowded spatial scenes share the multi-avatar residency work in [issue #337](https://github.com/arkavo-org/VRMMetalKit/issues/337).
 
 ## Add the package
 
-In Xcode, choose **File ▸ Add Package Dependencies…** and enter `https://github.com/arkavo-org/VRMMetalKit`. Pin to version **1.0.0** or later.
+In Xcode, choose **File ▸ Add Package Dependencies…** and enter `https://github.com/arkavo-org/VRMMetalKit`. Pin to version **1.1.0** or later for visionOS; **1.0.0** remains the macOS/iOS floor.
 
 For a `Package.swift`-based project, add the dependency directly:
 
 ```swift
-.package(url: "https://github.com/arkavo-org/VRMMetalKit", from: "1.0.0")
+.package(url: "https://github.com/arkavo-org/VRMMetalKit", from: "1.1.0")
 ```
 
 Then add `"VRMMetalKit"` to the `dependencies` of any target that needs it.

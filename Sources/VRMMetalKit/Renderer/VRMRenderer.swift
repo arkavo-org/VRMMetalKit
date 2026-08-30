@@ -94,7 +94,8 @@ import QuartzCore  // For CACurrentMediaTime
 /// Whichever entry point a host picks, exactly one of them drives a given
 /// renderer instance, from one thread. They all funnel into the same
 /// unsynchronized per-frame state — the inflight ring, the uniform-buffer
-/// index, ``viewMatrix``/``projectionMatrix``, the compositor deferral flags —
+/// index, ``viewMatrix``/``projectionMatrix``, the compositor deferral flags,
+/// ``springBoneSleepThreshold``, ``springBoneSleepDelayFrames`` —
 /// so mixing them (a `@MainActor` preview calling `draw(in:)` while a
 /// CompositorServices thread calls `encodeCompositorViews` on the same object)
 /// interleaves those writes mid-frame. Two render loops means two renderers.
@@ -616,6 +617,37 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
+    /// Velocity in m/s below which a spring chain may fall asleep on the
+    /// async (shared command-buffer) path. Default `0.001` (1 mm/s). Set `0`
+    /// to disable velocity-based sleep so a settled chain keeps stepping.
+    /// Negative values clamp to `0`. The sync/offline path never sleeps.
+    ///
+    /// Use with ``springBoneSleepDelayFrames`` to A/B the sleep gate — a
+    /// chain that rested against a collider can otherwise stay frozen if
+    /// the collider later moves under the threshold (#423).
+    ///
+    /// Write this from the same thread that drives ``encodeCompositorViews`` /
+    /// ``drawOffscreen(to:depth:commandBuffer:renderPassDescriptor:)`` (or
+    /// before that thread starts). The value is a plain `Float` forwarded into
+    /// `SpringBoneComputeSystem` with no lock; a concurrent setter racing
+    /// `update` is a data race.
+    public var springBoneSleepThreshold: Float = 0.001 {
+        didSet {
+            if springBoneSleepThreshold < 0 { springBoneSleepThreshold = 0 }
+            springBoneComputeSystem?.sleepThreshold = springBoneSleepThreshold
+        }
+    }
+
+    /// Consecutive below-threshold frames before a still chain sleeps.
+    /// Default `5`. Values below `1` clamp to `1`. Same single-writer-thread
+    /// contract as ``springBoneSleepThreshold``.
+    public var springBoneSleepDelayFrames: Int = 5 {
+        didSet {
+            if springBoneSleepDelayFrames < 1 { springBoneSleepDelayFrames = 1 }
+            springBoneComputeSystem?.sleepDelayFrames = springBoneSleepDelayFrames
+        }
+    }
+
     /// When `true`, `drawCore` skips the safety-net root-node `updateWorldTransform`
     /// pass before encoding. Set this on hosts that already update world transforms
     /// every frame (e.g. callers that tick `AnimationPlayer.update` per frame, which
@@ -1058,6 +1090,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         self.expressionController = VRMExpressionController()
         do {
             self.springBoneComputeSystem = try SpringBoneComputeSystem(device: device)
+            self.springBoneComputeSystem?.sleepThreshold = max(0, springBoneSleepThreshold)
+            self.springBoneComputeSystem?.sleepDelayFrames = max(1, springBoneSleepDelayFrames)
             vrmLogPhysics("[VRMRenderer] SpringBone GPU compute system created")
         } catch {
             vrmLogPhysics("⚠️ [VRMRenderer] Failed to create SpringBone GPU system: \(error)")
