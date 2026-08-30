@@ -47,6 +47,11 @@ public final class SpringBoneBuffers: @unchecked Sendable {
     // SoA buffers for SpringBone data (GPU-owned after allocation)
     var bonePosPrev: MTLBuffer?
     var bonePosCurr: MTLBuffer?
+    /// Immutable per-substep copy of `bonePosCurr`, taken after the existing
+    /// integrate/kinematic/collide dispatches and read by the segment collide
+    /// kernels for the PARENT endpoint. Never read/written by anything else —
+    /// see `springBoneSnapshotPositions` in `SpringBoneSegmentCollision.metal`.
+    var bonePosSnapshot: MTLBuffer?
     var boneParams: MTLBuffer?
     var restLengths: MTLBuffer?
     var bindDirections: MTLBuffer?  // Bind pose directions for stiffness spring force
@@ -115,6 +120,8 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         bonePosPrev?.label = "SpringBone BonePos Prev"
         bonePosCurr = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])
         bonePosCurr?.label = "SpringBone BonePos Curr"
+        bonePosSnapshot = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])
+        bonePosSnapshot?.label = "SpringBone BonePos Snapshot"
         boneParams = device.makeBuffer(length: boneParamsSize, options: [.storageModeShared])
         boneParams?.label = "SpringBone BoneParams"
         restLengths = device.makeBuffer(length: restLengthSize, options: [.storageModeShared])
@@ -588,9 +595,15 @@ public struct SpringBoneGlobalParams {
     public var numPlanes: UInt32
     /// Frames remaining in the settling period; non-zero means the simulation is in startup damping. Byte offset 68.
     public var settlingFrames: UInt32
-    /// Global drag multiplier (1.0 = normal, >1.0 = braking). Byte offset 72.
+    /// Segment (parent→child span) collision enable, gated on
+    /// `VRMModel.fitClothCollisionToMesh` (or the compute system's test hook).
+    /// `0` = off (default; the three shipped endpoint collide kernels are the
+    /// only collision path). `1` = also dispatch the segment collide kernels.
+    /// Byte offset 72. Fills the slot the struct's former alignment padding
+    /// occupied, so the stride is unchanged.
+    public var segmentCollision: UInt32
+    /// Global drag multiplier (1.0 = normal, >1.0 = braking). Byte offset 76.
     public var dragMultiplier: Float
-    private var _padding1: UInt32 = 0     // offset 76 - padding for float3 alignment
     /// Character root velocity in m/s, used to inject inertia into the simulation. Byte offset 80.
     public var externalVelocity: SIMD3<Float>
 
@@ -599,7 +612,7 @@ public struct SpringBoneGlobalParams {
          windPhase: Float, windDirection: SIMD3<Float>, substeps: UInt32,
          numBones: UInt32, numSpheres: UInt32, numCapsules: UInt32, numPlanes: UInt32 = 0,
          settlingFrames: UInt32 = 0, externalVelocity: SIMD3<Float> = .zero,
-         dragMultiplier: Float = 1.0) {
+         dragMultiplier: Float = 1.0, segmentCollision: UInt32 = 0) {
         self.gravity = gravity
         self.dtSub = dtSub
         self.windAmplitude = windAmplitude
@@ -612,6 +625,7 @@ public struct SpringBoneGlobalParams {
         self.numCapsules = numCapsules
         self.numPlanes = numPlanes
         self.settlingFrames = settlingFrames
+        self.segmentCollision = segmentCollision
         self.dragMultiplier = dragMultiplier
         self.externalVelocity = externalVelocity
     }

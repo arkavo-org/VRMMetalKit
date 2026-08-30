@@ -31,8 +31,8 @@ struct SpringBoneParams {
     uint numCapsules;     // offset 60
     uint numPlanes;       // offset 64
     uint settlingFrames;  // offset 68
-    float dragMultiplier; // offset 72 - global drag multiplier (1.0 = normal, >1.0 = braking)
-    uint _padding1;       // offset 76 - padding for float3 alignment
+    uint segmentCollision; // offset 72 - segment (parent-child span) collision enable; unused by this kernel. Fills the slot the former alignment padding occupied.
+    float dragMultiplier; // offset 76 - global drag multiplier (1.0 = normal, >1.0 = braking)
     float3 externalVelocity; // offset 80 - character root velocity for inertia (requires 16-byte alignment)
 };
 

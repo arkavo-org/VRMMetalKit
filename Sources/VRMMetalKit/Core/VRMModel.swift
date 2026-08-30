@@ -53,6 +53,17 @@ import Metal
 ///
 /// - SeeAlso: ``VRMRenderer``, ``VRMLoadingOptions``, ``VRMError``.
 public class VRMModel: @unchecked Sendable {
+    #if DEBUG
+    /// Counts `updateNodeTransforms()` calls so the pipeline's propagation
+    /// budget is assertable. Debug-only; reset by the test that reads it.
+    /// Increments outside `lock`, unsynchronized across model instances —
+    /// fine for the single-threaded pipeline tests that read it, but a
+    /// `swift test --sanitize=thread` run touching this from more than one
+    /// model concurrently may report a benign data race on the counter
+    /// itself, unrelated to any propagation-correctness question.
+    nonisolated(unsafe) public static var propagationCountForTesting = 0
+    #endif
+
     // MARK: - Thread Safety
     let lock = NSLock()
 
@@ -159,6 +170,10 @@ public class VRMModel: @unchecked Sendable {
     /// it to false to compare reserved vs. unreserved without a coordinator
     /// (design §8.1).
     public var reservesForeignColliderTail: Bool = true
+
+    /// Whether `VRMLoadingOptions.fitClothCollisionToMesh` was set at load time.
+    /// Read by the compute-dispatch path to gate the measured-radius kernel.
+    public private(set) var fitClothCollisionToMesh: Bool = false
 
     /// Texture indices used as outline-width mask (linear R8, not sRGB).
     public var outlineWidthMaskTextureIndices: Set<Int> = []
@@ -542,7 +557,10 @@ public class VRMModel: @unchecked Sendable {
         if let device = device, model.springBone != nil {
             await context?.updatePhase(.initializingPhysics, progress: 0.5)
             let augmentColliders = context?.options.augmentSpringBoneColliders ?? true
-            try model.initializeSpringBoneGPUSystem(device: device, augmentColliders: augmentColliders)
+            let fitClothCollisionToMesh = context?.options.fitClothCollisionToMesh ?? false
+            try model.initializeSpringBoneGPUSystem(
+                device: device, augmentColliders: augmentColliders,
+                fitClothCollisionToMesh: fitClothCollisionToMesh)
             await context?.updatePhase(.initializingPhysics, progress: 1.0)
         }
 
@@ -1171,8 +1189,14 @@ public class VRMModel: @unchecked Sendable {
     ///   - augmentColliders: When true, synthesizes additive bone-derived
     ///     colliders (issue #309) and persists them on `springBone.syntheticColliders`
     ///     before sizing GPU buffers. Authored colliders are never mutated.
+    ///   - fitClothCollisionToMesh: When true, measures each spring joint's
+    ///     collision half-extent from its skinned mesh and floors
+    ///     `effectiveHitRadius` at that extent, without ever mutating the
+    ///     authored `hitRadius`. See `SpringBoneJointRadiusMeasure`.
     /// - Throws: An error if buffer allocation fails.
-    public func initializeSpringBoneGPUSystem(device: MTLDevice, augmentColliders: Bool = true) throws {
+    public func initializeSpringBoneGPUSystem(
+        device: MTLDevice, augmentColliders: Bool = true, fitClothCollisionToMesh: Bool = false
+    ) throws {
         guard springBone != nil else {
             return // No SpringBone data in this model
         }
@@ -1214,6 +1238,19 @@ public class VRMModel: @unchecked Sendable {
             expandedSpringBone.syntheticColliders = []
         }
         self.springBone = expandedSpringBone
+
+        // Measure and floor per-joint collision radii from skinned mesh extent
+        // (issue #326-adjacent opt-in). Authored `hitRadius` is never mutated;
+        // `effectiveHitRadius` sits beside it. Requires the uploaded vertex
+        // buffers, so it runs here (post-`loadResources`), same as the
+        // mesh-fitted synthetic colliders above.
+        self.fitClothCollisionToMesh = fitClothCollisionToMesh
+        if fitClothCollisionToMesh, self.springBone != nil {
+            let rows = SpringBoneJointRadiusMeasure.measure(model: self)
+            for r in rows where r.effective > self.springBone!.springs[r.springIndex].joints[r.jointIndex].hitRadius {
+                self.springBone!.springs[r.springIndex].joints[r.jointIndex].effectiveHitRadius = r.effective
+            }
+        }
 
         // Count total bones from all springs
         var totalBones = 0
@@ -1345,6 +1382,9 @@ public class VRMModel: @unchecked Sendable {
     ///
     /// - Complexity: O(n) where n is the number of nodes.
     public func updateNodeTransforms() {
+        #if DEBUG
+        Self.propagationCountForTesting += 1
+        #endif
         for node in nodes where node.parent == nil {
             node.updateWorldTransform()
         }

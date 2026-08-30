@@ -257,6 +257,17 @@ public struct VRMLoadingOptions: Sendable {
     /// positions differ from pre-#309 versions on affected models.
     public let augmentSpringBoneColliders: Bool
 
+    /// When `true`, measures each spring joint's collision half-extent from the
+    /// mesh actually skinned to it (`SpringBoneJointRadiusMeasure`) and floors
+    /// `hitRadius` at that measured extent for simulation purposes, without ever
+    /// mutating the authored value (see `VRMSpringJoint.effectiveHitRadius`).
+    ///
+    /// Authored `hitRadius` is routinely near-zero on VRoid hair chains, far
+    /// smaller than the cloth cards it is meant to protect; this flag closes
+    /// that gap. Default `false`: per the #326 boundary, VMK does not deviate
+    /// from authored physics without explicit host consent.
+    public var fitClothCollisionToMesh: Bool
+
     /// Creates loading options.
     ///
     /// - Parameters:
@@ -265,18 +276,21 @@ public struct VRMLoadingOptions: Sendable {
     ///   - enableCancellation: Whether to check for Task cancellation (default: true).
     ///   - optimizations: Performance optimizations to apply (default: .default).
     ///   - augmentSpringBoneColliders: Synthesize bone-derived colliders additive to authored ones (default: true).
+    ///   - fitClothCollisionToMesh: Measure and floor spring-joint collision radii from skinned mesh extent (default: false).
     public init(
         progressCallback: (@Sendable (VRMLoadingProgress) -> Void)? = nil,
         progressUpdateInterval: TimeInterval = 0.1,
         enableCancellation: Bool = true,
         optimizations: VRMLoadingOptimization = .default,
-        augmentSpringBoneColliders: Bool = true
+        augmentSpringBoneColliders: Bool = true,
+        fitClothCollisionToMesh: Bool = false
     ) {
         self.progressCallback = progressCallback
         self.progressUpdateInterval = progressUpdateInterval
         self.enableCancellation = enableCancellation
         self.optimizations = optimizations
         self.augmentSpringBoneColliders = augmentSpringBoneColliders
+        self.fitClothCollisionToMesh = fitClothCollisionToMesh
     }
     
     /// Default options: no progress callback, cancellation enabled, ``VRMLoadingOptimization/default`` optimizations.
