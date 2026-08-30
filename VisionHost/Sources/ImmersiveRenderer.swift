@@ -58,6 +58,8 @@ final class ImmersiveRenderer: @unchecked Sendable {
     private var compositorMeasured = 0
     private var compositorDumped = false
     private var loggedDrawable = false
+    /// One-shot: foveation enabled but a view has no rasterization rate map.
+    private var loggedRateMapMismatch = false
     private var headLookYaw: Float = 0
     private var headLookPitch: Float = 0
     /// Floor height taken from the first tracked device pose, so the avatar
@@ -259,8 +261,15 @@ final class ImmersiveRenderer: @unchecked Sendable {
                 ? drawable.rasterizationRateMaps[viewIndex]
                 : nil
             if !loggedDrawable {
-                NSLog("[VisionHost] drawable \(color.width)x\(color.height) views=\(drawable.views.count) layout=\(layerRenderer.configuration.layout) slice=\(map.sliceIndex) foveation=\(layerRenderer.configuration.isFoveationEnabled) rateMap=\(rateMap != nil)")
+                NSLog("[VisionHost] drawable \(color.width)x\(color.height) views=\(drawable.views.count) maps=\(drawable.rasterizationRateMaps.count) layout=\(layerRenderer.configuration.layout) slice=\(map.sliceIndex) foveation=\(layerRenderer.configuration.isFoveationEnabled) rateMap=\(rateMap != nil)")
                 loggedDrawable = true
+            }
+            if layerRenderer.configuration.isFoveationEnabled && rateMap == nil {
+                if !loggedRateMapMismatch {
+                    NSLog("[VisionHost] ⚠️ foveation enabled but missing rasterization rate map for view \(viewIndex) (maps=\(drawable.rasterizationRateMaps.count) views=\(drawable.views.count))")
+                    loggedRateMapMismatch = true
+                }
+                assertionFailure("foveated drawable requires a rasterization rate map per view; maps=\(drawable.rasterizationRateMaps.count) views=\(drawable.views.count) missing view \(viewIndex)")
             }
             views.append(CompositorViewTarget(
                 colorTexture: color,
