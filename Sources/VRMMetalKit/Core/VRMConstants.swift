@@ -63,7 +63,8 @@ public enum VRMConstants {
         /// emotion preset dropped, leaving the face static.
         public static let maxMorphTargets: Int = 256
 
-        /// Active-morph count at which the renderer switches from CPU to GPU morph evaluation.
+        /// Unused. Morph accumulation always runs on the GPU compute path; there
+        /// is no CPU evaluation to switch away from. Kept for source compatibility.
         public static let morphComputeThreshold: Int = 8
     }
 

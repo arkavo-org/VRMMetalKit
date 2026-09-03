@@ -83,8 +83,9 @@ let options = VRMLoadingOptions(
 - **Impact**: 2-4x faster mesh loading
 - **Use when**: Model has 2+ meshes
 - **Note**: Automatically disabled for single meshes. Primitive decodes are
-  additionally capped by a global limiter sized to `activeProcessorCount`,
-  so peak decode memory stays bounded regardless of mesh count.
+  capped by a global limiter sized to `activeProcessorCount` on *every* load,
+  parallel or serial, so peak decode memory stays bounded regardless of mesh
+  count; this flag only controls whether meshes themselves load concurrently.
 
 ### `.parallelMaterialLoading`
 - **Impact**: Faster material conversion on multi-material models
@@ -161,7 +162,13 @@ let task = Task {
         let model = try await VRMModel.load(from: url, options: options)
         // Use model...
     } catch {
-        if case GLTFError.loadingCancelled = error {
+        // Cancellation surfaces as either error: the loader's own checkpoints
+        // throw `GLTFError.loadingCancelled`, while a cancel that lands inside
+        // a primitive decode propagates Swift's `CancellationError` out of the
+        // decode task group.
+        if error is CancellationError {
+            print("Loading was cancelled")
+        } else if case GLTFError.loadingCancelled = error {
             print("Loading was cancelled")
         }
     }
@@ -404,8 +411,10 @@ let renderer = VRMRenderer(device: device, config: config)
   and trivial-rejects whole primitives (including MToon outline hulls) by
   world-space AABB. Culled draws are counted in
   `PerformanceTracker` as `culledDraws`, not `drawCalls`.
-- Skinned primitives cull against a rest-pose AABB inflated by hips
-  displacement, so fast locomotion does not pop in and out at screen edges.
+- Skinned primitives cull against a rest-pose AABB inflated by a fixed 50%
+  (a quarter-extent margin per side, to absorb pose variance) and translated
+  by hips displacement, so fast locomotion does not pop in and out at screen
+  edges. The margin is constant: it does not grow with displacement.
 - Whole-model early-out is also available before encoding:
   `model.isOutsideFrustum(_:modelMatrix:)`.
 
@@ -425,12 +434,14 @@ let renderer = VRMRenderer(device: device, config: config)
   `springBoneSleepDelayFrames` (default 5) sleeps and skips XPBD until root
   motion, collider motion, or a param change wakes it:
 ```swift
-renderer.springBoneSleepThreshold = 0.001
-renderer.springBoneSleepDelayFrames = 5
+renderer.springBoneSleepThreshold = 0.004  // sleep sooner: 4 mm/s
+renderer.springBoneSleepDelayFrames = 15   // but only after 15 settled frames
 renderer.sleepingBoneCount  // performance readout; all-asleep skips the pipeline
 ```
 - The `synchronousSpringBone` offline path never sleeps (deterministic).
-  Set the threshold to `0` to pin the gate off for A/B testing.
+  Set the threshold to `0` to keep every chain awake for A/B testing; no
+  velocity is below zero, so nothing sleeps. The gate's own bookkeeping (the
+  velocity snapshot, wake-mask scan, and flag upload) still runs.
 
 ### `skipPreDrawTransformUpdate`
 - `drawCore` walks the node hierarchy once as a safety net before encoding.
@@ -443,10 +454,13 @@ renderer.skipPreDrawTransformUpdate = true
   exposes this as `--skip-pre-draw`.
 
 ### Outlines
-- `renderer.outlineWidth = 0` disables the entire inverted-hull outline pass
-  (guarded per frame and per material via `outlineWidthMode` /
-  `outlineWidthFactor`). Scale down rather than editing materials when
-  profiling a fragment-bound scene.
+- `renderer.outlineWidth = 0` disables the entire inverted-hull outline pass,
+  both the dedicated pass and the hull merged into the body draw (guarded per
+  frame and per material via `outlineWidthMode` / `outlineWidthFactor`). Scale
+  down rather than editing materials when profiling. The saving is mostly
+  vertex-side: the hull re-skins every outlined vertex, while its fragments are
+  front-culled and depth-tested against the already-drawn body, so only the
+  silhouette rim shades.
 
 ### Crowd sprite cache
 - `SpriteCacheSystem` pre-renders static or near-static poses to sprites
@@ -455,10 +469,12 @@ renderer.skipPreDrawTransformUpdate = true
   60 FPS via hybrid rendering with `CharacterPrioritySystem`.
 
 ### Depth prepass (experimental)
-- `RendererConfig.enableDepthPrepass` (default `false`) renders an
-  opaque-only position prepass for early-Z rejection of occluded fragments
-  in the main pass. Only a net win when opaque overdraw is high; measure
-  with `make bench-gate` before enabling.
+- `RendererConfig.enableDepthPrepass` (default `false`) renders a
+  position-only prepass for early-Z rejection of occluded fragments in the
+  main pass. It covers opaque, non-face geometry only: face materials are
+  skipped by the prepass and keep their existing depth state in the main
+  pass, so a face-heavy scene sees no early-Z benefit. Only a net win when
+  opaque overdraw is high; measure with `make bench-gate` before enabling.
 
 ### Leave the quality divergences off unless wanted
 - `dualQuaternionSkinning`, `alphaToCoverageForMASK`, `enableMaterialization`,

@@ -156,16 +156,18 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     /// ≤ 3/255 per channel. Devices that cannot sample BC keep RGBA8.
     public static let aggressiveTextureCompression = VRMLoadingOptimization(rawValue: 1 << 1)
 
-    /// Skips secondary UV channels (`TEXCOORD_1` and above) when present.
+    /// Reserved; currently has no effect. Only `TEXCOORD_0` is ever read, so
+    /// secondary UV channels are already skipped on every load.
     public static let skipSecondaryUVs = VRMLoadingOptimization(rawValue: 1 << 2)
 
-    /// Decodes textures concurrently where supported.
+    /// Reserved; currently has no effect. Use ``parallelTextureLoading`` for
+    /// concurrent texture work.
     public static let parallelTextureDecoding = VRMLoadingOptimization(rawValue: 1 << 3)
 
     /// Loads textures in parallel using a `TaskGroup`; large win for models with many textures.
     public static let parallelTextureLoading = VRMLoadingOptimization(rawValue: 1 << 4)
 
-    /// Defers texture loading until first use rather than loading every texture at startup.
+    /// Reserved; currently has no effect. Textures always load eagerly.
     public static let lazyTextureLoading = VRMLoadingOptimization(rawValue: 1 << 5)
 
     /// Loads meshes in parallel using a `TaskGroup`.
@@ -177,7 +179,9 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     /// Builds ``VRMMaterial`` instances in parallel.
     public static let parallelMaterialLoading = VRMLoadingOptimization(rawValue: 1 << 8)
 
-    /// Default optimization set: skip verbose logging and use parallel texture decoding.
+    /// Default optimization set: skip verbose logging. ``parallelTextureDecoding``
+    /// is included but currently has no effect, so this set does no parallel
+    /// work; add ``parallelTextureLoading`` for that.
     public static let `default`: VRMLoadingOptimization = [.skipVerboseLogging, .parallelTextureDecoding]
 
     /// Most aggressive optimization preset. Trades some image quality for shortest load time.
@@ -222,6 +226,11 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
 /// When ``enableCancellation`` is `true` (the default), the loader checks
 /// `Task.isCancelled` at each phase boundary and throws
 /// ``GLTFError/loadingCancelled`` if cancellation has been requested.
+///
+/// A cancel that lands inside a primitive decode instead propagates Swift's
+/// `CancellationError` out of the decode task group, on both the serial and
+/// the parallel mesh path and regardless of ``enableCancellation``. Callers
+/// that special-case cancellation must match both error types.
 public struct VRMLoadingOptions: Sendable {
 
     /// Optional progress callback invoked on the `MainActor` during loading.
@@ -262,7 +271,9 @@ public struct VRMLoadingOptions: Sendable {
     /// - Parameters:
     ///   - progressCallback: Called periodically with loading progress. Runs on MainActor.
     ///   - progressUpdateInterval: Minimum seconds between progress updates (default: 0.1).
-    ///   - enableCancellation: Whether to check for Task cancellation (default: true).
+    ///   - enableCancellation: Whether to check for Task cancellation at phase
+    ///     boundaries (default: true). Primitive decodes throw
+    ///     `CancellationError` regardless of this flag.
     ///   - optimizations: Performance optimizations to apply (default: .default).
     ///   - augmentSpringBoneColliders: Synthesize bone-derived colliders additive to authored ones (default: true).
     public init(
