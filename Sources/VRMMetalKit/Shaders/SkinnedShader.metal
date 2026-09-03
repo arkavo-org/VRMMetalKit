@@ -571,65 +571,14 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  VertexOut out;
  out.instanceId = 0;
 
- // Store RAW weights for threshold check
- float4 rawWeights = in.weights;
-
- // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
- float4 weights = rawWeights;
- float weightSum = dot(weights, float4(1.0));
- if (weightSum > 1e-6) {
- weights = weights / weightSum;
- } else {
- weights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
- }
-
- // Apply skeletal skinning - use RAW weights for threshold check
- float threshold = WEIGHT_THRESHOLD;
-
- // Safe buffer limit: clamp to 255 to prevent reading garbage memory
- uint maxJoint = kMaxSafeJointIndex;
- uint4 safeJoints = min(in.joints, uint4(maxJoint));
-
- float4 gatedWeights = float4(
-     rawWeights[0] > threshold ? weights[0] : 0.0,
-     rawWeights[1] > threshold ? weights[1] : 0.0,
-     rawWeights[2] > threshold ? weights[2] : 0.0,
-     rawWeights[3] > threshold ? weights[3] : 0.0);
-
- // Skin the outline hull with the SAME path as the body (#197) so the
- // inverted-hull outline tracks the DQS-skinned surface instead of an LBS one.
+ // Skin the outline hull with the SAME path as the body (#197) via the
+ // shared vrm_skin helper, so the inverted-hull outline tracks the
+ // DQS-skinned surface instead of an LBS one.
  float4 skinnedPosition;
  float3 skinnedNormal;
- if (uniforms.useDualQuaternionSkinning > 0.5) {
- float3 dqPos = in.position;
- float3 dqNrm = in.normal;
- dqsSkin(jointMatrices[safeJoints[0]], jointMatrices[safeJoints[1]],
-         jointMatrices[safeJoints[2]], jointMatrices[safeJoints[3]],
-         gatedWeights, dqPos, dqNrm);
- skinnedPosition = float4(dqPos, 1.0);
- skinnedNormal = dqNrm;
- } else {
- float4x4 skinMatrix = float4x4(0.0);
- skinMatrix += jointMatrices[safeJoints[0]] * gatedWeights[0];
- skinMatrix += jointMatrices[safeJoints[1]] * gatedWeights[1];
- skinMatrix += jointMatrices[safeJoints[2]] * gatedWeights[2];
- skinMatrix += jointMatrices[safeJoints[3]] * gatedWeights[3];
- if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
- skinMatrix = jointMatrices[safeJoints[0]];
- }
- skinnedPosition = skinMatrix * float4(in.position, 1.0);
- skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
- }
-
- // SANITY CHECK: Detect NaN/Inf or extreme skinned positions and fall back to original
- bool posHasNaN = any(isnan(skinnedPosition.xyz)) || any(isinf(skinnedPosition.xyz));
- bool posHasExtreme = length(skinnedPosition.xyz) > 50.0;
- bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
- if (posHasNaN || posHasExtreme || normalHasNaN) {
- skinnedPosition = float4(in.position, 1.0);
- skinnedNormal = in.normal;
- }
- skinnedNormal = normalize(skinnedNormal);
+ vrm_skin(in.position, in.normal, in.joints, in.weights,
+          jointMatrices, uniforms.useDualQuaternionSkinning > 0.5,
+          skinnedPosition, skinnedNormal);
 
  // Transform to world space
  float4 worldPos = uniforms.modelMatrix * skinnedPosition;
