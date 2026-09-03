@@ -161,8 +161,7 @@ let task = Task {
         let model = try await VRMModel.load(from: url, options: options)
         // Use model...
     } catch {
-        if let gltfError = error as? GLTFError,
-           gltfError == .loadingCancelled {
+        if case GLTFError.loadingCancelled = error {
             print("Loading was cancelled")
         }
     }
