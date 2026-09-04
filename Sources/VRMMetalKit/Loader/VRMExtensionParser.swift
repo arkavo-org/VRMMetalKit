@@ -1151,15 +1151,13 @@ public class VRMExtensionParser {
                             continue
                         }
 
-                        // VRM 0.0 collider format.
-                        // VRM 0.0 (Unity) uses a left-handed -Z forward system; VRM 1.0 / glTF uses +Z forward.
-                        // The node hierarchy is conjugated by `Ry180` at load time
-                        // (see `VRMModel.buildNodeHierarchy`), so the parent's local frame is
-                        // now rotated in world.  To keep the collider at the same world
-                        // position, the offset (expressed in the parent's local frame) must
-                        // be rotated too: `offset_new = Ry180·offset_old = (-x, y, -z)`.
+                        // VRM 0.0 collider offsets retain Unity's handedness:
+                        // first reflect Z to enter the glTF node's local frame,
+                        // as three-vrm's VRM0 loader does. Then apply the same
+                        // Ry180 facing conversion as buildNodeHierarchy.
+                        // Ry180 * reflectZ * (x,y,z) = (-x,y,z).
                         let rawOffset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-                        let offset = SIMD3<Float>(-rawOffset.x, rawOffset.y, -rawOffset.z)
+                        let offset = SIMD3<Float>(-rawOffset.x, rawOffset.y, rawOffset.z)
                         let radius = parseFloatValue(colliderDict["radius"]) ?? 0.0
 
                         // VRM 0.0 only supports spheres in most implementations
