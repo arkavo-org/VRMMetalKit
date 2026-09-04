@@ -21,14 +21,16 @@ import simd
 
 // MARK: - Skinning Implementation
 
-/// Builds and updates the shared GPU joint-matrices buffer that backs every skinned draw.
+/// Builds and updates the GPU joint palettes used by skinned draws.
 ///
 /// ## Discussion
-/// `VRMSkinningSystem` allocates one large `MTLBuffer` of `float4x4` joint
-/// matrices that covers every ``VRMSkin`` in the model. Each skin records
-/// its own offset (``VRMSkin/matrixOffset`` and
+/// `VRMSkinningSystem` allocates a ring of `MTLBuffer` palettes, one per
+/// renderer in-flight slot. Each palette covers every ``VRMSkin`` in the model.
+/// Each skin records its own offset (``VRMSkin/matrixOffset`` and
 /// ``VRMSkin/bufferByteOffset``) so per-skin draws bind a view onto the
-/// shared buffer rather than allocating per-skin buffers.
+/// selected frame buffer rather than allocating per-skin buffers. The renderer
+/// selects a slot only after acquiring it and retains it across compositor views.
+/// Slots with an older pose copy the latest skin palette when its joints are idle.
 ///
 /// ### Joint cap and padding
 /// Draws bind the buffer at their own skin's slice base, so the shader's
@@ -54,8 +56,14 @@ import simd
 /// current frame.
 public class VRMSkinningSystem {
     private let device: MTLDevice
-    /// The shared joint-matrices buffer. Exposed for debugging and renderer-side validation; callers should bind via ``getJointMatricesBuffer()`` and offset by ``VRMSkin/bufferByteOffset``.
+    /// The current frame's joint-matrices buffer. Exposed for debugging and renderer-side validation; callers should bind via ``getJointMatricesBuffer()`` and offset by ``VRMSkin/bufferByteOffset``.
     public var jointMatricesBuffer: MTLBuffer?
+    // Each renderer in-flight slot owns its palette until GPU completion.
+    private var paletteBuffers: [MTLBuffer] = []
+    private var paletteSlot = 0
+    private var paletteVersions: [[UInt64]] = []
+    private var skinVersions: [UInt64] = []
+    private var latestPaletteSlots: [Int] = []
     /// Dedicated read-only buffer of identity matrices. Bound at the joint
     /// matrices slot when the skinned pipeline draws a primitive whose owning
     /// node has `skin == nil` (issue #161). Distinct from `jointMatricesBuffer`
@@ -76,7 +84,9 @@ public class VRMSkinningSystem {
     private var lastJointGeneration: [Int: UInt64] = [:]
 
     /// A/B test hook: when set to a skin index, ``updateJointMatrices(for:skinIndex:)`` writes identity matrices for that skin instead of the computed palette.
-    public var testIdentityPalette: Int? = nil
+    public var testIdentityPalette: Int? = nil {
+        didSet { markAllSkinsDirty() }
+    }
 
     /// Creates a skinning system bound to `device`. Call ``setupForSkins(_:)`` before issuing updates.
     public init(device: MTLDevice) {
@@ -110,6 +120,13 @@ public class VRMSkinningSystem {
         totalMatrixCount = currentOffset
         skinCount = skins.count
         lastJointGeneration.removeAll(keepingCapacity: true)
+        skinDirty.removeAll(keepingCapacity: true)
+        paletteSlot = 0
+        skinVersions = Array(repeating: 0, count: skinCount)
+        latestPaletteSlots = Array(repeating: 0, count: skinCount)
+        paletteVersions = Array(
+            repeating: Array(repeating: 0, count: skinCount),
+            count: VRMConstants.Rendering.maxBufferedFrames)
         for index in skins.indices {
             skinDirty[index] = true
         }
@@ -121,12 +138,23 @@ public class VRMSkinningSystem {
         // keeps the clamp in-bounds for EVERY skin's offset, not just skin 0's.
         let paddedMatrixCount = totalMatrixCount + VRMConstants.Animation.maxJointCount
         let totalBufferSize = paddedMatrixCount * matrixSize
-        jointMatricesBuffer = device.makeBuffer(length: totalBufferSize, options: .storageModeShared)
-        vrmLog("[SKINNING] Allocated buffer for \(totalMatrixCount) matrices (padded to \(paddedMatrixCount), \(totalBufferSize) bytes)")
+        paletteBuffers = (0..<VRMConstants.Rendering.maxBufferedFrames).compactMap { slot in
+            let buffer = device.makeBuffer(length: totalBufferSize, options: .storageModeShared)
+            buffer?.label = "Skin palettes frame \(slot)"
+            return buffer
+        }
+        // An incomplete ring cannot safely support the renderer's in-flight count.
+        guard paletteBuffers.count == VRMConstants.Rendering.maxBufferedFrames else {
+            paletteBuffers.removeAll()
+            jointMatricesBuffer = nil
+            return
+        }
+        jointMatricesBuffer = paletteBuffers[paletteSlot]
+        vrmLog("[SKINNING] Allocated \(paletteBuffers.count) palettes for \(totalMatrixCount) matrices (\(totalBufferSize) bytes each, including padding)")
 
         // Initialize ALL matrices to identity to prevent garbage reads
         // This includes padding matrices that may be accessed by clamped garbage indices
-        if let buffer = jointMatricesBuffer {
+        for buffer in paletteBuffers {
             let pointer = buffer.contents().bindMemory(to: float4x4.self, capacity: paddedMatrixCount)
             for i in 0..<paddedMatrixCount {
                 pointer[i] = float4x4(1)  // Identity matrix
@@ -165,6 +193,15 @@ public class VRMSkinningSystem {
 
         // Skip recomputation when the skin's joints have not changed.
         guard isSkinDirty(skinIndex: skinIndex) else {
+            // A clean skin may still have an older pose in this frame slot.
+            // Copy the latest published palette instead of rebuilding matrices.
+            if paletteVersions[paletteSlot][skinIndex] != skinVersions[skinIndex] {
+                let source = paletteBuffers[latestPaletteSlots[skinIndex]]
+                buffer.contents().advanced(by: skin.bufferByteOffset).copyMemory(
+                    from: source.contents().advanced(by: skin.bufferByteOffset),
+                    byteCount: skin.joints.count * MemoryLayout<float4x4>.stride)
+                paletteVersions[paletteSlot][skinIndex] = skinVersions[skinIndex]
+            }
             markSkinUpdated(skinIndex: skinIndex)
             return
         }
@@ -172,6 +209,12 @@ public class VRMSkinningSystem {
         let pointer = buffer.contents()
             .advanced(by: skin.bufferByteOffset)
             .bindMemory(to: float4x4.self, capacity: skin.joints.count)
+
+        skinVersions[skinIndex] &+= 1
+        paletteVersions[paletteSlot][skinIndex] = skinVersions[skinIndex]
+        latestPaletteSlots[skinIndex] = paletteSlot
+        markSkinUpdated(skinIndex: skinIndex)
+        clearSkinDirty(skinIndex: skinIndex)
 
         // A/B TEST: Use identity matrices if this skin is being tested
         if let testSkin = testIdentityPalette, testSkin == skinIndex {
@@ -182,9 +225,7 @@ public class VRMSkinningSystem {
         }
 
         lastUpdatedSkinIndex = skinIndex
-        markSkinUpdated(skinIndex: skinIndex)
         debugFrameCount += 1
-        clearSkinDirty(skinIndex: skinIndex)
 
         // Iterate via unsafe buffer pointers so the hot loop doesn't
         // retain/release each VRMNode reference or the array containers on
@@ -207,7 +248,8 @@ public class VRMSkinningSystem {
         }
     }
 
-    /// Returns the shared joint-matrices `MTLBuffer`, or `nil` if ``setupForSkins(_:)`` has not been called.
+    /// Returns the selected frame's palette, or `nil` if setup did not allocate the ring.
+    /// Fetch this each frame; a previously returned buffer still belongs to that frame.
     public func getJointMatricesBuffer() -> MTLBuffer? {
         return jointMatricesBuffer
     }
@@ -225,6 +267,15 @@ public class VRMSkinningSystem {
     /// Clears the per-frame "last updated skin" cache. Call once per frame before issuing palette updates.
     public func beginFrame() {
         lastUpdatedSkinIndex = nil
+    }
+
+    /// Select a palette after the renderer has acquired this in-flight slot.
+    /// All views of a compositor frame keep the same slot until completion.
+    func beginFrame(bufferIndex: Int) {
+        precondition((0..<VRMConstants.Rendering.maxBufferedFrames).contains(bufferIndex))
+        paletteSlot = bufferIndex
+        jointMatricesBuffer = paletteBuffers.isEmpty ? nil : paletteBuffers[bufferIndex]
+        beginFrame()
     }
 
     /// Stamps every skin as fresh for `frameNumber` (used when the caller updates all skins in one pass).

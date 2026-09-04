@@ -966,6 +966,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // Scratch dictionary reused by the transparency-sort pass to avoid a
     // per-frame dictionary allocation. Keys are primitiveIndex.
     private var viewZByIndex: [Float] = []
+
+    // Reuse the authored material conversion across primitives and outline draws.
+    // Reset per pass so edits made between frames/views remain visible.
+    private var baseMToonUniformsByMaterial: [Int: MToonMaterialUniforms] = [:]
     private var morphedBuffers: [MorphKey: MTLBuffer] = [:]
     /// Expression-weight fingerprint that produced ``morphedBuffers``.
     private var lastMorphWeightsFingerprint: UInt64?
@@ -2005,6 +2009,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             return
         }
         encoderStateCache.reset()
+        baseMToonUniformsByMaterial.removeAll(keepingCapacity: true)
 
         // Debug: Log rendering statistics
         var totalMeshesWithNodes = 0
@@ -2059,7 +2064,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             vrmLog("[UPDATE ORDER] Frame \(frameCounter): Updating all skin palettes BEFORE drawing")
 
             // Reset skinning cache at frame boundary
-            skinningSystem?.beginFrame()
+            skinningSystem?.beginFrame(bufferIndex: currentUniformBufferIndex)
 
             // Rebuild only skins whose joints actually moved. The legacy
             // `animationState` path still dirties every skin because it can
@@ -3329,7 +3334,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                     // If material has MToon extension, use those properties
                     if let mtoon = material.mtoon {
-                        mtoonUniforms = MToonMaterialUniforms(from: mtoon)
+                        mtoonUniforms = baseMToonUniforms(materialIndex: materialIndex, mtoon: mtoon)
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
                         // glTF-core normalTextureInfo.scale lives on
                         // VRMMaterial (the glTF base layer), not on the
@@ -4589,6 +4594,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         )
     }
 
+    private func baseMToonUniforms(materialIndex: Int, mtoon: VRMMToonMaterial) -> MToonMaterialUniforms {
+        if let cached = baseMToonUniformsByMaterial[materialIndex] { return cached }
+        let uniforms = MToonMaterialUniforms(from: mtoon)
+        baseMToonUniformsByMaterial[materialIndex] = uniforms
+        return uniforms
+    }
+
     private func renderMToonOutlines(
         encoder: MTLRenderCommandEncoder,
         renderItems: [RenderItem],
@@ -4764,7 +4776,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
 
             // Set MToon material uniforms
-            var mtoonUniforms = MToonMaterialUniforms(from: mtoon)
+            var mtoonUniforms = baseMToonUniforms(materialIndex: materialIndex, mtoon: mtoon)
             mtoonUniforms.baseColorFactor = material.baseColorFactor
             // Preserve source version for shader paths that truly differ
             // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
