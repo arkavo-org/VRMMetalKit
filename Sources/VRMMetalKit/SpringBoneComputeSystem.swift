@@ -3014,6 +3014,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         globalParams.numSpheres = UInt32(buffers.numSpheres + activeForeignSpheres)
         globalParams.numCapsules = UInt32(buffers.numCapsules + activeForeignCapsules)
 
+        // Settle with the authored stiffness and drag. The interactive startup
+        // ramp disables stiffness for its first 60 steps, letting collisions
+        // push zero-gravity hair away from its rest pose throughout a 30-step
+        // warmup. Freezing that pose would preserve the displacement forever.
+        globalParams.settlingFrames = 0
+        model.springBoneGlobalParams?.settlingFrames = 0
+
         // Warmup dispatches executeXPBDStep directly, bypassing update()
         // entirely — so it never reaches update()'s sleep-gate handling. A
         // prior async-path frame on this same system may have left stale
@@ -3058,18 +3065,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             fillCenterDeltaBufferForFrame(substepCount: 1)
         }
 
-        // Step 4: Run silent physics steps to let bones settle into natural hanging positions.
-        // This happens BEFORE the first render, so there's no visual bounce.
-        //
-        // Decrement `settlingFrames` per step so the warmup *consumes* the
-        // settling period. Previously the counter only decremented during
-        // the animated update path, which meant short post-warmup animations
-        // (e.g. a 0.25 s swing) ran with `settlingFrames` still >60 — the
-        // `1 - smoothstep(0, 60, frames)` scale zeroed every joint's
-        // stiffness and the conformance harness saw all stiffness sweep
-        // values collapse to the same gravity-only trajectory (VMK#240).
-        // Warmup is exactly when settling *should* finish: the bones are
-        // explicitly being settled to their hanging pose.
+        // Integrate the fixed pose with the same stiffness and drag used after
+        // warmup, so the published state settles toward their equilibrium.
         let warmupDeltaTime: TimeInterval = 1.0 / 60.0  // Simulate at 60fps
         for _ in 0..<steps {
             // Update animated positions (colliders, bind directions, etc.)
@@ -3078,11 +3075,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Run one physics step
             var params = globalParams
             params.windPhase += Float(warmupDeltaTime)
-            if params.settlingFrames > 0 {
-                params.settlingFrames -= 1
-                model.springBoneGlobalParams?.settlingFrames = params.settlingFrames
-                globalParams.settlingFrames = params.settlingFrames
-            }
 
             // Copy params to GPU. Warmup dispatches with substepIndex 0, so
             // slot 0 is the one the kernels read.
@@ -3099,26 +3091,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // values — the settled pose then varies run to run. Warmup is a
             // one-time load cost, so drain every step.
             waitForPendingFrame()
-        }
-
-        // VMK#292 (regression of VMK#240): force `settlingFrames` to 0 at
-        // the end of warmup so the post-warmup animation runs with the
-        // stiffness contribution fully engaged. Per-step decrement above
-        // only drains by `steps`; with the default `steps = 30` against
-        // an initial counter of 120 the loop leaves `settlingFrames = 90`,
-        // and a typical 0.25 s swing decrements another 30 (1/60-s frames
-        // at the 1/120-s fixed substep). That puts the swing inside the
-        // `1 - smoothstep(0, 60, frames)` band where stiffness is scaled
-        // to ~0 — the entire stiffness sweep collapses to the rest
-        // trajectory. Warmup is exactly when settling *should* finish,
-        // so close the gap unconditionally.
-        if globalParams.settlingFrames > 0 {
-            globalParams.settlingFrames = 0
-            model.springBoneGlobalParams?.settlingFrames = 0
-            globalParamsBuffer?.contents().copyMemory(
-                from: &globalParams,
-                byteCount: MemoryLayout<SpringBoneGlobalParams>.stride
-            )
         }
 
         // Wait for all GPU work to complete before proceeding
@@ -3145,44 +3117,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // VMK#233: Apply settled positions to nodes so the first render frame
-        // shows the settled state, not the load-time rest pose. Without this,
-        // writeBonesToNodes() skips on frame 1 because the async snapshot
-        // hasn't completed yet, causing a one-frame lag.
-        //
-        // Skip the apply when every joint in the model has gravityPower == 0
-        // and there are no external forces during warmup (wind/characterVelocity
-        // are zero by construction here). In that case the integrator produces
-        // no movement and applying the snapshot only introduces a tiny readback
-        // divergence vs three-vrm's full-reload reset path on broken assets
-        // like AvatarSample_A_1.0 where authors set gravityPower=0 throughout.
+        // Publish collision/stiffness results even when gravity is zero.
+        // Gravity on an unrelated chain must not decide whether these nodes
+        // receive their settled pose.
         if !settledPositions.isEmpty {
-            var anyGravity = false
-            outer: for spring in springBone.springs {
-                for joint in spring.joints {
-                    let jointName = model.nodes[safe: joint.node]?.name
-                    let effective = springBoneOverride.apply(
-                        stiffness: joint.stiffness,
-                        dragForce: joint.dragForce,
-                        gravityPower: joint.gravityPower,
-                        jointName: jointName
-                    )
-                    if effective.gravityPower > 0 {
-                        anyGravity = true
-                        break outer
-                    }
-                }
-            }
-            if anyGravity {
-                snapshotLock.lock()
-                latestPositionsSnapshot = settledPositions
-                latestPrevPositionsSnapshot = settledPositions
-                completedChainVelocities = Array(repeating: 0, count: chainRanges.count)
-                latestCompletedFrame = 1
-                lastAppliedFrame = 0
-                snapshotLock.unlock()
-                writeBonesToNodes(model: model)
-            }
+            snapshotLock.lock()
+            latestPositionsSnapshot = settledPositions
+            latestPrevPositionsSnapshot = settledPositions
+            completedChainVelocities = Array(repeating: 0, count: chainRanges.count)
+            latestCompletedFrame = 1
+            lastAppliedFrame = 0
+            snapshotLock.unlock()
+            writeBonesToNodes(model: model)
         }
 
         // Reset time accumulator

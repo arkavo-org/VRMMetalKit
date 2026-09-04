@@ -421,6 +421,56 @@ final class SpringBoneSettlingTests: XCTestCase {
             "loadModel should warm up spring physics (tip settled, not at bind)")
     }
 
+    // MARK: - Warmup
+
+    func testWarmupUsesAuthoredStiffnessRegardlessOfStartupRamp() throws {
+        var poses: [[SIMD3<Float>]] = []
+        for ramp: UInt32 in [0, 120] {
+            let model = try buildHorizontalChain(boneCount: 4, gravityPower: 0.25, settlingFrames: ramp)
+            model.springBoneGlobalParams?.gravity = .zero
+            for index in 0..<4 {
+                model.springBone?.springs[0].joints[index].stiffness = 0.85
+            }
+            let system = try SpringBoneComputeSystem(device: device)
+            try system.populateSpringBoneData(model: model)
+            model.springBoneGlobalParams?.settlingFrames = ramp
+            system.warmupPhysics(model: model, steps: 30)
+            XCTAssertEqual(model.springBoneGlobalParams?.settlingFrames, 0)
+            poses.append(readBonePositions(model: model))
+        }
+        XCTAssertEqual(poses[0].count, poses[1].count)
+        for index in poses[0].indices {
+            XCTAssertLessThan(simd_distance(poses[0][index], poses[1][index]), 0.00001,
+                              "Warmup must settle using the runtime forces, independent of startup ramp")
+        }
+    }
+
+    func testWarmupPublishesCollisionResponseWithZeroGravity() throws {
+        let model = try buildHorizontalChain(boneCount: 3, gravityPower: 0, settlingFrames: 120)
+        // Spring roots need a parent frame for rotation writeback, like a hair
+        // root attached to the head in an avatar.
+        let anchor = VRMNode(index: 3, gltfNode: try createGLTFNode(name: "anchor", translation: .zero))
+        anchor.children = [model.nodes[0]]
+        model.nodes[0].parent = anchor
+        model.nodes.append(anchor)
+        anchor.updateWorldTransform()
+        model.springBoneGlobalParams?.gravity = .zero
+        model.springBone?.colliders = [VRMCollider(
+            node: 0, shape: .sphere(offset: SIMD3<Float>(0.1, -0.02, 0), radius: 0.04))]
+        model.springBone?.colliderGroups = [VRMColliderGroup(colliders: [0])]
+        model.springBone?.springs[0].colliderGroups = [0]
+        model.springBoneBuffers?.allocateBuffers(numBones: 3, numSpheres: 1, numCapsules: 0)
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+        let before = model.nodes[1].worldPosition
+        system.warmupPhysics(model: model, steps: 30)
+        let positions = readBonePositions(model: model)
+        XCTAssertGreaterThan(simd_distance(positions[1], before), 0.001,
+                             "Fixture must produce an actual collider push-out")
+        XCTAssertGreaterThan(simd_distance(model.nodes[1].worldPosition, before), 0.001,
+                             "Zero gravity must not suppress publishing the collided pose")
+    }
+
     // MARK: - Helper Methods
 
     private func createGLTFNode(name: String, translation: SIMD3<Float>) throws -> GLTFNode {
