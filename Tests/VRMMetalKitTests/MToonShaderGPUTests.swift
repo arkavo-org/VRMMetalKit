@@ -51,8 +51,9 @@ final class MToonShaderGPUTests: XCTestCase {
     /// Update this hash when intentionally changing the shader.
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
-    /// Re-baselined to current MToonShader.metal source.
-    static let knownGoodShaderHash = "74efa9d2b0d1b11e7b76f3645d1c5b3fd9fdba5bfb054d53380953ee520e6be5"
+    /// Re-baselined after the outline vertex shader gained morphed-position
+    /// inputs (the hull now extrudes from the morphed surface).
+    static let knownGoodShaderHash = "f01cef182d68d0d41ce4ebf7a8ff25d5f71a0d4df6eb854b66ed51bba062a2a3"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.

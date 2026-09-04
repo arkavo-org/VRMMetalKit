@@ -87,9 +87,10 @@ public struct RendererConfig {
     /// Global multiplier for per-material depth bias. Increase to push coplanar surfaces further apart.
     public var depthBiasScale: Float = 1.0
 
-    /// Experimental: render a position-only depth prepass for opaque geometry
-    /// before the main pass, so the fragment-bound main pass gets early-Z
-    /// rejection of occluded fragments. Default `false`; only a net win when
+    /// Experimental: render a position-only depth prepass for opaque, non-face
+    /// geometry before the main pass, so the fragment-bound main pass gets
+    /// early-Z rejection of occluded fragments. Face materials are excluded and
+    /// keep their current depth state. Default `false`; only a net win when
     /// opaque overdraw is high — measure with the benchmark before enabling.
     public var enableDepthPrepass: Bool = false
 
