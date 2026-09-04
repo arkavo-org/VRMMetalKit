@@ -462,6 +462,17 @@ renderer.skipPreDrawTransformUpdate = true
   front-culled and depth-tested against the already-drawn body, so only the
   silhouette rim shades.
 
+### Frame resources and material preparation
+- Joint palettes use one persistent buffer per in-flight frame slot. CPU
+  updates therefore cannot overwrite a palette still being read by the GPU.
+  When animation stops, an older slot copies the latest palette once; a slot
+  that already has the current pose skips both the copy and matrix evaluation.
+  The three-slot ring adds two padded palette buffers compared with one buffer.
+- The renderer converts each used MToon material to base uniforms once per
+  render pass, reusing that value for other primitives and dedicated outlines.
+  Per-draw values and expression overrides are applied to copies. The cache is
+  cleared each pass so runtime material edits remain visible.
+
 ### Crowd sprite cache
 - `SpriteCacheSystem` pre-renders static or near-static poses to sprites
   (LRU-evicted by count and memory bytes) so background characters skip
