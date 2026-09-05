@@ -153,8 +153,10 @@ enum SpringBoneContactColliderSet {
             SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
             SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
             SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2]))
+        // `tail` is a local-space position like `offset` (VRMC_springBone-1.0),
+        // not a vector from `offset`.
         let p0 = node.worldPosition + rot * offset
-        let p1 = p0 + rot * tail
+        let p1 = node.worldPosition + rot * tail
         return CapsuleCollider(p0: p0, p1: p1, radius: radius, groupMask: 0)
     }
 
