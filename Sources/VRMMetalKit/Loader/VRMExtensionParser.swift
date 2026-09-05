@@ -1113,10 +1113,12 @@ public class VRMExtensionParser {
                         // The default `(0, -1, 0)` is Ry180-invariant, so common
                         // assets are unaffected; this flip matches three-vrm's
                         // VRM0 → VRM1 converter for stylized gravity directions.
+                        // Components arrive as AnyCodable Double/Int, never Float,
+                        // so coerce through `parseFloatValue`.
                         if let gravityDir = groupDict["gravityDir"] as? [String: Any] {
-                            let x = gravityDir["x"] as? Float ?? 0
-                            let y = gravityDir["y"] as? Float ?? -1
-                            let z = gravityDir["z"] as? Float ?? 0
+                            let x = parseFloatValue(gravityDir["x"]) ?? 0
+                            let y = parseFloatValue(gravityDir["y"]) ?? -1
+                            let z = parseFloatValue(gravityDir["z"]) ?? 0
                             joint.gravityDir = SIMD3<Float>(-x, y, -z)
                         }
 
@@ -1229,11 +1231,13 @@ public class VRMExtensionParser {
         }
     }
 
+    /// VRM 0.x `{x, y, z}` object. Components arrive as AnyCodable Double/Int
+    /// (never Float), so each goes through `parseFloatValue`.
     private func parseVRM0Vector3(_ value: Any?) -> SIMD3<Float>? {
         if let dict = value as? [String: Any] {
-            let x = dict["x"] as? Float ?? 0
-            let y = dict["y"] as? Float ?? 0
-            let z = dict["z"] as? Float ?? 0
+            let x = parseFloatValue(dict["x"]) ?? 0
+            let y = parseFloatValue(dict["y"]) ?? 0
+            let z = parseFloatValue(dict["z"]) ?? 0
             return SIMD3<Float>(x, y, z)
         }
         return nil

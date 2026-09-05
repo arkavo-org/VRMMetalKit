@@ -422,7 +422,9 @@ public class VRMLookAtController {
         // Yaw: rotation around Y axis (horizontal)
         targetYaw = atan2(direction.x, direction.z)
 
-        // Pitch: rotation around X axis (vertical)
+        // Pitch: rotation around X axis (vertical), positive = up.
+        // (VRMC_vrm lookAt.md labels pitch down-positive; the sign is internal
+        // and folded back in when the bone quaternion is built.)
         targetPitch = asin(clamp(direction.y, min: -1, max: 1))
 
         // Apply state-based modifications
@@ -452,11 +454,11 @@ public class VRMLookAtController {
 
         // Apply horizontal constraints
         if currentYaw > 0 {
-            // Looking right (outer)
+            // Looking left (yaw > 0, toward +X): outer map bound
             let maxAngle = lookAt.rangeMapHorizontalOuter.inputMaxValue * (.pi / 180)
             currentYaw = min(currentYaw, maxAngle)
         } else {
-            // Looking left (inner)
+            // Looking right (yaw < 0): inner map bound
             let maxAngle = lookAt.rangeMapHorizontalInner.inputMaxValue * (.pi / 180)
             currentYaw = max(currentYaw, -maxAngle)
         }
@@ -496,11 +498,13 @@ public class VRMLookAtController {
         guard let model = model else { return }
         guard let lookAt = lookAtData else { return }
 
-        // Left eye: yaw > 0 (right) is inner (toward nose), yaw < 0 (left) is outer
+        // VRMC_vrm lookAt.md: yaw > 0 is toward +X, the model's left. The left
+        // eye swings outward (outer map) when looking left and inward (inner
+        // map, toward the nose) when looking right.
         if let leftIndex = leftEyeBoneIndex, leftIndex < model.nodes.count {
             let node = model.nodes[leftIndex]
 
-            let horizontalMap = currentYaw > 0 ? lookAt.rangeMapHorizontalInner : lookAt.rangeMapHorizontalOuter
+            let horizontalMap = currentYaw > 0 ? lookAt.rangeMapHorizontalOuter : lookAt.rangeMapHorizontalInner
             let mappedYawDeg = VRMLookAtController.rangeMapOutput(currentYaw, map: horizontalMap)
             let mappedYawRad = mappedYawDeg * (.pi / 180.0)
 
@@ -508,7 +512,8 @@ public class VRMLookAtController {
             let mappedPitchDeg = VRMLookAtController.rangeMapOutput(currentPitch, map: verticalMap)
             let mappedPitchRad = mappedPitchDeg * (.pi / 180.0)
 
-            let pitchQuat = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0])
+            // Up-positive pitch; +X rotation takes +Z toward -Y, so negate.
+            let pitchQuat = simd_quatf(angle: -mappedPitchRad, axis: [1, 0, 0])
             let yawQuat = simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
             // Compose the gaze deviation on top of the eye bone's authored rest
             // rotation (the bind-pose baseline the eyeball mesh is skinned to).
@@ -526,11 +531,12 @@ public class VRMLookAtController {
             node.updateWorldTransform()
         }
 
-        // Right eye: yaw < 0 (left) is inner (toward nose), yaw > 0 (right) is outer
+        // Right eye: outward (outer map) when looking right (yaw < 0), inward
+        // (inner map) when looking left.
         if let rightIndex = rightEyeBoneIndex, rightIndex < model.nodes.count {
             let node = model.nodes[rightIndex]
 
-            let horizontalMap = currentYaw < 0 ? lookAt.rangeMapHorizontalInner : lookAt.rangeMapHorizontalOuter
+            let horizontalMap = currentYaw < 0 ? lookAt.rangeMapHorizontalOuter : lookAt.rangeMapHorizontalInner
             let mappedYawDeg = VRMLookAtController.rangeMapOutput(currentYaw, map: horizontalMap)
             let mappedYawRad = mappedYawDeg * (.pi / 180.0)
 
@@ -538,7 +544,8 @@ public class VRMLookAtController {
             let mappedPitchDeg = VRMLookAtController.rangeMapOutput(currentPitch, map: verticalMap)
             let mappedPitchRad = mappedPitchDeg * (.pi / 180.0)
 
-            let pitchQuat = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0])
+            // Up-positive pitch; +X rotation takes +Z toward -Y, so negate.
+            let pitchQuat = simd_quatf(angle: -mappedPitchRad, axis: [1, 0, 0])
             let yawQuat = simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
             node.rotation = pitchQuat * yawQuat * node.initialRotation
 
@@ -575,20 +582,21 @@ public class VRMLookAtController {
         expressionController?.setCustomExpressionWeight("LookUp", weight: 0)
         expressionController?.setCustomExpressionWeight("LookDown", weight: 0)
 
+        // VRMC_vrm lookAt.md: yaw > 0 (toward +X, the model's left) drives lookLeft.
         if abs(currentYaw) > 0.02 {
             if currentYaw > 0 {
-                let weight = abs(VRMLookAtController.rangeMapOutput(currentYaw, map: lookAt.rangeMapHorizontalOuter))
-                expressionController?.setExpressionWeight(.lookRight, weight: weight)
-                expressionController?.setCustomExpressionWeight("LookRight", weight: weight)
-                if debugFrameCount % 60 == 0 {
-                    vrmLog("[LookAt EXPRESSION] lookRight weight: \(weight)")
-                }
-            } else {
                 let weight = abs(VRMLookAtController.rangeMapOutput(currentYaw, map: lookAt.rangeMapHorizontalOuter))
                 expressionController?.setExpressionWeight(.lookLeft, weight: weight)
                 expressionController?.setCustomExpressionWeight("LookLeft", weight: weight)
                 if debugFrameCount % 60 == 0 {
                     vrmLog("[LookAt EXPRESSION] lookLeft weight: \(weight)")
+                }
+            } else {
+                let weight = abs(VRMLookAtController.rangeMapOutput(currentYaw, map: lookAt.rangeMapHorizontalOuter))
+                expressionController?.setExpressionWeight(.lookRight, weight: weight)
+                expressionController?.setCustomExpressionWeight("LookRight", weight: weight)
+                if debugFrameCount % 60 == 0 {
+                    vrmLog("[LookAt EXPRESSION] lookRight weight: \(weight)")
                 }
             }
         }
@@ -669,25 +677,25 @@ public class VRMLookAtController {
         let leftRest = eyeRestRotation(leftEyeBoneIndex)
         let rightRest = eyeRestRotation(rightEyeBoneIndex)
 
-        // Left eye: yaw > 0 (right) is inner (toward nose), yaw < 0 (left) is outer
+        // Left eye: outer map when looking left (yaw > 0), inner when looking right.
         if leftEyeBoneIndex != nil {
-            let horizontalMap = currentYaw > 0 ? lookAt.rangeMapHorizontalInner : lookAt.rangeMapHorizontalOuter
+            let horizontalMap = currentYaw > 0 ? lookAt.rangeMapHorizontalOuter : lookAt.rangeMapHorizontalInner
             let mappedYawRad = VRMLookAtController.rangeMapOutput(currentYaw, map: horizontalMap) * (.pi / 180.0)
             let verticalMap = currentPitch > 0 ? lookAt.rangeMapVerticalUp : lookAt.rangeMapVerticalDown
             let mappedPitchRad = VRMLookAtController.rangeMapOutput(currentPitch, map: verticalMap) * (.pi / 180.0)
-            let eyeRotation = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0]) * simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
+            let eyeRotation = simd_quatf(angle: -mappedPitchRad, axis: [1, 0, 0]) * simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
             var transform = animationState.bones[.leftEye] ?? VRMAnimationState.BoneTransform()
             transform.rotation = eyeRotation * leftRest
             animationState.bones[.leftEye] = transform
         }
 
-        // Right eye: yaw < 0 (left) is inner (toward nose), yaw > 0 (right) is outer
+        // Right eye: outer map when looking right (yaw < 0), inner when looking left.
         if rightEyeBoneIndex != nil {
-            let horizontalMap = currentYaw < 0 ? lookAt.rangeMapHorizontalInner : lookAt.rangeMapHorizontalOuter
+            let horizontalMap = currentYaw < 0 ? lookAt.rangeMapHorizontalOuter : lookAt.rangeMapHorizontalInner
             let mappedYawRad = VRMLookAtController.rangeMapOutput(currentYaw, map: horizontalMap) * (.pi / 180.0)
             let verticalMap = currentPitch > 0 ? lookAt.rangeMapVerticalUp : lookAt.rangeMapVerticalDown
             let mappedPitchRad = VRMLookAtController.rangeMapOutput(currentPitch, map: verticalMap) * (.pi / 180.0)
-            let eyeRotation = simd_quatf(angle: mappedPitchRad, axis: [1, 0, 0]) * simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
+            let eyeRotation = simd_quatf(angle: -mappedPitchRad, axis: [1, 0, 0]) * simd_quatf(angle: mappedYawRad, axis: [0, 1, 0])
             var transform = animationState.bones[.rightEye] ?? VRMAnimationState.BoneTransform()
             transform.rotation = eyeRotation * rightRest
             animationState.bones[.rightEye] = transform

@@ -363,10 +363,12 @@ public struct ARKitCoordinateConverter {
 
     /// Convert hips translation from ARKit to glTF coordinate system
     ///
-    /// Negates Z to convert from ARKit's -Z forward to glTF's +Z forward.
+    /// Applies the same 180° turn about Y as ``convertRootRotation``, so the
+    /// translation stays consistent with the corrected root rotation:
+    /// (x, y, z) → (-x, y, -z).
     public static func convertHipsTranslation(from transform: simd_float4x4) -> simd_float3 {
         return simd_float3(
-            transform.columns.3.x,
+            -transform.columns.3.x,
             transform.columns.3.y,
             -transform.columns.3.z
         )
@@ -402,10 +404,9 @@ public struct ARKitCoordinateConverter {
 
         // Joint has a parent - need parent transform to compute local rotation
         guard let parentTransform = skeleton.joints[parentJoint] else {
-            // Parent transform missing - fall back to identity (T-pose rest position)
-            // This is better than returning nil which would freeze the joint entirely.
-            // The joint will stay at its rest pose until the parent becomes available.
-            return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+            // Parent transform missing: the local rotation is undefined, so the
+            // caller skips the joint and it keeps its current pose.
+            return nil
         }
 
         // Compute local: inverse(parentWorld) * childWorld

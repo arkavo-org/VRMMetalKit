@@ -208,19 +208,28 @@ public final class ConstraintSolver: @unchecked Sendable {
 
     /// Solve a roll constraint by transferring rotation around an axis.
     ///
-    /// Roll constraints are used for twist bones. They extract the rotation
-    /// component around a specific axis from the source bone and apply a
-    /// weighted portion of it to the target bone.
+    /// Roll constraints are used for twist bones. Per VRMC_node_constraint-1.0
+    /// the source contributes only its rotation *since rest*, re-expressed in
+    /// the destination's rest frame; the component around `axis` is kept and
+    /// the swing is removed with a from-to rotation. The result is blended from
+    /// the destination's rest rotation, so an idle source leaves the target at
+    /// its bind pose.
     ///
     /// - Parameters:
     ///   - source: The source node to read rotation from
     ///   - target: The target node to apply rotation to
-    ///   - axis: The axis to transfer rotation around (in local space)
+    ///   - axis: The axis to transfer rotation around (in target-local space)
     ///   - weight: How much of the rotation to transfer (0.0 to 1.0)
     private func solveRollConstraint(source: VRMNode, target: VRMNode, axis: SIMD3<Float>, weight: Float) {
-        let twist = extractTwist(rotation: source.rotation, axis: axis)
-        let weightedTwist = simd_slerp(simd_quatf(ix: 0, iy: 0, iz: 0, r: 1), twist, weight)
-        target.rotation = weightedTwist
+        let srcRest = source.initialRotation
+        let dstRest = target.initialRotation
+        // srcRest * (inverse(srcRest) * src) * inverse(srcRest) simplifies to
+        // src * inverse(srcRest): the source delta expressed in its parent frame.
+        let deltaInDst = dstRest.inverse * source.rotation * srcRest.inverse * dstRest
+        let rolledAxis = deltaInDst.act(axis)
+        let swing = simd_quatf(from: axis, to: rolledAxis)
+        let rolled = dstRest * swing.inverse * deltaInDst
+        target.rotation = simd_slerp(dstRest, rolled, weight)
         target.updateLocalMatrix()
     }
 
@@ -255,73 +264,35 @@ public final class ConstraintSolver: @unchecked Sendable {
             parentWorldRot = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
         }
 
-        let invParentRot = parentWorldRot.inverse
-        let aimVecInParent = invParentRot.act(aimVecWorld)
+        // Rotate from where the rested aim axis points in world space to the
+        // source, then bring that world-space correction back into the parent
+        // frame on top of the destination's rest rotation.
+        let dstRest = target.initialRotation
+        let restedAxisWorld = (parentWorldRot * dstRest).act(aimAxis)
+        let fromTo = simd_quatf(from: restedAxisWorld, to: aimVecWorld)
+        let aimed = parentWorldRot.inverse * fromTo * parentWorldRot * dstRest
 
-        // Compute the rotation that maps aimAxis → aimVecInParent.
-        let aimRotation = simd_quatf(from: aimAxis, to: aimVecInParent)
-
-        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        let weighted = simd_slerp(identity, aimRotation, weight)
-
-        target.rotation = weighted
+        target.rotation = simd_slerp(dstRest, aimed, weight)
         target.updateLocalMatrix()
     }
 
     // MARK: - Rotation Constraint
 
-    /// Solve a rotation constraint: copy source's local rotation to target.
+    /// Solve a rotation constraint: apply the source's rotation since rest to the target.
     ///
-    /// Per the VRMC_node_constraint-1.0 spec, the source's local rotation is copied
-    /// directly (not a delta from rest), blended by weight using slerp from identity.
+    /// Per the VRMC_node_constraint-1.0 spec the transferred rotation is
+    /// `inverse(srcRest) * src`, and the target is blended between its own rest
+    /// rotation and `dstRest * delta`.
     ///
     /// - Parameters:
     ///   - source: The source node to read rotation from
     ///   - target: The target node to write rotation to
-    ///   - weight: Blend factor (0 = identity, 1 = full source rotation)
+    ///   - weight: Blend factor (0 = target rest, 1 = full source delta)
     private func solveRotationConstraint(source: VRMNode, target: VRMNode, weight: Float) {
-        let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        let weighted = simd_slerp(identity, source.rotation, weight)
-        target.rotation = weighted
+        let delta = source.initialRotation.inverse * source.rotation
+        let dstRest = target.initialRotation
+        target.rotation = simd_slerp(dstRest, dstRest * delta, weight)
         target.updateLocalMatrix()
-    }
-
-    // MARK: - Swing-Twist Decomposition
-
-    /// Decomposes a quaternion into swing and twist components around a given axis.
-    /// Returns only the twist component (rotation around the axis).
-    ///
-    /// Mathematical basis: Any rotation Q can be decomposed as Q = Swing * Twist
-    /// where Twist is rotation around the specified axis.
-    ///
-    /// The algorithm:
-    /// 1. Project the quaternion's vector part onto the twist axis
-    /// 2. Construct a quaternion from this projection + the original scalar part
-    /// 3. Normalize to get a valid unit quaternion
-    ///
-    /// - Parameters:
-    ///   - rotation: The quaternion to decompose
-    ///   - axis: The axis to extract twist rotation around (must be normalized)
-    /// - Returns: The twist component as a unit quaternion
-    private func extractTwist(rotation q: simd_quatf, axis: SIMD3<Float>) -> simd_quatf {
-        let ra = SIMD3<Float>(q.imag.x, q.imag.y, q.imag.z)
-        let p = simd_dot(ra, axis) * axis
-
-        var twist = simd_quatf(ix: p.x, iy: p.y, iz: p.z, r: q.real)
-
-        let lengthSquared = simd_length_squared(twist.vector)
-        if lengthSquared < 1e-10 {
-            return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
-        }
-
-        twist = simd_normalize(twist)
-
-        if twist.real < 0 {
-            twist = simd_quatf(ix: -twist.imag.x, iy: -twist.imag.y,
-                              iz: -twist.imag.z, r: -twist.real)
-        }
-
-        return twist
     }
 }
 

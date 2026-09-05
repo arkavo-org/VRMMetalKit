@@ -899,7 +899,7 @@ final class VRMExtensionParserTests: XCTestCase {
                     [
                         "node": 0,
                         "colliders": [
-                            ["offset": ["x": Float(1.0), "y": Float(0.0), "z": Float(1.0)], "radius": Float(0.1)]
+                            ["offset": ["x": 1.0, "y": 0, "z": 1.0], "radius": 0.1]
                         ]
                     ]
                 ]
@@ -966,7 +966,7 @@ final class VRMExtensionParserTests: XCTestCase {
                     [
                         "node": 0,
                         "colliders": [
-                            ["offset": ["x": Float(0.5), "y": Float(2.0), "z": Float(-0.3)], "radius": Float(0.05)]
+                            ["offset": ["x": 0.5, "y": 2, "z": -0.3], "radius": 0.05]
                         ]
                     ]
                 ]
@@ -1071,7 +1071,7 @@ final class VRMExtensionParserTests: XCTestCase {
                         "comment": "Hair",
                         "stiffiness": Float(0.85),
                         "gravityPower": Float(1.0),
-                        "gravityDir": ["x": Float(0.3), "y": Float(-0.95), "z": Float(0.1)],
+                        "gravityDir": ["x": 0.3, "y": -0.95, "z": 0.1],
                         "dragForce": Float(0.4),
                         "hitRadius": Float(0.02),
                         "bones": [0],
@@ -1129,7 +1129,7 @@ final class VRMExtensionParserTests: XCTestCase {
                         "comment": "Hair",
                         "stiffiness": Float(0.85),
                         "gravityPower": Float(1.0),
-                        "gravityDir": ["x": Float(0.0), "y": Float(-1.0), "z": Float(0.0)],
+                        "gravityDir": ["x": 0, "y": -1, "z": 0],
                         "dragForce": Float(0.4),
                         "hitRadius": Float(0.02),
                         "bones": [0],

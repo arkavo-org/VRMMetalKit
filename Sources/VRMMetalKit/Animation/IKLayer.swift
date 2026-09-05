@@ -268,10 +268,17 @@ public final class IKLayer: AnimationLayer {
             return nil
         }
 
-        let hipPos = model.nodes[hipIdx].worldPosition
-        let kneePos = model.nodes[kneeIdx].worldPosition
+        let hipNode = model.nodes[hipIdx]
+        let kneeNode = model.nodes[kneeIdx]
+        let hipPos = hipNode.worldPosition
+        let kneePos = kneeNode.worldPosition
         let anklePos = model.nodes[ankleIdx].worldPosition
 
+        // The solver returns local deltas for the pose these positions
+        // describe, so hand it the bones' current world orientations.
+        // The compositor composes the deltas onto the base pose it captured
+        // at setup; the two agree whenever the leg is at that base pose when
+        // positions are read.
         return TwoBoneIKSolver.solve(
             rootPos: hipPos,
             midPos: kneePos,
@@ -279,8 +286,21 @@ public final class IKLayer: AnimationLayer {
             targetPos: targetFootPos,
             poleVector: kneeForwardDirection,
             upperLength: thighLen,
-            lowerLength: shinLen
+            lowerLength: shinLen,
+            rootWorldRotation: Self.worldRotation(of: hipNode),
+            midWorldRotation: Self.worldRotation(of: kneeNode)
         )
+    }
+
+    /// Rotation part of a node's world matrix with any scale removed.
+    private static func worldRotation(of node: VRMNode) -> simd_quatf {
+        let m = node.worldMatrix
+        let c0 = SIMD3<Float>(m.columns.0.x, m.columns.0.y, m.columns.0.z)
+        let c1 = SIMD3<Float>(m.columns.1.x, m.columns.1.y, m.columns.1.z)
+        let c2 = SIMD3<Float>(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+        let l0 = simd_length(c0), l1 = simd_length(c1), l2 = simd_length(c2)
+        guard l0 > 1e-8, l1 > 1e-8, l2 > 1e-8 else { return simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) }
+        return simd_normalize(simd_quatf(simd_float3x3(c0 / l0, c1 / l1, c2 / l2)))
     }
 
     private func getJointWorldPosition(_ bone: VRMHumanoidBone) -> SIMD3<Float>? {

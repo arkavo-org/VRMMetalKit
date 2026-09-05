@@ -31,8 +31,8 @@ import simd
 ///    ``ARKitCoordinateConverter/computeVRMRotation(joint:childTransform:skeleton:)``, which handles the
 ///    parent-relative local conversion, A-pose-to-T-pose rest-pose offset, left-side mirroring, and root
 ///    coordinate-system correction. Joints with a parent in ``ARKitCoordinateConverter/arkitParentMap``
-///    whose parent transform is missing from the skeleton are skipped (the converter returns the
-///    identity quaternion, which the driver normalizes and applies as a safe rest pose).
+///    whose parent transform is missing from the skeleton are skipped (the converter returns
+///    `nil` and the joint keeps its current pose until the parent is tracked again).
 /// 4. Smooths each rotation via SLERP through ``SkeletonFilterManager`` if a ``SkeletonSmoothingConfig``
 ///    is in use.
 /// 5. Normalizes the quaternion (and rejects NaN) before assigning ``VRMNode/rotation`` and updating

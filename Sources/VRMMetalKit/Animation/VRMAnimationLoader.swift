@@ -414,9 +414,11 @@ public enum VRMAnimationLoader {
         //      VRMC_vrm_animation-1.0 §lookAt.
         //   2) rotation track on the lookAt node — what
         //      `@pixiv/three-vrm-animation` and Pixiv's distributed VRMA
-        //      samples use, applying the rotation to a head-local forward
-        //      (-Z) to derive the gaze direction. Any loader claiming VRMA
-        //      support needs to accept this encoding too (VMK#286).
+        //      samples use. VRMC_vrm_animation-1.0: "The initial eye gaze is
+        //      directed toward the +Z axis in the model space", with yaw about
+        //      Y and pitch about X, so the rotation is applied to +Z to derive
+        //      the gaze direction. Any loader claiming VRMA support needs to
+        //      accept this encoding too (VMK#286).
         //
         // Distance for the head-local target is 1.0 by convention because
         // VRMLookAtController normalises the direction internally; only the
@@ -431,7 +433,7 @@ public enum VRMAnimationLoader {
             } else if let rotationTrack = lookAtTracks["rotation"] {
                 clip.lookAtTargetSampler = { t in
                     let q = sampleQuaternion(rotationTrack, at: t)
-                    return q.act(SIMD3<Float>(0, 0, -1))
+                    return q.act(SIMD3<Float>(0, 0, 1))
                 }
             }
             #if VRM_METALKIT_ENABLE_LOGS
@@ -846,7 +848,7 @@ private func buildAnimationRestTransforms(document: GLTFDocument) -> [Int: RestT
     return map
 }
 
-private func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: RestTransform] {
+func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: RestTransform] {
     guard let model, let humanoid = model.humanoid else { return [:] }
     guard let gltfNodes = model.gltf.nodes else { return [:] }
 
@@ -854,9 +856,18 @@ private func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: Res
     // humanoid bone by walking up the glTF parent chain — humanoid bones
     // generally have non-humanoid ancestors (armature root, scene root)
     // whose rotations contribute to `W`.
+    // The rest (bind) pose is `VRMNode.initial*`: it is captured at load and,
+    // for VRM 0.x, carries the Ry180 conversion the runtime skeleton uses.
+    // The raw glTF node data is pre-conversion and would retarget VRM0 models
+    // onto the wrong frame. Fall back to the glTF node only when the runtime
+    // node is absent.
     var allRest: [Int: RestTransform] = [:]
     for (index, node) in gltfNodes.enumerated() {
-        allRest[index] = RestTransform(node: node)
+        if let runtimeNode = model.nodes[safe: index] {
+            allRest[index] = RestTransform(bindPoseOf: runtimeNode)
+        } else {
+            allRest[index] = RestTransform(node: node)
+        }
     }
     let parents = buildGLTFParentMap(nodes: gltfNodes)
     let localOnly = allRest
@@ -870,8 +881,7 @@ private func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: Res
     for bone in VRMHumanoidBone.allCases {
         guard let nodeIndex = humanoid.getBoneNode(bone),
               nodeIndex < gltfNodes.count else { continue }
-        // CRITICAL: Use the ORIGINAL glTF node data (bind pose from file),
-        // NOT the runtime VRMNode transform (which may have been modified by animations)
+        // Bind pose only, never the runtime transform (which animations mutate).
         map[bone] = allRest[nodeIndex]
     }
     return map
@@ -915,7 +925,7 @@ private func computeWorldRotation(nodeIndex: Int,
     return w
 }
 
-private struct RestTransform {
+struct RestTransform {
     var rotation: simd_quatf
     var translation: SIMD3<Float>
     var scale: SIMD3<Float>
@@ -950,8 +960,7 @@ private struct RestTransform {
 
     init(node: GLTFNode) {
         if let matrix = node.matrix, matrix.count == 16 {
-            let m = matrixFromGLTF(matrix)
-            let components = decomposeMatrix(m)
+            let components = decomposeMatrix(GLTFSceneGraph.localMatrix(for: node))
             self.init(rotation: components.rotation,
                       translation: components.translation,
                       scale: components.scale)
@@ -986,6 +995,13 @@ private struct RestTransform {
                   translation: node.translation,
                   scale: node.scale)
     }
+
+    /// The node's bind pose as captured at load (post VRM 0.x conversion).
+    init(bindPoseOf node: VRMNode) {
+        self.init(rotation: simd_normalize(node.initialRotation),
+                  translation: node.initialTranslation,
+                  scale: node.initialScale)
+    }
 }
 
 private func safeDivide(_ numerator: SIMD3<Float>, by denominator: SIMD3<Float>) -> SIMD3<Float> {
@@ -998,15 +1014,6 @@ private func safeDivide(_ numerator: SIMD3<Float>, by denominator: SIMD3<Float>)
 }
 
 // MARK: - VRM 0.0 Coordinate Conversion
-private func matrixFromGLTF(_ values: [Float]) -> float4x4 {
-    return float4x4(
-        SIMD4<Float>(values[0], values[4], values[8], values[12]),
-        SIMD4<Float>(values[1], values[5], values[9], values[13]),
-        SIMD4<Float>(values[2], values[6], values[10], values[14]),
-        SIMD4<Float>(values[3], values[7], values[11], values[15])
-    )
-}
-
 private func decomposeMatrix(_ matrix: float4x4) -> (translation: SIMD3<Float>, rotation: simd_quatf, scale: SIMD3<Float>) {
     let translation = SIMD3<Float>(matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z)
 
