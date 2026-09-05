@@ -915,7 +915,7 @@ private func computeWorldRotation(nodeIndex: Int,
     return w
 }
 
-private struct RestTransform {
+struct RestTransform {
     var rotation: simd_quatf
     var translation: SIMD3<Float>
     var scale: SIMD3<Float>
@@ -950,8 +950,7 @@ private struct RestTransform {
 
     init(node: GLTFNode) {
         if let matrix = node.matrix, matrix.count == 16 {
-            let m = matrixFromGLTF(matrix)
-            let components = decomposeMatrix(m)
+            let components = decomposeMatrix(GLTFSceneGraph.localMatrix(for: node))
             self.init(rotation: components.rotation,
                       translation: components.translation,
                       scale: components.scale)
@@ -998,15 +997,6 @@ private func safeDivide(_ numerator: SIMD3<Float>, by denominator: SIMD3<Float>)
 }
 
 // MARK: - VRM 0.0 Coordinate Conversion
-private func matrixFromGLTF(_ values: [Float]) -> float4x4 {
-    return float4x4(
-        SIMD4<Float>(values[0], values[4], values[8], values[12]),
-        SIMD4<Float>(values[1], values[5], values[9], values[13]),
-        SIMD4<Float>(values[2], values[6], values[10], values[14]),
-        SIMD4<Float>(values[3], values[7], values[11], values[15])
-    )
-}
-
 private func decomposeMatrix(_ matrix: float4x4) -> (translation: SIMD3<Float>, rotation: simd_quatf, scale: SIMD3<Float>) {
     let translation = SIMD3<Float>(matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z)
 
