@@ -241,7 +241,7 @@ final class VRMASpecComplianceTests: XCTestCase {
 
     /// VMK#286: the rotation-channel encoding (what `@pixiv/three-vrm-animation`
     /// consumes and Pixiv's distributed VRMA samples emit) must also populate
-    /// the sampler. Identity rotation → head-local forward = (0, 0, -1).
+    /// the sampler. Identity rotation → head-local forward = (0, 0, +1).
     func testB1_lookAtTargetSamplerPresentForRotationChannel() throws {
         let lookAtNodeIndex = 5
         let glb = try VRMAGLBBuilder()
@@ -258,9 +258,10 @@ final class VRMASpecComplianceTests: XCTestCase {
                         "rotation-channel lookAt must populate lookAtTargetSampler (#286)")
     }
 
-    /// VMK#286: applying the keyframe rotation to head-local forward (-Z)
-    /// must produce the expected gaze direction. 90° around +Y rotates
-    /// (0,0,-1) → (-1,0,0).
+    /// VMK#286: applying the keyframe rotation to head-local forward (+Z;
+    /// VRMC_vrm_animation-1.0 "The initial eye gaze is directed toward the +Z
+    /// axis in the model space") must produce the expected gaze direction.
+    /// 90° around +Y rotates (0,0,1) → (1,0,0), i.e. the model's left.
     func testB1_lookAtTargetSamplerReturnsDirectionForRotationChannel() throws {
         let lookAtNodeIndex = 5
         let yaw90 = simd_quatf(angle: .pi / 2, axis: SIMD3<Float>(0, 1, 0))
@@ -279,7 +280,7 @@ final class VRMASpecComplianceTests: XCTestCase {
         }
 
         let dir = sampler(0)
-        XCTAssertEqual(dir.x, -1, accuracy: 1e-5, "yaw 90° around +Y → forward.x = -1")
+        XCTAssertEqual(dir.x, 1, accuracy: 1e-5, "yaw 90° around +Y → forward.x = +1")
         XCTAssertEqual(dir.y,  0, accuracy: 1e-5, "yaw 90° around +Y → forward.y = 0")
         XCTAssertEqual(dir.z,  0, accuracy: 1e-5, "yaw 90° around +Y → forward.z = 0")
     }

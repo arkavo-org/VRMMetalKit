@@ -139,8 +139,9 @@ final class VRMLookAtExpressionNamespaceTests: XCTestCase {
     func testApplyToExpressionsWritesPresetLookRightForRightwardGaze() throws {
         let rig = try makePresetNamespaceRig()
 
-        // Head is at origin; point gaze to the right of the head.
-        rig.controller.target = .point(SIMD3<Float>(1, 0, 0))
+        // Head is at origin; point gaze to the model's right (-X).
+        // VRMC_vrm-1.0 lookAt.md: yaw > 0 (Z -> X) is left, so -X is right.
+        rig.controller.target = .point(SIMD3<Float>(-1, 0, 0))
         rig.controller.update(deltaTime: 1.0 / 60.0)
 
         let lookRight = rig.expressions.weight(for: .lookRight)
@@ -161,7 +162,7 @@ final class VRMLookAtExpressionNamespaceTests: XCTestCase {
     /// presets so a one-sided fix doesn't pass the suite.
     func testApplyToExpressionsWritesPresetLookLeftLookUpLookDown() throws {
         let cases: [(target: SIMD3<Float>, preset: VRMExpressionPreset)] = [
-            (SIMD3<Float>(-1, 0, 0), .lookLeft),
+            (SIMD3<Float>(1, 0, 0), .lookLeft),
             (SIMD3<Float>(0,  1, 0), .lookUp),
             (SIMD3<Float>(0, -1, 0), .lookDown),
         ]
@@ -186,7 +187,7 @@ final class VRMLookAtExpressionNamespaceTests: XCTestCase {
     func testApplyToExpressionsWritesCustomLookRightLegacyPath() throws {
         let rig = try makeCustomNamespaceLegacyRig()
 
-        rig.controller.target = .point(SIMD3<Float>(1, 0, 0))
+        rig.controller.target = .point(SIMD3<Float>(-1, 0, 0))
         rig.controller.update(deltaTime: 1.0 / 60.0)
 
         let lookRight = rig.expressions.weight(forCustom: "LookRight") ?? 0

@@ -414,9 +414,11 @@ public enum VRMAnimationLoader {
         //      VRMC_vrm_animation-1.0 §lookAt.
         //   2) rotation track on the lookAt node — what
         //      `@pixiv/three-vrm-animation` and Pixiv's distributed VRMA
-        //      samples use, applying the rotation to a head-local forward
-        //      (-Z) to derive the gaze direction. Any loader claiming VRMA
-        //      support needs to accept this encoding too (VMK#286).
+        //      samples use. VRMC_vrm_animation-1.0: "The initial eye gaze is
+        //      directed toward the +Z axis in the model space", with yaw about
+        //      Y and pitch about X, so the rotation is applied to +Z to derive
+        //      the gaze direction. Any loader claiming VRMA support needs to
+        //      accept this encoding too (VMK#286).
         //
         // Distance for the head-local target is 1.0 by convention because
         // VRMLookAtController normalises the direction internally; only the
@@ -431,7 +433,7 @@ public enum VRMAnimationLoader {
             } else if let rotationTrack = lookAtTracks["rotation"] {
                 clip.lookAtTargetSampler = { t in
                     let q = sampleQuaternion(rotationTrack, at: t)
-                    return q.act(SIMD3<Float>(0, 0, -1))
+                    return q.act(SIMD3<Float>(0, 0, 1))
                 }
             }
             #if VRM_METALKIT_ENABLE_LOGS

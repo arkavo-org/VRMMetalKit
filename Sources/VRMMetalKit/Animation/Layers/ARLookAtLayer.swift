@@ -111,8 +111,10 @@ public class ARLookAtLayer: AnimationLayer {
         let normalizedDir = lookDir / distance
 
         // Calculate target angles
+        // Yaw about +Y: positive turns +Z toward +X. Pitch about +X: positive
+        // turns +Z toward -Y, so a target above the head needs a negative angle.
         var targetYaw = atan2(normalizedDir.x, normalizedDir.z)
-        var targetPitch = asin(clamp(normalizedDir.y, -1, 1))
+        var targetPitch = -asin(clamp(normalizedDir.y, -1, 1))
 
         // Apply constraints
         targetYaw = clamp(targetYaw, -maxYaw, maxYaw)
