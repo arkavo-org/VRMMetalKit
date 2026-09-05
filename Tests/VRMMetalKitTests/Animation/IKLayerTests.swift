@@ -78,7 +78,8 @@ final class IKLayerTests: XCTestCase {
         let midPos = SIMD3<Float>(0, 0.5, 0)
         let endPos = SIMD3<Float>(0, 0, 0)
 
-        let targetPos = SIMD3<Float>(0, 0, 0.3)
+        // Reachable with a clear bend (chain length 1.0, distance 0.8).
+        let targetPos = SIMD3<Float>(0, 0.4, 0.6)
 
         let resultForward = TwoBoneIKSolver.solve(
             rootPos: rootPos,
@@ -100,9 +101,16 @@ final class IKLayerTests: XCTestCase {
         XCTAssertNotNil(resultBackward, "Backward pole vector should produce valid result")
 
         if let fwd = resultForward, let bwd = resultBackward {
-            let fwdDot = simd_dot(fwd.rootRotation.vector, bwd.rootRotation.vector)
-            XCTAssertLessThan(abs(fwdDot), 0.999,
-                "Different pole vectors should produce different rotations")
+            // The knee must land on the pole side of the hip→target line:
+            // its offset perpendicular to that line points along the pole.
+            let line = simd_normalize(targetPos - rootPos)
+            func poleSide(_ result: TwoBoneIKSolver.SolveResult) -> Float {
+                let knee = result.rootRotation.act(midPos - rootPos)
+                let perpendicular = knee - line * simd_dot(knee, line)
+                return simd_dot(perpendicular, SIMD3<Float>(0, 0, 1))
+            }
+            XCTAssertGreaterThan(poleSide(fwd), 0.05, "forward pole bends the knee toward +Z")
+            XCTAssertLessThan(poleSide(bwd), -0.05, "backward pole bends the knee toward -Z")
         }
     }
 
