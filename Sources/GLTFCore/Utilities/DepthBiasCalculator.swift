@@ -21,8 +21,14 @@ import Metal
 ///
 /// Depth bias (polygon offset) is added to the rasterized depth. Under standard Z
 /// (near = 0, far = 1, compare less/lessEqual) a positive bias moves a fragment
-/// away from the camera, so the surface that should lose a coplanar depth test
-/// gets the larger bias. This resolves true Z-fighting between overlapping geometry.
+/// away from the camera. This table assigns the *larger* bias to overlays
+/// (`overlayBiasOffset` and the progressive base values), which under that
+/// sign pushes overlays farther from the camera, the opposite of what a
+/// coplanar overlay needs to win. It has no visible effect because every
+/// constant here is below one depth-buffer ULP after rasterization; the
+/// layering that actually holds comes from `.lessEqual`, draw order, and the
+/// slope-scale term. Treat the constants as legacy tuning, not as the
+/// mechanism.
 ///
 /// ## Thread safety
 /// This class caches resolved bias values in a non-synchronised dictionary.
@@ -253,8 +259,10 @@ public final class DepthBiasCalculator {
  
  ### Solution
  Depth bias is added to the fragment depth. Under standard Z a positive bias
- pushes fragments away from the camera (higher depth value); the base
- surface gets the larger bias so overlays consistently win the depth test.
+ pushes fragments away from the camera (higher depth value). The values
+ below give overlays the larger bias, so read literally they push overlays
+ away from the camera; they are all sub-ULP, so in practice they are inert
+ and overlays win through `.lessEqual`, draw order, and slope scale.
  
  ### Bias Values
  
