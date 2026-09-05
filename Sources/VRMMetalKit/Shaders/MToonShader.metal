@@ -230,11 +230,14 @@ static inline uint mtoonEffectiveLightCount() {
 
 // KHR_texture_transform: apply static scale, rotation and offset to UV
 // Must be applied BEFORE animateUV (transform is static; UV animation is dynamic on top)
+// Rotation is counter-clockwise in glTF's U-right / V-down UV space
+// (KhronosGroup/glTF#1563; same matrix as VRMC_materials_mtoon and three.js
+// Matrix3.setUvTransform): uv' = (c*u + s*v, -s*u + c*v).
 static inline float2 applyTextureTransform(float2 uv, constant MToonMaterial& material) {
  float c = cos(material.textureTransformRotation);
  float s = sin(material.textureTransformRotation);
  float2 scaled = uv * float2(material.textureTransformScaleX, material.textureTransformScaleY);
- float2 rotated = float2(c * scaled.x - s * scaled.y, s * scaled.x + c * scaled.y);
+ float2 rotated = float2(c * scaled.x + s * scaled.y, -s * scaled.x + c * scaled.y);
  return rotated + float2(material.textureTransformOffsetX, material.textureTransformOffsetY);
 }
 
@@ -267,8 +270,10 @@ static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
 
 // MatCap coordinate calculation
 float2 calculateMatCapUV(float3 viewNormal) {
- // Convert view normal to UV coordinates for MatCap sampling
- return viewNormal.xy * 0.5 + 0.5;
+ // Textures are uploaded with row 0 = image top (v = 0), so an upward view
+ // normal must sample the top of the matcap: negate y (three-vrm mtoon.frag
+ // `sphereUv = 0.5 + 0.5 * vec2(dot(x, n), -dot(y, n))`).
+ return float2(viewNormal.x, -viewNormal.y) * 0.5 + 0.5;
 }
 
 static inline bool hasParametricRim(constant MToonMaterial& material) {

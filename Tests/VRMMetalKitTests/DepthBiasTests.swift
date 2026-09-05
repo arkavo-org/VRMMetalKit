@@ -22,7 +22,7 @@ import MetalKit
 /// TDD Tests for Material-Aware Depth Bias implementation
 ///
 /// Depth bias (polygon offset) resolves true Z-fighting between coplanar surfaces
-/// by pushing one surface slightly toward the camera in depth buffer space.
+/// by pushing one surface slightly away from the camera in depth buffer space.
 @MainActor
 final class DepthBiasTests: XCTestCase {
     
@@ -40,7 +40,7 @@ final class DepthBiasTests: XCTestCase {
     /// Test 1: Renderer should provide depth bias for coplanar surfaces
     ///
     /// When two surfaces occupy the same depth (coplanar), depth bias
-    /// pushes one slightly toward camera to prevent Z-fighting.
+    /// pushes one slightly away from the camera to prevent Z-fighting.
     func testRendererProvidesDepthBiasForCoplanarSurfaces() throws {
         // Arrange
         let config = RendererConfig(strict: .off)
@@ -123,10 +123,10 @@ final class DepthBiasTests: XCTestCase {
             "Depth bias should reduce coplanar Z-fighting by at least 50%")
     }
     
-    /// Test 4: Depth bias values are positive (toward camera)
+    /// Test 4: Depth bias values are positive (larger depth, away from camera)
     ///
-    /// Positive depth bias pushes fragments toward camera (closer to viewer),
-    /// ensuring they pass depth test against surfaces at same world depth.
+    /// Positive depth bias raises the depth value (away from the viewer under standard Z),
+    /// so the base surface yields the depth test to overlays at the same world depth.
     func testDepthBiasValuesArePositive() {
         // Arrange
         let config = RendererConfig(strict: .off)
@@ -138,7 +138,7 @@ final class DepthBiasTests: XCTestCase {
         for category in categories {
             let bias = calculator.depthBias(for: category, isOverlay: category != "Face_SKIN")
             XCTAssertGreaterThan(bias, 0.0,
-                "\(category) should have positive depth bias (toward camera)")
+                "\(category) should have positive depth bias (away from camera)")
         }
     }
     
@@ -181,7 +181,7 @@ final class DepthBiasTests: XCTestCase {
         let standard = calculator.resolvedDepthBias(for: "EyeHighlight", isOverlay: true)
         let reversed = calculator.resolvedDepthBias(for: "EyeHighlight", isOverlay: true, reverseZ: true)
 
-        XCTAssertGreaterThan(standard.bias, 0, "overlay bias should push toward camera under standard Z")
+        XCTAssertGreaterThan(standard.bias, 0, "overlay bias should be positive (added to depth) under standard Z")
         XCTAssertEqual(reversed.bias, -standard.bias, "reverse-Z must negate the bias")
         XCTAssertEqual(reversed.slopeScale, -standard.slopeScale, "reverse-Z must negate the slope scale")
         XCTAssertEqual(reversed.clamp, -standard.clamp, "reverse-Z must negate the clamp (lower bound)")

@@ -19,9 +19,10 @@ import Metal
 
 /// Calculates depth bias values for materials to resolve Z-fighting
 ///
-/// Depth bias (polygon offset) pushes fragments toward the camera in depth buffer space,
-/// ensuring they pass depth tests against coplanar surfaces. This resolves true Z-fighting
-/// between overlapping geometry.
+/// Depth bias (polygon offset) is added to the rasterized depth. Under standard Z
+/// (near = 0, far = 1, compare less/lessEqual) a positive bias moves a fragment
+/// away from the camera, so the surface that should lose a coplanar depth test
+/// gets the larger bias. This resolves true Z-fighting between overlapping geometry.
 ///
 /// ## Thread safety
 /// This class caches resolved bias values in a non-synchronised dictionary.
@@ -103,7 +104,7 @@ public final class DepthBiasCalculator {
     /// - Parameters:
     ///   - materialName: Name of the material
     ///   - isOverlay: Whether this is an overlay material (renders on top of base)
-    /// - Returns: Depth bias value in depth buffer units (positive = toward camera)
+    /// - Returns: Depth bias value in depth buffer units (positive = larger depth, i.e. away from the camera under standard Z)
     public func depthBias(for materialName: String, isOverlay: Bool) -> Float {
         // Look up base bias for material
         let baseBias = lookupBias(for: materialName)
@@ -251,8 +252,9 @@ public final class DepthBiasCalculator {
  - Numerical differences in matrix math
  
  ### Solution
- Depth bias pushes fragments toward the camera (lower depth value) so they
- consistently pass the depth test against coplanar surfaces behind them.
+ Depth bias is added to the fragment depth. Under standard Z a positive bias
+ pushes fragments away from the camera (higher depth value); the base
+ surface gets the larger bias so overlays consistently win the depth test.
  
  ### Bias Values
  

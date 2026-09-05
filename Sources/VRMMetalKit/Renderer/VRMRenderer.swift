@@ -1665,8 +1665,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     /// Applies depth bias respecting the depth direction. All authored bias
-    /// constants in this file assume standard Z, where negative bias pushes
-    /// fragments away from the camera. Under reverse-Z the depth axis inverts,
+    /// constants in this file assume standard Z, where a positive bias raises
+    /// the depth value and pushes fragments away from the camera (Metal adds
+    /// the bias to the rasterized depth). Under reverse-Z the depth axis inverts,
     /// so bias, slope scale, and clamp are negated to preserve the intended
     /// push direction (a negative clamp is a lower bound per Metal semantics).
     private func applyDepthBias(_ encoder: MTLRenderCommandEncoder, _ bias: Float, slopeScale: Float, clamp: Float) {
@@ -3585,8 +3586,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
-                    // Z-FIGHTING FIX: Body renders first but pushed back in depth
-                    // Negative bias pushes away from camera, allowing overlays to win
+                    // Z-FIGHTING FIX: body renders first. The constant term is
+                    // sub-ULP and inert; the larger slope scale (4.0 vs the
+                    // overlays' 2.0) pushes the body away from the camera on
+                    // sloped surfaces so overlays win.
                     applyDepthBias(encoder, -0.1, slopeScale: 4.0, clamp: 1.0)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=body  z=\(viewZ)  mat=\(item.materialName)")
