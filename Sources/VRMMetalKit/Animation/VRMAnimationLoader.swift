@@ -848,7 +848,7 @@ private func buildAnimationRestTransforms(document: GLTFDocument) -> [Int: RestT
     return map
 }
 
-private func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: RestTransform] {
+func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: RestTransform] {
     guard let model, let humanoid = model.humanoid else { return [:] }
     guard let gltfNodes = model.gltf.nodes else { return [:] }
 
@@ -856,9 +856,18 @@ private func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: Res
     // humanoid bone by walking up the glTF parent chain — humanoid bones
     // generally have non-humanoid ancestors (armature root, scene root)
     // whose rotations contribute to `W`.
+    // The rest (bind) pose is `VRMNode.initial*`: it is captured at load and,
+    // for VRM 0.x, carries the Ry180 conversion the runtime skeleton uses.
+    // The raw glTF node data is pre-conversion and would retarget VRM0 models
+    // onto the wrong frame. Fall back to the glTF node only when the runtime
+    // node is absent.
     var allRest: [Int: RestTransform] = [:]
     for (index, node) in gltfNodes.enumerated() {
-        allRest[index] = RestTransform(node: node)
+        if let runtimeNode = model.nodes[safe: index] {
+            allRest[index] = RestTransform(bindPoseOf: runtimeNode)
+        } else {
+            allRest[index] = RestTransform(node: node)
+        }
     }
     let parents = buildGLTFParentMap(nodes: gltfNodes)
     let localOnly = allRest
@@ -872,8 +881,7 @@ private func buildModelRestTransforms(model: VRMModel?) -> [VRMHumanoidBone: Res
     for bone in VRMHumanoidBone.allCases {
         guard let nodeIndex = humanoid.getBoneNode(bone),
               nodeIndex < gltfNodes.count else { continue }
-        // CRITICAL: Use the ORIGINAL glTF node data (bind pose from file),
-        // NOT the runtime VRMNode transform (which may have been modified by animations)
+        // Bind pose only, never the runtime transform (which animations mutate).
         map[bone] = allRest[nodeIndex]
     }
     return map
@@ -986,6 +994,13 @@ struct RestTransform {
         self.init(rotation: simd_normalize(node.rotation),
                   translation: node.translation,
                   scale: node.scale)
+    }
+
+    /// The node's bind pose as captured at load (post VRM 0.x conversion).
+    init(bindPoseOf node: VRMNode) {
+        self.init(rotation: simd_normalize(node.initialRotation),
+                  translation: node.initialTranslation,
+                  scale: node.initialScale)
     }
 }
 
