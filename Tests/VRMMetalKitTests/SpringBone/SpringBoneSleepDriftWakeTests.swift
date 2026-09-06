@@ -197,4 +197,59 @@ final class SpringBoneSleepDriftWakeTests: XCTestCase {
             "\(h.system.testWakeMotionThreshold)) and the chain never woke: the root wake " +
             "anchor is not accumulating slow motion")
     }
+
+    /// A FOREIGN (cross-avatar) collider drifting at a quarter of the per-frame
+    /// wake threshold must wake a sleeping chain, exactly like an authored one:
+    /// its anchor is frozen at sleep time, so sub-threshold motion accumulates.
+    func testForeignColliderDriftingWakesSettledChain() async throws {
+        try await assertInjectedColliderDriftWakes(label: "foreign") {
+            $0.setForeignColliders($1)
+        }
+    }
+
+    /// Same for the EXTERNAL (prop) source, which keeps its own anchor.
+    func testExternalColliderDriftingWakesSettledChain() async throws {
+        try await assertInjectedColliderDriftWakes(label: "external") {
+            $0.setExternalColliders($1)
+        }
+    }
+
+    /// Shared body for the injected-collider drift tests. The foreign and
+    /// external sets diff as whole snapshots against per-source anchors (no
+    /// per-collider indices), so each source gets the same three-act check:
+    /// appearing wakes once, a static set lets the chain sleep again, and a
+    /// slow drift out from under the sleeping chain must wake it.
+    private func assertInjectedColliderDriftWakes(
+        label: String,
+        set: (SpringBoneComputeSystem, ForeignColliderSnapshot) -> Void
+    ) async throws {
+        let h = try await settledHarness()
+
+        // Placed well away from the chain so it never touches: the wake check
+        // diffs transforms against the sleep anchor, not contact.
+        var sphere = SphereCollider(center: SIMD3<Float>(0.5, 0, 0.5),
+                                    radius: 0.05, groupMask: 1 << 0, inside: false)
+        set(h.system, ForeignColliderSnapshot(spheres: [sphere]))
+        h.step()
+        XCTAssertFalse(h.asleep,
+            "a \(label) collider appearing (count 0 → 1) must wake the chain")
+
+        var frames = 0
+        while !h.asleep && frames < 600 { h.step(); frames += 1 }
+        XCTAssertTrue(h.asleep,
+            "a static \(label) collider must not keep the chain awake")
+
+        let perFrame = h.system.testWakeMotionThreshold * 0.25
+        var wokeAtFrame: Int? = nil
+        for frame in 0..<600 {
+            sphere.center.x += perFrame
+            set(h.system, ForeignColliderSnapshot(spheres: [sphere]))
+            h.step()
+            if !h.asleep { wokeAtFrame = frame; break }
+        }
+        XCTAssertNotNil(wokeAtFrame,
+            "\(label) collider drifted \(perFrame * 600) units (150× the wake threshold " +
+            "\(h.system.testWakeMotionThreshold)) and the chain never woke: the \(label) " +
+            "wake anchor is not accumulating slow motion")
+    }
 }
