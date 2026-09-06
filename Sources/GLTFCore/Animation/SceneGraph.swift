@@ -79,6 +79,36 @@ public enum GLTFSceneGraph {
         let s = simd_float4x4(scale: scale)
         return t * r * s
     }
+
+    /// Decomposes a local matrix into TRS. Translation is column 3; scale is
+    /// each column's length; rotation is the orthonormalized upper 3×3.
+    /// Negative determinant folds into a negative X scale so the rotation
+    /// stays a proper rotation.
+    public static func decompose(
+        _ matrix: simd_float4x4
+    ) -> (translation: SIMD3<Float>, rotation: simd_quatf, scale: SIMD3<Float>) {
+        let translation = SIMD3<Float>(matrix.columns.3.x, matrix.columns.3.y, matrix.columns.3.z)
+
+        var column0 = SIMD3<Float>(matrix.columns.0.x, matrix.columns.0.y, matrix.columns.0.z)
+        var column1 = SIMD3<Float>(matrix.columns.1.x, matrix.columns.1.y, matrix.columns.1.z)
+        var column2 = SIMD3<Float>(matrix.columns.2.x, matrix.columns.2.y, matrix.columns.2.z)
+
+        var scaleX = simd_length(column0)
+        var scaleY = simd_length(column1)
+        var scaleZ = simd_length(column2)
+
+        if scaleX > 1e-6 { column0 /= scaleX } else { scaleX = 1 }
+        if scaleY > 1e-6 { column1 /= scaleY } else { scaleY = 1 }
+        if scaleZ > 1e-6 { column2 /= scaleZ } else { scaleZ = 1 }
+
+        var rotationMatrix = simd_float3x3(columns: (column0, column1, column2))
+        if simd_determinant(rotationMatrix) < 0 {
+            scaleX = -scaleX
+            rotationMatrix.columns.0 = -rotationMatrix.columns.0
+        }
+
+        return (translation, simd_quatf(rotationMatrix), SIMD3<Float>(scaleX, scaleY, scaleZ))
+    }
 }
 
 // MARK: - simd_float4x4 helpers
