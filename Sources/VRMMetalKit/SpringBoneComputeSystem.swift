@@ -199,6 +199,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     var testChainAsleep: [Bool] { sleepGate.asleep }
     /// Test hook: per-chain collider-group masks, same indexing as `testChainAsleep`.
     var testChainColliderMasks: [UInt32] { chainColliderMasks }
+    /// Test hook: the per-frame root/collider displacement above which a
+    /// sleeping chain is woken (`sleepThreshold` scaled by model size).
+    var testWakeMotionThreshold: Float {
+        sleepThreshold * max(cachedModelScale, VRMConstants.Physics.minScaleForThreshold)
+    }
     /// Per-bone chain index and per-chain sleep flag, bound at buffers 16/17.
     private var boneChainIndexBuffer: MTLBuffer?
     private var chainSleepBuffer: MTLBuffer?
@@ -240,6 +245,20 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var previousExternalForSleep: ForeignColliderSnapshot = ForeignColliderSnapshot()
     /// True when an explicit wake has been requested and not yet processed.
     private var forceWakePending: Bool = false
+    /// What the last wake check saw cross the motion threshold. Drives which
+    /// wake anchors `captureSleepSnapshots` refreshes at the end of the frame.
+    private struct WakeMotion {
+        var refreshAll = false
+        var roots: [Int] = []
+        var spheres: [Int] = []
+        var capsules: [Int] = []
+        var planes: [Int] = []
+        // The foreign/external sets diff as whole snapshots, not per index,
+        // so their anchors carry a single moved flag each.
+        var foreignMoved = false
+        var externalMoved = false
+    }
+    private var lastWakeMotion = WakeMotion(refreshAll: true)
 
     // MARK: - Center-space simulation (VRMC_springBone-1.0 §5.1)
     // Each entry records the center node index, the contiguous bone-buffer range occupied
@@ -682,6 +701,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // would make every spring kernel early-out on those chains while
             // the CPU (sleepGate) believes them awake.
             wakeAllChains()
+            lastWakeMotion = WakeMotion(refreshAll: true)
         }
 
         let allChainsAsleep = sleepGateEnabled && sleepGate.allAsleep
@@ -1149,6 +1169,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         var movedRoots: [Int] = []
         var movedColliderMasks: [UInt32] = []
+        var motion = WakeMotion(refreshAll: globalWake)
         if !globalWake {
             let motionThreshold = sleepThreshold * max(cachedModelScale, VRMConstants.Physics.minScaleForThreshold)
 
@@ -1161,18 +1182,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 }
             }
 
-            movedColliderMasks.append(contentsOf: movedSphereMasks(
+            let spheres = movedSpheres(
                 previous: previousSphereCollidersForSleep,
                 current: targetSphereColliders,
-                threshold: motionThreshold))
-            movedColliderMasks.append(contentsOf: movedCapsuleMasks(
+                threshold: motionThreshold)
+            let capsules = movedCapsules(
                 previous: previousCapsuleCollidersForSleep,
                 current: targetCapsuleColliders,
-                threshold: motionThreshold))
-            movedColliderMasks.append(contentsOf: movedPlaneMasks(
+                threshold: motionThreshold)
+            let planes = movedPlanes(
                 previous: previousPlaneCollidersForSleep,
                 current: targetPlaneColliders,
-                threshold: motionThreshold))
+                threshold: motionThreshold)
+            movedColliderMasks.append(contentsOf: spheres.masks)
+            movedColliderMasks.append(contentsOf: capsules.masks)
+            movedColliderMasks.append(contentsOf: planes.masks)
+            motion.roots = movedRoots
+            motion.spheres = spheres.indices
+            motion.capsules = capsules.indices
+            motion.planes = planes.indices
 
             if foreignColliderGroupIndex != 0xFFFFFFFF {
                 let foreignBit: UInt32 = 1 << foreignColliderGroupIndex
@@ -1180,15 +1208,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                                            current: foreign,
                                            threshold: motionThreshold) {
                     movedColliderMasks.append(foreignBit)
+                    motion.foreignMoved = true
                 }
                 if foreignCollidersChanged(previous: previousExternalForSleep,
                                            current: external,
                                            threshold: motionThreshold) {
                     movedColliderMasks.append(foreignBit)
+                    motion.externalMoved = true
                 }
             }
         }
 
+        lastWakeMotion = motion
         return SpringBoneSleepGate.wakeMask(
             chainCount: chainRanges.count,
             globalWake: globalWake,
@@ -1227,41 +1258,55 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         return false
     }
 
-    private func movedSphereMasks(previous: [SphereCollider], current: [SphereCollider], threshold: Float) -> [UInt32] {
-        if previous.count != current.count { return previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF] }
+    /// Colliders whose current transform differs from their wake anchor by more
+    /// than `threshold`: the indices (so the anchors can be refreshed) and the
+    /// group masks (so intersecting chains can be woken). A count change is
+    /// reported as "everything moved" with no indices; the anchors are then
+    /// replaced wholesale.
+    private func movedSpheres(previous: [SphereCollider], current: [SphereCollider], threshold: Float)
+        -> (indices: [Int], masks: [UInt32]) {
+        if previous.count != current.count { return ([], previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF]) }
+        var indices: [Int] = []
         var masks: [UInt32] = []
         for i in previous.indices {
             if simd_distance(previous[i].center, current[i].center) > threshold ||
                abs(previous[i].radius - current[i].radius) > threshold {
+                indices.append(i)
                 masks.append(current[i].groupMask)
             }
         }
-        return masks
+        return (indices, masks)
     }
 
-    private func movedCapsuleMasks(previous: [CapsuleCollider], current: [CapsuleCollider], threshold: Float) -> [UInt32] {
-        if previous.count != current.count { return previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF] }
+    private func movedCapsules(previous: [CapsuleCollider], current: [CapsuleCollider], threshold: Float)
+        -> (indices: [Int], masks: [UInt32]) {
+        if previous.count != current.count { return ([], previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF]) }
+        var indices: [Int] = []
         var masks: [UInt32] = []
         for i in previous.indices {
             if simd_distance(previous[i].p0, current[i].p0) > threshold ||
                simd_distance(previous[i].p1, current[i].p1) > threshold ||
                abs(previous[i].radius - current[i].radius) > threshold {
+                indices.append(i)
                 masks.append(current[i].groupMask)
             }
         }
-        return masks
+        return (indices, masks)
     }
 
-    private func movedPlaneMasks(previous: [PlaneCollider], current: [PlaneCollider], threshold: Float) -> [UInt32] {
-        if previous.count != current.count { return previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF] }
+    private func movedPlanes(previous: [PlaneCollider], current: [PlaneCollider], threshold: Float)
+        -> (indices: [Int], masks: [UInt32]) {
+        if previous.count != current.count { return ([], previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF]) }
+        var indices: [Int] = []
         var masks: [UInt32] = []
         for i in previous.indices {
             if simd_distance(previous[i].point, current[i].point) > threshold ||
                simd_distance(previous[i].normal, current[i].normal) > 0.01 {
+                indices.append(i)
                 masks.append(current[i].groupMask)
             }
         }
-        return masks
+        return (indices, masks)
     }
 
     private func uploadChainSleepFlags() {
@@ -1273,19 +1318,61 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
     }
 
+    private func refreshAnchors<T>(_ anchors: inout [T], from current: [T], moved: [Int], refreshAll: Bool) {
+        if refreshAll || anchors.count != current.count {
+            anchors = current
+            return
+        }
+        for i in moved where i < current.count {
+            anchors[i] = current[i]
+        }
+    }
+
     private func captureSleepSnapshots(model: VRMModel, globalParams: SpringBoneGlobalParams,
                                        foreign: ForeignColliderSnapshot, external: ForeignColliderSnapshot) {
-        previousRootPositionsForSleep = targetRootPositions
-        previousSphereCollidersForSleep = targetSphereColliders
-        previousCapsuleCollidersForSleep = targetCapsuleColliders
-        previousPlaneCollidersForSleep = targetPlaneColliders
+        // These are wake ANCHORS, not last-frame copies. A sleeping chain's
+        // root, and every collider while any chain sleeps, keep the transform
+        // they had when the sleep began, so motion slower than the per-frame
+        // threshold still accumulates and eventually wakes the chain. Refreshing
+        // every frame would let a slow head turn carry a settled chain (and the
+        // collider it rests on) arbitrarily far without ever waking it. An
+        // anchor is refreshed once it has been seen to move past the threshold,
+        // while its chain is awake (roots), or while nothing sleeps (colliders).
+        let motion = lastWakeMotion
+        let asleep = sleepGate.asleep
+        let anyAsleep = asleep.contains(true)
+        if motion.refreshAll || !anyAsleep
+            || previousRootPositionsForSleep.count != targetRootPositions.count {
+            previousRootPositionsForSleep = targetRootPositions
+        } else {
+            let movedRoots = Set(motion.roots)
+            for i in targetRootPositions.indices
+            where !(i < asleep.count && asleep[i]) || movedRoots.contains(i) {
+                previousRootPositionsForSleep[i] = targetRootPositions[i]
+            }
+        }
+        let refreshColliders = motion.refreshAll || !anyAsleep
+        refreshAnchors(&previousSphereCollidersForSleep, from: targetSphereColliders,
+                       moved: motion.spheres, refreshAll: refreshColliders)
+        refreshAnchors(&previousCapsuleCollidersForSleep, from: targetCapsuleColliders,
+                       moved: motion.capsules, refreshAll: refreshColliders)
+        refreshAnchors(&previousPlaneCollidersForSleep, from: targetPlaneColliders,
+                       moved: motion.planes, refreshAll: refreshColliders)
         previousGlobalParamsForSleep = globalParams
         previousQualityForSleep = quality
-        // Store the CLAMPED sets (what `writeForeignTail` applied this frame), so
-        // next frame's wake check diffs applied-vs-applied and over-budget
+        // The foreign/external anchors follow the same rule as the authored
+        // ones: frozen while any chain sleeps, refreshed once the set is seen
+        // to change past the threshold, so a partner or prop drifting slower
+        // than the per-frame threshold still accumulates and wakes. The stored
+        // sets are the CLAMPED ones (what `writeForeignTail` applied this
+        // frame), so the wake check diffs applied-vs-applied and over-budget
         // colliders that were never written can't trigger a spurious wake.
-        previousForeignForSleep = foreign
-        previousExternalForSleep = external
+        if refreshColliders || motion.foreignMoved {
+            previousForeignForSleep = foreign
+        }
+        if refreshColliders || motion.externalMoved {
+            previousExternalForSleep = external
+        }
     }
 
     /// Transforms additive synthetic colliders (issue #309) into world space and
