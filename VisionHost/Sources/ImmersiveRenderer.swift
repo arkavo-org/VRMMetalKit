@@ -179,11 +179,14 @@ final class ImmersiveRenderer: @unchecked Sendable {
 
         // The renderer builds its pipeline states from this config, so it must
         // match the pass the host encodes: the layer's colour format and the
-        // sample count of the host-owned multisample targets. It allocates no
-        // MSAA texture of its own here — `drawOffscreen` draws into whatever
+        // sample count of the host-owned multisample targets. The colour format
+        // comes FROM the layer configuration — the same source the MSAA targets
+        // are created from — so the two cannot drift apart if
+        // `AvatarLayerConfiguration` ever changes it. It allocates no MSAA
+        // texture of its own here — `drawOffscreen` draws into whatever
         // attachments the pass descriptor names.
         var config = RendererConfig(strict: .off)
-        config.colorPixelFormat = .bgra8Unorm_srgb
+        config.colorPixelFormat = layerRenderer.configuration.colorFormat
         config.sampleCount = sampleCount
         config.alphaToCoverageForMASK = sampleCount > 1
         let renderer = VRMRenderer(device: device, config: config)
