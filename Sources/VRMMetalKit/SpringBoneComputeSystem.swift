@@ -253,6 +253,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var spheres: [Int] = []
         var capsules: [Int] = []
         var planes: [Int] = []
+        // The foreign/external sets diff as whole snapshots, not per index,
+        // so their anchors carry a single moved flag each.
+        var foreignMoved = false
+        var externalMoved = false
     }
     private var lastWakeMotion = WakeMotion(refreshAll: true)
 
@@ -1204,11 +1208,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                                            current: foreign,
                                            threshold: motionThreshold) {
                     movedColliderMasks.append(foreignBit)
+                    motion.foreignMoved = true
                 }
                 if foreignCollidersChanged(previous: previousExternalForSleep,
                                            current: external,
                                            threshold: motionThreshold) {
                     movedColliderMasks.append(foreignBit)
+                    motion.externalMoved = true
                 }
             }
         }
@@ -1339,8 +1345,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             || previousRootPositionsForSleep.count != targetRootPositions.count {
             previousRootPositionsForSleep = targetRootPositions
         } else {
+            let movedRoots = Set(motion.roots)
             for i in targetRootPositions.indices
-            where !(i < asleep.count && asleep[i]) || motion.roots.contains(i) {
+            where !(i < asleep.count && asleep[i]) || movedRoots.contains(i) {
                 previousRootPositionsForSleep[i] = targetRootPositions[i]
             }
         }
@@ -1353,11 +1360,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                        moved: motion.planes, refreshAll: refreshColliders)
         previousGlobalParamsForSleep = globalParams
         previousQualityForSleep = quality
-        // Store the CLAMPED sets (what `writeForeignTail` applied this frame), so
-        // next frame's wake check diffs applied-vs-applied and over-budget
+        // The foreign/external anchors follow the same rule as the authored
+        // ones: frozen while any chain sleeps, refreshed once the set is seen
+        // to change past the threshold, so a partner or prop drifting slower
+        // than the per-frame threshold still accumulates and wakes. The stored
+        // sets are the CLAMPED ones (what `writeForeignTail` applied this
+        // frame), so the wake check diffs applied-vs-applied and over-budget
         // colliders that were never written can't trigger a spurious wake.
-        previousForeignForSleep = foreign
-        previousExternalForSleep = external
+        if refreshColliders || motion.foreignMoved {
+            previousForeignForSleep = foreign
+        }
+        if refreshColliders || motion.externalMoved {
+            previousExternalForSleep = external
+        }
     }
 
     /// Transforms additive synthetic colliders (issue #309) into world space and
