@@ -245,6 +245,7 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``SkeletonFilterManager``
 
 - <doc:ARKitIntegration>
+- <doc:DeviceDrivenAvatars>
 
 ### Performance
 
