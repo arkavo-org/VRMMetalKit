@@ -213,6 +213,7 @@ final class ArmIKLayerTests: XCTestCase {
     func testAffectedBonesCoverArmsHandsAndFingers() {
         let layer = ArmIKLayer()
         XCTAssertTrue(layer.affectedBones.isSuperset(of: [.leftUpperArm, .leftLowerArm, .rightUpperArm, .rightLowerArm]))
+        XCTAssertFalse(layer.affectedBones.contains(.leftHand), "the layer never writes the wrist")
         XCTAssertTrue(layer.affectedBones.contains(.leftIndexProximal))
         XCTAssertTrue(layer.affectedBones.contains(.rightThumbDistal))
         XCTAssertFalse(layer.affectedBones.contains(.hips))

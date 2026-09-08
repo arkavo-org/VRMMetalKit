@@ -21,7 +21,7 @@ arms.leftFingers = .relaxed
 arms.rightFingers = ArmIKLayer.FingerCurl(thumb: 0.3, index: 0.1, middle: 0.5, ring: 0.6, little: 0.7)
 ```
 
-Finger curl is a rotation about a model-space axis, converted into each phalanx's rest frame, so it does not depend on how a particular rig orients its finger bones. Override ``ArmIKLayer/fingerCurlAxis(for:)`` behaviour through ``ArmIKLayer/thumbCurlAxis`` and ``ArmIKLayer/maxFingerCurlAngle`` for rigs that need it.
+Finger curl is a rotation about a model-space axis, converted into each phalanx's rest frame, so it does not depend on how a particular rig orients its finger bones. The axes (``ArmIKLayer/leftFingerCurlAxis``, ``ArmIKLayer/rightFingerCurlAxis``, ``ArmIKLayer/thumbCurlAxis``) and ``ArmIKLayer/maxFingerCurlAngle`` are properties for rigs that need different values.
 
 ## Lip-sync from the microphone
 
@@ -52,7 +52,7 @@ try receiver.start()
 vmc.apply(to: model, controller: expressionController)
 ```
 
-Rotations arrive in Unity's left-handed space. VRMMetalKit loads every model facing +Z with the left hand toward +X, which differs from Unity by a reflection of X, so ``VMCCoordinateConvention/flipX`` is the default. The driver composes each rotation relative to the bone's rest pose, so it stays correct on rigs whose rest rotations are not identity. Blend-shape names may be VRM 1.0 presets, VRM 0.x aliases (`Joy`, `A`, `Blink_L`), or ARKit names routed to custom expressions.
+Rotations arrive in Unity's left-handed space. VRMMetalKit loads every model facing +Z with the left hand toward +X (VRM 0.x files are rotated 180° about Y by the loader), which differs from Unity by a reflection of X, so ``VMCCoordinateConvention/flipX`` is the default for both spec versions. The driver composes each rotation relative to the bone's rest pose, so it stays correct on rigs whose rest rotations are not identity. Blend-shape names may be VRM 1.0 presets, VRM 0.x aliases (`Joy`, `A`, `Blink_L`), or ARKit names routed to custom expressions.
 
 To send instead, ``VMCEncoder/frame(for:controller:convention:time:)`` builds one bundle describing the current pose; feeding it back through a ``VMCDriver`` reproduces the pose.
 

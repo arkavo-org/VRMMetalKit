@@ -107,8 +107,8 @@ public final class ArmIKLayer: AnimationLayer {
 
     public var affectedBones: Set<VRMHumanoidBone> {
         var bones: Set<VRMHumanoidBone> = [
-            .leftUpperArm, .leftLowerArm, .leftHand,
-            .rightUpperArm, .rightLowerArm, .rightHand
+            .leftUpperArm, .leftLowerArm,
+            .rightUpperArm, .rightLowerArm
         ]
         for side in Side.allCases {
             for finger in Finger.allCases {
@@ -140,13 +140,16 @@ public final class ArmIKLayer: AnimationLayer {
     public var phalanxCurlScale: SIMD3<Float> = SIMD3<Float>(1.0, 0.85, 0.6)
     /// Model-space axis thumbs curl about (thumbs point +Z in a VRM T-pose; palms face -Y).
     public var thumbCurlAxis: SIMD3<Float> = SIMD3<Float>(1, 0, 0)
+    /// Model-space axis the left hand's four fingers curl about.
+    ///
+    /// In a VRM T-pose the left fingers point +X and curl toward -Y, which is a rotation about -Z.
+    public var leftFingerCurlAxis: SIMD3<Float> = SIMD3<Float>(0, 0, -1)
+    /// Model-space axis the right hand's four fingers curl about (mirror of the left).
+    public var rightFingerCurlAxis: SIMD3<Float> = SIMD3<Float>(0, 0, 1)
 
     /// Model-space axis the four fingers of `side` curl about.
-    ///
-    /// In a VRM T-pose the left fingers point +X and curl toward -Y, which is a
-    /// rotation about -Z; the right hand mirrors to +Z.
     public func fingerCurlAxis(for side: Side) -> SIMD3<Float> {
-        side == .left ? SIMD3<Float>(0, 0, -1) : SIMD3<Float>(0, 0, 1)
+        side == .left ? leftFingerCurlAxis : rightFingerCurlAxis
     }
 
     private struct RestTransform {

@@ -261,3 +261,45 @@ final class VMCDriverTests: XCTestCase {
         XCTAssertEqual(receiver.packetCount, 1)
     }
 }
+
+/// Verifies the Unity-to-model convention on a real VRM 0.x asset, which the
+/// loader rotates 180° about Y so it faces +Z like VRM 1.0.
+final class VMCDriverVRM0FixtureTests: XCTestCase {
+    private func vrm0FixtureURL() -> URL? {
+        var candidates: [URL] = []
+        if let env = ProcessInfo.processInfo.environment["VRM0_FIXTURE_PATH"] {
+            candidates.append(URL(fileURLWithPath: env))
+        }
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        candidates.append(root.appendingPathComponent("AliciaSolid.vrm"))
+        candidates.append(root.deletingLastPathComponent().appendingPathComponent("GameOfMods/VRM0-archive/AliciaSolid.vrm"))
+        return candidates.first { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    func testFlipXHoldsOnLoadedVRM0Model() async throws {
+        guard let url = vrm0FixtureURL() else {
+            throw XCTSkip("No VRM 0.x fixture (set VRM0_FIXTURE_PATH or place AliciaSolid.vrm at the repo root)")
+        }
+        let model = try await VRMModel.load(from: url)
+        XCTAssertEqual(model.specVersion, .v0_0, "fixture must be a VRM 0.x file")
+        let humanoid = try XCTUnwrap(model.humanoid)
+        let shoulder = model.nodes[try XCTUnwrap(humanoid.getBoneNode(.leftUpperArm))]
+        let hand = model.nodes[try XCTUnwrap(humanoid.getBoneNode(.leftHand))]
+
+        let restArm = hand.worldPosition - shoulder.worldPosition
+        XCTAssertGreaterThan(restArm.x, 0.8 * simd_length(restArm), "loaded 0.x left arm must point +X like VRM 1.0")
+
+        let driver = VMCDriver()
+        let s = sqrt(0.5) as Float
+        driver.receive(OSCMessage(address: "/VMC/Ext/Bone/Pos", arguments: [
+            .string("LeftUpperArm"), .float32(0), .float32(0), .float32(0),
+            .float32(0), .float32(s), .float32(0), .float32(s)
+        ]))
+        XCTAssertTrue(driver.apply(to: model))
+
+        let arm = hand.worldPosition - shoulder.worldPosition
+        XCTAssertGreaterThan(arm.z, 0.8 * simd_length(arm), "Unity yaw +90° must swing the left hand forward (+Z), got \(arm)")
+        XCTAssertEqual(simd_length(arm), simd_length(restArm), accuracy: 1e-3)
+    }
+}
