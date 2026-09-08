@@ -114,12 +114,21 @@ public final class VMCDriver: @unchecked Sendable {
     /// Ignore incoming data older than this when applying, in seconds. `nil` applies regardless of age.
     public var maxAge: TimeInterval? = 0.5
 
-    public private(set) var frame = VMCFrame()
-    public private(set) var messageCount: Int = 0
-    public private(set) var ignoredMessageCount: Int = 0
-    public private(set) var appliedFrameCount: Int = 0
+    /// Upper bound on distinct blend-shape names buffered between `Blend/Apply` messages.
+    /// Real senders emit tens of names; the cap stops a hostile sender from growing memory.
+    public static let maxPendingBlendShapes = 256
+
+    /// The latest received state. Reads take the driver's lock.
+    public var frame: VMCFrame { withLock { _frame } }
+    public var messageCount: Int { withLock { _messageCount } }
+    public var ignoredMessageCount: Int { withLock { _ignoredMessageCount } }
+    public var appliedFrameCount: Int { withLock { _appliedFrameCount } }
 
     private let lock = NSLock()
+    private var _frame = VMCFrame()
+    private var _messageCount = 0
+    private var _ignoredMessageCount = 0
+    private var _appliedFrameCount = 0
     private var pendingBlendShapes: [String: Float] = [:]
     private var restWorldRotations: [VRMHumanoidBone: simd_quatf] = [:]
     private var restCacheModel: ObjectIdentifier?
@@ -139,7 +148,7 @@ public final class VMCDriver: @unchecked Sendable {
     public func receive(_ message: OSCMessage) {
         lock.lock()
         defer { lock.unlock() }
-        messageCount += 1
+        _messageCount += 1
         let now = Date().timeIntervalSinceReferenceDate
         let args = message.arguments
 
@@ -147,38 +156,39 @@ public final class VMCDriver: @unchecked Sendable {
         case "/VMC/Ext/Bone/Pos":
             guard let name = args.first?.stringValue, let transform = Self.transform(args, from: 1),
                   let bone = Self.humanoidBone(unityName: name) else {
-                ignoredMessageCount += 1
+                _ignoredMessageCount += 1
                 return
             }
-            frame.bones[bone] = transform
-            frame.receivedAt = now
+            _frame.bones[bone] = transform
+            _frame.receivedAt = now
 
         case "/VMC/Ext/Root/Pos":
             guard let transform = Self.transform(args, from: 1) else {
-                ignoredMessageCount += 1
+                _ignoredMessageCount += 1
                 return
             }
-            frame.root = transform
-            frame.receivedAt = now
+            _frame.root = transform
+            _frame.receivedAt = now
 
         case "/VMC/Ext/Blend/Val":
-            guard let name = args.first?.stringValue, args.count > 1, let value = args[1].floatValue else {
-                ignoredMessageCount += 1
+            guard let name = args.first?.stringValue, args.count > 1, let value = args[1].floatValue,
+                  pendingBlendShapes.count < Self.maxPendingBlendShapes || pendingBlendShapes[name] != nil else {
+                _ignoredMessageCount += 1
                 return
             }
             pendingBlendShapes[name] = value
 
         case "/VMC/Ext/Blend/Apply":
-            frame.blendShapes = pendingBlendShapes
+            _frame.blendShapes = pendingBlendShapes
             pendingBlendShapes = [:]
-            frame.receivedAt = now
+            _frame.receivedAt = now
 
         case "/VMC/Ext/OK":
             guard let loaded = args.first?.intValue else {
-                ignoredMessageCount += 1
+                _ignoredMessageCount += 1
                 return
             }
-            frame.status = VMCDeviceStatus(
+            _frame.status = VMCDeviceStatus(
                 loaded: loaded != 0,
                 calibrationState: args.count > 1 ? args[1].intValue : nil,
                 calibrationMode: args.count > 2 ? args[2].intValue : nil,
@@ -186,10 +196,10 @@ public final class VMCDriver: @unchecked Sendable {
             )
 
         case "/VMC/Ext/T":
-            frame.time = args.first?.floatValue
+            _frame.time = args.first?.floatValue
 
         default:
-            ignoredMessageCount += 1
+            _ignoredMessageCount += 1
         }
     }
 
@@ -200,9 +210,7 @@ public final class VMCDriver: @unchecked Sendable {
     /// Returns `false` when nothing was applied because no frame has arrived or it is older than ``maxAge``.
     @discardableResult
     public func apply(to model: VRMModel, controller: VRMExpressionController? = nil) -> Bool {
-        lock.lock()
         let snapshot = frame
-        lock.unlock()
 
         guard snapshot.receivedAt > 0 else { return false }
         if let maxAge, Date().timeIntervalSinceReferenceDate - snapshot.receivedAt > maxAge {
@@ -242,18 +250,22 @@ public final class VMCDriver: @unchecked Sendable {
             }
         }
 
-        lock.lock()
-        appliedFrameCount += 1
-        lock.unlock()
+        withLock { _appliedFrameCount += 1 }
         return true
     }
 
     /// Drops the received frame and pending blend shapes.
     public func reset() {
+        withLock {
+            _frame = VMCFrame()
+            pendingBlendShapes = [:]
+        }
+    }
+
+    private func withLock<T>(_ body: () -> T) -> T {
         lock.lock()
         defer { lock.unlock() }
-        frame = VMCFrame()
-        pendingBlendShapes = [:]
+        return body()
     }
 
     // MARK: - Name mapping

@@ -39,15 +39,16 @@ public final class VMCReceiver: @unchecked Sendable {
     }
 
     public let requestedPort: UInt16
-    public private(set) var boundPort: UInt16?
+    /// Port the listener is bound to, or `nil` until ready or after `stop()`.
+    public var boundPort: UInt16? { withLock { _boundPort } }
 
     /// Called on the receiver queue with every decoded packet.
     public var onPacket: (@Sendable (OSCPacket) -> Void)?
     /// Called on the receiver queue when a datagram fails to decode or the listener fails.
     public var onError: (@Sendable (Error) -> Void)?
 
-    public private(set) var packetCount: Int = 0
-    public private(set) var decodeErrorCount: Int = 0
+    public var packetCount: Int { withLock { _packetCount } }
+    public var decodeErrorCount: Int { withLock { _decodeErrorCount } }
 
     /// Upper bound on simultaneously tracked sender flows. UDP senders that
     /// change source port create a new flow each time; when the cap is
@@ -55,14 +56,13 @@ public final class VMCReceiver: @unchecked Sendable {
     public var maxConnections: Int = 8
 
     /// Number of sender flows currently tracked.
-    public var connectionCount: Int {
-        lock.lock()
-        defer { lock.unlock() }
-        return connections.count
-    }
+    public var connectionCount: Int { withLock { connections.count } }
 
     private let queue: DispatchQueue
     private let lock = NSLock()
+    private var _boundPort: UInt16?
+    private var _packetCount = 0
+    private var _decodeErrorCount = 0
     private var listener: NWListener?
     private var connections: [NWConnection] = []
     private var ready = DispatchSemaphore(value: 0)
@@ -79,6 +79,10 @@ public final class VMCReceiver: @unchecked Sendable {
         onPacket = { [driver] packet in driver.receive(packet) }
     }
 
+    deinit {
+        stop()
+    }
+
     public func start() throws {
         lock.lock()
         defer { lock.unlock() }
@@ -93,13 +97,15 @@ public final class VMCReceiver: @unchecked Sendable {
         let ready = DispatchSemaphore(value: 0)
         self.ready = ready
         readySignalled = false
-        listener.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
+        // The listener owns this closure, so it must not own the listener back:
+        // a strong capture would keep the port bound after the receiver is gone.
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            guard let self, let listener else { return }
             switch state {
             case .ready:
                 self.lock.lock()
                 guard self.listener === listener else { self.lock.unlock(); return }
-                self.boundPort = listener.port?.rawValue
+                self._boundPort = listener.port?.rawValue
                 let signal = !self.readySignalled
                 self.readySignalled = true
                 self.lock.unlock()
@@ -129,9 +135,7 @@ public final class VMCReceiver: @unchecked Sendable {
         let ready = self.ready
         lock.unlock()
         _ = ready.wait(timeout: .now() + timeout)
-        lock.lock()
-        defer { lock.unlock() }
-        return boundPort != nil
+        return withLock { _boundPort != nil }
     }
 
     public func stop() {
@@ -140,7 +144,7 @@ public final class VMCReceiver: @unchecked Sendable {
         let connections = self.connections
         self.listener = nil
         self.connections = []
-        self.boundPort = nil
+        self._boundPort = nil
         self.readySignalled = false
         lock.unlock()
         connections.forEach { $0.cancel() }
@@ -171,14 +175,10 @@ public final class VMCReceiver: @unchecked Sendable {
             if let data, !data.isEmpty {
                 do {
                     let packet = try OSCPacket.decode(data)
-                    self.lock.lock()
-                    self.packetCount += 1
-                    self.lock.unlock()
+                    self.withLock { self._packetCount += 1 }
                     self.onPacket?(packet)
                 } catch {
-                    self.lock.lock()
-                    self.decodeErrorCount += 1
-                    self.lock.unlock()
+                    self.withLock { self._decodeErrorCount += 1 }
                     self.onError?(error)
                 }
             }
@@ -189,8 +189,12 @@ public final class VMCReceiver: @unchecked Sendable {
     }
 
     private func remove(_ connection: NWConnection) {
+        withLock { connections.removeAll { $0 === connection } }
+    }
+
+    private func withLock<T>(_ body: () -> T) -> T {
         lock.lock()
-        connections.removeAll { $0 === connection }
-        lock.unlock()
+        defer { lock.unlock() }
+        return body()
     }
 }

@@ -359,3 +359,43 @@ final class VMCReceiverLifecycleTests: XCTestCase {
         receiver.stop()
     }
 }
+
+final class VMCHostileInputTests: XCTestCase {
+    func testPendingBlendShapesAreCapped() {
+        let driver = VMCDriver()
+        for i in 0..<(VMCDriver.maxPendingBlendShapes + 50) {
+            driver.receive(OSCMessage("/VMC/Ext/Blend/Val", .string("shape\(i)"), .float32(0.5)))
+        }
+        XCTAssertEqual(driver.ignoredMessageCount, 50, "names past the cap must be dropped")
+        driver.receive(OSCMessage("/VMC/Ext/Blend/Val", .string("shape0"), .float32(0.9)))
+        XCTAssertEqual(driver.ignoredMessageCount, 50, "updating an existing name is still accepted at the cap")
+        driver.receive(OSCMessage(address: "/VMC/Ext/Blend/Apply"))
+        XCTAssertEqual(driver.frame.blendShapes.count, VMCDriver.maxPendingBlendShapes)
+        XCTAssertEqual(driver.frame.blendShapes["shape0"], 0.9)
+        driver.receive(OSCMessage("/VMC/Ext/Blend/Val", .string("fresh"), .float32(0.1)))
+        XCTAssertEqual(driver.ignoredMessageCount, 50, "Apply empties the buffer so new names are accepted again")
+    }
+
+    func testDroppedReceiverReleasesItsPort() throws {
+        var receiver: VMCReceiver? = VMCReceiver(port: 0)
+        do { try receiver!.start() } catch { throw XCTSkip("UDP listener unavailable: \(error)") }
+        guard receiver!.waitUntilReady(timeout: 3), let port = receiver!.boundPort else { throw XCTSkip("listener not ready") }
+        weak var weakReceiver = receiver
+        receiver = nil
+        XCTAssertNil(weakReceiver)
+
+        // A plain listener without endpoint reuse only binds if the orphaned one is gone.
+        let ready = expectation(description: "port rebinds")
+        let probe = try NWListener(using: .udp, on: NWEndpoint.Port(rawValue: port)!)
+        let state = VMCDriver()
+        probe.stateUpdateHandler = { s in
+            if case .ready = s { ready.fulfill() }
+            if case .failed = s { state.receive(OSCMessage(address: "/probe/failed")) }
+        }
+        probe.newConnectionHandler = { $0.cancel() }
+        probe.start(queue: DispatchQueue(label: "vmc-probe"))
+        wait(for: [ready], timeout: 5)
+        XCTAssertEqual(state.messageCount, 0, "probe listener must not fail with address in use")
+        probe.cancel()
+    }
+}
