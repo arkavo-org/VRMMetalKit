@@ -26,7 +26,7 @@ import Foundation
 /// visemes to zero through the same filters, so a `.none` smoothing config
 /// closes the mouth immediately and `.smooth` lets it relax.
 ///
-/// The driver is safe to feed from an audio thread through ``push(_:)`` and
+/// The driver is safe to feed from an audio thread through `push(_:)` and
 /// to apply from the animation thread through ``apply(to:)``; the combined
 /// ``update(samples:controller:)`` does both and is intended for callers that
 /// already marshal audio onto their animation thread.

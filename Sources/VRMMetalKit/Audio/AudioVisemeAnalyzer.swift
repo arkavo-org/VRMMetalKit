@@ -53,7 +53,7 @@ public struct VisemeFrame: Sendable, Equatable {
 /// model; it distinguishes open, closed, rounded, and spread vowels well
 /// enough to keep a mouth alive in sync with speech.
 ///
-/// Window size is fixed at construction. ``analyze(_:)`` uses the most
+/// Window size is fixed at construction. `analyze(_:)` uses the most
 /// recent ``Config/windowSize`` samples and zero-pads shorter input, so
 /// callers can pass whatever buffer size their tap delivers.
 public final class AudioVisemeAnalyzer: @unchecked Sendable {
