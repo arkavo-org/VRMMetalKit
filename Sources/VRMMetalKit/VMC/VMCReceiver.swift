@@ -105,12 +105,12 @@ public final class VMCReceiver: @unchecked Sendable {
                 self.lock.unlock()
                 if signal { ready.signal() }
             case .failed(let error):
-                self.onError?(ReceiverError.listenerFailed(error.localizedDescription))
                 self.lock.lock()
                 guard self.listener === listener else { self.lock.unlock(); return }
                 let signal = !self.readySignalled
                 self.readySignalled = true
                 self.lock.unlock()
+                self.onError?(ReceiverError.listenerFailed(error.localizedDescription))
                 if signal { ready.signal() }
             default:
                 break
