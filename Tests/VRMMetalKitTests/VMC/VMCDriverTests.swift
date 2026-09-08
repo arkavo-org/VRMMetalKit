@@ -333,15 +333,26 @@ final class VMCReceiverLifecycleTests: XCTestCase {
     func testSenderFlowsAreCappedAtMaxConnections() throws {
         let receiver = VMCReceiver(port: 0)
         receiver.maxConnections = 1
-        let received = expectation(description: "two packets from two flows")
-        received.expectedFulfillmentCount = 2
-        receiver.onPacket = { _ in received.fulfill() }
+        let first = expectation(description: "packet from first flow")
+        let second = expectation(description: "packet from second flow")
+        let counter = VMCDriver()
+        receiver.onPacket = { packet in
+            counter.receive(packet)
+            switch counter.messageCount {
+            case 1: first.fulfill()
+            case 2: second.fulfill()
+            default: break
+            }
+        }
         do { try receiver.start() } catch { throw XCTSkip("UDP listener unavailable: \(error)") }
         guard receiver.waitUntilReady(timeout: 3), let port = receiver.boundPort else { throw XCTSkip("listener not ready") }
 
+        // Sequential so the first flow's datagram lands before the second flow evicts it.
         let a = send(VMCEncoder.blendApply().encode(), to: port)
+        wait(for: [first], timeout: 5)
+        XCTAssertEqual(receiver.connectionCount, 1)
         let b = send(VMCEncoder.blendApply().encode(), to: port)
-        wait(for: [received], timeout: 5)
+        wait(for: [second], timeout: 5)
         XCTAssertLessThanOrEqual(receiver.connectionCount, 1, "oldest flow must be evicted past the cap")
         a.cancel()
         b.cancel()
