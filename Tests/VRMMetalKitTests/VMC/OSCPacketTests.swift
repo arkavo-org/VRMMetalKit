@@ -109,3 +109,60 @@ final class OSCPacketTests: XCTestCase {
         }
     }
 }
+
+final class OSCPacketHostileInputTests: XCTestCase {
+    private func message(_ address: String, tags: String, payload: [UInt8]) -> Data {
+        var bytes = Array(address.utf8) + [0]
+        while bytes.count % 4 != 0 { bytes.append(0) }
+        bytes += Array(tags.utf8) + [0]
+        while bytes.count % 4 != 0 { bytes.append(0) }
+        return Data(bytes + payload)
+    }
+
+    private func nestedBundles(depth: Int) -> Data {
+        var inner = OSCBundle(elements: []).encode()
+        for _ in 0..<depth {
+            var wrapped = Data()
+            OSCCodec.appendString("#bundle", to: &wrapped)
+            OSCCodec.appendBigEndian(UInt64(1), to: &wrapped)
+            OSCCodec.appendBigEndian(UInt32(inner.count), to: &wrapped)
+            wrapped.append(inner)
+            inner = wrapped
+        }
+        return inner
+    }
+
+    func testNaNFloatIntValueIsNilNotTrap() throws {
+        let packet = try OSCPacket.decode(message("/VMC/Ext/OK", tags: ",f", payload: [0x7F, 0xC0, 0x00, 0x00]))
+        let arg = try XCTUnwrap(packet.messages.first?.arguments.first)
+        XCTAssertNil(arg.intValue)
+        XCTAssertNil(OSCArgument.float32(.infinity).intValue)
+        XCTAssertNil(OSCArgument.double(1e30).intValue)
+        XCTAssertEqual(OSCArgument.float32(3.9).intValue, 3)
+        XCTAssertEqual(OSCArgument.float32(-3.9).intValue, -3)
+
+        let driver = VMCDriver()
+        driver.receive(packet)
+        XCTAssertEqual(driver.ignoredMessageCount, 1, "NaN status must be ignored, not applied")
+    }
+
+    func testBundleNestingAtLimitDecodes() throws {
+        let packet = try OSCPacket.decode(nestedBundles(depth: OSCPacket.maxBundleDepth - 1))
+        XCTAssertTrue(packet.messages.isEmpty)
+    }
+
+    func testBundleNestingPastLimitIsRejected() {
+        XCTAssertThrowsError(try OSCPacket.decode(nestedBundles(depth: OSCPacket.maxBundleDepth + 1))) { error in
+            XCTAssertEqual(error as? OSCDecodingError, .bundleTooDeep(OSCPacket.maxBundleDepth))
+        }
+        XCTAssertThrowsError(try OSCPacket.decode(nestedBundles(depth: 3000)))
+    }
+
+    func testMessagesFlattenDeepValueWithoutRecursion() {
+        var packet = OSCPacket.message(OSCMessage("/leaf"))
+        for _ in 0..<2_000 {
+            packet = .bundle(OSCBundle(elements: [packet]))
+        }
+        XCTAssertEqual(packet.messages.map(\.address), ["/leaf"])
+    }
+}

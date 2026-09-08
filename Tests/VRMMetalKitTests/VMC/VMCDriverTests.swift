@@ -303,3 +303,48 @@ final class VMCDriverVRM0FixtureTests: XCTestCase {
         XCTAssertEqual(simd_length(arm), simd_length(restArm), accuracy: 1e-3)
     }
 }
+
+final class VMCReceiverLifecycleTests: XCTestCase {
+    private func send(_ data: Data, to port: UInt16) -> NWConnection {
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .udp)
+        connection.start(queue: DispatchQueue(label: "vmc-lifecycle-sender"))
+        connection.send(content: data, completion: .contentProcessed { _ in })
+        return connection
+    }
+
+    func testRestartAfterStopBindsFreshPortAndReceives() throws {
+        let receiver = VMCReceiver(port: 0)
+        do { try receiver.start() } catch { throw XCTSkip("UDP listener unavailable: \(error)") }
+        guard receiver.waitUntilReady(timeout: 3) else { throw XCTSkip("listener not ready") }
+        receiver.stop()
+        XCTAssertNil(receiver.boundPort)
+
+        let received = expectation(description: "packet after restart")
+        receiver.onPacket = { _ in received.fulfill() }
+        try receiver.start()
+        XCTAssertTrue(receiver.waitUntilReady(timeout: 3), "second start must wait for its own listener")
+        let port = try XCTUnwrap(receiver.boundPort)
+        let sender = send(VMCEncoder.blendApply().encode(), to: port)
+        wait(for: [received], timeout: 5)
+        sender.cancel()
+        receiver.stop()
+    }
+
+    func testSenderFlowsAreCappedAtMaxConnections() throws {
+        let receiver = VMCReceiver(port: 0)
+        receiver.maxConnections = 1
+        let received = expectation(description: "two packets from two flows")
+        received.expectedFulfillmentCount = 2
+        receiver.onPacket = { _ in received.fulfill() }
+        do { try receiver.start() } catch { throw XCTSkip("UDP listener unavailable: \(error)") }
+        guard receiver.waitUntilReady(timeout: 3), let port = receiver.boundPort else { throw XCTSkip("listener not ready") }
+
+        let a = send(VMCEncoder.blendApply().encode(), to: port)
+        let b = send(VMCEncoder.blendApply().encode(), to: port)
+        wait(for: [received], timeout: 5)
+        XCTAssertLessThanOrEqual(receiver.connectionCount, 1, "oldest flow must be evicted past the cap")
+        a.cancel()
+        b.cancel()
+        receiver.stop()
+    }
+}

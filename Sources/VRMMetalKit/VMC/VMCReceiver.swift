@@ -49,11 +49,23 @@ public final class VMCReceiver: @unchecked Sendable {
     public private(set) var packetCount: Int = 0
     public private(set) var decodeErrorCount: Int = 0
 
+    /// Upper bound on simultaneously tracked sender flows. UDP senders that
+    /// change source port create a new flow each time; when the cap is
+    /// exceeded the oldest flow is cancelled.
+    public var maxConnections: Int = 8
+
+    /// Number of sender flows currently tracked.
+    public var connectionCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return connections.count
+    }
+
     private let queue: DispatchQueue
     private let lock = NSLock()
     private var listener: NWListener?
     private var connections: [NWConnection] = []
-    private let ready = DispatchSemaphore(value: 0)
+    private var ready = DispatchSemaphore(value: 0)
     private var readySignalled = false
 
     public init(port: UInt16 = 39539, queue: DispatchQueue = DispatchQueue(label: "com.arkavo.vrmmetalkit.vmc-receiver")) {
@@ -76,23 +88,30 @@ public final class VMCReceiver: @unchecked Sendable {
         params.allowLocalEndpointReuse = true
         let port = requestedPort == 0 ? NWEndpoint.Port.any : NWEndpoint.Port(rawValue: requestedPort)!
         let listener = try NWListener(using: params, on: port)
+        // A fresh semaphore per listener so a signal left over from a previous
+        // start()/stop() cycle cannot satisfy the next waitUntilReady().
+        let ready = DispatchSemaphore(value: 0)
+        self.ready = ready
+        readySignalled = false
         listener.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             switch state {
             case .ready:
                 self.lock.lock()
+                guard self.listener === listener else { self.lock.unlock(); return }
                 self.boundPort = listener.port?.rawValue
                 let signal = !self.readySignalled
                 self.readySignalled = true
                 self.lock.unlock()
-                if signal { self.ready.signal() }
+                if signal { ready.signal() }
             case .failed(let error):
                 self.onError?(ReceiverError.listenerFailed(error.localizedDescription))
                 self.lock.lock()
+                guard self.listener === listener else { self.lock.unlock(); return }
                 let signal = !self.readySignalled
                 self.readySignalled = true
                 self.lock.unlock()
-                if signal { self.ready.signal() }
+                if signal { ready.signal() }
             default:
                 break
             }
@@ -106,6 +125,9 @@ public final class VMCReceiver: @unchecked Sendable {
 
     /// Blocks until the listener is ready or failed. Returns `true` when a port is bound.
     public func waitUntilReady(timeout: TimeInterval = 2.0) -> Bool {
+        lock.lock()
+        let ready = self.ready
+        lock.unlock()
         _ = ready.wait(timeout: .now() + timeout)
         lock.lock()
         defer { lock.unlock() }
@@ -128,7 +150,12 @@ public final class VMCReceiver: @unchecked Sendable {
     private func accept(_ connection: NWConnection) {
         lock.lock()
         connections.append(connection)
+        var evicted: [NWConnection] = []
+        while connections.count > max(1, maxConnections) {
+            evicted.append(connections.removeFirst())
+        }
         lock.unlock()
+        evicted.forEach { $0.cancel() }
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let self, let connection else { return }
             if case .failed = state { self.remove(connection) }

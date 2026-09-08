@@ -44,8 +44,8 @@ public enum OSCArgument: Sendable, Equatable {
         switch self {
         case .int32(let v): return Int(v)
         case .int64(let v): return Int(v)
-        case .float32(let v): return Int(v)
-        case .double(let v): return Int(v)
+        case .float32(let v): return Int(exactly: v.rounded(.towardZero))
+        case .double(let v): return Int(exactly: v.rounded(.towardZero))
         default: return nil
         }
     }
@@ -136,12 +136,20 @@ public indirect enum OSCPacket: Sendable, Equatable {
     case message(OSCMessage)
     case bundle(OSCBundle)
 
+    /// Nesting depth past which ``decode(_:)`` rejects a bundle. Real senders nest one or two levels.
+    public static let maxBundleDepth = 8
+
     /// Every message in the packet, bundles flattened in order.
     public var messages: [OSCMessage] {
-        switch self {
-        case .message(let m): return [m]
-        case .bundle(let b): return b.elements.flatMap(\.messages)
+        var result: [OSCMessage] = []
+        var stack: [OSCPacket] = [self]
+        while let packet = stack.popLast() {
+            switch packet {
+            case .message(let m): result.append(m)
+            case .bundle(let b): stack.append(contentsOf: b.elements.reversed())
+            }
         }
+        return result
     }
 
     public func encode() -> Data {
@@ -151,15 +159,16 @@ public indirect enum OSCPacket: Sendable, Equatable {
         }
     }
 
-    /// Decodes one datagram.
+    /// Decodes one datagram. Bundles nested deeper than ``maxBundleDepth`` are rejected.
     public static func decode(_ data: Data) throws -> OSCPacket {
-        var reader = OSCReader(data: data)
-        return try decode(&reader)
+        var reader = OSCReader(bytes: [UInt8](data))
+        return try decode(&reader, depth: 0)
     }
 
-    private static func decode(_ reader: inout OSCReader) throws -> OSCPacket {
+    private static func decode(_ reader: inout OSCReader, depth: Int) throws -> OSCPacket {
         guard let first = reader.peekByte() else { throw OSCDecodingError.truncated }
         if first == UInt8(ascii: "#") {
+            guard depth < maxBundleDepth else { throw OSCDecodingError.bundleTooDeep(maxBundleDepth) }
             let marker = try reader.readString()
             guard marker == "#bundle" else { throw OSCDecodingError.malformedBundle }
             let timeTag: UInt64 = try reader.readBigEndian()
@@ -167,8 +176,8 @@ public indirect enum OSCPacket: Sendable, Equatable {
             while reader.remaining > 0 {
                 let size = Int(try reader.readBigEndian() as UInt32)
                 guard size <= reader.remaining else { throw OSCDecodingError.truncated }
-                var sub = OSCReader(data: reader.readBytes(size))
-                elements.append(try decode(&sub))
+                var sub = reader.subreader(count: size)
+                elements.append(try decode(&sub, depth: depth + 1))
             }
             return .bundle(OSCBundle(timeTag: timeTag, elements: elements))
         }
@@ -209,6 +218,7 @@ public enum OSCDecodingError: Error, Equatable, LocalizedError {
     case malformedAddress(String)
     case malformedTypeTags(String)
     case malformedBundle
+    case bundleTooDeep(Int)
     case unsupportedTypeTag(Character)
 
     public var errorDescription: String? {
@@ -221,6 +231,8 @@ public enum OSCDecodingError: Error, Equatable, LocalizedError {
             return "OSC type-tag string '\(t)' must start with ','. Spec: https://opensoundcontrol.stanford.edu/spec-1_0.html"
         case .malformedBundle:
             return "OSC bundle must begin with '#bundle'. Spec: https://opensoundcontrol.stanford.edu/spec-1_0.html"
+        case .bundleTooDeep(let limit):
+            return "OSC bundle nesting exceeds \(limit) levels; the packet was rejected as malformed or hostile. Real senders nest one or two levels. Spec: https://opensoundcontrol.stanford.edu/spec-1_0.html"
         case .unsupportedTypeTag(let c):
             return "OSC type tag '\(c)' is not supported (supported: i f s b h d T F N I). Spec: https://opensoundcontrol.stanford.edu/spec-1_0.html"
         }
@@ -249,18 +261,36 @@ enum OSCCodec {
     }
 }
 
+/// Cursor over a shared byte array. Sub-readers for bundle elements share the
+/// storage and narrow the bounds, so nested bundles never copy the datagram.
 struct OSCReader {
     private let bytes: [UInt8]
-    private var cursor = 0
+    private var cursor: Int
+    private let end: Int
 
-    init(data: Data) {
-        bytes = [UInt8](data)
+    init(bytes: [UInt8]) {
+        self.bytes = bytes
+        self.cursor = 0
+        self.end = bytes.count
     }
 
-    var remaining: Int { bytes.count - cursor }
+    private init(bytes: [UInt8], start: Int, end: Int) {
+        self.bytes = bytes
+        self.cursor = start
+        self.end = end
+    }
+
+    var remaining: Int { end - cursor }
 
     func peekByte() -> UInt8? {
-        cursor < bytes.count ? bytes[cursor] : nil
+        cursor < end ? bytes[cursor] : nil
+    }
+
+    /// A reader over the next `count` bytes; advances this reader past them.
+    mutating func subreader(count: Int) -> OSCReader {
+        let sub = OSCReader(bytes: bytes, start: cursor, end: cursor + count)
+        cursor += count
+        return sub
     }
 
     mutating func readBytes(_ count: Int) -> Data {
@@ -272,15 +302,15 @@ struct OSCReader {
     mutating func skipPadding(after size: Int) {
         let remainder = size % 4
         if remainder != 0 {
-            cursor = min(bytes.count, cursor + 4 - remainder)
+            cursor = min(end, cursor + 4 - remainder)
         }
     }
 
     mutating func readString() throws -> String {
-        guard let end = bytes[cursor...].firstIndex(of: 0) else { throw OSCDecodingError.truncated }
-        let s = String(decoding: bytes[cursor..<end], as: UTF8.self)
-        let consumed = end - cursor + 1
-        cursor = end + 1
+        guard let terminator = bytes[cursor..<end].firstIndex(of: 0) else { throw OSCDecodingError.truncated }
+        let s = String(decoding: bytes[cursor..<terminator], as: UTF8.self)
+        let consumed = terminator - cursor + 1
+        cursor = terminator + 1
         skipPadding(after: consumed)
         return s
     }
