@@ -1750,6 +1750,17 @@ public class VRMMaterial: @unchecked Sendable {
                 baseColorFactor = SIMD4<Float>(r, g, b, a)
             }
 
+            // Emission: VRM 0.x stores `_EmissionColor` in gamma space and UniVRM
+            // copies the same gamma value into glTF `emissiveFactor`. Decode to
+            // linear like the other 0.x colour factors (three-vrm V0CompatPlugin
+            // applies its EOTF to `_EmissionColor`). Prefer `_EmissionColor`
+            // because some 0.x exporters omit the glTF field entirely.
+            if let emission = vrm0Prop.vectorProperties["_EmissionColor"], emission.count >= 3 {
+                emissiveFactor = SIMD3<Float>(sRGBToLinear(emission[0]), sRGBToLinear(emission[1]), sRGBToLinear(emission[2]))
+            } else if gltfMaterial.emissiveFactor != nil {
+                emissiveFactor = SIMD3<Float>(sRGBToLinear(emissiveFactor.x), sRGBToLinear(emissiveFactor.y), sRGBToLinear(emissiveFactor.z))
+            }
+
             // Get renderQueue from VRM 0.x material (used for sorting transparent materials)
             if let queue = vrm0Prop.renderQueue {
                 renderQueue = queue

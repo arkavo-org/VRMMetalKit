@@ -42,8 +42,14 @@ JSON_CHUNK = 0x4E4F534A
 BIN_CHUNK = 0x004E4942
 
 
+def load_json(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
 def load_glb(path):
-    b = open(path, "rb").read()
+    with open(path, "rb") as fh:
+        b = fh.read()
     magic, _ver, length = struct.unpack_from("<III", b, 0)
     if magic != 0x46546C67:
         raise ValueError(f"{path}: not a GLB container")
@@ -89,12 +95,13 @@ def world_mats(js):
             parent[c] = i
     cache = {}
 
-    def w(i):
+    def w(i, visiting=()):
         if i in cache:
             return cache[i]
         m = local_mat(nodes[i])
-        if i in parent:
-            m = w(parent[i]) @ m
+        # A parent chain that revisits a node is a malformed graph; treat the repeat as a root.
+        if i in parent and parent[i] not in visiting:
+            m = w(parent[i], visiting + (i,)) @ m
         cache[i] = m
         return m
 
@@ -150,16 +157,22 @@ def image_size(data):
         if marker in (0xC0, 0xC1, 0xC2):
             h, w = struct.unpack_from(">HH", data, i + 5)
             return int(w), int(h)
-        i += 2 + struct.unpack_from(">H", data, i + 2)[0]
+        seglen = struct.unpack_from(">H", data, i + 2)[0]
+        if seglen < 2:
+            return None
+        i += 2 + seglen
     return None
 
 
 def descendants(nodes, root):
+    """Node indices under root, inclusive; tolerant of malformed graphs with cycles."""
     out, stack = set(), [root]
     while stack:
         n = stack.pop()
+        if n in out:
+            continue
         out.add(n)
-        stack.extend(nodes[n].get("children", []))
+        stack.extend(c for c in nodes[n].get("children", []) if c not in out)
     return out
 
 
@@ -415,7 +428,7 @@ def measure(path, role_overrides=None):
         for bg in sa.get("boneGroups", []):
             for root in bg.get("bones", []):
                 chain, n = [], root
-                while True:
+                while n not in chain:
                     chain.append(n)
                     ch = nodes[n].get("children", [])
                     if not ch:
@@ -437,6 +450,9 @@ def measure(path, role_overrides=None):
 
     # ---- geometry
     pos = {k: W[n][:3, 3] for k, n in bones.items()}
+    for required in ("hips", "head"):
+        if required not in pos:
+            raise ValueError(f"{path}: humanoid is missing the required '{required}' bone")
     head_set = {bones[k] for k in ("head", "leftEye", "rightEye", "jaw") if k in bones}
     head_pos = pos["head"]
     tri = vert_refs = 0
@@ -475,27 +491,38 @@ def measure(path, role_overrides=None):
              height_m=round(H, 4), bbox_min=[round(float(x), 4) for x in allmin], bbox_max=[round(float(x), 4) for x in allmax])
 
     # ---- proportions (humanoid bones; spec-mandated)
+    # Only hips, spine, head and the four upper limb bones are required by VRMC_vrm humanoid;
+    # every metric that needs an optional bone reports None (which fails its rule) instead of raising.
     def dist(a, b):
+        if a not in pos or b not in pos:
+            return None
         return float(np.linalg.norm(pos[a] - pos[b]))
+
+    def ratio(a, b):
+        return round(a / b, 4) if a is not None and b else None
 
     P_ = {}
     P_["eye_height_ratio"] = round(float((pos["leftEye"][1] + pos["rightEye"][1]) / 2 / H), 4) if "leftEye" in pos and "rightEye" in pos else None
-    P_["ipd_m"] = round(dist("leftEye", "rightEye"), 4) if "leftEye" in pos and "rightEye" in pos else None
+    P_["ipd_m"] = ratio(dist("leftEye", "rightEye"), 1.0)
     P_["hips_height_ratio"] = round(float(pos["hips"][1] / H), 4)
     P_["head_bone_height_ratio"] = round(float(head_pos[1] / H), 4)
-    P_["upper_leg_height_ratio"] = round(float(pos["leftUpperLeg"][1] / H), 4)
-    P_["shoulder_width_ratio"] = round(dist("leftUpperArm", "rightUpperArm") / H, 4)
-    P_["upper_arm_m"] = round(dist("leftUpperArm", "leftLowerArm"), 4)
-    P_["lower_arm_m"] = round(dist("leftLowerArm", "leftHand"), 4)
-    P_["upper_leg_m"] = round(dist("leftUpperLeg", "leftLowerLeg"), 4)
-    P_["lower_leg_m"] = round(dist("leftLowerLeg", "leftFoot"), 4)
-    P_["lower_upper_arm_ratio"] = round(P_["lower_arm_m"] / P_["upper_arm_m"], 4)
-    P_["lower_upper_leg_ratio"] = round(P_["lower_leg_m"] / P_["upper_leg_m"], 4)
-    P_["arm_span_height_ratio"] = round(dist("leftHand", "rightHand") / H, 4)
-    arm = pos["leftHand"] - pos["leftUpperArm"]
-    P_["rest_pose_arm_horizontal_cos"] = round(abs(float(arm[0])) / max(float(np.linalg.norm(arm)), 1e-9), 4)
+    P_["upper_leg_height_ratio"] = round(float(pos["leftUpperLeg"][1] / H), 4) if "leftUpperLeg" in pos else None
+    P_["shoulder_width_ratio"] = ratio(dist("leftUpperArm", "rightUpperArm"), H)
+    P_["upper_arm_m"] = ratio(dist("leftUpperArm", "leftLowerArm"), 1.0)
+    P_["lower_arm_m"] = ratio(dist("leftLowerArm", "leftHand"), 1.0)
+    P_["upper_leg_m"] = ratio(dist("leftUpperLeg", "leftLowerLeg"), 1.0)
+    P_["lower_leg_m"] = ratio(dist("leftLowerLeg", "leftFoot"), 1.0)
+    P_["lower_upper_arm_ratio"] = ratio(P_["lower_arm_m"], P_["upper_arm_m"])
+    P_["lower_upper_leg_ratio"] = ratio(P_["lower_leg_m"], P_["upper_leg_m"])
+    P_["arm_span_height_ratio"] = ratio(dist("leftHand", "rightHand"), H)
+    if "leftHand" in pos and "leftUpperArm" in pos:
+        arm = pos["leftHand"] - pos["leftUpperArm"]
+        P_["rest_pose_arm_horizontal_cos"] = round(abs(float(arm[0])) / max(float(np.linalg.norm(arm)), 1e-9), 4)
+    else:
+        P_["rest_pose_arm_horizontal_cos"] = None
     sym = [(dist("leftUpperArm", "leftHand"), dist("rightUpperArm", "rightHand")), (dist("leftUpperLeg", "leftFoot"), dist("rightUpperLeg", "rightFoot"))]
-    P_["limb_asymmetry"] = round(max(abs(a - b) / max(a, b) for a, b in sym), 4)
+    sym = [(a, b) for a, b in sym if a is not None and b is not None and max(a, b) > 0]
+    P_["limb_asymmetry"] = round(max(abs(a - b) / max(a, b) for a, b in sym), 4) if sym else None
 
     # head height: vertices dominated by head-region joints, centre column (|x - head.x| < 15 mm);
     # chin = lowest such vertex in front of the head bone, crown = highest. Includes crown hair.
@@ -689,7 +716,7 @@ def measure_corpus(manifest_path, role_overrides, allow_missing=False):
     the measurements with content hashes, so envelopes can be regenerated and audited.
     A missing asset is an error unless allow_missing is set, so a partial checkout cannot
     silently replace the reference corpus."""
-    man = json.load(open(manifest_path))
+    man = load_json(manifest_path)
     root = os.path.join(os.path.dirname(os.path.abspath(manifest_path)), man.get("root", "."))
     missing = [e["path"] for e in man["assets"] if not os.path.exists(os.path.normpath(os.path.join(root, e["path"])))]
     if missing and not allow_missing:
@@ -771,8 +798,9 @@ def envelopes(profile, corpus, write_path=None):
         profile["corpus"].update(n=len(ms), effective_n=len(families), manifest=corpus.get("manifest"),
                                  assets=[M["asset"]["path"] for M in ms],
                                  sha256={M["asset"]["file"]: M["asset"]["sha256"] for M in ms})
-        json.dump(profile, open(write_path, "w"), indent=2, ensure_ascii=False)
-        open(write_path, "a").write("\n")
+        with open(write_path, "w", encoding="utf-8") as fh:
+            json.dump(profile, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
     return report
 
 
@@ -842,14 +870,15 @@ def main(argv=None):
         print(json.dumps(describe(), indent=2))
         return 0
     if args.cmd == "envelopes":
-        profile = json.load(open(args.profile))
-        rep = envelopes(profile, json.load(open(args.measurements)), args.profile if args.write else None)
+        profile = load_json(args.profile)
+        rep = envelopes(profile, load_json(args.measurements), args.profile if args.write else None)
         print(json.dumps(rep, indent=1))
         return 0
-    overrides = json.load(open(args.roles)) if args.roles else {}
+    overrides = load_json(args.roles) if args.roles else {}
     if args.cmd == "corpus":
         corpus = measure_corpus(args.manifest, overrides, args.allow_missing)
-        json.dump(corpus, open(args.out, "w"), indent=1)
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump(corpus, fh, indent=1)
         if corpus["missing"]:
             print(f"corpus: partial ({corpus['measured']}/{corpus['expected']} assets)", file=sys.stderr)
         return 0
@@ -861,7 +890,7 @@ def main(argv=None):
             for m in ms:
                 print(json.dumps({"asset": m["asset"], "proportions": m["proportions"], "springs": m["springs"]}, indent=1))
         return 0
-    profile = json.load(open(args.profile))
+    profile = load_json(args.profile)
     validate_roles(overrides, profile)
     reports = [evaluate(measure(a, overrides), profile) for a in args.assets]
     if args.json:

@@ -30,6 +30,7 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import style_lint as L  # noqa: E402
+from style_lint import load_json  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROFILE = os.path.join(REPO, "docs", "style", "profiles", "vroid-lineage-anime.json")
@@ -80,12 +81,67 @@ class SparseAccessorTests(unittest.TestCase):
         np.testing.assert_array_equal(L.accessor_array(js, buf, 0), [[0, 0, 0], [7, 8, 9]])
 
 
+def minimal_vrm(bones, children_cycle=False):
+    """A spec-minimal VRM 1.0 GLB: one triangle, the given humanoid bones, no materials."""
+    names = list(bones)
+    nodes = [{"name": n, "translation": [0.0, 0.1 * i, 0.0]} for i, n in enumerate(names)]
+    nodes.append({"name": "mesh", "mesh": 0})
+    if children_cycle:
+        nodes[0]["children"] = [1]
+        nodes[1]["children"] = [0]
+    buf = struct.pack("<9f", 0, 0, 0, 1, 0, 0, 0, 1.6, 0) + struct.pack("<3H", 0, 1, 2) + b"\0\0"
+    js = {"asset": {"version": "2.0"}, "nodes": nodes, "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+          "accessors": [{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+                        {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}],
+          "bufferViews": [{"buffer": 0, "byteLength": 36}, {"buffer": 0, "byteOffset": 36, "byteLength": 6}],
+          "buffers": [{"byteLength": len(buf)}], "materials": [],
+          "extensions": {"VRMC_vrm": {"specVersion": "1.0", "humanoid": {"humanBones": {n: {"node": i} for i, n in enumerate(names)}},
+                                      "meta": {"name": "min", "authors": ["t"], "licenseUrl": "https://vrm.dev/licenses/1.0/"},
+                                      "expressions": {"preset": {}}, "lookAt": {"type": "bone"}}}}
+    return js, buf
+
+
+class RobustnessTests(unittest.TestCase):
+    REQUIRED = ["hips", "spine", "head", "leftUpperArm", "rightUpperArm", "leftUpperLeg", "rightUpperLeg"]
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".vrm", delete=False).name
+
+    def measure(self, js, buf):
+        with open(self.tmp, "wb") as fh:
+            fh.write(pack_glb(js, buf))
+        return L.measure(self.tmp)
+
+    def test_optional_bones_missing_yields_none_not_crash(self):
+        M = self.measure(*minimal_vrm(self.REQUIRED))
+        P = M["proportions"]
+        self.assertIsNotNone(P["hips_height_ratio"])
+        for k in ("lower_arm_m", "lower_upper_arm_ratio", "arm_span_height_ratio", "rest_pose_arm_horizontal_cos", "limb_asymmetry", "eye_height_ratio"):
+            self.assertIsNone(P[k], k)
+        with open(PROFILE) as fh:
+            rep = L.evaluate(M, json.load(fh))
+        self.assertEqual(rep["verdict"], "nonconforming")
+
+    def test_required_bone_missing_is_a_clear_error(self):
+        with self.assertRaises(ValueError):
+            self.measure(*minimal_vrm(["hips", "spine"]))
+
+    def test_node_cycle_terminates(self):
+        self.measure(*minimal_vrm(self.REQUIRED, children_cycle=True))
+
+    def test_jpeg_zero_length_segment_terminates(self):
+        data = b"\xff\xd8\xff\xe0\x00\x00" + b"\x00" * 16
+        self.assertIsNone(L.image_size(data))
+
+
 class CorpusTests(unittest.TestCase):
     def test_missing_asset_fails_unless_allowed(self):
         import tempfile
         with tempfile.TemporaryDirectory() as d:
             man = os.path.join(d, "m.json")
-            json.dump({"assets": [{"path": "nope.vrm"}]}, open(man, "w"))
+            with open(man, "w") as fh:
+                json.dump({"assets": [{"path": "nope.vrm"}]}, fh)
             with self.assertRaises(FileNotFoundError):
                 L.measure_corpus(man, {})
             out = L.measure_corpus(man, {}, allow_missing=True)
@@ -138,7 +194,7 @@ class MaterialMetricTests(unittest.TestCase):
 
 class EvaluatorTests(unittest.TestCase):
     def setUp(self):
-        self.profile = json.load(open(PROFILE))
+        self.profile = load_json(PROFILE)
 
     def measurement(self, roles=("body_skin",)):
         mats = [dict(index=i, name=f"m{i}", role=r, mtoon=True, vertices=1, outlineWidthMode="none", shadow_end=0.0, alphaMode="BLEND")
@@ -201,8 +257,8 @@ class SchemaContractTests(unittest.TestCase):
             import jsonschema  # noqa: F401
         except ImportError:
             self.skipTest("jsonschema not installed")
-        self.schema = json.load(open(os.path.join(REPO, "docs", "style", "vrm-anime-style-profile.schema.json")))
-        self.profile = json.load(open(PROFILE))
+        self.schema = load_json(os.path.join(REPO, "docs", "style", "vrm-anime-style-profile.schema.json"))
+        self.profile = load_json(PROFILE)
 
     def test_profile_validates(self):
         import jsonschema
@@ -231,11 +287,12 @@ class MutationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.js, cls.bin = L.load_glb(FIXTURE)
-        cls.profile = json.load(open(PROFILE))
+        cls.profile = load_json(PROFILE)
         cls.tmp = os.path.join(os.environ.get("TMPDIR", "/tmp"), "style_lint_mutation.glb")
 
     def lint(self, js):
-        open(self.tmp, "wb").write(pack_glb(js, self.bin))
+        with open(self.tmp, "wb") as fh:
+            fh.write(pack_glb(js, self.bin))
         rep = L.evaluate(L.measure(self.tmp), self.profile)
         return rep, {r["id"]: r["status"] for r in rep["results"]}
 
@@ -281,7 +338,8 @@ class MutationTests(unittest.TestCase):
                                     "meta": {}, "materialProperties": props, "blendShapeMaster": {"blendShapeGroups": []}, "firstPerson": {}, "secondaryAnimation": {}}}
         for m in js["materials"]:
             m.pop("name", None)
-        open(self.tmp, "wb").write(pack_glb(js, self.bin))
+        with open(self.tmp, "wb") as fh:
+            fh.write(pack_glb(js, self.bin))
         M = L.measure(self.tmp)
         self.assertEqual(M["asset"]["non_mtoon_materials"], 0)
 
