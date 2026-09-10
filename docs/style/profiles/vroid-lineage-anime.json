@@ -91,7 +91,8 @@
     "material.rim_luminance": "luminance of parametricRimColorFactor.",
     "material.emissive_luminance": "luminance of emissiveFactor.",
     "material.*": "VRM 0.x MToon properties are converted to 1.0 space following three-vrm's VRMMaterialsV0CompatPlugin: colour factors (_Color rgb, _ShadeColor, _EmissionColor, _RimColor, _OutlineColor) are sRGB-decoded to linear because 0.x stores gamma-space colours and 1.0 stores linear (exact sRGB EOTF as in UniVRM and VRoid's exporter; three-vrm approximates with pow 2.2); shadingToony = lerp(_ShadeToony, 1, 0.5 + 0.5·_ShadeShift); shadingShift = −_ShadeShift − (1 − shadingToony); giEqualization = 1 − _IndirectLightIntensity; transparent render queues map in order to offsets −9…0; _UvAnimScrollY flips sign. Shading-shift textures, shade textures, normals and renderer shadowing are not sampled: every shading metric here is a factor-only, direct-light statement.",
-    "mtoon_defaults": "Absent MToon 1.0 fields take the schema defaults (VRMC_materials_mtoon.schema.json): shadeColorFactor [1,1,1], shadingToony 0.9, shadingShift 0, giEqualization 0.9, rim fresnel 5, rim lift 0, rimLightingMix 1. The MToon prose describes a black default shade colour while the schema says white; the linter follows the schema. VRoid always writes the field, so the corpus is unaffected."
+    "mtoon_defaults": "Absent MToon 1.0 fields take the schema defaults (VRMC_materials_mtoon.schema.json): shadeColorFactor [1,1,1], shadingToony 0.9, shadingShift 0, giEqualization 0.9, rim fresnel 5, rim lift 0, rimLightingMix 1. The MToon prose describes a black default shade colour while the schema says white; the linter follows the schema. VRoid always writes the field, so the corpus is unaffected.",
+    "asset.vrm0_material_properties_aligned": "VRM 0.x only: len(VRM.materialProperties) == len(materials). UniVRM writes one entry per glTF material (placeholders for non-MToon shaders) and pairs them by index; an exporter that skips entries cannot be paired safely. null on VRM 1.0."
   },
   "material_roles": {
     "roles": [
@@ -850,6 +851,30 @@
         "min": 0,
         "median": 0.0,
         "max": 3
+      }
+    },
+    {
+      "id": "interop.vrm0_material_properties_aligned",
+      "class": "interop",
+      "severity": "should",
+      "vrm_versions": [
+        "0.x"
+      ],
+      "metric": "asset.vrm0_material_properties_aligned",
+      "title": "VRM 0.x materialProperties has one entry per glTF material",
+      "check": {
+        "type": "equals",
+        "value": true
+      },
+      "rationale": "Material properties are paired with glTF materials by index. A mismatched array length means material rules were evaluated against the wrong properties, so the report flags it rather than trusting the pairing.",
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 8,
+        "conforming": "8/8",
+        "n": 8,
+        "observed": {
+          "true": 8
+        }
       }
     },
     {

@@ -30,7 +30,6 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import style_lint as L  # noqa: E402
-from style_lint import load_json  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROFILE = os.path.join(REPO, "docs", "style", "profiles", "vroid-lineage-anime.json")
@@ -185,6 +184,10 @@ class MaterialMetricTests(unittest.TestCase):
         self.assertTrue(p0["uvAnimated"])
         self.assertAlmostEqual(p0["giEqualizationFactor"], 0.9)
 
+    def test_vrm0_zero_indirect_light_maps_to_full_gi_equalization(self):
+        mp = {"shader": "VRM/MToon", "floatProperties": {"_IndirectLightIntensity": 0.0}, "vectorProperties": {}, "textureProperties": {}}
+        self.assertAlmostEqual(L.mtoon_from_vrm0(mp)["giEqualizationFactor"], 1.0)
+
     def test_shadow_end_matches_mtoon_linearstep(self):
         d = L.derive_material_metrics(dict(L.MTOON_DEFAULTS, baseColorFactor=[1, 1, 1, 1], emissiveFactor=[0, 0, 0],
                                            shadingToonyFactor=0.91, shadingShiftFactor=0.71))
@@ -194,7 +197,7 @@ class MaterialMetricTests(unittest.TestCase):
 
 class EvaluatorTests(unittest.TestCase):
     def setUp(self):
-        self.profile = load_json(PROFILE)
+        self.profile = L.load_json(PROFILE)
 
     def measurement(self, roles=("body_skin",)):
         mats = [dict(index=i, name=f"m{i}", role=r, mtoon=True, vertices=1, outlineWidthMode="none", shadow_end=0.0, alphaMode="BLEND")
@@ -257,8 +260,8 @@ class SchemaContractTests(unittest.TestCase):
             import jsonschema  # noqa: F401
         except ImportError:
             self.skipTest("jsonschema not installed")
-        self.schema = load_json(os.path.join(REPO, "docs", "style", "vrm-anime-style-profile.schema.json"))
-        self.profile = load_json(PROFILE)
+        self.schema = L.load_json(os.path.join(REPO, "docs", "style", "vrm-anime-style-profile.schema.json"))
+        self.profile = L.load_json(PROFILE)
 
     def test_profile_validates(self):
         import jsonschema
@@ -287,7 +290,7 @@ class MutationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.js, cls.bin = L.load_glb(FIXTURE)
-        cls.profile = load_json(PROFILE)
+        cls.profile = L.load_json(PROFILE)
         cls.tmp = os.path.join(os.environ.get("TMPDIR", "/tmp"), "style_lint_mutation.glb")
 
     def lint(self, js):
@@ -342,6 +345,19 @@ class MutationTests(unittest.TestCase):
             fh.write(pack_glb(js, self.bin))
         M = L.measure(self.tmp)
         self.assertEqual(M["asset"]["non_mtoon_materials"], 0)
+
+    def test_vrm0_short_material_properties_flagged(self):
+        js = copy.deepcopy(self.js)
+        props = [{"shader": "VRM/MToon", "floatProperties": {}, "vectorProperties": {}, "textureProperties": {}}
+                 for _ in js["materials"][:-1]]
+        js["extensions"] = {"VRM": {"humanoid": {"humanBones": [{"bone": k, "node": v["node"]} for k, v in self.js["extensions"]["VRMC_vrm"]["humanoid"]["humanBones"].items()]},
+                                    "meta": {}, "materialProperties": props, "blendShapeMaster": {"blendShapeGroups": []}, "firstPerson": {}, "secondaryAnimation": {}}}
+        with open(self.tmp, "wb") as fh:
+            fh.write(pack_glb(js, self.bin))
+        M = L.measure(self.tmp)
+        self.assertFalse(M["asset"]["vrm0_material_properties_aligned"])
+        rep = L.evaluate(M, self.profile)
+        self.assertEqual({r["id"]: r["status"] for r in rep["results"]}["interop.vrm0_material_properties_aligned"], "fail")
 
     def test_dropping_blink_trips_core_presets(self):
         js = copy.deepcopy(self.js)

@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import re
 import statistics
@@ -319,7 +318,7 @@ def mtoon_from_vrm0(mp, queue_map=None):
         baseColorFactor=gamma_eotf(base[:3]) + [base[3] if len(base) > 3 else 1.0], hasBaseTexture="_MainTex" in t,
         shadeColorFactor=gamma_eotf(v.get("_ShadeColor", [0.97, 0.81, 0.86, 1])[:3]), hasShadeTexture="_ShadeTexture" in t,
         shadingToonyFactor=toony, shadingShiftFactor=shift, hasShadingShiftTexture=False,
-        giEqualizationFactor=(1.0 - gi) if gi else MTOON_DEFAULTS["giEqualizationFactor"],
+        giEqualizationFactor=1.0 - gi,
         parametricRimColorFactor=gamma_eotf(v.get("_RimColor", [0, 0, 0, 1])[:3]), parametricRimFresnelPowerFactor=f.get("_RimFresnelPower", 1.0),
         parametricRimLiftFactor=f.get("_RimLift", 0.0), rimLightingMixFactor=f.get("_RimLightingMix", 0.0), hasRimTexture="_RimTexture" in t,
         hasMatcapTexture="_SphereAdd" in t,
@@ -385,6 +384,7 @@ def measure(path, role_overrides=None):
     if "VRMC_vrm" in ext:
         v = ext["VRMC_vrm"]
         A["vrm_version"] = "1.0"
+        A["vrm0_material_properties_aligned"] = None
         bones = {k: b["node"] for k, b in v["humanoid"]["humanBones"].items()}
         meta = dict(VRM1_META_DEFAULTS)
         meta.update(v.get("meta", {}))
@@ -439,7 +439,10 @@ def measure(path, role_overrides=None):
         colliders = [{"node": cg["node"], "shape": "sphere", "radius": c["radius"]} for cg in sa.get("colliderGroups", []) for c in cg.get("colliders", [])]
         collider_groups = len(sa.get("colliderGroups", []))
         # VRM 0.x materialProperties[i] describes glTF materials[i] (UniVRM writes and reads them by index).
+        # An exporter that emits a shorter or longer array cannot be paired safely; that is reported
+        # as asset.vrm0_material_properties_aligned so a rule can flag it instead of silently misaligning.
         props = v.get("materialProperties", [])
+        A["vrm0_material_properties_aligned"] = len(props) == len(js.get("materials", []))
         queue_map = vrm0_render_queue_map(props)
         mats = []
         for i, m in enumerate(js.get("materials", [])):
