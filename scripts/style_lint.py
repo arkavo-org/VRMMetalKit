@@ -111,8 +111,10 @@ def accessor_array(js, bin_, ai):
     stride = bv.get("byteStride", 0)
     itemsize = struct.calcsize(comp) * ncomp
     if stride and stride != itemsize:
-        rows = np.frombuffer(bin_, dtype=np.uint8, count=stride * a["count"], offset=off).reshape(a["count"], stride)
-        return rows[:, :itemsize].copy().view(np.dtype("<" + comp)).reshape(a["count"], ncomp)
+        n = a["count"]
+        raw = np.frombuffer(bin_, dtype=np.uint8, count=stride * (n - 1) + itemsize, offset=off)
+        rows = np.lib.stride_tricks.as_strided(raw, shape=(n, itemsize), strides=(stride, 1))
+        return rows.copy().view(np.dtype("<" + comp)).reshape(n, ncomp)
     return np.frombuffer(bin_, dtype=np.dtype("<" + comp), count=a["count"] * ncomp, offset=off).reshape(a["count"], ncomp)
 
 
@@ -179,6 +181,8 @@ ROLE_GROUPS = {
 def assign_role(name, overrides):
     if name in overrides:
         return overrides[name]
+    if "*" in overrides:
+        return overrides["*"]
     n = (name or "").lower()
     for pat, role in ROLE_PATTERNS:
         if re.search(pat, n):
@@ -219,11 +223,46 @@ def mtoon_from_vrm1(m):
     return p
 
 
-def mtoon_from_vrm0(mp):
+def gamma_eotf(c):
+    """VRM 0.x colour factors are sRGB-encoded; MToon 1.0 factors are linear.
+
+    Uses the exact sRGB EOTF, which is what UniVRM's migration (Unity Color.linear) and VRoid
+    Studio's own 1.0 exporter apply, and what VRMMToonMaterial.toMToonMaterial() uses.
+    three-vrm approximates it with pow 2.2 (about 5% darker in the low range)."""
+    return [float(x) / 12.92 if x <= 0.04045 else ((float(x) + 0.055) / 1.055) ** 2.4 for x in c]
+
+
+def vrm0_is_transparent(mp):
+    f = mp.get("floatProperties", {})
+    shader = mp.get("shader")
+    zwrite = shader == "VRM/UnlitTransparentZWrite" or f.get("_ZWrite") == 1
+    transparent = "_ALPHABLEND_ON" in mp.get("keywordMap", {}) or shader in ("VRM/UnlitTransparent", "VRM/UnlitTransparentZWrite")
+    return transparent, zwrite
+
+
+def vrm0_render_queue_map(material_properties):
+    """three-vrm's _populateRenderQueueMap: every transparent render queue in use, in order, maps to offsets −9…0."""
+    queues = {False: set(), True: set()}
+    for mp in material_properties:
+        transparent, zwrite = vrm0_is_transparent(mp)
+        if transparent and mp.get("renderQueue") is not None:
+            queues[zwrite].add(mp["renderQueue"])
+    out = {}
+    for zwrite, qs in queues.items():
+        qs = sorted(qs)
+        for i, q in enumerate(qs):
+            out[(zwrite, q)] = min(max(i - len(qs) + 1, -9), 0)
+    return out
+
+
+def mtoon_from_vrm0(mp, queue_map=None):
     """VRM 0.x materialProperties -> MToon 1.0 parameter space.
 
-    Mirrors VRMMToonMaterial.toMToonMaterial() in Sources/VRMMetalKit/Core/VRMTypes.swift
-    (the three-vrm / UniVRM migration formulas)."""
+    Follows three-vrm's VRMMaterialsV0CompatPlugin (the migration used by pixiv and UniVRM):
+    colour factors are sRGB-decoded to linear, toony/shift are remapped, _IndirectLightIntensity becomes
+    1 − giEqualization, transparent render queues map to offsets, UV scroll Y flips sign.
+    VRMMToonMaterial.toMToonMaterial() in Sources/VRMMetalKit/Core/VRMTypes.swift uses the same
+    toony/shift formulas."""
     if mp.get("shader") != "VRM/MToon":
         return None
     f, v, t = mp.get("floatProperties", {}), mp.get("vectorProperties", {}), mp.get("textureProperties", {})
@@ -237,20 +276,27 @@ def mtoon_from_vrm0(mp):
     mode = {0: "none", 1: "worldCoordinates", 2: "screenCoordinates"}.get(int(f.get("_OutlineWidthMode", 0)), "none")
     outline_mix = f.get("_OutlineLightingMix", 1.0) if int(f.get("_OutlineColorMode", 0)) == 1 else 0.0
     base = v.get("_Color", [1, 1, 1, 1])
+    gi = f.get("_IndirectLightIntensity", 0.1)
+    transparent, zwrite = vrm0_is_transparent(mp)
+    rq = 0
+    if transparent and mp.get("renderQueue") is not None and queue_map is not None:
+        rq = queue_map.get((zwrite, mp["renderQueue"]), 0)
+    scroll_x, scroll_y, rot = f.get("_UvAnimScrollX", 0.0), -f.get("_UvAnimScrollY", 0.0), f.get("_UvAnimRotation", 0.0)
     return dict(
         MTOON_DEFAULTS,
-        baseColorFactor=base, hasBaseTexture="_MainTex" in t,
-        shadeColorFactor=v.get("_ShadeColor", [1, 1, 1, 1])[:3], hasShadeTexture="_ShadeTexture" in t,
+        baseColorFactor=gamma_eotf(base[:3]) + [base[3] if len(base) > 3 else 1.0], hasBaseTexture="_MainTex" in t,
+        shadeColorFactor=gamma_eotf(v.get("_ShadeColor", [0.97, 0.81, 0.86, 1])[:3]), hasShadeTexture="_ShadeTexture" in t,
         shadingToonyFactor=toony, shadingShiftFactor=shift, hasShadingShiftTexture=False,
-        parametricRimColorFactor=v.get("_RimColor", [0, 0, 0, 1])[:3], parametricRimFresnelPowerFactor=f.get("_RimFresnelPower", 5.0),
-        parametricRimLiftFactor=f.get("_RimLift", 0.0), rimLightingMixFactor=f.get("_RimLightingMix", 1.0), hasRimTexture="_RimTexture" in t,
+        giEqualizationFactor=(1.0 - gi) if gi else MTOON_DEFAULTS["giEqualizationFactor"],
+        parametricRimColorFactor=gamma_eotf(v.get("_RimColor", [0, 0, 0, 1])[:3]), parametricRimFresnelPowerFactor=f.get("_RimFresnelPower", 1.0),
+        parametricRimLiftFactor=f.get("_RimLift", 0.0), rimLightingMixFactor=f.get("_RimLightingMix", 0.0), hasRimTexture="_RimTexture" in t,
         hasMatcapTexture="_SphereAdd" in t,
         outlineWidthMode=mode, outlineWidthFactor=f.get("_OutlineWidth", 0.0) * 0.01,
-        outlineColorFactor=v.get("_OutlineColor", [0, 0, 0, 1])[:3], outlineLightingMixFactor=outline_mix,
-        renderQueueOffsetNumber=0, transparentWithZWrite=blend == 3,
-        emissiveFactor=v.get("_EmissionColor", [0, 0, 0, 1])[:3],
+        outlineColorFactor=gamma_eotf(v.get("_OutlineColor", [0, 0, 0, 1])[:3]), outlineLightingMixFactor=outline_mix,
+        renderQueueOffsetNumber=rq, transparentWithZWrite=blend == 3 or (transparent and zwrite),
+        emissiveFactor=gamma_eotf(v.get("_EmissionColor", [0, 0, 0, 1])[:3]),
         alphaMode=alpha, alphaCutoff=f.get("_Cutoff", 0.5) if alpha == "MASK" else None,
-        doubleSided=int(f.get("_CullMode", 2)) == 0, uvAnimated=False,
+        doubleSided=int(f.get("_CullMode", 2)) == 0, uvAnimated=any(x != 0 for x in (scroll_x, scroll_y, rot)),
     )
 
 
@@ -271,7 +317,7 @@ def derive_material_metrics(p):
         lit_start=round(1 - toony - shift, 4),
         terminator_width=round(2 * (1 - toony), 4),
         shade_luminance_ratio=round(shade_l / base_l, 4),
-        shade_warmth=round((shade[0] / max(shade[1], 1e-6)) / (base[0] / max(base[1], 1e-6)), 4),
+        shade_warmth=round((shade[0] / max(shade[1], 1e-6)) / max(base[0] / max(base[1], 1e-6), 1e-6), 4),
         rim_luminance=round(lum(rim), 4),
         outline_luminance=round(lum(ol), 4),
         outline_warm=bool(ol[0] >= ol[2]),
@@ -281,6 +327,11 @@ def derive_material_metrics(p):
 
 
 # --------------------------------------------------------------------------- measure
+
+# VRMC_vrm.meta.schema.json defaults; name, authors and licenseUrl are required and have none.
+VRM1_META_DEFAULTS = dict(avatarPermission="onlyAuthor", allowExcessivelyViolentUsage=False, allowExcessivelySexualUsage=False,
+                          commercialUsage="personalNonProfit", allowPoliticalOrReligiousUsage=False, allowAntisocialOrHateUsage=False,
+                          creditNotation="required", allowRedistribution=False, modification="prohibited")
 
 VRM1_PRESETS = ["aa", "ih", "ou", "ee", "oh", "blink", "blinkLeft", "blinkRight", "happy", "angry", "sad", "relaxed",
                 "surprised", "neutral", "lookUp", "lookDown", "lookLeft", "lookRight"]
@@ -303,7 +354,8 @@ def measure(path, role_overrides=None):
         v = ext["VRMC_vrm"]
         A["vrm_version"] = "1.0"
         bones = {k: b["node"] for k, b in v["humanoid"]["humanBones"].items()}
-        meta = v.get("meta", {})
+        meta = dict(VRM1_META_DEFAULTS)
+        meta.update(v.get("meta", {}))
         M["meta"] = {k: meta.get(k) for k in ("name", "version", "authors", "licenseUrl", "avatarPermission", "allowExcessivelyViolentUsage",
                                             "allowExcessivelySexualUsage", "commercialUsage", "allowPoliticalOrReligiousUsage",
                                             "allowAntisocialOrHateUsage", "creditNotation", "allowRedistribution", "modification")}
@@ -355,10 +407,11 @@ def measure(path, role_overrides=None):
         colliders = [{"node": cg["node"], "shape": "sphere", "radius": c["radius"]} for cg in sa.get("colliderGroups", []) for c in cg.get("colliders", [])]
         collider_groups = len(sa.get("colliderGroups", []))
         props = {mp.get("name"): mp for mp in v.get("materialProperties", [])}
+        queue_map = vrm0_render_queue_map(v.get("materialProperties", []))
         mats = []
         for m in js.get("materials", []):
             mp = props.get(m.get("name"))
-            mats.append((m.get("name", ""), mtoon_from_vrm0(mp) if mp else None))
+            mats.append((m.get("name", ""), mtoon_from_vrm0(mp, queue_map) if mp else None))
     else:
         raise ValueError(f"{path}: no VRM extension (VRMC_vrm or VRM) present")
 
@@ -366,7 +419,8 @@ def measure(path, role_overrides=None):
     pos = {k: W[n][:3, 3] for k, n in bones.items()}
     head_set = {bones[k] for k in ("head", "leftEye", "rightEye", "jaw") if k in bones}
     head_pos = pos["head"]
-    tri = verts = 0
+    tri = vert_refs = 0
+    position_accessors = set()
     allmin, allmax = np.full(3, np.inf), np.full(3, -np.inf)
     head_pts, skinned_meshes, max_morphs = [], 0, 0
     mat_vertex_counts = {}
@@ -381,7 +435,8 @@ def measure(path, role_overrides=None):
         for prim in mesh["primitives"]:
             P = accessor_array(js, bin_, prim["attributes"]["POSITION"]).astype(np.float64)
             Pw = (Mw[:3, :3] @ P.T).T + Mw[:3, 3]
-            verts += len(P)
+            vert_refs += len(P)
+            position_accessors.add(prim["attributes"]["POSITION"])
             tri += js["accessors"][prim["indices"]]["count"] // 3 if "indices" in prim else len(P) // 3
             max_morphs = max(max_morphs, len(prim.get("targets", [])))
             allmin, allmax = np.minimum(allmin, Pw.min(0)), np.maximum(allmax, Pw.max(0))
@@ -393,7 +448,8 @@ def measure(path, role_overrides=None):
                 dom = np.asarray(joints)[J[np.arange(len(J)), Wt.argmax(1)]]
                 head_pts.append(Pw[np.isin(dom, list(head_set))])
     H = float(allmax[1] - min(allmin[1], 0.0))
-    A.update(triangles=int(tri), vertices=int(verts), skinned_meshes=skinned_meshes, morph_targets_max=int(max_morphs),
+    verts = sum(js["accessors"][i]["count"] for i in position_accessors)
+    A.update(triangles=int(tri), vertices=int(verts), vertex_references=int(vert_refs), skinned_meshes=skinned_meshes, morph_targets_max=int(max_morphs),
              material_slots=len(js.get("materials", [])), node_count=len(nodes), humanoid_bone_count=len(bones),
              joint_count_max=max((len(s["joints"]) for s in js.get("skins", [])), default=0),
              height_m=round(H, 4), bbox_min=[round(float(x), 4) for x in allmin], bbox_max=[round(float(x), 4) for x in allmax])
@@ -424,8 +480,10 @@ def measure(path, role_overrides=None):
     # head height: vertices dominated by head-region joints, centre column (|x - head.x| < 15 mm);
     # chin = lowest such vertex in front of the head bone, crown = highest. Includes crown hair.
     hp = np.concatenate(head_pts) if head_pts else np.zeros((0, 3))
+    # VRM 1.0 models face +Z; VRM 0.x models face −Z in glTF space (specification/0.0/README.md).
+    forward = 1.0 if A["vrm_version"] == "1.0" else -1.0
     col = hp[np.abs(hp[:, 0] - head_pos[0]) < 0.015] if len(hp) else hp
-    front = col[col[:, 2] > head_pos[2]] if len(col) else col
+    front = col[(col[:, 2] - head_pos[2]) * forward > 0] if len(col) else col
     if len(front) and len(col):
         chin, crown = float(front[:, 1].min()), float(col[:, 1].max())
         head_h = crown - chin
@@ -472,6 +530,7 @@ def measure(path, role_overrides=None):
          "collider_radius_min": min((c["radius"] for c in colliders), default=None),
          "collider_radius_max": max((c["radius"] for c in colliders), default=None)}
     M["springs"] = S
+    A["generator"] = js.get("asset", {}).get("generator")
     off = M["lookat"].get("offset_from_head_bone") or [0, 0, 0]
     M["lookat"]["offset_y"] = off[1] if len(off) > 1 else None
 
@@ -531,7 +590,21 @@ def check_value(check, value):
     raise ValueError(f"unknown check type {t}")
 
 
+def profile_role_groups(profile):
+    groups = dict(ROLE_GROUPS)
+    groups.update(profile.get("material_roles", {}).get("groups", {}))
+    return groups
+
+
+def validate_roles(overrides, profile):
+    known = set(profile.get("material_roles", {}).get("roles", [])) or {r for _, r in ROLE_PATTERNS} | {"other"}
+    bad = {k: v for k, v in overrides.items() if v not in known}
+    if bad:
+        raise ValueError(f"--roles assigns roles outside the profile vocabulary {sorted(known)}: {bad}")
+
+
 def evaluate(M, profile):
+    groups = profile_role_groups(profile)
     results = []
     for rule in profile["rules"]:
         scope = rule.get("scope", "asset")
@@ -552,7 +625,7 @@ def evaluate(M, profile):
         elif scope == "material":
             roles = set()
             for x in rule.get("roles", []):
-                roles.update(ROLE_GROUPS.get(x, [x]))
+                roles.update(groups.get(x, [x]))
             flt = rule.get("filter", {})
             subjects = [m for m in M["materials"] if (not roles or m["role"] in roles) and (m["mtoon"] or not rule.get("mtoon_only", True))
                         and all(m.get(k) == v for k, v in flt.items())]
@@ -580,6 +653,101 @@ def evaluate(M, profile):
             "summary": by, "results": results}
 
 
+# --------------------------------------------------------------------------- corpus / envelopes
+
+def sha256_file(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def measure_corpus(manifest_path, role_overrides):
+    """Measure every asset in a manifest {root?, assets:[{path, body_family?, note?}]} and return
+    the measurements with content hashes, so envelopes can be regenerated and audited."""
+    man = json.load(open(manifest_path))
+    root = os.path.join(os.path.dirname(os.path.abspath(manifest_path)), man.get("root", "."))
+    out = []
+    for entry in man["assets"]:
+        path = os.path.normpath(os.path.join(root, entry["path"]))
+        if not os.path.exists(path):
+            print(f"corpus: missing {entry['path']}", file=sys.stderr)
+            continue
+        M = measure(path, role_overrides)
+        M["asset"].update(path=entry["path"], sha256=sha256_file(path), body_family=entry.get("body_family"),
+                          note=entry.get("note"))
+        out.append(M)
+    return {"manifest": os.path.basename(manifest_path), "measured": len(out), "measurements": out}
+
+
+def rule_observations(rule, measurements, groups):
+    """Collect the values a rule sees across a set of measurements (asset or material scope)."""
+    vals = []
+    for M in measurements:
+        if rule.get("vrm_versions") and M["asset"]["vrm_version"] not in rule["vrm_versions"]:
+            continue
+        if rule.get("scope", "asset") == "asset":
+            vals.append(get_path(M, rule["metric"]))
+        else:
+            roles = set()
+            for x in rule.get("roles", []):
+                roles.update(groups.get(x, [x]))
+            flt = rule.get("filter", {})
+            vals.extend(m.get(rule["metric"]) for m in M["materials"]
+                        if (not roles or m["role"] in roles) and (m["mtoon"] or not rule.get("mtoon_only", True))
+                        and all(m.get(k) == v for k, v in flt.items()))
+    return vals
+
+
+def summarize_values(vals):
+    present = [v for v in vals if v is not None]
+    summ = {"n": len(vals), "n_unavailable": len(vals) - len(present)}
+    nums = [v for v in present if isinstance(v, (int, float)) and not isinstance(v, bool)]
+    if nums and len(nums) == len(present):
+        nums.sort()
+        summ.update(min=nums[0], median=nums[len(nums) // 2], max=nums[-1])
+    else:
+        counts = {}
+        for v in present:
+            counts[json.dumps(v, sort_keys=True)] = counts.get(json.dumps(v, sort_keys=True), 0) + 1
+        summ["observed"] = counts
+    return summ
+
+
+def envelopes(profile, corpus, write_path=None):
+    """Recompute each rule's provenance statistics from a corpus measurement file. With write_path,
+    rewrite the profile's provenance n/min/median/max/observed in place (notes and source are kept)."""
+    ms = corpus["measurements"]
+    groups = profile_role_groups(profile)
+    families = {M["asset"].get("body_family") or M["asset"]["file"] for M in ms}
+    report = {"corpus": corpus.get("manifest"), "n_assets": len(ms), "effective_n": len(families), "rules": {}}
+    for rule in profile["rules"]:
+        summ = summarize_values(rule_observations(rule, ms, groups))
+        summ["conforming"] = sum(1 for v in rule_observations(rule, ms, groups) if check_value(rule["check"], v)[0])
+        report["rules"][rule["id"]] = summ
+        if write_path:
+            prov = rule.setdefault("provenance", {})
+            for k in ("n", "min", "median", "max", "observed"):
+                prov.pop(k, None)
+            prov["n"] = summ["n"]
+            if rule.get("scope", "asset") != "asset" or True:
+                prov["effective_n"] = len(families)
+            for k in ("min", "median", "max", "observed"):
+                if k in summ:
+                    prov[k] = round(summ[k], 4) if isinstance(summ[k], float) else summ[k]
+            prov["conforming"] = f"{summ['conforming']}/{summ['n']}"
+    if write_path:
+        profile.setdefault("corpus", {})
+        profile["corpus"].update(n=len(ms), effective_n=len(families), manifest=corpus.get("manifest"),
+                                 assets=[M["asset"]["path"] for M in ms],
+                                 sha256={M["asset"]["file"]: M["asset"]["sha256"] for M in ms})
+        json.dump(profile, open(write_path, "w"), indent=2, ensure_ascii=False)
+        open(write_path, "a").write("\n")
+    return report
+
+
 # --------------------------------------------------------------------------- CLI
 
 def describe():
@@ -589,6 +757,8 @@ def describe():
             "measure": {"input": {"assets": ["path"], "roles": "path?"}, "output": {"measurements": ["Measurement"]}},
             "lint": {"input": {"profile": "path", "assets": ["path"], "roles": "path?"}, "output": {"reports": ["Report"]},
                      "exit_status": {"0": "no must-rule failed", "1": "at least one must-rule failed"}},
+            "corpus": {"input": {"manifest": "path", "out": "path", "roles": "path?"}, "output": {"measurements_file": "path"}},
+            "envelopes": {"input": {"profile": "path", "measurements": "path", "write": "bool"}, "output": {"rules": {"<id>": "summary"}}},
         },
         "role_groups": ROLE_GROUPS,
         "role_heuristic": [{"pattern": p, "role": r} for p, r in ROLE_PATTERNS],
@@ -626,14 +796,30 @@ def main(argv=None):
         p = sub.add_parser(name)
         p.add_argument("assets", nargs="+")
         p.add_argument("--json", action="store_true")
-        p.add_argument("--roles", help="JSON file mapping material name -> role")
+        p.add_argument("--roles", help="JSON file mapping material name -> role ('*' sets a default)")
         if name == "lint":
             p.add_argument("--profile", required=True)
+    p = sub.add_parser("corpus", help="measure a manifest of assets into a measurements file")
+    p.add_argument("manifest")
+    p.add_argument("--out", required=True)
+    p.add_argument("--roles")
+    p = sub.add_parser("envelopes", help="recompute per-rule provenance from a measurements file")
+    p.add_argument("--profile", required=True)
+    p.add_argument("--measurements", required=True)
+    p.add_argument("--write", action="store_true", help="rewrite the profile's provenance statistics in place")
     args = ap.parse_args(argv)
     if args.cmd == "describe":
         print(json.dumps(describe(), indent=2))
         return 0
+    if args.cmd == "envelopes":
+        profile = json.load(open(args.profile))
+        rep = envelopes(profile, json.load(open(args.measurements)), args.profile if args.write else None)
+        print(json.dumps(rep, indent=1))
+        return 0
     overrides = json.load(open(args.roles)) if args.roles else {}
+    if args.cmd == "corpus":
+        json.dump(measure_corpus(args.manifest, overrides), open(args.out, "w"), indent=1)
+        return 0
     if args.cmd == "measure":
         ms = [measure(a, overrides) for a in args.assets]
         if args.json:
@@ -643,6 +829,7 @@ def main(argv=None):
                 print(json.dumps({"asset": m["asset"], "proportions": m["proportions"], "springs": m["springs"]}, indent=1))
         return 0
     profile = json.load(open(args.profile))
+    validate_roles(overrides, profile)
     reports = [evaluate(measure(a, overrides), profile) for a in args.assets]
     if args.json:
         print(json.dumps(reports, indent=1))

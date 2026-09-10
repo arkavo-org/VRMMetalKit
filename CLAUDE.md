@@ -38,7 +38,7 @@ swift build --configuration release
 `docs/style/` holds a machine-readable style profile (VRoid-lineage anime) and its JSON Schema; `scripts/style_lint.py` measures a `.vrm` and grades it. Rules are data; extend the profile before extending the linter.
 ```bash
 make style-lint                                                   # repo-root fixtures
-python3 scripts/style_lint.py lint --profile docs/style/profiles/vroid-lineage-anime-1.0.json --json a.vrm
+python3 scripts/style_lint.py lint --profile docs/style/profiles/vroid-lineage-anime.json --json a.vrm
 ```
 
 ### Debug Flags (Conditional Compilation)

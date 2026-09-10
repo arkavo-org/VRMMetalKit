@@ -96,3 +96,31 @@ result (a face that is never fully shaded) through different slider values.
 Hair clump topology, texture-sampled colour envelopes, face landmark geometry beyond the
 eye line, skinning-based role fallback, and additional lineage profiles. See "Known
 gaps" in `docs/style/README.md`.
+
+## Review corrections (2026-09-10, same day)
+
+An external review of the first commit found seven measurement defects; all are fixed
+and covered by `scripts/test_style_lint.py`:
+
+1. VRM 0.x colour factors are now sRGB-decoded to linear before any colour metric (the
+   0.x and 1.0 exports of one VRoid outline colour now agree at luminance 0.0202).
+   Render queues, `_IndirectLightIntensity` and UV animation survive migration.
+2. The 0.x chin search uses −Z as forward (0.x models face −Z; 1.0 models face +Z).
+   Head counts on 0.x assets changed materially; the corpus was re-measured.
+3. Absent VRM 1.0 meta fields take the schema defaults; only `name`, `authors` and
+   `licenseUrl` are required upstream. `expr.core_presets` is reclassified as a profile
+   (aesthetic) requirement because the spec makes every preset optional.
+4. A black base colour no longer divides by zero; interleaved accessors with a nonzero
+   accessor offset no longer over-read the buffer.
+5. `asset.vertices` counts distinct POSITION accessors; `asset.vertex_references` keeps
+   the per-primitive sum. The vertex budget was regenerated (max 47k, not 697k).
+6. Role groups come from the profile, `--roles` values are validated against the
+   profile's vocabulary, provenance is a required rule field, and fingerprint rules are
+   schema-limited to `info`/`may`.
+7. The shading interpretation is stated as a factor-only, direct-light envelope; the hair
+   rule no longer claims hair is softer than the body.
+
+Reproducibility: `docs/style/corpus/` holds the manifest (with body families) and the
+measurements (with SHA-256 hashes and exporter strings); `style_lint.py envelopes --write`
+regenerates every rule's provenance. pixiv's FAQ is cited as the documentary source for
+the face-shading convention and the gamma-to-linear change.

@@ -1,0 +1,28 @@
+{
+  "root": "../../../..",
+  "note": "Paths are relative to the Projects checkout that holds VRMMetalKit, GameOfMods, gom-mod, Muse and three-vrm side by side. Root-level VRMMetalKit fixtures are gitignored; body_family collapses re-exports of one VRoid body so effective_n is honest.",
+  "assets": [
+    { "path": "VRMMetalKit/AvatarSample_A_1.0.vrm.glb", "body_family": "sample-A" },
+    { "path": "VRMMetalKit/AvatarSample_A_0.0.vrm.glb", "body_family": "sample-A", "note": "VRM 0.x export of the same body" },
+    { "path": "GameOfMods/VRM0-archive/AvatarSample_B.vrm", "body_family": "sample-B" },
+    { "path": "VRMMetalKit/AvatarSample_H_1.0.vrm", "body_family": "sample-H" },
+    { "path": "VRMMetalKit/AvatarSample_K_1.0.vrm", "body_family": "sample-K" },
+    { "path": "VRMMetalKit/AvatarSample_O_1.0.vrm", "body_family": "sample-O" },
+    { "path": "VRMMetalKit/AvatarSample_U_1.0.vrm.glb", "body_family": "sample-U" },
+    { "path": "GameOfMods/AvatarSample_V_1.0.vrm", "body_family": "sample-V" },
+    { "path": "gom-mod/heroes-all-vrm/The President.vrm", "body_family": "sample-V", "note": "re-dressed sample-V body" },
+    { "path": "GameOfMods/AvatarBlondeRedDress_1.0.vrm", "body_family": "vroid-v110-female" },
+    { "path": "GameOfMods/VRM0-archive/VRoid_V110_Female_v1.1.3.vrm", "body_family": "vroid-v110-female" },
+    { "path": "three-vrm/examples/VRM1_Constraint_Twist_Sample.vrm", "body_family": "vroid-v110-female", "note": "pixiv constraint sample on the same body" },
+    { "path": "GameOfMods/VRM0-archive/VRoid_V110_Male_v1.1.3.vrm", "body_family": "vroid-v110-male" },
+    { "path": "VRMMetalKit/vroid_default_F_1_0.vrm", "body_family": "vroid-default-F" },
+    { "path": "GameOfMods/VRM0-archive/AliciaSolid.vrm", "body_family": "alicia-solid", "note": "non-VRoid, hand-modelled" },
+    { "path": "GameOfMods/VRM0-archive/AnnieV0.vrm", "body_family": "annie" },
+    { "path": "GameOfMods/VRM0-archive/PompaGirl_v0.vrm", "body_family": "pompa-girl" },
+    { "path": "GameOfMods/VRM0-archive/Vita_clothing.vrm", "body_family": "vita" },
+    { "path": "Muse/5824032820619220341.vrm", "body_family": "muse-purple" },
+    { "path": "gom-mod/heroes-all-vrm/Alex Scott (Heroes All).vrm", "body_family": "heroes-alex" },
+    { "path": "gom-mod/heroes-all-vrm/Chinese Space Commander.vrm", "body_family": "heroes-commander" },
+    { "path": "gom-mod/heroes-all-vrm/Mike Scott (Heroes All).vrm", "body_family": "heroes-mike" }
+  ]
+}

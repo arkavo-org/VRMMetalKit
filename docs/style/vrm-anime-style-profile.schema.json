@@ -32,6 +32,8 @@
         "assets": { "type": "array", "items": { "type": "string" } },
         "n": { "type": "integer" },
         "effective_n": { "type": "integer", "description": "Distinct bodies after collapsing re-exports of the same VRoid body." },
+        "manifest": { "type": "string" },
+        "sha256": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" } },
         "note": { "type": "string" }
       }
     },
@@ -48,7 +50,9 @@
   "$defs": {
     "rule": {
       "type": "object",
-      "required": ["id", "class", "severity", "metric", "check"],
+      "required": ["id", "class", "severity", "metric", "check", "provenance"],
+      "if": { "properties": { "class": { "const": "fingerprint" } } },
+      "then": { "properties": { "severity": { "enum": ["info", "may"] } } },
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z]+\\.[a-z0-9_]+$" },
@@ -93,6 +97,7 @@
         "min": { "type": "number" }, "median": { "type": "number" }, "max": { "type": "number" },
         "observed": { "description": "Free-form observed distribution (counts, sets)." },
         "source": { "type": "string", "description": "corpus | spec | external URL" },
+        "conforming": { "type": "string", "description": "k/n observations inside the envelope, written by `envelopes --write`." },
         "note": { "type": "string" }
       }
     }
