@@ -73,3 +73,7 @@ tmp/
 /VisionHost/VRMVisionHost.xcodeproj/
 /VisionHost/Info.plist
 /VisionHost/DerivedData/
+
+# Python
+__pycache__/
+*.pyc
