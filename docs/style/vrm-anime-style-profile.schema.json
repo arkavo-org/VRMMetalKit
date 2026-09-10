@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/arkavo-org/VRMMetalKit/docs/style/vrm-anime-style-profile.schema.json",
+  "title": "VRM Style Profile",
+  "description": "A machine-readable, lintable definition of a visual style for VRM avatars. A profile is a list of rules; each rule names a metric produced by scripts/style_lint.py `measure`, an envelope the metric must fall in, a severity, and the provenance of the envelope. Rules are data: adding a rule never requires changing the linter unless it needs a new metric.",
+  "type": "object",
+  "required": ["id", "version", "title", "rules"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "extends": { "type": "string", "description": "id of a base profile whose rules are inherited (informational in v0; the linter does not resolve inheritance yet)." },
+    "metric_definitions": {
+      "type": "object",
+      "description": "Operational definitions of every metric this profile references, keyed by metric path. Metrics must be computable from spec-mandated data (glTF geometry/skins, VRMC_vrm humanoid/expressions/lookAt/meta, VRMC_springBone, VRMC_materials_mtoon) plus the material-role assignment.",
+      "additionalProperties": { "type": "string" }
+    },
+    "material_roles": {
+      "type": "object",
+      "description": "Role vocabulary used by material-scoped rules. Role assignment is an input to the linter (name heuristic by default; overridable per material), never something the profile depends on being encoded in the file.",
+      "properties": {
+        "roles": { "type": "array", "items": { "type": "string" } },
+        "groups": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } } }
+      }
+    },
+    "corpus": {
+      "type": "object",
+      "description": "The assets the envelopes were derived from.",
+      "properties": {
+        "assets": { "type": "array", "items": { "type": "string" } },
+        "n": { "type": "integer" },
+        "effective_n": { "type": "integer", "description": "Distinct bodies after collapsing re-exports of the same VRoid body." },
+        "note": { "type": "string" }
+      }
+    },
+    "reference_tiers": {
+      "type": "object",
+      "description": "External budget tables cited for context (e.g. VRChat performance ranks). Informational; not evaluated.",
+      "additionalProperties": true
+    },
+    "rules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rule" }
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "required": ["id", "class", "severity", "metric", "check"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z]+\\.[a-z0-9_]+$" },
+        "title": { "type": "string" },
+        "rationale": { "type": "string" },
+        "class": {
+          "type": "string",
+          "enum": ["aesthetic", "interop", "budget", "fingerprint"],
+          "description": "aesthetic: what makes the avatar read as this style. interop: round-trip requirements ecosystems reject files without. budget: performance envelope. fingerprint: a constant every corpus asset shares because one tool wrote it — never `must`; tells you what tool produced the file, not whether it is in style."
+        },
+        "severity": { "type": "string", "enum": ["must", "should", "may", "info"] },
+        "scope": { "type": "string", "enum": ["asset", "material"], "default": "asset" },
+        "roles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "material scope only: roles or role groups the rule applies to; empty means every material."
+        },
+        "mtoon_only": { "type": "boolean", "default": true },
+        "filter": { "type": "object", "description": "material scope only: equality conditions on material entry keys that must hold for a material to be in scope (e.g. {\"alphaMode\": \"MASK\"}).", "additionalProperties": true },
+        "vrm_versions": { "type": "array", "items": { "type": "string", "enum": ["0.x", "1.0"] } },
+        "metric": { "type": "string", "description": "asset scope: dotted path into the measurement (asset.*, proportions.*, springs.*, expressions.*, lookat.*, meta.*). material scope: key of a material entry." },
+        "check": { "$ref": "#/$defs/check" },
+        "provenance": { "$ref": "#/$defs/provenance" }
+      }
+    },
+    "check": {
+      "oneOf": [
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "range" }, "min": { "type": "number" }, "max": { "type": "number" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "value"], "properties": { "type": { "const": "equals" }, "value": {} }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "values"], "properties": { "type": { "const": "enum" }, "values": { "type": "array" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "values"], "properties": { "type": { "const": "superset_of" }, "values": { "type": "array" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type", "values"], "properties": { "type": { "const": "subset_of" }, "values": { "type": "array" } }, "additionalProperties": false },
+        { "type": "object", "required": ["type"], "properties": { "type": { "const": "present" } }, "additionalProperties": false }
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "description": "Where the envelope came from. A metric unavailable on an asset counts as a failure, so every rule should say what data it needs.",
+      "properties": {
+        "n": { "type": "integer", "description": "Number of observations (assets or materials) behind the envelope." },
+        "effective_n": { "type": "integer" },
+        "min": { "type": "number" }, "median": { "type": "number" }, "max": { "type": "number" },
+        "observed": { "description": "Free-form observed distribution (counts, sets)." },
+        "source": { "type": "string", "description": "corpus | spec | external URL" },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}

@@ -34,6 +34,13 @@ swift test --filter VRMCreatorSimpleTests --disable-sandbox
 swift build --configuration release
 ```
 
+### Style Profile Lint
+`docs/style/` holds a machine-readable style profile (VRoid-lineage anime) and its JSON Schema; `scripts/style_lint.py` measures a `.vrm` and grades it. Rules are data; extend the profile before extending the linter.
+```bash
+make style-lint                                                   # repo-root fixtures
+python3 scripts/style_lint.py lint --profile docs/style/profiles/vroid-lineage-anime-1.0.json --json a.vrm
+```
+
 ### Debug Flags (Conditional Compilation)
 Use `-Xswiftc -D{FLAG_NAME}` to enable zero-cost debug logging:
 - `VRM_METALKIT_ENABLE_LOGS`: General logging
