@@ -133,3 +133,14 @@ glTF materials by index; sparse accessors and accessors without a bufferView are
 medians use `statistics.median` (the texture-memory median moved from 137.6 to 126.6 MB,
 triangles from 37,326 to 36,944); and each rule's `effective_n` counts only the bodies
 that contribute observations to it (12 for VRM 1.0-only rules, 8 for 0.x-only).
+
+## Out of scope: VRM 0.x emission colour space in the Swift loader
+
+While verifying the 0.x colour fix, the same class of gap showed up in the renderer:
+`VRMMaterial.init(from:textures:vrm0MaterialProperty:)` linearises `_Color`,
+`_ShadeColor`, `_RimColor` and `_OutlineColor` for VRM 0.x but copies the glTF
+`emissiveFactor` verbatim (UniVRM writes it in gamma space) and ignores `_EmissionColor`
+when that glTF field is absent (the Muse validation avatar's hair). A fix with three
+XCTest cases was prototyped and then withdrawn from this PR, which is scoped to docs and
+scripts. The linter already decodes 0.x emission correctly, so profile envelopes are
+unaffected; the renderer follow-up is tracked separately.
