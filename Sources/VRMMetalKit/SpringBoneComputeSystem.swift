@@ -199,11 +199,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     var testChainAsleep: [Bool] { sleepGate.asleep }
     /// Test hook: per-chain collider-group masks, same indexing as `testChainAsleep`.
     var testChainColliderMasks: [UInt32] { chainColliderMasks }
-    /// Test hook: the per-frame root/collider displacement above which a
-    /// sleeping chain is woken (`sleepThreshold` scaled by model size).
-    var testWakeMotionThreshold: Float {
+    /// Root/collider displacement from its wake anchor above which a sleeping
+    /// chain is woken (`sleepThreshold` scaled by model size).
+    var wakeMotionThreshold: Float {
         sleepThreshold * max(cachedModelScale, VRMConstants.Physics.minScaleForThreshold)
     }
+    /// Test hook: per-chain root wake anchors, same indexing as `testChainAsleep`.
+    var testRootWakeAnchors: [SIMD3<Float>] { previousRootPositionsForSleep }
     /// Per-bone chain index and per-chain sleep flag, bound at buffers 16/17.
     private var boneChainIndexBuffer: MTLBuffer?
     private var chainSleepBuffer: MTLBuffer?
@@ -226,7 +228,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let pointer = buffer.contents().bindMemory(to: UInt32.self, capacity: count)
         for i in 0..<count { pointer[i] = 1 }
     }
-    /// Previous-frame target transforms for wake-on-motion detection.
+    /// Wake anchors for motion detection: a sleeping chain's root, and every
+    /// collider while any chain sleeps, keep the pose from when sleep began so
+    /// sub-threshold motion accumulates.
     private var previousRootPositionsForSleep: [SIMD3<Float>] = []
     private var previousSphereCollidersForSleep: [SphereCollider] = []
     private var previousCapsuleCollidersForSleep: [CapsuleCollider] = []
@@ -246,7 +250,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// True when an explicit wake has been requested and not yet processed.
     private var forceWakePending: Bool = false
     /// What the last wake check saw cross the motion threshold. Drives which
-    /// wake anchors `captureSleepSnapshots` refreshes at the end of the frame.
+    /// wake anchors `captureSleepSnapshots` refreshes after the substep loop.
     private struct WakeMotion {
         var refreshAll = false
         var roots: [Int] = []
@@ -338,10 +342,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var latestPositionsSnapshot: [SIMD3<Float>] = []
     /// Last completed `bonePosPrev` (GPU-done). Sleep velocities use this pair.
     private var latestPrevPositionsSnapshot: [SIMD3<Float>] = []
-    /// Reusable destination for the most recent readback. `writeBonesToNodes`
-    /// copies `latestPositionsSnapshot` into this under `snapshotLock` so it
-    /// never holds a second reference to the producer's storage — handing one
-    /// out would force a full COW copy on the completion handler's next update.
+    /// Reusable destination for the most recent readback, touched only by the
+    /// `writeBonesToNodes` caller. It copies `latestPositionsSnapshot` into this
+    /// (reading the snapshot under `snapshotLock`) so it never holds a second
+    /// reference to the producer's storage — handing one out would force a full
+    /// COW copy on the completion handler's next update.
     private var writebackPositions: [SIMD3<Float>] = []
     /// Per-chain max velocities from the last completed command buffer.
     private var completedChainVelocities: [Float] = []
@@ -849,6 +854,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             vrmLogPhysics("⚠️ [SpringBone] Hit max substeps (\(maxSubsteps)) this frame. Dropping \(droppedSteps) pending step(s) to stay real-time.")
         }
 
+        // Snapshot targets and params for next frame's wake-condition checks.
+        // Must precede `commitAllTransforms`, which swaps the target arrays
+        // with last frame's interpolation state.
+        captureSleepSnapshots(model: model, globalParams: globalParams,
+                              foreign: clampedForeign, external: clampedExternal)
+
         // Commit all target transforms as previous for next frame's interpolation.
         // Also commit when asleep so interpolation state stays current while the
         // simulation is skipped.
@@ -864,10 +875,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if frameSubstepCount > 0 || allChainsAsleep {
             lastFrameSubstepCount = max(1, frameSubstepCount)
         }
-
-        // Snapshot targets and params for next frame's wake-condition checks.
-        captureSleepSnapshots(model: model, globalParams: globalParams,
-                              foreign: clampedForeign, external: clampedExternal)
 
         lastUpdateTime = CACurrentMediaTime()
     }
@@ -1185,7 +1192,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         var movedColliderMasks: [UInt32] = []
         var motion = WakeMotion(refreshAll: globalWake)
         if !globalWake {
-            let motionThreshold = sleepThreshold * max(cachedModelScale, VRMConstants.Physics.minScaleForThreshold)
+            let motionThreshold = wakeMotionThreshold
 
             if !previousRootPositionsForSleep.isEmpty,
                previousRootPositionsForSleep.count == targetRootPositions.count {
@@ -1344,14 +1351,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     private func captureSleepSnapshots(model: VRMModel, globalParams: SpringBoneGlobalParams,
                                        foreign: ForeignColliderSnapshot, external: ForeignColliderSnapshot) {
-        // These are wake ANCHORS, not last-frame copies. A sleeping chain's
-        // root, and every collider while any chain sleeps, keep the transform
-        // they had when the sleep began, so motion slower than the per-frame
-        // threshold still accumulates and eventually wakes the chain. Refreshing
-        // every frame would let a slow head turn carry a settled chain (and the
-        // collider it rests on) arbitrarily far without ever waking it. An
-        // anchor is refreshed once it has been seen to move past the threshold,
-        // while its chain is awake (roots), or while nothing sleeps (colliders).
+        // Wake anchors refresh when seen to cross the motion threshold, while
+        // their chain is awake (roots), or while nothing sleeps (colliders).
         let motion = lastWakeMotion
         let asleep = sleepGate.asleep
         let anyAsleep = asleep.contains(true)
@@ -1374,13 +1375,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                        moved: motion.planes, refreshAll: refreshColliders)
         previousGlobalParamsForSleep = globalParams
         previousQualityForSleep = quality
-        // The foreign/external anchors follow the same rule as the authored
-        // ones: frozen while any chain sleeps, refreshed once the set is seen
-        // to change past the threshold, so a partner or prop drifting slower
-        // than the per-frame threshold still accumulates and wakes. The stored
-        // sets are the CLAMPED ones (what `writeForeignTail` applied this
-        // frame), so the wake check diffs applied-vs-applied and over-budget
-        // colliders that were never written can't trigger a spurious wake.
+        // Foreign/external anchors follow the collider rule. The stored sets
+        // are the CLAMPED ones (what `writeForeignTail` applied this frame), so
+        // over-budget colliders that were never written can't trigger a wake.
         if refreshColliders || motion.foreignMoved {
             previousForeignForSleep = foreign
         }

@@ -55,7 +55,6 @@ final class SpringBoneSleepDriftWakeTests: XCTestCase {
         }
 
         var asleep: Bool { system.testChainAsleep.first ?? false }
-        var rootX: Float { model.nodes[rootNode].worldPosition.x }
 
         /// GPU-side joint positions (`bonePosCurr`); safe to read because
         /// `step()` waits for the frame. Chain joints occupy slots 0..<4.
@@ -138,6 +137,45 @@ final class SpringBoneSleepDriftWakeTests: XCTestCase {
         return harness
     }
 
+    /// Drift step as a fraction of the wake threshold.
+    private let driftFraction: Float = 0.25
+    /// 0-based frame on which a drift of `driftFraction` × threshold per frame,
+    /// applied before each step, first exceeds the threshold: the smallest k
+    /// with (k + 1) × fraction > 1.
+    private var expectedDriftWakeFrame: Int { Int(1 / driftFraction) }
+
+    /// Applies `move(perFrame)` once per frame until the chain wakes; returns
+    /// the 0-based wake frame and checks it against `expectedDriftWakeFrame`.
+    private func driftUntilAwake(_ h: Harness, label: String,
+                                 move: (Float) throws -> Void) throws -> Int {
+        let perFrame = h.system.wakeMotionThreshold * driftFraction
+        let frames = 600
+        var wokeAtFrame: Int? = nil
+        for frame in 0..<frames {
+            try move(perFrame)
+            h.step()
+            if !h.asleep { wokeAtFrame = frame; break }
+        }
+        let woke = try XCTUnwrap(wokeAtFrame,
+            "\(label) drifted \(perFrame * Float(frames)) units " +
+            "(\(Float(frames) * driftFraction)× the wake threshold \(h.system.wakeMotionThreshold)) " +
+            "and the chain never woke: the \(label) wake anchor is not accumulating slow motion")
+        XCTAssertLessThanOrEqual(woke, expectedDriftWakeFrame,
+            "\(label) drifts \(driftFraction)× the wake threshold per frame, so the " +
+            "accumulated offset first exceeds the threshold on step \(expectedDriftWakeFrame + 1) " +
+            "(frame \(expectedDriftWakeFrame)); waking later means the anchor or threshold is mis-scaled")
+        return woke
+    }
+
+    /// With the moving thing held still, the awake chain must settle and sleep again.
+    private func assertSleepsAgain(_ h: Harness, label: String) {
+        var frames = 0
+        while !h.asleep && frames < 600 { h.step(); frames += 1 }
+        XCTAssertTrue(h.asleep,
+            "once the \(label) stopped the chain must sleep again within 600 frames: " +
+            "a wake anchor that is never refreshed pins the chain awake")
+    }
+
     /// Settle a chain onto the capsule, sleep, move the capsule away in ONE
     /// step: the chain wakes, falls back toward vertical, and — the anchor
     /// having been refreshed by that wake — settles and sleeps AGAIN.
@@ -159,43 +197,56 @@ final class SpringBoneSleepDriftWakeTests: XCTestCase {
             "the wake anchor is refreshed when the collider is seen to move")
     }
 
-    /// Same scenario, but the capsule DRIFTS away at a QUARTER of the per-frame
-    /// wake threshold for 600 frames — 150× the threshold in total. The chain is left hanging in mid-air where
-    /// the capsule used to be; it must not still be asleep.
-    func testColliderDriftingAwayWakesSettledChain() async throws {
+    /// The anchor refreshed on a wake frame must hold THAT frame's pose, so a
+    /// root that jumped once compares as still on the very next frame instead
+    /// of firing the wake bit a second time.
+    func testRootJumpRefreshesAnchorToPostJumpPoseOnWakeFrame() async throws {
         let h = try await settledHarness()
-        let perFrame = h.system.testWakeMotionThreshold * 0.25
-        let frames = 600   // total travel = 150× the wake threshold
-        var wokeAtFrame: Int? = nil
-        for frame in 0..<frames {
-            try h.shiftCapsule(by: SIMD3<Float>(perFrame, 0, 0))
-            h.step()
-            if !h.asleep { wokeAtFrame = frame; break }
-        }
-        XCTAssertNotNil(wokeAtFrame,
-            "capsule drifted \(perFrame * Float(frames)) units (150× the wake threshold " +
-            "\(h.system.testWakeMotionThreshold)) out from under a sleeping chain and the chain " +
-            "never woke: the collider wake anchor is not accumulating slow motion")
+
+        // 100× the wake threshold, but well under the teleport threshold (1.0 ×
+        // model scale), whose reset would rewrite the interpolation state and
+        // hide the anchor ordering under test.
+        let jump = h.system.wakeMotionThreshold * 100
+        h.shiftRoot(by: SIMD3<Float>(jump, 0, 0))
+        let jumped = h.model.nodes[h.rootNode].worldPosition
+        h.step()
+        XCTAssertFalse(h.asleep, "root moved \(jump) in one frame: chain must wake")
+        XCTAssertEqual(h.system.testRootWakeAnchors.first, jumped,
+            "the root anchor refreshed on the wake frame must be the post-jump pose, " +
+            "not the stale pose left in the target array by the interpolation swap")
+
+        h.step()
+        XCTAssertEqual(h.system.testRootWakeAnchors.first, jumped,
+            "a root that jumped once and stopped must not move its anchor on the next frame")
     }
 
-    /// The chain's ROOT drifts at a quarter of the per-frame wake threshold for
-    /// 600 frames (150× the threshold in total) while the capsule stays put. While asleep the kinematic kernel does not run
-    /// and `writeBonesToNodes` skips the chain, so its joints keep their last
-    /// local pose — the "hair held a bent pose while the head moved" symptom.
+    /// Same scenario, but the capsule DRIFTS away at a quarter of the wake
+    /// threshold per frame. The chain would be left hanging in mid-air where
+    /// the capsule used to be; it must wake as soon as the accumulated drift
+    /// crosses the threshold, sleep again once the capsule stops, and wake a
+    /// second time when the drift resumes.
+    func testColliderDriftingAwayWakesSettledChain() async throws {
+        let h = try await settledHarness()
+        let shift: (Float) throws -> Void = { try h.shiftCapsule(by: SIMD3<Float>($0, 0, 0)) }
+
+        _ = try driftUntilAwake(h, label: "capsule", move: shift)
+        assertSleepsAgain(h, label: "capsule")
+        _ = try driftUntilAwake(h, label: "capsule (second drift)", move: shift)
+    }
+
+    /// The chain's ROOT drifts at a quarter of the wake threshold per frame
+    /// while the capsule stays put. While asleep the kinematic kernel does not
+    /// run and `writeBonesToNodes` skips the chain, so its joints keep their
+    /// last local pose — the "hair held a bent pose while the head moved"
+    /// symptom. The chain must wake, sleep again once the root stops, and wake
+    /// again when the drift resumes.
     func testRootDriftingWakesSettledChain() async throws {
         let h = try await settledHarness()
-        let startRootX = h.rootX
-        let perFrame = h.system.testWakeMotionThreshold * 0.25
-        var wokeAtFrame: Int? = nil
-        for frame in 0..<600 {
-            h.shiftRoot(by: SIMD3<Float>(perFrame, 0, 0))
-            h.step()
-            if !h.asleep { wokeAtFrame = frame; break }
-        }
-        XCTAssertNotNil(wokeAtFrame,
-            "root travelled \(h.rootX - startRootX) units (150× the wake threshold " +
-            "\(h.system.testWakeMotionThreshold)) and the chain never woke: the root wake " +
-            "anchor is not accumulating slow motion")
+        let shift: (Float) throws -> Void = { h.shiftRoot(by: SIMD3<Float>($0, 0, 0)) }
+
+        _ = try driftUntilAwake(h, label: "root", move: shift)
+        assertSleepsAgain(h, label: "root")
+        _ = try driftUntilAwake(h, label: "root (second drift)", move: shift)
     }
 
     /// A FOREIGN (cross-avatar) collider drifting at a quarter of the per-frame
@@ -216,9 +267,10 @@ final class SpringBoneSleepDriftWakeTests: XCTestCase {
 
     /// Shared body for the injected-collider drift tests. The foreign and
     /// external sets diff as whole snapshots against per-source anchors (no
-    /// per-collider indices), so each source gets the same three-act check:
-    /// appearing wakes once, a static set lets the chain sleep again, and a
-    /// slow drift out from under the sleeping chain must wake it.
+    /// per-collider indices), so each source gets the same check: appearing
+    /// wakes once, a static set lets the chain sleep again, a slow drift out
+    /// from under the sleeping chain wakes it, holding still lets it sleep
+    /// again, and resuming the drift wakes it a second time.
     private func assertInjectedColliderDriftWakes(
         label: String,
         set: (SpringBoneComputeSystem, ForeignColliderSnapshot) -> Void
@@ -233,23 +285,14 @@ final class SpringBoneSleepDriftWakeTests: XCTestCase {
         h.step()
         XCTAssertFalse(h.asleep,
             "a \(label) collider appearing (count 0 → 1) must wake the chain")
+        assertSleepsAgain(h, label: "\(label) collider")
 
-        var frames = 0
-        while !h.asleep && frames < 600 { h.step(); frames += 1 }
-        XCTAssertTrue(h.asleep,
-            "a static \(label) collider must not keep the chain awake")
-
-        let perFrame = h.system.testWakeMotionThreshold * 0.25
-        var wokeAtFrame: Int? = nil
-        for frame in 0..<600 {
-            sphere.center.x += perFrame
+        let shift: (Float) throws -> Void = {
+            sphere.center.x += $0
             set(h.system, ForeignColliderSnapshot(spheres: [sphere]))
-            h.step()
-            if !h.asleep { wokeAtFrame = frame; break }
         }
-        XCTAssertNotNil(wokeAtFrame,
-            "\(label) collider drifted \(perFrame * 600) units (150× the wake threshold " +
-            "\(h.system.testWakeMotionThreshold)) and the chain never woke: the \(label) " +
-            "wake anchor is not accumulating slow motion")
+        _ = try driftUntilAwake(h, label: "\(label) collider", move: shift)
+        assertSleepsAgain(h, label: "\(label) collider")
+        _ = try driftUntilAwake(h, label: "\(label) collider (second drift)", move: shift)
     }
 }
