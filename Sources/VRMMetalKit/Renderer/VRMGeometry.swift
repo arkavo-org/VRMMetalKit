@@ -1179,11 +1179,11 @@ public class VRMNode {
     public var children: [VRMNode] = []
 
     /// Local-space translation. Mutated by animation, constraints, and physics.
-    public var translation: SIMD3<Float> = [0, 0, 0]
+    public var translation: SIMD3<Float> = [0, 0, 0] { didSet { localMatrixDirty = true } }
     /// Local-space rotation. Mutated by animation, look-at, constraints, and physics.
-    public var rotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
+    public var rotation: simd_quatf = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1) { didSet { localMatrixDirty = true } }
     /// Local-space scale.
-    public var scale: SIMD3<Float> = [1, 1, 1]
+    public var scale: SIMD3<Float> = [1, 1, 1] { didSet { localMatrixDirty = true } }
 
     /// Bind-pose translation captured at load time. Used by ``resetToBindPose()`` and retargeting.
     public var initialTranslation: SIMD3<Float>
@@ -1201,7 +1201,7 @@ public class VRMNode {
     /// overwritten the next time the node, or any of its ancestors, runs
     /// through ``updateWorldTransform()``. To set a stable local pose, mutate
     /// T/R/S instead.
-    public var localMatrix: float4x4 = matrix_identity_float4x4
+    public var localMatrix: float4x4 = matrix_identity_float4x4 { didSet { localMatrixDirty = true } }
     /// `parent.worldMatrix * localMatrix`, recomputed by ``updateWorldTransform()``.
     public var worldMatrix: float4x4 = matrix_identity_float4x4
     /// Inverse-transpose of the world linear part, cached here so the renderer
@@ -1212,6 +1212,14 @@ public class VRMNode {
     /// to skip palette rebuilds for joints that have not moved.
     public internal(set) var worldGeneration: UInt64 = 0
     private var hasPublishedWorld = false
+
+    /// True when ``translation`` / ``rotation`` / ``scale`` (or ``localMatrix``
+    /// itself) changed since the last ``updateLocalMatrix()``. Lets
+    /// ``updateWorldTransform()`` skip the quaternion→matrix rebuild for nodes
+    /// that did not move; the hierarchy is walked several times per frame
+    /// (host animation, renderer safety net, post-physics), so the untouched
+    /// majority would otherwise rebuild its local matrix on every walk.
+    private var localMatrixDirty = true
 
     /// World-space position of this node's origin, extracted from ``worldMatrix``. Used by spring-bone colliders.
     public var worldPosition: SIMD3<Float> {
@@ -1316,6 +1324,7 @@ public class VRMNode {
 
         let s = float4x4(scaling: scale)
         localMatrix = t * r * s
+        localMatrixDirty = false
     }
 
     /// Recomputes ``worldMatrix`` (and recurses through ``children``) by composing with the parent's world matrix.
@@ -1330,7 +1339,9 @@ public class VRMNode {
     /// no-animation settle pair because the cached `localMatrix` never
     /// picked up the displacement.
     public func updateWorldTransform() {
-        updateLocalMatrix()
+        if localMatrixDirty {
+            updateLocalMatrix()
+        }
 
         #if DEBUG
         // Check for NaNs before using localMatrix
