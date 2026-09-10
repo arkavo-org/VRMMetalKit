@@ -328,11 +328,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         sphereColliderRadiusOverrides.removeAll()
     }
 
+    /// Optional tracker used to attribute per-frame spring-bone CPU time to
+    /// `springTargetCapture`, `springSubsteps`, and `springReadback`. Set by
+    /// ``VRMRenderer`` each frame when a tracker is present; `nil` otherwise.
+    weak var performanceTracker: PerformanceTracker?
+
     // Readback + synchronization (protected by snapshotLock)
     private let snapshotLock = NSLock()
     private var latestPositionsSnapshot: [SIMD3<Float>] = []
     /// Last completed `bonePosPrev` (GPU-done). Sleep velocities use this pair.
     private var latestPrevPositionsSnapshot: [SIMD3<Float>] = []
+    /// Reusable destination for the most recent readback. `writeBonesToNodes`
+    /// copies `latestPositionsSnapshot` into this under `snapshotLock` so it
+    /// never holds a second reference to the producer's storage — handing one
+    /// out would force a full COW copy on the completion handler's next update.
+    private var writebackPositions: [SIMD3<Float>] = []
     /// Per-chain max velocities from the last completed command buffer.
     private var completedChainVelocities: [Float] = []
     private var simulationFrameCounter: UInt64 = 0
@@ -607,6 +617,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Captures: root positions, world bind directions, collider transforms.
         // Always capture when interpolation is enabled so the sleep gate can
         // detect root/collider motion even on frames with zero substeps.
+        performanceTracker?.beginPhase(.springTargetCapture)
         if VRMConstants.Physics.enableRootInterpolation {
             captureTargetTransforms(model: model)
 
@@ -709,6 +720,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // Write this frame's foreign colliders into the reserved tail once. The
         // tail persists across substeps (interpolate only rewrites the prefix).
         writeForeignTail(buffers: buffers, foreign: clampedForeign, external: clampedExternal)
+        performanceTracker?.endPhase(.springTargetCapture)
 
         var stepsThisFrame = 0
 
@@ -719,6 +731,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             timeAccumulator = 0
         }
 
+        performanceTracker?.beginPhase(.springSubsteps)
         while timeAccumulator >= fixedDeltaTime && stepsThisFrame < maxSubsteps {
             timeAccumulator -= fixedDeltaTime
             stepsThisFrame += 1
@@ -827,6 +840,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 vrmLog("[SpringBone] GPU update \(updateCounter): First 3 positions: \(pos)")
             }
         }
+        performanceTracker?.endPhase(.springSubsteps)
 
         if timeAccumulator >= fixedDeltaTime {
             // We've reached the per-frame cap; carry a single substep forward to avoid runaway accumulation
@@ -2267,10 +2281,23 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         snapshotLock.lock()
         let readyFrame = latestCompletedFrame
-        let positions = latestPositionsSnapshot
-        let canApply = readyFrame > lastAppliedFrame && positions.count >= buffers.numBones && !positions.isEmpty
+        let canApply = readyFrame > lastAppliedFrame
+            && latestPositionsSnapshot.count >= buffers.numBones
+            && !latestPositionsSnapshot.isEmpty
         if canApply {
             lastAppliedFrame = readyFrame
+            if writebackPositions.count != latestPositionsSnapshot.count {
+                writebackPositions.removeAll(keepingCapacity: true)
+                writebackPositions.append(contentsOf: latestPositionsSnapshot)
+            } else {
+                writebackPositions.withUnsafeMutableBufferPointer { dst in
+                    latestPositionsSnapshot.withUnsafeBufferPointer { src in
+                        if let base = dst.baseAddress, let source = src.baseAddress {
+                            base.update(from: source, count: src.count)
+                        }
+                    }
+                }
+            }
         }
         snapshotLock.unlock()
 
@@ -2282,6 +2309,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return
         }
         skippedReadbacks = 0
+        let positions = writebackPositions
+
+        performanceTracker?.beginPhase(.springReadback)
+        defer { performanceTracker?.endPhase(.springReadback) }
 
         // Map bone index to spring/joint for node updates. Reuse a single
         // nodePositions buffer across all springs instead of allocating per
@@ -2747,9 +2778,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         
         let dest = buffer.contents().advanced(by: byteOffset)
         let ptr = dest.bindMemory(to: SIMD3<Float>.self, capacity: previousRootPositions.count)
+        let tv = SIMD3<Float>(repeating: t)
         for i in 0..<previousRootPositions.count {
             // Linear interpolation: prev + t * (target - prev)
-            ptr[i] = simd_mix(previousRootPositions[i], targetRootPositions[i], SIMD3<Float>(repeating: t))
+            ptr[i] = simd_mix(previousRootPositions[i], targetRootPositions[i], tv)
         }
     }
 
@@ -2763,9 +2795,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let ptr = bindDirectionsBuffer.contents()
             .advanced(by: substepIndex * buffers.bindDirectionsStride)
             .bindMemory(to: SIMD3<Float>.self, capacity: previousWorldBindDirections.count)
+        let tv = SIMD3<Float>(repeating: t)
         for i in 0..<previousWorldBindDirections.count {
             // Normalized linear interpolation (nlerp) for direction vectors
-            let interpolated = simd_mix(previousWorldBindDirections[i], targetWorldBindDirections[i], SIMD3<Float>(repeating: t))
+            let interpolated = simd_mix(previousWorldBindDirections[i], targetWorldBindDirections[i], tv)
             let len = simd_length(interpolated)
             ptr[i] = len > 0.001 ? interpolated / len : targetWorldBindDirections[i]
         }
@@ -2774,6 +2807,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Interpolates collider transforms for the current substep
     /// Prevents collision geometry from snapping during fast rotations
     private func interpolateColliders(t: Float, buffers: SpringBoneBuffers, substepIndex: Int) {
+        let tv = SIMD3<Float>(repeating: t)
         // Interpolate sphere colliders
         if previousSphereColliders.count == targetSphereColliders.count,
            let sphereBuffer = buffers.sphereColliders,
@@ -2785,7 +2819,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let prev = previousSphereColliders[i]
                 let target = targetSphereColliders[i]
                 ptr[i] = SphereCollider(
-                    center: simd_mix(prev.center, target.center, SIMD3<Float>(repeating: t)),
+                    center: simd_mix(prev.center, target.center, tv),
                     radius: prev.radius + t * (target.radius - prev.radius),
                     groupMask: target.groupMask,
                     inside: target.inside != 0
@@ -2804,8 +2838,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let prev = previousCapsuleColliders[i]
                 let target = targetCapsuleColliders[i]
                 ptr[i] = CapsuleCollider(
-                    p0: simd_mix(prev.p0, target.p0, SIMD3<Float>(repeating: t)),
-                    p1: simd_mix(prev.p1, target.p1, SIMD3<Float>(repeating: t)),
+                    p0: simd_mix(prev.p0, target.p0, tv),
+                    p1: simd_mix(prev.p1, target.p1, tv),
                     radius: prev.radius + t * (target.radius - prev.radius),
                     groupMask: target.groupMask,
                     inside: target.inside != 0
@@ -2822,10 +2856,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 let prev = previousPlaneColliders[i]
                 let target = targetPlaneColliders[i]
                 // nlerp for normal direction
-                let interpolatedNormal = simd_mix(prev.normal, target.normal, SIMD3<Float>(repeating: t))
+                let interpolatedNormal = simd_mix(prev.normal, target.normal, tv)
                 let normalLen = simd_length(interpolatedNormal)
                 ptr[i] = PlaneCollider(
-                    point: simd_mix(prev.point, target.point, SIMD3<Float>(repeating: t)),
+                    point: simd_mix(prev.point, target.point, tv),
                     normal: normalLen > 0.001 ? interpolatedNormal / normalLen : target.normal,
                     groupMask: target.groupMask
                 )
