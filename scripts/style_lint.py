@@ -30,6 +30,7 @@ import json
 import math
 import os
 import re
+import statistics
 import struct
 import sys
 
@@ -102,20 +103,38 @@ def world_mats(js):
     return cache, parent
 
 
-def accessor_array(js, bin_, ai):
-    a = js["accessors"][ai]
-    bv = js["bufferViews"][a["bufferView"]]
-    comp = {5120: "b", 5121: "B", 5122: "h", 5123: "H", 5125: "I", 5126: "f"}[a["componentType"]]
-    ncomp = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}[a["type"]]
-    off = bv.get("byteOffset", 0) + a.get("byteOffset", 0)
+COMPONENT_FORMAT = {5120: "b", 5121: "B", 5122: "h", 5123: "H", 5125: "I", 5126: "f"}
+TYPE_COMPONENTS = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16}
+
+
+def _read_view(js, bin_, view_index, byte_offset, count, comp, ncomp):
+    bv = js["bufferViews"][view_index]
+    off = bv.get("byteOffset", 0) + byte_offset
     stride = bv.get("byteStride", 0)
     itemsize = struct.calcsize(comp) * ncomp
     if stride and stride != itemsize:
-        n = a["count"]
-        raw = np.frombuffer(bin_, dtype=np.uint8, count=stride * (n - 1) + itemsize, offset=off)
-        rows = np.lib.stride_tricks.as_strided(raw, shape=(n, itemsize), strides=(stride, 1))
-        return rows.copy().view(np.dtype("<" + comp)).reshape(n, ncomp)
-    return np.frombuffer(bin_, dtype=np.dtype("<" + comp), count=a["count"] * ncomp, offset=off).reshape(a["count"], ncomp)
+        raw = np.frombuffer(bin_, dtype=np.uint8, count=stride * (count - 1) + itemsize, offset=off)
+        rows = np.lib.stride_tricks.as_strided(raw, shape=(count, itemsize), strides=(stride, 1))
+        return rows.copy().view(np.dtype("<" + comp)).reshape(count, ncomp)
+    return np.frombuffer(bin_, dtype=np.dtype("<" + comp), count=count * ncomp, offset=off).reshape(count, ncomp).copy()
+
+
+def accessor_array(js, bin_, ai):
+    """Decode an accessor, including sparse accessors and accessors without a bufferView (all zeros)."""
+    a = js["accessors"][ai]
+    comp = COMPONENT_FORMAT[a["componentType"]]
+    ncomp = TYPE_COMPONENTS[a["type"]]
+    if "bufferView" in a:
+        arr = _read_view(js, bin_, a["bufferView"], a.get("byteOffset", 0), a["count"], comp, ncomp)
+    else:
+        arr = np.zeros((a["count"], ncomp), dtype=np.dtype("<" + comp))
+    sp = a.get("sparse")
+    if sp:
+        idx = _read_view(js, bin_, sp["indices"]["bufferView"], sp["indices"].get("byteOffset", 0), sp["count"],
+                         COMPONENT_FORMAT[sp["indices"]["componentType"]], 1)[:, 0].astype(np.int64)
+        vals = _read_view(js, bin_, sp["values"]["bufferView"], sp["values"].get("byteOffset", 0), sp["count"], comp, ncomp)
+        arr[idx] = vals
+    return arr
 
 
 def image_size(data):
@@ -406,11 +425,12 @@ def measure(path, role_overrides=None):
                                 "drag": [bg.get("dragForce", 0.4)] * len(chain), "gravity": [bg.get("gravityPower", 0.0)] * len(chain), "hit_radius": [bg.get("hitRadius", 0.02)] * len(chain)})
         colliders = [{"node": cg["node"], "shape": "sphere", "radius": c["radius"]} for cg in sa.get("colliderGroups", []) for c in cg.get("colliders", [])]
         collider_groups = len(sa.get("colliderGroups", []))
-        props = {mp.get("name"): mp for mp in v.get("materialProperties", [])}
-        queue_map = vrm0_render_queue_map(v.get("materialProperties", []))
+        # VRM 0.x materialProperties[i] describes glTF materials[i] (UniVRM writes and reads them by index).
+        props = v.get("materialProperties", [])
+        queue_map = vrm0_render_queue_map(props)
         mats = []
-        for m in js.get("materials", []):
-            mp = props.get(m.get("name"))
+        for i, m in enumerate(js.get("materials", [])):
+            mp = props[i] if i < len(props) else None
             mats.append((m.get("name", ""), mtoon_from_vrm0(mp, queue_map) if mp else None))
     else:
         raise ValueError(f"{path}: no VRM extension (VRMC_vrm or VRM) present")
@@ -664,11 +684,17 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def measure_corpus(manifest_path, role_overrides):
+def measure_corpus(manifest_path, role_overrides, allow_missing=False):
     """Measure every asset in a manifest {root?, assets:[{path, body_family?, note?}]} and return
-    the measurements with content hashes, so envelopes can be regenerated and audited."""
+    the measurements with content hashes, so envelopes can be regenerated and audited.
+    A missing asset is an error unless allow_missing is set, so a partial checkout cannot
+    silently replace the reference corpus."""
     man = json.load(open(manifest_path))
     root = os.path.join(os.path.dirname(os.path.abspath(manifest_path)), man.get("root", "."))
+    missing = [e["path"] for e in man["assets"] if not os.path.exists(os.path.normpath(os.path.join(root, e["path"])))]
+    if missing and not allow_missing:
+        raise FileNotFoundError(f"corpus: {len(missing)} of {len(man['assets'])} manifest assets missing "
+                                f"(pass --allow-missing to measure a partial corpus): {missing}")
     out = []
     for entry in man["assets"]:
         path = os.path.normpath(os.path.join(root, entry["path"]))
@@ -679,26 +705,28 @@ def measure_corpus(manifest_path, role_overrides):
         M["asset"].update(path=entry["path"], sha256=sha256_file(path), body_family=entry.get("body_family"),
                           note=entry.get("note"))
         out.append(M)
-    return {"manifest": os.path.basename(manifest_path), "measured": len(out), "measurements": out}
+    return {"manifest": os.path.basename(manifest_path), "measured": len(out), "expected": len(man["assets"]),
+            "missing": missing, "measurements": out}
 
 
 def rule_observations(rule, measurements, groups):
-    """Collect the values a rule sees across a set of measurements (asset or material scope)."""
-    vals = []
+    """Collect (body_family, value) pairs a rule sees across a set of measurements."""
+    obs = []
     for M in measurements:
         if rule.get("vrm_versions") and M["asset"]["vrm_version"] not in rule["vrm_versions"]:
             continue
+        fam = M["asset"].get("body_family") or M["asset"]["file"]
         if rule.get("scope", "asset") == "asset":
-            vals.append(get_path(M, rule["metric"]))
+            obs.append((fam, get_path(M, rule["metric"])))
         else:
             roles = set()
             for x in rule.get("roles", []):
                 roles.update(groups.get(x, [x]))
             flt = rule.get("filter", {})
-            vals.extend(m.get(rule["metric"]) for m in M["materials"]
-                        if (not roles or m["role"] in roles) and (m["mtoon"] or not rule.get("mtoon_only", True))
-                        and all(m.get(k) == v for k, v in flt.items()))
-    return vals
+            obs.extend((fam, m.get(rule["metric"])) for m in M["materials"]
+                       if (not roles or m["role"] in roles) and (m["mtoon"] or not rule.get("mtoon_only", True))
+                       and all(m.get(k) == v for k, v in flt.items()))
+    return obs
 
 
 def summarize_values(vals):
@@ -706,8 +734,7 @@ def summarize_values(vals):
     summ = {"n": len(vals), "n_unavailable": len(vals) - len(present)}
     nums = [v for v in present if isinstance(v, (int, float)) and not isinstance(v, bool)]
     if nums and len(nums) == len(present):
-        nums.sort()
-        summ.update(min=nums[0], median=nums[len(nums) // 2], max=nums[-1])
+        summ.update(min=min(nums), median=statistics.median(nums), max=max(nums))
     else:
         counts = {}
         for v in present:
@@ -724,15 +751,17 @@ def envelopes(profile, corpus, write_path=None):
     families = {M["asset"].get("body_family") or M["asset"]["file"] for M in ms}
     report = {"corpus": corpus.get("manifest"), "n_assets": len(ms), "effective_n": len(families), "rules": {}}
     for rule in profile["rules"]:
-        summ = summarize_values(rule_observations(rule, ms, groups))
-        summ["conforming"] = sum(1 for v in rule_observations(rule, ms, groups) if check_value(rule["check"], v)[0])
+        obs = rule_observations(rule, ms, groups)
+        summ = summarize_values([v for _, v in obs])
+        summ["conforming"] = sum(1 for _, v in obs if check_value(rule["check"], v)[0])
+        summ["effective_n"] = len({fam for fam, v in obs if v is not None})
         report["rules"][rule["id"]] = summ
         if write_path:
             prov = rule.setdefault("provenance", {})
             for k in ("n", "min", "median", "max", "observed"):
                 prov.pop(k, None)
             prov["n"] = summ["n"]
-            prov["effective_n"] = len(families)
+            prov["effective_n"] = summ["effective_n"]
             for k in ("min", "median", "max", "observed"):
                 if k in summ:
                     prov[k] = round(summ[k], 4) if isinstance(summ[k], float) else summ[k]
@@ -756,7 +785,8 @@ def describe():
             "measure": {"input": {"assets": ["path"], "roles": "path?"}, "output": {"measurements": ["Measurement"]}},
             "lint": {"input": {"profile": "path", "assets": ["path"], "roles": "path?"}, "output": {"reports": ["Report"]},
                      "exit_status": {"0": "no must-rule failed", "1": "at least one must-rule failed"}},
-            "corpus": {"input": {"manifest": "path", "out": "path", "roles": "path?"}, "output": {"measurements_file": "path"}},
+            "corpus": {"input": {"manifest": "path", "out": "path", "roles": "path?", "allow_missing": "bool"}, "output": {"measurements_file": "path"},
+                       "errors": {"FileNotFoundError": "a manifest asset is missing and allow_missing is not set"}},
             "envelopes": {"input": {"profile": "path", "measurements": "path", "write": "bool"}, "output": {"rules": {"<id>": "summary"}}},
         },
         "role_groups": ROLE_GROUPS,
@@ -802,6 +832,7 @@ def main(argv=None):
     p.add_argument("manifest")
     p.add_argument("--out", required=True)
     p.add_argument("--roles")
+    p.add_argument("--allow-missing", action="store_true", help="measure whatever exists instead of failing on a missing asset")
     p = sub.add_parser("envelopes", help="recompute per-rule provenance from a measurements file")
     p.add_argument("--profile", required=True)
     p.add_argument("--measurements", required=True)
@@ -817,7 +848,10 @@ def main(argv=None):
         return 0
     overrides = json.load(open(args.roles)) if args.roles else {}
     if args.cmd == "corpus":
-        json.dump(measure_corpus(args.manifest, overrides), open(args.out, "w"), indent=1)
+        corpus = measure_corpus(args.manifest, overrides, args.allow_missing)
+        json.dump(corpus, open(args.out, "w"), indent=1)
+        if corpus["missing"]:
+            print(f"corpus: partial ({corpus['measured']}/{corpus['expected']} assets)", file=sys.stderr)
         return 0
     if args.cmd == "measure":
         ms = [measure(a, overrides) for a in args.assets]

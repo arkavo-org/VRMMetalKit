@@ -60,6 +60,49 @@ class AccessorTests(unittest.TestCase):
         np.testing.assert_array_equal(L.accessor_array(js, buf, 0), [[1, 2, 3], [4, 5, 6]])
 
 
+class SparseAccessorTests(unittest.TestCase):
+    def _js(self, with_base):
+        acc = {"componentType": 5126, "count": 2, "type": "VEC3",
+               "sparse": {"count": 1, "indices": {"bufferView": 1, "componentType": 5123}, "values": {"bufferView": 2}}}
+        if with_base:
+            acc["bufferView"] = 0
+        js = {"accessors": [acc], "bufferViews": [{"buffer": 0, "byteLength": 24}, {"buffer": 0, "byteOffset": 24, "byteLength": 2},
+                                                  {"buffer": 0, "byteOffset": 28, "byteLength": 12}]}
+        buf = struct.pack("<6f", 1, 2, 3, 4, 5, 6) + struct.pack("<H", 1) + b"\0\0" + struct.pack("<3f", 7, 8, 9)
+        return js, buf
+
+    def test_sparse_replacement_applied(self):
+        js, buf = self._js(True)
+        np.testing.assert_array_equal(L.accessor_array(js, buf, 0), [[1, 2, 3], [7, 8, 9]])
+
+    def test_sparse_without_base_view_is_zero_initialised(self):
+        js, buf = self._js(False)
+        np.testing.assert_array_equal(L.accessor_array(js, buf, 0), [[0, 0, 0], [7, 8, 9]])
+
+
+class CorpusTests(unittest.TestCase):
+    def test_missing_asset_fails_unless_allowed(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            man = os.path.join(d, "m.json")
+            json.dump({"assets": [{"path": "nope.vrm"}]}, open(man, "w"))
+            with self.assertRaises(FileNotFoundError):
+                L.measure_corpus(man, {})
+            out = L.measure_corpus(man, {}, allow_missing=True)
+            self.assertEqual((out["measured"], out["expected"], out["missing"]), (0, 1, ["nope.vrm"]))
+
+    def test_median_is_statistical_median(self):
+        self.assertEqual(L.summarize_values([1, 2, 3, 10])["median"], 2.5)
+
+    def test_effective_n_counts_contributing_families_only(self):
+        ms = [{"asset": {"file": "a", "vrm_version": "1.0", "body_family": "A"}, "materials": []},
+              {"asset": {"file": "b", "vrm_version": "0.x", "body_family": "B"}, "materials": []}]
+        rule = {"id": "x.y", "class": "interop", "severity": "must", "vrm_versions": ["1.0"], "metric": "asset.file",
+                "check": {"type": "present"}, "provenance": {}}
+        rep = L.envelopes({"rules": [rule], "corpus": {}}, {"measurements": ms})
+        self.assertEqual(rep["rules"]["x.y"]["effective_n"], 1)
+
+
 class MaterialMetricTests(unittest.TestCase):
     def test_black_base_colour_does_not_crash(self):
         p = dict(L.MTOON_DEFAULTS, baseColorFactor=[0, 0, 0, 1], shadeColorFactor=[0, 0, 0], emissiveFactor=[0, 0, 0])
@@ -228,6 +271,19 @@ class MutationTests(unittest.TestCase):
             js["extensions"]["VRMC_vrm"]["meta"].pop(k, None)
         rep, st = self.lint(js)
         self.assertEqual(rep["summary"]["must"]["fail"], 0)
+
+    def test_vrm0_materials_matched_by_index(self):
+        js = copy.deepcopy(self.js)
+        # a name-less glTF material must still find its VRM 0.x properties by position
+        props = [{"shader": "VRM/MToon", "floatProperties": {}, "vectorProperties": {}, "textureProperties": {}, "name": "x"}
+                 for _ in js["materials"]]
+        js["extensions"] = {"VRM": {"humanoid": {"humanBones": [{"bone": k, "node": v["node"]} for k, v in self.js["extensions"]["VRMC_vrm"]["humanoid"]["humanBones"].items()]},
+                                    "meta": {}, "materialProperties": props, "blendShapeMaster": {"blendShapeGroups": []}, "firstPerson": {}, "secondaryAnimation": {}}}
+        for m in js["materials"]:
+            m.pop("name", None)
+        open(self.tmp, "wb").write(pack_glb(js, self.bin))
+        M = L.measure(self.tmp)
+        self.assertEqual(M["asset"]["non_mtoon_materials"], 0)
 
     def test_dropping_blink_trips_core_presets(self):
         js = copy.deepcopy(self.js)

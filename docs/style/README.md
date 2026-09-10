@@ -31,9 +31,12 @@ scripts/style_lint.py corpus docs/style/corpus/vroid-lineage-anime.manifest.json
 scripts/style_lint.py envelopes --profile docs/style/profiles/vroid-lineage-anime.json \
     --measurements docs/style/corpus/vroid-lineage-anime.measurements.json --write
 ```
-`envelopes --write` rewrites each rule's provenance statistics (n, min, median, max,
-observed, conforming k/n) from the measurements; the envelope bounds themselves are
-authored and stay put, so the diff shows exactly which rules the new data strains.
+`envelopes --write` rewrites each rule's provenance statistics (n, effective_n counted
+over the bodies that actually contribute to that rule, min, median, max, observed,
+conforming k/n) from the measurements; the envelope bounds themselves are authored and
+stay put, so the diff shows exactly which rules the new data strains. `corpus` refuses
+to run when a manifest asset is missing unless `--allow-missing` is passed, so a partial
+checkout cannot silently replace the reference measurements.
 
 Only NumPy is required. Binary payloads are passed by path and reports are JSON with
 `--json`, mirroring the conformance repo's operation contract.
@@ -129,6 +132,9 @@ not reproduce.
 
 ## VRM 0.x handling
 
+0.x `materialProperties[i]` is paired with glTF `materials[i]` by index, as UniVRM
+writes them, so name-less or duplicate-named materials keep their properties. Sparse
+accessors and accessors without a bufferView are decoded per the glTF specification.
 0.x material properties are migrated to MToon 1.0 space the way three-vrm's
 `VRMMaterialsV0CompatPlugin` does it, with one refinement: colour factors are decoded
 with the exact sRGB curve that UniVRM and VRoid's exporter use rather than three-vrm's

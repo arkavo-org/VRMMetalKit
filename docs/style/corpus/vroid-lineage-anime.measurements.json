@@ -1,6 +1,8 @@
 {
  "manifest": "vroid-lineage-anime.manifest.json",
  "measured": 22,
+ "expected": 22,
+ "missing": [],
  "measurements": [
   {
    "asset": {

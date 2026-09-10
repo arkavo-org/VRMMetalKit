@@ -253,7 +253,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.8433,
-        "median": 0.8983,
+        "median": 0.8976,
         "max": 0.9243
       }
     },
@@ -274,7 +274,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.538,
-        "median": 0.5665,
+        "median": 0.5643,
         "max": 0.5811
       }
     },
@@ -295,7 +295,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.5107,
-        "median": 0.5415,
+        "median": 0.5399,
         "max": 0.5562
       }
     },
@@ -316,7 +316,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.0836,
-        "median": 0.1341,
+        "median": 0.1339,
         "max": 0.1702
       }
     },
@@ -338,7 +338,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.0252,
-        "median": 0.0307,
+        "median": 0.0305,
         "max": 0.0553
       }
     },
@@ -360,7 +360,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 4.595,
-        "median": 6.318,
+        "median": 6.303,
         "max": 7.473
       }
     },
@@ -382,7 +382,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.3099,
-        "median": 0.3884,
+        "median": 0.387,
         "max": 0.4491
       }
     },
@@ -404,7 +404,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.6409,
-        "median": 0.8087,
+        "median": 0.8056,
         "max": 0.9764
       }
     },
@@ -425,7 +425,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.125,
-        "median": 0.1516,
+        "median": 0.1495,
         "max": 0.2641
       }
     },
@@ -446,7 +446,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.1219,
-        "median": 0.1415,
+        "median": 0.1399,
         "max": 0.2289
       }
     },
@@ -509,7 +509,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.5923,
-        "median": 0.6741,
+        "median": 0.6733,
         "max": 0.7226
       }
     },
@@ -530,7 +530,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 1.1764,
-        "median": 1.6189,
+        "median": 1.6186,
         "max": 1.8776
       }
     },
@@ -591,7 +591,7 @@
       },
       "rationale": "The headline anime rule: no nose or brow shadows. VRoid's 'toon' preset does it with shift +0.71 (fully lit above NdotL −0.62); its 'soft' preset with toony 0.05 (gradient spanning the whole hemisphere). Both leave the fully-shaded region behind the head.",
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "note": "18/21 face_skin materials conform; PompaGirl, AnnieV0 and pixiv's constraint sample use plain toon faces.",
         "conforming": "135/158",
@@ -619,7 +619,7 @@
       },
       "rationale": "toony ≥ 0.8. The soft-gradient VRoid preset (toony 0.2, width 1.6) is a recognised minority style and fails this rule by design.",
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "note": "19/21 body_skin materials conform; the soft-gradient minority is AvatarSample_A/B-era exports, Mike Scott and Vita.",
         "conforming": "139/146",
@@ -647,7 +647,7 @@
         "max": 0.6
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "146/146",
         "n": 146,
@@ -672,7 +672,7 @@
       },
       "rationale": "Hair is allowed a softer terminator than body (VRoid default 0.4 vs 0.1) but this rule does not require it to be softer; hard-edged hair also conforms.",
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "60/60",
         "n": 60,
@@ -696,7 +696,7 @@
         "max": 0.3
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "60/60",
         "n": 60,
@@ -720,12 +720,12 @@
         "min": 1.0
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "42/42",
         "n": 42,
         "min": 1.0,
-        "median": 1.2044,
+        "median": 1.2041,
         "max": 1.5028
       }
     },
@@ -745,12 +745,12 @@
         "max": 1.0
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "42/42",
         "n": 42,
         "min": 0.6938,
-        "median": 0.8627,
+        "median": 0.8619,
         "max": 1.0
       }
     },
@@ -771,7 +771,7 @@
         "max": 1.0
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "168/168",
         "n": 168,
@@ -796,7 +796,7 @@
         "max": 0.3
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "227/227",
         "n": 227,
@@ -821,7 +821,7 @@
         "value": 0.0
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "note": "hair emissive is used deliberately (28/60 hair materials) and is not constrained.",
         "conforming": "150/150",
@@ -848,7 +848,7 @@
         "conforming": "20/22",
         "n": 22,
         "min": 0,
-        "median": 0,
+        "median": 0.0,
         "max": 3
       }
     },
@@ -868,7 +868,7 @@
         "conforming": "21/22",
         "n": 22,
         "min": 0,
-        "median": 0,
+        "median": 0.0,
         "max": 6
       }
     },
@@ -889,7 +889,7 @@
         "value": "worldCoordinates"
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "note": "accessories (cat ears, tails, glasses) are excluded; 5 of them ship without an outline.",
         "conforming": "150/150",
@@ -920,7 +920,7 @@
         "max": 0.003
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "150/150",
         "n": 150,
@@ -946,7 +946,7 @@
         "max": 0.2
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "150/150",
         "n": 150,
@@ -972,7 +972,7 @@
         "value": true
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "150/150",
         "n": 150,
@@ -996,7 +996,7 @@
         "value": "none"
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "137/137",
         "n": 137,
@@ -1023,7 +1023,7 @@
         ]
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "202/206",
         "n": 206,
@@ -1055,7 +1055,7 @@
       },
       "provenance": {
         "source": "corpus",
-        "effective_n": 18,
+        "effective_n": 17,
         "conforming": "215/215",
         "n": 215,
         "min": 0.5,
@@ -1085,7 +1085,7 @@
         ]
       },
       "provenance": {
-        "effective_n": 18,
+        "effective_n": 17,
         "source": "corpus",
         "conforming": "91/95",
         "n": 95,
@@ -1114,7 +1114,7 @@
       "provenance": {
         "source": "corpus",
         "note": "VRoid orders eyeline/iris −4…−1 under the highlight; the face skin stays at 0.",
-        "effective_n": 18,
+        "effective_n": 17,
         "conforming": "137/137",
         "n": 137,
         "min": -4,
@@ -1135,7 +1135,7 @@
       },
       "provenance": {
         "source": "corpus",
-        "effective_n": 18,
+        "effective_n": 17,
         "conforming": "365/365",
         "n": 365,
         "observed": {
@@ -1161,7 +1161,7 @@
       },
       "provenance": {
         "source": "corpus",
-        "effective_n": 18,
+        "effective_n": 17,
         "conforming": "60/63",
         "n": 63,
         "observed": {
@@ -1188,7 +1188,7 @@
         "conforming": "21/22",
         "n": 22,
         "min": 0,
-        "median": 11,
+        "median": 11.0,
         "max": 16
       }
     },
@@ -1209,7 +1209,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 3,
-        "median": 5,
+        "median": 5.0,
         "max": 10
       }
     },
@@ -1270,7 +1270,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0,
-        "median": 0,
+        "median": 0.0,
         "max": 0.5
       }
     },
@@ -1290,7 +1290,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0.0066,
-        "median": 0.0296,
+        "median": 0.0281,
         "max": 0.1
       }
     },
@@ -1310,7 +1310,7 @@
         "conforming": "21/22",
         "n": 22,
         "min": 0,
-        "median": 1,
+        "median": 1.0,
         "max": 1
       }
     },
@@ -1327,7 +1327,7 @@
       },
       "provenance": {
         "source": "corpus",
-        "effective_n": 18,
+        "effective_n": 17,
         "conforming": "21/22",
         "n": 22,
         "min": 0.0932,
@@ -1388,7 +1388,7 @@
       },
       "provenance": {
         "source": "corpus",
-        "effective_n": 18,
+        "effective_n": 12,
         "conforming": "14/14",
         "n": 14,
         "observed": {
@@ -1483,7 +1483,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 49,
-        "median": 57,
+        "median": 57.0,
         "max": 124
       }
     },
@@ -1546,7 +1546,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 12,
         "conforming": "14/14",
         "n": 14,
         "observed": {
@@ -1573,7 +1573,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 12,
         "conforming": "14/14",
         "n": 14,
         "observed": {
@@ -1601,7 +1601,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 12,
         "conforming": "14/14",
         "n": 14,
         "observed": {
@@ -1629,7 +1629,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 12,
         "conforming": "14/14",
         "n": 14,
         "observed": {
@@ -1656,7 +1656,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 12,
         "conforming": "14/14",
         "n": 14,
         "observed": {
@@ -1683,7 +1683,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 12,
         "conforming": "14/14",
         "n": 14,
         "observed": {
@@ -1706,7 +1706,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 12,
         "conforming": "14/14",
         "n": 14,
         "observed": {
@@ -1730,7 +1730,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 12,
         "conforming": "14/14",
         "n": 14,
         "observed": {
@@ -1796,7 +1796,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 8,
         "conforming": "8/8",
         "n": 8,
         "observed": {
@@ -1825,7 +1825,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 8,
         "conforming": "8/8",
         "n": 8,
         "observed": {
@@ -1852,7 +1852,7 @@
       },
       "provenance": {
         "source": "spec",
-        "effective_n": 18,
+        "effective_n": 8,
         "conforming": "8/8",
         "n": 8,
         "observed": {
@@ -1877,7 +1877,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 26138,
-        "median": 37326,
+        "median": 36944.0,
         "max": 77236
       }
     },
@@ -1898,7 +1898,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 18388,
-        "median": 25628,
+        "median": 25289.5,
         "max": 47471
       }
     },
@@ -1919,7 +1919,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 3,
-        "median": 3,
+        "median": 3.0,
         "max": 7
       }
     },
@@ -1939,7 +1939,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 6,
-        "median": 16,
+        "median": 16.0,
         "max": 24
       }
     },
@@ -1959,7 +1959,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 2048,
-        "median": 2048,
+        "median": 2048.0,
         "max": 2048
       }
     },
@@ -1979,7 +1979,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0,
-        "median": 0,
+        "median": 0.0,
         "max": 0
       }
     },
@@ -1999,7 +1999,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 51.4,
-        "median": 137.6,
+        "median": 126.6,
         "max": 222.0
       }
     },
@@ -2019,7 +2019,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 73,
-        "median": 137,
+        "median": 135.5,
         "max": 276
       }
     },
@@ -2039,7 +2039,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 94,
-        "median": 165,
+        "median": 161.5,
         "max": 347
       }
     },
@@ -2059,7 +2059,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 34,
-        "median": 89,
+        "median": 88.5,
         "max": 257
       }
     },
@@ -2079,7 +2079,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 0,
-        "median": 22,
+        "median": 22.0,
         "max": 28
       }
     },
@@ -2099,7 +2099,7 @@
         "conforming": "22/22",
         "n": 22,
         "min": 10.71,
-        "median": 18.42,
+        "median": 18.175,
         "max": 23.3
       }
     },
@@ -2119,7 +2119,7 @@
         "conforming": "21/22",
         "n": 22,
         "min": 3,
-        "median": 3,
+        "median": 3.0,
         "max": 7
       }
     },
@@ -2139,7 +2139,7 @@
         "conforming": "18/22",
         "n": 22,
         "min": 49,
-        "median": 57,
+        "median": 57.0,
         "max": 124
       }
     },
@@ -2244,7 +2244,7 @@
       },
       "provenance": {
         "source": "corpus",
-        "effective_n": 18,
+        "effective_n": 17,
         "conforming": "365/365",
         "n": 365,
         "min": 0.9,
@@ -2269,7 +2269,7 @@
       },
       "provenance": {
         "source": "corpus",
-        "effective_n": 18,
+        "effective_n": 17,
         "conforming": "163/227",
         "n": 227,
         "min": 1.0,
@@ -2296,7 +2296,7 @@
       "provenance": {
         "source": "corpus",
         "note": "The 0.x value (0.2745, 0.0902, 0.1255) sRGB-decodes to the same linear colour the 1.0 exporter writes, so both generations agree once colour space is normalised.",
-        "effective_n": 18,
+        "effective_n": 17,
         "conforming": "150/150",
         "n": 150,
         "min": 0.0202,

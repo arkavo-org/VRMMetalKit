@@ -124,3 +124,12 @@ Reproducibility: `docs/style/corpus/` holds the manifest (with body families) an
 measurements (with SHA-256 hashes and exporter strings); `style_lint.py envelopes --write`
 regenerates every rule's provenance. pixiv's FAQ is cited as the documentary source for
 the face-shading convention and the gamma-to-linear change.
+
+## Second review (PR #436 at 1dd0186)
+
+Five further defects, all fixed with tests: `corpus` now fails on a missing manifest
+asset unless `--allow-missing` is passed; VRM 0.x material properties are paired with
+glTF materials by index; sparse accessors and accessors without a bufferView are decoded;
+medians use `statistics.median` (the texture-memory median moved from 137.6 to 126.6 MB,
+triangles from 37,326 to 36,944); and each rule's `effective_n` counts only the bodies
+that contribute observations to it (12 for VRM 1.0-only rules, 8 for 0.x-only).
