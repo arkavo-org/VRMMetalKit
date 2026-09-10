@@ -159,7 +159,11 @@ test:
 STYLE_PROFILE ?= docs/style/profiles/vroid-lineage-anime-1.0.json
 STYLE_ASSETS ?= $(wildcard *.vrm *.vrm.glb)
 style-lint:
-	@python3 scripts/style_lint.py lint --profile $(STYLE_PROFILE) $(STYLE_ASSETS)
+	@if [ -z "$(STYLE_ASSETS)" ]; then \
+		echo "style-lint: no .vrm / .vrm.glb fixtures at the repo root (they are gitignored); pass STYLE_ASSETS=path/to/model.vrm"; \
+	else \
+		python3 scripts/style_lint.py lint --profile $(STYLE_PROFILE) $(STYLE_ASSETS); \
+	fi
 
 # Capture a GPU trace of the bundled avatar render for offline debugging.
 # Override the output path with GPUTRACE_OUT=/path/to/out.gputrace and the

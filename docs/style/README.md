@@ -109,8 +109,11 @@ tables are carried in `reference_tiers` for context, not enforced.
 assets; the warnings are the known minority choices (soft-gradient body shading on two
 assets, toon faces on three non-VRoid-authored ones, non-spring hair on one). Two
 synthetic generator outputs from `../vrm-conformance/assets/generated` return
-`nonconforming` on `prop.eye_height_ratio` and `expr.core_presets`, so the profile
-discriminates rather than merely describing.
+`nonconforming` on `prop.eye_height_ratio` and `expr.core_presets`. Their single
+material has no role, so the material rules skip; with `--roles` assigning it
+`face_skin`, `shade.face_never_deep_shadowed`, `shade.skin_shade_not_dark` and
+`outline.surface_present` fail as well. The profile discriminates rather than merely
+describing.
 
 ## Known gaps
 
