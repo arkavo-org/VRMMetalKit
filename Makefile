@@ -18,6 +18,7 @@ help:
 	@echo "  make gputrace-baseline - Capture a .gputrace matching the VRMBenchmark baseline (animated + spring, 1024px)"
 	@echo "  make bench-baseline - Record the authoritative perf baseline (run on the dedicated perf machine)"
 	@echo "  make bench-gate    - Gate the current build against baselines/baseline.json (perf machine only)"
+	@echo "  make bench-hotspots - Per-phase CPU bench (animated + ultra spring) → perf-review-output/bench-hotspots.json"
 	@echo "  make bench-visionos - Stereo reverse-Z compositor-shaped bench (preferred vs host submit)"
 	@echo "  make bench-visionos-sim - Same bench on the visionOS Simulator GPU (Apple Vision Pro 26.5)"
 	@echo "  make docs          - Preview documentation locally"
@@ -211,20 +212,19 @@ bench-gate:
 	@swift build -c release --product VRMBenchmark
 	@.build/release/VRMBenchmark $(BENCH_VRM) $(BENCH_ARGS) --label gate-$$(hostname -s) --baseline $(BENCH_BASELINE)
 
-# Hotspot-shaped bench: one avatar's per-frame CPU is too small to move any
-# single phase measurably, so amplify the code under review by piling on the
-# work each hotspot scales with — animation (skinning, transforms, morphs),
-# spring physics (target capture, substeps, readback) and multiple avatars
-# (render-item build, palette rebuilds). Run before/after a change and diff the
-# `--json` reports; `bench-gate` intersects common phase keys, so a committed
-# hotspot baseline gates them automatically. Not a replacement for bench-gate.
-BENCH_HOTSPOT_AVATARS ?= 4
+# Hotspot-shaped bench: a static avatar's per-frame CPU is too small to move
+# any single phase measurably, so amplify the code under review by piling on
+# the work each hotspot scales with — animation (skinning, transforms, morphs)
+# and ultra spring physics (target capture, substeps, readback). The tracker is
+# attached to a single renderer, so extra avatars would not reach the per-phase
+# samples. Run before/after a change and diff the `--json` reports;
+# `bench-gate` intersects common phase keys, so a committed hotspot baseline
+# gates them automatically. Not a replacement for bench-gate.
 BENCH_HOTSPOT_FRAMES  ?= 300
 BENCH_HOTSPOT_ARGS     = --mode render --frames $(BENCH_HOTSPOT_FRAMES) --warmup $(BENCH_WARMUP) \
-                         --vrma $(BENCH_VRMA) --spring-bone --spring-bone-quality ultra \
-                         --avatar-count $(BENCH_HOTSPOT_AVATARS)
+                         --vrma $(BENCH_VRMA) --spring-bone --spring-bone-quality ultra
 bench-hotspots:
-	@echo "🔥  Hotspot bench ($(BENCH_HOTSPOT_AVATARS) avatars, animated + spring)..."
+	@echo "🔥  Hotspot bench (animated + ultra spring)..."
 	@swift build -c release --product VRMBenchmark
 	@mkdir -p perf-review-output
 	@.build/release/VRMBenchmark $(BENCH_VRM) $(BENCH_HOTSPOT_ARGS) \

@@ -210,7 +210,7 @@ public struct PerformanceMetrics: Codable {
     public var springTargetCaptureMs: Double = 0
     /// Average spring-bone XPBD substep CPU time in milliseconds (subset of `springBoneMs`).
     public var springSubstepsMs: Double = 0
-    /// Average spring-bone GPU readback + node writeback CPU time in milliseconds (outside `springBoneMs`).
+    /// Average spring-bone GPU readback + node writeback CPU time in milliseconds (subset of `springBoneMs`).
     public var springReadbackMs: Double = 0
     /// Average skin-joint-palette update CPU time in milliseconds.
     public var skinPaletteMs: Double = 0
@@ -244,6 +244,7 @@ public class PerformanceTracker {
     private var lastFrameTime: CFTimeInterval = 0
     private var frameStartTime: CFTimeInterval = 0
     private var frameCount: Int = 0
+    var now: () -> CFTimeInterval = { CACurrentMediaTime() }
 
     // Total frame CPU time window
     private var cpuFrameTimes: [Double] = []
@@ -267,7 +268,12 @@ public class PerformanceTracker {
     }
     private var phaseTimers: [Phase: CFTimeInterval] = [:]
     private var phaseAccumulators: [Phase: (totalMs: Double, count: Int)] = [:]
-    // Per-call sample windows (bounded like the frame-time windows) so consumers
+    // Elapsed time per phase within the open frame; a phase may be begun several
+    // times per frame (transform walks, per-primitive morph sets) and is flushed
+    // as one sample at endFrame.
+    private var phaseFrameTotals: [Phase: Double] = [:]
+    private var frameOpen = false
+    // Per-frame sample windows (bounded like the frame-time windows) so consumers
     // can compute full distributions per phase, not just the running average.
     private var phaseSamples: [Phase: [Double]] = [:]
 
@@ -306,13 +312,15 @@ public class PerformanceTracker {
 
     /// Start tracking a new frame
     public func beginFrame() {
-        let currentTime = CACurrentMediaTime()
+        let currentTime = now()
         if lastFrameTime > 0 {
             let frameTime = (currentTime - lastFrameTime) * 1000.0 // Convert to ms
             appendFrameTime(frameTime)
         }
         lastFrameTime = currentTime
         frameStartTime = currentTime
+        frameOpen = true
+        phaseFrameTotals.removeAll(keepingCapacity: true)
 
         // Reset per-frame counters
         currentFrameMetrics = FrameMetrics()
@@ -320,10 +328,15 @@ public class PerformanceTracker {
 
     /// End the current frame and update accumulated metrics
     public func endFrame() {
-        let currentTime = CACurrentMediaTime()
+        let currentTime = now()
         let cpuFrameTime = (currentTime - frameStartTime) * 1000.0
         appendCpuFrameTime(cpuFrameTime)
         accumulatePhase(.total, ms: cpuFrameTime)
+        for (phase, ms) in phaseFrameTotals {
+            accumulatePhase(phase, ms: ms)
+        }
+        phaseFrameTotals.removeAll(keepingCapacity: true)
+        frameOpen = false
 
         frameCount += 1
         totalDrawCalls += currentFrameMetrics.drawCalls
@@ -483,6 +496,8 @@ public class PerformanceTracker {
         totalPipelineChanges = 0
         phaseTimers.removeAll()
         phaseAccumulators.removeAll()
+        phaseFrameTotals.removeAll()
+        frameOpen = false
         phaseSamples.removeAll()
     }
 
@@ -541,14 +556,18 @@ public class PerformanceTracker {
     // MARK: - Phase helpers
 
     public func beginPhase(_ phase: Phase) {
-        phaseTimers[phase] = CACurrentMediaTime()
+        phaseTimers[phase] = now()
     }
 
     public func endPhase(_ phase: Phase) {
         guard let startTime = phaseTimers[phase] else { return }
-        let elapsedMs = (CACurrentMediaTime() - startTime) * 1000.0
-        accumulatePhase(phase, ms: elapsedMs)
+        let elapsedMs = (now() - startTime) * 1000.0
         phaseTimers.removeValue(forKey: phase)
+        if frameOpen {
+            phaseFrameTotals[phase, default: 0] += elapsedMs
+        } else {
+            accumulatePhase(phase, ms: elapsedMs)
+        }
     }
 
     private func accumulatePhase(_ phase: Phase, ms: Double) {
@@ -570,10 +589,13 @@ public class PerformanceTracker {
         return acc.totalMs / Double(acc.count)
     }
 
-    /// Per-call elapsed-time samples (milliseconds) recorded for `phase`, oldest
-    /// first, bounded to the most recent ~10 s. Empty when the phase never ran.
-    /// Like the frame-time windows, this is cleared only by ``reset()`` —
-    /// ``generateMetrics()`` does not drain it.
+    /// Elapsed-time samples (milliseconds) recorded for `phase`, oldest first,
+    /// bounded to the most recent ~10 s. Inside a ``beginFrame()`` /
+    /// ``endFrame()`` pair every begin/end of the phase is summed into one
+    /// sample emitted at ``endFrame()`` (none if the phase did not run that
+    /// frame); outside a frame each begin/end pair emits its own sample. Empty
+    /// when the phase never ran. Like the frame-time windows, this is cleared
+    /// only by ``reset()`` — ``generateMetrics()`` does not drain it.
     public func samples(for phase: Phase) -> [Double] {
         phaseSamples[phase] ?? []
     }

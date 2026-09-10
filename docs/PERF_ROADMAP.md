@@ -80,8 +80,22 @@ key for the code you touched is the signal, not the total.
 | `renderItemBuild` | Render-item build, culling and sort. |
 | `depthPrepass` / `outlinePass` | The optional depth prepass and the inverted-hull outline pass. |
 
-`make bench-hotspots` amplifies each stage by combining animation, ultra spring
-physics and multiple avatars; `bench-gate` intersects common phase keys against
-`baselines/baseline.json`, so re-recording the baseline promotes these phases to
-gated metrics. `PerformanceTrackerTests` pins the phase→metric mapping so a new
-phase cannot silently miss the report.
+Each phase is one sample per frame: a phase the renderer begins several times
+in a frame (`transformUpdate` walks twice with spring bone on, `morphActiveSet`
+runs once per primitive) is summed, so the percentiles compare frames, not calls.
+
+`make bench-hotspots` amplifies each stage by combining animation with ultra
+spring physics on a single avatar (the tracker is attached to one renderer, so
+extra avatars would not reach the per-phase samples). `bench-gate` intersects
+common phase keys against `baselines/baseline.json`, so re-recording the
+baseline gates the phases its `BENCH_ARGS` exercise — `transformUpdate`,
+`skinPalette`, `morphSetup`, `renderItemBuild`, `outlinePass` and
+`commandEncode`. The spring phases (`springBone`, `springTargetCapture`,
+`springSubsteps`, `springReadback`) and `depthPrepass` emit no samples without
+`--spring-bone` / `--depth-prepass`, so they stay out of the baseline until
+those flags are added to `BENCH_ARGS` in the Makefile and the baseline is
+re-recorded on the perf machine. `morphActiveSet` only runs when expression
+weights change between frames (the morph gate reuses the previous output
+otherwise), and `VRMBenchmark` drives no expressions, so gating it needs a new
+benchmark option first. `PerformanceTrackerTests` pins the phase→metric
+mapping so a new phase cannot silently miss the report.

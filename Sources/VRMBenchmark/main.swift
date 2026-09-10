@@ -778,9 +778,7 @@ struct VRMBenchmarkCLI {
             // Offset avatar in world space by translating root nodes
             if xOffset != 0 {
                 for node in avatarModel.nodes where node.parent == nil {
-                    var m = node.localMatrix
-                    m.columns.3.x += xOffset
-                    node.localMatrix = m
+                    node.translation.x += xOffset
                 }
                 avatarModel.updateNodeTransforms()
             }
@@ -992,32 +990,28 @@ struct VRMBenchmarkCLI {
         // PerformanceTracker. These attribute the `encode` span to morph setup,
         // spring-bone dispatch, render-item build, and command encoding. A phase
         // with no samples (e.g. spring bone when disabled) is omitted.
-        // (jsonKey, displayLabel, phase) — jsonKey is persisted/gated; label is
-        // the short human-report column.
-        // (jsonKey, displayLabel, phase) — jsonKey is persisted/gated; label is
-        // the short human-report column. Hotspot phases attribute frame CPU to
-        // the individual stages under review (morph active-set build, per-frame
+        // The list is every `PerformanceTracker.Phase` except `.total`; the
+        // persisted/gated JSON key is the phase's case name and the label is the
+        // short human-report column. Hotspot phases attribute frame CPU to the
+        // individual stages under review (morph active-set build, per-frame
         // spring target capture / substeps / readback, skin-palette rebuilds,
         // world-transform propagation, depth prepass, outline pass) so a change
         // can be judged against the stage it targets, not just total frame time.
-        let subPhases: [(key: String, label: String, phase: PerformanceTracker.Phase)] = [
-            ("transformUpdate", "transform", .transformUpdate),
-            ("skinPalette", "skinPalette", .skinPalette),
-            ("morphSetup", "morphSetup", .morphSetup),
-            ("morphActiveSet", "morphActiveSet", .morphActiveSet),
-            ("springBone", "springBone", .springBone),
-            ("springTargetCapture", "springCap", .springTargetCapture),
-            ("springSubsteps", "springStep", .springSubsteps),
-            ("springReadback", "springRead", .springReadback),
-            ("renderItemBuild", "renderItem", .renderItemBuild),
-            ("depthPrepass", "depthPre", .depthPrepass),
-            ("outlinePass", "outline", .outlinePass),
-            ("commandEncode", "cmdEncode", .commandEncode),
+        let phaseLabels: [PerformanceTracker.Phase: String] = [
+            .transformUpdate: "transform",
+            .springTargetCapture: "springCap",
+            .springSubsteps: "springStep",
+            .springReadback: "springRead",
+            .renderItemBuild: "renderItem",
+            .depthPrepass: "depthPre",
+            .outlinePass: "outline",
+            .commandEncode: "cmdEncode",
         ]
-        let subPhaseSamples: [(key: String, label: String, samples: [Double])] = subPhases.compactMap {
-            guard let s = renderer.performanceTracker?.samples(for: $0.phase), !s.isEmpty else { return nil }
-            return (key: $0.key, label: $0.label, samples: s)
-        }
+        let subPhaseSamples: [(key: String, label: String, samples: [Double])] =
+            PerformanceTracker.Phase.allCases.filter { $0 != .total }.compactMap { phase in
+                guard let s = renderer.performanceTracker?.samples(for: phase), !s.isEmpty else { return nil }
+                return (key: "\(phase)", label: phaseLabels[phase] ?? "\(phase)", samples: s)
+            }
         if !subPhaseSamples.isEmpty {
             print("""
 
