@@ -62,3 +62,26 @@ Update the table whenever issues close or new ones are filed.
 - Every PR runs against a fixed reference scene (`AvatarSample_A_1.0.vrm.glb`).
 - No performance regression merges without explicit sign-off.
 - Publish a frame-time budget and defend it.
+
+## Hotspot instrumentation (how a change is judged)
+
+Total frame time is too noisy to attribute to any one stage on a single avatar,
+so the renderer emits per-stage CPU phases through `PerformanceTracker`, and
+`VRMBenchmark` persists each as a distribution under `BenchmarkReport.stats`.
+Run `make bench-hotspots` before and after a change and diff the JSON; the phase
+key for the code you touched is the signal, not the total.
+
+| Phase key | What it times |
+|-----------|----------------|
+| `transformUpdate` | Node world-transform propagation (pre-draw and post-physics walks). |
+| `skinPalette` | Per-skin dirty check and joint-palette rebuild. |
+| `morphSetup` | Whole morph compute pass; `morphActiveSet` isolates per-primitive active-set build. |
+| `springBone` | Whole spring step; `springTargetCapture` (per-frame target/collider capture), `springSubsteps` (XPBD loop), `springReadback` (GPU positions → node writeback) isolate its stages. |
+| `renderItemBuild` | Render-item build, culling and sort. |
+| `depthPrepass` / `outlinePass` | The optional depth prepass and the inverted-hull outline pass. |
+
+`make bench-hotspots` amplifies each stage by combining animation, ultra spring
+physics and multiple avatars; `bench-gate` intersects common phase keys against
+`baselines/baseline.json`, so re-recording the baseline promotes these phases to
+gated metrics. `PerformanceTrackerTests` pins the phase→metric mapping so a new
+phase cannot silently miss the report.

@@ -52,8 +52,16 @@ public struct PerformanceMetrics: Codable {
         case frameTimeP95Ms
         case frameTimeP99Ms
         case morphSetupMs
+        case morphActiveSetMs
         case springBoneMs
+        case springTargetCaptureMs
+        case springSubstepsMs
+        case springReadbackMs
+        case skinPaletteMs
+        case transformUpdateMs
         case renderItemBuildMs
+        case depthPrepassMs
+        case outlinePassMs
         case commandEncodeMs
         case cpuFrameMs
         case allocatedMemoryMB
@@ -89,8 +97,16 @@ public struct PerformanceMetrics: Codable {
         try container.encode(frameTimeP95Ms.isFinite ? frameTimeP95Ms : 0, forKey: .frameTimeP95Ms)
         try container.encode(frameTimeP99Ms.isFinite ? frameTimeP99Ms : 0, forKey: .frameTimeP99Ms)
         try container.encode(morphSetupMs.isFinite ? morphSetupMs : 0, forKey: .morphSetupMs)
+        try container.encode(morphActiveSetMs.isFinite ? morphActiveSetMs : 0, forKey: .morphActiveSetMs)
         try container.encode(springBoneMs.isFinite ? springBoneMs : 0, forKey: .springBoneMs)
+        try container.encode(springTargetCaptureMs.isFinite ? springTargetCaptureMs : 0, forKey: .springTargetCaptureMs)
+        try container.encode(springSubstepsMs.isFinite ? springSubstepsMs : 0, forKey: .springSubstepsMs)
+        try container.encode(springReadbackMs.isFinite ? springReadbackMs : 0, forKey: .springReadbackMs)
+        try container.encode(skinPaletteMs.isFinite ? skinPaletteMs : 0, forKey: .skinPaletteMs)
+        try container.encode(transformUpdateMs.isFinite ? transformUpdateMs : 0, forKey: .transformUpdateMs)
         try container.encode(renderItemBuildMs.isFinite ? renderItemBuildMs : 0, forKey: .renderItemBuildMs)
+        try container.encode(depthPrepassMs.isFinite ? depthPrepassMs : 0, forKey: .depthPrepassMs)
+        try container.encode(outlinePassMs.isFinite ? outlinePassMs : 0, forKey: .outlinePassMs)
         try container.encode(commandEncodeMs.isFinite ? commandEncodeMs : 0, forKey: .commandEncodeMs)
         try container.encode(cpuFrameMs.isFinite ? cpuFrameMs : 0, forKey: .cpuFrameMs)
         try container.encode(allocatedMemoryMB.isFinite ? allocatedMemoryMB : 0, forKey: .allocatedMemoryMB)
@@ -122,8 +138,16 @@ public struct PerformanceMetrics: Codable {
         frameTimeP95Ms = try container.decode(Double.self, forKey: .frameTimeP95Ms)
         frameTimeP99Ms = try container.decode(Double.self, forKey: .frameTimeP99Ms)
         morphSetupMs = (try? container.decode(Double.self, forKey: .morphSetupMs)) ?? 0
+        morphActiveSetMs = (try? container.decode(Double.self, forKey: .morphActiveSetMs)) ?? 0
         springBoneMs = (try? container.decode(Double.self, forKey: .springBoneMs)) ?? 0
+        springTargetCaptureMs = (try? container.decode(Double.self, forKey: .springTargetCaptureMs)) ?? 0
+        springSubstepsMs = (try? container.decode(Double.self, forKey: .springSubstepsMs)) ?? 0
+        springReadbackMs = (try? container.decode(Double.self, forKey: .springReadbackMs)) ?? 0
+        skinPaletteMs = (try? container.decode(Double.self, forKey: .skinPaletteMs)) ?? 0
+        transformUpdateMs = (try? container.decode(Double.self, forKey: .transformUpdateMs)) ?? 0
         renderItemBuildMs = (try? container.decode(Double.self, forKey: .renderItemBuildMs)) ?? 0
+        depthPrepassMs = (try? container.decode(Double.self, forKey: .depthPrepassMs)) ?? 0
+        outlinePassMs = (try? container.decode(Double.self, forKey: .outlinePassMs)) ?? 0
         commandEncodeMs = (try? container.decode(Double.self, forKey: .commandEncodeMs)) ?? 0
         cpuFrameMs = (try? container.decode(Double.self, forKey: .cpuFrameMs)) ?? 0
         allocatedMemoryMB = try container.decode(Double.self, forKey: .allocatedMemoryMB)
@@ -178,10 +202,26 @@ public struct PerformanceMetrics: Codable {
 
     /// Average morph-setup CPU time in milliseconds.
     public var morphSetupMs: Double = 0
+    /// Average morph active-set build CPU time in milliseconds (subset of `morphSetupMs`).
+    public var morphActiveSetMs: Double = 0
     /// Average spring-bone CPU time in milliseconds.
     public var springBoneMs: Double = 0
+    /// Average spring-bone per-frame target-capture CPU time in milliseconds (subset of `springBoneMs`).
+    public var springTargetCaptureMs: Double = 0
+    /// Average spring-bone XPBD substep CPU time in milliseconds (subset of `springBoneMs`).
+    public var springSubstepsMs: Double = 0
+    /// Average spring-bone GPU readback + node writeback CPU time in milliseconds (outside `springBoneMs`).
+    public var springReadbackMs: Double = 0
+    /// Average skin-joint-palette update CPU time in milliseconds.
+    public var skinPaletteMs: Double = 0
+    /// Average node world-transform propagation CPU time in milliseconds.
+    public var transformUpdateMs: Double = 0
     /// Average render-item-build CPU time in milliseconds.
     public var renderItemBuildMs: Double = 0
+    /// Average depth-prepass CPU time in milliseconds (0 when disabled).
+    public var depthPrepassMs: Double = 0
+    /// Average MToon outline-pass CPU time in milliseconds.
+    public var outlinePassMs: Double = 0
     /// Average command-encode CPU time in milliseconds.
     public var commandEncodeMs: Double = 0
     /// Average total per-frame CPU time in milliseconds.
@@ -210,10 +250,18 @@ public class PerformanceTracker {
     private var sortedCpuFrameTimes: [Double] = []
 
     // Sub-phase CPU timers
-    public enum Phase {
+    public enum Phase: CaseIterable {
         case morphSetup
+        case morphActiveSet
         case springBone
+        case springTargetCapture
+        case springSubsteps
+        case springReadback
+        case skinPalette
+        case transformUpdate
         case renderItemBuild
+        case depthPrepass
+        case outlinePass
         case commandEncode
         case total
     }
@@ -374,8 +422,16 @@ public class PerformanceTracker {
 
         // Per-phase CPU averages
         metrics.morphSetupMs = averagePhase(.morphSetup)
+        metrics.morphActiveSetMs = averagePhase(.morphActiveSet)
         metrics.springBoneMs = averagePhase(.springBone)
+        metrics.springTargetCaptureMs = averagePhase(.springTargetCapture)
+        metrics.springSubstepsMs = averagePhase(.springSubsteps)
+        metrics.springReadbackMs = averagePhase(.springReadback)
+        metrics.skinPaletteMs = averagePhase(.skinPalette)
+        metrics.transformUpdateMs = averagePhase(.transformUpdate)
         metrics.renderItemBuildMs = averagePhase(.renderItemBuild)
+        metrics.depthPrepassMs = averagePhase(.depthPrepass)
+        metrics.outlinePassMs = averagePhase(.outlinePass)
         metrics.commandEncodeMs = averagePhase(.commandEncode)
         metrics.cpuFrameMs = averagePhase(.total)
 

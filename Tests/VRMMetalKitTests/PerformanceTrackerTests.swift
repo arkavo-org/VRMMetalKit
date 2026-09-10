@@ -123,4 +123,81 @@ final class PerformanceTrackerTests: XCTestCase {
         XCTAssertTrue(tracker.samples(for: .commandEncode).isEmpty,
             "reset() should clear phase sample windows")
     }
+
+    /// Every hotspot phase added for the allocation-review work must be
+    /// independently sampleable AND mapped onto its own `PerformanceMetrics`
+    /// field. A phase that records samples but never reaches a metric would be
+    /// invisible to both the human report and the JSON gate.
+    func testHotspotPhasesMapToMetricsFields() {
+        let tracker = PerformanceTracker()
+
+        // Each entry pairs a phase with the metric field it must populate.
+        let mappings: [(phase: PerformanceTracker.Phase, metric: (PerformanceMetrics) -> Double)] = [
+            (.morphActiveSet,      { $0.morphActiveSetMs }),
+            (.springTargetCapture, { $0.springTargetCaptureMs }),
+            (.springSubsteps,      { $0.springSubstepsMs }),
+            (.springReadback,      { $0.springReadbackMs }),
+            (.skinPalette,         { $0.skinPaletteMs }),
+            (.transformUpdate,     { $0.transformUpdateMs }),
+            (.depthPrepass,        { $0.depthPrepassMs }),
+            (.outlinePass,         { $0.outlinePassMs }),
+        ]
+
+        for (phase, _) in mappings {
+            tracker.beginPhase(phase)
+            Thread.sleep(forTimeInterval: 0.001)
+            tracker.endPhase(phase)
+        }
+
+        let metrics = tracker.generateMetrics()
+
+        for (phase, metric) in mappings {
+            XCTAssertEqual(tracker.samples(for: phase).count, 1,
+                "\(phase) should record exactly one sample")
+            XCTAssertGreaterThan(metric(metrics), 0,
+                "\(phase) should map to a non-zero metric field")
+        }
+
+        // Phases that never ran stay at zero and readable.
+        XCTAssertEqual(metrics.morphSetupMs, 0)
+        XCTAssertEqual(metrics.springBoneMs, 0)
+    }
+
+    /// Phase.allCases must list every hotspot phase so the benchmark/report can
+    /// iterate it instead of hard-coding a divergent list.
+    func testAllCasesCoversHotspotPhases() {
+        let expected: Set<String> = [
+            "morphSetup", "morphActiveSet", "springBone", "springTargetCapture",
+            "springSubsteps", "springReadback", "skinPalette", "transformUpdate",
+            "renderItemBuild", "depthPrepass", "outlinePass", "commandEncode", "total",
+        ]
+        let names = Set(PerformanceTracker.Phase.allCases.map { "\($0)" })
+        XCTAssertEqual(names, expected)
+    }
+
+    /// The new hotspot metrics must survive the JSON round-trip used by
+    /// `VRMBenchmark --json` / `--baseline`.
+    func testHotspotMetricsJSONRoundTrip() throws {
+        var metrics = PerformanceMetrics()
+        metrics.morphActiveSetMs = 0.11
+        metrics.springTargetCaptureMs = 0.22
+        metrics.springSubstepsMs = 0.33
+        metrics.springReadbackMs = 0.44
+        metrics.skinPaletteMs = 0.55
+        metrics.transformUpdateMs = 0.66
+        metrics.depthPrepassMs = 0.77
+        metrics.outlinePassMs = 0.88
+
+        let data = try JSONEncoder().encode(metrics)
+        let decoded = try JSONDecoder().decode(PerformanceMetrics.self, from: data)
+
+        XCTAssertEqual(decoded.morphActiveSetMs, 0.11, accuracy: 1e-9)
+        XCTAssertEqual(decoded.springTargetCaptureMs, 0.22, accuracy: 1e-9)
+        XCTAssertEqual(decoded.springSubstepsMs, 0.33, accuracy: 1e-9)
+        XCTAssertEqual(decoded.springReadbackMs, 0.44, accuracy: 1e-9)
+        XCTAssertEqual(decoded.skinPaletteMs, 0.55, accuracy: 1e-9)
+        XCTAssertEqual(decoded.transformUpdateMs, 0.66, accuracy: 1e-9)
+        XCTAssertEqual(decoded.depthPrepassMs, 0.77, accuracy: 1e-9)
+        XCTAssertEqual(decoded.outlinePassMs, 0.88, accuracy: 1e-9)
+    }
 }

@@ -1,7 +1,7 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-visionos bench-visionos-sim
+.PHONY: help shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-hotspots bench-visionos bench-visionos-sim
 
 help:
 	@echo "VRMMetalKit Build Targets:"
@@ -210,6 +210,27 @@ bench-gate:
 	@echo "🚦  Gating current build against $(BENCH_BASELINE)..."
 	@swift build -c release --product VRMBenchmark
 	@.build/release/VRMBenchmark $(BENCH_VRM) $(BENCH_ARGS) --label gate-$$(hostname -s) --baseline $(BENCH_BASELINE)
+
+# Hotspot-shaped bench: one avatar's per-frame CPU is too small to move any
+# single phase measurably, so amplify the code under review by piling on the
+# work each hotspot scales with — animation (skinning, transforms, morphs),
+# spring physics (target capture, substeps, readback) and multiple avatars
+# (render-item build, palette rebuilds). Run before/after a change and diff the
+# `--json` reports; `bench-gate` intersects common phase keys, so a committed
+# hotspot baseline gates them automatically. Not a replacement for bench-gate.
+BENCH_HOTSPOT_AVATARS ?= 4
+BENCH_HOTSPOT_FRAMES  ?= 300
+BENCH_HOTSPOT_ARGS     = --mode render --frames $(BENCH_HOTSPOT_FRAMES) --warmup $(BENCH_WARMUP) \
+                         --vrma $(BENCH_VRMA) --spring-bone --spring-bone-quality ultra \
+                         --avatar-count $(BENCH_HOTSPOT_AVATARS)
+bench-hotspots:
+	@echo "🔥  Hotspot bench ($(BENCH_HOTSPOT_AVATARS) avatars, animated + spring)..."
+	@swift build -c release --product VRMBenchmark
+	@mkdir -p perf-review-output
+	@.build/release/VRMBenchmark $(BENCH_VRM) $(BENCH_HOTSPOT_ARGS) \
+		--label hotspots-$$(hostname -s) \
+		--json perf-review-output/bench-hotspots.json
+	@echo "✅ Wrote perf-review-output/bench-hotspots.json (per-phase stats under .stats)"
 
 # Compositor-shaped stereo bench (Mac stand-in for visionOS). Does not
 # replace bench-gate. Preferred submit simulates once; host submit is the

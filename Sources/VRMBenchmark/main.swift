@@ -994,10 +994,24 @@ struct VRMBenchmarkCLI {
         // with no samples (e.g. spring bone when disabled) is omitted.
         // (jsonKey, displayLabel, phase) — jsonKey is persisted/gated; label is
         // the short human-report column.
+        // (jsonKey, displayLabel, phase) — jsonKey is persisted/gated; label is
+        // the short human-report column. Hotspot phases attribute frame CPU to
+        // the individual stages under review (morph active-set build, per-frame
+        // spring target capture / substeps / readback, skin-palette rebuilds,
+        // world-transform propagation, depth prepass, outline pass) so a change
+        // can be judged against the stage it targets, not just total frame time.
         let subPhases: [(key: String, label: String, phase: PerformanceTracker.Phase)] = [
+            ("transformUpdate", "transform", .transformUpdate),
+            ("skinPalette", "skinPalette", .skinPalette),
             ("morphSetup", "morphSetup", .morphSetup),
+            ("morphActiveSet", "morphActiveSet", .morphActiveSet),
             ("springBone", "springBone", .springBone),
+            ("springTargetCapture", "springCap", .springTargetCapture),
+            ("springSubsteps", "springStep", .springSubsteps),
+            ("springReadback", "springRead", .springReadback),
             ("renderItemBuild", "renderItem", .renderItemBuild),
+            ("depthPrepass", "depthPre", .depthPrepass),
+            ("outlinePass", "outline", .outlinePass),
             ("commandEncode", "cmdEncode", .commandEncode),
         ]
         let subPhaseSamples: [(key: String, label: String, samples: [Double])] = subPhases.compactMap {
@@ -1007,7 +1021,7 @@ struct VRMBenchmarkCLI {
         if !subPhaseSamples.isEmpty {
             print("""
 
-            Sub-phase CPU breakdown (inside encode, per frame)
+            Sub-phase CPU breakdown (per frame)
             ----------------------------------------------------------------------
             """)
             for entry in subPhaseSamples {
