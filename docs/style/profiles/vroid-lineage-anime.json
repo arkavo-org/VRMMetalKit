@@ -593,7 +593,7 @@
       "provenance": {
         "effective_n": 18,
         "source": "corpus",
-        "note": "158 face_region materials; 18/21 face_skin materials conform. PompaGirl, AnnieV0 and pixiv's constraint sample use plain toon faces.",
+        "note": "18/21 face_skin materials conform; PompaGirl, AnnieV0 and pixiv's constraint sample use plain toon faces.",
         "conforming": "135/158",
         "n": 158,
         "min": -1.0,
@@ -621,7 +621,7 @@
       "provenance": {
         "effective_n": 18,
         "source": "corpus",
-        "note": "16/21 bodies conform.",
+        "note": "19/21 body_skin materials conform; the soft-gradient minority is AvatarSample_A/B-era exports, Mike Scott and Vita.",
         "conforming": "139/146",
         "n": 146,
         "min": 0,
@@ -823,7 +823,7 @@
       "provenance": {
         "effective_n": 18,
         "source": "corpus",
-        "note": "hair emissive is used deliberately (10/60 hair materials) and is not constrained.",
+        "note": "hair emissive is used deliberately (28/60 hair materials) and is not constrained.",
         "conforming": "150/150",
         "n": 150,
         "min": 0.0,
@@ -1184,7 +1184,7 @@
       "provenance": {
         "effective_n": 18,
         "source": "corpus",
-        "note": "AliciaSolid's hair is not spring-driven.",
+        "note": "PompaGirl (a hand-tuned VRM 0.x asset) has no spring chains rooted under the head and no head collider.",
         "conforming": "21/22",
         "n": 22,
         "min": 0,

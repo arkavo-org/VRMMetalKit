@@ -126,6 +126,61 @@ class EvaluatorTests(unittest.TestCase):
                 self.assertTrue(ok, f"{rule['id']}: {why}")
 
 
+FIXTURE_A1 = os.path.join(REPO, "AvatarSample_A_1.0.vrm.glb")
+FIXTURE_A0 = os.path.join(REPO, "AvatarSample_A_0.0.vrm.glb")
+
+
+@unittest.skipUnless(os.path.exists(FIXTURE_A1) and os.path.exists(FIXTURE_A0), "AvatarSample_A fixtures not present")
+class CrossVersionTests(unittest.TestCase):
+    """AvatarSample_A 0.0 and 1.0 are one body; measurements must agree across VRM generations."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.m0, cls.m1 = L.measure(FIXTURE_A0), L.measure(FIXTURE_A1)
+
+    def test_head_metrics_agree_across_forward_axis(self):
+        for k in ("head_count", "eye_height_in_head", "head_bone_fraction"):
+            self.assertAlmostEqual(self.m0["proportions"][k], self.m1["proportions"][k], delta=0.02, msg=k)
+
+    def test_outline_colour_agrees_after_srgb_decode(self):
+        o0 = [m for m in self.m0["materials"] if m["role"] == "face_skin"][0]["outline_luminance"]
+        o1 = [m for m in self.m1["materials"] if m["role"] == "face_skin"][0]["outline_luminance"]
+        self.assertAlmostEqual(o0, o1, places=3)
+
+    def test_vertex_counts_distinguish_storage_from_references(self):
+        self.assertEqual(self.m1["asset"]["vertices"], 20459)
+        self.assertEqual(self.m1["asset"]["vertex_references"], 94016)
+
+
+class SchemaContractTests(unittest.TestCase):
+    def setUp(self):
+        try:
+            import jsonschema  # noqa: F401
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        self.schema = json.load(open(os.path.join(REPO, "docs", "style", "vrm-anime-style-profile.schema.json")))
+        self.profile = json.load(open(PROFILE))
+
+    def test_profile_validates(self):
+        import jsonschema
+        jsonschema.Draft202012Validator(self.schema).validate(self.profile)
+
+    def test_fingerprint_rule_cannot_be_must(self):
+        import jsonschema
+        p = copy.deepcopy(self.profile)
+        fp = next(r for r in p["rules"] if r["class"] == "fingerprint")
+        fp["severity"] = "must"
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(self.schema).validate(p)
+
+    def test_rule_without_provenance_is_rejected(self):
+        import jsonschema
+        p = copy.deepcopy(self.profile)
+        p["rules"][0].pop("provenance")
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(self.schema).validate(p)
+
+
 @unittest.skipUnless(os.path.exists(FIXTURE), "AvatarSample_U_1.0.vrm.glb not present")
 class MutationTests(unittest.TestCase):
     """Controlled edits to a conforming fixture must trip exactly the rules that describe them."""

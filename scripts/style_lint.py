@@ -732,8 +732,7 @@ def envelopes(profile, corpus, write_path=None):
             for k in ("n", "min", "median", "max", "observed"):
                 prov.pop(k, None)
             prov["n"] = summ["n"]
-            if rule.get("scope", "asset") != "asset" or True:
-                prov["effective_n"] = len(families)
+            prov["effective_n"] = len(families)
             for k in ("min", "median", "max", "observed"):
                 if k in summ:
                     prov[k] = round(summ[k], 4) if isinstance(summ[k], float) else summ[k]
