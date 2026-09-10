@@ -1213,12 +1213,14 @@ public class VRMNode {
     public internal(set) var worldGeneration: UInt64 = 0
     private var hasPublishedWorld = false
 
-    /// True when ``translation`` / ``rotation`` / ``scale`` (or ``localMatrix``
-    /// itself) changed since the last ``updateLocalMatrix()``. Lets
-    /// ``updateWorldTransform()`` skip the quaternion→matrix rebuild for nodes
-    /// that did not move; the hierarchy is walked several times per frame
-    /// (host animation, renderer safety net, post-physics), so the untouched
-    /// majority would otherwise rebuild its local matrix on every walk.
+    /// Number of times ``updateLocalMatrix()`` has run on this node.
+    private(set) var localMatrixRebuildCount = 0
+
+    /// Set by the ``translation`` / ``rotation`` / ``scale`` / ``localMatrix``
+    /// setters and cleared by ``updateLocalMatrix()``; ``updateWorldTransform()``
+    /// rebuilds ``localMatrix`` only while this is true. Assumes T/R/S are
+    /// mutated on the thread that walks the hierarchy: a writer on another
+    /// thread must call ``updateLocalMatrix()`` itself, as the in-tree ones do.
     private var localMatrixDirty = true
 
     /// World-space position of this node's origin, extracted from ``worldMatrix``. Used by spring-bone colliders.
@@ -1325,6 +1327,7 @@ public class VRMNode {
         let s = float4x4(scaling: scale)
         localMatrix = t * r * s
         localMatrixDirty = false
+        localMatrixRebuildCount += 1
     }
 
     /// Recomputes ``worldMatrix`` (and recurses through ``children``) by composing with the parent's world matrix.
