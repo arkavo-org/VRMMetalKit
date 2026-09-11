@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Acceptance-pack runner for Python-oracle packs (docs/proposals/vrm-author-cli/acceptance).
+"""Acceptance-pack runner for Python-oracle and swift-test packs (docs/proposals/vrm-author-cli/acceptance).
 
     acceptance_run.py PACK.json [--json] [--fixtures DIR] [--out RESULT.json] [--schema SCHEMA.json]
 
@@ -20,6 +20,12 @@ Checks, in order: the pack validates against pack.schema.json; packHash matches 
 canonical JSON; the runner entry point exists; every oracle hash matches the working
 tree; each fixture hashes as pinned and grades as expected; each mutant is rejected;
 the corpus dimension passes per body family when the pack declares one.
+
+`runner.kind == "swift-test"` packs name an XCTest suite as their entry point. The runner
+executes `swift test --disable-sandbox --filter <suite>` from the repository root under the
+pack's deadline, grades the fixture dimension from the suite's test-case results, requires
+each `swift-test` mutant's named test to run and pass, and reports missing-handler when the
+filter matches no test case.
 
 Exit status: 0 pass, 1 fail, 2 pending (a fixture or corpus asset is absent),
 3 missing-handler (entry point absent), 4 pack invalid.
@@ -199,6 +205,17 @@ def validate_pack(pack, schema):
             errors.append("runner.profile must be listed in runner.environment.oracleHashes")
         if pack["runner"]["entryPoint"] not in pack["runner"]["environment"]["oracleHashes"]:
             errors.append("runner.entryPoint must be listed in runner.environment.oracleHashes")
+    if pack["runner"]["kind"] == "swift-test":
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?", pack["runner"]["entryPoint"]):
+            errors.append("runner.entryPoint must be an XCTest suite name for swift-test packs")
+        for m in pack["mutants"]:
+            tr = m["transform"]
+            if tr["kind"] == "swift-test" and not tr.get("test"):
+                errors.append(f"mutant {m['id']}: swift-test mutants need a test name")
+            elif tr["kind"] != "swift-test" and tr["kind"] != "report-fabricated":
+                errors.append(f"mutant {m['id']}: swift-test packs only support swift-test and report-fabricated mutants")
+    elif any(m["transform"]["kind"] == "swift-test" for m in pack["mutants"]):
+        errors.append("swift-test mutants require runner.kind swift-test")
     if pack["evidencePolicy"]["dimensions"]["corpus"] == "required" and "corpus" not in pack:
         errors.append("evidencePolicy.dimensions.corpus is required but the pack has no corpus block")
     if not pack["visual"]["applicable"] and not pack["visual"].get("applicabilityRecord"):
@@ -548,6 +565,120 @@ class Runner:
         out["familiesTotal"] = len(fam_st)
         return out
 
+    # ---- swift-test
+
+    SWIFT_TEST_CASE = re.compile(r"Test Case '-\[(?P<module>[^ .\]]+)\.(?P<suite>[^ \]]+) (?P<test>[^\]]+)\]' (?P<status>passed|failed)")
+
+    @staticmethod
+    def parse_swift_test_output(text):
+        """Per-test final status from XCTest output; the last status line for a test wins."""
+        tests = {}
+        for m in Runner.SWIFT_TEST_CASE.finditer(text):
+            tests[f"{m.group('suite')}.{m.group('test')}"] = m.group("status")
+        return tests
+
+    def run_swift_suite(self):
+        """Run the suite once and wrap the parsed results in a report envelope."""
+        suite = self.pack["runner"]["entryPoint"]
+        swift = shutil.which("swift")
+        if swift is None:
+            return {"report": None, "oracleHashes": dict(self.oracle_hashes), "exitCode": None, "stderr": "swift toolchain not found on PATH", "tests": {}, "command": None}
+        cmd = [swift, "test", "--disable-sandbox", "--filter", suite]
+        deadline = self.pack["resources"]["deadlineSeconds"]
+        env = dict(os.environ)
+        if self.fixtures_dir:
+            for f in self.pack["fixtures"]:
+                if f.get("pathEnv"):
+                    env[f["pathEnv"]] = self.fixtures_dir
+        try:
+            proc = subprocess.run(cmd, cwd=self.repo, capture_output=True, text=True, timeout=deadline, env=env)
+        except subprocess.TimeoutExpired:
+            return {"report": None, "oracleHashes": dict(self.oracle_hashes), "exitCode": None, "stderr": f"timeout after {deadline}s", "tests": {}, "command": cmd}
+        combined = proc.stdout + "\n" + proc.stderr
+        tests = self.parse_swift_test_output(combined)
+        failing = sorted(t for t, st in tests.items() if st == "failed")
+        report = None
+        if tests:
+            report = {"suite": suite, "executed": len(tests), "passed": len(tests) - len(failing), "failed": len(failing),
+                      "failingTests": failing, "exitCode": proc.returncode}
+        tail = "\n".join(line for line in combined.splitlines() if "error:" in line or "warning: No matching" in line)[-2000:]
+        return {"report": report, "oracleHashes": dict(self.oracle_hashes), "exitCode": proc.returncode, "stderr": tail or proc.stderr[-2000:],
+                "tests": tests, "command": cmd}
+
+    def run_swift_test(self, result):
+        env = self.run_swift_suite()
+        result["runner"]["command"] = env.get("command")
+        result["runner"]["exitCode"] = env["exitCode"]
+        if env["command"] is None:
+            result.update(status="pending", reason=env["stderr"])
+            return result
+        if env["exitCode"] is None:
+            result.update(status="fail", reason=env["stderr"])
+            result["dimensions"]["fixture"] = "fail"
+            return result
+        if not env["tests"]:
+            if env["exitCode"] == 0:
+                result.update(status="missing-handler", reason=f"no test case matched suite {self.pack['runner']['entryPoint']!r}")
+            else:
+                result.update(status="fail", reason=f"swift test did not run any test case (exit {env['exitCode']}): {env['stderr'][-500:]}")
+                result["dimensions"]["fixture"] = "fail"
+            return result
+        ok, why = self.accept_envelope(env)
+        if not ok:
+            result.update(status="fail", reason=f"report rejected: {why}")
+            result["dimensions"]["provenance"] = "fail"
+            return result
+        failing = env["report"]["failingTests"]
+        for f in self.pack["fixtures"]:
+            out = {"id": f["id"], "class": f["class"], "path": f["path"], "sha256": f["sha256"]}
+            path = self.resolve_fixture(f)
+            out["resolvedPath"] = path
+            if not os.path.exists(path):
+                out.update(status="pending", reason=f"fixture file absent: {path}")
+            elif sha256_file(path) != f["sha256"]:
+                out.update(status="fail", reason=f"fixture sha256 {sha256_file(path)} differs from pinned {f['sha256']}")
+            else:
+                checks = self.check_assertions(f, env)
+                out["assertions"] = checks
+                out["exitCode"] = env["exitCode"]
+                failed_checks = [c for c in checks if c["status"] == "fail"]
+                if failing:
+                    out.update(status="fail", reason="failing tests: " + ", ".join(failing))
+                elif failed_checks:
+                    out.update(status="fail", reason="; ".join(f"{c['id']}: expected {c['expected']!r}, observed {c.get('observed')!r}" for c in failed_checks))
+                else:
+                    out["status"] = "pass"
+            result["fixtures"].append(out)
+        for m in self.pack["mutants"]:
+            tr = m["transform"]
+            out = {"id": m["id"], "kind": tr["kind"], "expectedClassification": m["expectedClassification"]}
+            if tr["kind"] == "report-fabricated":
+                ok, why = self.accept_envelope(tr["envelope"])
+                out.update(status="fail", classification="accepted", reason="fabricated report envelope was accepted") if ok else \
+                    out.update(status="pass", classification="reject", reason=why)
+            else:
+                name = f"{self.pack['runner']['entryPoint']}.{tr['test']}"
+                status = env["tests"].get(name)
+                if status == "passed":
+                    out.update(status="pass", classification="reject", test=name)
+                elif status == "failed":
+                    out.update(status="fail", classification="not-rejected", test=name, reason=f"mutant test {name} failed")
+                else:
+                    out.update(status="fail", classification="not-executed", test=name, reason=f"mutant test {name} was not executed by the suite")
+            result["mutants"].append(out)
+        result["swiftTest"] = env["report"]
+        fx = [f["status"] for f in result["fixtures"]]
+        mt = [m["status"] for m in result["mutants"]]
+        result["dimensions"]["fixture"] = worst(fx + mt)
+        integrity_fail = any(f["status"] == "fail" and "sha256" in f.get("reason", "") for f in result["fixtures"]) or \
+            any(m["status"] == "fail" for m in result["mutants"] if m["kind"] == "report-fabricated")
+        result["dimensions"]["provenance"] = "fail" if integrity_fail else worst(fx + mt)
+        applicable = [v for v in result["dimensions"].values() if v != "inapplicable"]
+        result["status"] = worst(applicable)
+        if result["status"] == "fail" and failing:
+            result["reason"] = "failing tests: " + ", ".join(failing)
+        return result
+
     # ---- orchestration
 
     def run(self):
@@ -564,10 +695,11 @@ class Runner:
         for k, v in dims.items():
             result["dimensions"][k] = "inapplicable" if v == "inapplicable" else "pending"
         entry = self.repo_path(pack["runner"]["entryPoint"])
-        if pack["runner"]["kind"] != "python":
-            result.update(status="missing-handler", reason=f"runner kind {pack['runner']['kind']!r} is not executed by this runner")
+        kind = pack["runner"]["kind"]
+        if kind not in ("python", "swift-test"):
+            result.update(status="missing-handler", reason=f"runner kind {kind!r} is not executed by this runner")
             return result
-        if not os.path.exists(entry):
+        if kind == "python" and not os.path.exists(entry):
             result.update(status="missing-handler", reason=f"entry point not found: {pack['runner']['entryPoint']}")
             return result
         mismatches = self.verify_oracles()
@@ -578,6 +710,8 @@ class Runner:
                 f"{m['path']} expected {m['expected'][:12]}… got {(m['actual'] or 'absent')[:12]}" for m in mismatches))
             result["dimensions"]["provenance"] = "fail"
             return result
+        if kind == "swift-test":
+            return self.run_swift_test(result)
         profile = load_json(self.repo_path(pack["runner"]["profile"]))
         self.profile_meta = {"id": profile.get("id"), "version": profile.get("version"),
                              "corpusHashes": profile.get("corpus", {}).get("sha256", {})}

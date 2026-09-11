@@ -257,6 +257,170 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("not_an_assertion", err)
 
 
+FAKE_SWIFT = r"""#!/bin/sh
+printf '%s\n' "$@" > "$FAKE_SWIFT_ARGS"
+case "$FAKE_SWIFT_MODE" in
+  pass)
+    echo "Building for debugging..."
+    echo "Test Suite 'FakeSuite' started at 2026-09-10 12:00:00.000."
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testAlpha]' started."
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testAlpha]' passed (0.001 seconds)."
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testMutantRejected]' started."
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testMutantRejected]' passed (0.001 seconds)."
+    echo "Test Suite 'FakeSuite' passed at 2026-09-10 12:00:00.002."
+    printf '\t Executed 2 tests, with 0 failures (0 unexpected) in 0.002 (0.003) seconds\n'
+    echo "Test Suite 'OtherBundle.xctest' passed at 2026-09-10 12:00:00.003."
+    printf '\t Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds\n'
+    exit 0 ;;
+  fail)
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testAlpha]' started."
+    echo "/repo/Tests/FakeSuite.swift:10: error: -[VRMAuthorKitTests.FakeSuite testAlpha] : XCTAssertEqual failed: (\"1\") is not equal to (\"2\")"
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testAlpha]' failed (0.001 seconds)."
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testMutantRejected]' started."
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testMutantRejected]' passed (0.001 seconds)."
+    printf '\t Executed 2 tests, with 1 failure (1 unexpected) in 0.002 (0.003) seconds\n'
+    exit 1 ;;
+  mutant-missing)
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testAlpha]' passed (0.001 seconds)."
+    printf '\t Executed 1 test, with 0 failures (0 unexpected) in 0.001 (0.001) seconds\n'
+    exit 0 ;;
+  none)
+    echo "Building for debugging..."
+    echo "Build complete! (0.48 sec)"
+    echo "warning: No matching test cases were run" >&2
+    exit 0 ;;
+  compile-error)
+    echo "/repo/Sources/X.swift:1:1: error: cannot find 'Nope' in scope" >&2
+    echo "error: fatalError" >&2
+    exit 1 ;;
+esac
+"""
+
+
+class SwiftTestRunnerTests(unittest.TestCase):
+    """swift-test packs run against a fake `swift` on PATH so the tests stay fast and hermetic."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.f = PackFactory()
+        cls.bin = os.path.join(cls.f.dir, "bin")
+        os.makedirs(cls.bin)
+        cls.swift = os.path.join(cls.bin, "swift")
+        with open(cls.swift, "w", encoding="utf-8") as fh:
+            fh.write(FAKE_SWIFT)
+        os.chmod(cls.swift, 0o755)
+        cls.args_file = os.path.join(cls.f.dir, "swift-args.txt")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.f.cleanup()
+
+    def pack(self, **overrides):
+        base = {
+            "runner": {"kind": "swift-test", "entryPoint": "FakeSuite",
+                       "environment": {"pinnedCommit": "0" * 40, "oracleHashes": {LINTER: R.sha256_file(os.path.join(REPO, LINTER))}}},
+            "assertions": [
+                {"id": "exit_code", "kind": "exit-code", "target": "process", "expected": 0},
+                {"id": "executed", "kind": "report-field", "target": "executed", "expected": 2},
+                {"id": "failed", "kind": "report-field", "target": "failed", "expected": 0},
+            ],
+            "mutants": [{"id": "wrong-units", "description": "suite injects metre/centimetre confusion", "expectedClassification": "reject",
+                         "transform": {"kind": "swift-test", "test": "testMutantRejected"}}],
+        }
+        base.update(overrides)
+        p = self.f.pack(**base)
+        p["fixtures"][0]["expected"] = {}
+        p["packHash"] = R.compute_pack_hash(p)
+        return p
+
+    def run_mode(self, mode, pack):
+        env = dict(os.environ)
+        env.update({"PATH": self.bin + os.pathsep + env.get("PATH", ""), "FAKE_SWIFT_MODE": mode, "FAKE_SWIFT_ARGS": self.args_file})
+        if os.path.exists(self.args_file):
+            os.remove(self.args_file)
+        old = os.environ.copy()
+        os.environ.clear()
+        os.environ.update(env)
+        try:
+            return self.f.run(pack)
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_swift_test_pack_validates(self):
+        self.assertEqual(R.validate_pack(self.pack(), R.load_json(SCHEMA_PATH)), [])
+        bad = self.pack()
+        bad["mutants"][0]["transform"] = {"kind": "swift-test"}
+        bad["packHash"] = R.compute_pack_hash(bad)
+        self.assertTrue(any("test name" in e for e in R.validate_pack(bad, R.load_json(SCHEMA_PATH))))
+        py = self.f.pack(mutants=[{"id": "m", "description": "", "expectedClassification": "reject", "transform": {"kind": "swift-test", "test": "t"}}])
+        self.assertTrue(any("require runner.kind swift-test" in e for e in R.validate_pack(py, R.load_json(SCHEMA_PATH))))
+
+    def test_passing_suite_passes_fixture_dimension_and_mutants(self):
+        code, result, err = self.run_mode("pass", self.pack())
+        self.assertEqual(code, 0, err)
+        self.assertEqual(result["status"], "pass")
+        self.assertEqual(result["dimensions"]["fixture"], "pass")
+        self.assertEqual(result["dimensions"]["provenance"], "pass")
+        self.assertEqual(result["fixtures"][0]["status"], "pass")
+        self.assertEqual(result["mutants"][0]["classification"], "reject")
+        self.assertEqual(result["swiftTest"]["executed"], 2)
+        with open(self.args_file, encoding="utf-8") as fh:
+            self.assertEqual(fh.read().split(), ["test", "--disable-sandbox", "--filter", "FakeSuite"])
+
+    def test_failing_tests_fail_with_names(self):
+        code, result, _ = self.run_mode("fail", self.pack())
+        self.assertEqual(code, 1)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("FakeSuite.testAlpha", result["reason"])
+        self.assertIn("FakeSuite.testAlpha", result["fixtures"][0]["reason"])
+        self.assertEqual(result["swiftTest"]["failingTests"], ["FakeSuite.testAlpha"])
+        self.assertEqual(result["mutants"][0]["status"], "pass")
+
+    def test_missing_mutant_test_is_not_rejected(self):
+        code, result, _ = self.run_mode("mutant-missing", self.pack())
+        self.assertEqual(code, 1)
+        self.assertEqual(result["mutants"][0]["classification"], "not-executed")
+        self.assertEqual(result["fixtures"][0]["status"], "fail")
+
+    def test_zero_matching_tests_is_missing_handler(self):
+        code, result, _ = self.run_mode("none", self.pack())
+        self.assertEqual(code, 3)
+        self.assertEqual(result["status"], "missing-handler")
+        self.assertIn("FakeSuite", result["reason"])
+        self.assertEqual(result["fixtures"], [])
+
+    def test_compile_error_fails_with_diagnostic(self):
+        code, result, _ = self.run_mode("compile-error", self.pack())
+        self.assertEqual(code, 1)
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("error:", result["reason"])
+        self.assertEqual(result["dimensions"]["fixture"], "fail")
+
+    def test_absent_fixture_is_pending_even_when_suite_passes(self):
+        pack = self.pack()
+        pack["fixtures"][0]["path"] = "does-not-exist.bin"
+        pack["packHash"] = R.compute_pack_hash(pack)
+        code, result, _ = self.run_mode("pass", pack)
+        self.assertEqual(code, 2)
+        self.assertEqual(result["fixtures"][0]["status"], "pending")
+
+    def test_oracle_mismatch_short_circuits_before_swift(self):
+        pack = self.pack()
+        pack["runner"]["environment"]["oracleHashes"][LINTER] = "1" * 64
+        pack["packHash"] = R.compute_pack_hash(pack)
+        code, result, _ = self.run_mode("pass", pack)
+        self.assertEqual(code, 1)
+        self.assertIn("oracle hash mismatch", result["reason"])
+        self.assertFalse(os.path.exists(self.args_file))
+
+    def test_parse_output_keeps_last_status_per_test(self):
+        text = ("Test Case '-[M.S testA]' started.\nTest Case '-[M.S testA]' passed (0.1 seconds).\n"
+                "Test Case '-[M.S testB]' failed (0.1 seconds).\nTest Case '-[M.S testB]' passed (0.1 seconds).\n")
+        self.assertEqual(R.Runner.parse_swift_test_output(text), {"S.testA": "passed", "S.testB": "passed"})
+        self.assertEqual(R.Runner.parse_swift_test_output("warning: No matching test cases were run"), {})
+
+
 class ShippedPackTests(unittest.TestCase):
     def setUp(self):
         self.schema = R.load_json(SCHEMA_PATH)

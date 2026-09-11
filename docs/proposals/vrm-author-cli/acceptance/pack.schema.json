@@ -113,13 +113,14 @@
           "expectedClassification": {
             "type": "string",
             "enum": ["reject"],
-            "description": "Every mutant must be rejected. What counts as rejection is transform-specific: `style-mutation:*` must flip each rule in expectFlip relative to the unmutated baseline; `report-fabricated` must be refused by the runner's report-acceptance path; `metadata-noop` must be refused as the pinned fixture (sha256 integrity) while its grade stays identical to the baseline (a grade change breaks the control and fails the pack). A mutant whose run is indistinguishable from the baseline is a failure of the pack, not a pass."
+            "description": "Every mutant must be rejected. What counts as rejection is transform-specific: `style-mutation:*` must flip each rule in expectFlip relative to the unmutated baseline; `report-fabricated` must be refused by the runner's report-acceptance path; `metadata-noop` must be refused as the pinned fixture (sha256 integrity) while its grade stays identical to the baseline (a grade change breaks the control and fails the pack); `swift-test` names the XCTest method that injects the mutant, which must be executed by the suite and pass. A mutant whose run is indistinguishable from the baseline is a failure of the pack, not a pass."
           },
           "transform": {
             "type": "object",
             "required": ["kind"],
             "properties": {
-              "kind": { "type": "string", "pattern": "^(metadata-noop|report-fabricated|style-mutation:[a-z0-9_-]+)$" },
+              "kind": { "type": "string", "pattern": "^(metadata-noop|report-fabricated|style-mutation:[a-z0-9_-]+|swift-test)$" },
+              "test": { "type": "string", "description": "swift-test: XCTest method in the runner's suite that injects this mutant and must be executed and pass." },
               "fixture": { "type": "string", "description": "Fixture id the transform is applied to (metadata-noop, style-mutation:*)." },
               "field": { "type": "string", "description": "metadata-noop: dotted path into the glTF JSON chunk to overwrite." },
               "value": { "description": "metadata-noop: value written at `field`." },
