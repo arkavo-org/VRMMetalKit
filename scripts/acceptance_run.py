@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -674,6 +675,9 @@ class Runner:
         witnesses = load_json(self.repo_path(entry["witnesses"]))
         measurements = load_json(self.repo_path(entry["measurements"]))["measurements"]
         targets = family_targets(measurements)
+        profile = load_json(self.repo_path(entry["profile"]))
+        self.profile_meta = {"id": profile.get("id"), "version": profile.get("version"),
+                             "corpusHashes": profile.get("corpus", {}).get("sha256", {})}
         widths = self.profile_rule_widths(entry)
         out["familiesTotal"] = len(targets)
 
@@ -726,7 +730,8 @@ class Runner:
         for cmd in steps:
             proc = subprocess.run(cmd, cwd=self.repo, capture_output=True, text=True, timeout=deadline)
             if proc.returncode != 0:
-                return {"status": "fail", "reason": f"{cmd[1]} {cmd[2]} exited {proc.returncode}: {proc.stderr[-400:]}"}
+                name = " ".join(itertools.takewhile(lambda t: not t.startswith("--"), cmd[1:]))
+                return {"status": "fail", "reason": f"{name} exited {proc.returncode}: {proc.stderr[-400:]}"}
         env = self.run_lint_with(entry["profile"], draft)
         ok, why = self.accept_envelope(env)
         if not ok or env["report"] is None:
@@ -855,8 +860,12 @@ class Runner:
             result["mutants"].append(out)
         result["swiftTest"] = env["report"]
         if self.pack["evidencePolicy"]["dimensions"]["corpus"] == "required":
-            result["corpus"] = [self.run_corpus_swift(e) for e in self.pack["corpus"]]
-            result["dimensions"]["corpus"] = worst([c["status"] for c in result["corpus"]])
+            try:
+                result["corpus"] = [self.run_corpus_swift(e) for e in self.pack["corpus"]]
+                result["dimensions"]["corpus"] = worst([c["status"] for c in result["corpus"]])
+            finally:
+                if self.tmp:
+                    shutil.rmtree(self.tmp, ignore_errors=True)
         fx = [f["status"] for f in result["fixtures"]]
         mt = [m["status"] for m in result["mutants"]]
         result["dimensions"]["fixture"] = worst(fx + mt)

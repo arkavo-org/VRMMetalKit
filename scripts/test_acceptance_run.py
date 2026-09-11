@@ -815,7 +815,9 @@ class CorpusSwiftReplay(unittest.TestCase):
         profile_bytes = json.dumps({
             "id": "test-style", "version": "1",
             "rules": [{"id": "r1", "metric": "proportions.head_count", "check": {"type": "range", "min": 5.0, "max": 7.0}},
-                      {"id": "r2", "metric": "proportions.hips_height_ratio", "check": {"type": "range", "min": 0.5, "max": 0.6}}],
+                      {"id": "r2", "metric": "proportions.hips_height_ratio", "check": {"type": "range", "min": 0.5, "max": 0.6}},
+                      {"id": "r3", "metric": "proportions.eye_height_ratio", "check": {"type": "range", "min": 0.82}},
+                      {"id": "r4", "metric": "proportions.shoulder_width_ratio", "check": {"type": "enum", "values": ["narrow", "wide"]}}],
         }).encode()
         manifest_bytes = json.dumps({"assets": []}).encode()
         measurements_bytes = json.dumps({"measurements": [
@@ -873,13 +875,17 @@ class CorpusSwiftReplay(unittest.TestCase):
 
     def test_family_without_a_witness_is_pending(self):
         entry = self.entry()
-        out = self.runner(entry).run_corpus_swift(entry)
+        runner = self.runner(entry)
+        with binary_absent(runner.repo_path(".build/debug/vrm-author")):
+            out = runner.run_corpus_swift(entry)
         self.assertEqual(out["families"]["fam-c"]["status"], "pending")
         self.assertEqual(out["families"]["fam-c"]["reason"], "no witness for this family")
 
     def test_ineligible_family_records_the_worst_residual(self):
         entry = self.entry()
-        out = self.runner(entry).run_corpus_swift(entry)
+        runner = self.runner(entry)
+        with binary_absent(runner.repo_path(".build/debug/vrm-author")):
+            out = runner.run_corpus_swift(entry)
         fam_b = out["families"]["fam-b"]
         self.assertEqual(fam_b["status"], "ineligible")
         self.assertEqual(fam_b["blockedBy"], "proportions.hips_height_ratio")
@@ -908,7 +914,9 @@ class CorpusSwiftReplay(unittest.TestCase):
         targets = R.family_targets(measurements)
         self.assertNotIn("proportions.ipd_m", targets["fam-c"])
         self.assertIn("proportions.ipd_m", targets["fam-a"])
-        out = self.runner(entry).run_corpus_swift(entry)
+        runner = self.runner(entry)
+        with binary_absent(runner.repo_path(".build/debug/vrm-author")):
+            out = runner.run_corpus_swift(entry)
         self.assertEqual(set(out["families"]), {"fam-a", "fam-b", "fam-c"})
 
     def test_corpus_entry_paths_skips_absent_optional_fields(self):
@@ -923,6 +931,8 @@ class CorpusSwiftReplay(unittest.TestCase):
         widths = self.runner(entry).profile_rule_widths(entry)
         self.assertEqual(widths["proportions.head_count"], 2.0)
         self.assertAlmostEqual(widths["proportions.hips_height_ratio"], 0.1)
+        self.assertNotIn("proportions.eye_height_ratio", widths, "one-sided range (no max) must be excluded")
+        self.assertNotIn("proportions.shoulder_width_ratio", widths, "a non-range check must be excluded")
 
     def run_pass(self, pack):
         bin_dir = os.path.join(self.dir, "bin")
@@ -955,6 +965,89 @@ class CorpusSwiftReplay(unittest.TestCase):
         self.assertEqual(result["dimensions"]["corpus"], "pending")
         self.assertEqual(result["status"], "pending")
         self.assertEqual(code, 2)
+
+    def stub_cli_repo(self, work):
+        """A repo root whose .build/debug/vrm-author is a stub that exits 0 for every step,
+        so replay_family's build steps succeed without touching the real CLI."""
+        bin_dir = os.path.join(work, ".build", "debug")
+        os.makedirs(bin_dir)
+        binary = os.path.join(bin_dir, "vrm-author")
+        with open(binary, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(binary, 0o755)
+
+    def single_family_style(self, work, style_id, family):
+        """One style set with a single eligible family, its own profile id/version, pinned by
+        sha256 like the real corpus."""
+        profile_bytes = json.dumps({"id": style_id, "version": "1", "rules": []}).encode()
+        manifest_bytes = json.dumps({"assets": []}).encode()
+        measurements_bytes = json.dumps({"measurements": [self.measurement(family, head_count=6.4)]}).encode()
+        witnesses_bytes = json.dumps({
+            "corpusManifestSha256": "0" * 64, "templateId": "native-anime-v1", "templateSha256": "1" * 64,
+            "profileId": style_id, "solver": {"budget": 100, "seed": 42, "tolerance": 0.25},
+            "generated": "2026-09-11T00:00:00Z",
+            "families": {family: {"eligible": True, "controls": {"height": 1.6},
+                                  "residuals": {"proportions.head_count": 0.1}}},
+        }).encode()
+        paths = {}
+        for name, data in (("profile.json", profile_bytes), ("manifest.json", manifest_bytes),
+                           ("measurements.json", measurements_bytes), ("witnesses.json", witnesses_bytes)):
+            p = os.path.join(work, f"{style_id}-{name}")
+            with open(p, "wb") as fh:
+                fh.write(data)
+            paths[name] = p
+        return self.entry(styleId=style_id,
+                          profile=paths["profile.json"], profileSha256=R.sha256_bytes(profile_bytes),
+                          manifest=paths["manifest.json"], manifestSha256=R.sha256_bytes(manifest_bytes),
+                          measurements=paths["measurements.json"], measurementsSha256=R.sha256_bytes(measurements_bytes),
+                          witnesses=paths["witnesses.json"], witnessesSha256=R.sha256_bytes(witnesses_bytes),
+                          expectedFamilies=1)
+
+    def test_replay_family_reaches_pass_with_a_stubbed_cli_and_a_synthetic_lint_report(self):
+        work = tempfile.mkdtemp(prefix="corpus_swift_pass_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a")
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        self.stub_cli_repo(work)
+
+        runner = R.Runner(pack, repo=work)
+        synthetic_report = {"profile": "test-style", "profile_version": "1", "verdict": "conforming",
+                            "summary": {"must": {"fail": 0}}, "results": []}
+        synthetic_env = {"report": synthetic_report, "oracleHashes": dict(pack["runner"]["environment"]["oracleHashes"]),
+                         "exitCode": 0, "stderr": ""}
+        runner.run_lint_with = lambda profile_rel, asset_path: synthetic_env
+
+        out = runner.run_corpus_swift(entry)
+
+        self.assertEqual(out["familiesEligible"], 1)
+        self.assertEqual(out["familiesPassed"], 1)
+        self.assertEqual(out["families"]["fam-a"]["status"], "pass")
+        self.assertEqual(out["families"]["fam-a"]["verdict"], "conforming")
+        self.assertEqual(out["status"], "pass")
+
+    def test_second_entry_does_not_inherit_the_first_entrys_profile_meta(self):
+        work = tempfile.mkdtemp(prefix="corpus_swift_multi_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry_a = self.single_family_style(work, "style-a", "fam-a")
+        entry_b = self.single_family_style(work, "style-b", "fam-b")
+        pack = with_corpus(swift_test_pack(self.f), [entry_a, entry_b])
+        self.stub_cli_repo(work)
+
+        runner = R.Runner(pack, repo=work)
+
+        def stub_run_lint_with(profile_rel, asset_path):
+            profile = R.load_json(profile_rel)
+            report = {"profile": profile["id"], "profile_version": profile["version"], "verdict": "conforming",
+                      "summary": {"must": {"fail": 0}}, "results": []}
+            return {"report": report, "oracleHashes": dict(pack["runner"]["environment"]["oracleHashes"]),
+                   "exitCode": 0, "stderr": ""}
+        runner.run_lint_with = stub_run_lint_with
+
+        out_a = runner.run_corpus_swift(entry_a)
+        out_b = runner.run_corpus_swift(entry_b)
+
+        self.assertEqual(out_a["families"]["fam-a"]["status"], "pass")
+        self.assertEqual(out_b["families"]["fam-b"]["status"], "pass")
 
 
 class PrintSummaryCorpusBranch(unittest.TestCase):
