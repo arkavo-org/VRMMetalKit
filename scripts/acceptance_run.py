@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import itertools
 import json
 import os
 import re
@@ -136,6 +135,84 @@ def family_targets(measurements):
                 vector[metric] = value
         out[family] = vector
     return out
+
+
+class ReplayStepError(Exception):
+    """A witness's recorded replay steps cannot be executed as written."""
+
+
+REPLAY_COMMANDS = {
+    "project init": (False, lambda c: ["project", "init", "--dir", c["project"],
+                                       "--template", c["template"], "--seed", str(c["seed"])]),
+    "object set": (True, lambda c: ["object", "set", "--project", c["project"], "--request", c["request"]]),
+    "control set": (True, lambda c: ["control", "set", "--project", c["project"], "--request", c["request"]]),
+    "build": (False, lambda c: ["build", "--project", c["project"], "--out", c["draft"]]),
+}
+
+
+def validated_replay_steps(steps):
+    """The witness's own record of the steps that were solved, checked against what the replayer
+    can execute. A witness without the record is an error: replaying a different sequence than
+    the one that was solved measures something the witness never claimed."""
+    if not isinstance(steps, list) or not steps:
+        raise ReplayStepError("witness carries no replaySteps; regenerate the witnesses file with scripts/corpus_witness.py")
+    for i, step in enumerate(steps):
+        name = step.get("command") if isinstance(step, dict) else None
+        if name not in REPLAY_COMMANDS:
+            raise ReplayStepError(f"replaySteps[{i}] names {name!r}, which the replayer cannot execute")
+        if REPLAY_COMMANDS[name][0] and step.get("request") is None:
+            raise ReplayStepError(f"replaySteps[{i}] ({name}) carries no request")
+    return steps
+
+
+def replay_argv(steps, work, context):
+    """One argv tail per validated step; each step's request is written to its own file under
+    work, since paths belong to the replayer and not to the recorded step."""
+    tails = []
+    for i, step in enumerate(steps):
+        ctx = dict(context)
+        if step.get("request") is not None:
+            path = os.path.join(work, f"step-{i}-request.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(step["request"], fh)
+            ctx["request"] = path
+        tails.append(REPLAY_COMMANDS[step["command"]][1](ctx))
+    return tails
+
+
+def measured_vector(runner, asset_path, metrics):
+    """The pinned linter's metric vector for one asset, profile-independent."""
+    proc = subprocess.run([sys.executable, runner.repo_path("scripts/style_lint.py"), "measure", asset_path, "--json"],
+                          cwd=runner.repo, capture_output=True, text=True,
+                          timeout=runner.pack["resources"]["deadlineSeconds"])
+    if proc.returncode != 0:
+        return None
+    record = json.loads(proc.stdout)[0]
+    return {m: metric_value(record, m) for m in metrics if metric_value(record, m) is not None}
+
+
+def reach_holds(observed, target, widths, tolerance):
+    """Every target metric within tolerance of its corpus-derived value."""
+    over = {m: round(abs(observed[m] - target[m]) / widths[m], 6)
+            for m in target
+            if m in observed and widths.get(m) and abs(observed[m] - target[m]) / widths[m] > tolerance}
+    return (not over, None if not over else f"outside tolerance: {over}")
+
+
+def export_metrics_match(draft_vector, export_vector):
+    """Export must preserve the draft's measured geometry exactly; both are GLB and byte-deterministic."""
+    differing = {m: (draft_vector.get(m), export_vector.get(m))
+                 for m in set(draft_vector) | set(export_vector)
+                 if draft_vector.get(m) != export_vector.get(m)}
+    return (not differing, None if not differing else f"metric drift through export: {differing}")
+
+
+CORPUS_ASSERTIONS = {
+    "control set": "reach",
+    "recipe apply": "reach",
+    "build": "conforming",
+    "export vrm": "export",
+}
 
 
 # --------------------------------------------------------------------------- schema subset
@@ -692,12 +769,17 @@ class Runner:
                                            "blockedBy": worst_metric[0]}
                 continue
             out["familiesEligible"] += 1
-            record = self.replay_family(entry, family, witness, targets[family], widths, witnesses["templateId"])
+            record = self.replay_family(entry, family, witness, targets[family], widths,
+                                        witnesses["templateId"], witnesses.get("solver", {}).get("seed", 42))
             out["families"][family] = record
             if record["status"] == "pass":
                 out["familiesPassed"] += 1
 
         out["status"] = corpus_status(out["families"], entry["minEligibleFamilies"])
+        reached = sum(1 for f in out["families"].values() if f["status"] != "ineligible")
+        if out["status"] == "fail" and reached < entry["minEligibleFamilies"]:
+            out["reason"] = (f"{reached} of {out['familiesTotal']} families are reachable by the template, "
+                             f"below the floor of {entry['minEligibleFamilies']}")
         return out
 
     def profile_rule_widths(self, entry):
@@ -709,8 +791,13 @@ class Runner:
                 widths[rule["metric"]] = float(check["max"]) - float(check["min"])
         return widths
 
-    def replay_family(self, entry, family, witness, target, widths, template_id):
-        """Replay one witness through the shipped CLI and lint the result."""
+    def replay_family(self, entry, family, witness, target, widths, template_id, seed):
+        """Replay one witness's own recorded steps through the shipped CLI, assert what this
+        pack's operation claims of the result, and lint it."""
+        try:
+            steps = validated_replay_steps(witness.get("replaySteps"))
+        except ReplayStepError as exc:
+            return {"status": "fail", "reason": str(exc)}
         binary = self.repo_path(".build/debug/vrm-author")
         if not os.path.exists(binary):
             return {"status": "pending", "reason": "vrm-author not built"}
@@ -720,18 +807,31 @@ class Runner:
         os.makedirs(work, exist_ok=True)
         project = os.path.join(work, "a.vrmauthor")
         draft = os.path.join(work, "draft.vrm")
-        request = os.path.join(work, "edit.json")
-        with open(request, "w", encoding="utf-8") as fh:
-            json.dump({"edit": {"object": "avatar:main", "values": witness["controls"]}}, fh)
         deadline = self.pack["resources"]["deadlineSeconds"]
-        steps = [[binary, "project", "init", "--dir", project, "--template", template_id, "--seed", "42"],
-                 [binary, "control", "set", "--project", project, "--request", request],
-                 [binary, "build", "--project", project, "--out", draft]]
-        for cmd in steps:
-            proc = subprocess.run(cmd, cwd=self.repo, capture_output=True, text=True, timeout=deadline)
+        context = {"project": project, "draft": draft, "template": template_id, "seed": seed}
+        for step, tail in zip(steps, replay_argv(steps, work, context)):
+            proc = subprocess.run([binary] + tail, cwd=self.repo, capture_output=True, text=True, timeout=deadline)
             if proc.returncode != 0:
-                name = " ".join(itertools.takewhile(lambda t: not t.startswith("--"), cmd[1:]))
-                return {"status": "fail", "reason": f"{name} exited {proc.returncode}: {proc.stderr[-400:]}"}
+                return {"status": "fail", "reason": f"{step['command']} exited {proc.returncode}: {proc.stderr[-400:]}"}
+        mode = CORPUS_ASSERTIONS.get(self.pack["operation"], "conforming")
+        if mode in ("reach", "export"):
+            vector = measured_vector(self, draft, list(widths))
+            if vector is None:
+                return {"status": "fail", "reason": "style_lint measure failed on the draft"}
+            if mode == "reach":
+                ok, detail = reach_holds(vector, target, widths, entry["tolerance"])
+                if not ok:
+                    return {"status": "fail", "reason": detail, "observed": vector}
+            if mode == "export":
+                final = os.path.join(work, "final.vrm")
+                proc = subprocess.run([binary, "export", "vrm", "--project", project, "--out", final],
+                                      cwd=self.repo, capture_output=True, text=True, timeout=deadline)
+                if proc.returncode != 0:
+                    return {"status": "fail", "reason": f"export vrm exited {proc.returncode}: {proc.stderr[-400:]}"}
+                ok, detail = export_metrics_match(vector, measured_vector(self, final, list(widths)) or {})
+                if not ok:
+                    return {"status": "fail", "reason": detail}
+                draft = final
         env = self.run_lint_with(entry["profile"], draft)
         ok, why = self.accept_envelope(env)
         if not ok or env["report"] is None:

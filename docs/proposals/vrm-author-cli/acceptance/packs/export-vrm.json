@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "773f39ed3921091b3fd89235ebf8b76ae9da2e5c258b77de98b38bc3ea852465",
   "resultSchemaHash": "2850fa3329e6e9b389996986755d2532cdeca0299ed1c4f157c7e0ae2887fda8",
-  "packHash": "8343632d693b612006fb511c222d41d1b59aedf7aa0e79fa1c8d7658c9219019",
+  "packHash": "d5ac2a8fb8563160e9e34e03136bc5717ba931e41f98f416af51cfb081ddeaa3",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -51,7 +51,8 @@
     "excluded": [
       "signing (deliver)",
       "consumers other than VRMMetalKit (README consumer matrix rows pending)",
-      "VRM 0.x output"
+      "VRM 0.x output",
+      "corpus reach for native-anime-v1: the template's solved-best eye spacing is about 0.21 of head width (0.265 at its default) against family targets of 0.13 to 0.17, leaving 16 of the 18 families unreachable, and the other two blocked by a height below the template's 1.2 m floor and by shoulder width already at its rail"
     ]
   },
   "fixtures": [
@@ -88,7 +89,11 @@
       "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "403b25860029a553999eaa225222cf5ca08ac1e8ce5da5491f174abe8af66ebc",
-        "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c"
+        "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
+        "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
+        "docs/style/corpus/vroid-lineage-anime.manifest.json": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
+        "docs/style/corpus/vroid-lineage-anime.measurements.json": "c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc",
+        "docs/style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json": "20635cf23e0c2214a49e82c0af269976cc2739d068dad4426eddaf0b72b6e803"
       }
     }
   },
@@ -196,12 +201,24 @@
     },
     "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md \u00a76)."
   },
-  "corpus": {
-    "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json",
-    "sha256": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
-    "familyKey": "body_family",
-    "expectedFamilies": 18
-  },
+  "corpus": [
+    {
+      "styleId": "vroid-lineage-anime",
+      "profile": "docs/style/profiles/vroid-lineage-anime.json",
+      "profileSha256": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
+      "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json",
+      "manifestSha256": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
+      "measurements": "docs/style/corpus/vroid-lineage-anime.measurements.json",
+      "measurementsSha256": "c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc",
+      "witnesses": "docs/style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json",
+      "witnessesSha256": "20635cf23e0c2214a49e82c0af269976cc2739d068dad4426eddaf0b72b6e803",
+      "familyKey": "body_family",
+      "driver": "vrm-author-cli",
+      "tolerance": 0.25,
+      "expectedFamilies": 18,
+      "minEligibleFamilies": 1
+    }
+  ],
   "resources": {
     "cpuSeconds": 600,
     "gpuSeconds": 0,

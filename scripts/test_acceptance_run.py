@@ -148,6 +148,25 @@ def corpus_entry(**over):
     return e
 
 
+def command_name(tokens):
+    """The leading non-flag tokens of a recorded CLI invocation, e.g. "control set"."""
+    name = []
+    for t in tokens:
+        if t.startswith("--"):
+            break
+        name.append(t)
+    return " ".join(name)
+
+
+def synthetic_replay_steps(controls):
+    """The shape scripts/corpus_witness.py records on a solved witness: the ordered steps that
+    reproduce the build, the template's default garment disabled among them."""
+    return [{"command": "project init", "request": None},
+            {"command": "object set", "request": {"edit": {"id": "outfit.top", "values": {"/enabled": False}}}},
+            {"command": "control set", "request": {"edit": {"object": "avatar:main", "values": controls}}},
+            {"command": "build", "request": None}]
+
+
 @contextlib.contextmanager
 def binary_absent(binary_path):
     """Force os.path.exists(binary_path) to report absent regardless of whether the checkout
@@ -569,8 +588,7 @@ class SwiftTestRunnerTests(unittest.TestCase):
         self.assertEqual(R.Runner.parse_swift_test_output("warning: No matching test cases were run"), {})
 
 
-PACKS_PENDING_CORPUS_ARRAY_MIGRATION = {"build.json", "control-set.json", "export-vrm.json",
-                                        "recipe-apply.json"}
+PACKS_PENDING_CORPUS_ARRAY_MIGRATION = set()
 
 
 class ShippedPackTests(unittest.TestCase):
@@ -830,7 +848,8 @@ class CorpusSwiftReplay(unittest.TestCase):
             "profileId": "test-style", "solver": {"budget": 100, "seed": 42, "tolerance": 0.25},
             "generated": "2026-09-11T00:00:00Z",
             "families": {
-                "fam-a": {"eligible": True, "controls": {"height": 1.6}, "residuals": {"proportions.head_count": 0.1}},
+                "fam-a": {"eligible": True, "controls": {"height": 1.6}, "residuals": {"proportions.head_count": 0.1},
+                          "replaySteps": synthetic_replay_steps({"height": 1.6})},
                 "fam-b": {"eligible": False, "controls": {},
                           "residuals": {"proportions.head_count": 0.9, "proportions.hips_height_ratio": 0.95}},
             },
@@ -976,9 +995,21 @@ class CorpusSwiftReplay(unittest.TestCase):
             fh.write("#!/bin/sh\nexit 0\n")
         os.chmod(binary, 0o755)
 
-    def single_family_style(self, work, style_id, family):
+    def recording_cli_repo(self, work):
+        """Like stub_cli_repo, but every invocation appends its arguments to calls.log, so a test
+        can assert which steps the replayer ran and in what order."""
+        bin_dir = os.path.join(work, ".build", "debug")
+        os.makedirs(bin_dir)
+        binary = os.path.join(bin_dir, "vrm-author")
+        with open(binary, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$(dirname "$0")/calls.log"\nexit 0\n')
+        os.chmod(binary, 0o755)
+        return os.path.join(bin_dir, "calls.log")
+
+    def single_family_style(self, work, style_id, family, replay_steps=True):
         """One style set with a single eligible family, its own profile id/version, pinned by
-        sha256 like the real corpus."""
+        sha256 like the real corpus. replay_steps=False writes the witness without the recorded
+        steps, as a pre-replaySteps witnesses file would."""
         profile_bytes = json.dumps({"id": style_id, "version": "1", "rules": []}).encode()
         manifest_bytes = json.dumps({"assets": []}).encode()
         measurements_bytes = json.dumps({"measurements": [self.measurement(family, head_count=6.4)]}).encode()
@@ -986,8 +1017,9 @@ class CorpusSwiftReplay(unittest.TestCase):
             "corpusManifestSha256": "0" * 64, "templateId": "native-anime-v1", "templateSha256": "1" * 64,
             "profileId": style_id, "solver": {"budget": 100, "seed": 42, "tolerance": 0.25},
             "generated": "2026-09-11T00:00:00Z",
-            "families": {family: {"eligible": True, "controls": {"height": 1.6},
-                                  "residuals": {"proportions.head_count": 0.1}}},
+            "families": {family: dict({"eligible": True, "controls": {"height": 1.6},
+                                        "residuals": {"proportions.head_count": 0.1}},
+                                      **({"replaySteps": synthetic_replay_steps({"height": 1.6})} if replay_steps else {}))},
         }).encode()
         paths = {}
         for name, data in (("profile.json", profile_bytes), ("manifest.json", manifest_bytes),
@@ -1025,6 +1057,54 @@ class CorpusSwiftReplay(unittest.TestCase):
         self.assertEqual(out["families"]["fam-a"]["verdict"], "conforming")
         self.assertEqual(out["status"], "pass")
 
+    def conforming_lint(self, pack, style_id="test-style"):
+        return lambda profile_rel, asset_path: {
+            "report": {"profile": style_id, "profile_version": "1", "verdict": "conforming",
+                       "summary": {"must": {"fail": 0}}, "results": []},
+            "oracleHashes": dict(pack["runner"]["environment"]["oracleHashes"]), "exitCode": 0, "stderr": ""}
+
+    def test_replay_executes_the_steps_the_witness_recorded_in_order(self):
+        work = tempfile.mkdtemp(prefix="corpus_swift_steps_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a")
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        calls_log = self.recording_cli_repo(work)
+
+        runner = R.Runner(pack, repo=work)
+        runner.run_lint_with = self.conforming_lint(pack)
+        out = runner.run_corpus_swift(entry)
+        self.addCleanup(shutil.rmtree, runner.tmp or work, ignore_errors=True)
+
+        self.assertEqual(out["families"]["fam-a"]["status"], "pass")
+        calls = [line.split() for line in open(calls_log, encoding="utf-8").read().splitlines()]
+        self.assertEqual([command_name(c) for c in calls],
+                         ["project init", "object set", "control set", "build"])
+        init = calls[0]
+        self.assertEqual(init[init.index("--template") + 1], "native-anime-v1")
+        self.assertEqual(init[init.index("--seed") + 1], "42")
+        garment = R.load_json(calls[1][calls[1].index("--request") + 1])
+        self.assertEqual(garment, {"edit": {"id": "outfit.top", "values": {"/enabled": False}}},
+                         "the default garment must be disabled exactly as the witness was solved")
+        controls = R.load_json(calls[2][calls[2].index("--request") + 1])
+        self.assertEqual(controls, {"edit": {"object": "avatar:main", "values": {"height": 1.6}}})
+
+    def test_witness_without_recorded_steps_fails_without_replaying_anything(self):
+        work = tempfile.mkdtemp(prefix="corpus_swift_nosteps_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a", replay_steps=False)
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        calls_log = self.recording_cli_repo(work)
+
+        runner = R.Runner(pack, repo=work)
+        runner.run_lint_with = self.conforming_lint(pack)
+        out = runner.run_corpus_swift(entry)
+
+        record = out["families"]["fam-a"]
+        self.assertEqual(record["status"], "fail")
+        self.assertIn("replaySteps", record["reason"])
+        self.assertFalse(os.path.exists(calls_log), "a witness without recorded steps must not fall back to a replay")
+        self.assertEqual(out["status"], "fail")
+
     def test_second_entry_does_not_inherit_the_first_entrys_profile_meta(self):
         work = tempfile.mkdtemp(prefix="corpus_swift_multi_")
         self.addCleanup(shutil.rmtree, work, ignore_errors=True)
@@ -1048,6 +1128,66 @@ class CorpusSwiftReplay(unittest.TestCase):
 
         self.assertEqual(out_a["families"]["fam-a"]["status"], "pass")
         self.assertEqual(out_b["families"]["fam-b"]["status"], "pass")
+
+
+class ReplayStepRecords(unittest.TestCase):
+    STEPS = [{"command": "project init", "request": None},
+             {"command": "object set", "request": {"edit": {"id": "outfit.top", "values": {"/enabled": False}}}},
+             {"command": "control set", "request": {"edit": {"object": "avatar:main", "values": {"body.heightM": 1.6}}}},
+             {"command": "build", "request": None}]
+
+    def test_absent_record_is_rejected(self):
+        for steps in (None, [], {}, "project init"):
+            with self.subTest(steps=steps), self.assertRaises(R.ReplayStepError) as caught:
+                R.validated_replay_steps(steps)
+            self.assertIn("replaySteps", str(caught.exception))
+
+    def test_unknown_command_is_rejected(self):
+        with self.assertRaises(R.ReplayStepError) as caught:
+            R.validated_replay_steps([{"command": "deliver", "request": None}])
+        self.assertIn("deliver", str(caught.exception))
+
+    def test_a_request_carrying_command_without_a_request_is_rejected(self):
+        with self.assertRaises(R.ReplayStepError) as caught:
+            R.validated_replay_steps([{"command": "control set", "request": None}])
+        self.assertIn("control set", str(caught.exception))
+
+    def test_argv_owns_the_paths_and_writes_each_request_to_its_own_file(self):
+        work = tempfile.mkdtemp(prefix="replay_argv_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        tails = R.replay_argv(R.validated_replay_steps(self.STEPS), work,
+                              {"project": "/p/a.vrmauthor", "draft": "/p/draft.vrm",
+                               "template": "native-anime-v1", "seed": 7})
+        self.assertEqual(tails[0], ["project", "init", "--dir", "/p/a.vrmauthor",
+                                    "--template", "native-anime-v1", "--seed", "7"])
+        self.assertEqual(tails[3], ["build", "--project", "/p/a.vrmauthor", "--out", "/p/draft.vrm"])
+        requests = [t[t.index("--request") + 1] for t in tails[1:3]]
+        self.assertEqual(len(set(requests)), 2, "each step's request needs its own file")
+        self.assertEqual(R.load_json(requests[0]), self.STEPS[1]["request"])
+        self.assertEqual(R.load_json(requests[1]), self.STEPS[2]["request"])
+
+
+class CorpusAssertions(unittest.TestCase):
+    def test_every_corpus_required_operation_has_an_assertion(self):
+        for name in ("build", "export vrm", "control set", "recipe apply"):
+            self.assertIn(name, R.CORPUS_ASSERTIONS, name)
+
+    def test_material_shading_has_no_corpus_assertion(self):
+        self.assertNotIn("material shading", R.CORPUS_ASSERTIONS)
+
+    def test_export_assertion_requires_equal_metric_vectors(self):
+        same = {"asset.height_m": 1.6, "proportions.head_count": 6.4}
+        self.assertEqual(R.export_metrics_match(same, dict(same)), (True, None))
+        drifted = dict(same, **{"asset.height_m": 1.61})
+        ok, detail = R.export_metrics_match(same, drifted)
+        self.assertFalse(ok)
+        self.assertIn("asset.height_m", detail)
+
+    def test_reach_assertion_uses_the_pack_tolerance(self):
+        target = {"asset.height_m": 1.60}
+        widths = {"asset.height_m": 0.9}
+        self.assertTrue(R.reach_holds({"asset.height_m": 1.61}, target, widths, 0.25)[0])
+        self.assertFalse(R.reach_holds({"asset.height_m": 1.10}, target, widths, 0.25)[0])
 
 
 class PrintSummaryCorpusBranch(unittest.TestCase):

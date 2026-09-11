@@ -1,0 +1,589 @@
+{
+  "corpusManifestSha256": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
+  "families": {
+    "alicia-solid": {
+      "controls": {
+        "body.headCount": 6.103,
+        "body.heightM": 1.6516,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": -1.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": 0.0,
+        "face.eye.right.spacing": 0.0,
+        "face.head.width": 0.0
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.456522,
+        "proportions.eye_height_in_head": 0.3088,
+        "proportions.eye_height_ratio": 0.436667,
+        "proportions.head_bone_fraction": 0.025333,
+        "proportions.head_count": 0.016571,
+        "proportions.head_width_height_ratio": 0.1938,
+        "proportions.hips_height_ratio": 0.179167,
+        "proportions.ipd_head_width_ratio": 0.0035,
+        "proportions.ipd_m": 0.136,
+        "proportions.lower_upper_arm_ratio": 0.19275,
+        "proportions.lower_upper_leg_ratio": 0.059333,
+        "proportions.shoulder_width_ratio": 0.569231,
+        "proportions.upper_leg_height_ratio": 0.12
+      }
+    },
+    "annie": {
+      "controls": {
+        "body.headCount": 6.118,
+        "body.heightM": 1.664,
+        "body.proportion.armLength": -0.533203,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": -0.65625,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -1.0,
+        "face.eye.right.spacing": -1.0,
+        "face.head.width": 0.5
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.395217,
+        "proportions.eye_height_in_head": 0.0132,
+        "proportions.eye_height_ratio": 0.246667,
+        "proportions.head_bone_fraction": 0.000667,
+        "proportions.head_count": 0.016571,
+        "proportions.head_width_height_ratio": 0.0686,
+        "proportions.hips_height_ratio": 0.114167,
+        "proportions.ipd_head_width_ratio": 0.435,
+        "proportions.ipd_m": 0.448,
+        "proportions.lower_upper_arm_ratio": 0.02975,
+        "proportions.lower_upper_leg_ratio": 0.018,
+        "proportions.shoulder_width_ratio": 0.446154,
+        "proportions.upper_leg_height_ratio": 0.039
+      }
+    },
+    "heroes-alex": {
+      "controls": {
+        "body.headCount": 5.674,
+        "body.heightM": 1.1764
+      },
+      "eligible": false,
+      "infeasible": "body.heightM = 1.1764 is outside its valid range [1.2, 2]",
+      "residuals": {
+        "body.heightM": 0.026222
+      }
+    },
+    "heroes-commander": {
+      "controls": {
+        "body.headCount": 7.232,
+        "body.heightM": 1.7584,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": 0.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -1.0,
+        "face.eye.right.spacing": -0.75,
+        "face.head.width": 0.5
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.162609,
+        "proportions.eye_height_in_head": 0.2084,
+        "proportions.eye_height_ratio": 0.091667,
+        "proportions.head_bone_fraction": 0.118333,
+        "proportions.head_count": 0.019143,
+        "proportions.head_width_height_ratio": 0.276,
+        "proportions.hips_height_ratio": 0.098333,
+        "proportions.ipd_head_width_ratio": 0.426,
+        "proportions.ipd_m": 0.462,
+        "proportions.lower_upper_arm_ratio": 0.40425,
+        "proportions.lower_upper_leg_ratio": 0.023333,
+        "proportions.shoulder_width_ratio": 0.092308,
+        "proportions.upper_leg_height_ratio": 0.034
+      }
+    },
+    "heroes-mike": {
+      "controls": {
+        "body.headCount": 6.599,
+        "body.heightM": 1.7671,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": 0.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -1.0,
+        "face.eye.right.spacing": -1.0,
+        "face.head.width": 0.0
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.017826,
+        "proportions.eye_height_in_head": 0.248,
+        "proportions.eye_height_ratio": 0.108333,
+        "proportions.head_bone_fraction": 0.276333,
+        "proportions.head_count": 0.017429,
+        "proportions.head_width_height_ratio": 0.2674,
+        "proportions.hips_height_ratio": 0.076667,
+        "proportions.ipd_head_width_ratio": 0.296,
+        "proportions.ipd_m": 0.39,
+        "proportions.lower_upper_arm_ratio": 0.3365,
+        "proportions.lower_upper_leg_ratio": 0.008,
+        "proportions.shoulder_width_ratio": 0.213846,
+        "proportions.upper_leg_height_ratio": 0.241
+      }
+    },
+    "muse-purple": {
+      "controls": {
+        "body.headCount": 6.318,
+        "body.heightM": 1.6157,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": 0.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -0.439453,
+        "face.eye.right.spacing": -1.0,
+        "face.head.width": 0.492188
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.144783,
+        "proportions.eye_height_in_head": 0.0864,
+        "proportions.eye_height_ratio": 0.005,
+        "proportions.head_bone_fraction": 0.055,
+        "proportions.head_count": 0.017429,
+        "proportions.head_width_height_ratio": 0.0072,
+        "proportions.hips_height_ratio": 0.0025,
+        "proportions.ipd_head_width_ratio": 0.4195,
+        "proportions.ipd_m": 0.386,
+        "proportions.lower_upper_arm_ratio": 0.00025,
+        "proportions.lower_upper_leg_ratio": 0.008,
+        "proportions.shoulder_width_ratio": 0.343846,
+        "proportions.upper_leg_height_ratio": 0.149
+      }
+    },
+    "pompa-girl": {
+      "controls": {
+        "body.headCount": 4.595,
+        "body.heightM": 1.8776,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": 0.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -0.585938,
+        "face.eye.right.spacing": -1.0,
+        "face.head.width": 0.0
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.321304,
+        "proportions.eye_height_in_head": 0.1696,
+        "proportions.eye_height_ratio": 0.051667,
+        "proportions.head_bone_fraction": 0.076667,
+        "proportions.head_count": 0.011714,
+        "proportions.head_width_height_ratio": 0.4594,
+        "proportions.hips_height_ratio": 0.154167,
+        "proportions.ipd_head_width_ratio": 0.4045,
+        "proportions.ipd_m": 0.854,
+        "proportions.lower_upper_arm_ratio": 0.09075,
+        "proportions.lower_upper_leg_ratio": 0.024,
+        "proportions.shoulder_width_ratio": 0.607692,
+        "proportions.upper_leg_height_ratio": 0.36
+      }
+    },
+    "sample-A": {
+      "controls": {
+        "body.headCount": 6.461,
+        "body.heightM": 1.5581,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": -0.210938,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -0.118652,
+        "face.eye.right.spacing": 0.0,
+        "face.head.width": 0.158203
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.008696,
+        "proportions.eye_height_in_head": 0.0628,
+        "proportions.eye_height_ratio": 0.055,
+        "proportions.head_bone_fraction": 0.015,
+        "proportions.head_count": 0.018286,
+        "proportions.head_width_height_ratio": 0.1606,
+        "proportions.hips_height_ratio": 0.0425,
+        "proportions.ipd_head_width_ratio": 0.539,
+        "proportions.ipd_m": 0.512,
+        "proportions.lower_upper_arm_ratio": 0.17675,
+        "proportions.lower_upper_leg_ratio": 0.175,
+        "proportions.shoulder_width_ratio": 0.548462,
+        "proportions.upper_leg_height_ratio": 0.217
+      }
+    },
+    "sample-B": {
+      "controls": {
+        "body.headCount": 6.602,
+        "body.heightM": 1.5674,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": -0.9375,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -0.493652,
+        "face.eye.right.spacing": -0.369141,
+        "face.head.width": 0.158203
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.043043,
+        "proportions.eye_height_in_head": 0.006,
+        "proportions.eye_height_ratio": 0.203333,
+        "proportions.head_bone_fraction": 0.028667,
+        "proportions.head_count": 0.018571,
+        "proportions.head_width_height_ratio": 0.2086,
+        "proportions.hips_height_ratio": 0.088333,
+        "proportions.ipd_head_width_ratio": 0.414,
+        "proportions.ipd_m": 0.422,
+        "proportions.lower_upper_arm_ratio": 0.175,
+        "proportions.lower_upper_leg_ratio": 0.163667,
+        "proportions.shoulder_width_ratio": 0.427692,
+        "proportions.upper_leg_height_ratio": 0.065
+      }
+    },
+    "sample-H": {
+      "controls": {
+        "body.headCount": 5.797,
+        "body.heightM": 1.2743,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": -0.588989,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -1.0,
+        "face.eye.right.spacing": -1.0,
+        "face.head.width": 1.0
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.186522,
+        "proportions.eye_height_in_head": 0.112,
+        "proportions.eye_height_ratio": 0.06,
+        "proportions.head_bone_fraction": 0.077667,
+        "proportions.head_count": 0.018286,
+        "proportions.head_width_height_ratio": 0.1294,
+        "proportions.hips_height_ratio": 0.153333,
+        "proportions.ipd_head_width_ratio": 0.3305,
+        "proportions.ipd_m": 0.31,
+        "proportions.lower_upper_arm_ratio": 0.002,
+        "proportions.lower_upper_leg_ratio": 0.037333,
+        "proportions.shoulder_width_ratio": 0.25,
+        "proportions.upper_leg_height_ratio": 0.045
+      }
+    },
+    "sample-K": {
+      "controls": {
+        "body.headCount": 6.008,
+        "body.heightM": 1.6113,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": 0.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -1.0,
+        "face.eye.right.spacing": -0.875,
+        "face.head.width": 0.0
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.227391,
+        "proportions.eye_height_in_head": 0.2052,
+        "proportions.eye_height_ratio": 0.104167,
+        "proportions.head_bone_fraction": 0.223667,
+        "proportions.head_count": 0.016571,
+        "proportions.head_width_height_ratio": 0.1602,
+        "proportions.hips_height_ratio": 0.079167,
+        "proportions.ipd_head_width_ratio": 0.4095,
+        "proportions.ipd_m": 0.44,
+        "proportions.lower_upper_arm_ratio": 0.03075,
+        "proportions.lower_upper_leg_ratio": 0.010667,
+        "proportions.shoulder_width_ratio": 0.341538,
+        "proportions.upper_leg_height_ratio": 0.246
+      }
+    },
+    "sample-O": {
+      "controls": {
+        "body.headCount": 6.185,
+        "body.heightM": 1.3134,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": -0.588989,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -1.0,
+        "face.eye.right.spacing": -0.993652,
+        "face.head.width": 1.0
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.126087,
+        "proportions.eye_height_in_head": 0.0636,
+        "proportions.eye_height_ratio": 0.02,
+        "proportions.head_bone_fraction": 0.066333,
+        "proportions.head_count": 0.019143,
+        "proportions.head_width_height_ratio": 0.2754,
+        "proportions.hips_height_ratio": 0.116667,
+        "proportions.ipd_head_width_ratio": 0.252,
+        "proportions.ipd_m": 0.29,
+        "proportions.lower_upper_arm_ratio": 0.00225,
+        "proportions.lower_upper_leg_ratio": 0.012667,
+        "proportions.shoulder_width_ratio": 0.271538,
+        "proportions.upper_leg_height_ratio": 0.001
+      }
+    },
+    "sample-U": {
+      "controls": {
+        "body.headCount": 7.473,
+        "body.heightM": 1.7338,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": 0.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": 0.0,
+        "face.eye.right.spacing": -0.5,
+        "face.head.width": 0.5
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.423478,
+        "proportions.eye_height_in_head": 0.0708,
+        "proportions.eye_height_ratio": 0.49,
+        "proportions.head_bone_fraction": 0.002,
+        "proportions.head_count": 0.02,
+        "proportions.head_width_height_ratio": 0.1934,
+        "proportions.hips_height_ratio": 0.3475,
+        "proportions.ipd_head_width_ratio": 0.454,
+        "proportions.ipd_m": 0.446,
+        "proportions.lower_upper_arm_ratio": 0.0155,
+        "proportions.lower_upper_leg_ratio": 0.012333,
+        "proportions.shoulder_width_ratio": 0.426154,
+        "proportions.upper_leg_height_ratio": 0.251
+      }
+    },
+    "sample-V": {
+      "controls": {
+        "body.headCount": 7.314,
+        "body.heightM": 1.8011,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": 0.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -1.0,
+        "face.eye.right.spacing": -1.0,
+        "face.head.width": 0.0
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.094348,
+        "proportions.eye_height_in_head": 0.2372,
+        "proportions.eye_height_ratio": 0.098333,
+        "proportions.head_bone_fraction": 0.118,
+        "proportions.head_count": 0.019143,
+        "proportions.head_width_height_ratio": 0.2198,
+        "proportions.hips_height_ratio": 0.0975,
+        "proportions.ipd_head_width_ratio": 0.4545,
+        "proportions.ipd_m": 0.458,
+        "proportions.lower_upper_arm_ratio": 0.433,
+        "proportions.lower_upper_leg_ratio": 0.042333,
+        "proportions.shoulder_width_ratio": 0.07,
+        "proportions.upper_leg_height_ratio": 0.031
+      }
+    },
+    "vita": {
+      "controls": {
+        "body.headCount": 6.256,
+        "body.heightM": 1.7131,
+        "body.proportion.armLength": -0.158203,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": -0.588989,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -0.050056,
+        "face.eye.right.spacing": -1.0,
+        "face.head.width": 0.992188
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.31913,
+        "proportions.eye_height_in_head": 0.118,
+        "proportions.eye_height_ratio": 0.039167,
+        "proportions.head_bone_fraction": 0.080333,
+        "proportions.head_count": 0.016857,
+        "proportions.head_width_height_ratio": 0.0626,
+        "proportions.hips_height_ratio": 0.059167,
+        "proportions.ipd_head_width_ratio": 0.3165,
+        "proportions.ipd_m": 0.292,
+        "proportions.lower_upper_arm_ratio": 0.032,
+        "proportions.lower_upper_leg_ratio": 0.059333,
+        "proportions.shoulder_width_ratio": 0.304615,
+        "proportions.upper_leg_height_ratio": 0.239
+      }
+    },
+    "vroid-default-F": {
+      "controls": {
+        "body.headCount": 6.423,
+        "body.heightM": 1.4994,
+        "body.proportion.armLength": -0.088989,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": 0.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -1.0,
+        "face.eye.right.spacing": -0.658203,
+        "face.head.width": 1.0
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.403913,
+        "proportions.eye_height_in_head": 0.062,
+        "proportions.eye_height_ratio": 0.290833,
+        "proportions.head_bone_fraction": 0.048333,
+        "proportions.head_count": 0.018286,
+        "proportions.head_width_height_ratio": 0.0724,
+        "proportions.hips_height_ratio": 0.2325,
+        "proportions.ipd_head_width_ratio": 0.411,
+        "proportions.ipd_m": 0.334,
+        "proportions.lower_upper_arm_ratio": 0.04525,
+        "proportions.lower_upper_leg_ratio": 0.084,
+        "proportions.shoulder_width_ratio": 0.407692,
+        "proportions.upper_leg_height_ratio": 0.122
+      }
+    },
+    "vroid-v110-female": {
+      "controls": {
+        "body.headCount": 6.288,
+        "body.heightM": 1.6183,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": -0.28125,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -1.0,
+        "face.eye.right.spacing": -1.0,
+        "face.head.width": 0.5
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.213913,
+        "proportions.eye_height_in_head": 0.0448,
+        "proportions.eye_height_ratio": 0.018333,
+        "proportions.head_bone_fraction": 0.045333,
+        "proportions.head_count": 0.017429,
+        "proportions.head_width_height_ratio": 0.1202,
+        "proportions.hips_height_ratio": 0.003333,
+        "proportions.ipd_head_width_ratio": 0.287,
+        "proportions.ipd_m": 0.312,
+        "proportions.lower_upper_arm_ratio": 0.03025,
+        "proportions.lower_upper_leg_ratio": 0.011333,
+        "proportions.shoulder_width_ratio": 0.299231,
+        "proportions.upper_leg_height_ratio": 0.148
+      }
+    },
+    "vroid-v110-male": {
+      "controls": {
+        "body.headCount": 6.401,
+        "body.heightM": 1.7803,
+        "body.proportion.armLength": 0.0,
+        "body.proportion.hipWidth": 0.0,
+        "body.proportion.legLength": 0.0,
+        "body.proportion.shoulderWidth": 0.0,
+        "body.proportion.torsoLength": 0.0,
+        "face.chin.length": 0.0,
+        "face.eye.left.spacing": -0.588989,
+        "face.eye.right.spacing": -1.0,
+        "face.head.width": 0.0
+      },
+      "eligible": false,
+      "infeasible": null,
+      "residuals": {
+        "asset.height_m": 0.008889,
+        "proportions.arm_span_height_ratio": 0.143478,
+        "proportions.eye_height_in_head": 0.0704,
+        "proportions.eye_height_ratio": 0.0525,
+        "proportions.head_bone_fraction": 0.117,
+        "proportions.head_count": 0.016857,
+        "proportions.head_width_height_ratio": 0.176,
+        "proportions.hips_height_ratio": 0.001667,
+        "proportions.ipd_head_width_ratio": 0.341,
+        "proportions.ipd_m": 0.406,
+        "proportions.lower_upper_arm_ratio": 0.4305,
+        "proportions.lower_upper_leg_ratio": 0.002667,
+        "proportions.shoulder_width_ratio": 0.091538,
+        "proportions.upper_leg_height_ratio": 0.149
+      }
+    }
+  },
+  "generated": {
+    "measurementsSha256": "c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc",
+    "styleLintSha256": "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881"
+  },
+  "profileId": "vroid-lineage-anime",
+  "solver": {
+    "budget": 80,
+    "seed": 42,
+    "tolerance": 0.25
+  },
+  "templateId": "native-anime-v1",
+  "templateSha256": "77ae575e2fe3e5ea0ff6c64a73606f8b88bab5a26b3ec02079e3fdede0c0b71c"
+}
