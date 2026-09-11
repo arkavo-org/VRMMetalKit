@@ -242,6 +242,32 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["dimensions"]["provenance"], "pass")
         self.assertIsInstance(result["corpus"], list)
 
+    def test_run_corpus_reads_the_first_entrys_manifest_and_sha256_field(self):
+        manifest_bytes = json.dumps({"assets": [{"path": "missing.vrm.glb", "body_family": "solo"}]}).encode()
+        manifest_path = os.path.join(self.f.dir, "corpus-manifest.json")
+        with open(manifest_path, "wb") as fh:
+            fh.write(manifest_bytes)
+        manifest_sha = R.sha256_bytes(manifest_bytes)
+        entry = {"styleId": "test-style",
+                 "profile": PROFILE, "profileSha256": R.sha256_file(os.path.join(REPO, PROFILE)),
+                 "manifest": manifest_path, "manifestSha256": manifest_sha,
+                 "measurements": manifest_path, "measurementsSha256": manifest_sha,
+                 "familyKey": "body_family", "tolerance": 0.25,
+                 "expectedFamilies": 1, "minEligibleFamilies": 1}
+        pack = self.f.pack(corpus=[entry],
+                           evidencePolicy={"requiredLevel": "corpus-validated",
+                                           "dimensions": {"fixture": "required", "corpus": "required",
+                                                          "visual": "inapplicable", "interoperability": "inapplicable",
+                                                          "provenance": "required"},
+                                           "heldOutPolicy": "none"})
+        pack["runner"]["environment"]["oracleHashes"][manifest_path] = manifest_sha
+        pack["packHash"] = R.compute_pack_hash(pack)
+        self.assertEqual(R.validate_pack(pack, self.schema), [])
+        out = R.Runner(pack).run_corpus()
+        self.assertEqual(out["manifest"], manifest_path)
+        self.assertEqual(out["status"], "pending")
+        self.assertEqual(out["families"]["solo"]["status"], "pending")
+
     def test_fabricated_report_with_correct_hashes_is_not_rejected(self):
         pack = self.f.pack()
         pack["mutants"] = [{"id": "fab", "description": "", "expectedClassification": "reject",
@@ -593,6 +619,15 @@ class ShippedPackTests(unittest.TestCase):
                     kinds = [m["transform"]["kind"] for m in pack["mutants"]]
                     self.assertGreaterEqual(kinds.count("swift-test"), 2)
                     self.assertIn("report-fabricated", kinds)
+
+    def test_pending_corpus_array_migration_packs_still_need_the_exemption(self):
+        packs_dir = os.path.join(ACCEPTANCE, "packs")
+        for name in PACKS_PENDING_CORPUS_ARRAY_MIGRATION:
+            with self.subTest(pack=name):
+                pack = R.load_json(os.path.join(packs_dir, name))
+                self.assertTrue(R.validate_pack(pack, self.schema),
+                                f"{name} now validates against the array corpus schema; remove it from "
+                                f"PACKS_PENDING_CORPUS_ARRAY_MIGRATION")
 
     def test_evidence_registry_is_empty_and_pinned(self):
         reg = R.load_json(os.path.join(ACCEPTANCE, "evidence.json"))
