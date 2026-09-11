@@ -58,14 +58,14 @@ public enum QAPins {
                            configuration: sharedRender.merging(["camera": ["position": JSONValue(position), "target": JSONValue(target)], "expressionWeights": .object(expression), "frameTimesS": [0]]))
         }
         return [
-            view("visual.front", position: [0, 1.3, 2.4], target: [0, 1.0, 0]),
-            view("visual.threeQuarter", position: [1.7, 1.3, 1.7], target: [0, 1.0, 0]),
-            view("visual.profile", position: [2.4, 1.3, 0], target: [0, 1.0, 0]),
+            view("visual.front", position: [0, 0.95, 3.4], target: [0, 0.9, 0]),
+            view("visual.threeQuarter", position: [2.4, 0.95, 2.4], target: [0, 0.9, 0]),
+            view("visual.profile", position: [3.4, 0.95, 0], target: [0, 0.9, 0]),
             view("expression.blink", position: [0, 1.45, 0.9], target: [0, 1.45, 0], expression: ["blink": 1]),
             view("expression.aa", position: [0, 1.45, 0.9], target: [0, 1.45, 0], expression: ["aa": 1]),
             view("expression.happy", position: [0, 1.45, 0.9], target: [0, 1.45, 0], expression: ["happy": 1]),
             RenderScenario(id: "motion.idle", kind: "motion", configuration: sharedRender.merging([
-                "camera": ["position": [0, 1.3, 2.4], "target": [0, 1.0, 0]], "timestepS": 0.008333333333333333, "durationS": 4,
+                "camera": ["position": [0, 0.95, 3.4], "target": [0, 0.9, 0]], "timestepS": 0.008333333333333333, "durationS": 4,
                 "inputAnimationHashes": [], "colliderOverlay": true, "metrics": ["tipPenetration", "jointVelocity"],
             ])),
         ]

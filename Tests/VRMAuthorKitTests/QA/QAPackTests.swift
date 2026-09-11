@@ -93,7 +93,7 @@ final class QAPackTests: XCTestCase {
                                                 "visual.front", "visual.threeQuarter", "visual.profile", "expression.blink", "expression.aa", "expression.happy", "motion.idle"])
         XCTAssertEqual(plan.consumers, ["vrmmetalkit"])
         XCTAssertEqual(plan.renderScenarios.map(\.id), ["visual.front", "visual.threeQuarter", "visual.profile", "expression.blink", "expression.aa", "expression.happy", "motion.idle"])
-        XCTAssertEqual(plan.renderScenarios[0].configuration["camera"]?["position"], [0, 1.3, 2.4])
+        XCTAssertEqual(plan.renderScenarios[0].configuration["camera"]?["position"], [0, 0.95, 3.4])
         XCTAssertEqual(plan.renderScenarios[6].configuration["timestepS"], 0.008333333333333333)
         XCTAssertEqual(plan.renderer["identity"], "none")
         XCTAssertEqual(envelope.result?["planHash"], .string(plan.planHash))
