@@ -149,7 +149,7 @@ Stage B release. Parenthesised items are fixtures the pack must contain.
 | `object set` | Revision/transaction | fixture-tested | n/a | n/a |
 | `control set` | Shape/deformation | visually-validated | required (reach) | required |
 | `recipe export` | Import/export/provenance | fixture-tested (round-trip byte identity) | n/a | n/a |
-| `recipe apply` | Shape/deformation + provenance | visually-validated (owned by the Shape pack; provenance fixtures included) | required (reach) | required |
+| `recipe apply` | Shape/deformation + provenance | visually-validated (owned by the Shape pack; provenance fixtures included) | required (reach, replayed through `control set`) | required |
 | `asset import`, `asset inspect` | Import/export/provenance | fixture-tested + interoperability dimension | n/a | n/a |
 | `style attach` | Revision/transaction | fixture-tested | n/a | n/a |
 | `style lint` | Materials/style (oracle = pinned `style_lint.py` + profile) | corpus-validated | required | n/a (numeric-only, reviewed applicability) |
@@ -164,7 +164,9 @@ Stage B release. Parenthesised items are fixtures the pack must contain.
 
 `required (reach)` names the corpus dimension of a generative command: the pack replays
 the per-family witnesses of §2 through the template, so only eligible families (§3) are
-measured. Plain `required`, which in v1 is `style lint` alone, measures the corpus assets
+measured. `recipe apply` carries the qualifier because the witnesses record control edits,
+not recipes: its reach is replayed through `control set`, as its pack's `scope.excluded`
+states, and the recipe path itself is covered by fixtures rather than by the corpus. Plain `required`, which in v1 is `style lint` alone, measures the corpus assets
 themselves: no template is solved and no witnesses are replayed, so the §3 eligibility
 test does not arise. Every family of the style set is measured and the floor is the full
 family count.

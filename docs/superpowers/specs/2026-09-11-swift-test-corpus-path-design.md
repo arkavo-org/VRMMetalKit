@@ -1,6 +1,9 @@
 # Corpus evidence path for swift-test acceptance packs
 
-Date: 2026-09-11. Branch: `vrm-author-cli`. Status: design approved, spec under review.
+Date: 2026-09-11. Branch: `vrm-author-cli`. Status: shipped, with the deviations recorded below.
+Implementation deviations from this document are recorded in
+`.superpowers/sdd/2026-09-11-swift-test-corpus-path/progress.md` and the per-task briefs
+and reports beside it; where the two disagree, the plan records what was built and why.
 
 ## 1. Problem
 
@@ -139,6 +142,9 @@ plumbing.
 
 A hand-edited witness cannot fake reach, because the pass criterion remains the pinned
 linter's metrics on the operation's output measured against the corpus-derived targets.
+That criterion runs in every assertion mode, `build` and `export vrm` included, so no
+pack's corpus evidence collapses to "the replayed witness builds and lints conforming",
+which the fixture dimension already establishes.
 A change to either hash invalidates the file and forces a re-solve.
 
 ## 5. Pack schema changes
@@ -155,7 +161,15 @@ Each entry:
 | `styleId` | string | The profile's `id`, e.g. `vroid-lineage-anime` |
 | `profile`, `manifest`, `measurements`, `witnesses` | path + sha256 | The style set and its witnesses |
 | `familyKey` | string | Manifest field naming the family, today `body_family` |
-| `driver` | string | XCTest suite that replays witnesses and emits per-family records. Required when `runner.kind` is `swift-test`. |
+| `driver` | string | The replay driver, `vrm-author-cli`. Required when `runner.kind` is `swift-test`. |
+
+**Shipped substitution.** This document specified an XCTest suite as the driver. What
+shipped is the constant identifier `vrm-author-cli`: the replay is driven from
+`scripts/acceptance_run.py` through the shipped executable, with no suite between them.
+The reasons are recorded in the plan (`.superpowers/sdd/2026-09-11-swift-test-corpus-path/`,
+task 2 brief and task 6), the short form being that a Swift suite replaying witnesses
+would have to reach the Python oracle to grade itself. §6 step 3 below describes the
+suite mechanism that was therefore never built.
 | `tolerance` | number | One fraction, applied to every target metric against that metric's own rule range width in that style's profile, inside which a residual counts as reached. Frozen in the pack, not in the suite. |
 | `expectedFamilies` | integer ≥ 1 | Denominator, fixed before the run |
 | `minEligibleFamilies` | integer ≥ 1 | Floor below which the dimension is `fail`, never `pass` |
@@ -188,6 +202,9 @@ runner kind is `swift-test` and the corpus dimension is required. It loops over 
    temp directory plus a per-family record. Every pack emits a measurable artifact:
    `control-set` and `recipe-apply` compile and export the avatar their witness
    produces, because the metric vector is only observable on exported bytes.
+   *Shipped instead:* no suite. `run_corpus_swift` replays each witness's own recorded
+   steps through the shipped `vrm-author` binary and measures the result itself — see the
+   substitution note in §5.
 4. Lint each emitted artifact with the pinned linter and **that style's** profile. The
    oracle stays in Python where it already lives, so the suite never grades itself.
 5. Roll up per family.
@@ -233,9 +250,9 @@ Per eligible family, per declared style set:
 | Pack | Assertion |
 |---|---|
 | `control-set` | The witness's control values apply and compile; the resulting metrics match the target within tolerance. Proves reach. |
-| `recipe-apply` | The same reach through the recipe path rather than direct control edits. |
-| `build` | Build succeeds, artifacts and spec validation pass, output lints conforming against that style's profile. |
-| `export-vrm` | The linter's metric vector on the exported bytes **equals** the vector on the build draft from the same witness replay, both GLB, exact equality given byte-determinism; and the export lints conforming. Consumer coverage stays in the interoperability dimension and is not counted twice. |
+| `recipe-apply` | The same reach. *As shipped* the witnesses record control edits, so the replay runs through `control set` and the recipe path itself stays fixture-covered; the pack's `scope.excluded` and verification.md §4 say so. |
+| `build` | Build succeeds, artifacts and spec validation pass, the output reaches the family target within tolerance, and it lints conforming against that style's profile. |
+| `export-vrm` | The draft reaches the family target within tolerance; the linter's metric vector on the exported bytes **equals** the vector on the build draft from the same witness replay, both GLB, exact equality given byte-determinism; and the export lints conforming. Consumer coverage stays in the interoperability dimension and is not counted twice. |
 
 `build.json`'s `scope.excluded` entry `"corpus-wide builds"` is removed, resolving the
 contradiction.
@@ -247,9 +264,12 @@ is "project material object with MToon fields". Partitioning it by body family i
 pseudo-precision, and that holds for any style.
 
 Its corpus dimension becomes `inapplicable` with a reviewed applicability record, and it
-gains a fixture sweep instead: `shadowEnd` and `terminatorWidth` at their range extremes
-plus the `(-1, 0)` edge, across the material roles the attached profile declares,
-thirteen for `vroid-lineage-anime`, linted per role.
+gains a fixture sweep instead: the four legal corners of the `(shadowEnd,
+terminatorWidth)` region, plus a per-role round trip over the thirteen role defaults the
+template pack declares — each role's `(toony, shift)` derives a `(shadowEnd,
+terminatorWidth)` that must solve back to that role's own factors. As shipped the roles
+come from `MaterialRoleDefaults`, not from the profile, which declares no per-role
+shading values.
 
 ## 10. Removing the hardcoded style from Swift
 

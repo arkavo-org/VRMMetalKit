@@ -50,6 +50,8 @@ STATUS_RANK = {"pass": 0, "pending": 1, "fail": 2, "missing-handler": 3}
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_SCHEMA = os.path.join(REPO, "docs", "proposals", "vrm-author-cli", "acceptance", "pack.schema.json")
+STYLE_LINT = os.path.join("scripts", "style_lint.py")
+VRM_AUTHOR = os.path.join(".build", "debug", "vrm-author")
 
 GLB_MAGIC = 0x46546C67
 JSON_CHUNK = 0x4E4F534A
@@ -184,7 +186,7 @@ def measured_vector(runner, asset_path, metrics):
     """The pinned linter's metric vector for one asset, profile-independent. Returns
     (vector, None) on success and (None, cause) when the measure fails, so a caller reports
     what the linter said rather than a generic message."""
-    proc = subprocess.run([sys.executable, runner.repo_path("scripts/style_lint.py"), "measure", asset_path, "--json"],
+    proc = subprocess.run([sys.executable, runner.repo_path(STYLE_LINT), "measure", asset_path, "--json"],
                           cwd=runner.repo, capture_output=True, text=True,
                           timeout=runner.pack["resources"]["deadlineSeconds"])
     name = os.path.basename(asset_path)
@@ -196,6 +198,22 @@ def measured_vector(runner, asset_path, metrics):
     except (ValueError, IndexError, KeyError):
         return None, f"style_lint measure emitted no record for {name}: {proc.stdout.strip()[-200:]}"
     return {m: metric_value(record, m) for m in metrics if metric_value(record, m) is not None}, None
+
+
+def rule_widths(profile):
+    """Metric path to the width of its two-sided rule range; one-sided rules have no scale.
+
+    The generator and the runner must agree on this derivation exactly: the generator scores a
+    candidate's residuals against it and the runner scores the replayed result against it, so a
+    divergence would let a witness be solved on one scale and graded on another. It therefore
+    has one definition, here, which scripts/corpus_witness.py imports.
+    """
+    widths = {}
+    for rule in profile["rules"]:
+        check = rule.get("check") or {}
+        if check.get("type") == "range" and "min" in check and "max" in check:
+            widths[rule["metric"]] = float(check["max"]) - float(check["min"])
+    return widths
 
 
 def reach_holds(observed, target, widths, tolerance):
@@ -234,6 +252,31 @@ CORPUS_ASSERTIONS = {
     "build": "conforming",
     "export vrm": "export",
 }
+
+
+def witness_provenance_failures(entry, witnesses, style_lint_sha, template_sha):
+    """Every recorded input of a witnesses document that disagrees with the style set the pack
+    declares, named field by field.
+
+    The generator stamps each document with the corpus, profile, linter, template and solver
+    tolerance it was solved against. A document solved against different inputs describes a
+    different experiment than the one the pack claims, so replaying it would grade one
+    experiment's witnesses with another's oracle. `template_sha` is None when the shipped
+    template cannot be read (no binary, or a binary that cannot list it), in which case every
+    family replay pends or fails on its own account and the template is left unchecked.
+    """
+    solver = witnesses.get("solver")
+    solver = solver if isinstance(solver, dict) else {}
+    generated = witnesses.get("generated")
+    generated = generated if isinstance(generated, dict) else {}
+    checks = [("corpusManifestSha256", witnesses.get("corpusManifestSha256"), entry["manifestSha256"]),
+              ("generated.measurementsSha256", generated.get("measurementsSha256"), entry["measurementsSha256"]),
+              ("generated.styleLintSha256", generated.get("styleLintSha256"), style_lint_sha),
+              ("profileId", witnesses.get("profileId"), entry["styleId"]),
+              ("solver.tolerance", solver.get("tolerance"), entry["tolerance"])]
+    if template_sha is not None:
+        checks.append(("templateSha256", witnesses.get("templateSha256"), template_sha))
+    return [f"{field} is {got!r}, not the declared {want!r}" for field, got, want in checks if got != want]
 
 
 # --------------------------------------------------------------------------- schema subset
@@ -773,6 +816,15 @@ class Runner:
                 return out
 
         witnesses = load_json(self.repo_path(entry["witnesses"]))
+        disagreements = witness_provenance_failures(
+            entry, witnesses, sha256_file(self.repo_path(STYLE_LINT)),
+            self.installed_template_sha(witnesses.get("templateId")))
+        if disagreements:
+            out.update(status="fail",
+                       reason=f"{entry['witnesses']} was solved against other inputs than the style set declares: "
+                              + "; ".join(disagreements))
+            return out
+
         measurements = load_json(self.repo_path(entry["measurements"]))["measurements"]
         targets = family_targets(measurements)
         profile = load_json(self.repo_path(entry["profile"]))
@@ -780,6 +832,10 @@ class Runner:
                              "corpusHashes": profile.get("corpus", {}).get("sha256", {})}
         widths = self.profile_rule_widths(entry)
         out["familiesTotal"] = len(targets)
+        expected = entry.get("expectedFamilies")
+        if expected is not None and len(targets) != expected:
+            out.update(status="fail", reason=f"measurements carry {len(targets)} families, pack expects {expected}")
+            return out
         seed = (witnesses.get("solver") or {}).get("seed")
         if seed is None:
             out.update(status="fail",
@@ -806,27 +862,50 @@ class Runner:
         out["status"] = corpus_status(out["families"], entry["minEligibleFamilies"])
         reached = sum(1 for f in out["families"].values() if f["status"] != "ineligible")
         if out["status"] == "fail" and reached < entry["minEligibleFamilies"]:
-            out["reason"] = (f"{reached} of {out['familiesTotal']} families are reachable by the template, "
-                             f"below the floor of {entry['minEligibleFamilies']}")
+            out["reason"] = (f"{out['familiesEligible']} of {out['familiesTotal']} families are reachable by the "
+                             f"template, below the floor of {entry['minEligibleFamilies']}")
         return out
 
     def profile_rule_widths(self, entry):
-        profile = load_json(self.repo_path(entry["profile"]))
-        widths = {}
-        for rule in profile["rules"]:
-            check = rule.get("check") or {}
-            if check.get("type") == "range" and "min" in check and "max" in check:
-                widths[rule["metric"]] = float(check["max"]) - float(check["min"])
-        return widths
+        return rule_widths(load_json(self.repo_path(entry["profile"])))
+
+    def installed_template_sha(self, template_id):
+        """The sha256 the shipped CLI reports for a template, or None when it cannot be read:
+        no built binary, a binary that cannot list templates, or a template it does not carry.
+        In every one of those cases the replay of each family pends or fails on its own."""
+        binary = self.repo_path(VRM_AUTHOR)
+        if template_id is None or not os.path.exists(binary):
+            return None
+        try:
+            proc = subprocess.run([binary, "template", "list"], cwd=self.repo,
+                                  capture_output=True, text=True,
+                                  timeout=self.pack["resources"]["deadlineSeconds"])
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if proc.returncode != 0:
+            return None
+        try:
+            packs = json.loads(proc.stdout)["result"]["packs"]
+        except (ValueError, KeyError, TypeError):
+            return None
+        for pack in packs:
+            if isinstance(pack, dict) and pack.get("id") == template_id:
+                return pack.get("sha256")
+        return None
 
     def replay_family(self, entry, family, witness, target, widths, template_id, seed):
         """Replay one witness's own recorded steps through the shipped CLI, assert what this
-        pack's operation claims of the result, and lint it."""
+        pack's operation claims of the result, and lint it.
+
+        Reach runs in every mode: the pinned linter's vector on the replayed output is compared
+        against the family's corpus-derived target whatever the operation, so a hand-edited
+        witness claiming an unreachable family fails on the measurement rather than on the edit.
+        A mode's own assertion is added to that, never substituted for it."""
         try:
             steps = validated_replay_steps(witness.get("replaySteps"))
         except ReplayStepError as exc:
             return {"status": "fail", "reason": str(exc)}
-        binary = self.repo_path(".build/debug/vrm-author")
+        binary = self.repo_path(VRM_AUTHOR)
         if not os.path.exists(binary):
             return {"status": "pending", "reason": "vrm-author not built"}
         if self.tmp is None:
@@ -842,27 +921,25 @@ class Runner:
             if proc.returncode != 0:
                 return {"status": "fail", "reason": f"{step['command']} exited {proc.returncode}: {proc.stderr[-400:]}"}
         mode = CORPUS_ASSERTIONS.get(self.pack["operation"], "conforming")
-        if mode in ("reach", "export"):
-            vector, why = measured_vector(self, draft, list(widths))
-            if vector is None:
+        vector, why = measured_vector(self, draft, list(widths))
+        if vector is None:
+            return {"status": "fail", "reason": why}
+        ok, detail = reach_holds(vector, target, widths, entry["tolerance"])
+        if not ok:
+            return {"status": "fail", "reason": detail, "observed": vector}
+        if mode == "export":
+            final = os.path.join(work, "final.vrm")
+            proc = subprocess.run([binary, "export", "vrm", "--project", project, "--out", final],
+                                  cwd=self.repo, capture_output=True, text=True, timeout=deadline)
+            if proc.returncode != 0:
+                return {"status": "fail", "reason": f"export vrm exited {proc.returncode}: {proc.stderr[-400:]}"}
+            final_vector, why = measured_vector(self, final, list(widths))
+            if final_vector is None:
                 return {"status": "fail", "reason": why}
-            if mode == "reach":
-                ok, detail = reach_holds(vector, target, widths, entry["tolerance"])
-                if not ok:
-                    return {"status": "fail", "reason": detail, "observed": vector}
-            if mode == "export":
-                final = os.path.join(work, "final.vrm")
-                proc = subprocess.run([binary, "export", "vrm", "--project", project, "--out", final],
-                                      cwd=self.repo, capture_output=True, text=True, timeout=deadline)
-                if proc.returncode != 0:
-                    return {"status": "fail", "reason": f"export vrm exited {proc.returncode}: {proc.stderr[-400:]}"}
-                final_vector, why = measured_vector(self, final, list(widths))
-                if final_vector is None:
-                    return {"status": "fail", "reason": why}
-                ok, detail = export_metrics_match(vector, final_vector)
-                if not ok:
-                    return {"status": "fail", "reason": detail}
-                draft = final
+            ok, detail = export_metrics_match(vector, final_vector)
+            if not ok:
+                return {"status": "fail", "reason": detail}
+            draft = final
         env = self.run_lint_with(entry["profile"], draft)
         ok, why = self.accept_envelope(env)
         if not ok or env["report"] is None:
@@ -1083,12 +1160,15 @@ def corpus_status(families, min_eligible):
 
     Ineligible families are neither a pass nor a fail, but the eligible count
     must clear the floor or the dimension fails: "every eligible family passed"
-    is vacuously true at zero eligible families.
+    is vacuously true at zero eligible families, which stays a fail even where
+    the floor itself is zero. The pack schema rejects a floor below 1, so that
+    last case is unreachable through a validated pack and guarded here anyway.
     """
     statuses = [f["status"] for f in families.values()]
     if "fail" in statuses:
         return "fail"
-    if sum(1 for s in statuses if s != "ineligible") < min_eligible:
+    reached = sum(1 for s in statuses if s != "ineligible")
+    if reached < min_eligible or not reached:
         return "fail"
     if "pending" in statuses:
         return "pending"

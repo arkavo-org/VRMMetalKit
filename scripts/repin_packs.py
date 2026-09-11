@@ -26,6 +26,12 @@ target commit (HEAD unless --commit says otherwise) and recomputing packHash;
 the registry in evidence.json follows the same pin. Pins that already hold are
 left alone unless --all forces the move.
 
+Every `provenance.sources` entry naming a commit is restated at the pack's pin,
+because a pack that cites a file at one commit while pinning its hash at another
+cites evidence it is not reproducing. A cited source that is also an oracle must
+carry its pinned hash at the target; one that is not an oracle must at least
+exist there, or the script refuses and writes nothing.
+
 The oracles themselves are never touched: if the target commit does not carry a
 pack's recorded oracle hashes, nothing is written and every offending pack and
 path is named, because a pin that does not carry its oracles is the defect this
@@ -36,6 +42,7 @@ Exit codes: 0 nothing to do or written, 2 refused, 3 changes pending (--check).
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -84,6 +91,45 @@ def write_json(path, obj):
         fh.write(json.dumps(obj, indent=2, ensure_ascii=True) + "\n")
 
 
+SOURCE_CITATION = re.compile(r"^(?P<head>(?P<path>\S+).*) @ (?P<commit>[0-9a-f]{7,40})(?P<tail>.*)$")
+
+
+def cited_sources(pack):
+    """Every provenance.sources entry that names a commit, as (index, path, commit).
+
+    A citation is `<path>[ extra text] @ <commit>[ (note)]`. Entries with no commit are prose
+    references and are left alone.
+    """
+    out = []
+    for i, source in enumerate(pack["provenance"]["sources"]):
+        m = SOURCE_CITATION.match(source) if isinstance(source, str) else None
+        if m:
+            out.append((i, m.group("path"), m.group("commit")))
+    return out
+
+
+def recite_sources(pack, commit):
+    """The pack's sources with every cited commit moved to `commit`, the rest untouched."""
+    sources = list(pack["provenance"]["sources"])
+    for i, _, _ in cited_sources(pack):
+        m = SOURCE_CITATION.match(sources[i])
+        sources[i] = f"{m.group('head')} @ {commit}{m.group('tail')}"
+    return sources
+
+
+def citation_failures(repo, commit, pack):
+    """Every cited source with no pinned hash that commit does not carry.
+
+    A citation that is also an oracle must carry the hash the pack pins there, which is the
+    rule oracle_failures already applies to it; a citation that is not an oracle has no pinned
+    hash, so the weaker requirement is that the path exists at that commit. Either way the
+    script never writes a citation naming a commit that does not carry the cited file.
+    """
+    oracles = pack["runner"]["environment"]["oracleHashes"]
+    return [(rel, None, None) for _, rel, _ in cited_sources(pack)
+            if rel not in oracles and blob_sha256(repo, commit, rel) is None]
+
+
 def oracle_failures(repo, commit, pack):
     """Every (path, expected, actual) in a pack whose oracle does not resolve at commit."""
     out = []
@@ -116,10 +162,11 @@ def plan(repo, packs_dir, evidence_path, target, retarget_all, head):
     desired = {}
     for path, pack in packs:
         pin = target if retarget else pack["runner"]["environment"]["pinnedCommit"]
-        for rel, want, got in oracle_failures(repo, pin, pack):
+        for rel, want, got in oracle_failures(repo, pin, pack) + citation_failures(repo, pin, pack):
             refusals.append((os.path.basename(path), pin, rel, want, got))
         updated = json.loads(json.dumps(pack))
         updated["runner"]["environment"]["pinnedCommit"] = pin
+        updated["provenance"]["sources"] = recite_sources(pack, pin)
         updated["packHash"] = ""
         updated["packHash"] = compute_pack_hash(updated)
         desired[path] = updated
@@ -127,6 +174,10 @@ def plan(repo, packs_dir, evidence_path, target, retarget_all, head):
             why = []
             if pack["runner"]["environment"]["pinnedCommit"] != pin:
                 why.append(f"pinnedCommit {pack['runner']['environment']['pinnedCommit'][:12]} -> {pin[:12]}")
+            restated = sum(1 for old, new in zip(pack["provenance"]["sources"], updated["provenance"]["sources"])
+                           if old != new)
+            if restated:
+                why.append(f"{restated} source citation(s) -> {pin[:12]}")
             if pack["packHash"] != updated["packHash"]:
                 why.append(f"packHash {(pack['packHash'] or '(empty)')[:12]} -> {updated['packHash'][:12]}")
             changes.append((path, ", ".join(why)))
@@ -168,10 +219,12 @@ def main(argv=None):
 
     desired, evidence, changes, refusals = plan(repo, packs_dir, evidence_path, target, args.all, head)
     if refusals:
-        print("refused: the target commit does not carry these oracles", file=sys.stderr)
+        print("refused: the target commit does not carry these oracles and cited sources", file=sys.stderr)
         for name, pin, rel, want, got in refusals:
-            print(f"  {name} @ {pin[:12]}: {rel} is {got or 'absent'}, not the pinned {want}", file=sys.stderr)
-        print(f"{len(refusals)} oracle(s) unresolved; nothing written", file=sys.stderr)
+            detail = (f"is {got or 'absent'}, not the pinned {want}" if want
+                      else "is absent there, so no citation may name that commit")
+            print(f"  {name} @ {pin[:12]}: {rel} {detail}", file=sys.stderr)
+        print(f"{len(refusals)} reference(s) unresolved; nothing written", file=sys.stderr)
         return EXIT["refused"]
     held = next(iter({p["runner"]["environment"]["pinnedCommit"] for p in desired.values()}))
     if not changes:

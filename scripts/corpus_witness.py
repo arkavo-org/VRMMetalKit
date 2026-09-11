@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+# Copyright 2026 Arkavo
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 """Solve per-family control values for one (corpus, template) pair and write a witnesses file.
 
 Drives the shipped vrm-author CLI: project init, object set (disabling the template's
@@ -25,7 +38,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from acceptance_run import family_targets, metric_value
+from acceptance_run import family_targets, metric_value, rule_widths
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -71,8 +84,9 @@ def run_cli(cmd, cwd):
     """Run a vrm-author subprocess whose failure may describe this candidate rather than the
     process: exit 1 (gate failed) and exit 2 (invalid request) mean the template refused this
     candidate and raise InfeasibleCandidate; any other non-zero exit (3 missing capability, 4
-    conflict, 5 internal error) or a failure to launch the binary at all is infrastructure and
-    raises RuntimeError with the command and stderr surfaced, exactly like run_checked."""
+    conflict, 5 internal error) is infrastructure and raises RuntimeError with the command and
+    stderr surfaced, exactly like run_checked. A binary that cannot be launched at all does not
+    reach either branch: subprocess raises FileNotFoundError, which propagates naming it."""
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if proc.returncode in (1, 2):
         raise InfeasibleCandidate(proc.stderr.strip())
@@ -93,16 +107,6 @@ def sha256_file(path):
         for chunk in iter(lambda: fh.read(1 << 20), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def rule_widths(profile):
-    """Metric path to the width of its two-sided rule range; one-sided rules have no scale."""
-    widths = {}
-    for rule in profile["rules"]:
-        check = rule.get("check") or {}
-        if check.get("type") == "range" and "min" in check and "max" in check:
-            widths[rule["metric"]] = float(check["max"]) - float(check["min"])
-    return widths
 
 
 def residuals(observed, target, widths):

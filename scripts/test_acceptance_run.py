@@ -191,6 +191,13 @@ def read_lines(path):
         return fh.read().splitlines()
 
 
+def replayed_commands(calls_log):
+    """The replay steps a recording stub logged, with the runner's own template-list probe of the
+    witnesses document's provenance removed: that probe is not a replay of any witness."""
+    names = [command_name(line.split()) for line in read_lines(calls_log)]
+    return [n for n in names if n != "template list"]
+
+
 def command_name(tokens):
     """The leading non-flag tokens of a recorded CLI invocation, e.g. "control set"."""
     name = []
@@ -742,6 +749,25 @@ class ShippedPackTests(unittest.TestCase):
                                      f"{name}: {rel} at pinnedCommit {commit} hashes to {got}, "
                                      f"not the pinned {want}")
 
+    def test_every_shipped_pack_cites_its_sources_at_the_commit_it_pins(self):
+        """The same rule as the oracles, for provenance.sources: a pack that cites a file at one
+        commit while pinning its hash at another cites evidence it is not reproducing."""
+        packs_dir = os.path.join(ACCEPTANCE, "packs")
+        for name in sorted(n for n in os.listdir(packs_dir) if n.endswith(".json")):
+            pack = R.load_json(os.path.join(packs_dir, name))
+            env = pack["runner"]["environment"]
+            for _, rel, commit in RP.cited_sources(pack):
+                with self.subTest(pack=name, path=rel):
+                    self.assertEqual(commit, env["pinnedCommit"],
+                                     f"{name}: {rel} is cited at {commit}, not the pinned {env['pinnedCommit']}")
+                    got = RP.blob_sha256(REPO, commit, rel)
+                    self.assertIsNotNone(got, f"{name}: {rel} does not exist at the cited commit {commit}")
+                    want = env["oracleHashes"].get(rel)
+                    if want is not None:
+                        self.assertEqual(got, want,
+                                         f"{name}: {rel} at the cited commit {commit} hashes to {got}, "
+                                         f"not the pinned {want}")
+
     def test_evidence_registry_is_empty_and_pins_what_the_packs_pin(self):
         packs_dir = os.path.join(ACCEPTANCE, "packs")
         pins = {R.load_json(os.path.join(packs_dir, n))["runner"]["environment"]["pinnedCommit"]
@@ -814,16 +840,72 @@ class RepinPacks(unittest.TestCase):
                 self.assertEqual(pack["packHash"], R.compute_pack_hash(pack))
         self.assertEqual(R.load_json(self.evidence)["pinnedCommit"], self.head)
 
-    def test_repinning_touches_nothing_but_the_pin_and_its_hash(self):
+    def test_repinning_touches_nothing_but_the_pin_its_citations_and_its_hash(self):
         self.unpin()
         before = {n: R.load_json(os.path.join(ACCEPTANCE, "packs", n)) for n in sorted(os.listdir(self.packs))}
         self.assertEqual(self.run_repin()[0], RP.EXIT["ok"])
         for name, original in before.items():
             after = R.load_json(os.path.join(self.packs, name))
             after["runner"]["environment"]["pinnedCommit"] = original["runner"]["environment"]["pinnedCommit"]
+            after["provenance"]["sources"] = original["provenance"]["sources"]
             after["packHash"] = original["packHash"]
             with self.subTest(pack=name):
                 self.assertEqual(after, original)
+
+    def test_repinning_restates_every_cited_source_at_the_new_pin(self):
+        self.unpin()
+        stale = "0" * 40
+        path = os.path.join(self.packs, "version.json")
+        pack = R.load_json(path)
+        pack["provenance"]["sources"] = [f"{rel} @ {stale}" for rel in sorted(pack["runner"]["environment"]["oracleHashes"])]
+        pack["packHash"] = ""
+        pack["packHash"] = R.compute_pack_hash(pack)
+        RP.write_json(path, pack)
+
+        code, out, err = self.run_repin()
+
+        self.assertEqual(code, RP.EXIT["ok"], out + err)
+        after = R.load_json(path)
+        self.assertEqual([c for _, _, c in RP.cited_sources(after)], [self.head] * len(after["provenance"]["sources"]))
+        self.assertEqual(after["packHash"], R.compute_pack_hash(after))
+
+    def test_a_prose_source_without_a_commit_is_left_alone(self):
+        self.unpin()
+        path = os.path.join(self.packs, "version.json")
+        pack = R.load_json(path)
+        prose = "docs/proposals/vrm-author-cli/commands.md (`version` row)"
+        pack["provenance"]["sources"] = pack["provenance"]["sources"] + [prose]
+        pack["packHash"] = ""
+        pack["packHash"] = R.compute_pack_hash(pack)
+        RP.write_json(path, pack)
+
+        self.assertEqual(self.run_repin()[0], RP.EXIT["ok"])
+
+        self.assertIn(prose, R.load_json(path)["provenance"]["sources"])
+
+    def test_a_cited_source_absent_at_the_target_refuses_and_writes_nothing(self):
+        self.unpin()
+        path = os.path.join(self.packs, "version.json")
+        pack = R.load_json(path)
+        pack["provenance"]["sources"] = pack["provenance"]["sources"] + [f"scripts/no_such_source.py @ {'0' * 40}"]
+        pack["packHash"] = ""
+        pack["packHash"] = R.compute_pack_hash(pack)
+        RP.write_json(path, pack)
+        before = self.snapshot()
+
+        code, _, err = self.run_repin()
+
+        self.assertEqual(code, RP.EXIT["refused"])
+        self.assertIn("scripts/no_such_source.py", err)
+        self.assertIn("nothing written", err)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_cited_source_carries_its_pinned_hash_note_at_the_target(self):
+        pack = R.load_json(os.path.join(ACCEPTANCE, "packs", "export-vrm.json"))
+        cited = {rel for _, rel, _ in RP.cited_sources(pack)}
+        self.assertIn("Tests/VRMAuthorKitTests/Export/InteropTests.swift", cited,
+                      "the one cited source that is not an oracle; it must still exist at the pin")
+        self.assertEqual(RP.citation_failures(REPO, pack["runner"]["environment"]["pinnedCommit"], pack), [])
 
     def test_an_oracle_absent_at_the_target_refuses_and_writes_nothing(self):
         path = self.unpin()
@@ -985,6 +1067,10 @@ class CorpusArraySchema(unittest.TestCase):
         self.assertIn("corpus[0].driver is required when runner.kind is swift-test",
                       R.validate_pack(pack, self.schema))
 
+    def test_a_driver_other_than_the_shipped_cli_is_rejected(self):
+        pack = self.pack([corpus_entry(driver="XCTestCorpusDriver")])
+        self.assertIn("!= 'vrm-author-cli'", " ".join(R.validate_pack(pack, self.schema)))
+
     def test_duplicate_style_ids_are_rejected(self):
         pack = self.pack([corpus_entry(), corpus_entry()])
         self.assertIn("corpus styleId values must be unique", R.validate_pack(pack, self.schema))
@@ -1042,6 +1128,11 @@ class CorpusRollup(unittest.TestCase):
         fams = {"a": {"status": "fail"}, "b": {"status": "pending"}}
         self.assertEqual(self.rollup(fams, 1), "fail")
 
+    def test_an_all_ineligible_set_fails_even_at_a_floor_of_zero(self):
+        fams = {"a": {"status": "ineligible"}, "b": {"status": "ineligible"}}
+        self.assertEqual(self.rollup(fams, 0), "fail",
+                         "the schema rejects a floor below 1, but zero measured families is never a pass")
+
 
 class CorpusSwiftReplay(unittest.TestCase):
     """run_corpus_swift against a fully synthetic style set, pinned by sha256 like the real
@@ -1083,9 +1174,11 @@ class CorpusSwiftReplay(unittest.TestCase):
             cls.measurement("fam-c", head_count=6.2, drop_metric="ipd_m"),
         ]}).encode()
         witnesses_bytes = json.dumps({
-            "corpusManifestSha256": "0" * 64, "templateId": "native-anime-v1", "templateSha256": "1" * 64,
+            "corpusManifestSha256": R.sha256_bytes(manifest_bytes),
+            "templateId": "native-anime-v1", "templateSha256": "1" * 64,
             "profileId": "test-style", "solver": {"budget": 100, "seed": 42, "tolerance": 0.25},
-            "generated": "2026-09-11T00:00:00Z",
+            "generated": {"styleLintSha256": R.sha256_file(os.path.join(REPO, R.STYLE_LINT)),
+                          "measurementsSha256": R.sha256_bytes(measurements_bytes)},
             "families": {
                 "fam-a": {"eligible": True, "controls": {"height": 1.6}, "residuals": {"proportions.head_count": 0.1},
                           "replaySteps": synthetic_replay_steps({"height": 1.6})},
@@ -1224,7 +1317,18 @@ class CorpusSwiftReplay(unittest.TestCase):
         self.assertEqual(result["status"], "pending")
         self.assertEqual(code, 2)
 
-    def stub_cli_repo(self, work):
+    def stub_linter_repo(self, work, height=1.6, head_count=6.4):
+        """The stub style_lint.py every replay measures through, answering with one record.
+        Its bytes are fixed, so a witness can record its sha256 as the linter it was solved
+        against without the fixture having to read the file back."""
+        scripts_dir = os.path.join(work, "scripts")
+        os.makedirs(scripts_dir, exist_ok=True)
+        with open(os.path.join(scripts_dir, "style_lint.py"), "w", encoding="utf-8") as fh:
+            fh.write(STUB_LINTER)
+        with open(os.path.join(scripts_dir, "measure.json"), "w", encoding="utf-8") as fh:
+            json.dump({"default": {"asset": {"height_m": height}, "proportions": {"head_count": head_count}}}, fh)
+
+    def stub_cli_repo(self, work, **measure):
         """A repo root whose .build/debug/vrm-author is a stub that exits 0 for every step,
         so replay_family's build steps succeed without touching the real CLI."""
         bin_dir = os.path.join(work, ".build", "debug")
@@ -1233,6 +1337,19 @@ class CorpusSwiftReplay(unittest.TestCase):
         with open(binary, "w", encoding="utf-8") as fh:
             fh.write("#!/bin/sh\nexit 0\n")
         os.chmod(binary, 0o755)
+        self.stub_linter_repo(work, **measure)
+
+    def template_listing_cli_repo(self, work, sha="1" * 64):
+        """Like recording_cli_repo, but `template list` answers with one installed template, so
+        the runner can compare the witnesses document's template hash against it."""
+        calls_log = self.recording_cli_repo(work)
+        binary = os.path.join(work, ".build", "debug", "vrm-author")
+        listing = json.dumps({"result": {"packs": [{"id": "native-anime-v1", "sha256": sha}]}})
+        with open(binary, "w", encoding="utf-8") as fh:
+            fh.write('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$(dirname "$0")/calls.log"\n'
+                     f'if [ "$1 $2" = "template list" ]; then printf \'%s\' \'{listing}\'; fi\nexit 0\n')
+        os.chmod(binary, 0o755)
+        return calls_log
 
     def recording_cli_repo(self, work):
         """Like stub_cli_repo, but every invocation appends its arguments to calls.log, so a test
@@ -1243,27 +1360,41 @@ class CorpusSwiftReplay(unittest.TestCase):
         with open(binary, "w", encoding="utf-8") as fh:
             fh.write('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$(dirname "$0")/calls.log"\nexit 0\n')
         os.chmod(binary, 0o755)
+        self.stub_linter_repo(work)
         return os.path.join(bin_dir, "calls.log")
 
-    def single_family_style(self, work, style_id, family, replay_steps=True, eligible=True, seed=1337):
+    def single_family_style(self, work, style_id, family, replay_steps=True, eligible=True, seed=1337,
+                            witness_overrides=None):
         """One style set with a single eligible family, its own profile id/version, pinned by
-        sha256 like the real corpus. replay_steps=False writes the witness without the recorded
-        steps, as a pre-replaySteps witnesses file would; eligible=False writes an ineligible
-        witness; seed=None writes a solver block with no seed. The seed is deliberately not 42,
-        so a replayer that hardcoded one could not pass the steps test."""
-        profile_bytes = json.dumps({"id": style_id, "version": "1", "rules": []}).encode()
+        sha256 like the real corpus. Its profile scores the two metrics the stub linter reports,
+        so a replay that reaches the family target passes and one that does not fails.
+        replay_steps=False writes the witness without the recorded steps, as a pre-replaySteps
+        witnesses file would; eligible=False writes an ineligible witness; seed=None writes a
+        solver block with no seed. The seed is deliberately not 42, so a replayer that hardcoded
+        one could not pass the steps test. witness_overrides rewrites top-level document fields,
+        which is how a document solved against other inputs is expressed."""
+        profile_bytes = json.dumps({
+            "id": style_id, "version": "1",
+            "rules": [{"id": "h", "metric": "asset.height_m", "check": {"type": "range", "min": 1.2, "max": 2.1}},
+                      {"id": "c", "metric": "proportions.head_count",
+                       "check": {"type": "range", "min": 5.0, "max": 7.0}}],
+        }).encode()
         manifest_bytes = json.dumps({"assets": []}).encode()
-        measurements_bytes = json.dumps({"measurements": [self.measurement(family, head_count=6.4)]}).encode()
-        witnesses_bytes = json.dumps({
-            "corpusManifestSha256": "0" * 64, "templateId": "native-anime-v1", "templateSha256": "1" * 64,
+        measurements_bytes = json.dumps({"measurements": [
+            {"asset": {"file": f"{family}.vrm", "body_family": family, "height_m": 1.6, "vrm_version": "1.0"},
+             "proportions": {"head_count": 6.4}}]}).encode()
+        witnesses_bytes = json.dumps(dict({
+            "corpusManifestSha256": R.sha256_bytes(manifest_bytes),
+            "templateId": "native-anime-v1", "templateSha256": "1" * 64,
             "profileId": style_id,
             "solver": dict({"budget": 100, "tolerance": 0.25}, **({"seed": seed} if seed is not None else {})),
-            "generated": "2026-09-11T00:00:00Z",
+            "generated": {"styleLintSha256": R.sha256_bytes(STUB_LINTER.encode()),
+                          "measurementsSha256": R.sha256_bytes(measurements_bytes)},
             "families": {family: dict({"eligible": eligible, "controls": {"height": 1.6},
                                         "residuals": {"proportions.head_count": 0.1 if eligible else 0.9}},
                                       **({"replaySteps": synthetic_replay_steps({"height": 1.6})}
                                          if replay_steps and eligible else {}))},
-        }).encode()
+        }, **(witness_overrides or {}))).encode()
         paths = {}
         for name, data in (("profile.json", profile_bytes), ("manifest.json", manifest_bytes),
                            ("measurements.json", measurements_bytes), ("witnesses.json", witnesses_bytes)):
@@ -1319,7 +1450,7 @@ class CorpusSwiftReplay(unittest.TestCase):
         self.addCleanup(shutil.rmtree, runner.tmp or work, ignore_errors=True)
 
         self.assertEqual(out["families"]["fam-a"]["status"], "pass")
-        calls = [line.split() for line in read_lines(calls_log)]
+        calls = [c for c in (line.split() for line in read_lines(calls_log)) if command_name(c) != "template list"]
         self.assertEqual([command_name(c) for c in calls],
                          ["project init", "object set", "control set", "build"])
         init = calls[0]
@@ -1346,7 +1477,8 @@ class CorpusSwiftReplay(unittest.TestCase):
         record = out["families"]["fam-a"]
         self.assertEqual(record["status"], "fail")
         self.assertIn("replaySteps", record["reason"])
-        self.assertFalse(os.path.exists(calls_log), "a witness without recorded steps must not fall back to a replay")
+        self.assertEqual(replayed_commands(calls_log), [],
+                         "a witness without recorded steps must not fall back to a replay")
         self.assertEqual(out["status"], "fail")
 
     def test_witnesses_without_a_solver_seed_fail_the_style_set(self):
@@ -1361,7 +1493,109 @@ class CorpusSwiftReplay(unittest.TestCase):
 
         self.assertEqual(out["status"], "fail")
         self.assertIn("solver.seed", out["reason"])
-        self.assertFalse(os.path.exists(calls_log), "an unusable witnesses document must not be replayed")
+        self.assertEqual(replayed_commands(calls_log), [],
+                         "an unusable witnesses document must not be replayed")
+
+    def provenance_mismatch(self, name, overrides, cli=None):
+        """run_corpus_swift over a style set whose witnesses document records one input other
+        than the one the style set declares."""
+        work = tempfile.mkdtemp(prefix=f"corpus_swift_prov_{name}_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a", witness_overrides=overrides)
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        calls_log = (cli or self.recording_cli_repo)(work)
+
+        runner = R.Runner(pack, repo=work)
+        runner.run_lint_with = self.conforming_lint(pack)
+        out = runner.run_corpus_swift(entry)
+
+        self.assertEqual(out["status"], "fail")
+        self.assertIn("solved against other inputs", out["reason"])
+        self.assertEqual(replayed_commands(calls_log), [],
+                         "a witnesses document solved against other inputs must not be replayed")
+        return out["reason"]
+
+    def generated_with(self, **over):
+        base = {"styleLintSha256": R.sha256_bytes(STUB_LINTER.encode()), "measurementsSha256": "0" * 64}
+        measurements = json.dumps({"measurements": [
+            {"asset": {"file": "fam-a.vrm", "body_family": "fam-a", "height_m": 1.6, "vrm_version": "1.0"},
+             "proportions": {"head_count": 6.4}}]}).encode()
+        base["measurementsSha256"] = R.sha256_bytes(measurements)
+        base.update(over)
+        return base
+
+    def test_a_witnesses_document_solved_on_another_corpus_manifest_fails(self):
+        reason = self.provenance_mismatch("manifest", {"corpusManifestSha256": "a" * 64})
+        self.assertIn("corpusManifestSha256", reason)
+
+    def test_a_witnesses_document_solved_on_other_measurements_fails(self):
+        reason = self.provenance_mismatch("measurements",
+                                          {"generated": self.generated_with(measurementsSha256="b" * 64)})
+        self.assertIn("generated.measurementsSha256", reason)
+
+    def test_a_witnesses_document_solved_with_another_linter_fails(self):
+        reason = self.provenance_mismatch("linter", {"generated": self.generated_with(styleLintSha256="c" * 64)})
+        self.assertIn("generated.styleLintSha256", reason)
+
+    def test_a_witnesses_document_naming_another_profile_fails(self):
+        reason = self.provenance_mismatch("profile", {"profileId": "other-style"})
+        self.assertIn("profileId", reason)
+
+    def test_a_witnesses_document_solved_at_another_tolerance_fails(self):
+        reason = self.provenance_mismatch("tolerance", {"solver": {"budget": 100, "seed": 1337, "tolerance": 0.4}})
+        self.assertIn("solver.tolerance", reason)
+
+    def test_a_witnesses_document_solved_against_another_template_build_fails(self):
+        reason = self.provenance_mismatch("template", {"templateSha256": "d" * 64},
+                                          cli=self.template_listing_cli_repo)
+        self.assertIn("templateSha256", reason)
+
+    def test_a_template_the_shipped_cli_cannot_report_leaves_the_template_unchecked(self):
+        work = tempfile.mkdtemp(prefix="corpus_swift_notemplate_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a", witness_overrides={"templateSha256": "d" * 64})
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        self.stub_cli_repo(work)
+
+        runner = R.Runner(pack, repo=work)
+        runner.run_lint_with = self.conforming_lint(pack)
+        out = runner.run_corpus_swift(entry)
+        self.addCleanup(shutil.rmtree, runner.tmp or work, ignore_errors=True)
+
+        self.assertEqual(out["families"]["fam-a"]["status"], "pass",
+                         "a binary that cannot list templates leaves the field unchecked rather than failing it")
+
+    def test_measurements_gaining_a_family_fails_the_declared_denominator(self):
+        work = tempfile.mkdtemp(prefix="corpus_swift_denominator_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a")
+        measurements = R.load_json(entry["measurements"])
+        measurements["measurements"].append(
+            {"asset": {"file": "fam-b.vrm", "body_family": "fam-b", "height_m": 1.6, "vrm_version": "1.0"},
+             "proportions": {"head_count": 6.4}})
+        data = json.dumps(measurements).encode()
+        with open(entry["measurements"], "wb") as fh:
+            fh.write(data)
+        entry["measurementsSha256"] = R.sha256_bytes(data)
+        entry["witnesses"], entry["witnessesSha256"] = self.rewrite_witness_measurements(entry, data)
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        calls_log = self.recording_cli_repo(work)
+
+        out = R.Runner(pack, repo=work).run_corpus_swift(entry)
+
+        self.assertEqual(out["status"], "fail")
+        self.assertIn("2 families, pack expects 1", out["reason"])
+        self.assertEqual(replayed_commands(calls_log), [])
+
+    def rewrite_witness_measurements(self, entry, measurements_bytes):
+        """Re-stamp the witnesses document with a measurements hash, so a denominator test fails
+        on the family count rather than on the provenance check that precedes it."""
+        document = R.load_json(entry["witnesses"])
+        document["generated"]["measurementsSha256"] = R.sha256_bytes(measurements_bytes)
+        data = json.dumps(document).encode()
+        with open(entry["witnesses"], "wb") as fh:
+            fh.write(data)
+        return entry["witnesses"], R.sha256_bytes(data)
 
     def test_an_all_ineligible_style_set_fails_with_the_floor_reason(self):
         work = tempfile.mkdtemp(prefix="corpus_swift_floor_")
@@ -1572,13 +1806,30 @@ class CorpusAssertionDispatch(unittest.TestCase):
         self.addCleanup(shutil.rmtree, runner.tmp or work, ignore_errors=True)
         return record
 
-    def test_build_takes_the_conforming_mode_and_measures_nothing(self):
+    def test_build_measures_reach_as_well_as_taking_the_conforming_mode(self):
         work = self.repo()
         record = self.replay(work, "build")
         self.assertEqual(record["status"], "pass")
         self.assertEqual(record["verdict"], "conforming")
         self.assertEqual(self.calls(work), ["project init", "object set", "control set", "build"])
-        self.assertEqual(self.measured(work), [], "conforming evidence is the lint verdict, not a metric vector")
+        self.assertEqual(self.measured(work), ["draft.vrm"],
+                         "conforming alone is what the fixture dimension already establishes; the corpus "
+                         "dimension has to measure the output against the family target too")
+
+    def test_a_witness_edited_to_claim_an_unreachable_family_fails_reach_on_build(self):
+        """The forgery §4.2 of the spec claims is impossible: a witness whose controls are
+        rewritten to name a family the template does not reach. The stub CLI builds whatever it is
+        given and the stub linter answers with the same vector either way, so the only thing that
+        can reject the edit is the measured vector against that family's target."""
+        work = self.repo({"default": self.measurement_record(height=1.6, head_count=6.4)})
+        unreachable = {"asset.height_m": 1.15, "proportions.head_count": 8.2}
+
+        record = self.replay(work, "build", target=unreachable)
+
+        self.assertEqual(record["status"], "fail")
+        self.assertIn("outside tolerance", record["reason"])
+        self.assertIn("proportions.head_count", record["reason"])
+        self.assertEqual(record["observed"], {"asset.height_m": 1.6, "proportions.head_count": 6.4})
 
     def test_control_set_takes_the_reach_mode_and_passes_inside_the_tolerance(self):
         work = self.repo({"default": self.measurement_record(height=1.61, head_count=6.45)})

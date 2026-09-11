@@ -193,7 +193,7 @@
           "witnesses": { "type": "string", "description": "swift-test packs: solved controls per family, keyed by the corpus and template hashes." },
           "witnessesSha256": { "$ref": "#/$defs/sha256" },
           "familyKey": { "type": "string" },
-          "driver": { "type": "string", "description": "swift-test packs: the replay driver. vrm-author-cli replays each witness through the shipped executable." },
+          "driver": { "type": "string", "const": "vrm-author-cli", "description": "swift-test packs: the replay driver. vrm-author-cli replays each witness through the shipped executable, which is the only driver the runner implements." },
           "tolerance": { "type": "number", "description": "Fraction of each target metric's own rule range width in this style's profile inside which a residual counts as reached. Must be greater than 0 and at most 1; enforced in validate_pack, since exclusiveMinimum/maximum are outside the schema subset validate_schema supports." },
           "expectedFamilies": { "type": "integer", "minimum": 1 },
           "minEligibleFamilies": { "type": "integer", "minimum": 1, "description": "Floor below which the dimension is fail, never pass. Closes the vacuous pass at zero eligible families." }

@@ -270,16 +270,26 @@ final class MaterialsPackTests: XCTestCase {
         XCTAssertThrowsError(try MaterialShading.solve(shadowEnd: 0, terminatorWidth: .nan)) { XCTAssertEqual(($0 as? AuthorError)?.code, .invalidRequest) }
     }
 
-    func testShadingSolvesAtParameterExtremesForEveryRole() throws {
-        let extremes: [(shadowEnd: Double, terminatorWidth: Double)] = [
-            (-1.0, 0.0), (-1.0, 2.0), (0.0, 0.0), (0.0, 2.0), (-1.0, 0.0),
+    func testShadingSolvesAtTheLegalParameterCorners() throws {
+        let corners: [(shadowEnd: Double, terminatorWidth: Double)] = [
+            (-1.0, 0.0), (-1.0, 2.0), (0.0, 0.0), (0.0, 2.0),
         ]
+        for point in corners {
+            let solved = try MaterialShading.solve(shadowEnd: point.shadowEnd, terminatorWidth: point.terminatorWidth)
+            XCTAssertTrue((-1.0...1.0).contains(solved.shadingShiftFactor), "shift out of range at \(point)")
+            XCTAssertTrue((0.0...1.0).contains(solved.shadingToonyFactor), "toony out of range at \(point)")
+        }
+    }
+
+    func testEveryRoleDefaultRoundTripsThroughTheShadingSolver() throws {
         for role in MaterialRole.allCases {
-            for point in extremes {
-                let solved = try MaterialShading.solve(shadowEnd: point.shadowEnd, terminatorWidth: point.terminatorWidth)
-                XCTAssertTrue((-1.0...1.0).contains(solved.shadingShiftFactor), "\(role) shift out of range at \(point)")
-                XCTAssertTrue((0.0...1.0).contains(solved.shadingToonyFactor), "\(role) toony out of range at \(point)")
-            }
+            let declared = MaterialRoleDefaults.shading(for: role)
+            let derived = MaterialShading.derive(toony: declared.toony, shift: declared.shift)
+            let solved = try MaterialShading.solve(shadowEnd: derived.shadowEnd, terminatorWidth: derived.terminatorWidth)
+            XCTAssertEqual(solved.shadingToonyFactor, declared.toony, accuracy: 1e-9, "\(role) toony")
+            XCTAssertEqual(solved.shadingShiftFactor, declared.shift, accuracy: 1e-9, "\(role) shift")
+            XCTAssertEqual(solved.shadowEnd, derived.shadowEnd, accuracy: 1e-9, "\(role) shadow end")
+            XCTAssertEqual(solved.terminatorWidth, derived.terminatorWidth, accuracy: 1e-9, "\(role) terminator width")
         }
     }
 
