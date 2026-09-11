@@ -141,7 +141,7 @@ public struct EvidencePolicy: Codable, Hashable, Sendable {
     }
 
     public var hash: String {
-        (try? CanonicalJSON.sha256(["minimumLevel": .string(minimumLevel.rawValue), "requireCurrent": .bool(true)])) ?? ""
+        (try? CanonicalJSON.sha256(["minimumLevel": .string(minimumLevel.rawValue), "requireCurrent": .bool(requireCurrent)])) ?? ""
     }
 }
 

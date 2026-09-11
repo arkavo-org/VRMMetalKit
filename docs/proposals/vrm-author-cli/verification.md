@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 # Verification contract for agent-coordinated implementation
 
-Status: proposed. This is the primary coordination artifact for the
+Status: active. This is the primary coordination artifact for the
 [authoring proposal](README.md); the [v1](commands.md) and [reserved](reserved.md)
 command catalogs consume it. This Markdown file is not itself an oracle. The
 executable pieces live under `acceptance/`: the pack schema

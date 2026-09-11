@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 # Worked v1 authoring session
 
-This is a proposed Stage B acceptance scenario, not currently runnable tooling.
+This is the Stage B acceptance scenario; every command it invokes is runnable.
 Every invocation belongs to the [v1 catalog](commands.md); payloads are defined in
 [parameters.md](parameters.md). Reserved solvers are not needed to finish the avatar.
 

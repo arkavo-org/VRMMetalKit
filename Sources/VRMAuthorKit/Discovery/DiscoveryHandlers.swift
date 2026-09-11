@@ -106,7 +106,11 @@ public enum DiscoveryHandlers {
         VRMAuthorRenderLocator.renderers(executableURL: context.executableURL, env: context.env)
     }
 
-    public static func signerAvailable(context: OperationContext) -> Bool { false }
+    public static func signerReport(context: OperationContext) -> SignerAvailabilityReport {
+        SignerAvailability.check(env: context.env, cwd: context.cwd)
+    }
+
+    public static func signerAvailable(context: OperationContext) -> Bool { signerReport(context: context).available }
 
     static func capabilities(_ context: OperationContext, _ request: JSONValue) throws -> ResultEnvelope {
         let requestId = request["requestId"]?.string
@@ -207,7 +211,8 @@ public enum DiscoveryHandlers {
 
         let renderers = renderers(context: context)
         if renderers.isEmpty { warnings.append(AuthorWarning(code: "RENDERER_MISSING", message: "vrm-author-render not found next to the executable or via VRM_AUTHOR_RENDERER; authoring-v1 visual scenarios report incomplete.")) }
-        warnings.append(AuthorWarning(code: "SIGNER_UNAVAILABLE", message: "No signer is configured; deliver returns incomplete."))
+        let signer = signerReport(context: context)
+        if !signer.available { warnings.append(AuthorWarning(code: "SIGNER_UNAVAILABLE", message: "No signer is configured; deliver returns incomplete. \(signer.reason)")) }
 
         var acceptance: [String: JSONValue] = ["packs": .number(Double(context.evidenceRegistry.packs.count)), "entries": .number(Double(context.evidenceRegistry.entries.count))]
         if let dir = context.evidenceRegistry.acceptanceDirectory { acceptance["directory"] = .string(dir.path) }
@@ -218,7 +223,7 @@ public enum DiscoveryHandlers {
             "python3": .object(python),
             "styleLinter": .object(linter),
             "renderer": ["found": .bool(!renderers.isEmpty), "renderers": JSONValue(renderers)],
-            "signer": ["available": .bool(signerAvailable(context: context)), "reason": "no signer credential reference configured"],
+            "signer": signer.json,
             "determinism": ["backend": "portable-strict/1", "mode": "cpu-strict", "fastMath": false, "fmaContraction": false, "threads": 1,
                             "platform": .string(platformDescription()), "crossPlatformVerified": false],
             "acceptance": .object(acceptance),

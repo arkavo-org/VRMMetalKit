@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "bb82ec3a80d4a114a02cb4bf8c0f66612384fa7ef9b336a2b8cf7e2bf906bf87",
   "resultSchemaHash": "fe78c4a002fe467471d652b1cc3ce2b8674fd1bc7f14b7317f3404c3155a6e94",
-  "packHash": "2134227a5da2be7b52199b0aba626d02f42342505e293b4b93637122cb527ace",
+  "packHash": "78f498491e05cbd6b8137b570fe54e2a59c3ded4fb9e55d7b3341f5dbdfcc693",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -43,7 +43,7 @@
     "invariants": [
       "lists installed packs and items with their manifest hashes and control schemas; the native-anime-v1 control table must match parameters.md",
       "an unknown category is an invalid request",
-      "no handler is installed in this build: the operation is registered schema-only, capabilities reports runnable=false and invoking it is NOT_IMPLEMENTED (exit 3)",
+      "the handler is installed: capabilities reports runnable=true and a valid request succeeds; a registry without the Template installer is the only NOT_IMPLEMENTED path (exit 3)",
       "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
     ],
     "units": "none (project-free); revisions are nonnegative integers",
@@ -59,7 +59,7 @@
       "synthetic": true,
       "class": "positive",
       "expected": {},
-      "note": "TemplatePackTests.testPackIsRegisteredWithStableManifestHash and testControlTableMatchesParametersContract describe the expected listing; no test invokes template list itself"
+      "note": "TemplateListPackTests.testListsBuiltinPackWithHashAndControls invokes template list and pins the pack id, manifest sha256 and control keys; TemplatePackTests.testControlTableMatchesParametersContract pins the native-anime-v1 control table against parameters.md"
     },
     {
       "id": "unknown-category",
@@ -67,7 +67,7 @@
       "synthetic": true,
       "class": "negative",
       "expected": {},
-      "note": "expected invalidRequest once a handler exists; no covering test today"
+      "note": "TemplateListPackTests.testRejectsUnknownCategoryAndUnknownField: an out-of-enum category and an unknown field are both invalidRequest"
     },
     {
       "id": "no-packs-installed",
@@ -75,7 +75,7 @@
       "synthetic": true,
       "class": "degenerate",
       "expected": {},
-      "note": "expected empty list; ControlPackTests.testListRequiresInstalledTemplatePack shows the missingCapability path a project-bound read takes"
+      "note": "TemplateListPackTests.testEmptyRegistryListsNothingAndDeterministicOrder: an empty registry lists nothing and repeated invocations are byte-identical; ControlPackTests.testListRequiresInstalledTemplatePack shows the missingCapability path a project-bound read takes"
     }
   ],
   "seeds": [],

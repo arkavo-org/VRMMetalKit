@@ -11,7 +11,8 @@ specific language governing permissions and limitations under the License.
 
 # V1 command contract
 
-Part of the [proposal](README.md). All commands are proposed, not implemented.
+Part of the [proposal](README.md). Every command here is implemented and runnable;
+production eligibility is gated separately by admitted evidence.
 This is the complete **Stage B release allowlist**. Stage A defines the entire
 registry and each operation's executable acceptance pack before handler assignment;
 see the primary [verification contract](verification.md), whose staging section

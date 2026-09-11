@@ -213,6 +213,14 @@ final class DiscoveryPackTests: XCTestCase {
         XCTAssertTrue(noPython.warnings.contains { $0.code == "PYTHON3_MISSING" })
     }
 
+    func testEvidencePolicyHashCoversRequireCurrent() {
+        let strict = EvidencePolicy(minimumLevel: .fixtureTested, requireCurrent: true)
+        let lax = EvidencePolicy(minimumLevel: .fixtureTested, requireCurrent: false)
+        XCTAssertEqual(strict.hash.count, 64)
+        XCTAssertNotEqual(strict.hash, lax.hash)
+        XCTAssertEqual(strict.hash, EvidencePolicy(minimumLevel: .fixtureTested, requireCurrent: true).hash)
+    }
+
     func testEvidenceRegistryLocatorAndDefaults() throws {
         let cwd = DiscoveryPackTests.acceptanceDirectory.deletingLastPathComponent()
         XCTAssertEqual(EvidenceRegistry.locate(cwd: cwd, executableURL: nil, env: [:])?.path, DiscoveryPackTests.acceptanceDirectory.path)

@@ -11,7 +11,9 @@ specific language governing permissions and limitations under the License.
 
 # Proposal: VRMAuthor — autonomous VRM authoring CLI
 
-Status: proposed; none of the commands below are implemented by this proposal.  
+Status: implemented on branch `vrm-author-cli`. All 35 v1 commands are registered and
+runnable; none is production-eligible yet, because evidence admission, inspection
+records and the visual judge remain open. Reserved designs stay unimplemented.  
 Date: 2026-09-10. Proposed executable: `vrm-author`. Protocol: `vrmauthor/1`.  
 Primary output: a self-contained VRM 1.0 avatar plus its editable authoring project.
 
@@ -668,4 +670,4 @@ fixes at the pinned revision (main `430e890906f9c53b1c944cf30a0aeee8625ff84d`,
 content hashes in §1) before relying on its measurements; missing corpus inputs
 must preserve prior evidence and statistics must count contributing body families.
 Implementation follows the repository issue/branch/build/test/commit/PR workflow.
-This proposal changes documentation only; none of these commands is implemented yet.
+The v1 catalog is implemented; the reserved catalog remains design-only.

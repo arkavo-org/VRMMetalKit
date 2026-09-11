@@ -15,7 +15,7 @@ These advanced command designs are coordinated through the primary
 [verification contract](verification.md). They are outside the initial v1 release
 allowlist, not postponed because of implementation staffing. Before assigning a handler,
 Stage A registers its concrete schema and independently reviewed executable acceptance
-pack. No command is implemented by this proposal.
+pack. No reserved command is implemented.
 
 Every spelling below is relative to the **`reserved` namespace**: `mesh subdivide`
 means `reserved mesh subdivide`, RPC `reserved.mesh.subdivide`. Registered definitions
@@ -27,6 +27,10 @@ acceptance evidence. [commands.md](commands.md) and [parameters.md](parameters.m
 take precedence for overlapping v1 operations; advanced payload sketches are in
 [reserved-parameters.md](reserved-parameters.md). No reserved command blocks unrelated
 v1 qualification, and ready advanced work may proceed concurrently.
+
+This file lists reserved commands only. The v1 commands it used to restate are defined
+once, in [commands.md](commands.md) and [parameters.md](parameters.md); reserved research
+that builds on a v1 command references it rather than redefining its arguments.
 
 ## Invocation and argument rules
 
@@ -89,17 +93,9 @@ QA policy promotes them.
 
 | Command | Additional arguments | Result |
 |---|---|---|
-| `version` | none | CLI/library/backend versions and build IDs |
-| `describe` | `command:string?`, `schema:bool=true`, `examples:bool=true` | Complete command tree or one operation contract |
-| `capabilities` | `target:Target?` | Non-evidence fields (`targets`, `templateHashes`, `supportedImports`, `backends`, `renderers`, `signerAvailable`) plus the per-operation evidence fields defined in [verification.md](verification.md) |
-| `doctor` | `checks:string[]=all` | Toolchain, Metal, assets, schema lock and backend health |
 | `schema list` | `kind:string?` | Registered object and upstream schemas |
-| `schema show` | `id:ID!`, `resolveRefs:bool=true` | Complete resolved schema |
 | `schema install` | `source:path!`, `sha256:string!` | Register a local, pinned schema bundle |
 | `schema coverage` | `target:Target!`, `out:path?` | Every upstream leaf mapped to read/write/validate/export tests |
-| `control list` | `object:ID?`, `domain:string?`, `changedOnly:bool=false` | Available controls, values and capability states |
-| `control describe` | `key:string!`, `object:ID?` | Units, bounds, response, provenance, dependencies, symmetry, examples |
-| `control set` | `object:ID!`, `values:ControlValues!`, `rangePolicy:error\|extrapolate=error` | Atomic typed control changes |
 | `control reset` | `object:ID!`, `keys:string[]!`, `to:template\|revision=template`, `revision:int?` | Restore selected values |
 | `control register` | `descriptor:ControlDescriptor!`, `binding:ControlBinding!` | Add a versioned native/template control; test it before activation |
 | `control probe` | `object:ID!`, `key:string!`, `samples:number[]!`, `views:ID[]?` | Response curves, parameter-to-measurement sensitivity and renders |
@@ -114,17 +110,13 @@ the authoring loop and is recorded through `asset import`.
 
 | Command | Additional arguments | Result |
 |---|---|---|
-| `project init` | `dir:path!`, `template:ID?`, `target:Target=portable-vrm1`, `seed:uint64=0` | Empty or template-based project |
-| `project inspect` | `include:string[]=summary` | Revision, asset tree, dependencies, stale objects and budgets |
 | `project validate` | `level:schema\|references\|all=all` | Source-project integrity report |
 | `project clone` | `dir:path!`, `revision:int?`, `includeBuilds:bool=false` | Independent project sharing content hashes |
 | `project migrate` | `version:string!`, `lossPolicy:error\|report=error` | Planned/applied project format migration |
 | `project pack` | `out:path!`, `includeBuilds:bool=false`, `includeReports:bool=true` | Portable project archive |
 | `project unpack` | `file:path!`, `dir:path!` | Validate hashes/references then unpack |
 | `project gc` | `keepRevisions:int=20`, `includeUnreferenced:bool=false` | Plan/remove unreferenced cache blobs only |
-| `history list` | `limit:int=50` | Revision IDs and operations |
 | `history diff` | `from:int!`, `to:int!`, `geometry:bool=false` | Semantic and optional geometric diff |
-| `history restore` | `revision:int!` | New revision restoring selected snapshot |
 | `transaction begin` | `label:string?` | Transaction ID and base revision |
 | `transaction inspect` | `id:ID!` | Staged edits and invalidations |
 | `transaction commit` | `id:ID!`, `validate:bool=true` | Atomic revision or conflict |
@@ -135,11 +127,8 @@ the authoring loop and is recorded through `asset import`.
 | `job cancel` | `id:ID!` | Cancel at next safe boundary |
 | `job resume` | `id:ID!` | Resume checkpoint if inputs/backend match |
 | `recipe inspect` | `file:path?` | Resolved recipe and defaults |
-| `recipe apply` | request body `Recipe!` | Create/update full procedural graph |
-| `recipe export` | `out:path!`, `resolved:bool=true` | Recipe with locked inputs |
 | `recipe vary` | `variables:VariableRange[]!`, `count:int!`, `method:grid\|latin-hypercube\|random=random`, `out:path!` | Child recipes, no changes to parent |
 | `recipe fit` | `targets:Goal[]!`, `variables:VariableRange[]!`, `search:SearchConfig!` | Candidate revision and residuals; explicit apply required |
-| `serve` | `stdio:bool!`, `protocol:string=vrmauthor/1` | JSON RPC service; no GUI dependency |
 
 ## Universal object and asset editing
 
@@ -154,21 +143,15 @@ Resource kinds: `avatar`, `node`, `mesh`, `selection`, `landmark`, `cage`, `modi
 
 | Command | Additional arguments | Result |
 |---|---|---|
-| `object list` | `kind:string?`, `selector:Selector?`, `fields:string[]?` | IDs and selected fields |
-| `object get` | `id:ID!`, `path:JsonPointer?` | Typed object or field |
 | `object create` | `kind:string!`, `id:ID?`, `data:ObjectData!` | Create object using its full schema |
-| `object set` | `id:ID!`, `values:PointerValueMap!` | Set arbitrary writable fields without dropping siblings |
 | `object unset` | `id:ID!`, `paths:JsonPointer[]!` | Remove optional values, restore specified inheritance |
 | `object clone` | `id:ID!`, `newId:ID?`, `dependencies:share\|copy=share` | Clone with explicit shared-resource semantics |
 | `object remove` | `ids:ID[]!`, `dependents:error\|cascade=error` | Delete or return dependency blockers |
 | `object reorder` | `parent:ID!`, `field:JsonPointer!`, `order:ID[]!` | Explicit layer/chain/modifier ordering |
 | `object transform` | `ids:ID[]!`, `transform:Transform!`, `space:Space=local`, `pivot:V3?`, `bake:bool=false` | Transform with dependency updates |
 | `object mirror` | `ids:ID[]!`, `plane:Plane!`, `mode:copy\|replace=copy`, `bindings:mirror\|preserve=mirror` | Mirror geometry, side labels, rig and curves coherently |
-| `asset import` | `file:path!`, `kind:string!`, `sha256:string?`, `provenance:Provenance!`, `options:ImportConfig={}` | Content-hashed asset and mapping/loss report |
 | `asset export` | `id:ID!`, `format:string!`, `out:path!`, `options:ExportConfig={}` | Native item, mesh, curve or image artifact |
-| `asset inspect` | `id:ID!`, `includeDependencies:bool=true` | Dimensions, schema, hash, origin and usage |
 | `asset relink` | `id:ID!`, `file:path!`, `expectedSha256:string!` | Restore missing input without changing identity |
-| `template list` | `category:string?` | Installed template IDs, versions and controls |
 | `template instantiate` | `id:ID!`, `parent:ID?`, `values:ControlValues={}` | Expand a reusable native item |
 | `template capture` | `objects:ID[]!`, `id:ID!`, `expose:string[]!`, `out:path!` | Save editable custom item with selected controls |
 | `template install` | `file:path!`, `sha256:string!` | Install pinned native pack and schemas |
@@ -239,7 +222,6 @@ validated/render-supported; export policy identifies unresolved index-bearing da
 | `texture inspect` | `image:ID!`, `channels:string[]=rgba`, `histogram:bool=true` | Colour/alpha/size/coverage measurements |
 | `material assign` | `material:ID!`, `selection:ID!` | Primitive/material assignment |
 | `material role` | `material:ID!`, `role:MaterialRole!` | Explicit style role binding |
-| `material shading` | `material:ID!`, `shadowEnd:number!`, `terminatorWidth:number!` | Solve explicit MToon toony/shift; retain target metadata |
 | `material convert` | `material:ID!`, `to:mtoon\|pbr\|unlit!`, `lossPolicy:error\|report=error` | Converted material plus loss report |
 | `material atlas` | `materials:ID[]!`, `config:AtlasConfig!`, `mergePolicy:compatible\|keep-separate=compatible` | Atlas compatible textures; preserve roles/queues |
 
@@ -336,17 +318,13 @@ No `ccd=all` operation exists. `PhysicsPreviewConfig` permits `ccd=off` or
 
 | Command | Additional arguments | Result |
 |---|---|---|
-| `style attach` | `profile:path!`, `sha256:string?`, `roleMap:RoleMap!` | Pinned profile binding |
 | `style apply` | `binding:ID!`, `rules:string[]?`, `variables:string[]?`, `policy:goals\|fit=goals` | Install goals or propose measured fitting edits |
 | `style measure` | `file:path?`, `binding:ID?`, `out:path?` | Raw measurements, definitions and coverage |
-| `style lint` | `binding:ID!`, `file:path?`, `out:path?` | Rule-level results and separate completeness verdict |
 | `style explain` | `rule:string!`, `binding:ID!` | Provenance, metric definition, contributing subjects and controls |
 | `render image` | `config:RenderConfig!`, `out:path!` | PNG/EXR image and ID/depth/normal overlays |
 | `render views` | `config:RenderConfig!`, `views:ViewSpec[]!`, `out:path!` | Contact sheet and individual images |
 | `render turntable` | `config:RenderConfig!`, `durationSeconds:number=4`, `fps:int=30`, `out:path!` | Video and camera path |
 | `render expressions` | `config:RenderConfig!`, `combinations:ExpressionWeights[]!`, `out:path!` | Face sheets and active-target diagnostics |
-| `qa plan` | `suite:QaSuite!`, `target:Target?`, `policy:ID?`, `out:path!` | Resolved plan with checks, views, motions and thresholds |
-| `qa run` | request body `QaPlan!`, `out:path!` | All required checks and evidence, no skipped-success |
 | `qa geometry` | `objects:ID[]?`, `config:GeometryQaConfig!`, `out:path?` | Mesh/rig/UV/clearance checks |
 | `qa expressions` | `config:ExpressionQaConfig!`, `out:path!` | Binding effectiveness, combinations, clipping, basis limits |
 | `qa motion` | `scenarios:ID[]!`, `config:MotionQaConfig!`, `out:path!` | Pose/motion clearance and stability results |
@@ -355,12 +333,8 @@ No `ccd=all` operation exists. `PhysicsPreviewConfig` permits `ccd=off` or
 | `repair propose` | `report:path!`, `allowed:string[]?`, `maxEdits:int=20`, `out:path!` | Version-bound, constrained repair plan |
 | `repair apply` | request body `RepairPlan!` | Atomic edits with explicit preconditions and post-checks |
 | `repair search` | `plan:path!`, `search:SearchConfig!`, `out:path!` | Candidate revisions ranked by declared objective |
-| `build` | `target:Target!`, `out:path!`, `config:BuildConfig={}` | Reproducible draft VRM, index map and compilation report |
-| `export vrm` | `target:Target!`, `out:path!`, `config:ExportConfig={}` | Gated final VRM 1.0 or explicit legacy conversion |
 | `export gltf` | `out:path!`, `binary:bool=true`, `config:ExportConfig={}` | GLB or glTF debug/interchange output |
 | `export item` | `objects:ID[]!`, `out:path!`, `includeSources:bool=true` | Native reusable custom item |
-| `export verify` | `file:path!`, `suite:QaSuite!`, `out:path?` | Fresh reimport, spec and requested visual/motion tests |
-| `deliver` | `file:path!`, `out:path!`, `includeProject:bool=true`, `includeReports:bool=true` | VRM, project, previews, source/asset manifest and evidence |
 
 `Target` = `portable-vrm1`, `extended-vrm1`, `vrmmetalkit`, `legacy-vrm0`.
 `spec+style` and `authoring-v1` are the v1 suite names defined in
