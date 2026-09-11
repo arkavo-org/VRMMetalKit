@@ -135,6 +135,51 @@ class Solve(unittest.TestCase):
         for key in ("body.proportion.legLength", "body.proportion.shoulderWidth", "body.proportion.armLength"):
             self.assertGreater(abs(a["controls"][key]), 0.3)
 
+    def test_infeasible_candidates_are_rejected_but_the_search_still_reaches_a_feasible_target(self):
+        """Part of the legLength range is infeasible, simulating a build-time domain
+        rejection (e.g. GARMENT_PENETRATION) discovered only by evaluating a candidate."""
+        widths = W.rule_widths(PROFILE)
+        infeasible_hits = []
+
+        def evaluate(controls):
+            if controls["body.proportion.legLength"] > 0.6:
+                infeasible_hits.append(controls["body.proportion.legLength"])
+                raise W.InfeasibleCandidate("simulated GARMENT_PENETRATION")
+            return {"proportions.hips_height_ratio": 0.5 + 0.10 * controls["body.proportion.legLength"]}
+
+        target = {"proportions.hips_height_ratio": 0.555}
+
+        a = W.solve("f", target, evaluate, widths, tolerance=0.02, budget=200, seed=42)
+        self.assertGreater(len(infeasible_hits), 0, "the search never reached the infeasible region; test is not exercising the rejection path")
+
+        infeasible_hits.clear()
+        b = W.solve("f", target, evaluate, widths, tolerance=0.02, budget=200, seed=42)
+
+        self.assertEqual(a, b)
+        self.assertTrue(a["eligible"])
+        self.assertIsNone(a["infeasible"])
+        self.assertLessEqual(a["controls"]["body.proportion.legLength"], 0.6)
+
+    def test_infeasible_initial_candidate_is_ineligible_with_reason_and_no_search(self):
+        """If the starting point (direct controls at target, search controls at zero) is
+        itself infeasible, the family has no feasible baseline: record it ineligible with
+        the rejection reason and never enter the search loop at all."""
+        widths = W.rule_widths(PROFILE)
+        calls = []
+
+        def evaluate(controls):
+            calls.append(dict(controls))
+            raise W.InfeasibleCandidate("GARMENT_PENETRATION: top-v1 penetrates the body at rest")
+
+        target = {"asset.height_m": 1.7584, "proportions.head_count": 7.232}
+
+        w = W.solve("heroes-commander", target, evaluate, widths, tolerance=0.25, budget=200, seed=42)
+
+        self.assertFalse(w["eligible"])
+        self.assertEqual(w["residuals"], {})
+        self.assertIn("GARMENT_PENETRATION", w["infeasible"])
+        self.assertEqual(len(calls), 1)
+
 
 class OutOfRangeControls(unittest.TestCase):
     def test_family_outside_a_direct_controls_range_is_ineligible_without_calling_evaluate(self):

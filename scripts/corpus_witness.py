@@ -36,9 +36,29 @@ SEARCH_CONTROLS = ["body.proportion.shoulderWidth", "body.proportion.torsoLength
                    "face.head.width", "face.chin.length"]
 
 
+class InfeasibleCandidate(Exception):
+    """The template rejected this specific candidate (ExitCode.gateFailed or .invalidRequest,
+    per Sources/VRMAuthorKit/Core/ExitCode.swift and AuthorErrorCode.exitCode) - a domain
+    rejection, not an infrastructure failure."""
+
+
 def run_checked(cmd, cwd):
     """Run a subprocess and raise a diagnosable error naming the command and its stderr on failure."""
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr}")
+    return proc
+
+
+def run_cli(cmd, cwd):
+    """Run a vrm-author subprocess whose failure may describe this candidate rather than the
+    process: exit 1 (gate failed) and exit 2 (invalid request) mean the template refused this
+    candidate and raise InfeasibleCandidate; any other non-zero exit (3 missing capability, 4
+    conflict, 5 internal error) or a failure to launch the binary at all is infrastructure and
+    raises RuntimeError with the command and stderr surfaced, exactly like run_checked."""
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if proc.returncode in (1, 2):
+        raise InfeasibleCandidate(proc.stderr.strip())
     if proc.returncode != 0:
         raise RuntimeError(f"command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr}")
     return proc
@@ -90,7 +110,14 @@ def solve(family, target, evaluate, widths, tolerance, budget, seed):
     Each search coordinate keeps its own step size: a rejected move shrinks only that
     coordinate's step, and an accepted move resets it to the initial size. A shared step
     would let a bad sign guess on one coordinate collapse the exploration radius for every
-    other coordinate too, well before the budget is spent."""
+    other coordinate too, well before the budget is spent.
+
+    A candidate the template refuses to build (InfeasibleCandidate) is scored as worse than
+    any feasible candidate and rejected exactly like any other rejected candidate, consuming
+    its iteration and its RNG draw identically either way. If the initial candidate itself -
+    direct controls at target, every search control at zero - is infeasible, the family has
+    no feasible baseline: it is recorded ineligible with the rejection reason and the search
+    never runs, rather than spending the whole budget on candidates that can never be scored."""
     rng = random.Random(f"{seed}:{family}")
     controls = {}
     for metric, key in DIRECT_CONTROLS.items():
@@ -100,7 +127,12 @@ def solve(family, target, evaluate, widths, tolerance, budget, seed):
         controls[key] = 0.0
 
     best = dict(controls)
-    best_res = residuals(evaluate(best), target, widths)
+    try:
+        best_res = residuals(evaluate(best), target, widths)
+    except InfeasibleCandidate as exc:
+        return {"family": family, "eligible": False,
+                "controls": {k: round(v, 6) for k, v in sorted(best.items())},
+                "residuals": {}, "infeasible": str(exc)}
     best_score = max(best_res.values()) if best_res else float("inf")
 
     initial_step = 0.5
@@ -112,8 +144,11 @@ def solve(family, target, evaluate, widths, tolerance, budget, seed):
         key = SEARCH_CONTROLS[i % len(SEARCH_CONTROLS)]
         delta = steps[key] * (1 if rng.random() < 0.5 else -1)
         candidate[key] = max(-1.0, min(1.0, candidate[key] + delta))
-        res = residuals(evaluate(candidate), target, widths)
-        score = max(res.values()) if res else float("inf")
+        try:
+            res = residuals(evaluate(candidate), target, widths)
+            score = max(res.values()) if res else float("inf")
+        except InfeasibleCandidate:
+            res, score = {}, float("inf")
         if score < best_score:
             best, best_res, best_score = candidate, res, score
             steps[key] = initial_step
@@ -122,7 +157,8 @@ def solve(family, target, evaluate, widths, tolerance, budget, seed):
 
     return {"family": family, "eligible": eligible(best_res, tolerance),
             "controls": {k: round(v, 6) for k, v in sorted(best.items())},
-            "residuals": {k: round(v, 6) for k, v in sorted(best_res.items())}}
+            "residuals": {k: round(v, 6) for k, v in sorted(best_res.items())},
+            "infeasible": None}
 
 
 def out_of_range_witness(family, target, control_ranges, widths):
@@ -131,6 +167,7 @@ def out_of_range_witness(family, target, control_ranges, widths):
     rejects out-of-range values rather than clamping them, so this is knowable without a
     single CLI call: any violation makes the family ineligible regardless of magnitude."""
     residuals_out = {}
+    reasons = []
     for metric, key in DIRECT_CONTROLS.items():
         if metric not in target:
             continue
@@ -144,11 +181,13 @@ def out_of_range_witness(family, target, control_ranges, widths):
         distance = (lo - value) if value < lo else (value - hi)
         width = widths.get(metric)
         residuals_out[key] = distance / width if width else distance
+        reasons.append(f"{key} = {value} is outside its valid range [{lo}, {hi}]")
     if not residuals_out:
         return None
     controls = {key: round(float(target[metric]), 6) for metric, key in DIRECT_CONTROLS.items() if metric in target}
     return {"family": family, "eligible": False, "controls": controls,
-            "residuals": {k: round(v, 6) for k, v in sorted(residuals_out.items())}}
+            "residuals": {k: round(v, 6) for k, v in sorted(residuals_out.items())},
+            "infeasible": "; ".join(sorted(reasons))}
 
 
 def solve_family(family, target, control_ranges, widths, evaluate, tolerance, budget, seed):
@@ -174,8 +213,8 @@ def cli_evaluator(binary, template, seed, linter, workdir, metrics):
         request = os.path.join(workdir, "edit.json")
         with open(request, "w", encoding="utf-8") as fh:
             json.dump({"edit": {"object": "avatar:main", "values": controls}}, fh)
-        run_checked([binary, "control", "set", "--project", project, "--request", request], REPO)
-        run_checked([binary, "build", "--project", project, "--out", out], REPO)
+        run_cli([binary, "control", "set", "--project", project, "--request", request], REPO)
+        run_cli([binary, "build", "--project", project, "--out", out], REPO)
         proc = run_checked([sys.executable, linter, "measure", out, "--json"], REPO)
         record = json.loads(proc.stdout)[0]
         return {m: metric_value(record, m) for m in metrics if metric_value(record, m) is not None}
@@ -227,9 +266,10 @@ def main(argv=None):
         for family in sorted(targets):
             witness = solve_family(family, targets[family], control_ranges, widths, evaluate,
                                    args.tolerance, args.budget, args.seed)
-            document["families"][family] = {k: witness[k] for k in ("eligible", "controls", "residuals")}
+            document["families"][family] = {k: witness[k] for k in ("eligible", "controls", "residuals", "infeasible")}
             write_document(out_path, document)
-            print(f"{family}: {'eligible' if witness['eligible'] else 'INELIGIBLE'}", file=sys.stderr)
+            tag = "eligible" if witness["eligible"] else ("INFEASIBLE" if witness.get("infeasible") else "INELIGIBLE")
+            print(f"{family}: {tag}", file=sys.stderr)
 
     families = document["families"]
     eligible_count = sum(1 for f in families.values() if f["eligible"])
