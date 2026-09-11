@@ -166,10 +166,10 @@ Each entry:
 **Shipped substitution.** This document specified an XCTest suite as the driver. What
 shipped is the constant identifier `vrm-author-cli`: the replay is driven from
 `scripts/acceptance_run.py` through the shipped executable, with no suite between them.
-The reasons are recorded in the plan (`.superpowers/sdd/2026-09-11-swift-test-corpus-path/`,
-task 2 brief and task 6), the short form being that a Swift suite replaying witnesses
-would have to reach the Python oracle to grade itself. §6 step 3 below describes the
-suite mechanism that was therefore never built.
+The substitution is recorded in the plan
+(`.superpowers/sdd/2026-09-11-swift-test-corpus-path/`: the task 2 brief fixes the field's
+value and its schema description, tasks 5 and 6 build the replay in Python). §6 step 3
+below describes the suite mechanism that was therefore never built.
 | `tolerance` | number | One fraction, applied to every target metric against that metric's own rule range width in that style's profile, inside which a residual counts as reached. Frozen in the pack, not in the suite. |
 | `expectedFamilies` | integer ≥ 1 | Denominator, fixed before the run |
 | `minEligibleFamilies` | integer ≥ 1 | Floor below which the dimension is `fail`, never `pass` |

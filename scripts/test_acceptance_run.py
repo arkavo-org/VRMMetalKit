@@ -1555,6 +1555,21 @@ class CorpusSwiftReplay(unittest.TestCase):
                                           cli=self.template_listing_cli_repo)
         self.assertIn("templateSha256", reason)
 
+    def test_a_witnesses_document_matching_the_installed_template_replays(self):
+        work = tempfile.mkdtemp(prefix="corpus_swift_template_ok_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a")
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        self.template_listing_cli_repo(work)
+
+        runner = R.Runner(pack, repo=work)
+        runner.run_lint_with = self.conforming_lint(pack)
+        out = runner.run_corpus_swift(entry)
+        self.addCleanup(shutil.rmtree, runner.tmp or work, ignore_errors=True)
+
+        self.assertEqual(out["families"]["fam-a"]["status"], "pass")
+        self.assertNotIn("reason", out)
+
     def test_a_template_the_shipped_cli_cannot_report_leaves_the_template_unchecked(self):
         work = tempfile.mkdtemp(prefix="corpus_swift_notemplate_")
         self.addCleanup(shutil.rmtree, work, ignore_errors=True)
