@@ -51,7 +51,7 @@ public struct QARunner: Sendable {
         }
         checks += SpecValidator.validate(data: data)
         checks.append(identityEditCheck(data: data, fileHash: fileHash, store: store))
-        checks.append(styleLint(fileURL: fileURL, plan: plan, context: context))
+        checks.append(styleLint(fileURL: fileURL, plan: plan, store: store, context: context))
 
         if plan.suite == .authoringV1 {
             for scenario in plan.renderScenarios {
@@ -151,11 +151,29 @@ public struct QARunner: Sendable {
         return GeometryChecks.noOpEdit(baseline: baseline, candidate: candidate, geometryInputsChanged: inputsChanged)
     }
 
-    func styleLint(fileURL: URL, plan: QAPlan, context: OperationContext) -> QACheck {
+    /// Locates the plan's profile bytes the way `style lint` does: the path as
+    /// given (absolute or cwd-relative), the project's attached style asset,
+    /// then the toolchain's pinned copy (env override or repository root, found
+    /// from cwd, the executable or the sources). Nil when nothing matches the
+    /// plan's sha256, so the lint reports the missing file.
+    public static func resolveProfile(_ profile: Blob, store: ProjectStore?, context: OperationContext) -> URL? {
+        let fm = FileManager.default
+        func matches(_ url: URL?) -> URL? {
+            guard let url, fm.fileExists(atPath: url.path), let hash = try? SHA256Hex.hex(fileAt: url), hash == profile.sha256 else { return nil }
+            return url
+        }
+        if let url = matches(URL(fileURLWithPath: profile.path, relativeTo: context.cwd).standardizedFileURL) { return url }
+        if let store, let url = matches(store.assetsDirectory.appendingPathComponent(profile.sha256)) { return url }
+        if let url = matches(StyleToolchain.locate(context: context).profile) { return url }
+        return nil
+    }
+
+    func styleLint(fileURL: URL, plan: QAPlan, store: ProjectStore?, context: OperationContext) -> QACheck {
         guard let operation = context.registry.operation(named: "style lint"), operation.isRunnable else {
             return QACheck(scenario: "style.lint", id: "style.lint.profile", status: .incomplete, message: "style lint handler is not installed in this build.", code: AuthorErrorCode.missingCapability.rawValue)
         }
-        var request: JSONValue = ["file": .string(fileURL.path), "profile": ["path": .string(plan.profile.path), "sha256": .string(plan.profile.sha256)]]
+        let profilePath = QARunner.resolveProfile(plan.profile, store: store, context: context)?.path ?? plan.profile.path
+        var request: JSONValue = ["file": .string(fileURL.path), "profile": ["path": .string(profilePath), "sha256": .string(plan.profile.sha256)]]
         if let project = context.projectPath { request = request.merging(["project": .string(project.path)]) }
         let envelope = context.registry.invoke("style lint", request: request, context: context)
         let reportHash = (try? envelope.result?["report"].map { try CanonicalJSON.sha256($0) }) ?? nil

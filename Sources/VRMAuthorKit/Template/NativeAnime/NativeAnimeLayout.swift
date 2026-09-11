@@ -24,6 +24,8 @@ struct NativeAnimeLayout {
     let headHeight: Double
     let headCenter: NAVec3
     let headRadii: NAVec3
+    /// Bottom of the head shell (the chin line); the head bone sits above it.
+    var headBottomY: Double { headCenter.y - headRadii.y }
     let neckLength: Double
     let hipsY: Double
     let hipJointY: Double
@@ -41,11 +43,22 @@ struct NativeAnimeLayout {
     let toesForward: Double
     let controls: NativeAnimeControlSet
 
+    /// Proportion constants as fractions of stature (leg root, joint spread,
+    /// limb lengths) and of head height (head bone above the chin line).
+    static let legRootFactor = 0.63
+    static let hipJointOffsetFactor = 0.04
+    static let hipHalfWidthFactor = 0.075
+    static let shoulderHalfWidthFactor = 0.09
+    static let upperArmFactor = 0.14
+    static let lowerArmFactor = 0.135
+    static let thighFraction = 0.46
+    static let headBoneFactor = 0.15
+
     /// Face landmark constants as fractions of head height (eye line, globe radius,
     /// eye pivot lateral offset as a fraction of head width, nose and mouth lines).
     static let globeRadiusFactor = 0.078
     static let eyeLineFactor = 0.11
-    static let eyeSpacingFactor = 0.21
+    static let eyeSpacingFactor = 0.14
     static let noseLineFactor = 0.23
     static let mouthLineFactor = 0.34
     static var defaultLidRadiusFactor: Double { globeRadiusFactor * 1.05 }
@@ -86,25 +99,25 @@ struct NativeAnimeLayout {
         let legLength = c["body.proportion.legLength"]
         let torsoLength = c["body.proportion.torsoLength"]
         let bodyBelowHead = H - hh
-        let legBase = 0.53 * bodyBelowHead
-        let torsoBase = bodyBelowHead - neckLength - 0.04 * H - legBase
+        let legBase = NativeAnimeLayout.legRootFactor * bodyBelowHead
+        let torsoBase = bodyBelowHead - neckLength - NativeAnimeLayout.hipJointOffsetFactor * H - legBase
         let leg = legBase * (1 + 0.08 * legLength) - torsoBase * 0.10 * torsoLength
         hipJointY = leg
-        hipsY = leg + 0.04 * H
+        hipsY = leg + NativeAnimeLayout.hipJointOffsetFactor * H
         neckBaseY = H - hh - neckLength
         let torso = neckBaseY - hipsY
 
-        hipHalfWidth = 0.075 * H * (1 + 0.10 * c["body.proportion.hipWidth"])
-        shoulderHalfWidth = 0.115 * H * (1 + 0.12 * c["body.proportion.shoulderWidth"])
+        hipHalfWidth = NativeAnimeLayout.hipHalfWidthFactor * H * (1 + 0.10 * c["body.proportion.hipWidth"])
+        shoulderHalfWidth = NativeAnimeLayout.shoulderHalfWidthFactor * H * (1 + 0.12 * c["body.proportion.shoulderWidth"])
         clavicleHalfWidth = 0.035 * H
         shoulderY = neckBaseY - 0.025 * H
         let armScale = 1 + 0.10 * c["body.proportion.armLength"]
-        upperArmLength = 0.155 * H * armScale
-        lowerArmLength = 0.145 * H * armScale
+        upperArmLength = NativeAnimeLayout.upperArmFactor * H * armScale
+        lowerArmLength = NativeAnimeLayout.lowerArmFactor * H * armScale
         handLength = 0.10 * H
         let legSpan = hipJointY - ankleY
-        thighLength = 0.52 * legSpan
-        shinLength = 0.48 * legSpan
+        thighLength = NativeAnimeLayout.thighFraction * legSpan
+        shinLength = (1 - NativeAnimeLayout.thighFraction) * legSpan
         toesForward = 0.085 * H
 
         let headBottom = H - hh
@@ -117,7 +130,7 @@ struct NativeAnimeLayout {
         j[.chest] = NAVec3(0, hipsY + 0.45 * torso, 0)
         j[.upperChest] = NAVec3(0, hipsY + 0.70 * torso, 0)
         j[.neck] = NAVec3(0, neckBaseY, 0)
-        j[.head] = NAVec3(0, headBottom, 0)
+        j[.head] = NAVec3(0, headBottom + NativeAnimeLayout.headBoneFactor * hh, 0)
         j[.jaw] = NAVec3(0, headBottom + 0.12 * hh, 0.28 * hh)
         for (side, sign) in [("left", 1.0), ("right", -1.0)] {
             let s = side == "left"

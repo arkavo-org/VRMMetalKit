@@ -22,7 +22,16 @@ import XCTest
 enum NativeAnimeFixture {
     static let pack = NativeAnimeV1Pack()
 
+    /// Template-only compile (body, head, eyes, rig, morphs): what the geometry,
+    /// rig and morph suites inspect.
     static func compiled(_ mutate: (inout Recipe) -> Void = { _ in }) throws -> (avatar: CompiledAvatar, attachments: TemplateAttachments) {
+        var recipe = pack.defaults
+        mutate(&recipe)
+        return try pack.compileTemplate(recipe, seed: 0)
+    }
+
+    /// Full compile including wearables and materials.
+    static func integrated(_ mutate: (inout Recipe) -> Void = { _ in }) throws -> (avatar: CompiledAvatar, attachments: TemplateAttachments) {
         var recipe = pack.defaults
         mutate(&recipe)
         return try pack.compileWithAttachments(recipe, seed: 0)
@@ -41,7 +50,7 @@ final class TemplatePackTests: XCTestCase {
     private let pack = NativeAnimeFixture.pack
 
     /// Cross-process pin of the default compile; verified identical over separate `swift test` invocations.
-    static let goldenDefaultBuildHash = "c636ff31266d9d0e550ac0a2a80feb98c558f0e2dc0c2d97273db6e4f3dba24c"
+    static let goldenDefaultBuildHash = "6ac654596b9dbf68577483810bf49c8a1d8faef2c3f243087ed5bfbab180c6c0"
 
     static let expectedKeys: [String] = {
         var keys = ["body.heightM", "body.headCount"]
@@ -150,13 +159,21 @@ final class TemplatePackTests: XCTestCase {
         }
     }
 
-    func testCompileIsDeterministicAndSeedIndependent() throws {
+    func testCompileIsDeterministicAndSeedOnlyChangesTextures() throws {
         let a = try pack.compile(pack.defaults, seed: 0)
         let b = try pack.compile(pack.defaults, seed: 0)
         let c = try pack.compile(pack.defaults, seed: 42)
         XCTAssertEqual(a, b)
         XCTAssertEqual(try a.buildHash(), try b.buildHash())
-        XCTAssertEqual(try a.buildHash(), try c.buildHash())
+        XCTAssertEqual(a.nodes, c.nodes)
+        XCTAssertEqual(a.meshes, c.meshes)
+        XCTAssertEqual(a.skins, c.skins)
+        XCTAssertEqual(a.springs, c.springs)
+        XCTAssertEqual(a.colliders, c.colliders)
+        XCTAssertEqual(a.materials, c.materials)
+        XCTAssertEqual(a.images.map(\.id), c.images.map(\.id))
+        XCTAssertNotEqual(a.images, c.images)
+        XCTAssertNotEqual(try a.buildHash(), try c.buildHash())
         XCTAssertEqual(try a.sorted().buildHash(), try a.buildHash())
         XCTAssertEqual(try a.buildHash(), TemplatePackTests.goldenDefaultBuildHash,
                        "default build hash changed across processes or geometry; update goldenDefaultBuildHash only for an intentional template change")
@@ -195,7 +212,7 @@ final class TemplatePackTests: XCTestCase {
         XCTAssertEqual(code { $0.expressions[0].morphTargetBinds = [MorphTargetBind(mesh: "mesh.nope", target: "blink", weight: 1)] }, .validationFailed)
     }
 
-    func testCompiledAvatarShapeAndMetadata() throws {
+    func testTemplateCompileShapeAndMetadata() throws {
         let (avatar, attachments) = try NativeAnimeFixture.compiled()
         XCTAssertEqual(avatar.meshes.map(\.id), ["mesh.body", "mesh.head", "mesh.eyeL", "mesh.eyeR"])
         XCTAssertEqual(avatar.skins.count, 1)
@@ -210,6 +227,7 @@ final class TemplatePackTests: XCTestCase {
         XCTAssertEqual(avatar.colliderGroups, [])
         XCTAssertEqual(avatar.images, [])
         XCTAssertEqual(avatar.meta, pack.defaults.rights.meta)
+        XCTAssertEqual(avatar.meta.thumbnailImage, NativeAnimeMaterials.thumbnailImageId)
         XCTAssertEqual(avatar.lookAt.type, .bone)
         XCTAssertEqual(avatar.lookAt.rangeMapHorizontalInner.inputMaxValue, 90)
         XCTAssertEqual(avatar.lookAt.rangeMapHorizontalInner.outputScale, 10)
@@ -232,6 +250,59 @@ final class TemplatePackTests: XCTestCase {
         XCTAssertEqual(attachments.skinId, avatar.skins[0].id)
         XCTAssertEqual(attachments.heightM, 1.65)
         XCTAssertEqual(attachments.controlRegions.count, 44)
+    }
+
+    func testIntegratedCompileDressesTheTemplate() throws {
+        let (avatar, attachments) = try NativeAnimeFixture.integrated()
+        XCTAssertEqual(avatar.meshes.map(\.id), ["mesh.body", "mesh.eyeL", "mesh.eyeR", "mesh.head", "mesh:garment:outfit.bottom", "mesh:garment:outfit.footwear",
+                                                 "mesh:garment:outfit.top", "mesh:hair:hair.main"])
+        XCTAssertEqual(avatar.skins.map(\.id), ["skin.body", "skin:hair:hair.main"])
+        XCTAssertEqual(avatar.meshInstances.count, 8)
+        for instance in avatar.meshInstances {
+            XCTAssertTrue(avatar.skins.contains { $0.id == instance.skinId }, instance.meshId)
+            XCTAssertTrue(avatar.nodes.contains { $0.id == instance.nodeId }, instance.nodeId)
+        }
+        for garment in avatar.meshInstances where garment.meshId.hasPrefix("mesh:garment:") { XCTAssertEqual(garment.skinId, attachments.skinId) }
+        XCTAssertEqual(avatar.springs.count, HairBobV1.Layout.clumpCount)
+        XCTAssertEqual(Set(avatar.springs.map { $0.joints.count }), [HairBobV1.Layout.nodesPerClump])
+        XCTAssertEqual(avatar.colliders.map(\.id), [HairBobV1.chestColliderId, HairBobV1.headColliderId, HairBobV1.neckColliderId])
+        XCTAssertEqual(avatar.colliderGroups.map(\.id), [HairBobV1.bodyColliderGroupId, HairBobV1.headColliderGroupId])
+        let head = avatar.colliders.first { $0.id == HairBobV1.headColliderId }!
+        XCTAssertEqual(head.node, attachments.attachmentNodes["head"])
+        let headRadius = try XCTUnwrap(head.shape.sphere?.radius)
+        XCTAssertGreaterThan(headRadius, 0.05)
+        XCTAssertLessThan(headRadius, 0.2)
+        let nodeIds = Set(avatar.nodes.map(\.id))
+        for spring in avatar.springs {
+            for joint in spring.joints {
+                XCTAssertTrue(nodeIds.contains(joint.node), joint.node)
+                XCTAssertLessThanOrEqual(joint.stiffness, 4)
+                XCTAssertLessThanOrEqual(joint.dragForce, 1)
+                XCTAssertLessThanOrEqual(joint.gravityPower, 1)
+                XCTAssertLessThanOrEqual(joint.hitRadius, 0.12)
+            }
+            let rootJoint = try XCTUnwrap(spring.joints.first)
+            XCTAssertEqual(avatar.nodes.first { $0.id == rootJoint.node }?.parentId, attachments.attachmentNodes["head"], spring.id)
+        }
+        XCTAssertEqual(avatar.images.map(\.id), ["image:body_skin", "image:brow", "image:cloth", "image:eye_highlight", "image:eye_white", "image:eyelash", "image:eyeline",
+                                                 NativeAnimeMaterials.faceImageId, NativeAnimeMaterials.hairImageId, "image:iris", "image:mouth", NativeAnimeMaterials.thumbnailImageId])
+        for image in avatar.images { XCTAssertTrue(image.pngData.starts(with: [0x89, 0x50, 0x4E, 0x47]), image.id) }
+        XCTAssertEqual(avatar.meta.thumbnailImage, NativeAnimeMaterials.thumbnailImageId)
+        let imageIds = Set(avatar.images.map(\.id))
+        for material in avatar.materials {
+            XCTAssertEqual(material.gltf["name"], .string(NativeAnimeMaterials.names[material.id]!), material.id)
+            let references = MaterialCompiler.textureReferences(of: material)
+            XCTAssertFalse(references.isEmpty, material.id)
+            for (slot, reference) in references { XCTAssertTrue(imageIds.contains(reference.imageId), "\(material.id) \(slot)") }
+        }
+        let hair = avatar.materials.first { $0.id == NativeAnimeMaterials.hair }!
+        XCTAssertEqual(hair.gltf["pbrMetallicRoughness"]?["baseColorTexture"]?["imageId"], .string(NativeAnimeMaterials.hairImageId))
+        let usedRoles = Set(avatar.meshes.flatMap { $0.primitives.map(\.materialId) }.compactMap { id in avatar.materials.first { $0.id == id }?.role })
+        XCTAssertEqual(usedRoles, [.faceSkin, .bodySkin, .iris, .eyeWhite, .eyeHighlight, .eyeline, .eyelash, .brow, .mouth, .hair, .cloth])
+        let annotations = Dictionary(uniqueKeysWithValues: avatar.firstPerson.meshAnnotations.map { ($0.mesh, $0.type) })
+        XCTAssertEqual(annotations["mesh:hair:hair.main"], .thirdPersonOnly)
+        XCTAssertEqual(annotations["mesh:garment:outfit.top"], .auto)
+        XCTAssertEqual(annotations.count, avatar.meshes.count)
     }
 
     func testPlaceholderMaterialsAreOnlyAddedWhenMissing() throws {

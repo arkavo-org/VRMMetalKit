@@ -88,6 +88,7 @@ public enum MaterialSchemas {
             "emissiveStrength": JSONSchema.number(minimum: 0).defaulting(to: 1).described("Emissive multiplier"),
         ], required: [], description: "KHR_materials_emissive_strength")
         return JSONSchema.object(properties: [
+            "name": JSONSchema.string().described("glTF material name; style linters classify roles from it"),
             "pbrMetallicRoughness": pbr,
             "normalTexture": textureReference(["scale": JSONSchema.number().defaulting(to: 1).described("Normal scale")], description: "Tangent-space normal texture"),
             "occlusionTexture": textureReference(["strength": JSONSchema.number(minimum: 0, maximum: 1).defaulting(to: 1).described("Occlusion strength")], description: "Occlusion (R) texture"),

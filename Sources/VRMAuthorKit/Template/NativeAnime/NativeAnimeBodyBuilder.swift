@@ -56,8 +56,8 @@ struct NativeAnimeBodyBuilder {
             yRing(at(0.12), rx: hipW, rz: 0.065 * H, region: "hips"),
             yRing(at(0.26), rx: hipW * 0.86, rz: 0.058 * H, region: "waist"),
             yRing(at(0.42), rx: 0.075 * H, rz: 0.055 * H, region: "waist"),
-            yRing(at(0.58), rx: 0.088 * H, rz: 0.066 * H, region: "chest"),
-            yRing(at(0.72), rx: 0.098 * H, rz: 0.070 * H, region: "chest"),
+            yRing(at(0.58), rx: 0.080 * H, rz: 0.064 * H, region: "chest"),
+            yRing(at(0.72), rx: 0.086 * H, rz: 0.066 * H, region: "chest"),
             yRing(at(0.86), rx: shoulderW, rz: 0.058 * H, region: "chest"),
             yRing(at(0.95), rx: shoulderW * 0.75, rz: 0.050 * H, region: "torso"),
             yRing(at(1.00), rx: 0.055 * H, rz: 0.046 * H, region: "torso"),
@@ -67,7 +67,7 @@ struct NativeAnimeBodyBuilder {
 
     private func buildNeck(_ mesh: inout BuildMesh) {
         let y0 = layout.neckBaseY - 0.02 * H
-        let y1 = layout.joint(.head).y + 0.05 * layout.headHeight
+        let y1 = layout.headBottomY + 0.05 * layout.headHeight
         let r = 0.040 * H
         let rings = [
             yRing(y0, rx: r * 1.15, rz: r * 1.1, region: "neck"),
@@ -140,9 +140,9 @@ struct NativeAnimeBodyBuilder {
         let x = upper.x
 
         let thigh = [
-            downRing(x, upper.y + 0.035 * H, rx: 0.052 * H, rz: 0.055 * H, region: "thigh\(sfx)"),
-            downRing(x, upper.y - 0.03 * H, rx: 0.054 * H, rz: 0.057 * H, region: "thigh\(sfx)"),
-            downRing(x, NAMath.lerp(upper.y, lower.y, 0.6), rx: 0.044 * H, rz: 0.046 * H, region: "thigh\(sfx)"),
+            downRing(x, upper.y + 0.035 * H, rx: 0.047 * H, rz: 0.050 * H, region: "thigh\(sfx)"),
+            downRing(x, upper.y - 0.03 * H, rx: 0.049 * H, rz: 0.052 * H, region: "thigh\(sfx)"),
+            downRing(x, NAMath.lerp(upper.y, lower.y, 0.6), rx: 0.041 * H, rz: 0.043 * H, region: "thigh\(sfx)"),
             downRing(x, lower.y, rx: 0.036 * H, rz: 0.038 * H, region: "thigh\(sfx)"),
         ]
         mesh.loft(thigh, segments: Self.limbSegments, capStart: NAVec3(x, upper.y + 0.05 * H, 0), capEnd: NAVec3(x, lower.y - 0.01 * H, 0))

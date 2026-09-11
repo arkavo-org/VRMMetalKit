@@ -22,8 +22,10 @@ import Foundation
 /// distance-based skin weights, blink/viseme/emotion morphs, bone-mode lookAt
 /// and first-person annotations.
 ///
-/// Geometry is seed-independent: `seed` is reserved for texture noise in the
-/// materials area, so two compiles that differ only in seed share a buildHash.
+/// The compile then dresses the template: the wearable compiler adds the
+/// recipe's hair, garments and accessories (with their spring chains and
+/// colliders) and the material compiler resolves every material and renders
+/// its textures. Geometry is seed-independent; `seed` only drives texture noise.
 public struct NativeAnimeV1Pack: TemplatePack {
     public static let packId = "native-anime-v1"
     public static let version = "1.0.0"
@@ -80,14 +82,15 @@ public struct NativeAnimeV1Pack: TemplatePack {
 
     static func makeDefaults(templateHash: String) -> Recipe {
         let skinTone = Colour(rgba: [0.35, 0.22, 0.15, 1])
-        let hair = HairItem(id: "hair.main", preset: "bob-v1", controls: HairControls(),
+        let hair = HairItem(id: "hair.main", preset: "bob-v1", controls: HairControls(widthScale: 1.25),
                             texture: HairTexture(baseColour: skinTone, rootColour: Colour(rgba: [0.28, 0.17, 0.12, 1]), tipColour: Colour(rgba: [0.42, 0.28, 0.20, 1])))
         let outfits = [
             OutfitItem(id: "outfit.top", preset: "top-v1", layer: 1, materialIds: [NativeAnimeMaterials.clothTop]),
             OutfitItem(id: "outfit.bottom", preset: "bottom-v1", layer: 0, materialIds: [NativeAnimeMaterials.clothBottom]),
             OutfitItem(id: "outfit.footwear", preset: "footwear-v1", layer: 0, materialIds: [NativeAnimeMaterials.clothFootwear]),
         ]
-        let meta = VRMMeta(name: "Native Anime Avatar", version: version, authors: ["native-anime-v1"], licenseUrl: VRMMeta.vrm10LicenseUrl)
+        let meta = VRMMeta(name: "Native Anime Avatar", version: version, authors: ["native-anime-v1"], thumbnailImage: NativeAnimeMaterials.thumbnailImageId,
+                           licenseUrl: VRMMeta.vrm10LicenseUrl)
         let rights = RightsDeclaration(id: "rights.native-anime-v1", declarant: "native-anime-v1", evidence: [], authors: meta.authors, meta: meta)
         return Recipe(name: "Native Anime Avatar", template: TemplateRef(id: packId, sha256: templateHash), body: NativeAnimeControls.defaultBody,
                       face: NativeAnimeControls.defaultFace, hair: [hair], outfits: outfits, accessories: [], textures: [],
@@ -99,9 +102,47 @@ public struct NativeAnimeV1Pack: TemplatePack {
         try compileWithAttachments(recipe, seed: seed).avatar
     }
 
-    /// Compiles the recipe and returns the semantic attachment data alongside
-    /// the avatar. The seed is unused by geometry (reserved for texture noise).
+    /// Compiles the recipe (template body/face, then wearables and materials)
+    /// and returns the semantic attachment data alongside the dressed avatar.
     public func compileWithAttachments(_ recipe: Recipe, seed: UInt64) throws -> (avatar: CompiledAvatar, attachments: TemplateAttachments) {
+        let (template, attachments) = try compileTemplate(recipe, seed: seed)
+        let host = try NativeAnimeWearableHost(avatar: template, attachments: attachments)
+        var materialsById: [String: MaterialRole] = [:]
+        for material in template.materials { materialsById[material.id] = material.role }
+        let wearables = try WearableCompiler.compile(host: host, hair: recipe.hair, outfits: recipe.outfits, accessories: recipe.accessories,
+                                                     materialsById: materialsById)
+        var avatar = wearables.merged(into: template)
+        var annotations = avatar.firstPerson.meshAnnotations
+        for mesh in wearables.meshes where !annotations.contains(where: { $0.mesh == mesh.id }) {
+            annotations.append(MeshAnnotation(mesh: mesh.id, type: mesh.id.hasPrefix("mesh:hair:") ? .thirdPersonOnly : .auto))
+        }
+        avatar.firstPerson.meshAnnotations = annotations
+
+        let hairTexture = CompiledAvatar.sortedById(recipe.hair, \.id).first?.texture ?? Self.makeDefaults(templateHash: sha256).hair[0].texture
+        let scalpUnderlay = recipe.hair.isEmpty ? nil : hairTexture
+        let headSkin = template.meshes.first { $0.id == Self.headMeshId }!.primitives[HeadPrimitive.skin.rawValue]
+        let scalp = Set(attachments.indices(of: "scalp", mesh: Self.headMeshId) + attachments.indices(of: "nape", mesh: Self.headMeshId))
+        let faceSize = MaterialRoleDefaults.imageSize(for: .faceSkin)
+        let images = [
+            ImageSpec(id: NativeAnimeMaterials.faceImageId, width: faceSize, height: faceSize, colourSpace: .srgb, usage: .colour),
+            ImageSpec(id: NativeAnimeMaterials.hairImageId, width: NativeAnimeTextures.hairImageSize, height: NativeAnimeTextures.hairImageSize, colourSpace: .srgb, usage: .colour),
+            ImageSpec(id: NativeAnimeMaterials.thumbnailImageId, width: NativeAnimeTextures.thumbnailSize, height: NativeAnimeTextures.thumbnailSize, colourSpace: .srgb, usage: .colour),
+        ]
+        let sources: [String: RasterImage] = [
+            NativeAnimeMaterials.faceImageId: NativeAnimeTextures.faceRaster(head: headSkin, scalp: scalp, hair: scalpUnderlay, seed: seed),
+            NativeAnimeMaterials.hairImageId: NativeAnimeTextures.hairRaster(texture: hairTexture, seed: seed),
+            NativeAnimeMaterials.thumbnailImageId: NativeAnimeTextures.thumbnailRaster(hair: hairTexture, skin: MaterialRoleDefaults.baseColour(for: .faceSkin)),
+        ]
+        let compiled = try MaterialCompiler.compile(materials: avatar.materials, textures: recipe.textures, images: images, seed: seed, sources: sources)
+        avatar.images = compiled.images
+        avatar.materials = compiled.materials
+        return (avatar.sorted(), attachments)
+    }
+
+    /// The template alone: body, head and eye meshes, rig, morphs, lookAt,
+    /// first-person annotations and the recipe's (unresolved) materials, with
+    /// no images, wearables, springs or colliders.
+    func compileTemplate(_ recipe: Recipe, seed: UInt64) throws -> (avatar: CompiledAvatar, attachments: TemplateAttachments) {
         guard recipe.template.id == id else {
             throw AuthorError.invalidRequest("Recipe targets template '\(recipe.template.id)', not '\(id)'.", path: "/template/id",
                                              observed: .string(recipe.template.id), required: .string(id))

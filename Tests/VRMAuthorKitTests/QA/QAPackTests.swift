@@ -168,6 +168,43 @@ final class QAPackTests: XCTestCase {
         XCTAssertTrue(bad.result?["checks"]?.array?.contains { $0["id"] == "visual.front.render" && $0["status"] == "incomplete" } ?? false)
     }
 
+    func testQARunResolvesThePinnedProfileFromACwdOutsideTheRepository() throws {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        guard StyleToolchain.python3(env: ["PATH": path]) != nil else { throw XCTSkip("python3 not on PATH") }
+        let outside = try TestProject.make(registry: TestProject.registry(extra: [MaterialsHandlers.install]), env: ["PATH": path])
+        defer { outside.cleanup() }
+        XCTAssertNil(StyleToolchain.ancestor(of: outside.root, containing: StyleToolchain.profileRelativePath), "fixture root must sit outside the repository")
+        try outside.applyDefaultRecipe()
+        XCTAssertEqual(outside.invoke("build", ["out": .string(outside.path("draft.vrm"))]).exitCode, .success)
+        let plan = try QAHandlers.profile(for: outside.store.state(), context: outside.context)
+        XCTAssertEqual(plan.path, QAPins.defaultProfilePath)
+        XCTAssertNil(try? Data(contentsOf: URL(fileURLWithPath: plan.path, relativeTo: outside.root)), "relative profile path must not resolve against the fixture cwd")
+        let resolved = try XCTUnwrap(QARunner.resolveProfile(plan, store: outside.store, context: outside.context))
+        XCTAssertEqual(try SHA256Hex.hex(fileAt: resolved), QAPins.defaultProfileSha256)
+        XCTAssertTrue(resolved.path.hasSuffix(QAPins.defaultProfilePath))
+
+        let envelope = outside.invoke("qa run", ["request": ["file": .string(outside.path("draft.vrm")), "suite": "spec+style"], "out": .string(outside.path("qa"))])
+        let check = try XCTUnwrap(envelope.result?["checks"]?.array?.first { $0["id"] == "style.lint.profile" })
+        XCTAssertNotEqual(check["status"], "incomplete", "\(check)")
+        XCTAssertFalse(check["message"]?.string?.contains("File not found") ?? false, "\(check)")
+        XCTAssertNotNil(check["reportHash"], "\(check)")
+
+        let attached = try TestProject.make(registry: TestProject.registry(extra: [MaterialsHandlers.install]), env: ["PATH": path])
+        defer { attached.cleanup() }
+        let custom = attached.root.appendingPathComponent("custom-profile.json")
+        var profile = try JSONValue.parse(try Data(contentsOf: resolved))
+        profile = profile.merging(["id": "custom-profile"])
+        let customData = try CanonicalJSON.data(profile)
+        try customData.write(to: custom)
+        try attached.applyDefaultRecipe()
+        XCTAssertEqual(attached.invoke("style attach", ["profile": ["path": .string(custom.path), "sha256": .string(SHA256Hex.hex(customData))]]).exitCode, .success)
+        try FileManager.default.removeItem(at: custom)
+        let attachedPlan = try QAHandlers.profile(for: attached.store.state(), context: attached.context)
+        XCTAssertEqual(attachedPlan.sha256, SHA256Hex.hex(customData))
+        let fromAsset = try XCTUnwrap(QARunner.resolveProfile(attachedPlan, store: attached.store, context: attached.context))
+        XCTAssertEqual(fromAsset.path, attached.store.assetsDirectory.appendingPathComponent(attachedPlan.sha256).path)
+    }
+
     func testQARunPlanFormVerifiesPlanAndFileBinding() throws {
         let planPath = project.path("plan.json")
         XCTAssertEqual(project.invoke("qa plan", ["suite": "spec+style", "file": .string(project.path("draft.vrm")), "out": .string(planPath)]).exitCode, .success)

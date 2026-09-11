@@ -193,12 +193,14 @@ public enum OutfitPresets {
         let offset = Float(offset(layer: item.layer, fit: item.controls.fit))
         let ordered = covered.sorted()
         var remap: [Int: UInt32] = [:]
+        var sources: [Int] = []
         var builder = MeshBuilder()
         for i in ordered {
             guard i < host.bodyPositions.count, i < host.bodyNormals.count, i < host.bodyJoints.count, i < host.bodyWeights.count else { continue }
             let n = V3.normalize(host.bodyNormals[i])
             let uv = i < host.bodyUV0.count ? host.bodyUV0[i] : SIMD2<Float>(0, 0)
             remap[i] = builder.addVertex(host.bodyPositions[i] + n * offset, normal: n, uv: uv, joints: host.bodyJoints[i], weights: host.bodyWeights[i])
+            sources.append(i)
         }
         var t = 0
         while t + 2 < host.bodyTriangles.count {
@@ -211,7 +213,7 @@ public enum OutfitPresets {
                               message: "\(d.id) '\(item.id)' covers no complete body triangles with the requested length.", suggestedCommands: ["control set"])
         }
 
-        let minClearance = try clearance(builder: builder, host: host, item: item, descriptor: d, regionOfVertex: regionOfVertex)
+        let minClearance = try clearance(builder: builder, sources: sources, host: host, item: item, descriptor: d, regionOfVertex: regionOfVertex)
 
         let meshId = "mesh:garment:\(item.id)"
         let nodeId = "node:garment:\(item.id)"
@@ -223,8 +225,13 @@ public enum OutfitPresets {
     }
 
     /// Minimum signed distance from any garment vertex to the nearest body
-    /// surface; below `minClearanceM` is a penetration.
-    static func clearance(builder: MeshBuilder, host: WearableHost, item: OutfitItem, descriptor d: OutfitPresetDescriptor, regionOfVertex: [Int: String]) throws -> Float {
+    /// surface of a part disjoint from the part the vertex was shelled from;
+    /// below `minClearanceM` is a penetration. Parts that overlap the source
+    /// part (a limb loft embedded in the torso) are fused with it: a shell
+    /// vertex dipping into such a part sits inside the body's own self-overlap
+    /// and is not a garment defect.
+    static func clearance(builder: MeshBuilder, sources: [Int], host: WearableHost, item: OutfitItem, descriptor d: OutfitPresetDescriptor,
+                          regionOfVertex: [Int: String]) throws -> Float {
         var lo = SIMD3<Float>(repeating: .infinity), hi = SIMD3<Float>(repeating: -.infinity)
         for p in builder.positions {
             lo = pointwiseMin(lo, p)
@@ -238,11 +245,19 @@ public enum OutfitPresets {
             let p = positions[i]
             return p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y && p.z >= lo.z && p.z <= hi.z
         }
+        let components = BodyComponents(positions: positions, normals: host.bodyNormals, indices: host.bodyTriangles)
         let probe = SurfaceProbe(positions: positions, normals: host.bodyNormals, indices: host.bodyTriangles) { a, b, c in inside(a) || inside(b) || inside(c) }
         var worst: Float = .infinity
         var worstHit: SurfaceProbe.Hit?
-        for p in builder.positions {
-            guard let hit = probe.nearest(to: p) else { continue }
+        for (k, p) in builder.positions.enumerated() {
+            let source = k < sources.count ? components.componentOfVertex[sources[k]] : -1
+            var hit: SurfaceProbe.Hit?
+            if source >= 0 {
+                hit = probe.nearest(to: p) { tri in !components.fused(source, components.component(ofTriangle: tri)) }
+            } else {
+                hit = probe.nearest(to: p)
+            }
+            guard let hit else { continue }
             if hit.distance < worst {
                 worst = hit.distance
                 worstHit = hit

@@ -172,11 +172,12 @@ struct SurfaceProbe {
 
     var isEmpty: Bool { triangles.isEmpty }
 
-    func nearest(to p: SIMD3<Float>) -> Hit? {
+    func nearest(to p: SIMD3<Float>, where include: ((SIMD3<Int>) -> Bool)? = nil) -> Hit? {
         var best: Hit?
         var bestD = Float.infinity
         for (t, tri) in triangles.enumerated() {
             if V3.distance(p, centres[t]) - radii[t] >= bestD { continue }
+            if let include, !include(tri) { continue }
             let (q, bary) = SurfaceProbe.closestPoint(p, positions[tri.x], positions[tri.y], positions[tri.z])
             let d = V3.distance(p, q)
             if d < bestD {
@@ -280,5 +281,92 @@ struct MeshBuilder {
     func primitive(materialId: String, skinned: Bool) -> CompiledPrimitive {
         CompiledPrimitive(materialId: materialId, positions: positions, normals: normals, uv0: uv0,
                           joints0: skinned ? joints0 : nil, weights0: skinned ? weights0 : nil, indices: indices)
+    }
+}
+
+/// Connected components of a body triangle soup (parts joined by shared
+/// vertices), with lazily built per-part probes and an overlap cache. Two
+/// parts overlap when a vertex of either lies inside the other; a template
+/// whose limbs are closed lofts embedded in the torso has every adjacent pair
+/// overlapping, while separate limbs (left and right thigh) stay disjoint.
+final class BodyComponents {
+    let positions: [SIMD3<Float>]
+    let normals: [SIMD3<Float>]
+    let indices: [UInt32]
+    /// Component id per vertex (-1 for vertices no triangle references).
+    let componentOfVertex: [Int]
+    let count: Int
+    private var probes: [Int: SurfaceProbe] = [:]
+    private var vertices: [Int: [Int]] = [:]
+    private var overlapCache: [Int: Bool] = [:]
+
+    init(positions: [SIMD3<Float>], normals: [SIMD3<Float>], indices: [UInt32]) {
+        self.positions = positions
+        self.normals = normals
+        self.indices = indices
+        var parent = Array(0..<positions.count)
+        func find(_ x: Int) -> Int {
+            var r = x
+            while parent[r] != r { r = parent[r] }
+            var c = x
+            while parent[c] != r {
+                let next = parent[c]
+                parent[c] = r
+                c = next
+            }
+            return r
+        }
+        var referenced = [Bool](repeating: false, count: positions.count)
+        var t = 0
+        while t + 2 < indices.count {
+            let a = Int(indices[t]), b = Int(indices[t + 1]), c = Int(indices[t + 2])
+            t += 3
+            guard a < positions.count, b < positions.count, c < positions.count else { continue }
+            referenced[a] = true
+            referenced[b] = true
+            referenced[c] = true
+            let ra = find(a), rb = find(b), rc = find(c)
+            if rb != ra { parent[rb] = ra }
+            if rc != find(a) { parent[rc] = find(a) }
+        }
+        var ids: [Int: Int] = [:]
+        var component = [Int](repeating: -1, count: positions.count)
+        for i in 0..<positions.count where referenced[i] {
+            let root = find(i)
+            if ids[root] == nil { ids[root] = ids.count }
+            component[i] = ids[root]!
+        }
+        componentOfVertex = component
+        count = ids.count
+        for (i, c) in component.enumerated() where c >= 0 { vertices[c, default: []].append(i) }
+    }
+
+    func component(ofTriangle tri: SIMD3<Int>) -> Int { componentOfVertex[tri.x] }
+
+    func probe(_ c: Int) -> SurfaceProbe {
+        if let cached = probes[c] { return cached }
+        let component = componentOfVertex
+        let probe = SurfaceProbe(positions: positions, normals: normals, indices: indices) { a, _, _ in component[a] == c }
+        probes[c] = probe
+        return probe
+    }
+
+    /// True when `a` and `b` are the same part or either has a vertex inside the other.
+    func fused(_ a: Int, _ b: Int) -> Bool {
+        if a == b { return true }
+        let key = a < b ? a * count + b : b * count + a
+        if let cached = overlapCache[key] { return cached }
+        var result = false
+        outer: for (x, y) in [(a, b), (b, a)] {
+            let probe = probe(y)
+            for i in vertices[x] ?? [] {
+                if let hit = probe.nearest(to: positions[i]), hit.distance < 0 {
+                    result = true
+                    break outer
+                }
+            }
+        }
+        overlapCache[key] = result
+        return result
     }
 }

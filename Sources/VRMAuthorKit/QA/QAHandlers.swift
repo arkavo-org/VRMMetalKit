@@ -35,8 +35,13 @@ public struct QAHandlers: Sendable {
 
     // MARK: Plan construction
 
+    /// The project's attached style profile (`style attach` records it under
+    /// `style.profile`; a bare blob is accepted too), else the pinned default.
     public static func profile(for state: ProjectState?, context: OperationContext) throws -> Blob {
-        if let style = state?.style, let blob = try? Blob.decode(style) { return blob }
+        if let style = state?.style {
+            if let blob = try? Blob.decode(style) { return blob }
+            if let path = style["profile"]?["path"]?.string, let sha256 = style["profile"]?["sha256"]?.string { return Blob(path: path, sha256: sha256) }
+        }
         return Blob(path: QAPins.defaultProfilePath, sha256: QAPins.defaultProfileSha256)
     }
 

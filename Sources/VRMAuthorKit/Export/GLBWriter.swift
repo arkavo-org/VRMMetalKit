@@ -336,11 +336,12 @@ public enum GLBWriter {
         mutating func resolveTextures(_ value: JSONValue, path: String, materialId: String) throws -> JSONValue {
             switch value {
             case .object(var o):
-                if let imageId = o["image"]?.string {
+                if let imageId = o["imageId"]?.string ?? o["image"]?.string {
                     guard let texture = idMap.textures[imageId] else {
-                        throw fail("Material '\(materialId)' references unknown image '\(imageId)'.", path: path + "/image", objectId: materialId)
+                        throw fail("Material '\(materialId)' references unknown image '\(imageId)'.", path: path + (o["imageId"] != nil ? "/imageId" : "/image"), objectId: materialId)
                     }
                     o["image"] = nil
+                    o["imageId"] = nil
                     o["index"] = .number(Double(texture))
                 }
                 if let exts = o["extensions"]?.object { for key in exts.keys.sorted() { use(key) } }

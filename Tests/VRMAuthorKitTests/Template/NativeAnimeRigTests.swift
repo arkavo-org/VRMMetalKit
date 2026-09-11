@@ -102,7 +102,7 @@ final class NativeAnimeRigTests: XCTestCase {
         XCTAssertLessThan(w(.neck).y, w(.head).y)
         XCTAssertGreaterThan(w(.hips).y, 0.7)
         XCTAssertLessThan(w(.hips).y, 1.0)
-        XCTAssertEqual(Double(w(.head).y), 1.65 - 1.65 / 6.3, accuracy: 1e-4)
+        XCTAssertEqual(Double(w(.head).y), 1.65 - 1.65 / 6.3 + 0.15 * 1.65 / 6.3, accuracy: 1e-4)
         for (bone, p) in attachments.jointWorldPositions {
             let ww = w(bone)
             XCTAssertEqual(ww.x, p.x, accuracy: 1e-5, bone.rawValue)

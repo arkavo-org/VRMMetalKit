@@ -46,6 +46,7 @@ final class MaterialsPackTests: XCTestCase {
         "/gltf/emissiveFactor",
     ] + textureLeaves("/gltf/emissiveTexture") + [
         "/gltf/extensions/KHR_materials_emissive_strength/emissiveStrength",
+        "/gltf/name",
     ] + textureLeaves("/gltf/normalTexture", extra: ["/scale"])
       + textureLeaves("/gltf/occlusionTexture", extra: ["/strength"]) + [
         "/gltf/pbrMetallicRoughness/baseColorFactor",
@@ -83,7 +84,7 @@ final class MaterialsPackTests: XCTestCase {
     ]
 
     func testSchemaShowMaterialEnumeratesEveryLeaf() throws {
-        XCTAssertEqual(MaterialsPackTests.expectedMaterialLeaves.count, 142)
+        XCTAssertEqual(MaterialsPackTests.expectedMaterialLeaves.count, 143)
         let envelope = MaterialsTestSupport.invoke("schema show", ["name": "Material"], context: MaterialsTestSupport.context())
         XCTAssertEqual(envelope.exitCode, .success)
         let leaves = try XCTUnwrap(envelope.result?["leaves"]?.array?.compactMap { $0.string })

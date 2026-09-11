@@ -170,6 +170,19 @@ struct NativeAnimeHeadBuilder {
         }
     }
 
+    /// UV rectangle inside the shell's front-face band that the nose and ear
+    /// lofts are packed into, so face-texture paint aimed at shell regions
+    /// (the scalp underlay) never lands on them.
+    static let featureUVRect = (u: 0.70...0.80, v: 0.40...0.50)
+
+    static func remapUV(_ mesh: inout BuildMesh, from first: Int, into rect: (u: ClosedRange<Double>, v: ClosedRange<Double>)) {
+        for i in first..<mesh.vertexCount {
+            let uv = mesh.vertices[i].uv
+            mesh.vertices[i].uv = NAVec2(rect.u.lowerBound + uv.x * (rect.u.upperBound - rect.u.lowerBound),
+                                         rect.v.lowerBound + uv.y * (rect.v.upperBound - rect.v.lowerBound))
+        }
+    }
+
     // MARK: Ears
 
     private func buildEars(_ mesh: inout BuildMesh, handles: inout HeadHandles) {
@@ -184,7 +197,9 @@ struct NativeAnimeHeadBuilder {
                 Ring(center: root + NAVec3(sign * t, 0, 0), u: u, v: v, ru: ry, rv: rz, region: "ear\(sfx)")
             }
             let rings = [ring(0, 0.10 * hh, 0.065 * hh), ring(0.02 * hh, 0.11 * hh, 0.07 * hh), ring(0.036 * hh, 0.08 * hh, 0.05 * hh)]
+            let first = mesh.vertexCount
             mesh.loft(rings, segments: Self.earSegments, capStart: root - NAVec3(sign * 0.008 * hh, 0, 0), capEnd: root + NAVec3(sign * 0.046 * hh, 0, 0))
+            Self.remapUV(&mesh, from: first, into: Self.featureUVRect)
             handles.earRoots[side] = NAVec3(sign * rx, earY, -0.02 * hh)
         }
     }
@@ -199,7 +214,9 @@ struct NativeAnimeHeadBuilder {
             Ring(center: base + NAVec3(0, 0, dz), u: NAMath.xAxis, v: NAMath.yAxis, ru: rx, rv: ry, region: "nose")
         }
         let rings = [ring(-0.006 * hh, 0.06 * hh, 0.045 * hh), ring(0.018 * hh, 0.045 * hh, 0.035 * hh), ring(0.034 * hh, 0.028 * hh, 0.022 * hh)]
+        let first = mesh.vertexCount
         mesh.loft(rings, segments: Self.noseSegments, capStart: base + NAVec3(0, 0, -0.014 * hh), capEnd: base + NAVec3(0, 0, 0.044 * hh))
+        Self.remapUV(&mesh, from: first, into: Self.featureUVRect)
         handles.noseBridge = NAVec3(0, y + 0.06 * hh, layout.shellZ(x: 0, y: y + 0.06 * hh))
     }
 
