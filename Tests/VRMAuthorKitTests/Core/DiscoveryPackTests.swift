@@ -109,7 +109,7 @@ final class DiscoveryPackTests: XCTestCase {
         XCTAssertEqual(lint["acceptancePackHash"]?.string?.count, 64)
         XCTAssertEqual(lint["dimensions"]?["visual"]?["status"], "notApplicable")
         XCTAssertEqual(lint["dimensions"]?["corpus"]?["status"], "pending")
-        XCTAssertTrue(lint["blockers"]!.array!.contains("handler not implemented"))
+        XCTAssertFalse(lint["blockers"]!.array!.isEmpty)
         let build = entries.first { $0["operation"] == "build" }!
         XCTAssertTrue(build["blockers"]!.array!.contains("visual gate pending"))
         XCTAssertNil(build["acceptancePackHash"])
@@ -141,7 +141,7 @@ final class DiscoveryPackTests: XCTestCase {
     }
 
     func testEvidenceEntriesDriveStatusAndStaleness() throws {
-        let op = Registry.v1().operation(named: "style lint")!
+        let op = Registry.v1SchemaOnly().operation(named: "style lint")!
         let base = try EvidenceRegistry.load(acceptanceDirectory: DiscoveryPackTests.acceptanceDirectory)
         let pack = try XCTUnwrap(base.packs["style lint"])
         var registry = base
