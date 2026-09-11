@@ -99,3 +99,87 @@ weights change between frames (the morph gate reuses the previous output
 otherwise), and `VRMBenchmark` drives no expressions, so gating it needs a new
 benchmark option first. `PerformanceTrackerTests` pins the phase→metric
 mapping so a new phase cannot silently miss the report.
+
+## Measured: PR #437 hotspot commits
+
+Evidence for the two perf claims in this PR's commit messages, taken with the
+instrumentation above. Environment: Apple M4 Max, macOS 26.6.2. VRMMetalKit
+source at `caf4ee5`; benchmark binary built at `ab9aa7c` (adds `--fixed-step`).
+Model `AvatarSample_U_1.0.vrm.glb` (more spring chains than the reference
+scene `AvatarSample_A_1.0`). Invocation per run:
+
+```
+VRMBenchmark AvatarSample_U_1.0.vrm.glb --mode render --frames 1000 --warmup 30 \
+  --vrma VRMA_01.vrma --spring-bone --spring-bone-quality ultra --fixed-step --json <out>
+```
+
+`--fixed-step` matters: without it the unpaced loop hands spring bone a
+near-zero wall-clock delta, the XPBD loop runs no substeps and `springReadback`
+only samples on the few frames where a GPU frame happens to complete (see the
+probe row). The phase percentiles cover the last 600 measured frames (the
+tracker's ring buffer); `cpuBudget` covers all 1000. Warmup frames are in
+neither.
+
+Configurations, all built from the same tree:
+
+- **A** — `caf4ee5` as-is.
+- **B** — A with 759a1c6's `localMatrixDirty` guard removed, so
+  `updateWorldTransform()` rebuilds every node's local matrix on every walk
+  (the only behavioural difference of that commit).
+- **C** — A with 789bfe5's readback-copy hunk reverted: `writeBonesToNodes`
+  takes `let positions = latestPositionsSnapshot` under the lock again instead
+  of the unconditional copy into `writebackPositions`. The tracker phases and
+  the splat hoist from that commit are retained so C emits the same phases.
+
+Runs were interleaved A/B/A/B/A/B and then A/C/A/C/A/C (the A rows are
+reported per pair because the pairing is the control). "Median" is the median
+of the three run medians, "p95" the median of the three run p95s. **All runs
+were concurrent with another `swift test` job on the same machine**, so
+absolute numbers are inflated and the min/max spread is the noise floor.
+
+| Pair | Config | Phase | Median ms | p95 ms | Run medians min / max | vs A | Samples per run |
+|------|--------|-------|-----------|--------|-----------------------|------|-----------------|
+| AB | A | `transformUpdate` | 0.0608 | 0.0698 | 0.0607 / 0.0608 | — | 600 x3 runs |
+| AB | A | `cpuBudget` | 0.3036 | 0.3314 | 0.3022 / 0.3038 | — | 1000 x3 runs |
+| AB | A | `springBone` | 0.1235 | 0.1435 | 0.1235 / 0.1236 | — | 600 x3 runs |
+| AB | A | `springReadback` | 0.0564 | 0.0640 | 0.0563 / 0.0565 | — | 600 x3 runs |
+| AB | A | `springSubsteps` | 0.0058 | 0.0065 | 0.0058 / 0.0058 | — | 600 x3 runs |
+| AB | A | `springTargetCapture` | 0.0280 | 0.0312 | 0.0280 / 0.0280 | — | 600 x3 runs |
+| AB | B | `transformUpdate` | 0.0771 | 0.0942 | 0.0762 / 0.0842 | +26.8% | 600 x3 runs |
+| AB | B | `cpuBudget` | 0.3469 | 0.3829 | 0.3454 / 0.3636 | +14.2% | 1000 x3 runs |
+| AB | B | `springBone` | 0.1497 | 0.1795 | 0.1476 / 0.1602 | +21.2% | 600 x3 runs |
+| AB | B | `springReadback` | 0.0738 | 0.0887 | 0.0729 / 0.0777 | +30.8% | 600 x3 runs |
+| AB | B | `springSubsteps` | 0.0060 | 0.0070 | 0.0059 / 0.0064 | +2.9% | 600 x3 runs |
+| AB | B | `springTargetCapture` | 0.0281 | 0.0318 | 0.0278 / 0.0296 | +0.4% | 600 x3 runs |
+| AC | A | `transformUpdate` | 0.0610 | 0.0690 | 0.0608 / 0.0630 | — | 600 x3 runs |
+| AC | A | `cpuBudget` | 0.3044 | 0.3362 | 0.3017 / 0.3073 | — | 1000 x3 runs |
+| AC | A | `springBone` | 0.1236 | 0.1447 | 0.1232 / 0.1243 | — | 600 x3 runs |
+| AC | A | `springReadback` | 0.0563 | 0.0641 | 0.0563 / 0.0564 | — | 600 x3 runs |
+| AC | A | `springSubsteps` | 0.0058 | 0.0067 | 0.0058 / 0.0060 | — | 600 x3 runs |
+| AC | A | `springTargetCapture` | 0.0280 | 0.0316 | 0.0280 / 0.0283 | — | 600 x3 runs |
+| AC | C | `transformUpdate` | 0.0612 | 0.0695 | 0.0609 / 0.0680 | +0.2% | 600 x3 runs |
+| AC | C | `cpuBudget` | 0.3064 | 0.3375 | 0.3034 / 0.3221 | +0.6% | 1000 x3 runs |
+| AC | C | `springBone` | 0.1232 | 0.1450 | 0.1228 / 0.1365 | -0.3% | 600 x3 runs |
+| AC | C | `springReadback` | 0.0561 | 0.0653 | 0.0560 / 0.0623 | -0.3% | 600 x3 runs |
+| AC | C | `springSubsteps` | 0.0059 | 0.0065 | 0.0058 / 0.0065 | +0.7% | 600 x3 runs |
+| AC | C | `springTargetCapture` | 0.0281 | 0.0313 | 0.0281 / 0.0307 | +0.4% | 600 x3 runs |
+| probe | A, no `--fixed-step`, 100 frames | `springReadback` | 0.0577 | 0.0584 | single run | — | 7 x1 run |
+| probe | A, no `--fixed-step`, 100 frames | `springSubsteps` | 0.0001 | 0.0040 | single run | — | 100 x1 run |
+
+**Claim (a), 759a1c6 dirty-flag skip of local-matrix rebuilds:** supported —
+`transformUpdate` and `cpuBudget` are lower in A than B in every interleaved
+pair, with no overlap between the A and B run-median ranges; `springReadback`
+and `springBone` move too because the readback re-walks the spring chain
+nodes. The commit message's original figure was an unattributed `cpuBudget`
+median from an unnamed machine; the table above is what replaces it (the
+effect on this model is larger than that figure because U has more nodes and
+spring bone adds a second walk per frame).
+
+**Claim (b), 789bfe5 readback-buffer reuse:** not supported as a measurable
+win — every A-vs-C phase delta is inside the run-to-run spread, so the
+unconditional copy under `snapshotLock` is neutral on the render thread, and
+the removed COW copy (which only fired when the completion handler raced the
+short `writeBonesToNodes` window, on the completion thread) is not visible in
+any per-frame phase. Note that `springReadback` begins after the lock in both
+A and C, so the enclosing `springBone` phase is the discriminating one for this
+claim. Keep the commit for its hoist and instrumentation, not for the copy.
