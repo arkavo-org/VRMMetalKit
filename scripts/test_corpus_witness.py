@@ -71,6 +71,27 @@ class Solve(unittest.TestCase):
         self.assertFalse(w["eligible"])
         self.assertGreater(w["residuals"]["asset.height_m"], 0.01)
 
+    def test_search_reaches_a_target_only_the_accept_branch_can_find(self):
+        """Target is reachable only by moving a SEARCH_CONTROLS key, never by the two
+        DIRECT_CONTROLS keys, so the accept branch (`score < best_score`) must fire at
+        least once for this to pass."""
+        widths = W.rule_widths(PROFILE)
+
+        def evaluate(controls):
+            return {"proportions.hips_height_ratio": 0.5 + 0.10 * controls["body.proportion.legLength"]}
+
+        target = {"proportions.hips_height_ratio": 0.51}
+        starting_residual = W.residuals(evaluate({"body.proportion.legLength": 0.0}), target, widths)
+        starting_score = max(starting_residual.values())
+
+        a = W.solve("f", target, evaluate, widths, tolerance=0.02, budget=200, seed=42)
+        b = W.solve("f", target, evaluate, widths, tolerance=0.02, budget=200, seed=42)
+
+        self.assertEqual(a, b)
+        self.assertTrue(a["eligible"])
+        self.assertLess(max(a["residuals"].values()), starting_score)
+        self.assertNotEqual(a["controls"]["body.proportion.legLength"], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

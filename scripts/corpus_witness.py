@@ -36,6 +36,20 @@ SEARCH_CONTROLS = ["body.proportion.shoulderWidth", "body.proportion.torsoLength
                    "face.head.width", "face.chin.length"]
 
 
+def run_checked(cmd, cwd):
+    """Run a subprocess and raise a diagnosable error naming the command and its stderr on failure."""
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr}")
+    return proc
+
+
+def write_document(path, document):
+    """Write the witnesses document, overwriting any earlier partial write at the same path."""
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(document, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
+
+
 def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -113,17 +127,14 @@ def cli_evaluator(binary, template, seed, linter, workdir, metrics):
         shutil.rmtree(project, ignore_errors=True)
         if os.path.exists(out):
             os.remove(out)
-        subprocess.run([binary, "project", "init", "--dir", project, "--template", template,
-                        "--seed", str(seed)], cwd=REPO, check=True, capture_output=True)
+        run_checked([binary, "project", "init", "--dir", project, "--template", template,
+                    "--seed", str(seed)], REPO)
         request = os.path.join(workdir, "edit.json")
         with open(request, "w", encoding="utf-8") as fh:
             json.dump({"edit": {"object": "avatar:main", "values": controls}}, fh)
-        subprocess.run([binary, "control", "set", "--project", project, "--request", request],
-                       cwd=REPO, check=True, capture_output=True)
-        subprocess.run([binary, "build", "--project", project, "--out", out],
-                       cwd=REPO, check=True, capture_output=True)
-        proc = subprocess.run([sys.executable, linter, "measure", out, "--json"],
-                              cwd=REPO, check=True, capture_output=True, text=True)
+        run_checked([binary, "control", "set", "--project", project, "--request", request], REPO)
+        run_checked([binary, "build", "--project", project, "--out", out], REPO)
+        proc = run_checked([sys.executable, linter, "measure", out, "--json"], REPO)
         record = json.loads(proc.stdout)[0]
         return {m: metric_value(record, m) for m in metrics if metric_value(record, m) is not None}
 
@@ -156,16 +167,7 @@ def main(argv=None):
         return 2
 
     template_sha = template_hash(binary, args.template)
-    families = {}
-    with tempfile.TemporaryDirectory(prefix="corpus_witness_") as workdir:
-        evaluate = cli_evaluator(binary, args.template, args.seed, os.path.join(REPO, args.linter),
-                                 workdir, list(widths))
-        for family in sorted(targets):
-            witness = solve(family, targets[family], evaluate, widths,
-                            args.tolerance, args.budget, args.seed)
-            families[family] = {k: witness[k] for k in ("eligible", "controls", "residuals")}
-            print(f"{family}: {'eligible' if witness['eligible'] else 'INELIGIBLE'}", file=sys.stderr)
-
+    out_path = os.path.join(REPO, args.out)
     document = {
         "corpusManifestSha256": sha256_file(os.path.join(REPO, args.manifest)),
         "templateId": args.template,
@@ -174,18 +176,26 @@ def main(argv=None):
         "solver": {"budget": args.budget, "seed": args.seed, "tolerance": args.tolerance},
         "generated": {"styleLintSha256": sha256_file(os.path.join(REPO, args.linter)),
                       "measurementsSha256": sha256_file(os.path.join(REPO, args.measurements))},
-        "families": families,
+        "families": {},
     }
-    with open(os.path.join(REPO, args.out), "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(document, indent=2, sort_keys=True, ensure_ascii=True) + "\n")
+    with tempfile.TemporaryDirectory(prefix="corpus_witness_") as workdir:
+        evaluate = cli_evaluator(binary, args.template, args.seed, os.path.join(REPO, args.linter),
+                                 workdir, list(widths))
+        for family in sorted(targets):
+            witness = solve(family, targets[family], evaluate, widths,
+                            args.tolerance, args.budget, args.seed)
+            document["families"][family] = {k: witness[k] for k in ("eligible", "controls", "residuals")}
+            write_document(out_path, document)
+            print(f"{family}: {'eligible' if witness['eligible'] else 'INELIGIBLE'}", file=sys.stderr)
+
+    families = document["families"]
     eligible_count = sum(1 for f in families.values() if f["eligible"])
     print(f"{eligible_count}/{len(families)} families eligible -> {args.out}", file=sys.stderr)
     return 0
 
 
 def template_hash(binary, template_id):
-    proc = subprocess.run([binary, "template", "list"], cwd=REPO, check=True,
-                          capture_output=True, text=True)
+    proc = run_checked([binary, "template", "list"], REPO)
     packs = json.loads(proc.stdout)["result"]["packs"]
     for pack in packs:
         if pack["id"] == template_id:
