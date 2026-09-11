@@ -195,7 +195,7 @@ final class DeliverPackTests: XCTestCase {
         let uncertain = fx.invoke("deliver", deliverRequest(report: report, signer: "local-author", policy: policy))
         XCTAssertEqual(uncertain.status, .failed)
         XCTAssertEqual(uncertain.errors.map(\.code), [.gateFailed])
-        let coverage = try DefaultInspectionCoverage().coverage(for: vrmSha, in: fx.store)
+        let coverage = try InspectionCoverage.coverage(for: vrmSha, in: fx.store)
         XCTAssertEqual(coverage.passCount, 1)
         XCTAssertEqual(coverage.uncertainCount, 1)
         XCTAssertFalse(coverage.isCovered)
@@ -217,14 +217,14 @@ final class DeliverPackTests: XCTestCase {
     }
 
     func testInspectionCoverageIgnoresUnreadableAndForeignRecords() throws {
-        let dir = DefaultInspectionCoverage.directory(for: vrmSha, in: fx.store)
+        let dir = InspectionCoverage.directory(for: vrmSha, in: fx.store)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Data("{not json".utf8).write(to: dir.appendingPathComponent("broken.json"))
         try fx.writeInspection(for: vrmSha, verdict: "pass", index: 7)
-        let coverage = try DefaultInspectionCoverage().coverage(for: vrmSha, in: fx.store)
+        let coverage = try InspectionCoverage.coverage(for: vrmSha, in: fx.store)
         XCTAssertEqual(coverage.records, ["7.json"])
         XCTAssertEqual(coverage.unreadable, ["broken.json"])
         XCTAssertTrue(coverage.isCovered)
-        XCTAssertEqual(try DefaultInspectionCoverage().coverage(for: String(repeating: "0", count: 64), in: fx.store).passCount, 0)
+        XCTAssertEqual(try InspectionCoverage.coverage(for: String(repeating: "0", count: 64), in: fx.store).passCount, 0)
     }
 }

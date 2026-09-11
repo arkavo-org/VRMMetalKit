@@ -80,20 +80,6 @@ public struct AuthorError: Error, Codable, Hashable, Sendable, LocalizedError {
 
     public var errorDescription: String? { "\(code.rawValue): \(message)" }
 
-    enum CodingKeys: String, CodingKey { case code, objectId, path, observed, required, message, suggestedCommands, artifact }
-
-    public func encode(to encoder: any Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(code, forKey: .code)
-        try c.encodeIfPresent(objectId, forKey: .objectId)
-        try c.encodeIfPresent(path, forKey: .path)
-        try c.encodeIfPresent(observed, forKey: .observed)
-        try c.encodeIfPresent(required, forKey: .required)
-        try c.encode(message, forKey: .message)
-        try c.encode(suggestedCommands, forKey: .suggestedCommands)
-        try c.encodeIfPresent(artifact, forKey: .artifact)
-    }
-
     public static func invalidRequest(_ message: String, path: String? = nil, observed: JSONValue? = nil, required: JSONValue? = nil) -> AuthorError {
         AuthorError(code: .invalidRequest, path: path, observed: observed, required: required, message: message, suggestedCommands: ["describe", "schema show"])
     }

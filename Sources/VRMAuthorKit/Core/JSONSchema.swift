@@ -72,6 +72,11 @@ public struct JSONSchema: Hashable, Sendable {
         return JSONSchema(fields)
     }
 
+    /// Every case of a string-backed enum, in declaration order.
+    public static func enumeration<E: RawRepresentable & CaseIterable>(of type: E.Type, description: String? = nil) -> JSONSchema where E.RawValue == String {
+        enumeration(E.allCases.map(\.rawValue), description: description)
+    }
+
     public static func number(minimum: Double? = nil, maximum: Double? = nil, exclusiveMinimum: Double? = nil, exclusiveMaximum: Double? = nil, description: String? = nil) -> JSONSchema {
         var fields: [String: JSONValue] = ["type": "number"]
         if let minimum { fields["minimum"] = .number(minimum) }

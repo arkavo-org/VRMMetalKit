@@ -79,7 +79,7 @@ public struct Inspection: AuthorModel {
         "rubricHash": .hash,
         "timestamp": .string(minLength: 1, description: "RFC 3339"),
         "findings": .array(of: .string()),
-        "verdict": .enumeration(InspectionVerdict.allCases.map(\.rawValue)),
+        "verdict": .enumeration(of: InspectionVerdict.self),
         "scoring": InspectionScoring.schema,
     ], required: ["artifactHash", "buildHash", "revision", "scenarioId", "actor", "actorVersion", "rubricHash", "timestamp", "findings", "verdict"],
        description: "Append-only artifact inspection attestation")
@@ -124,7 +124,7 @@ public struct QARequest: AuthorModel {
 
     public static let modelName = "QARequest"
     public static let schema = JSONSchema.oneOf([
-        .object(properties: ["file": .path, "suite": .enumeration(QASuite.allCases.map(\.rawValue))], required: ["file", "suite"]),
+        .object(properties: ["file": .path, "suite": .enumeration(of: QASuite.self)], required: ["file", "suite"]),
         .object(properties: ["plan": Blob.schema], required: ["plan"]),
         .object(properties: ["acceptance": AcceptanceRequest.schema], required: ["acceptance"]),
     ], description: "Exactly one of {file,suite}, {plan} or {acceptance}")

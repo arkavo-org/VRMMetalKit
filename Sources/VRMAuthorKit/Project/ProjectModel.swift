@@ -112,6 +112,9 @@ public enum ProjectObjects {
         return .object(o)
     }
 
+    /// The only pointers `object set` accepts. VRM meta, rights and training
+    /// claims are absent by design: they are edited through `provenance resolve`
+    /// or the Recipe, never through a field write.
     public static func writablePointers(kind: ObjectKind, fields: [String: JSONValue]) -> [String] {
         switch kind {
         case .avatar: return ["/name", "/body", "/face"]

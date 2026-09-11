@@ -202,7 +202,7 @@ public struct CompiledAvatar: Codable, Hashable, Sendable {
         copy.nodes = CompiledAvatar.sortedById(nodes, \.id)
         copy.meshes = CompiledAvatar.sortedById(meshes, \.id)
         copy.skins = CompiledAvatar.sortedById(skins, \.id)
-        copy.meshInstances = meshInstances.sorted { CompiledAvatar.precedes($0.nodeId + "\u{0}" + $0.meshId, $1.nodeId + "\u{0}" + $1.meshId) }
+        copy.meshInstances = CompiledAvatar.sortedMeshInstances(meshInstances)
         copy.images = CompiledAvatar.sortedById(images, \.id)
         copy.materials = CompiledAvatar.sortedById(materials, \.id)
         copy.expressions = CompiledAvatar.sortedById(expressions, \.id)
@@ -218,6 +218,13 @@ public struct CompiledAvatar: Codable, Hashable, Sendable {
 
     public static func sortedById<T>(_ items: [T], _ id: KeyPath<T, String>) -> [T] {
         items.sorted { precedes($0[keyPath: id], $1[keyPath: id]) }
+    }
+
+    /// Mesh instances have no id of their own; node then mesh is their stable
+    /// order, and both the avatar and a wearable output must use this one key
+    /// or a merged avatar hashes differently from its parts.
+    public static func sortedMeshInstances(_ items: [CompiledMeshInstance]) -> [CompiledMeshInstance] {
+        items.sorted { precedes($0.nodeId + "\u{0}" + $0.meshId, $1.nodeId + "\u{0}" + $1.meshId) }
     }
 
     /// Export index of an id after stable sorting, or nil when absent.

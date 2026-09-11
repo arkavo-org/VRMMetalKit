@@ -32,23 +32,17 @@ public struct InspectionCoverageReport: Codable, Hashable, Sendable {
     }
 }
 
-/// Answers whether inspection records cover the exact artifact bytes.
-public protocol InspectionCoverage: Sendable {
-    func coverage(for artifactHash: String, in store: ProjectStore) throws -> InspectionCoverageReport
-}
-
-/// Reads `reports/inspections/<artifactHash>/*.json` (each an `Inspection`)
-/// and counts verdicts bound to that hash; records naming another hash are
-/// ignored, unreadable files are listed.
-public struct DefaultInspectionCoverage: InspectionCoverage {
-    public init() {}
-
+/// Answers whether inspection records cover the exact artifact bytes: reads
+/// `reports/inspections/<artifactHash>/*.json` (each an `Inspection`) and counts
+/// verdicts bound to that hash; records naming another hash are ignored,
+/// unreadable files are listed.
+public enum InspectionCoverage {
     public static func directory(for artifactHash: String, in store: ProjectStore) -> URL {
         store.reportsDirectory.appendingPathComponent("inspections").appendingPathComponent(artifactHash)
     }
 
-    public func coverage(for artifactHash: String, in store: ProjectStore) throws -> InspectionCoverageReport {
-        let dir = DefaultInspectionCoverage.directory(for: artifactHash, in: store)
+    public static func coverage(for artifactHash: String, in store: ProjectStore) throws -> InspectionCoverageReport {
+        let dir = directory(for: artifactHash, in: store)
         var report = InspectionCoverageReport(artifactHash: artifactHash, records: [], passCount: 0, failCount: 0, uncertainCount: 0, unreadable: [])
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasSuffix(".json") && !$0.contains(ProjectStore.tempInfix) }.sorted()
         for name in names {

@@ -83,15 +83,15 @@ public struct VRMMeta: AuthorModel {
         "thirdPartyLicenses": .string(),
         "thumbnailImage": .id.described("Image ID; exported as an image index"),
         "licenseUrl": .string(minLength: 1).defaulting(to: .string(VRMMeta.vrm10LicenseUrl)),
-        "avatarPermission": .enumeration(AvatarPermission.allCases.map(\.rawValue)).defaulting(to: "onlyAuthor"),
+        "avatarPermission": .enumeration(of: AvatarPermission.self).defaulting(to: "onlyAuthor"),
         "allowExcessivelyViolentUsage": .boolean().defaulting(to: false),
         "allowExcessivelySexualUsage": .boolean().defaulting(to: false),
-        "commercialUsage": .enumeration(CommercialUsage.allCases.map(\.rawValue)).defaulting(to: "personalNonProfit"),
+        "commercialUsage": .enumeration(of: CommercialUsage.self).defaulting(to: "personalNonProfit"),
         "allowPoliticalOrReligiousUsage": .boolean().defaulting(to: false),
         "allowAntisocialOrHateUsage": .boolean().defaulting(to: false),
-        "creditNotation": .enumeration(CreditNotation.allCases.map(\.rawValue)).defaulting(to: "required"),
+        "creditNotation": .enumeration(of: CreditNotation.self).defaulting(to: "required"),
         "allowRedistribution": .boolean().defaulting(to: false),
-        "modification": .enumeration(ModificationPermission.allCases.map(\.rawValue)).defaulting(to: "prohibited"),
+        "modification": .enumeration(of: ModificationPermission.self).defaulting(to: "prohibited"),
         "otherLicenseUrl": .string(),
     ], required: ["name", "authors"], description: "VRMC_vrm 1.0 meta; licenseUrl defaults to the VRM 1.0 license")
 
@@ -119,7 +119,7 @@ public struct TrainingClaim: AuthorModel {
 
     public static let modelName = "TrainingClaim"
     public static let schema = JSONSchema.object(properties: [
-        "use": .enumeration(TrainingUse.allCases.map(\.rawValue)), "constraint_info": .string(),
+        "use": .enumeration(of: TrainingUse.self), "constraint_info": .string(),
     ], required: ["use"])
 
     public func validate() throws {
@@ -257,7 +257,7 @@ public struct AssetImport: AuthorModel {
     public static let modelName = "AssetImport"
     public static let schema = JSONSchema.object(properties: [
         "path": .path,
-        "kind": .enumeration(AssetKind.allCases.map(\.rawValue)),
+        "kind": .enumeration(of: AssetKind.self),
         "manifestPath": .path,
         "sourceUri": .string(),
         "generation": Generation.schema,

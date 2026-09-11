@@ -44,7 +44,7 @@ final class MCPClientTests: XCTestCase {
             let op = registry.operation(named: name)!
             let packHash = SHA256Hex.hex("pack-\(name)")
             evidence.packs[name] = AcceptancePackSummary(id: name, operation: name, packHash: packHash, requestSchemaHash: op.schemaHash, resultSchemaHash: op.resultSchemaHash,
-                                                         requiredLevel: .fixtureTested, dimensions: ["fixture": "required"], oracleHashes: [:], runnerKind: "swift-test", entryPoint: "x", path: "x")
+                                                         requiredLevel: .fixtureTested, dimensions: ["fixture": "required"], oracleHashes: [:], path: "x")
             evidence.entries.append(EvidenceEntry(operation: name, packHash: packHash, requestSchemaHash: op.schemaHash, evidenceLevel: .fixtureTested, evidenceStatus: .current,
                                                   dimensions: ["fixture": DimensionRecord(status: .pass, reportHash: String(repeating: "1", count: 64))]))
         }

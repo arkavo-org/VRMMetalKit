@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "52e6fc2067bb7fdce1905713b8a7d39dc312346e8e6775b24f38a37b8bd84f10",
   "resultSchemaHash": "4ac456d39569fa1081f93784f15d48aaeb98b10c61ec030962a8eee1d560ffcc",
-  "packHash": "a4cd2780266f9ba9e0c34ed3d70a5bd26b193c787aaa03b655f2d7fa9f7e8020",
+  "packHash": "49e061f4e3a758ba49a6874a6d3c3333ee5b22a366fb41ce5eb52697b0d2a444",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -78,7 +78,7 @@
     "environment": {
       "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "7ac2a7b9693cf4f6b1b983c75e13adfe912e7a038888f232916c837e6f8ba4e7",
+        "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "f3f6f30c4e1c3d63f4e6127c5ff1dbcb38ab04097488fe2ed58174e08f9a8b67",
         "Tests/VRMAuthorKitTests/Core/CLIParsingTests.swift": "5fbe1a0e5a8468c611c8000a5b1565ab366058f2d068fae12584be049296db0d"
       }
     }

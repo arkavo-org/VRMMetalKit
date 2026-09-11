@@ -58,7 +58,7 @@ public struct MaterialColorBind: AuthorModel {
 
     public static let modelName = "MaterialColorBind"
     public static let schema = JSONSchema.object(properties: [
-        "material": .id, "type": .enumeration(MaterialColorType.allCases.map(\.rawValue)), "targetValue": .vector(4, minimum: 0, maximum: 1),
+        "material": .id, "type": .enumeration(of: MaterialColorType.self), "targetValue": .vector(4, minimum: 0, maximum: 1),
     ], required: ["material", "type", "targetValue"])
 
     public func validate() throws { try ModelCheck.count(targetValue, 4, "/targetValue") }
@@ -116,12 +116,12 @@ public struct ExpressionObject: AuthorModel {
     public static let modelName = "Expression"
     public static let schema = JSONSchema.object(properties: [
         "id": .id,
-        "preset": .enumeration(ExpressionPreset.allCases.map(\.rawValue)).described("VRM 1.0 preset name; exclusive with name"),
+        "preset": .enumeration(of: ExpressionPreset.self).described("VRM 1.0 preset name; exclusive with name"),
         "name": .string(minLength: 1, description: "Custom expression name; exclusive with preset"),
         "isBinary": .boolean().defaulting(to: false),
-        "overrideBlink": .enumeration(ExpressionOverride.allCases.map(\.rawValue)).defaulting(to: "none"),
-        "overrideLookAt": .enumeration(ExpressionOverride.allCases.map(\.rawValue)).defaulting(to: "none"),
-        "overrideMouth": .enumeration(ExpressionOverride.allCases.map(\.rawValue)).defaulting(to: "none"),
+        "overrideBlink": .enumeration(of: ExpressionOverride.self).defaulting(to: "none"),
+        "overrideLookAt": .enumeration(of: ExpressionOverride.self).defaulting(to: "none"),
+        "overrideMouth": .enumeration(of: ExpressionOverride.self).defaulting(to: "none"),
         "morphTargetBinds": .array(of: MorphTargetBind.schema).defaulting(to: []),
         "materialColorBinds": .array(of: MaterialColorBind.schema).defaulting(to: []),
         "textureTransformBinds": .array(of: TextureTransformBind.schema).defaulting(to: []),
@@ -182,7 +182,7 @@ public struct LookAtObject: AuthorModel {
     public static let modelName = "LookAt"
     public static let schema = JSONSchema.object(properties: [
         "offsetFromHeadBone": .vector(3).unit("metres").defaulting(to: [0, 0, 0]),
-        "type": .enumeration(LookAtType.allCases.map(\.rawValue)).defaulting(to: "bone"),
+        "type": .enumeration(of: LookAtType.self).defaulting(to: "bone"),
         "rangeMapHorizontalInner": LookAtRangeMap.schema.defaulting(to: ["inputMaxValue": 90, "outputScale": 10]),
         "rangeMapHorizontalOuter": LookAtRangeMap.schema.defaulting(to: ["inputMaxValue": 90, "outputScale": 10]),
         "rangeMapVerticalDown": LookAtRangeMap.schema.defaulting(to: ["inputMaxValue": 90, "outputScale": 10]),
@@ -211,7 +211,7 @@ public struct MeshAnnotation: AuthorModel {
 
     public static let modelName = "MeshAnnotation"
     public static let schema = JSONSchema.object(properties: [
-        "mesh": .id, "type": .enumeration(FirstPersonType.allCases.map(\.rawValue)),
+        "mesh": .id, "type": .enumeration(of: FirstPersonType.self),
     ], required: ["mesh", "type"])
 }
 

@@ -20,13 +20,8 @@ import Foundation
 /// coverage for the exact bytes, signs the frozen VRM into a detached sidecar
 /// and writes the bundle atomically. The input VRM is never modified.
 public enum DeliverHandler {
-    public static let bundleFiles = ["avatar.vrm", "avatar.vrm\(Sidecar.suffix)", "lock.json", "delivery.json"]
 
-    static func deliver(_ context: OperationContext, _ request: JSONValue) throws -> ResultEnvelope {
-        try deliver(context, request, coverage: DefaultInspectionCoverage())
-    }
-
-    public static func deliver(_ context: OperationContext, _ request: JSONValue, coverage: any InspectionCoverage) throws -> ResultEnvelope {
+    public static func deliver(_ context: OperationContext, _ request: JSONValue) throws -> ResultEnvelope {
         let requestId = ProvenanceHandlers.requestId(request)
         let store = try ProvenanceHandlers.store(context)
         let mutex = try ProcessMutex(path: store.root.appendingPathComponent(".mutex").path)
@@ -83,7 +78,7 @@ public enum DeliverHandler {
             block(AuthorError(code: .missingInput, path: "/report", observed: .string(reportPath), message: "QA report '\(reportPath)' was not found.", suggestedCommands: ["export verify"]))
         }
 
-        let inspections = try coverage.coverage(for: vrmSha, in: store)
+        let inspections = try InspectionCoverage.coverage(for: vrmSha, in: store)
         if inspections.passCount == 0 {
             block(AuthorError(code: .inspectionMissing, path: "reports/inspections/\(vrmSha)", observed: inspections.json,
                               message: "No passing inspection record is bound to sha256 \(vrmSha).", suggestedCommands: ["inspection record", "inspection verify"]))
@@ -186,7 +181,7 @@ public enum DeliverHandler {
                 try put(try Data(contentsOf: store.revisionsDirectory.appendingPathComponent(name)), "project/revisions/\(name)", "application/json", "revision")
             }
             try put(reportData, "qa/report.json", "application/json", "qa-report")
-            let inspectionDir = DefaultInspectionCoverage.directory(for: vrmSha, in: store)
+            let inspectionDir = InspectionCoverage.directory(for: vrmSha, in: store)
             for name in inspections.records {
                 try put(try Data(contentsOf: inspectionDir.appendingPathComponent(name)), "inspections/\(vrmSha)/\(name)", "application/json", "inspection")
             }

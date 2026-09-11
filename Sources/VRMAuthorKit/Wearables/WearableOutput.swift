@@ -134,7 +134,7 @@ public struct WearableOutput: Codable, Hashable, Sendable {
         copy.meshes = CompiledAvatar.sortedById(meshes, \.id)
         copy.nodes = CompiledAvatar.sortedById(nodes, \.id)
         copy.skins = CompiledAvatar.sortedById(skins, \.id)
-        copy.meshInstances = meshInstances.sorted { CompiledAvatar.precedes($0.nodeId + "\u{0}" + $0.meshId, $1.nodeId + "\u{0}" + $1.meshId) }
+        copy.meshInstances = CompiledAvatar.sortedMeshInstances(meshInstances)
         copy.springs = CompiledAvatar.sortedById(springs, \.id)
         copy.colliders = CompiledAvatar.sortedById(colliders, \.id)
         copy.colliderGroups = CompiledAvatar.sortedById(colliderGroups, \.id)

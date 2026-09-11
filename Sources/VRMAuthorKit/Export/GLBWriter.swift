@@ -39,7 +39,6 @@ public struct GLBExport: Sendable {
     public var json: JSONValue
     public var bin: Data
     public var idMap: ExportIndexMap
-    public var buildHash: String
     public var sha256: String { SHA256Hex.hex(data) }
 }
 
@@ -63,7 +62,7 @@ public enum GLBWriter {
         while bin.count % 4 != 0 { bin.append(0x00) }
         let glb = GLBFile(json: json, bin: bin)
         let data = try glb.serialize()
-        return GLBExport(data: data, json: json, bin: glb.bin, idMap: builder.idMap, buildHash: try avatar.buildHash())
+        return GLBExport(data: data, json: json, bin: glb.bin, idMap: builder.idMap)
     }
 
     static func fail(_ message: String, path: String? = nil, objectId: String? = nil) -> AuthorError {

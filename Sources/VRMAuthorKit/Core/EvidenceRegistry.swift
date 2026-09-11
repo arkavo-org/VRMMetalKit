@@ -79,12 +79,10 @@ public struct AcceptancePackSummary: Codable, Hashable, Sendable {
     public var requiredLevel: EvidenceLevel
     public var dimensions: [String: String]
     public var oracleHashes: [String: String]
-    public var runnerKind: String
-    public var entryPoint: String
     public var path: String
 
     public init(id: String, operation: String, packHash: String, requestSchemaHash: String, resultSchemaHash: String, requiredLevel: EvidenceLevel,
-                dimensions: [String: String], oracleHashes: [String: String], runnerKind: String, entryPoint: String, path: String) {
+                dimensions: [String: String], oracleHashes: [String: String], path: String) {
         self.id = id
         self.operation = operation
         self.packHash = packHash
@@ -93,22 +91,20 @@ public struct AcceptancePackSummary: Codable, Hashable, Sendable {
         self.requiredLevel = requiredLevel
         self.dimensions = dimensions
         self.oracleHashes = oracleHashes
-        self.runnerKind = runnerKind
-        self.entryPoint = entryPoint
         self.path = path
     }
 
     public static func parse(_ json: JSONValue, path: String) throws -> AcceptancePackSummary {
         guard let id = json["id"]?.string, let operation = json["operation"]?.string, let packHash = json["packHash"]?.string,
               let policy = json["evidencePolicy"], let levelText = policy["requiredLevel"]?.string, let level = EvidenceLevel(rawValue: levelText),
-              let runner = json["runner"], let kind = runner["kind"]?.string, let entry = runner["entryPoint"]?.string else {
+              let runner = json["runner"], runner["kind"]?.string != nil, runner["entryPoint"]?.string != nil else {
             throw AuthorError(code: .validationFailed, path: path, message: "Acceptance pack is missing id/operation/packHash/evidencePolicy/runner.")
         }
         let dims = (policy["dimensions"]?.object ?? [:]).compactMapValues { $0.string }
         let oracles = (runner["environment"]?["oracleHashes"]?.object ?? [:]).compactMapValues { $0.string }
         return AcceptancePackSummary(id: id, operation: operation, packHash: packHash, requestSchemaHash: json["requestSchemaHash"]?.string ?? "",
                                      resultSchemaHash: json["resultSchemaHash"]?.string ?? "", requiredLevel: level, dimensions: dims,
-                                     oracleHashes: oracles, runnerKind: kind, entryPoint: entry, path: path)
+                                     oracleHashes: oracles, path: path)
     }
 }
 
@@ -124,7 +120,7 @@ public struct EvidencePolicy: Codable, Hashable, Sendable {
 
     public static let release = EvidencePolicy()
     public static let schema = JSONSchema.object(properties: [
-        "minimumLevel": .enumeration(EvidenceLevel.allCases.map(\.rawValue)).defaulting(to: "schema-only"),
+        "minimumLevel": .enumeration(of: EvidenceLevel.self).defaulting(to: "schema-only"),
         "requireCurrent": .boolean().defaulting(to: true),
     ], required: [])
 

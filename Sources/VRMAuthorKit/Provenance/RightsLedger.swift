@@ -119,18 +119,6 @@ public struct RightsLedger: Codable, Hashable, Sendable {
         return "asset:" + sha256
     }
 
-    /// Pointers that object editing must refuse: VRM meta, rights and training
-    /// claims are only edited through `provenance resolve` or the Recipe.
-    public static func isRightsPointer(_ pointer: JSONPointer) -> Bool {
-        guard let first = pointer.tokens.first else { return false }
-        return ["meta", "rights", "training"].contains(first)
-    }
-
-    public static func isRightsPointer(_ pointer: String) -> Bool {
-        guard let parsed = try? JSONPointer(pointer) else { return false }
-        return isRightsPointer(parsed)
-    }
-
     /// Ingredient graph entries for `provenance inspect` and the sidecar claim.
     public func ingredientEntries() throws -> [JSONValue] {
         try assets.map { asset in

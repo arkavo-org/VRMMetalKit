@@ -42,7 +42,7 @@ final class ExportPackTests: XCTestCase {
         let third = try GLBWriter.write(shuffled)
         XCTAssertEqual(first.data, second.data)
         XCTAssertEqual(first.data, third.data)
-        XCTAssertEqual(first.buildHash, third.buildHash)
+        XCTAssertEqual(try avatar.buildHash(), try shuffled.buildHash())
         XCTAssertEqual(first.data.count % 4, 0)
         let parsed = try GLBFile.parse(first.data)
         XCTAssertEqual(try parsed.serialize(), first.data)

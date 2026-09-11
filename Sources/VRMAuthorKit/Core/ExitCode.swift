@@ -27,19 +27,8 @@ public enum ExitCode: Int32, Codable, Hashable, Sendable, CaseIterable {
     case conflict = 4
     case internalError = 5
 
-    /// Severity for combining multiple errors: internal > conflict > missing > invalid > gate.
-    public var severity: Int {
-        switch self {
-        case .success: return 0
-        case .gateFailed: return 1
-        case .invalidRequest: return 2
-        case .missingCapability: return 3
-        case .conflict: return 4
-        case .internalError: return 5
-        }
-    }
-
+    /// The raw values ascend by severity: internal > conflict > missing > invalid > gate.
     public static func mostSevere(_ codes: [ExitCode]) -> ExitCode {
-        codes.max { $0.severity < $1.severity } ?? .success
+        codes.max { $0.rawValue < $1.rawValue } ?? .success
     }
 }

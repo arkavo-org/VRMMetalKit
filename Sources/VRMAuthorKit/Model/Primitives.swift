@@ -30,7 +30,7 @@ public struct Colour: AuthorModel {
     public static let modelName = "Colour"
     public static let schema = JSONSchema.object(properties: [
         "rgba": .vector(4, minimum: 0, maximum: 1).unit("normalized"),
-        "space": .enumeration(ColourSpace.allCases.map(\.rawValue)).defaulting(to: "linear"),
+        "space": .enumeration(of: ColourSpace.self).defaulting(to: "linear"),
     ], required: ["rgba"], description: "RGBA colour with components in [0,1]")
 
     public func validate() throws {
@@ -170,7 +170,7 @@ public struct ImageSpec: AuthorModel {
         "id": .id,
         "width": .integer(minimum: 1, maximum: 4096).unit("pixels"),
         "height": .integer(minimum: 1, maximum: 4096).unit("pixels"),
-        "colourSpace": .enumeration(ColourSpace.allCases.map(\.rawValue)),
-        "usage": .enumeration(ImageUsage.allCases.map(\.rawValue)),
+        "colourSpace": .enumeration(of: ColourSpace.self),
+        "usage": .enumeration(of: ImageUsage.self),
     ], required: ["id", "width", "height", "colourSpace", "usage"], description: "Composited image target")
 }

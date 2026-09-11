@@ -32,7 +32,7 @@ public enum CommonFields {
     public static let threads = JSONSchema.integer(minimum: 1).defaulting(to: 1).described("Independent work only; does not change strict output bytes")
     public static let target = JSONSchema.enumeration(["portable-vrm1"]).defaulting(to: "portable-vrm1")
     public static let backend = JSONSchema.enumeration(["portable-strict/1"]).defaulting(to: "portable-strict/1")
-    public static let suite = JSONSchema.enumeration(QASuite.allCases.map(\.rawValue))
+    public static let suite = JSONSchema.enumeration(of: QASuite.self)
 
     static func request(kind: OperationKind, _ fields: [String: JSONSchema], required: [String], out: Bool = false, description: String) -> JSONSchema {
         var props = fields
@@ -76,12 +76,12 @@ extension Registry {
         let commandEntry = JSONSchema.object(properties: [
             "name": .string(), "rpcMethod": .string(), "kind": .enumeration(["read", "mutation", "projectFree"]), "summary": .string(), "result": .string(),
             "requestSchema": .any(), "resultSchema": .any(), "schemaHash": .hash, "resultSchemaHash": .hash, "examples": .array(of: .any()),
-            "units": .map(of: .string()), "requiredEvidence": .enumeration(EvidenceLevel.allCases.map(\.rawValue)), "runnable": .boolean(),
+            "units": .map(of: .string()), "requiredEvidence": .enumeration(of: EvidenceLevel.self), "runnable": .boolean(),
             "prerequisites": stringList,
         ], required: ["name", "rpcMethod", "kind", "requestSchema", "resultSchema", "schemaHash", "requiredEvidence", "runnable"])
         let controlDescriptor = JSONSchema.object(properties: [
-            "key": .string(), "unit": .enumeration(ControlUnit.allCases.map(\.rawValue)), "validRange": .vector(2), "recommendedRange": .vector(2),
-            "defaultValue": .number(), "side": .enumeration(ControlSide.allCases.map(\.rawValue)), "mirrorKey": .string(),
+            "key": .string(), "unit": .enumeration(of: ControlUnit.self), "validRange": .vector(2), "recommendedRange": .vector(2),
+            "defaultValue": .number(), "side": .enumeration(of: ControlSide.self), "mirrorKey": .string(),
             "affects": .array(of: ObjectKind.schema), "dependencies": stringList, "description": .string(),
         ], required: ["key", "unit", "validRange", "recommendedRange", "defaultValue", "side", "affects", "dependencies"])
         let objectSummary = JSONSchema.object(properties: [
@@ -92,7 +92,7 @@ extension Registry {
             "id": .string(), "status": .enumeration(["pass", "fail", "incomplete", "notApplicable"]), "message": .string(), "reportHash": .hash,
         ], required: ["id", "status"]))
         let lossReport = JSONSchema.object(properties: ["preserved": stringList, "lost": stringList, "converted": stringList], required: ["preserved", "lost", "converted"])
-        let importResult = R.result(["asset": .id, "sha256": .hash, "kind": .enumeration(AssetKind.allCases.map(\.rawValue)), "lossReport": lossReport,
+        let importResult = R.result(["asset": .id, "sha256": .hash, "kind": .enumeration(of: AssetKind.self), "lossReport": lossReport,
                                      "ingredient": .any(), "credentialStatus": .string()], required: ["asset", "sha256"], description: "Hashed source, preservation report and ingredient ledger entry")
 
         return [
@@ -158,7 +158,7 @@ extension Registry {
                       requestSchema: R.request(kind: .mutation, ["revision": .integer(minimum: 0)], required: ["revision"], description: "history restore arguments"),
                       resultSchema: planResult, requiredEvidence: .fixtureTested, examples: [["project": "avatar.vrmauthor", "revision": 3]]),
             Operation(name: "template list", kind: .projectFree, summary: "Installed packs/items with hashes and control schemas", resultDescription: "Installed packs/items",
-                      requestSchema: R.request(kind: .projectFree, ["category": .enumeration(TemplateCategory.allCases.map(\.rawValue))], required: [], description: "template list arguments"),
+                      requestSchema: R.request(kind: .projectFree, ["category": .enumeration(of: TemplateCategory.self)], required: [], description: "template list arguments"),
                       resultSchema: R.result(["packs": .array(of: .any()), "items": .array(of: .any())], required: ["packs", "items"], description: "Installed templates"),
                       requiredEvidence: .fixtureTested, examples: [[:], ["category": "hair"]]),
             Operation(name: "recipe export", kind: .read, summary: "Canonical complete Recipe, including pack defaults", resultDescription: "Canonical complete Recipe",

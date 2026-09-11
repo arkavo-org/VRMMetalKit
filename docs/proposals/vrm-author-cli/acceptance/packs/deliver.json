@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "d0e95952bc63babac2d1b8792529bd3ca7b807c07a1a142522a6d1914180c940",
   "resultSchemaHash": "ae4d2e79ef18d680eee198b2cd90874d869cd7c01a256c37d8d1f56e52384efb",
-  "packHash": "4991bce577eb97aa923ed2c64f61a597f3de83a5bd07546c7e6282ed32e305b4",
+  "packHash": "b27f9ccd67b6aea4d5924c2bf97c4df1b779349bc2a67ce84b3d2367b132c74d",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -94,8 +94,8 @@
     "environment": {
       "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Provenance/DeliverPackTests.swift": "c1d4c3fbf5a7668e6bbabaca628140c265359e93f4a75801156b8663e2987e56",
-        "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "61d50bf07e6652e1dfb76516d5173f173a26f6b1d35f5a1bd0ecbb74164b141e"
+        "Tests/VRMAuthorKitTests/Provenance/DeliverPackTests.swift": "57d792e24195109fb7d49d98421e473698661fa8f026f3b2d270af3ab413e3e5",
+        "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "68ee7fbd59e8d9dceab9691e7f857392c859e65dbc6d4ce54c1e0db671caf265"
       }
     }
   },

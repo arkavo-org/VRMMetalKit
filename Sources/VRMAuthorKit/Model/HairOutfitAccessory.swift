@@ -183,7 +183,7 @@ public struct AccessoryItem: AuthorModel {
     public static let modelName = "AccessoryItem"
     public static let schema = JSONSchema.object(properties: [
         "id": .id,
-        "preset": .enumeration(AccessoryPreset.allCases.map(\.rawValue)),
+        "preset": .enumeration(of: AccessoryPreset.self),
         "attachment": .id.described("Declared rig node"),
         "transform": Transform.schema.defaulting(to: ["translation": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1]]),
         "materialIds": .idList,

@@ -145,13 +145,14 @@ final class ProvenancePackTests: XCTestCase {
         XCTAssertFalse(update.conflicts.contains { $0.code == "LEDGER_CONTRADICTION" })
     }
 
-    func testRightsPointersAreRecognised() throws {
-        XCTAssertTrue(RightsLedger.isRightsPointer("/meta/authors"))
-        XCTAssertTrue(RightsLedger.isRightsPointer("/rights"))
-        XCTAssertTrue(RightsLedger.isRightsPointer(try JSONPointer("/training/cawg.ai_training")))
-        XCTAssertFalse(RightsLedger.isRightsPointer("/mtoon/shadingToonyFactor"))
-        XCTAssertFalse(RightsLedger.isRightsPointer(""))
-        XCTAssertFalse(RightsLedger.isRightsPointer("no-slash"))
+    func testRightsPointersAreNotObjectWritable() {
+        for kind in ObjectKind.allCases {
+            let writable = ProjectObjects.writablePointers(kind: kind, fields: [:])
+            for reserved in ["/meta", "/rights", "/training"] {
+                XCTAssertFalse(writable.contains { $0 == reserved || $0.hasPrefix(reserved + "/") }, "\(kind) exposes \(reserved)")
+            }
+        }
+        XCTAssertTrue(ProjectObjects.writablePointers(kind: .material, fields: [:]).contains("/mtoon"))
     }
 
     // MARK: CAWG

@@ -154,7 +154,7 @@ struct ProvenanceFixture {
     }
 
     func writeInspection(for hash: String, verdict: String, index: Int = 1) throws {
-        let dir = DefaultInspectionCoverage.directory(for: hash, in: store)
+        let dir = InspectionCoverage.directory(for: hash, in: store)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let record: JSONValue = ["artifactHash": .string(hash), "buildHash": .string(String(repeating: "b", count: 64)), "revision": 0, "scenarioId": "front",
                                  "actor": "test", "actorVersion": "1", "rubricHash": .string(String(repeating: "c", count: 64)), "timestamp": "2026-09-10T00:00:00Z",
