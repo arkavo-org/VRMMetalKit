@@ -26,5 +26,6 @@ extension Registry {
         DiscoveryHandlers.install,
         ProjectHandlers.install,
         ProvenanceHandlers.install,
+        MaterialsHandlers.install,
     ]
 }
