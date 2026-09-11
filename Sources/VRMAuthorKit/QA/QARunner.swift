@@ -80,13 +80,16 @@ public struct QARunner: Sendable {
                     continue
                 }
                 do {
-                    let report = try consumer.importVRM(data)
+                    let report = try consumer.importVRM(data, context: context)
                     consumers.append(report)
                     let summary = "\(report.consumer) \(report.version) read \(report.humanoidBones) humanoid bones, \(report.expressions) expressions, \(report.springs) springs, \(report.colliders) colliders."
                     let problems = consumerProblems(report, data: data)
                     checks.append(problems.isEmpty
                         ? QACheck(scenario: scenario, id: "\(scenario).import", status: .pass, message: summary)
                         : QACheck(scenario: scenario, id: "\(scenario).import", status: .fail, message: summary + " " + problems.joined(separator: " "), code: "CONSUMER_MISMATCH"))
+                } catch let error as AuthorError where error.code == .missingCapability {
+                    checks.append(QACheck(scenario: scenario, id: "\(scenario).import", status: .incomplete,
+                                          message: "Consumer '\(pinned)' could not run: \(error.message)", code: AuthorErrorCode.missingCapability.rawValue))
                 } catch {
                     checks.append(QACheck(scenario: scenario, id: "\(scenario).import", status: .fail, message: "Consumer '\(pinned)' rejected the file: \(error)", code: "CONSUMER_REJECTED"))
                 }

@@ -21,13 +21,21 @@ import VRMMetalKit
 
 let usage = """
 Usage: vrm-author-render --file AVATAR.vrm --scenario SCENARIO.json --out DIR
+       vrm-author-render --check-import AVATAR.vrm
        vrm-author-render --device-info
+       vrm-author-render --version
 
 Renders one canonical `vrm-author qa run --suite authoring-v1` scenario with
 VRMMetalKit and prints a JSON manifest {renderer, scenario, artifacts[]} on stdout
 (also written to DIR/manifest.json). SCENARIO.json is a RenderScenario
 {id, kind, configuration}. Exit codes: 0 success, 1 usage or render failure,
 2 unreadable input, 3 no Metal device.
+
+--check-import loads AVATAR.vrm with VRMMetalKit's loader (no Metal device
+needed) and prints one JSON consumer report {consumer, version, humanoidBones,
+requiredBonesPresent, expressions, expressionNames, springs, colliders,
+colliderGroups, meshes, materials, images, metaName, warnings}; on failure it
+prints {"error": …} and exits 1. --version prints {renderer: {id, version}}.
 
 """
 
@@ -53,7 +61,9 @@ struct Arguments {
     var file: String?
     var scenario: String?
     var out: String?
+    var checkImport: String?
     var deviceInfo = false
+    var version = false
 
     init(_ raw: [String]) {
         var index = 0
@@ -68,7 +78,9 @@ struct Arguments {
             case "--file": file = value()
             case "--scenario": scenario = value()
             case "--out": out = value()
+            case "--check-import": checkImport = value()
             case "--device-info": deviceInfo = true
+            case "--version": version = true
             case "-h", "--help":
                 FileHandle.standardOutput.write(Data(usage.utf8))
                 exit(RenderExit.success)
@@ -80,6 +92,23 @@ struct Arguments {
 }
 
 let arguments = Arguments(Array(CommandLine.arguments.dropFirst()))
+
+if arguments.version {
+    do { try emit(["renderer": ["id": .string(ScenarioRenderer.rendererId), "version": .string(VRMMetalKit.version)]]) } catch { fail("\(error)", code: RenderExit.failure) }
+    exit(RenderExit.success)
+}
+
+if let checkPath = arguments.checkImport {
+    let checkURL = URL(fileURLWithPath: checkPath)
+    do {
+        try emit(try await ConsumerImportCheck.report(fileURL: checkURL))
+        exit(RenderExit.success)
+    } catch {
+        let message = "VRMMetalKit could not load \(checkURL.path): \(error)"
+        try? emit(["error": .string(message), "consumer": .string(ConsumerImportCheck.consumerId), "version": .string(VRMMetalKit.version)])
+        fail(message, code: RenderExit.failure)
+    }
+}
 
 guard let device = MTLCreateSystemDefaultDevice() else {
     fail("No Metal device is available; authoring-v1 render scenarios stay incomplete on this host.", code: RenderExit.noDevice)

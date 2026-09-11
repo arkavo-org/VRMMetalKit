@@ -28,6 +28,6 @@ extension Registry {
         ProjectHandlers.install,
         ProvenanceHandlers.install,
         MaterialsHandlers.install,
-        ExportQAInstaller.installer(rights: LedgerRightsHook(), render: VRMAuthorRenderAdapter()),
+        ExportQAInstaller.installer(rights: LedgerRightsHook(), render: VRMAuthorRenderAdapter(), consumer: VRMMetalKitSubprocessConsumer()),
     ]
 }

@@ -108,4 +108,11 @@ public protocol ConsumerImporter: Sendable {
     var id: String { get }
     var version: String { get }
     func importVRM(_ data: Data) throws -> ConsumerImportReport
+    /// Context-aware variant so consumers that spawn tools can honour the
+    /// session's environment; defaults to `importVRM(_:)`.
+    func importVRM(_ data: Data, context: OperationContext) throws -> ConsumerImportReport
+}
+
+extension ConsumerImporter {
+    public func importVRM(_ data: Data, context: OperationContext) throws -> ConsumerImportReport { try importVRM(data) }
 }
