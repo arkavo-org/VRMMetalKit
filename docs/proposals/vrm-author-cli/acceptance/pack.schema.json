@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/arkavo-org/VRMMetalKit/docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+  "title": "vrm-author-cli acceptance pack",
+  "description": "An executable acceptance pack for one catalog operation. Packs are frozen by packHash (sha256 of the canonical JSON: sort_keys=true, separators (',', ':'), ensure_ascii=true, with packHash set to the empty string) and run by the runner declared in `runner`. Paths are relative to the repository root unless a fixture names a `pathEnv` directory.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "version", "operation", "operationVersion", "requestSchemaHash", "resultSchemaHash", "packHash",
+    "provenance", "scope", "fixtures", "seeds", "runner", "assertions", "mutants", "visual",
+    "evidencePolicy", "resources", "reproduction"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]*$" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "operation": { "type": "string", "description": "Catalog operation name as listed in commands.md, e.g. `style lint`." },
+    "operationVersion": { "type": "integer", "minimum": 1 },
+    "requestSchemaHash": { "$ref": "#/$defs/sha256OrEmpty", "description": "sha256 of the operation's registered request schema; empty until the schema registry exists (Stage A)." },
+    "resultSchemaHash": { "$ref": "#/$defs/sha256OrEmpty" },
+    "packHash": { "$ref": "#/$defs/sha256OrEmpty" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["author", "reviewer", "sources", "reviewReceipt"],
+      "properties": {
+        "author": { "$ref": "#/$defs/agent" },
+        "reviewer": { "$ref": "#/$defs/agent", "description": "Must be a different model family (or a human) than the author. Empty provider/family/version means the review is pending." },
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "reviewReceipt": { "type": "string", "description": "Empty until the independent reviewer signs; the receipt is recorded against packHash." }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputClasses", "parameterRanges", "invariants", "units", "excluded"],
+      "properties": {
+        "inputClasses": { "type": "array", "items": { "type": "string" } },
+        "parameterRanges": { "type": "object" },
+        "invariants": { "type": "array", "items": { "type": "string" } },
+        "units": { "type": "string" },
+        "excluded": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "fixtures": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "sha256", "class", "expected"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "path": { "type": "string", "description": "Relative to the `pathEnv` directory when set, otherwise to the repository root." },
+          "pathEnv": { "type": "string", "description": "Environment variable naming the directory that holds gitignored fixtures; `--fixtures DIR` overrides it, and the repository root is the fallback." },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "class": { "type": "string", "enum": ["positive", "negative", "degenerate"] },
+          "expected": { "type": "object", "description": "Per-assertion expected values keyed by assertion id; a null value skips that assertion for this fixture. Keys must name declared assertions." },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "seeds": { "type": "array", "items": { "type": "integer" } },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "entryPoint", "environment"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["python", "swift-test"] },
+        "entryPoint": { "type": "string", "description": "python: script path relative to the repository root; swift-test: the test suite name passed to `swift test --filter`." },
+        "profile": { "type": "string", "description": "python style-lint packs: the profile passed as `--profile`, relative to the repository root. Must also appear in oracleHashes." },
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pinnedCommit", "oracleHashes"],
+          "properties": {
+            "pinnedCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "oracleHashes": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": { "$ref": "#/$defs/sha256" },
+              "description": "Repository-relative path -> sha256 of every file the oracle's verdict depends on. The runner refuses to run when the working tree differs."
+            }
+          }
+        }
+      }
+    },
+    "assertions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "target", "expected"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "kind": { "type": "string", "enum": ["report-field", "exit-code", "error-class"] },
+          "target": { "type": "string", "description": "report-field: dotted path into the oracle's JSON report; exit-code / error-class: `process`." },
+          "expected": { "description": "Default expected value for every fixture; fixtures[].expected[id] overrides it, null skips." },
+          "tolerance": { "type": "number", "minimum": 0 }
+        }
+      }
+    },
+    "mutants": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "expectedClassification", "transform"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "description": { "type": "string" },
+          "expectedClassification": {
+            "type": "string",
+            "enum": ["reject"],
+            "description": "Every mutant must be rejected. What counts as rejection is transform-specific: `style-mutation:*` must flip each rule in expectFlip relative to the unmutated baseline; `report-fabricated` must be refused by the runner's report-acceptance path; `metadata-noop` must be refused as the pinned fixture (sha256 integrity) while its grade stays identical to the baseline (a grade change breaks the control and fails the pack). A mutant whose run is indistinguishable from the baseline is a failure of the pack, not a pass."
+          },
+          "transform": {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": { "type": "string", "pattern": "^(metadata-noop|report-fabricated|style-mutation:[a-z0-9_-]+)$" },
+              "fixture": { "type": "string", "description": "Fixture id the transform is applied to (metadata-noop, style-mutation:*)." },
+              "field": { "type": "string", "description": "metadata-noop: dotted path into the glTF JSON chunk to overwrite." },
+              "value": { "description": "metadata-noop: value written at `field`." },
+              "materialNameContains": { "type": "array", "items": { "type": "string" }, "description": "style-mutation:mtoon: substrings; any match selects the material." },
+              "changes": { "type": "object", "description": "style-mutation:mtoon: keys merged into VRMC_materials_mtoon of every selected material." },
+              "path": { "type": "string", "description": "style-mutation:delete-path: dotted path into the glTF JSON chunk to delete." },
+              "expectFlip": { "type": "object", "additionalProperties": { "type": "string", "enum": ["pass", "fail", "skip"] }, "description": "style-mutation:*: rule id -> status the rule must reach, and it must differ from the baseline status." },
+              "expectUnchanged": { "type": "array", "items": { "type": "string" }, "description": "style-mutation:*: rule ids whose status must equal the baseline." },
+              "envelope": { "type": "object", "description": "report-fabricated: a report envelope {report, oracleHashes, exitCode} as the runner would produce, with fabricated contents." }
+            }
+          }
+        }
+      }
+    },
+    "visual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["applicable", "views", "motions", "landmarks", "thresholds", "adjudication"],
+      "properties": {
+        "applicable": { "type": "boolean" },
+        "applicabilityRecord": { "type": "string", "description": "Required when applicable is false: who decided the visual dimension does not apply and why." },
+        "views": { "type": "array", "items": { "type": "string" } },
+        "motions": { "type": "array", "items": { "type": "string" } },
+        "landmarks": { "type": "array", "items": { "type": "string" } },
+        "thresholds": { "type": "object" },
+        "adjudication": { "type": "string" }
+      }
+    },
+    "evidencePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requiredLevel", "dimensions", "heldOutPolicy"],
+      "properties": {
+        "requiredLevel": { "type": "string", "enum": ["schema-only", "fixture-tested", "corpus-validated", "visually-validated"] },
+        "dimensions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["fixture", "corpus", "visual", "interoperability", "provenance"],
+          "properties": {
+            "fixture": { "$ref": "#/$defs/dimension" },
+            "corpus": { "$ref": "#/$defs/dimension" },
+            "visual": { "$ref": "#/$defs/dimension" },
+            "interoperability": { "$ref": "#/$defs/dimension" },
+            "provenance": { "$ref": "#/$defs/dimension" }
+          }
+        },
+        "heldOutPolicy": { "type": "string" }
+      }
+    },
+    "corpus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest", "sha256", "familyKey"],
+      "description": "Present when evidencePolicy.dimensions.corpus is required: the development-corpus manifest the runner lints per body family.",
+      "properties": {
+        "manifest": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "familyKey": { "type": "string" },
+        "expectedFamilies": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpuSeconds", "gpuSeconds", "judgeCalls", "deadlineSeconds", "maxRepairAttempts", "onFailure"],
+      "properties": {
+        "cpuSeconds": { "type": "number", "minimum": 0 },
+        "gpuSeconds": { "type": "number", "minimum": 0 },
+        "judgeCalls": { "type": "integer", "minimum": 0 },
+        "deadlineSeconds": { "type": "number", "minimum": 1 },
+        "maxRepairAttempts": { "type": "integer", "minimum": 0 },
+        "onFailure": { "type": "string", "enum": ["fail", "pending"] }
+      }
+    },
+    "reproduction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entryPoint", "inputManifestSchema", "outputManifestSchema", "canonicalArtifacts"],
+      "properties": {
+        "entryPoint": { "type": "string" },
+        "inputManifestSchema": { "type": "string" },
+        "outputManifestSchema": { "type": "string" },
+        "canonicalArtifacts": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sha256OrEmpty": { "type": "string", "pattern": "^([0-9a-f]{64})?$" },
+    "dimension": { "type": "string", "enum": ["required", "inapplicable"] },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "family", "version", "role"],
+      "properties": {
+        "provider": { "type": "string" },
+        "family": { "type": "string" },
+        "version": { "type": "string" },
+        "role": { "type": "string" }
+      }
+    }
+  }
+}
