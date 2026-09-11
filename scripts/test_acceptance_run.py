@@ -28,6 +28,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import acceptance_run as R  # noqa: E402
@@ -145,6 +146,15 @@ def corpus_entry(**over):
          "tolerance": 0.25, "expectedFamilies": 18, "minEligibleFamilies": 4}
     e.update(over)
     return e
+
+
+@contextlib.contextmanager
+def binary_absent(binary_path):
+    """Force os.path.exists(binary_path) to report absent regardless of whether the checkout
+    actually has a built vrm-author, so the 'not built' path is deterministic in tests."""
+    real_exists = os.path.exists
+    with mock.patch("acceptance_run.os.path.exists", side_effect=lambda p: False if p == binary_path else real_exists(p)):
+        yield
 
 
 def with_corpus(pack, entries, pin=True):
@@ -741,6 +751,237 @@ class CorpusArraySchema(unittest.TestCase):
         pack = self.pack([corpus_entry(tolerance=0)])
         self.assertIn("corpus[0].tolerance must be greater than 0 and at most 1",
                       R.validate_pack(pack, self.schema))
+
+
+class CorpusRollup(unittest.TestCase):
+    def rollup(self, families, min_eligible):
+        return R.corpus_status(families, min_eligible)
+
+    def test_all_eligible_and_passing_is_pass(self):
+        fams = {"a": {"status": "pass"}, "b": {"status": "pass"}}
+        self.assertEqual(self.rollup(fams, 2), "pass")
+
+    def test_below_the_floor_is_fail_not_pass(self):
+        fams = {"a": {"status": "pass"}, "b": {"status": "ineligible"}}
+        self.assertEqual(self.rollup(fams, 2), "fail")
+
+    def test_zero_eligible_families_is_fail_never_pass(self):
+        fams = {"a": {"status": "ineligible"}, "b": {"status": "ineligible"}}
+        self.assertEqual(self.rollup(fams, 1), "fail")
+
+    def test_an_ineligible_family_is_neither_pass_nor_fail_on_its_own(self):
+        fams = {"a": {"status": "pass"}, "b": {"status": "ineligible"}}
+        self.assertEqual(self.rollup(fams, 1), "pass")
+
+    def test_a_failing_eligible_family_fails_the_dimension(self):
+        fams = {"a": {"status": "pass"}, "b": {"status": "fail"}}
+        self.assertEqual(self.rollup(fams, 1), "fail")
+
+    def test_a_pending_family_pends_the_dimension(self):
+        fams = {"a": {"status": "pass"}, "b": {"status": "pending"}}
+        self.assertEqual(self.rollup(fams, 1), "pending")
+
+    def test_fail_outranks_pending(self):
+        fams = {"a": {"status": "fail"}, "b": {"status": "pending"}}
+        self.assertEqual(self.rollup(fams, 1), "fail")
+
+
+class CorpusSwiftReplay(unittest.TestCase):
+    """run_corpus_swift against a fully synthetic style set, pinned by sha256 like the real
+    corpus. Tests that reach replay_family's eligible-family branch stub the binary-existence
+    check with binary_absent so they land on the 'vrm-author not built' pending path and never
+    invoke the real CLI, regardless of whether this checkout happens to have one built."""
+
+    @staticmethod
+    def measurement(family, head_count=6.4, hips=0.57, drop_metric=None):
+        proportions = {"head_count": head_count, "hips_height_ratio": hips, "eye_height_ratio": 0.9,
+                       "ipd_m": 0.03, "upper_leg_height_ratio": 0.55, "shoulder_width_ratio": 0.10,
+                       "eye_height_in_head": 0.40, "head_width_height_ratio": 0.80, "ipd_head_width_ratio": 0.15,
+                       "head_bone_fraction": 0.14, "lower_upper_arm_ratio": 0.89, "lower_upper_leg_ratio": 1.12,
+                       "arm_span_height_ratio": 0.72}
+        if drop_metric:
+            del proportions[drop_metric]
+        return {"asset": {"file": f"{family}.vrm", "body_family": family, "height_m": 1.6, "vrm_version": "1.0"},
+                "proportions": proportions}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.f = PackFactory()
+        cls.dir = tempfile.mkdtemp(prefix="corpus_swift_test_")
+        cls.profile_path = os.path.join(cls.dir, "profile.json")
+        cls.manifest_path = os.path.join(cls.dir, "manifest.json")
+        cls.measurements_path = os.path.join(cls.dir, "measurements.json")
+        cls.witnesses_path = os.path.join(cls.dir, "witnesses.json")
+        profile_bytes = json.dumps({
+            "id": "test-style", "version": "1",
+            "rules": [{"id": "r1", "metric": "proportions.head_count", "check": {"type": "range", "min": 5.0, "max": 7.0}},
+                      {"id": "r2", "metric": "proportions.hips_height_ratio", "check": {"type": "range", "min": 0.5, "max": 0.6}}],
+        }).encode()
+        manifest_bytes = json.dumps({"assets": []}).encode()
+        measurements_bytes = json.dumps({"measurements": [
+            cls.measurement("fam-a", head_count=6.4),
+            cls.measurement("fam-b", head_count=6.0),
+            cls.measurement("fam-c", head_count=6.2, drop_metric="ipd_m"),
+        ]}).encode()
+        witnesses_bytes = json.dumps({
+            "corpusManifestSha256": "0" * 64, "templateId": "native-anime-v1", "templateSha256": "1" * 64,
+            "profileId": "test-style", "solver": {"budget": 100, "seed": 42, "tolerance": 0.25},
+            "generated": "2026-09-11T00:00:00Z",
+            "families": {
+                "fam-a": {"eligible": True, "controls": {"height": 1.6}, "residuals": {"proportions.head_count": 0.1}},
+                "fam-b": {"eligible": False, "controls": {},
+                          "residuals": {"proportions.head_count": 0.9, "proportions.hips_height_ratio": 0.95}},
+            },
+        }).encode()
+        for path, data in ((cls.profile_path, profile_bytes), (cls.manifest_path, manifest_bytes),
+                            (cls.measurements_path, measurements_bytes), (cls.witnesses_path, witnesses_bytes)):
+            with open(path, "wb") as fh:
+                fh.write(data)
+        cls.hashes = {"profile": R.sha256_bytes(profile_bytes), "manifest": R.sha256_bytes(manifest_bytes),
+                      "measurements": R.sha256_bytes(measurements_bytes), "witnesses": R.sha256_bytes(witnesses_bytes)}
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.f.cleanup()
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def entry(self, **over):
+        e = {"styleId": "test-style", "profile": self.profile_path, "profileSha256": self.hashes["profile"],
+             "manifest": self.manifest_path, "manifestSha256": self.hashes["manifest"],
+             "measurements": self.measurements_path, "measurementsSha256": self.hashes["measurements"],
+             "witnesses": self.witnesses_path, "witnessesSha256": self.hashes["witnesses"],
+             "familyKey": "body_family", "driver": "vrm-author-cli",
+             "tolerance": 0.25, "expectedFamilies": 3, "minEligibleFamilies": 1}
+        e.update(over)
+        return e
+
+    def runner(self, entry):
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        return R.Runner(pack)
+
+    def test_missing_path_is_pending(self):
+        entry = self.entry(witnesses="/no/such/witnesses.json")
+        out = self.runner(entry).run_corpus_swift(entry)
+        self.assertEqual(out["status"], "pending")
+        self.assertIn("absent", out["reason"])
+
+    def test_hash_mismatch_is_fail(self):
+        entry = self.entry(profileSha256="f" * 64)
+        out = self.runner(entry).run_corpus_swift(entry)
+        self.assertEqual(out["status"], "fail")
+        self.assertIn("pinned sha256", out["reason"])
+
+    def test_family_without_a_witness_is_pending(self):
+        entry = self.entry()
+        out = self.runner(entry).run_corpus_swift(entry)
+        self.assertEqual(out["families"]["fam-c"]["status"], "pending")
+        self.assertEqual(out["families"]["fam-c"]["reason"], "no witness for this family")
+
+    def test_ineligible_family_records_the_worst_residual(self):
+        entry = self.entry()
+        out = self.runner(entry).run_corpus_swift(entry)
+        fam_b = out["families"]["fam-b"]
+        self.assertEqual(fam_b["status"], "ineligible")
+        self.assertEqual(fam_b["blockedBy"], "proportions.hips_height_ratio")
+
+    def test_eligible_family_without_a_built_binary_is_pending(self):
+        entry = self.entry()
+        runner = self.runner(entry)
+        with binary_absent(runner.repo_path(".build/debug/vrm-author")):
+            out = runner.run_corpus_swift(entry)
+        self.assertEqual(out["familiesTotal"], 3)
+        self.assertEqual(out["familiesEligible"], 1)
+        self.assertEqual(out["familiesPassed"], 0)
+        self.assertEqual(out["families"]["fam-a"]["status"], "pending")
+        self.assertEqual(out["families"]["fam-a"]["reason"], "vrm-author not built")
+
+    def test_rollup_status_is_pending_when_a_replay_is_pending(self):
+        entry = self.entry()
+        runner = self.runner(entry)
+        with binary_absent(runner.repo_path(".build/debug/vrm-author")):
+            out = runner.run_corpus_swift(entry)
+        self.assertEqual(out["status"], "pending")
+
+    def test_ragged_target_vectors_across_families_do_not_raise(self):
+        entry = self.entry()
+        measurements = R.load_json(self.measurements_path)["measurements"]
+        targets = R.family_targets(measurements)
+        self.assertNotIn("proportions.ipd_m", targets["fam-c"])
+        self.assertIn("proportions.ipd_m", targets["fam-a"])
+        out = self.runner(entry).run_corpus_swift(entry)
+        self.assertEqual(set(out["families"]), {"fam-a", "fam-b", "fam-c"})
+
+    def test_corpus_entry_paths_skips_absent_optional_fields(self):
+        entry = self.entry()
+        del entry["witnesses"]
+        paths = self.runner(self.entry()).corpus_entry_paths(entry)
+        self.assertEqual(len(paths), 3)
+        self.assertNotIn(None, paths)
+
+    def test_profile_rule_widths_only_keeps_range_rules(self):
+        entry = self.entry()
+        widths = self.runner(entry).profile_rule_widths(entry)
+        self.assertEqual(widths["proportions.head_count"], 2.0)
+        self.assertAlmostEqual(widths["proportions.hips_height_ratio"], 0.1)
+
+    def run_pass(self, pack):
+        bin_dir = os.path.join(self.dir, "bin")
+        if not os.path.exists(bin_dir):
+            os.makedirs(bin_dir)
+            swift = os.path.join(bin_dir, "swift")
+            with open(swift, "w", encoding="utf-8") as fh:
+                fh.write(FAKE_SWIFT)
+            os.chmod(swift, 0o755)
+        args_file = os.path.join(self.dir, "swift-args.txt")
+        env = dict(os.environ)
+        env.update({"PATH": bin_dir + os.pathsep + env.get("PATH", ""), "FAKE_SWIFT_MODE": "pass", "FAKE_SWIFT_ARGS": args_file})
+        old = os.environ.copy()
+        os.environ.clear()
+        os.environ.update(env)
+        try:
+            return self.f.run(pack)
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def test_run_swift_test_wires_the_corpus_dimension(self):
+        entry = self.entry()
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        with binary_absent(os.path.join(REPO, ".build", "debug", "vrm-author")):
+            code, result, err = self.run_pass(pack)
+        self.assertIsNotNone(result, err)
+        self.assertEqual(len(result["corpus"]), 1)
+        self.assertEqual(result["corpus"][0]["styleId"], "test-style")
+        self.assertEqual(result["dimensions"]["corpus"], "pending")
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(code, 2)
+
+
+class PrintSummaryCorpusBranch(unittest.TestCase):
+    def capture(self, result):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            R.print_summary(result)
+        return buf.getvalue()
+
+    def base_result(self):
+        return {"pack": {"id": "p", "version": "1", "operation": "op"}, "status": "pass",
+                "dimensions": {"fixture": "pass"}, "fixtures": [], "mutants": [], "corpus": []}
+
+    def test_python_style_corpus_record_prints_family_lines(self):
+        result = self.base_result()
+        result["corpus"] = [{"manifest": "m.json", "familiesPassed": 1, "familiesTotal": 2, "status": "fail",
+                             "families": {"fam-a": {"assets": 1, "passed": 1, "status": "pass"}}}]
+        out = self.capture(result)
+        self.assertIn("corpus  m.json 1/2 families pass: fail", out)
+        self.assertIn("fam-a", out)
+
+    def test_swift_style_corpus_record_prints_one_line_per_style_set(self):
+        result = self.base_result()
+        result["corpus"] = [{"styleId": "vroid-lineage-anime", "familiesPassed": 3, "familiesEligible": 4,
+                             "familiesTotal": 18, "status": "pending", "families": {}}]
+        out = self.capture(result)
+        self.assertIn("corpus  [vroid-lineage-anime] 3/4 eligible pass, 18 families: pending", out)
 
 
 if __name__ == "__main__":

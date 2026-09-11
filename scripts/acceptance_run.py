@@ -404,15 +404,25 @@ class Runner:
 
     # ---- oracle invocation
 
-    def run_lint(self, asset_path):
-        """Run the pinned linter on one asset and wrap its report in a provenance envelope."""
+    def run_lint_with(self, profile_rel, asset_path):
+        """Run the pinned linter on one asset against an explicit profile and wrap its report
+        in a provenance envelope."""
         r = self.pack["runner"]
-        cmd = [sys.executable, self.repo_path(r["entryPoint"]), "lint", "--profile", self.repo_path(r["profile"]), "--json", asset_path]
+        entry_point = r["entryPoint"] if r["kind"] == "python" else "scripts/style_lint.py"
+        cmd = [sys.executable, self.repo_path(entry_point), "lint",
+               "--profile", self.repo_path(profile_rel), "--json", asset_path]
         deadline = self.pack["resources"]["deadlineSeconds"]
         try:
             proc = subprocess.run(cmd, cwd=self.repo, capture_output=True, text=True, timeout=deadline)
         except subprocess.TimeoutExpired:
-            return {"report": None, "oracleHashes": dict(self.oracle_hashes), "exitCode": None, "stderr": f"timeout after {deadline}s"}
+            return {"report": None, "oracleHashes": dict(self.oracle_hashes), "exitCode": None,
+                    "stderr": f"timeout after {deadline}s"}
+        return self._lint_envelope(proc)
+
+    def run_lint(self, asset_path):
+        return self.run_lint_with(self.pack["runner"]["profile"], asset_path)
+
+    def _lint_envelope(self, proc):
         report = None
         try:
             parsed = json.loads(proc.stdout)
@@ -643,6 +653,87 @@ class Runner:
         out["familiesTotal"] = len(fam_st)
         return out
 
+    def corpus_entry_paths(self, entry):
+        return [entry[k] for k in ("profile", "manifest", "measurements", "witnesses") if entry.get(k)]
+
+    def run_corpus_swift(self, entry):
+        """Replay the pinned witnesses for one style set and lint each emitted artifact."""
+        out = {"styleId": entry["styleId"], "families": {}, "familiesTotal": 0,
+               "familiesEligible": 0, "familiesPassed": 0}
+        for rel in self.corpus_entry_paths(entry):
+            path = self.repo_path(rel)
+            if not os.path.exists(path):
+                out.update(status="pending", reason=f"{rel} is absent")
+                return out
+        for path_key, hash_key in (("profile", "profileSha256"), ("manifest", "manifestSha256"),
+                                   ("measurements", "measurementsSha256"), ("witnesses", "witnessesSha256")):
+            if entry.get(path_key) and sha256_file(self.repo_path(entry[path_key])) != entry[hash_key]:
+                out.update(status="fail", reason=f"{entry[path_key]} does not match its pinned sha256")
+                return out
+
+        witnesses = load_json(self.repo_path(entry["witnesses"]))
+        measurements = load_json(self.repo_path(entry["measurements"]))["measurements"]
+        targets = family_targets(measurements)
+        widths = self.profile_rule_widths(entry)
+        out["familiesTotal"] = len(targets)
+
+        for family in sorted(targets):
+            witness = witnesses["families"].get(family)
+            if witness is None:
+                out["families"][family] = {"status": "pending", "reason": "no witness for this family"}
+                continue
+            if not witness["eligible"]:
+                worst_metric = max(witness["residuals"].items(), key=lambda kv: kv[1], default=(None, None))
+                out["families"][family] = {"status": "ineligible", "residuals": witness["residuals"],
+                                           "blockedBy": worst_metric[0]}
+                continue
+            out["familiesEligible"] += 1
+            record = self.replay_family(entry, family, witness, targets[family], widths, witnesses["templateId"])
+            out["families"][family] = record
+            if record["status"] == "pass":
+                out["familiesPassed"] += 1
+
+        out["status"] = corpus_status(out["families"], entry["minEligibleFamilies"])
+        return out
+
+    def profile_rule_widths(self, entry):
+        profile = load_json(self.repo_path(entry["profile"]))
+        widths = {}
+        for rule in profile["rules"]:
+            check = rule.get("check") or {}
+            if check.get("type") == "range" and "min" in check and "max" in check:
+                widths[rule["metric"]] = float(check["max"]) - float(check["min"])
+        return widths
+
+    def replay_family(self, entry, family, witness, target, widths, template_id):
+        """Replay one witness through the shipped CLI and lint the result."""
+        binary = self.repo_path(".build/debug/vrm-author")
+        if not os.path.exists(binary):
+            return {"status": "pending", "reason": "vrm-author not built"}
+        if self.tmp is None:
+            self.tmp = tempfile.mkdtemp(prefix="acceptance_run_")
+        work = os.path.join(self.tmp, f"corpus-{entry['styleId']}-{family}")
+        os.makedirs(work, exist_ok=True)
+        project = os.path.join(work, "a.vrmauthor")
+        draft = os.path.join(work, "draft.vrm")
+        request = os.path.join(work, "edit.json")
+        with open(request, "w", encoding="utf-8") as fh:
+            json.dump({"edit": {"object": "avatar:main", "values": witness["controls"]}}, fh)
+        deadline = self.pack["resources"]["deadlineSeconds"]
+        steps = [[binary, "project", "init", "--dir", project, "--template", template_id, "--seed", "42"],
+                 [binary, "control", "set", "--project", project, "--request", request],
+                 [binary, "build", "--project", project, "--out", draft]]
+        for cmd in steps:
+            proc = subprocess.run(cmd, cwd=self.repo, capture_output=True, text=True, timeout=deadline)
+            if proc.returncode != 0:
+                return {"status": "fail", "reason": f"{cmd[1]} {cmd[2]} exited {proc.returncode}: {proc.stderr[-400:]}"}
+        env = self.run_lint_with(entry["profile"], draft)
+        ok, why = self.accept_envelope(env)
+        if not ok or env["report"] is None:
+            return {"status": "fail", "reason": why or "no lint report"}
+        return {"status": "fail" if env["report"]["summary"]["must"]["fail"] else "pass",
+                "verdict": env["report"]["verdict"], "artifact": draft}
+
     # ---- swift-test
 
     SWIFT_TEST_CASE = re.compile(r"Test Case '-\[(?P<module>[^ .\]]+)\.(?P<suite>[^ \]]+) (?P<test>[^\]]+)\]' (?P<status>passed|failed)")
@@ -763,6 +854,9 @@ class Runner:
                     out.update(status="fail", classification="not-executed", test=name, reason=f"mutant test {name} was not executed by the suite")
             result["mutants"].append(out)
         result["swiftTest"] = env["report"]
+        if self.pack["evidencePolicy"]["dimensions"]["corpus"] == "required":
+            result["corpus"] = [self.run_corpus_swift(e) for e in self.pack["corpus"]]
+            result["dimensions"]["corpus"] = worst([c["status"] for c in result["corpus"]])
         fx = [f["status"] for f in result["fixtures"]]
         mt = [m["status"] for m in result["mutants"]]
         result["dimensions"]["fixture"] = worst(fx + mt)
@@ -844,6 +938,23 @@ def worst(statuses):
     return max(statuses, key=lambda s: STATUS_RANK.get(s, 2))
 
 
+def corpus_status(families, min_eligible):
+    """Roll one style set's per-family records up to a dimension status.
+
+    Ineligible families are neither a pass nor a fail, but the eligible count
+    must clear the floor or the dimension fails: "every eligible family passed"
+    is vacuously true at zero eligible families.
+    """
+    statuses = [f["status"] for f in families.values()]
+    if "fail" in statuses:
+        return "fail"
+    if sum(1 for s in statuses if s != "ineligible") < min_eligible:
+        return "fail"
+    if "pending" in statuses:
+        return "pending"
+    return "pass"
+
+
 def git_head(repo):
     try:
         return subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10).stdout.strip() or None
@@ -868,9 +979,13 @@ def print_summary(result):
             line += f"  — {m['reason']}"
         print(line)
     for c in result.get("corpus") or []:
-        print(f"  corpus  {c.get('manifest', '?')} {c.get('familiesPassed', 0)}/{c.get('familiesTotal', 0)} families pass: {c['status']}")
-        for fam, v in c.get("families", {}).items():
-            print(f"          {fam:24s} {v['passed']}/{v['assets']} {v['status']}")
+        if "styleId" in c:
+            print(f"  corpus  [{c['styleId']}] {c.get('familiesPassed', 0)}/{c.get('familiesEligible', 0)} eligible pass, "
+                  f"{c.get('familiesTotal', 0)} families: {c['status']}")
+        else:
+            print(f"  corpus  {c.get('manifest', '?')} {c.get('familiesPassed', 0)}/{c.get('familiesTotal', 0)} families pass: {c['status']}")
+            for fam, v in c.get("families", {}).items():
+                print(f"          {fam:24s} {v['passed']}/{v['assets']} {v['status']}")
     print("  dimensions: " + ", ".join(f"{k}={v}" for k, v in result["dimensions"].items()))
 
 
