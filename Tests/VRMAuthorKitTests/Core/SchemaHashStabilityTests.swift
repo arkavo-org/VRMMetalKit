@@ -107,7 +107,7 @@ final class SchemaHashStabilityTests: XCTestCase {
 
     func testSchemaOnlyRegistryHasNoHandlers() {
         XCTAssertTrue(Registry.v1SchemaOnly().ordered.allSatisfy { !$0.isRunnable })
-        XCTAssertEqual(Registry.v1().ordered.filter(\.isRunnable).map(\.name).sorted(), DiscoveryHandlers.names.sorted())
+        XCTAssertEqual(Registry.v1().ordered.filter(\.isRunnable).map(\.name).sorted(), (DiscoveryHandlers.names + ProjectHandlers.names).sorted())
     }
 
     func testDispatchOrderUnknownThenHandlerThenSchema() {
@@ -124,7 +124,7 @@ final class SchemaHashStabilityTests: XCTestCase {
     }
 
     func testHandlerThrownErrorsMapToStructuredEnvelopes() throws {
-        var registry = Registry.v1()
+        var registry = Registry.v1SchemaOnly()
         try registry.install(handler: { _, _ in
             throw ModelValidationError(errors: [AuthorError.unknownField("/recipe/extra"), AuthorError.invalidRequest("bad range", path: "/recipe/seed")])
         }, for: "history restore")

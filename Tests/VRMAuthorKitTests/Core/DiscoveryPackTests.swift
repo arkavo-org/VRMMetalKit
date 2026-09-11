@@ -57,7 +57,8 @@ final class DiscoveryPackTests: XCTestCase {
         XCTAssertEqual(commands.count, 35)
         XCTAssertEqual(commands.map { $0["name"]?.string ?? "" }, Registry.v1Names)
         let runnable = commands.filter { $0["runnable"] == true }.map { $0["name"]!.string! }
-        XCTAssertEqual(runnable, ["version", "describe", "capabilities", "doctor", "schema show"])
+        let implemented = DiscoveryHandlers.names + ProjectHandlers.names
+        XCTAssertEqual(runnable, Registry.v1Names.filter { implemented.contains($0) })
         for c in commands {
             XCTAssertNotNil(c["requestSchema"]?["properties"], c["name"]?.string ?? "")
             XCTAssertNotNil(c["resultSchema"], c["name"]?.string ?? "")
@@ -86,14 +87,15 @@ final class DiscoveryPackTests: XCTestCase {
         let r = try XCTUnwrap(envelope.result)
         let entries = try XCTUnwrap(r["entries"]?.array)
         XCTAssertEqual(entries.count, 35)
+        let implemented = DiscoveryHandlers.names + ProjectHandlers.names
         for e in entries {
             let name = e["operation"]!.string!
             XCTAssertEqual(e["evidenceLevel"], "schema-only", name)
             XCTAssertEqual(e["evidenceStatus"], "pending", name)
             XCTAssertEqual(e["productionEligible"], false, name)
-            XCTAssertEqual(e["runnable"]?.bool, DiscoveryHandlers.names.contains(name), name)
-            XCTAssertEqual(e["availability"], DiscoveryHandlers.names.contains(name) ? "implemented" : "schema-only", name)
-            XCTAssertEqual(e["implementationHash"] == nil, !DiscoveryHandlers.names.contains(name), name)
+            XCTAssertEqual(e["runnable"]?.bool, implemented.contains(name), name)
+            XCTAssertEqual(e["availability"], implemented.contains(name) ? "implemented" : "schema-only", name)
+            XCTAssertEqual(e["implementationHash"] == nil, !implemented.contains(name), name)
             XCTAssertEqual(e["schemaHash"]?.string?.count, 64)
             XCTAssertEqual(e["backendHash"]?.string?.count, 64)
             XCTAssertEqual(Set(e["dimensions"]!.object!.keys), Set(evidenceDimensions))
