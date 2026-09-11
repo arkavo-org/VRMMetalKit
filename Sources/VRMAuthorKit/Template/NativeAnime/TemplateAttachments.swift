@@ -110,9 +110,4 @@ public struct TemplateAttachments: Codable, Hashable, Sendable {
     public func indices(of region: String, mesh: String, primitive: Int = 0) -> [Int] {
         regions[region]?.first { $0.meshId == mesh && $0.primitiveIndex == primitive }?.indices ?? []
     }
-
-    /// Every region name present on `mesh`.
-    public func regionNames(mesh: String) -> [String] {
-        regions.filter { $0.value.contains { $0.meshId == mesh } }.keys.sorted()
-    }
 }

@@ -102,7 +102,7 @@ public struct QARunner: Sendable {
                               projectId: plan.projectId, revision: plan.revision, buildHash: plan.buildHash, verdict: verdict, scenarios: scenarios, checks: checks,
                               requiredArtifacts: required, evidence: evidence, consumers: consumers, generator: GLBWriter.generator)
         report.evidence = evidence
-        let reportData = try CanonicalJSON.data(try JSONValue.from(report))
+        let reportData = try CanonicalJSON.encode(report)
         let reportURL = outputDirectory.appendingPathComponent("findings.json")
         try ProjectStore.atomicWrite(reportData, to: reportURL)
         let reportRef = BuildSupport.artifact(reportURL, data: reportData, mediaType: BuildSupport.mediaTypeJSON, role: "qa-report", buildHash: plan.buildHash)

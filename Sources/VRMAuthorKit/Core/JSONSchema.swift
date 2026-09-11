@@ -143,7 +143,6 @@ public struct JSONSchema: Hashable, Sendable {
     }
 
     public func described(_ text: String) -> JSONSchema { with("description", .string(text)) }
-    public func titled(_ text: String) -> JSONSchema { with("title", .string(text)) }
     public func unit(_ unit: String) -> JSONSchema { with("x-unit", .string(unit)) }
     public func defaulting(to value: JSONValue) -> JSONSchema { with("default", value) }
     public func recommended(minimum: Double, maximum: Double) -> JSONSchema {

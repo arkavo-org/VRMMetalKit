@@ -244,6 +244,4 @@ extension TrainingClaims {
         }
         return ["entries": .object(entries)]
     }
-
-    public static let cawgLabel = "cawg.training-mining"
 }

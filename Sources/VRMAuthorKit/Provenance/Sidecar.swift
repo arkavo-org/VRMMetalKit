@@ -66,7 +66,7 @@ public enum Sidecar {
             try c.encode(actions, forKey: .actions)
         }
 
-        public func canonicalData() throws -> Data { try CanonicalJSON.data(try JSONValue.from(self)) }
+        public func canonicalData() throws -> Data { try CanonicalJSON.encode(self) }
     }
 
     public struct Signature: Codable, Hashable, Sendable {
@@ -94,7 +94,7 @@ public enum Sidecar {
             self.signature = signature
         }
 
-        public func canonicalData() throws -> Data { try CanonicalJSON.data(try JSONValue.from(self)) }
+        public func canonicalData() throws -> Data { try CanonicalJSON.encode(self) }
 
         public static func parse(_ data: Data, path: String) throws -> Document {
             let json: JSONValue

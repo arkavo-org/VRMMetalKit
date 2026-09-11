@@ -241,8 +241,8 @@ extension ProjectStore {
         var state = seeded
         state.revision = 0
         let record = RevisionRecord(revision: 0, parent: nil, requestId: nil, operation: operation, plan: nil, state: state)
-        try atomicWrite(try CanonicalJSON.data(try JSONValue.from(record)), to: revisionsDirectory.appendingPathComponent(ProjectStore.revisionFileName(0)))
-        try atomicWrite(try CanonicalJSON.data(try JSONValue.from(state)), to: projectFile)
+        try atomicWrite(try CanonicalJSON.encode(record), to: revisionsDirectory.appendingPathComponent(ProjectStore.revisionFileName(0)))
+        try atomicWrite(try CanonicalJSON.encode(state), to: projectFile)
     }
 
     /// Highest build-marker revision not beyond the current revision.

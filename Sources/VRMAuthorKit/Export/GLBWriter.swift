@@ -51,7 +51,6 @@ public enum GLBWriter {
     public static let vrmExtension = "VRMC_vrm"
     public static let mtoonExtension = "VRMC_materials_mtoon"
     public static let springBoneExtension = "VRMC_springBone"
-    public static let textureTransformExtension = "KHR_texture_transform"
     public static let emissiveStrengthExtension = "KHR_materials_emissive_strength"
 
     public static func write(_ avatar: CompiledAvatar, threads: Int = 1) throws -> GLBExport {
@@ -85,23 +84,18 @@ public enum GLBWriter {
         }
     }
 
-    static func floatBytes(_ values: [Float]) -> Data {
-        var out = Data(capacity: values.count * 4)
-        for v in values { withUnsafeBytes(of: v.bitPattern.littleEndian) { out.append(contentsOf: $0) } }
-        return out
-    }
-
-    static func u16Bytes(_ values: [UInt16]) -> Data {
-        var out = Data(capacity: values.count * 2)
+    /// glTF buffer payloads are little-endian regardless of host byte order.
+    static func leBytes<T: FixedWidthInteger>(_ values: [T]) -> Data {
+        var out = Data(capacity: values.count * MemoryLayout<T>.size)
         for v in values { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
         return out
     }
 
-    static func u32Bytes(_ values: [UInt32]) -> Data {
-        var out = Data(capacity: values.count * 4)
-        for v in values { withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) } }
-        return out
-    }
+    static func floatBytes(_ values: [Float]) -> Data { leBytes(values.map(\.bitPattern)) }
+
+    static func u16Bytes(_ values: [UInt16]) -> Data { leBytes(values) }
+
+    static func u32Bytes(_ values: [UInt32]) -> Data { leBytes(values) }
 
     static func numbers(_ values: [Float]) -> JSONValue { .array(values.map { .number(Double($0)) }) }
     static func numbers(_ values: [Double]) -> JSONValue { .array(values.map { .number($0) }) }

@@ -29,7 +29,7 @@ public struct VRMMetalKitSubprocessConsumer: ConsumerImporter {
     private let executableURL: URL?
     private let environment: [String: String]
     private let timeout: TimeInterval
-    private let probe: VersionProbe
+    private let probe: CachedProbe
 
     /// - Parameters:
     ///   - executableURL: the running executable whose sibling `vrm-author-render` is used when `VRM_AUTHOR_RENDERER` is unset.
@@ -39,7 +39,7 @@ public struct VRMMetalKitSubprocessConsumer: ConsumerImporter {
         self.executableURL = executableURL
         self.environment = environment
         self.timeout = timeout
-        self.probe = VersionProbe()
+        self.probe = CachedProbe()
     }
 
     public var id: String { QAPins.consumerVRMMetalKit }
@@ -47,7 +47,7 @@ public struct VRMMetalKitSubprocessConsumer: ConsumerImporter {
     /// VRMMetalKit's version from `--version`, probed once; `unavailable`
     /// when the executable is absent.
     public var version: String {
-        probe.version {
+        probe.value {
             guard let binary = binary(),
                   let manifest = try? VRMAuthorRenderAdapter.run(binary, arguments: [VRMMetalKitSubprocessConsumer.versionFlag], timeout: 120),
                   let version = manifest["renderer"]?["version"]?.string else { return VRMMetalKitSubprocessConsumer.unavailableVersion }
@@ -56,8 +56,7 @@ public struct VRMMetalKitSubprocessConsumer: ConsumerImporter {
     }
 
     public func binary(context: OperationContext? = nil) -> URL? {
-        if let context, let found = VRMAuthorRenderLocator.locate(executableURL: context.executableURL, env: context.env) { return found }
-        return VRMAuthorRenderLocator.locate(executableURL: executableURL, env: environment)
+        VRMAuthorRenderLocator.binary(context: context, executableURL: executableURL, environment: environment)
     }
 
     public func importVRM(_ data: Data) throws -> ConsumerImportReport {
@@ -110,18 +109,5 @@ public struct VRMMetalKitSubprocessConsumer: ConsumerImporter {
                                     humanoidBones: try count("humanoidBones"), expressions: try count("expressions"), springs: try count("springs"),
                                     colliders: try count("colliders"), colliderGroups: try count("colliderGroups"), meshes: try count("meshes"),
                                     materials: try count("materials"), warnings: warnings)
-    }
-
-    private final class VersionProbe: Sendable {
-        private let cached = Mutex<String?>(nil)
-
-        func version(_ compute: () -> String) -> String {
-            cached.withLock { value in
-                if let value { return value }
-                let computed = compute()
-                value = computed
-                return computed
-            }
-        }
     }
 }

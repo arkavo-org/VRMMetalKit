@@ -228,7 +228,7 @@ public struct ExportHandlers: Sendable {
         let info = try BuildSupport.recordBuild(store: store, compilation: compilation, export: export, revision: state.revision)
         try ProjectStore.atomicWrite(export.data, to: out)
         let artifact = BuildSupport.artifact(out, data: export.data, mediaType: BuildSupport.mediaTypeVRM, role: "draft", buildHash: compilation.buildHash)
-        let idMapArtifact = BuildSupport.artifact(BuildSupport.idMapURL(store, compilation.buildHash), data: try CanonicalJSON.data(try JSONValue.from(export.idMap)),
+        let idMapArtifact = BuildSupport.artifact(BuildSupport.idMapURL(store, compilation.buildHash), data: try CanonicalJSON.encode(export.idMap),
                                                   mediaType: BuildSupport.mediaTypeJSON, role: "idmap", buildHash: compilation.buildHash)
         var envelope = ResultEnvelope.succeeded(requestId: requestId, revisionBefore: state.revision, revisionAfter: state.revision, result: [
             "buildHash": .string(compilation.buildHash), "artifacts": try JSONValue.from([artifact, idMapArtifact]), "idMap": try JSONValue.from(export.idMap), "stale": [],

@@ -174,8 +174,6 @@ public enum NativeAnimeControls {
     }
 
     public static var keys: [String] { entries.map(\.key) }
-    public static var bodyKeys: [String] { keys.filter { $0.hasPrefix("body.") } }
-    public static var faceKeys: [String] { keys.filter { $0.hasPrefix("face.") } }
 
     public static var defaultBody: ControlValues {
         var out: ControlValues = [:]

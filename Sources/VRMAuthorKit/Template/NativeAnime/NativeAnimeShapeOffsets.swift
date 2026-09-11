@@ -107,7 +107,7 @@ struct NativeAnimeShapeOffsets {
                 plus: { p, piv in NAVec3(p.x, piv.y + (p.y - piv.y) * 1.35, p.z + 0.0005) }, minus: { p, piv in NAVec3(p.x, piv.y + (p.y - piv.y) * 0.7, p.z - 0.0003) }),
         ]
         for (side, sign) in [("left", 1.0), ("right", -1.0)] {
-            let sfx = side == "left" ? "L" : "R"
+            let sfx = NativeAnimeControls.suffix(side)
             let root = handles.earRoots[side] ?? .zero
             keys.append(Key(control: NativeAnimeControls.sided("face.brow.{side}.height", side: side), regions: ["brow\(sfx)"],
                             plus: { p, _ in NAVec3(p.x, p.y + 0.02 * hh, p.z) }, minus: { p, _ in NAVec3(p.x, p.y - 0.02 * hh, p.z) }))

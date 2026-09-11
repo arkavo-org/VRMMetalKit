@@ -156,7 +156,7 @@ struct NativeAnimeHeadBuilder {
                 let depress = 0.18 * eye.globeRadius * (1 - NAMath.smoothstep(0.7, 1.4, d))
                 mesh.vertices[i].position.z -= depress
             }
-            mesh.tag("eyeSocket" + (side == "left" ? "L" : "R"), socket)
+            mesh.tag("eyeSocket" + NativeAnimeControls.suffix(side), socket)
         }
 
         let mouthY = layout.mouthLineY
@@ -189,7 +189,7 @@ struct NativeAnimeHeadBuilder {
         let earY = C.y - 0.05 * hh
         let (rx, _) = NativeAnimeLayout.shellRadii(radii: R, center: C, y: earY)
         for (side, sign) in [("left", 1.0), ("right", -1.0)] {
-            let sfx = side == "left" ? "L" : "R"
+            let sfx = NativeAnimeControls.suffix(side)
             let root = NAVec3(sign * (rx - 0.012 * hh), earY, -0.02 * hh)
             let u = NAMath.yAxis
             let v = NAMath.zAxis * sign
@@ -248,7 +248,7 @@ struct NativeAnimeHeadBuilder {
 
     private func buildLids(_ prims: inout [BuildMesh], side: String, handles: inout HeadHandles) {
         let eye = layout.eyes[side]!
-        let sfx = side == "left" ? "L" : "R"
+        let sfx = NativeAnimeControls.suffix(side)
         let K = Self.lidColumns
         handles.lidColumns = K
         var lidVertices: [LidVertex] = []
@@ -295,7 +295,7 @@ struct NativeAnimeHeadBuilder {
 
     private func buildBrow(_ mesh: inout BuildMesh, side: String, handles: inout HeadHandles) {
         let sign = side == "left" ? 1.0 : -1.0
-        let sfx = side == "left" ? "L" : "R"
+        let sfx = NativeAnimeControls.suffix(side)
         let lid = layout.defaultLidRadius
         let centerX = layout.defaultEyeX(sign)
         let baseY = layout.eyeLineY + 1.05 * lid

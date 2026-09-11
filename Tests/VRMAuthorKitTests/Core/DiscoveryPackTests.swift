@@ -82,7 +82,7 @@ final class DiscoveryPackTests: XCTestCase {
     }
 
     func testCapabilitiesAreSchemaOnlyPendingExceptDiscoveryHandlers() throws {
-        let envelope = try invoke("capabilities")
+        let envelope = try invoke("capabilities", env: DiscoveryPackTests.pathOnly)
         XCTAssertEqual(envelope.exitCode, .success)
         let r = try XCTUnwrap(envelope.result)
         let entries = try XCTUnwrap(r["entries"]?.array)
@@ -195,8 +195,12 @@ final class DiscoveryPackTests: XCTestCase {
         XCTAssertEqual(try invoke("schema show", [:]).exitCode, .invalidRequest)
     }
 
+    /// PATH only: the assertions below describe an environment with no signer
+    /// configured, so the developer's own VRM_AUTHOR_* variables must not leak in.
+    private static let pathOnly = ["PATH": ProcessInfo.processInfo.environment["PATH"] ?? ""]
+
     func testDoctorReportsEnvironment() throws {
-        let envelope = try invoke("doctor")
+        let envelope = try invoke("doctor", env: DiscoveryPackTests.pathOnly)
         XCTAssertEqual(envelope.exitCode, .success)
         let r = try XCTUnwrap(envelope.result)
         for key in ["python3", "styleLinter", "renderer", "signer", "determinism", "acceptance", "ok"] { XCTAssertNotNil(r[key], key) }

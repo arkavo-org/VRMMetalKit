@@ -41,6 +41,11 @@ public enum CanonicalJSON {
         SHA256Hex.hex(try data(value))
     }
 
+    /// Canonical bytes of any Encodable, without the JSONValue round-trip at the call site.
+    public static func encode<T: Encodable>(_ value: T) throws -> Data {
+        try data(try JSONValue.from(value))
+    }
+
     private static func write(_ value: JSONValue, into out: inout String) throws {
         switch value {
         case .null: out += "null"

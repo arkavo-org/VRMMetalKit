@@ -250,7 +250,7 @@ public struct ProjectStore: Sendable {
         let state = ProjectState(projectId: projectId, name: name, template: template, seed: seed)
         try store.atomicWrite(try CanonicalJSON.data(lock), to: store.lockFile)
         let record = RevisionRecord(revision: 0, parent: nil, requestId: nil, operation: "project init", plan: nil, state: state)
-        try store.atomicWrite(try CanonicalJSON.data(try JSONValue.from(record)), to: store.revisionsDirectory.appendingPathComponent(revisionFileName(0)))
+        try store.atomicWrite(try CanonicalJSON.encode(record), to: store.revisionsDirectory.appendingPathComponent(revisionFileName(0)))
         try store.writeState(state)
         return store
     }
@@ -369,9 +369,9 @@ public struct ProjectStore: Sendable {
         envelope.artifacts = transaction.artifacts
         envelope.warnings = transaction.warnings
         let record = RevisionRecord(revision: next.revision, parent: current.revision, requestId: requestId, operation: operation, plan: plan, state: next)
-        try atomicWrite(try CanonicalJSON.data(try JSONValue.from(record)), to: revisionsDirectory.appendingPathComponent(ProjectStore.revisionFileName(next.revision)))
+        try atomicWrite(try CanonicalJSON.encode(record), to: revisionsDirectory.appendingPathComponent(ProjectStore.revisionFileName(next.revision)))
         let receipt = Receipt(requestId: requestId, payloadHash: hash, revisionBefore: current.revision, revisionAfter: next.revision, result: envelope)
-        try atomicWrite(try CanonicalJSON.data(try JSONValue.from(receipt)), to: receiptsDirectory.appendingPathComponent(ProjectStore.receiptFileName(requestId)))
+        try atomicWrite(try CanonicalJSON.encode(receipt), to: receiptsDirectory.appendingPathComponent(ProjectStore.receiptFileName(requestId)))
         try writeState(next)
         return envelope
     }
@@ -379,7 +379,7 @@ public struct ProjectStore: Sendable {
     // MARK: Files
 
     private func writeState(_ state: ProjectState) throws {
-        try atomicWrite(try CanonicalJSON.data(try JSONValue.from(state)), to: projectFile)
+        try atomicWrite(try CanonicalJSON.encode(state), to: projectFile)
     }
 
     /// Writes to `<name>.tmp-<pid>-<nonce>` in the same directory, then renames over the target.

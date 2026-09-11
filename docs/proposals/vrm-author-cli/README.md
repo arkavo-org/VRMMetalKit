@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 # Proposal: VRMAuthor — autonomous VRM authoring CLI
 
-Status: implemented on branch `vrm-author-cli`. All 35 v1 commands are registered and
+Status: implemented. All 35 v1 commands are registered and
 runnable; none is production-eligible yet, because evidence admission, inspection
 records and the visual judge remain open. Reserved designs stay unimplemented.  
 Date: 2026-09-10. Proposed executable: `vrm-author`. Protocol: `vrmauthor/1`.  

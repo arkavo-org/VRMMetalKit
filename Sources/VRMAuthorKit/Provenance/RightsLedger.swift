@@ -85,7 +85,7 @@ public struct RightsLedger: Codable, Hashable, Sendable {
     }
 
     public func write(_ store: ProjectStore) throws {
-        try store.atomicWrite(try CanonicalJSON.data(try JSONValue.from(self)), to: RightsLedger.url(in: store))
+        try store.atomicWrite(try CanonicalJSON.encode(self), to: RightsLedger.url(in: store))
     }
 
     public func asset(id: String) -> LedgerAsset? { assets.first { $0.id == id } }

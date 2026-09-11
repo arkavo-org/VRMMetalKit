@@ -84,7 +84,7 @@ struct NativeAnimeBodyBuilder {
 
     private func buildArm(_ mesh: inout BuildMesh, side: String) {
         let s = side == "left" ? 1.0 : -1.0
-        let sfx = side == "left" ? "L" : "R"
+        let sfx = NativeAnimeControls.suffix(side)
         let upper = layout.joint(side == "left" ? .leftUpperArm : .rightUpperArm)
         let lower = layout.joint(side == "left" ? .leftLowerArm : .rightLowerArm)
         let hand = layout.joint(side == "left" ? .leftHand : .rightHand)
@@ -133,7 +133,7 @@ struct NativeAnimeBodyBuilder {
     }
 
     private func buildLeg(_ mesh: inout BuildMesh, side: String) {
-        let sfx = side == "left" ? "L" : "R"
+        let sfx = NativeAnimeControls.suffix(side)
         let upper = layout.joint(side == "left" ? .leftUpperLeg : .rightUpperLeg)
         let lower = layout.joint(side == "left" ? .leftLowerLeg : .rightLowerLeg)
         let foot = layout.joint(side == "left" ? .leftFoot : .rightFoot)

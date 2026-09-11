@@ -120,7 +120,7 @@ public enum BuildSupport {
         let hash = try avatar.buildHash()
         let url = compiledURL(store, hash)
         if !FileManager.default.fileExists(atPath: url.path) {
-            try store.atomicWrite(try CanonicalJSON.data(try JSONValue.from(avatar)), to: url)
+            try store.atomicWrite(try CanonicalJSON.encode(avatar), to: url)
         }
         return hash
     }
@@ -200,8 +200,8 @@ public enum BuildSupport {
                              previousBuildHash: previousBuildHash, previousControlsHash: previousControlsHash, target: target, backend: backend, artifactSha256: export.sha256, generator: GLBWriter.generator,
                              templateId: compilation.recipe.template.id, templateSha256: compilation.recipe.template.sha256, seed: compilation.recipe.seed)
         try store.atomicWrite(export.data, to: avatarURL(store, compilation.buildHash))
-        try store.atomicWrite(try CanonicalJSON.data(try JSONValue.from(export.idMap)), to: idMapURL(store, compilation.buildHash))
-        try store.atomicWrite(try CanonicalJSON.data(try JSONValue.from(info)), to: buildInfoURL(store, compilation.buildHash))
+        try store.atomicWrite(try CanonicalJSON.encode(export.idMap), to: idMapURL(store, compilation.buildHash))
+        try store.atomicWrite(try CanonicalJSON.encode(info), to: buildInfoURL(store, compilation.buildHash))
         try store.atomicWrite(try CanonicalJSON.data(["buildHash": .string(compilation.buildHash), "revision": .number(Double(revision))]), to: latestURL(store))
         return info
     }

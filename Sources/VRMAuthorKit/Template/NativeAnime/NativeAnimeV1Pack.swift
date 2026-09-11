@@ -258,7 +258,7 @@ public struct NativeAnimeV1Pack: TemplatePack {
 
         var lidEdges: [String: TemplateAttachments.RegionRef] = [:]
         for side in ["left", "right"] {
-            let sfx = side == "left" ? "L" : "R"
+            let sfx = NativeAnimeControls.suffix(side)
             let verts = headHandles.lids[side] ?? []
             let upper = verts.filter { $0.upper && $0.row == 0 && $0.primitive == HeadPrimitive.eyelash.rawValue }.sorted { $0.column < $1.column }
             let lower = verts.filter { !$0.upper && $0.row == 0 && $0.primitive == HeadPrimitive.eyeline.rawValue }.sorted { $0.column < $1.column }

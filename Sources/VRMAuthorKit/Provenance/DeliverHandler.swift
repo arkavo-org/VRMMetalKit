@@ -134,7 +134,7 @@ public enum DeliverHandler {
         ])
         envelope.artifacts = bundle
         let receipt = Receipt(requestId: requestId, payloadHash: payloadHash, revisionBefore: revision, revisionAfter: revision, result: envelope)
-        try store.atomicWrite(try CanonicalJSON.data(try JSONValue.from(receipt)), to: store.receiptsDirectory.appendingPathComponent(ProjectStore.receiptFileName(requestId)))
+        try store.atomicWrite(try CanonicalJSON.encode(receipt), to: store.receiptsDirectory.appendingPathComponent(ProjectStore.receiptFileName(requestId)))
         return envelope
     }
 
@@ -175,7 +175,7 @@ public enum DeliverHandler {
             try put(lock, "lock.json", "application/json", "lock")
             try put(try Data(contentsOf: store.projectFile), "project/project.json", "application/json", "project")
             try put(lock, "project/lock.json", "application/json", "project")
-            try put(try CanonicalJSON.data(try JSONValue.from(ledger)), "project/\(RightsLedger.fileName)", "application/json", "ledger")
+            try put(try CanonicalJSON.encode(ledger), "project/\(RightsLedger.fileName)", "application/json", "ledger")
             for number in try store.revisionNumbers() {
                 let name = ProjectStore.revisionFileName(number)
                 try put(try Data(contentsOf: store.revisionsDirectory.appendingPathComponent(name)), "project/revisions/\(name)", "application/json", "revision")

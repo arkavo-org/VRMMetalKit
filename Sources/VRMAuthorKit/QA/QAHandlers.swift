@@ -175,7 +175,7 @@ public struct QAHandlers: Sendable {
         outcome.report.checks.append(coverage.check)
         outcome.report.scenarios = QARunner.scenarioResults(plan: plan, checks: outcome.report.checks)
         outcome.report.verdict = QARunner.verdict(scenarios: outcome.report.scenarios, checks: outcome.report.checks)
-        outcome.reportData = try CanonicalJSON.data(try JSONValue.from(outcome.report))
+        outcome.reportData = try CanonicalJSON.encode(outcome.report)
         try ProjectStore.atomicWrite(outcome.reportData, to: outcome.reportURL)
         outcome.artifacts[0] = BuildSupport.artifact(outcome.reportURL, data: outcome.reportData, mediaType: BuildSupport.mediaTypeJSON, role: "verify-report", buildHash: plan.buildHash)
         return QAHandlers.envelope(requestId: requestId, revision: revision, outcome: outcome)

@@ -29,7 +29,7 @@ public struct VRMAuthorRenderAdapter: RenderAdapter {
     private let executableURL: URL?
     private let environment: [String: String]
     private let timeout: TimeInterval
-    private let probe: IdentityProbe
+    private let probe: CachedProbe
 
     /// - Parameters:
     ///   - executableURL: the running executable whose sibling `vrm-author-render` is used when `VRM_AUTHOR_RENDERER` is unset.
@@ -39,18 +39,17 @@ public struct VRMAuthorRenderAdapter: RenderAdapter {
         self.executableURL = executableURL
         self.environment = environment
         self.timeout = timeout
-        self.probe = IdentityProbe()
+        self.probe = CachedProbe()
     }
 
     public func binary(context: OperationContext? = nil) -> URL? {
-        if let context, let found = VRMAuthorRenderLocator.locate(executableURL: context.executableURL, env: context.env) { return found }
-        return VRMAuthorRenderLocator.locate(executableURL: executableURL, env: environment)
+        VRMAuthorRenderLocator.binary(context: context, executableURL: executableURL, environment: environment)
     }
 
     /// `vrmmetalkit/<version>@<device>` from `--device-info`, probed once and
     /// cached; `vrmmetalkit/unavailable` when the executable or device is missing.
     public var identity: String {
-        probe.identity {
+        probe.value {
             guard let binary = binary() else { return VRMAuthorRenderAdapter.unavailableIdentity }
             guard let manifest = try? VRMAuthorRenderAdapter.run(binary, arguments: ["--device-info"], timeout: 120),
                   let renderer = manifest["renderer"], let version = renderer["version"]?.string, let device = renderer["device"]?.string else {
@@ -64,7 +63,7 @@ public struct VRMAuthorRenderAdapter: RenderAdapter {
         guard let binary = binary(context: context) else { return nil }
         try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
         let scenarioURL = outputDirectory.appendingPathComponent("scenario.json")
-        try ProjectStore.atomicWrite(try CanonicalJSON.data(try JSONValue.from(scenario)), to: scenarioURL)
+        try ProjectStore.atomicWrite(try CanonicalJSON.encode(scenario), to: scenarioURL)
         guard let manifest = try VRMAuthorRenderAdapter.run(binary, arguments: ["--file", file.path, "--scenario", scenarioURL.path, "--out", outputDirectory.path],
                                                             timeout: timeout, manifestURL: outputDirectory.appendingPathComponent("manifest.json")) else { return nil }
         return try VRMAuthorRenderAdapter.artifacts(from: manifest, scenario: scenario, binary: binary)
@@ -152,18 +151,5 @@ public struct VRMAuthorRenderAdapter: RenderAdapter {
         }
 
         func snapshot() -> (Data, Data) { state.withLock { ($0.output, $0.error) } }
-    }
-
-    private final class IdentityProbe: Sendable {
-        private let cached = Mutex<String?>(nil)
-
-        func identity(_ compute: () -> String) -> String {
-            cached.withLock { value in
-                if let value { return value }
-                let computed = compute()
-                value = computed
-                return computed
-            }
-        }
     }
 }

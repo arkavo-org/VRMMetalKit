@@ -15,6 +15,7 @@
 //
 
 import Foundation
+import Synchronization
 
 /// Finds the optional `vrm-author-render` executable: `VRM_AUTHOR_RENDERER`
 /// wins, then a sibling of the running executable.
@@ -39,5 +40,28 @@ public enum VRMAuthorRenderLocator {
     /// Renderer ids `capabilities` and `doctor` report.
     public static func renderers(executableURL: URL?, env: [String: String]) -> [String] {
         locate(executableURL: executableURL, env: env) == nil ? [] : [rendererId]
+    }
+}
+
+/// A value computed on first use and kept for the process lifetime. Both
+/// subprocess wrappers probe their executable exactly once.
+final class CachedProbe: Sendable {
+    private let cached = Mutex<String?>(nil)
+
+    func value(_ compute: () -> String) -> String {
+        cached.withLock { value in
+            if let value { return value }
+            let computed = compute()
+            value = computed
+            return computed
+        }
+    }
+}
+
+extension VRMAuthorRenderLocator {
+    /// The request's own context wins over the wrapper's construction-time environment.
+    static func binary(context: OperationContext?, executableURL: URL?, environment: [String: String]) -> URL? {
+        if let context, let found = locate(executableURL: context.executableURL, env: context.env) { return found }
+        return locate(executableURL: executableURL, env: environment)
     }
 }
