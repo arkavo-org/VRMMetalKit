@@ -1369,7 +1369,7 @@ class CorpusSwiftReplay(unittest.TestCase):
         return os.path.join(bin_dir, "calls.log")
 
     def single_family_style(self, work, style_id, family, replay_steps=True, eligible=True, seed=1337,
-                            witness_overrides=None):
+                            witness_overrides=None, unwitnessed_family=None):
         """One style set with a single eligible family, its own profile id/version, pinned by
         sha256 like the real corpus. Its profile scores the two metrics the stub linter reports,
         so a replay that reaches the family target passes and one that does not fails.
@@ -1377,7 +1377,10 @@ class CorpusSwiftReplay(unittest.TestCase):
         witnesses file would; eligible=False writes an ineligible witness; seed=None writes a
         solver block with no seed. The seed is deliberately not 42, so a replayer that hardcoded
         one could not pass the steps test. witness_overrides rewrites top-level document fields,
-        which is how a document solved against other inputs is expressed."""
+        which is how a document solved against other inputs is expressed. unwitnessed_family adds a
+        second family to the measurements and no witness for it, so it resolves pending: that is the
+        one shape where the count of families not ineligible differs from the count actually
+        eligible."""
         profile_bytes = json.dumps({
             "id": style_id, "version": "1",
             "rules": [{"id": "h", "metric": "asset.height_m", "check": {"type": "range", "min": 1.2, "max": 2.1}},
@@ -1385,9 +1388,13 @@ class CorpusSwiftReplay(unittest.TestCase):
                        "check": {"type": "range", "min": 5.0, "max": 7.0}}],
         }).encode()
         manifest_bytes = json.dumps({"assets": []}).encode()
-        measurements_bytes = json.dumps({"measurements": [
-            {"asset": {"file": f"{family}.vrm", "body_family": family, "height_m": 1.6, "vrm_version": "1.0"},
-             "proportions": {"head_count": 6.4}}]}).encode()
+        records = [{"asset": {"file": f"{family}.vrm", "body_family": family, "height_m": 1.6,
+                              "vrm_version": "1.0"}, "proportions": {"head_count": 6.4}}]
+        if unwitnessed_family:
+            records.append({"asset": {"file": f"{unwitnessed_family}.vrm", "body_family": unwitnessed_family,
+                                      "height_m": 1.6, "vrm_version": "1.0"},
+                            "proportions": {"head_count": 6.4}})
+        measurements_bytes = json.dumps({"measurements": records}).encode()
         witnesses_bytes = json.dumps(dict({
             "corpusManifestSha256": R.sha256_bytes(manifest_bytes),
             "templateId": "native-anime-v1", "templateSha256": "1" * 64,
@@ -1616,6 +1623,26 @@ class CorpusSwiftReplay(unittest.TestCase):
         with open(entry["witnesses"], "wb") as fh:
             fh.write(data)
         return entry["witnesses"], R.sha256_bytes(data)
+
+    def test_the_floor_reason_counts_eligible_families_not_merely_unblocked_ones(self):
+        """A family with no witness is pending, not ineligible, so it counts toward the floor check
+        while never having been replayed. The sentence must report what was actually eligible, or it
+        credits the template with reaching a family nothing ever measured."""
+        work = tempfile.mkdtemp(prefix="corpus_swift_reason_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a", eligible=False,
+                                         unwitnessed_family="fam-b")
+        entry["minEligibleFamilies"] = 2
+        entry["expectedFamilies"] = 2
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        self.stub_cli_repo(work)
+
+        out = R.Runner(pack, repo=work).run_corpus_swift(entry)
+
+        self.assertEqual(out["status"], "fail")
+        self.assertEqual(out["familiesEligible"], 0)
+        self.assertEqual(out["families"]["fam-b"]["status"], "pending")
+        self.assertIn("0 of 2 families are reachable", out["reason"])
 
     def test_an_all_ineligible_style_set_fails_with_the_floor_reason(self):
         work = tempfile.mkdtemp(prefix="corpus_swift_floor_")
@@ -1884,6 +1911,19 @@ class CorpusAssertionDispatch(unittest.TestCase):
         self.assertEqual(self.calls(work)[-1], "export vrm")
         self.assertEqual(self.measured(work), ["draft.vrm", "final.vrm"])
         self.assertTrue(record["artifact"].endswith("final.vrm"), "the exported file is what gets linted")
+
+    def test_a_witness_edited_to_claim_an_unreachable_family_fails_reach_on_export(self):
+        """Reach is asserted in export mode too, not only in build. Draft and export agree here,
+        so the drift check passes and only the target comparison can reject the edit; without it
+        the family would pass on a vector no one compared to anything."""
+        work = self.repo({"draft.vrm": self.measurement_record(height=1.6, head_count=6.4),
+                          "final.vrm": self.measurement_record(height=1.6, head_count=6.4)})
+        unreachable = {"asset.height_m": 1.15, "proportions.head_count": 8.2}
+
+        record = self.replay(work, "export vrm", target=unreachable)
+
+        self.assertEqual(record["status"], "fail")
+        self.assertNotIn("metric drift through export", record["reason"])
 
     def test_export_drift_fails_and_names_the_drifting_metric(self):
         work = self.repo({"draft.vrm": self.measurement_record(),

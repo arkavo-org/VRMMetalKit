@@ -145,6 +145,11 @@ linter's metrics on the operation's output measured against the corpus-derived t
 That criterion runs in every assertion mode, `build` and `export vrm` included, so no
 pack's corpus evidence collapses to "the replayed witness builds and lints conforming",
 which the fixture dimension already establishes.
+
+While no family is reachable the property is proven in unit tests against a stubbed
+command line tool and a stubbed linter, because nothing downstream of the eligibility
+check runs in production. That is a consequence of the reach being zero, not a gap in
+the criterion, and it ends the moment any family becomes eligible.
 A change to either hash invalidates the file and forces a re-solve.
 
 ## 5. Pack schema changes
@@ -162,17 +167,25 @@ Each entry:
 | `profile`, `manifest`, `measurements`, `witnesses` | path + sha256 | The style set and its witnesses |
 | `familyKey` | string | Manifest field naming the family, today `body_family` |
 | `driver` | string | The replay driver, `vrm-author-cli`. Required when `runner.kind` is `swift-test`. |
+| `tolerance` | number | One fraction, applied to every target metric against that metric's own rule range width in that style's profile, inside which a residual counts as reached. Frozen in the pack, not in the suite. |
+| `expectedFamilies` | integer ≥ 1 | Denominator, fixed before the run |
+| `minEligibleFamilies` | integer ≥ 1 | Floor below which the dimension is `fail`, never `pass` |
 
 **Shipped substitution.** This document specified an XCTest suite as the driver. What
 shipped is the constant identifier `vrm-author-cli`: the replay is driven from
 `scripts/acceptance_run.py` through the shipped executable, with no suite between them.
-The substitution is recorded in the plan
-(`.superpowers/sdd/2026-09-11-swift-test-corpus-path/`: the task 2 brief fixes the field's
-value and its schema description, tasks 5 and 6 build the replay in Python). §6 step 3
-below describes the suite mechanism that was therefore never built.
-| `tolerance` | number | One fraction, applied to every target metric against that metric's own rule range width in that style's profile, inside which a residual counts as reached. Frozen in the pack, not in the suite. |
-| `expectedFamilies` | integer ≥ 1 | Denominator, fixed before the run |
-| `minEligibleFamilies` | integer ≥ 1 | Floor below which the dimension is `fail`, never `pass` |
+
+The reason, which the plan records the shape of but not the cause: a witness is only
+evidence if the thing that replays it is the thing users run. An XCTest suite replaying
+witnesses would exercise in-process APIs, so a solved control assignment could reproduce
+inside the suite and not through the command line tool, and the dimension would attest to
+the library rather than to the shipped surface. Driving the replay from the runner through
+the executable keeps the evidence pointed at what ships. It also keeps one measurement
+oracle: the generator solves against `scripts/style_lint.py` and the replay grades against
+the same pinned script, which a Swift suite could not do without a second implementation of
+every metric.
+
+§6 step 3 below describes the suite mechanism that was therefore never built.
 
 Every path in the entry also goes into `runner.environment.oracleHashes`, so the runner
 refuses a mismatch.
