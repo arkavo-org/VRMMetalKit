@@ -1,0 +1,200 @@
+//
+// Copyright 2025 Arkavo
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+import Foundation
+import Network
+
+/// Thin UDP listener that decodes OSC datagrams and hands them to a callback.
+///
+/// VMC senders default to port 39539 (marionette) and 39540 (performer).
+/// Pass port `0` to let the system choose; read the assigned port from
+/// ``boundPort`` once ``waitUntilReady(timeout:)`` returns `true`.
+public final class VMCReceiver: @unchecked Sendable {
+
+    public enum ReceiverError: Error, LocalizedError {
+        case alreadyStarted
+        case listenerFailed(String)
+
+        public var errorDescription: String? {
+            switch self {
+            case .alreadyStarted:
+                return "VMCReceiver.start() was called while already listening. Call stop() first."
+            case .listenerFailed(let reason):
+                return "VMCReceiver could not open its UDP port: \(reason). Check that no other VMC app owns the port and that Local Network access is granted. Spec: https://protocol.vmc.info/english"
+            }
+        }
+    }
+
+    public let requestedPort: UInt16
+    /// Port the listener is bound to, or `nil` until ready or after `stop()`.
+    public var boundPort: UInt16? { withLock { _boundPort } }
+
+    /// Called on the receiver queue with every decoded packet.
+    public var onPacket: (@Sendable (OSCPacket) -> Void)?
+    /// Called on the receiver queue when a datagram fails to decode or the listener fails.
+    public var onError: (@Sendable (Error) -> Void)?
+
+    public var packetCount: Int { withLock { _packetCount } }
+    public var decodeErrorCount: Int { withLock { _decodeErrorCount } }
+
+    /// Upper bound on simultaneously tracked sender flows. UDP senders that
+    /// change source port create a new flow each time; when the cap is
+    /// exceeded the oldest flow is cancelled.
+    public var maxConnections: Int = 8
+
+    /// Number of sender flows currently tracked.
+    public var connectionCount: Int { withLock { connections.count } }
+
+    private let queue: DispatchQueue
+    private let lock = NSLock()
+    private var _boundPort: UInt16?
+    private var _packetCount = 0
+    private var _decodeErrorCount = 0
+    private var listener: NWListener?
+    private var connections: [NWConnection] = []
+    private var ready = DispatchSemaphore(value: 0)
+    private var readySignalled = false
+
+    public init(port: UInt16 = 39539, queue: DispatchQueue = DispatchQueue(label: "com.arkavo.vrmmetalkit.vmc-receiver")) {
+        self.requestedPort = port
+        self.queue = queue
+    }
+
+    /// Convenience: a receiver whose packets go straight into `driver`.
+    public convenience init(port: UInt16 = 39539, driver: VMCDriver) {
+        self.init(port: port)
+        onPacket = { [driver] packet in driver.receive(packet) }
+    }
+
+    deinit {
+        stop()
+    }
+
+    public func start() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard listener == nil else { throw ReceiverError.alreadyStarted }
+
+        let params = NWParameters.udp
+        params.allowLocalEndpointReuse = true
+        let port = requestedPort == 0 ? NWEndpoint.Port.any : NWEndpoint.Port(rawValue: requestedPort)!
+        let listener = try NWListener(using: params, on: port)
+        // A fresh semaphore per listener so a signal left over from a previous
+        // start()/stop() cycle cannot satisfy the next waitUntilReady().
+        let ready = DispatchSemaphore(value: 0)
+        self.ready = ready
+        readySignalled = false
+        // The listener owns this closure, so it must not own the listener back:
+        // a strong capture would keep the port bound after the receiver is gone.
+        listener.stateUpdateHandler = { [weak self, weak listener] state in
+            guard let self, let listener else { return }
+            switch state {
+            case .ready:
+                self.lock.lock()
+                guard self.listener === listener else { self.lock.unlock(); return }
+                self._boundPort = listener.port?.rawValue
+                let signal = !self.readySignalled
+                self.readySignalled = true
+                self.lock.unlock()
+                if signal { ready.signal() }
+            case .failed(let error):
+                self.lock.lock()
+                guard self.listener === listener else { self.lock.unlock(); return }
+                let signal = !self.readySignalled
+                self.readySignalled = true
+                self.lock.unlock()
+                self.onError?(ReceiverError.listenerFailed(error.localizedDescription))
+                if signal { ready.signal() }
+            default:
+                break
+            }
+        }
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.accept(connection)
+        }
+        self.listener = listener
+        listener.start(queue: queue)
+    }
+
+    /// Blocks until the listener is ready or failed. Returns `true` when a port is bound.
+    public func waitUntilReady(timeout: TimeInterval = 2.0) -> Bool {
+        lock.lock()
+        let ready = self.ready
+        lock.unlock()
+        _ = ready.wait(timeout: .now() + timeout)
+        return withLock { _boundPort != nil }
+    }
+
+    public func stop() {
+        lock.lock()
+        let listener = self.listener
+        let connections = self.connections
+        self.listener = nil
+        self.connections = []
+        self._boundPort = nil
+        self.readySignalled = false
+        lock.unlock()
+        connections.forEach { $0.cancel() }
+        listener?.cancel()
+    }
+
+    private func accept(_ connection: NWConnection) {
+        lock.lock()
+        connections.append(connection)
+        var evicted: [NWConnection] = []
+        while connections.count > max(1, maxConnections) {
+            evicted.append(connections.removeFirst())
+        }
+        lock.unlock()
+        evicted.forEach { $0.cancel() }
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let self, let connection else { return }
+            if case .failed = state { self.remove(connection) }
+            if case .cancelled = state { self.remove(connection) }
+        }
+        connection.start(queue: queue)
+        receiveLoop(connection)
+    }
+
+    private func receiveLoop(_ connection: NWConnection) {
+        connection.receiveMessage { [weak self, weak connection] data, _, _, error in
+            guard let self, let connection else { return }
+            if let data, !data.isEmpty {
+                do {
+                    let packet = try OSCPacket.decode(data)
+                    self.withLock { self._packetCount += 1 }
+                    self.onPacket?(packet)
+                } catch {
+                    self.withLock { self._decodeErrorCount += 1 }
+                    self.onError?(error)
+                }
+            }
+            if error == nil, connection.state != .cancelled {
+                self.receiveLoop(connection)
+            }
+        }
+    }
+
+    private func remove(_ connection: NWConnection) {
+        withLock { connections.removeAll { $0 === connection } }
+    }
+
+    private func withLock<T>(_ body: () -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body()
+    }
+}
