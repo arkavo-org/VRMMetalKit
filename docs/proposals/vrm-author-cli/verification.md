@@ -61,24 +61,41 @@ fixtures, at least two mutants with fixed expected classifications, and the expe
 missing-handler failure (exit code or error class). The field layout is enforced by
 [`pack.schema.json`](acceptance/pack.schema.json); `packHash` is the sha256 of the
 pack file with `packHash` set to the empty string. A pack whose corpus dimension is
-required also carries a `corpus` block naming the manifest, its sha256, the family key
-and the expected family count, so per-family denominators are fixed before the run.
+required also carries a `corpus` block naming the manifest, its sha256, the family key,
+the expected family count, the tolerance and the eligibility floor, so per-family
+denominators and the floor are fixed before the run.
+
+A **body-independent** pack may declare the corpus dimension inapplicable on the same
+terms. A pack is body-independent when its input class contains no body geometry, so
+partitioning its inputs by body family carries no information; `material shading`, whose
+input is a project material object, is the v1 example. The record names the parameter
+sweep that covers its input space instead.
 
 ## 2. Pinned oracles
 
-Three in-tree files are the v1 oracles for the Materials/style class and the corpus
-dimension. They are pinned by content hash; the hashes are the pin. The files landed
-on main in #436 (`430e890906f9c53b1c944cf30a0aeee8625ff84d`) and are byte-identical at
-`a020125384c0c15b6479e7dc304ec48c899887dc`, the environment commit the worked pack
-records in `runner.environment.pinnedCommit`. Packs record the hashes in
+The in-tree oracles for the Materials/style class and the corpus dimension are pinned
+by content hash; the hashes are the pin, and nothing else about their provenance is one.
+The style linter is a single global oracle, shared by every style set. The remaining
+oracles are grouped per style set. Packs record the hashes in
 `runner.environment.oracleHashes` and the runner refuses a mismatch; the head commit
 is reported in the result manifest for provenance and is not itself a check.
 
 | Oracle | Path | sha256 |
 |---|---|---|
-| Style linter | [`scripts/style_lint.py`](../../../scripts/style_lint.py) | `01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881` |
-| Style profile v0.1.0 | [`docs/style/profiles/vroid-lineage-anime.json`](../../style/profiles/vroid-lineage-anime.json) | `7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35` |
+| Style linter (global) | [`scripts/style_lint.py`](../../../scripts/style_lint.py) | `01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881` |
+
+**Style set `vroid-lineage-anime`:**
+
+| Oracle | Path | sha256 |
+|---|---|---|
+| Profile v0.1.0 | [`docs/style/profiles/vroid-lineage-anime.json`](../../style/profiles/vroid-lineage-anime.json) | `7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35` |
 | Corpus manifest | [`docs/style/corpus/vroid-lineage-anime.manifest.json`](../../style/corpus/vroid-lineage-anime.manifest.json) | `b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6` |
+| Measurements | [`docs/style/corpus/vroid-lineage-anime.measurements.json`](../../style/corpus/vroid-lineage-anime.measurements.json) | `c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc` |
+| Witnesses, `native-anime-v1` | [`docs/style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json`](../../style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json) | `20635cf23e0c2214a49e82c0af269976cc2739d068dad4426eddaf0b72b6e803` |
+
+Witnesses are per template as well as per style set: a second template measured against
+the same style adds a witnesses row of its own. A second style adds a group. Family
+counts, tolerances and eligibility floors are per style set, never global.
 
 The profile content hash is the freeze. `style_lint.py envelopes --write` must not be
 run against the pinned profile without bumping the profile version and re-hashing;
@@ -94,8 +111,18 @@ emit a runner output hash that the evaluator receipt (§7) binds.
 |---|---|
 | `schema-only` | Request/result schema registered and validated; handler may be absent. A missing handler produces an expected harness failure (exit code or error class), never a skip |
 | `fixture-tested` | The command's acceptance pack runs green on macOS via its declared runner; positive, negative and degenerate fixtures pass; every declared mutant is rejected |
-| `corpus-validated` | Fixture-tested, plus the pack's corpus dimension passes across every eligible body family of the development corpus (§6, 18 families) with per-family denominators reported; no family may fail |
+| `corpus-validated` | Fixture-tested, plus the pack's corpus dimension passes across every eligible body family of the development corpus for each style set the pack declares (§6; 18 families for `vroid-lineage-anime`) with per-family denominators reported; no family may fail |
 | `visually-validated` | Corpus-validated where applicable, plus the visual rubric passes under the v1 visual gate (§5) |
+
+A body family is **eligible** for a generative command when the template's directly
+invertible controls are set exactly to that family's corresponding measured metrics, and
+every remaining target metric's residual is within the pack's `tolerance` multiplied by
+that metric's rule range width in the style set's profile. On `native-anime-v1` the
+direct pairs are `body.heightM` to `asset.height_m` and `body.headCount` to
+`proportions.head_count`; another template declares its own. An ineligible family is
+reported with a residual per metric and is neither a pass nor a fail, but a pack's
+`minEligibleFamilies` floor must still be met or the dimension fails: "every eligible
+family passed" is vacuously true at zero eligible families.
 
 Levels are cumulative over **applicable** dimensions; visual validation cannot leapfrog
 a failed fixture or required corpus check. An implemented but untested handler stays
@@ -115,20 +142,39 @@ Stage B release. Parenthesised items are fixtures the pack must contain.
 | `project init`, `project inspect`, `history list`, `history restore` | Revision/transaction | fixture-tested (atomic rollback, crash/restart replay) | n/a | n/a |
 | `template list`, `control list`, `control describe`, `object list`, `object get` | Discovery/registry | fixture-tested | n/a | n/a |
 | `object set` | Revision/transaction | fixture-tested | n/a | n/a |
-| `control set` | Shape/deformation | visually-validated | required | required |
+| `control set` | Shape/deformation | visually-validated | required (reach) | required |
 | `recipe export` | Import/export/provenance | fixture-tested (round-trip byte identity) | n/a | n/a |
-| `recipe apply` | Shape/deformation + provenance | visually-validated (owned by the Shape pack; provenance fixtures included) | required | required |
+| `recipe apply` | Shape/deformation + provenance | visually-validated (owned by the Shape pack; provenance fixtures included) | required (reach) | required |
 | `asset import`, `asset inspect` | Import/export/provenance | fixture-tested + interoperability dimension | n/a | n/a |
 | `style attach` | Revision/transaction | fixture-tested | n/a | n/a |
 | `style lint` | Materials/style (oracle = pinned `style_lint.py` + profile) | corpus-validated | required | n/a (numeric-only, reviewed applicability) |
 | `material shading` | Materials/style | visually-validated | n/a (body-independent, reviewed applicability; covered by a parameter sweep) | required |
-| `build` | Compile (Shape + Hair/springs + Materials aggregated) | visually-validated | required | required |
+| `build` | Compile (Shape + Hair/springs + Materials aggregated) | visually-validated | required (reach) | required |
 | `qa plan` | QA machinery | fixture-tested | n/a | n/a |
 | `qa run`, `export verify` | QA machinery | fixture-tested via mutant injection (must fail on each declared mutant class: identity transform, wrong units, discarded morphs, broken eyelids, fabricated report) | n/a | n/a |
 | `inspection record`, `inspection verify` | Provenance/inspection | fixture-tested (append-only, `uncertain` blocks completion, rebuild ⇒ new evidence) | n/a | n/a |
 | `provenance inspect`, `provenance resolve`, `provenance verify` | Import/export/provenance | fixture-tested (missing sidecar, untrusted signer, tampered binding, stale manifest, conflicting rights) | n/a | n/a |
-| `export vrm` | Import/export/provenance + consumer matrix | visually-validated + interoperability (every required consumer in the README consumer matrix) | required | required |
+| `export vrm` | Import/export/provenance + consumer matrix | visually-validated + interoperability (every required consumer in the README consumer matrix) | required (reach) | required |
 | `deliver` | Delivery | fixture-tested; production-eligible only when every command it invokes is production-eligible | n/a | n/a |
+
+`required (reach)` names the corpus dimension of a generative command: the pack replays
+the per-family witnesses of §2 through the template, so only eligible families (§3) are
+measured. Plain `required`, which in v1 is `style lint` alone, measures the corpus assets
+themselves, where every family is eligible by construction and the floor is the full
+family count.
+
+None of the four `required (reach)` rows carries corpus evidence for `native-anime-v1`
+today. The pinned witnesses report zero of the 18 `vroid-lineage-anime` families eligible
+against each pack's floor of one, so the dimension reports `fail`, which is the truthful
+result and not a defect of the packs. The template's solved-best eye spacing is about
+0.21 of head width, 0.265 at its default, against family targets of 0.13 to 0.17, leaving
+16 families unreachable; `alicia-solid` sits at 0.2641, which the default already matches,
+and is blocked instead by shoulder width with its control at the rail, and `heroes-alex`
+is rejected before the template runs because its height of 1.1764 m is below the
+template's 1.2 m floor. Recovering the dimension is a change to the template's eye
+spacing relative to head width, not a loosening of any pack's tolerance or floor. Such a
+template change regenerates the witnesses, whose hash four packs pin, so it is a contract
+change under §1 and requalifies them.
 
 Hair/springs and Garment fit are reached in v1 only through `control set`,
 `recipe apply` and `build` on HairItem/OutfitItem; their checks live inside the
@@ -187,8 +233,11 @@ permitted uses and manifest hashes. If lineage is ambiguous, group conservativel
 exclude the case from independent claims. Private corpus assets are not redistributed
 with public fixtures; packs reference them through `pathEnv` and hash.
 
-v1 `corpus-validated` means the pack's corpus dimension passes on all 18 development
-families, reported with per-family denominators. An average cannot hide a failing
+v1 `corpus-validated` means the pack's corpus dimension passes on every eligible
+development family of each style set the pack declares, with that style set's
+eligibility floor met, reported with per-family denominators. The 18 families above are
+the `vroid-lineage-anime` figure, not a universal one; a second style set brings its own
+manifest, its own family count and its own floor. An average cannot hide a failing
 family; report per-family and per-domain results and failures.
 
 Stage C: a sealed release holdout cohort collected after the profile freeze, an
