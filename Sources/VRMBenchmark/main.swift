@@ -42,6 +42,7 @@ struct BenchmarkOptions {
     var debugUVs: Int32 = 0
     var cameraOffsetY: Float = 0  // Shift camera target/eye in Y to push avatar off-screen for cull tests
     var springBoneQuality: String = "ultra"  // off, low, medium, high, ultra
+    var fixedStep: Bool = false
     var skipPreDrawTransform: Bool = false   // opt out of renderer's safety-net root transform pass
     var jsonOutPath: String? = nil           // --json [PATH]; nil = no JSON, "-" = stdout
     var baselinePath: String? = nil          // --baseline FILE
@@ -74,6 +75,9 @@ func usage() {
       --frames N       Number of measured frames (default 500)
       --warmup N       Warm-up frames (default 30)
       --fps N          Animation playback rate in frames/sec (default 60)
+      --fixed-step     Step spring-bone physics by 1/fps per frame instead of
+                       wall-clock time (renderer.simulationDeltaTime); without
+                       it an unpaced offline loop runs near-zero substeps
       --width W        Render width  (default 1024)
       --height H       Render height (default 1024)
       --sample-count N MSAA sample count (default 1)
@@ -153,6 +157,8 @@ func parseArguments() -> BenchmarkOptions? {
         case "--outline-width":
             guard let v = nextValue(for: a) else { return nil }
             opts.outlineWidth = Float(v) ?? opts.outlineWidth
+        case "--fixed-step":
+            opts.fixedStep = true
         case "--spring-bone":
             opts.enableSpringBone = true
         case "--wireframe":
@@ -735,6 +741,7 @@ struct VRMBenchmarkCLI {
             r.loadModel(avatarModel)
             r.outlineWidth = opts.outlineWidth
             r.enableSpringBone = opts.enableSpringBone
+            if opts.fixedStep { r.simulationDeltaTime = 1.0 / opts.fps }
             r.skipPreDrawTransformUpdate = opts.skipPreDrawTransform
             switch opts.springBoneQuality {
             case "off":    r.springBoneQuality = .off
@@ -778,9 +785,7 @@ struct VRMBenchmarkCLI {
             // Offset avatar in world space by translating root nodes
             if xOffset != 0 {
                 for node in avatarModel.nodes where node.parent == nil {
-                    var m = node.localMatrix
-                    m.columns.3.x += xOffset
-                    node.localMatrix = m
+                    node.translation.x += xOffset
                 }
                 avatarModel.updateNodeTransforms()
             }
@@ -992,22 +997,32 @@ struct VRMBenchmarkCLI {
         // PerformanceTracker. These attribute the `encode` span to morph setup,
         // spring-bone dispatch, render-item build, and command encoding. A phase
         // with no samples (e.g. spring bone when disabled) is omitted.
-        // (jsonKey, displayLabel, phase) — jsonKey is persisted/gated; label is
-        // the short human-report column.
-        let subPhases: [(key: String, label: String, phase: PerformanceTracker.Phase)] = [
-            ("morphSetup", "morphSetup", .morphSetup),
-            ("springBone", "springBone", .springBone),
-            ("renderItemBuild", "renderItem", .renderItemBuild),
-            ("commandEncode", "cmdEncode", .commandEncode),
+        // The list is every `PerformanceTracker.Phase` except `.total`; the
+        // persisted/gated JSON key is the phase's case name and the label is the
+        // short human-report column. Hotspot phases attribute frame CPU to the
+        // individual stages under review (morph active-set build, per-frame
+        // spring target capture / substeps / readback, skin-palette rebuilds,
+        // world-transform propagation, depth prepass, outline pass) so a change
+        // can be judged against the stage it targets, not just total frame time.
+        let phaseLabels: [PerformanceTracker.Phase: String] = [
+            .transformUpdate: "transform",
+            .springTargetCapture: "springCap",
+            .springSubsteps: "springStep",
+            .springReadback: "springRead",
+            .renderItemBuild: "renderItem",
+            .depthPrepass: "depthPre",
+            .outlinePass: "outline",
+            .commandEncode: "cmdEncode",
         ]
-        let subPhaseSamples: [(key: String, label: String, samples: [Double])] = subPhases.compactMap {
-            guard let s = renderer.performanceTracker?.samples(for: $0.phase), !s.isEmpty else { return nil }
-            return (key: $0.key, label: $0.label, samples: s)
-        }
+        let subPhaseSamples: [(key: String, label: String, samples: [Double])] =
+            PerformanceTracker.Phase.allCases.filter { $0 != .total }.compactMap { phase in
+                guard let s = renderer.performanceTracker?.samples(for: phase), !s.isEmpty else { return nil }
+                return (key: "\(phase)", label: phaseLabels[phase] ?? "\(phase)", samples: s)
+            }
         if !subPhaseSamples.isEmpty {
             print("""
 
-            Sub-phase CPU breakdown (inside encode, per frame)
+            Sub-phase CPU breakdown (per frame)
             ----------------------------------------------------------------------
             """)
             for entry in subPhaseSamples {

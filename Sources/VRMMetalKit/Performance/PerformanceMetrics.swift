@@ -52,8 +52,16 @@ public struct PerformanceMetrics: Codable {
         case frameTimeP95Ms
         case frameTimeP99Ms
         case morphSetupMs
+        case morphActiveSetMs
         case springBoneMs
+        case springTargetCaptureMs
+        case springSubstepsMs
+        case springReadbackMs
+        case skinPaletteMs
+        case transformUpdateMs
         case renderItemBuildMs
+        case depthPrepassMs
+        case outlinePassMs
         case commandEncodeMs
         case cpuFrameMs
         case allocatedMemoryMB
@@ -89,8 +97,16 @@ public struct PerformanceMetrics: Codable {
         try container.encode(frameTimeP95Ms.isFinite ? frameTimeP95Ms : 0, forKey: .frameTimeP95Ms)
         try container.encode(frameTimeP99Ms.isFinite ? frameTimeP99Ms : 0, forKey: .frameTimeP99Ms)
         try container.encode(morphSetupMs.isFinite ? morphSetupMs : 0, forKey: .morphSetupMs)
+        try container.encode(morphActiveSetMs.isFinite ? morphActiveSetMs : 0, forKey: .morphActiveSetMs)
         try container.encode(springBoneMs.isFinite ? springBoneMs : 0, forKey: .springBoneMs)
+        try container.encode(springTargetCaptureMs.isFinite ? springTargetCaptureMs : 0, forKey: .springTargetCaptureMs)
+        try container.encode(springSubstepsMs.isFinite ? springSubstepsMs : 0, forKey: .springSubstepsMs)
+        try container.encode(springReadbackMs.isFinite ? springReadbackMs : 0, forKey: .springReadbackMs)
+        try container.encode(skinPaletteMs.isFinite ? skinPaletteMs : 0, forKey: .skinPaletteMs)
+        try container.encode(transformUpdateMs.isFinite ? transformUpdateMs : 0, forKey: .transformUpdateMs)
         try container.encode(renderItemBuildMs.isFinite ? renderItemBuildMs : 0, forKey: .renderItemBuildMs)
+        try container.encode(depthPrepassMs.isFinite ? depthPrepassMs : 0, forKey: .depthPrepassMs)
+        try container.encode(outlinePassMs.isFinite ? outlinePassMs : 0, forKey: .outlinePassMs)
         try container.encode(commandEncodeMs.isFinite ? commandEncodeMs : 0, forKey: .commandEncodeMs)
         try container.encode(cpuFrameMs.isFinite ? cpuFrameMs : 0, forKey: .cpuFrameMs)
         try container.encode(allocatedMemoryMB.isFinite ? allocatedMemoryMB : 0, forKey: .allocatedMemoryMB)
@@ -122,8 +138,16 @@ public struct PerformanceMetrics: Codable {
         frameTimeP95Ms = try container.decode(Double.self, forKey: .frameTimeP95Ms)
         frameTimeP99Ms = try container.decode(Double.self, forKey: .frameTimeP99Ms)
         morphSetupMs = (try? container.decode(Double.self, forKey: .morphSetupMs)) ?? 0
+        morphActiveSetMs = (try? container.decode(Double.self, forKey: .morphActiveSetMs)) ?? 0
         springBoneMs = (try? container.decode(Double.self, forKey: .springBoneMs)) ?? 0
+        springTargetCaptureMs = (try? container.decode(Double.self, forKey: .springTargetCaptureMs)) ?? 0
+        springSubstepsMs = (try? container.decode(Double.self, forKey: .springSubstepsMs)) ?? 0
+        springReadbackMs = (try? container.decode(Double.self, forKey: .springReadbackMs)) ?? 0
+        skinPaletteMs = (try? container.decode(Double.self, forKey: .skinPaletteMs)) ?? 0
+        transformUpdateMs = (try? container.decode(Double.self, forKey: .transformUpdateMs)) ?? 0
         renderItemBuildMs = (try? container.decode(Double.self, forKey: .renderItemBuildMs)) ?? 0
+        depthPrepassMs = (try? container.decode(Double.self, forKey: .depthPrepassMs)) ?? 0
+        outlinePassMs = (try? container.decode(Double.self, forKey: .outlinePassMs)) ?? 0
         commandEncodeMs = (try? container.decode(Double.self, forKey: .commandEncodeMs)) ?? 0
         cpuFrameMs = (try? container.decode(Double.self, forKey: .cpuFrameMs)) ?? 0
         allocatedMemoryMB = try container.decode(Double.self, forKey: .allocatedMemoryMB)
@@ -178,10 +202,26 @@ public struct PerformanceMetrics: Codable {
 
     /// Average morph-setup CPU time in milliseconds.
     public var morphSetupMs: Double = 0
+    /// Average morph active-set build CPU time in milliseconds (subset of `morphSetupMs`).
+    public var morphActiveSetMs: Double = 0
     /// Average spring-bone CPU time in milliseconds.
     public var springBoneMs: Double = 0
+    /// Average spring-bone per-frame target-capture CPU time in milliseconds (subset of `springBoneMs`).
+    public var springTargetCaptureMs: Double = 0
+    /// Average spring-bone XPBD substep CPU time in milliseconds (subset of `springBoneMs`).
+    public var springSubstepsMs: Double = 0
+    /// Average spring-bone GPU readback + node writeback CPU time in milliseconds (subset of `springBoneMs`).
+    public var springReadbackMs: Double = 0
+    /// Average skin-joint-palette update CPU time in milliseconds.
+    public var skinPaletteMs: Double = 0
+    /// Average node world-transform propagation CPU time in milliseconds.
+    public var transformUpdateMs: Double = 0
     /// Average render-item-build CPU time in milliseconds.
     public var renderItemBuildMs: Double = 0
+    /// Average depth-prepass CPU time in milliseconds (0 when disabled).
+    public var depthPrepassMs: Double = 0
+    /// Average MToon outline-pass CPU time in milliseconds.
+    public var outlinePassMs: Double = 0
     /// Average command-encode CPU time in milliseconds.
     public var commandEncodeMs: Double = 0
     /// Average total per-frame CPU time in milliseconds.
@@ -204,22 +244,36 @@ public class PerformanceTracker {
     private var lastFrameTime: CFTimeInterval = 0
     private var frameStartTime: CFTimeInterval = 0
     private var frameCount: Int = 0
+    var now: () -> CFTimeInterval = { CACurrentMediaTime() }
 
     // Total frame CPU time window
     private var cpuFrameTimes: [Double] = []
     private var sortedCpuFrameTimes: [Double] = []
 
     // Sub-phase CPU timers
-    public enum Phase {
+    public enum Phase: CaseIterable {
         case morphSetup
+        case morphActiveSet
         case springBone
+        case springTargetCapture
+        case springSubsteps
+        case springReadback
+        case skinPalette
+        case transformUpdate
         case renderItemBuild
+        case depthPrepass
+        case outlinePass
         case commandEncode
         case total
     }
     private var phaseTimers: [Phase: CFTimeInterval] = [:]
     private var phaseAccumulators: [Phase: (totalMs: Double, count: Int)] = [:]
-    // Per-call sample windows (bounded like the frame-time windows) so consumers
+    // Elapsed time per phase within the open frame; a phase may be begun several
+    // times per frame (transform walks, per-primitive morph sets) and is flushed
+    // as one sample at endFrame.
+    private var phaseFrameTotals: [Phase: Double] = [:]
+    private var frameOpen = false
+    // Per-frame sample windows (bounded like the frame-time windows) so consumers
     // can compute full distributions per phase, not just the running average.
     private var phaseSamples: [Phase: [Double]] = [:]
 
@@ -258,13 +312,15 @@ public class PerformanceTracker {
 
     /// Start tracking a new frame
     public func beginFrame() {
-        let currentTime = CACurrentMediaTime()
+        let currentTime = now()
         if lastFrameTime > 0 {
             let frameTime = (currentTime - lastFrameTime) * 1000.0 // Convert to ms
             appendFrameTime(frameTime)
         }
         lastFrameTime = currentTime
         frameStartTime = currentTime
+        frameOpen = true
+        phaseFrameTotals.removeAll(keepingCapacity: true)
 
         // Reset per-frame counters
         currentFrameMetrics = FrameMetrics()
@@ -272,10 +328,15 @@ public class PerformanceTracker {
 
     /// End the current frame and update accumulated metrics
     public func endFrame() {
-        let currentTime = CACurrentMediaTime()
+        let currentTime = now()
         let cpuFrameTime = (currentTime - frameStartTime) * 1000.0
         appendCpuFrameTime(cpuFrameTime)
         accumulatePhase(.total, ms: cpuFrameTime)
+        for (phase, ms) in phaseFrameTotals {
+            accumulatePhase(phase, ms: ms)
+        }
+        phaseFrameTotals.removeAll(keepingCapacity: true)
+        frameOpen = false
 
         frameCount += 1
         totalDrawCalls += currentFrameMetrics.drawCalls
@@ -374,8 +435,16 @@ public class PerformanceTracker {
 
         // Per-phase CPU averages
         metrics.morphSetupMs = averagePhase(.morphSetup)
+        metrics.morphActiveSetMs = averagePhase(.morphActiveSet)
         metrics.springBoneMs = averagePhase(.springBone)
+        metrics.springTargetCaptureMs = averagePhase(.springTargetCapture)
+        metrics.springSubstepsMs = averagePhase(.springSubsteps)
+        metrics.springReadbackMs = averagePhase(.springReadback)
+        metrics.skinPaletteMs = averagePhase(.skinPalette)
+        metrics.transformUpdateMs = averagePhase(.transformUpdate)
         metrics.renderItemBuildMs = averagePhase(.renderItemBuild)
+        metrics.depthPrepassMs = averagePhase(.depthPrepass)
+        metrics.outlinePassMs = averagePhase(.outlinePass)
         metrics.commandEncodeMs = averagePhase(.commandEncode)
         metrics.cpuFrameMs = averagePhase(.total)
 
@@ -427,6 +496,8 @@ public class PerformanceTracker {
         totalPipelineChanges = 0
         phaseTimers.removeAll()
         phaseAccumulators.removeAll()
+        phaseFrameTotals.removeAll()
+        frameOpen = false
         phaseSamples.removeAll()
     }
 
@@ -485,14 +556,18 @@ public class PerformanceTracker {
     // MARK: - Phase helpers
 
     public func beginPhase(_ phase: Phase) {
-        phaseTimers[phase] = CACurrentMediaTime()
+        phaseTimers[phase] = now()
     }
 
     public func endPhase(_ phase: Phase) {
         guard let startTime = phaseTimers[phase] else { return }
-        let elapsedMs = (CACurrentMediaTime() - startTime) * 1000.0
-        accumulatePhase(phase, ms: elapsedMs)
+        let elapsedMs = (now() - startTime) * 1000.0
         phaseTimers.removeValue(forKey: phase)
+        if frameOpen {
+            phaseFrameTotals[phase, default: 0] += elapsedMs
+        } else {
+            accumulatePhase(phase, ms: elapsedMs)
+        }
     }
 
     private func accumulatePhase(_ phase: Phase, ms: Double) {
@@ -514,10 +589,13 @@ public class PerformanceTracker {
         return acc.totalMs / Double(acc.count)
     }
 
-    /// Per-call elapsed-time samples (milliseconds) recorded for `phase`, oldest
-    /// first, bounded to the most recent ~10 s. Empty when the phase never ran.
-    /// Like the frame-time windows, this is cleared only by ``reset()`` —
-    /// ``generateMetrics()`` does not drain it.
+    /// Elapsed-time samples (milliseconds) recorded for `phase`, oldest first,
+    /// bounded to the most recent ~10 s. Inside a ``beginFrame()`` /
+    /// ``endFrame()`` pair every begin/end of the phase is summed into one
+    /// sample emitted at ``endFrame()`` (none if the phase did not run that
+    /// frame); outside a frame each begin/end pair emits its own sample. Empty
+    /// when the phase never ran. Like the frame-time windows, this is cleared
+    /// only by ``reset()`` — ``generateMetrics()`` does not drain it.
     public func samples(for phase: Phase) -> [Double] {
         phaseSamples[phase] ?? []
     }

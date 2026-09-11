@@ -1427,7 +1427,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let localWeights = meshWeights[0..<morphCount]
 
                 // Build active set for this primitive (MUST be done before applyMorphsCompute!)
+                performanceTracker?.beginPhase(.morphActiveSet)
                 let primitiveActiveSet = morphTargetSystem.buildActiveSet(weights: localWeights)
+                performanceTracker?.endPhase(.morphActiveSet)
 
                 if frameCounter % 60 == 0 && !primitiveActiveSet.isEmpty {
                     vrmLog("[VRMRenderer] Active morphs for mesh=\(meshIndex) prim=\(primitiveIndex): \(primitiveActiveSet.map{Int($0.index)})")
@@ -1818,9 +1820,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // model.updateNodeTransforms internally). Hosts that always tick per-frame can
             // opt out via `skipPreDrawTransformUpdate`.
             if !skipPreDrawTransformUpdate {
+                performanceTracker?.beginPhase(.transformUpdate)
                 for node in model.nodes where node.parent == nil {
                     node.updateWorldTransform()
                 }
+                performanceTracker?.endPhase(.transformUpdate)
             }
 
             // DEBUG: Check if transforms are actually set
@@ -1963,6 +1967,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // populated by the completion handler is for *this* frame before
             // writeBonesToNodes consumes it.
             if let springBoneCompute = springBoneComputeSystem {
+                springBoneCompute.performanceTracker = performanceTracker
                 if config.synchronousSpringBone {
                     springBoneCompute.update(model: model,
                                              deltaTime: TimeInterval(clampedDeltaTime),
@@ -1978,7 +1983,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 springBoneCompute.writeBonesToNodes(model: model)
 
                 // CRITICAL: Propagate spring bone transforms through entire hierarchy before skinning
+                performanceTracker?.beginPhase(.transformUpdate)
                 model.updateNodeTransforms()
+                performanceTracker?.endPhase(.transformUpdate)
 
                 // Report sleep-gate stats to the performance tracker.
                 performanceTracker?.recordSleepingBones(springBoneCompute.sleepingBoneCount)
@@ -2070,6 +2077,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // Rebuild only skins whose joints actually moved. The legacy
             // `animationState` path still dirties every skin because it can
             // write joints without going through `updateWorldTransform`.
+            performanceTracker?.beginPhase(.skinPalette)
             if isAnimationActive {
                 skinningSystem?.markSkinsDirtyIfJointsMoved(model.skins)
             }
@@ -2090,6 +2098,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
                 #endif
             }
+
+            performanceTracker?.endPhase(.skinPalette)
 
             // PHASE 1 VALIDATION: Vertex attributes check (once at start)
             if frameCounter == 10 {
@@ -2645,6 +2655,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // rejects occluded fragments instead of re-writing depth.
         var depthPrepassRan = false
         if config.enableDepthPrepass && !materializationUsesDiscard {
+            performanceTracker?.beginPhase(.depthPrepass)
             depthPrepassRan = renderDepthPrepass(
                 encoder: encoder,
                 itemsToRender: itemsToRender,
@@ -2655,6 +2666,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 inflatedModelMax: inflatedModelMax,
                 skinnedCullMatrix: skinnedCullMatrix,
                 hasSkinning: hasSkinning)
+            performanceTracker?.endPhase(.depthPrepass)
         }
 
         // Baseline sampler for draws whose material binds no base color
@@ -4287,6 +4299,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Render outlines for MToon mode (inverted hull technique)
+        performanceTracker?.beginPhase(.outlinePass)
         renderMToonOutlines(
             encoder: encoder,
             renderItems: allItems,
@@ -4296,6 +4309,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             inflatedModelMax: inflatedModelMax,
             skinnedCullMatrix: skinnedCullMatrix
         )
+        performanceTracker?.endPhase(.outlinePass)
 
         performanceTracker?.endPhase(.commandEncode)
         encoder.endEncoding()

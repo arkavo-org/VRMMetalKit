@@ -62,3 +62,130 @@ Update the table whenever issues close or new ones are filed.
 - Every PR runs against a fixed reference scene (`AvatarSample_A_1.0.vrm.glb`).
 - No performance regression merges without explicit sign-off.
 - Publish a frame-time budget and defend it.
+
+## Hotspot instrumentation (how a change is judged)
+
+Total frame time is too noisy to attribute to any one stage on a single avatar,
+so the renderer emits per-stage CPU phases through `PerformanceTracker`, and
+`VRMBenchmark` persists each as a distribution under `BenchmarkReport.stats`.
+Run `make bench-hotspots` before and after a change and diff the JSON; the phase
+key for the code you touched is the signal, not the total.
+
+| Phase key | What it times |
+|-----------|----------------|
+| `transformUpdate` | Node world-transform propagation (pre-draw and post-physics walks). |
+| `skinPalette` | Per-skin dirty check and joint-palette rebuild. |
+| `morphSetup` | Whole morph compute pass; `morphActiveSet` isolates per-primitive active-set build. |
+| `springBone` | Whole spring step; `springTargetCapture` (per-frame target/collider capture), `springSubsteps` (XPBD loop), `springReadback` (GPU positions → node writeback) isolate its stages. |
+| `renderItemBuild` | Render-item build, culling and sort. |
+| `depthPrepass` / `outlinePass` | The optional depth prepass and the inverted-hull outline pass. |
+
+Each phase is one sample per frame: a phase the renderer begins several times
+in a frame (`transformUpdate` walks twice with spring bone on, `morphActiveSet`
+runs once per primitive) is summed, so the percentiles compare frames, not calls.
+
+`make bench-hotspots` amplifies each stage by combining animation with ultra
+spring physics on a single avatar (the tracker is attached to one renderer, so
+extra avatars would not reach the per-phase samples). The spring phases only
+do real work with `--fixed-step`: the benchmark loop is unpaced, so without it
+the renderer's wall-clock delta is near zero, the XPBD loop runs no substeps
+and `springReadback` samples on a handful of frames (probe rows in the table
+below); `BENCH_HOTSPOT_ARGS` does not yet pass the flag. `bench-gate` intersects
+common phase keys against `baselines/baseline.json`, so re-recording the
+baseline gates the phases its `BENCH_ARGS` exercise — `transformUpdate`,
+`skinPalette`, `morphSetup`, `renderItemBuild`, `outlinePass` and
+`commandEncode`. The spring phases (`springBone`, `springTargetCapture`,
+`springSubsteps`, `springReadback`) and `depthPrepass` emit no samples without
+`--spring-bone` / `--depth-prepass`, so they stay out of the baseline until
+those flags are added to `BENCH_ARGS` in the Makefile and the baseline is
+re-recorded on the perf machine. `morphActiveSet` only runs when expression
+weights change between frames (the morph gate reuses the previous output
+otherwise), and `VRMBenchmark` drives no expressions, so gating it needs a new
+benchmark option first. `PerformanceTrackerTests` pins the phase→metric
+mapping so a new phase cannot silently miss the report.
+
+## Measured: PR #437 hotspot commits
+
+Evidence for the two perf claims in this PR's commit messages, taken with the
+instrumentation above. Environment: Apple M4 Max, macOS 26.6.2. VRMMetalKit
+source at `caf4ee5`; benchmark binary built at `ab9aa7c` (adds `--fixed-step`).
+Model `AvatarSample_U_1.0.vrm.glb` (more spring chains than the reference
+scene `AvatarSample_A_1.0`). Invocation per run:
+
+```
+VRMBenchmark AvatarSample_U_1.0.vrm.glb --mode render --frames 1000 --warmup 30 \
+  --vrma VRMA_01.vrma --spring-bone --spring-bone-quality ultra --fixed-step --json <out>
+```
+
+`--fixed-step` matters: without it the unpaced loop hands spring bone a
+near-zero wall-clock delta, the XPBD loop runs no substeps and `springReadback`
+only samples on the few frames where a GPU frame happens to complete (see the
+probe row). The phase percentiles cover the last 600 measured frames (the
+tracker's ring buffer); `cpuBudget` covers all 1000. Warmup frames are in
+neither.
+
+Configurations, all built from the same tree:
+
+- **A** — `caf4ee5` as-is.
+- **B** — A with 759a1c6's `localMatrixDirty` guard removed, so
+  `updateWorldTransform()` rebuilds every node's local matrix on every walk
+  (the only behavioural difference of that commit).
+- **C** — A with 789bfe5's readback-copy hunk reverted: `writeBonesToNodes`
+  takes `let positions = latestPositionsSnapshot` under the lock again instead
+  of the unconditional copy into `writebackPositions`. The tracker phases and
+  the splat hoist from that commit are retained so C emits the same phases.
+
+Runs were interleaved A/B/A/B/A/B and then A/C/A/C/A/C (the A rows are
+reported per pair because the pairing is the control). "Median" is the median
+of the three run medians, "p95" the median of the three run p95s. **All runs
+were concurrent with another `swift test` job on the same machine**, so
+absolute numbers are inflated and the min/max spread is the noise floor.
+
+| Pair | Config | Phase | Median ms | p95 ms | Run medians min / max | vs A | Samples per run |
+|------|--------|-------|-----------|--------|-----------------------|------|-----------------|
+| AB | A | `transformUpdate` | 0.0608 | 0.0698 | 0.0607 / 0.0608 | — | 600 x3 runs |
+| AB | A | `cpuBudget` | 0.3036 | 0.3314 | 0.3022 / 0.3038 | — | 1000 x3 runs |
+| AB | A | `springBone` | 0.1235 | 0.1435 | 0.1235 / 0.1236 | — | 600 x3 runs |
+| AB | A | `springReadback` | 0.0564 | 0.0640 | 0.0563 / 0.0565 | — | 600 x3 runs |
+| AB | A | `springSubsteps` | 0.0058 | 0.0065 | 0.0058 / 0.0058 | — | 600 x3 runs |
+| AB | A | `springTargetCapture` | 0.0280 | 0.0312 | 0.0280 / 0.0280 | — | 600 x3 runs |
+| AB | B | `transformUpdate` | 0.0771 | 0.0942 | 0.0762 / 0.0842 | +26.8% | 600 x3 runs |
+| AB | B | `cpuBudget` | 0.3469 | 0.3829 | 0.3454 / 0.3636 | +14.2% | 1000 x3 runs |
+| AB | B | `springBone` | 0.1497 | 0.1795 | 0.1476 / 0.1602 | +21.2% | 600 x3 runs |
+| AB | B | `springReadback` | 0.0738 | 0.0887 | 0.0729 / 0.0777 | +30.8% | 600 x3 runs |
+| AB | B | `springSubsteps` | 0.0060 | 0.0070 | 0.0059 / 0.0064 | +2.9% | 600 x3 runs |
+| AB | B | `springTargetCapture` | 0.0281 | 0.0318 | 0.0278 / 0.0296 | +0.4% | 600 x3 runs |
+| AC | A | `transformUpdate` | 0.0610 | 0.0690 | 0.0608 / 0.0630 | — | 600 x3 runs |
+| AC | A | `cpuBudget` | 0.3044 | 0.3362 | 0.3017 / 0.3073 | — | 1000 x3 runs |
+| AC | A | `springBone` | 0.1236 | 0.1447 | 0.1232 / 0.1243 | — | 600 x3 runs |
+| AC | A | `springReadback` | 0.0563 | 0.0641 | 0.0563 / 0.0564 | — | 600 x3 runs |
+| AC | A | `springSubsteps` | 0.0058 | 0.0067 | 0.0058 / 0.0060 | — | 600 x3 runs |
+| AC | A | `springTargetCapture` | 0.0280 | 0.0316 | 0.0280 / 0.0283 | — | 600 x3 runs |
+| AC | C | `transformUpdate` | 0.0612 | 0.0695 | 0.0609 / 0.0680 | +0.2% | 600 x3 runs |
+| AC | C | `cpuBudget` | 0.3064 | 0.3375 | 0.3034 / 0.3221 | +0.6% | 1000 x3 runs |
+| AC | C | `springBone` | 0.1232 | 0.1450 | 0.1228 / 0.1365 | -0.3% | 600 x3 runs |
+| AC | C | `springReadback` | 0.0561 | 0.0653 | 0.0560 / 0.0623 | -0.3% | 600 x3 runs |
+| AC | C | `springSubsteps` | 0.0059 | 0.0065 | 0.0058 / 0.0065 | +0.7% | 600 x3 runs |
+| AC | C | `springTargetCapture` | 0.0281 | 0.0313 | 0.0281 / 0.0307 | +0.4% | 600 x3 runs |
+| probe | A, no `--fixed-step`, 100 frames | `springReadback` | 0.0577 | 0.0584 | single run | — | 7 x1 run |
+| probe | A, no `--fixed-step`, 100 frames | `springSubsteps` | 0.0001 | 0.0040 | single run | — | 100 x1 run |
+
+**Claim (a), 759a1c6 dirty-flag skip of local-matrix rebuilds:** supported —
+`transformUpdate` and `cpuBudget` are lower in A than B in every interleaved
+pair with no overlap between the A and B run-median ranges; `springReadback`
+and `springBone` move with it because `writeBonesToNodes` calls
+`updateLocalMatrix()` + `updateWorldTransform()` per chain node, which in B
+rebuilds those subtrees a second time. The commit message's original figure
+was a `cpuBudget` median from an unnamed machine and is superseded by the
+table; the effect on this model is likely larger because U has more nodes and
+spring bone adds a second walk per frame.
+
+**Claim (b), 789bfe5 readback-buffer reuse:** not supported as a measurable
+win — every A-vs-C delta is within one percent, smaller than the spread of C's
+own run medians, so the unconditional copy under `snapshotLock` is neutral on
+the render thread. The completion handler updates `latestPositionsSnapshot`
+in place (`withUnsafeMutableBufferPointer`), so the old second reference only
+forced a COW copy while it was alive during that write — a race window on the
+completion thread that no per-frame phase can observe. `springReadback` begins
+after the lock in both A and C, so `springBone` is the discriminating phase.
+The commit stands on its hoist and instrumentation, not on the copy.

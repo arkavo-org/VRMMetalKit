@@ -88,8 +88,8 @@ final class PerformanceTrackerTests: XCTestCase {
         XCTAssertEqual(metrics.triangleCount, 0)
     }
 
-    /// Each begin/endPhase pair records one per-call sample, retained so
-    /// VRMBenchmark can build a full distribution (not just the average) per
+    /// Outside a frame, each begin/endPhase pair records one sample, retained
+    /// so VRMBenchmark can build a full distribution (not just the average) per
     /// sub-phase. An empty phase yields an empty array, not a crash.
     func testPhaseSamplesAccumulatePerCall() {
         let tracker = PerformanceTracker()
@@ -122,5 +122,158 @@ final class PerformanceTrackerTests: XCTestCase {
         tracker.reset()
         XCTAssertTrue(tracker.samples(for: .commandEncode).isEmpty,
             "reset() should clear phase sample windows")
+    }
+
+    /// Every hotspot phase added for the allocation-review work must be
+    /// independently sampleable AND mapped onto its own `PerformanceMetrics`
+    /// field. A phase that records samples but never reaches a metric would be
+    /// invisible to both the human report and the JSON gate.
+    func testHotspotPhasesMapToMetricsFields() {
+        let tracker = PerformanceTracker()
+
+        // Each entry pairs a phase with the metric field it must populate.
+        let mappings: [(phase: PerformanceTracker.Phase, metric: (PerformanceMetrics) -> Double)] = [
+            (.morphActiveSet,      { $0.morphActiveSetMs }),
+            (.springTargetCapture, { $0.springTargetCaptureMs }),
+            (.springSubsteps,      { $0.springSubstepsMs }),
+            (.springReadback,      { $0.springReadbackMs }),
+            (.skinPalette,         { $0.skinPaletteMs }),
+            (.transformUpdate,     { $0.transformUpdateMs }),
+            (.depthPrepass,        { $0.depthPrepassMs }),
+            (.outlinePass,         { $0.outlinePassMs }),
+        ]
+
+        for (phase, _) in mappings {
+            tracker.beginPhase(phase)
+            Thread.sleep(forTimeInterval: 0.001)
+            tracker.endPhase(phase)
+        }
+
+        let metrics = tracker.generateMetrics()
+
+        for (phase, metric) in mappings {
+            XCTAssertEqual(tracker.samples(for: phase).count, 1,
+                "\(phase) should record exactly one sample")
+            XCTAssertGreaterThan(metric(metrics), 0,
+                "\(phase) should map to a non-zero metric field")
+        }
+
+        // Phases that never ran stay at zero and readable.
+        XCTAssertEqual(metrics.morphSetupMs, 0)
+        XCTAssertEqual(metrics.springBoneMs, 0)
+    }
+
+    /// Phase.allCases must list every hotspot phase; VRMBenchmark derives its
+    /// sub-phase report from it (minus `.total`), so a missing case would drop
+    /// that phase from both the human report and the persisted `stats`.
+    func testAllCasesCoversHotspotPhases() {
+        let expected: Set<String> = [
+            "morphSetup", "morphActiveSet", "springBone", "springTargetCapture",
+            "springSubsteps", "springReadback", "skinPalette", "transformUpdate",
+            "renderItemBuild", "depthPrepass", "outlinePass", "commandEncode", "total",
+        ]
+        let names = Set(PerformanceTracker.Phase.allCases.map { "\($0)" })
+        XCTAssertEqual(names, expected)
+    }
+
+    /// The hotspot metric fields must survive `PerformanceMetrics`' custom
+    /// Codable round-trip (encode coerces non-finite values, decode tolerates
+    /// absent fields), so a field missing from either side is caught here.
+    func testHotspotMetricsJSONRoundTrip() throws {
+        var metrics = PerformanceMetrics()
+        metrics.morphActiveSetMs = 0.11
+        metrics.springTargetCaptureMs = 0.22
+        metrics.springSubstepsMs = 0.33
+        metrics.springReadbackMs = 0.44
+        metrics.skinPaletteMs = 0.55
+        metrics.transformUpdateMs = 0.66
+        metrics.depthPrepassMs = 0.77
+        metrics.outlinePassMs = 0.88
+
+        let data = try JSONEncoder().encode(metrics)
+        let decoded = try JSONDecoder().decode(PerformanceMetrics.self, from: data)
+
+        XCTAssertEqual(decoded.morphActiveSetMs, 0.11, accuracy: 1e-9)
+        XCTAssertEqual(decoded.springTargetCaptureMs, 0.22, accuracy: 1e-9)
+        XCTAssertEqual(decoded.springSubstepsMs, 0.33, accuracy: 1e-9)
+        XCTAssertEqual(decoded.springReadbackMs, 0.44, accuracy: 1e-9)
+        XCTAssertEqual(decoded.skinPaletteMs, 0.55, accuracy: 1e-9)
+        XCTAssertEqual(decoded.transformUpdateMs, 0.66, accuracy: 1e-9)
+        XCTAssertEqual(decoded.depthPrepassMs, 0.77, accuracy: 1e-9)
+        XCTAssertEqual(decoded.outlinePassMs, 0.88, accuracy: 1e-9)
+    }
+
+    /// A phase begun several times inside one frame (the renderer walks
+    /// `.transformUpdate` twice when spring bone is on, and `.morphActiveSet`
+    /// once per primitive) must collapse to ONE per-frame sample equal to the
+    /// sum of its intervals, so the benchmark's percentiles compare frames.
+    func testPhaseCallsWithinFrameCollapseToOneSample() {
+        let tracker = PerformanceTracker()
+        var clock: CFTimeInterval = 0
+        tracker.now = { clock }
+
+        tracker.beginFrame()
+        tracker.beginPhase(.transformUpdate)
+        clock += 0.002
+        tracker.endPhase(.transformUpdate)
+        clock += 0.001
+        tracker.beginPhase(.transformUpdate)
+        clock += 0.003
+        tracker.endPhase(.transformUpdate)
+        XCTAssertTrue(tracker.samples(for: .transformUpdate).isEmpty,
+            "samples are emitted at endFrame, not per call")
+        tracker.endFrame()
+
+        let samples = tracker.samples(for: .transformUpdate)
+        XCTAssertEqual(samples.count, 1, "one sample per frame per phase")
+        XCTAssertEqual(samples.first ?? 0, 5.0, accuracy: 1e-9,
+            "the frame sample is the sum of the phase's intervals")
+
+        let metrics = tracker.generateMetrics()
+        XCTAssertEqual(metrics.transformUpdateMs, 5.0, accuracy: 1e-9,
+            "the per-frame average is the frame total, not the per-call mean")
+    }
+
+    /// Without an open frame there is nothing to accumulate into, so each
+    /// begin/endPhase pair still flushes one sample immediately.
+    func testPhaseOutsideFrameFlushesPerCall() {
+        let tracker = PerformanceTracker()
+        var clock: CFTimeInterval = 0
+        tracker.now = { clock }
+
+        for _ in 0..<2 {
+            tracker.beginPhase(.morphActiveSet)
+            clock += 0.001
+            tracker.endPhase(.morphActiveSet)
+        }
+        let samples = tracker.samples(for: .morphActiveSet)
+        XCTAssertEqual(samples.count, 2)
+        for sample in samples {
+            XCTAssertEqual(sample, 1.0, accuracy: 1e-9)
+        }
+    }
+
+    /// A phase that ran in one frame but not the next contributes no sample
+    /// for the idle frame — the pending frame total must not carry over.
+    func testPhaseIdleInFrameEmitsNoSample() {
+        let tracker = PerformanceTracker()
+        var clock: CFTimeInterval = 0
+        tracker.now = { clock }
+
+        tracker.beginFrame()
+        tracker.beginPhase(.springBone)
+        clock += 0.004
+        tracker.endPhase(.springBone)
+        tracker.endFrame()
+
+        tracker.beginFrame()
+        clock += 0.016
+        tracker.endFrame()
+
+        let samples = tracker.samples(for: .springBone)
+        XCTAssertEqual(samples.count, 1, "the idle frame must not emit a sample")
+        XCTAssertEqual(samples.first ?? 0, 4.0, accuracy: 1e-9)
+        XCTAssertEqual(tracker.samples(for: .total).count, 2,
+            "the frame total is still recorded for both frames")
     }
 }
