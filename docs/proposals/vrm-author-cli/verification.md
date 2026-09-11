@@ -55,8 +55,10 @@ A contract change requires a new pack hash, independent review and requalificati
 Keep previous results; never rewrite evidence to match the new criteria.
 
 **Minimum viable pack.** A discovery or CRUD pack may declare the visual and corpus
-dimensions inapplicable through a reviewed applicability record in `evidencePolicy`
-and `visual.applicabilityRecord`. It must still carry positive, negative and degenerate
+dimensions inapplicable through a reviewed applicability record for each: the visual
+dimension through `visual.applicabilityRecord`, the corpus dimension through
+`evidencePolicy.corpusApplicabilityRecord`, which is the field the body-independent
+carve-out below uses. It must still carry positive, negative and degenerate
 fixtures, at least two mutants with fixed expected classifications, and the expected
 missing-handler failure (exit code or error class). The field layout is enforced by
 [`pack.schema.json`](acceptance/pack.schema.json); `packHash` is the sha256 of the
@@ -160,7 +162,8 @@ Stage B release. Parenthesised items are fixtures the pack must contain.
 `required (reach)` names the corpus dimension of a generative command: the pack replays
 the per-family witnesses of §2 through the template, so only eligible families (§3) are
 measured. Plain `required`, which in v1 is `style lint` alone, measures the corpus assets
-themselves, where every family is eligible by construction and the floor is the full
+themselves: no template is solved and no witnesses are replayed, so the §3 eligibility
+test does not arise. Every family of the style set is measured and the floor is the full
 family count.
 
 None of the four `required (reach)` rows carries corpus evidence for `native-anime-v1`

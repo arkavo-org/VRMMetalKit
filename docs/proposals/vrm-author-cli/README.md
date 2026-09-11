@@ -49,10 +49,12 @@ Use four distinct authorities, recorded in every relevant control descriptor:
    validation. Schema validity alone cannot prove a usable rig, visible expression,
    suitable topology or a good render. The [VRM specification](https://github.com/vrm-c/vrm-specification/tree/master/specification)
    separates core avatar data, MToon, spring bones and node constraints.
-2. **Style targets:** PR #436's [VRoid-lineage profile](https://github.com/arkavo-org/VRMMetalKit/blob/430e890906f9c53b1c944cf30a0aeee8625ff84d/docs/style/profiles/vroid-lineage-anime.json)
-   (v0.1.0), [linter](https://github.com/arkavo-org/VRMMetalKit/blob/430e890906f9c53b1c944cf30a0aeee8625ff84d/scripts/style_lint.py)
-   and [corpus manifest](https://github.com/arkavo-org/VRMMetalKit/blob/430e890906f9c53b1c944cf30a0aeee8625ff84d/docs/style/corpus/vroid-lineage-anime.manifest.json),
-   pinned at main commit `430e890906f9c53b1c944cf30a0aeee8625ff84d` by content hash:
+2. **Style targets:** the in-tree VRoid-lineage
+   [profile](../../style/profiles/vroid-lineage-anime.json) (v0.1.0),
+   [linter](../../../scripts/style_lint.py) and
+   [corpus manifest](../../style/corpus/vroid-lineage-anime.manifest.json),
+   originating in PR #436. The content hash is the pin and no commit is; the
+   authoritative table is [verification.md §2](verification.md):
    - `scripts/style_lint.py` sha256 `01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881`
    - `docs/style/profiles/vroid-lineage-anime.json` (v0.1.0) sha256 `7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35`
    - `docs/style/corpus/vroid-lineage-anime.manifest.json` sha256 `b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6`
@@ -666,8 +668,8 @@ V1 pass-through import must report unsupported extensions and stale dependencies
 it does not promise arbitrary imported VRoid geometry becomes parametrically editable.
 
 The style profile/linter remain independently testable. Verify PR #436's correctness
-fixes at the pinned revision (main `430e890906f9c53b1c944cf30a0aeee8625ff84d`,
-content hashes in §1) before relying on its measurements; missing corpus inputs
-must preserve prior evidence and statistics must count contributing body families.
+fixes against the pinned content hashes (§1, and [verification.md §2](verification.md))
+before relying on its measurements; missing corpus inputs must preserve prior evidence
+and statistics must count contributing body families.
 Implementation follows the repository issue/branch/build/test/commit/PR workflow.
 The v1 catalog is implemented; the reserved catalog remains design-only.

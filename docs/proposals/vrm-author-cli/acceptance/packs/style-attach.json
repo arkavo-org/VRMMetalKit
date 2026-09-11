@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "ef077c5a7c083f677fa42b1fcd07f9339f915e9ab144ccc26f388953959fd7a1",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "4987af0cd42455f5581b75dda58fef4b9f01951194a371032cb40e02f9cde03c",
+  "packHash": "534c87a54a2ff71d228691fb23d75b82874ad23465ad9dc95013a8b30ffcc79a",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -84,7 +84,7 @@
     "kind": "swift-test",
     "entryPoint": "MaterialsPackTests",
     "environment": {
-      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
+      "pinnedCommit": "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "842d2830621ed51e3e5b9b7e5d49e3782fee93216dcd1417c90aff65ee628a2f",
         "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",

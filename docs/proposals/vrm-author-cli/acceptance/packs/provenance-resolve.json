@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "8a744e24e57121c8e0d6aa1706c380cd68247b8c3692235f7fe2dde90e5c5035",
   "resultSchemaHash": "a117da50ed49a8122a39a015c34ed90b3c8e1343e7694287637048a6cb883869",
-  "packHash": "6406a9b1dce84a48fe5b0d469ad6fafd60d8313465da2a518cb0c89d5b51afd8",
+  "packHash": "b17ff510d167ae9d35af505637ca3c6453178e3ca3e3d9009afa19a0296e174f",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -90,7 +90,7 @@
     "kind": "swift-test",
     "entryPoint": "ProvenancePackTests",
     "environment": {
-      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
+      "pinnedCommit": "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift": "3d1df682adb9cdd56e38cc6c4f2fbfd8d94d8f66ae0b6f46e889d39f84a309dd",
         "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "68ee7fbd59e8d9dceab9691e7f857392c859e65dbc6d4ce54c1e0db671caf265"

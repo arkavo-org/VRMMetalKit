@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "7bbde31a8eac895a621f529a68f1bb0de439e3226f035538b47e83bccfa0547f",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "18d62e70a1fe20b47e75b259fa676a570b3c23a1dbbfeb9ed21c8a7b43e19bbd",
+  "packHash": "91ed19b2eccfc880cf643dbd6271e43fb3410004d08aa2011645c1b87d0604dc",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -83,7 +83,7 @@
     "kind": "swift-test",
     "entryPoint": "ProjectPackTests",
     "environment": {
-      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
+      "pinnedCommit": "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6"

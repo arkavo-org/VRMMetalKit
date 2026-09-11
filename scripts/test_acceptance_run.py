@@ -25,6 +25,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -645,7 +646,7 @@ class ShippedPackTests(unittest.TestCase):
         self.assertEqual(oracles["scripts/style_lint.py"], "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881")
         self.assertEqual(oracles["docs/style/profiles/vroid-lineage-anime.json"], "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35")
         self.assertEqual(oracles["docs/style/corpus/vroid-lineage-anime.manifest.json"], "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6")
-        self.assertEqual(self.pack["runner"]["environment"]["pinnedCommit"], "a020125384c0c15b6479e7dc304ec48c899887dc")
+        self.assertEqual(self.pack["runner"]["environment"]["pinnedCommit"], "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3")
 
     def test_shipped_pack_covers_every_fixture_class_and_mutant_kind(self):
         self.assertEqual({f["class"] for f in self.pack["fixtures"]}, {"positive", "negative", "degenerate"})
@@ -684,6 +685,31 @@ class ShippedPackTests(unittest.TestCase):
                     kinds = [m["transform"]["kind"] for m in pack["mutants"]]
                     self.assertGreaterEqual(kinds.count("swift-test"), 2)
                     self.assertIn("report-fabricated", kinds)
+
+    def test_every_shipped_pack_pins_a_commit_carrying_its_oracles(self):
+        packs_dir = os.path.join(ACCEPTANCE, "packs")
+        names = sorted(n for n in os.listdir(packs_dir) if n.endswith(".json"))
+        blobs = {}
+
+        def blob_sha256(commit, rel):
+            key = (commit, rel)
+            if key not in blobs:
+                proc = subprocess.run(["git", "-C", REPO, "cat-file", "blob", f"{commit}:{rel}"],
+                                      capture_output=True, timeout=30)
+                blobs[key] = R.sha256_bytes(proc.stdout) if proc.returncode == 0 else None
+            return blobs[key]
+
+        for name in names:
+            pack = R.load_json(os.path.join(packs_dir, name))
+            env = pack["runner"]["environment"]
+            commit = env["pinnedCommit"]
+            for rel, want in sorted(env["oracleHashes"].items()):
+                with self.subTest(pack=name, path=rel):
+                    got = blob_sha256(commit, rel)
+                    self.assertIsNotNone(got, f"{name}: {rel} does not exist at pinnedCommit {commit}")
+                    self.assertEqual(got, want,
+                                     f"{name}: {rel} at pinnedCommit {commit} hashes to {got}, "
+                                     f"not the pinned {want}")
 
     def test_evidence_registry_is_empty_and_pinned(self):
         reg = R.load_json(os.path.join(ACCEPTANCE, "evidence.json"))
