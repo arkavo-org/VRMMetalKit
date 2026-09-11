@@ -24,5 +24,6 @@ extension Registry {
     /// call `install(handler:for:)` and must not replace existing handlers.
     public static let installers: [RegistryInstaller] = [
         DiscoveryHandlers.install,
+        ExportQAInstaller.install,
     ]
 }
