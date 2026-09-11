@@ -15,7 +15,6 @@
 //
 
 import Foundation
-import Synchronization
 
 /// The authoring-v1 `vrmmetalkit` consumer: hands exported bytes to the
 /// `vrm-author-render` executable's `--check-import` mode, which loads them

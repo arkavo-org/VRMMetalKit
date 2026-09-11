@@ -32,10 +32,6 @@ public enum MaterialsHandlers {
         return try ProjectStore.open(at: url)
     }
 
-    static func requestId(_ request: JSONValue) -> String {
-        request["requestId"]?.string ?? UUID().uuidString.lowercased()
-    }
-
     static func resolvePath(_ path: String, context: OperationContext) -> URL {
         URL(fileURLWithPath: path, relativeTo: context.cwd).standardizedFileURL
     }
@@ -48,7 +44,7 @@ public enum MaterialsHandlers {
         }
         let solution = try MaterialShading.solve(shadowEnd: shadowEnd, terminatorWidth: width)
         let store = try project(context, request)
-        return try store.mutate(requestId: requestId(request), payload: request, expectedRevision: request["expectedRevision"]?.int,
+        return try store.mutate(requestId: ProvenanceHandlers.requestId(request), payload: request, expectedRevision: request["expectedRevision"]?.int,
                                 dryRun: request["dryRun"]?.bool ?? false, expectedPlanHash: request["expectedPlanHash"]?.string, operation: "material shading") { tx in
             let object = try tx.object(id: materialId)
             guard object.kind == .material else {
@@ -118,7 +114,7 @@ public enum MaterialsHandlers {
         let summary = try summarizeProfile(json, path: "/profile/path")
         let store = try project(context, request)
         let dryRun = request["dryRun"]?.bool ?? false
-        return try store.mutate(requestId: requestId(request), payload: request, expectedRevision: request["expectedRevision"]?.int,
+        return try store.mutate(requestId: ProvenanceHandlers.requestId(request), payload: request, expectedRevision: request["expectedRevision"]?.int,
                                 dryRun: dryRun, expectedPlanHash: request["expectedPlanHash"]?.string, operation: "style attach") { tx in
             if !dryRun { _ = try store.storeAsset(loaded.data) }
             let missingRoles = MaterialRole.allCases.map(\.rawValue).filter { !summary.roles.contains($0) }
