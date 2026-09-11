@@ -32,8 +32,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIRECT_CONTROLS = {"asset.height_m": "body.heightM", "proportions.head_count": "body.headCount"}
 SEARCH_CONTROLS = ["body.proportion.shoulderWidth", "body.proportion.torsoLength",
                    "body.proportion.armLength", "body.proportion.legLength",
-                   "body.proportion.hipWidth", "body.shape.chest", "body.shape.waist",
-                   "body.shape.hip", "body.shape.muscle"]
+                   "body.proportion.hipWidth", "face.eye.left.spacing", "face.eye.right.spacing",
+                   "face.head.width", "face.chin.length"]
 
 
 def sha256_file(path):
