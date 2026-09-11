@@ -85,6 +85,58 @@ def load_json(path):
         return json.load(fh)
 
 
+# --------------------------------------------------------------------------- corpus targets
+
+TARGET_METRICS = [
+    "asset.height_m",
+    "proportions.head_count",
+    "proportions.eye_height_ratio",
+    "proportions.hips_height_ratio",
+    "proportions.upper_leg_height_ratio",
+    "proportions.shoulder_width_ratio",
+    "proportions.ipd_m",
+    "proportions.eye_height_in_head",
+    "proportions.head_width_height_ratio",
+    "proportions.ipd_head_width_ratio",
+    "proportions.head_bone_fraction",
+    "proportions.lower_upper_arm_ratio",
+    "proportions.lower_upper_leg_ratio",
+    "proportions.arm_span_height_ratio",
+]
+
+
+def metric_value(record, dotted):
+    section, _, leaf = dotted.partition(".")
+    return (record.get(section) or {}).get(leaf)
+
+
+def family_representatives(measurements):
+    """One record per body family: unnoted before noted, VRM 1.0 before 0.x, then manifest order."""
+    chosen = {}
+    for index, m in enumerate(measurements):
+        asset = m["asset"]
+        family = asset["body_family"]
+        rank = (0 if not asset.get("note") else 1,
+                0 if str(asset.get("vrm_version", "")).startswith("1") else 1,
+                index)
+        if family not in chosen or rank < chosen[family][0]:
+            chosen[family] = (rank, m)
+    return {f: m for f, (_, m) in chosen.items()}
+
+
+def family_targets(measurements):
+    """Per family, the target coordinates the control space must reach."""
+    out = {}
+    for family, record in family_representatives(measurements).items():
+        vector = {}
+        for metric in TARGET_METRICS:
+            value = metric_value(record, metric)
+            if value is not None:
+                vector[metric] = value
+        out[family] = vector
+    return out
+
+
 # --------------------------------------------------------------------------- schema subset
 
 def _type_ok(value, t):

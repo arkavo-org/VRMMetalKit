@@ -558,5 +558,53 @@ class ShippedPackTests(unittest.TestCase):
         self.assertEqual(reg, {"schemaVersion": 1, "pinnedCommit": "a020125384c0c15b6479e7dc304ec48c899887dc", "entries": []})
 
 
+class TargetDerivation(unittest.TestCase):
+    def measurement(self, family, file, note=None, height=1.6, head=6.4, hips=0.57):
+        return {"asset": {"file": file, "path": f"x/{file}", "sha256": "a" * 64,
+                          "body_family": family, "note": note,
+                          "height_m": height, "vrm_version": "1.0"},
+                "proportions": {"head_count": head, "hips_height_ratio": hips,
+                                "eye_height_ratio": 0.9, "ipd_m": 0.03,
+                                "upper_leg_height_ratio": 0.55, "shoulder_width_ratio": 0.10,
+                                "eye_height_in_head": 0.40, "head_width_height_ratio": 0.80,
+                                "ipd_head_width_ratio": 0.15, "head_bone_fraction": 0.14,
+                                "lower_upper_arm_ratio": 0.89, "lower_upper_leg_ratio": 1.12,
+                                "arm_span_height_ratio": 0.72,
+                                "rest_pose_arm_horizontal_cos": 1.0, "limb_asymmetry": 0.0}}
+
+    def test_one_asset_per_family_is_its_own_representative(self):
+        ms = [self.measurement("solo", "solo.vrm")]
+        reps = R.family_representatives(ms)
+        self.assertEqual(set(reps), {"solo"})
+        self.assertEqual(reps["solo"]["asset"]["file"], "solo.vrm")
+
+    def test_unnoted_asset_beats_a_noted_one(self):
+        ms = [self.measurement("f", "noted.vrm", note="VRM 0.x export of the same body"),
+              self.measurement("f", "clean.vrm")]
+        self.assertEqual(R.family_representatives(ms)["f"]["asset"]["file"], "clean.vrm")
+
+    def test_vrm1_beats_vrm0_when_both_are_unnoted(self):
+        old = self.measurement("f", "old.vrm")
+        old["asset"]["vrm_version"] = "0.0"
+        ms = [old, self.measurement("f", "new.vrm")]
+        self.assertEqual(R.family_representatives(ms)["f"]["asset"]["file"], "new.vrm")
+
+    def test_manifest_order_breaks_remaining_ties(self):
+        ms = [self.measurement("f", "first.vrm"), self.measurement("f", "second.vrm")]
+        self.assertEqual(R.family_representatives(ms)["f"]["asset"]["file"], "first.vrm")
+
+    def test_target_vector_excludes_pose_invariants(self):
+        targets = R.family_targets([self.measurement("f", "a.vrm")])["f"]
+        self.assertNotIn("proportions.rest_pose_arm_horizontal_cos", targets)
+        self.assertNotIn("proportions.limb_asymmetry", targets)
+        self.assertEqual(targets["asset.height_m"], 1.6)
+        self.assertEqual(targets["proportions.head_count"], 6.4)
+
+    def test_missing_metric_is_omitted_not_defaulted(self):
+        m = self.measurement("f", "a.vrm")
+        del m["proportions"]["ipd_m"]
+        self.assertNotIn("proportions.ipd_m", R.family_targets([m])["f"])
+
+
 if __name__ == "__main__":
     unittest.main()
