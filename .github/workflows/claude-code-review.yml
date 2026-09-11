@@ -82,6 +82,15 @@ jobs:
           # here rather than in `--allowedTools` because the one-line form trips
           # GitGuardian's generic-password detector; `settings` permissions merge with the
           # CLI list, and none of these entries needs MCP server discovery.
+          #
+          # The matcher also treats shell keywords as command names (anthropics/claude-code#32270),
+          # so `for f in $(git diff); do git log; done` is denied unless `for`/`do`/`done`
+          # match independently of `git`. Review on PR #438 (7e40bec) completed with 15 Bash
+          # denials: cd, diff, do, done, echo, for, git, grep, head, sed, then, wc. `do` and
+          # `then` are prefixes of the body when written on the same line (`do git log`), so
+          # those get `do <prog>:*` / `then <prog>:*` for programs already on this list — not
+          # a bare `do:*`, which would allow `do curl …`. Exact `do`/`then`/`done`/`fi`/`else`
+          # cover the multiline form where the keyword is its own newline-separated segment.
           settings: |
             {
               "permissions": {
@@ -109,7 +118,60 @@ jobs:
                   "Bash(paste:*)",
                   "Bash(comm:*)",
                   "Bash(true:*)",
-                  "Bash(false:*)"
+                  "Bash(false:*)",
+                  "Bash(for:*)",
+                  "Bash(do)",
+                  "Bash(done)",
+                  "Bash(if)",
+                  "Bash(if [:*)",
+                  "Bash(if test:*)",
+                  "Bash(if git:*)",
+                  "Bash(then)",
+                  "Bash(else)",
+                  "Bash(elif:*)",
+                  "Bash(fi)",
+                  "Bash(while:*)",
+                  "Bash([:*)",
+                  "Bash(do git:*)",
+                  "Bash(do grep:*)",
+                  "Bash(do echo:*)",
+                  "Bash(do head:*)",
+                  "Bash(do wc:*)",
+                  "Bash(do sed:*)",
+                  "Bash(do diff:*)",
+                  "Bash(do cd:*)",
+                  "Bash(do cat:*)",
+                  "Bash(do ls:*)",
+                  "Bash(do rg:*)",
+                  "Bash(do find:*)",
+                  "Bash(do tail:*)",
+                  "Bash(do test:*)",
+                  "Bash(do awk:*)",
+                  "Bash(do cut:*)",
+                  "Bash(do sort:*)",
+                  "Bash(do uniq:*)",
+                  "Bash(do jq:*)",
+                  "Bash(do printf:*)",
+                  "Bash(then git:*)",
+                  "Bash(then grep:*)",
+                  "Bash(then echo:*)",
+                  "Bash(then head:*)",
+                  "Bash(then wc:*)",
+                  "Bash(then sed:*)",
+                  "Bash(then diff:*)",
+                  "Bash(then cd:*)",
+                  "Bash(then cat:*)",
+                  "Bash(then ls:*)",
+                  "Bash(then rg:*)",
+                  "Bash(then find:*)",
+                  "Bash(then tail:*)",
+                  "Bash(then test:*)",
+                  "Bash(then awk:*)",
+                  "Bash(then cut:*)",
+                  "Bash(then sort:*)",
+                  "Bash(then uniq:*)",
+                  "Bash(then jq:*)",
+                  "Bash(then printf:*)"
                 ]
               }
             }
