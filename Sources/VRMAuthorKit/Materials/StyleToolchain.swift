@@ -30,11 +30,15 @@ public struct StyleToolchain: Sendable {
     public var linter: URL?
     public var profile: URL?
     public var python: URL?
+    /// The hash `profile` is checked against. Nil means the module's pinned
+    /// default profile; a value means the caller supplied its own style blob.
+    public var expectedProfileSHA256: String?
 
-    public init(linter: URL?, profile: URL?, python: URL?) {
+    public init(linter: URL?, profile: URL?, python: URL?, expectedProfileSHA256: String? = nil) {
         self.linter = linter
         self.profile = profile
         self.python = python
+        self.expectedProfileSHA256 = expectedProfileSHA256
     }
 
     // MARK: Location
@@ -70,17 +74,22 @@ public struct StyleToolchain: Sendable {
         return nil
     }
 
-    public static func locate(cwd: URL, executableURL: URL?, env: [String: String]) -> StyleToolchain {
+    /// `profile` is the style the caller is working in — the project's attached
+    /// blob, a template pack's own style, or any other. When given it wins over
+    /// the environment override and the module's default profile path, and its
+    /// sha256 becomes the hash `verified()` checks. Nil keeps the default.
+    public static func locate(cwd: URL, executableURL: URL?, env: [String: String], profile: Blob? = nil) -> StyleToolchain {
         let root = repoRoot(cwd: cwd, executableURL: executableURL)
         func resolve(_ key: String, _ relative: String) -> URL? {
             if let override = env[key], !override.isEmpty { return URL(fileURLWithPath: override, relativeTo: cwd).standardizedFileURL }
             return root?.appendingPathComponent(relative)
         }
-        return StyleToolchain(linter: resolve(linterEnvironmentKey, linterRelativePath), profile: resolve(profileEnvironmentKey, profileRelativePath), python: python3(env: env))
+        let profileURL = profile.map { URL(fileURLWithPath: $0.path, relativeTo: cwd).standardizedFileURL } ?? resolve(profileEnvironmentKey, profileRelativePath)
+        return StyleToolchain(linter: resolve(linterEnvironmentKey, linterRelativePath), profile: profileURL, python: python3(env: env), expectedProfileSHA256: profile?.sha256)
     }
 
-    public static func locate(context: OperationContext) -> StyleToolchain {
-        locate(cwd: context.cwd, executableURL: context.executableURL, env: context.env)
+    public static func locate(context: OperationContext, profile: Blob? = nil) -> StyleToolchain {
+        locate(cwd: context.cwd, executableURL: context.executableURL, env: context.env, profile: profile)
     }
 
     // MARK: Verification
@@ -92,7 +101,8 @@ public struct StyleToolchain: Sendable {
         public var oracleHashes: [String: String]
     }
 
-    static func verifyPinned(_ url: URL?, relative: String, pinned: String, what: String) throws -> String {
+    static func verifyPinned(_ url: URL?, relative: String, pinned: String, what: String,
+                             expectation: String = "the pinned oracle hash from verification.md §2") throws -> String {
         guard let url, FileManager.default.fileExists(atPath: url.path) else {
             throw AuthorError(code: .missingCapability, path: relative, required: .string(pinned),
                               message: "\(what) not found; expected \(relative) under the repository root or \(what == "Style linter" ? linterEnvironmentKey : profileEnvironmentKey).",
@@ -101,13 +111,15 @@ public struct StyleToolchain: Sendable {
         let hash = try SHA256Hex.hex(fileAt: url)
         guard hash == pinned else {
             throw AuthorError(code: .missingCapability, path: url.path, observed: .string(hash), required: .string(pinned),
-                              message: "\(what) at \(url.path) does not match the pinned oracle hash from verification.md §2.", suggestedCommands: ["doctor"])
+                              message: "\(what) at \(url.path) does not match \(expectation).", suggestedCommands: ["doctor"])
         }
         return hash
     }
 
-    /// Verifies python3 and the pinned linter; `profileOverride` (already
-    /// hash-checked by the caller) replaces the pinned profile when given.
+    /// Verifies python3 and the pinned linter, then the profile against
+    /// `expectedProfileSHA256` when this toolchain was located for a caller's
+    /// style and against the module default otherwise. `profileOverride`
+    /// (already hash-checked by the caller) replaces the profile when given.
     public func verified(profileOverride: (url: URL, sha256: String)? = nil) throws -> Verified {
         guard let python else {
             throw AuthorError(code: .missingCapability, path: "python3", message: "python3 not found on PATH; style lint runs the pinned scripts/style_lint.py under python3.",
@@ -119,6 +131,11 @@ public struct StyleToolchain: Sendable {
         if let profileOverride {
             profileURL = profileOverride.url
             hashes[profileOverride.url.path] = profileOverride.sha256
+        } else if let expectedProfileSHA256 {
+            let key = profile?.path ?? StyleToolchain.profileRelativePath
+            hashes[key] = try StyleToolchain.verifyPinned(profile, relative: key, pinned: expectedProfileSHA256, what: "Style profile",
+                                                          expectation: "the sha256 the caller pinned for this style profile")
+            profileURL = profile!
         } else {
             hashes[StyleToolchain.profileRelativePath] = try StyleToolchain.verifyPinned(profile, relative: StyleToolchain.profileRelativePath, pinned: StyleToolchain.pinnedProfileSHA256, what: "Style profile")
             profileURL = profile!

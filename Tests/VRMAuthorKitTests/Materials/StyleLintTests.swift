@@ -187,4 +187,16 @@ final class StyleLintTests: XCTestCase {
         XCTAssertEqual(try SHA256Hex.hex(fileAt: URL(fileURLWithPath: artifact.path)), artifact.sha256)
         XCTAssertEqual(try store.state().revision, 0, "lint is a read; no revision is created")
     }
+
+    func testToolchainResolvesTheProjectsAttachedProfileNotAModuleConstant() throws {
+        let profiles = root.appendingPathComponent("profiles")
+        try FileManager.default.createDirectory(at: profiles, withIntermediateDirectories: true)
+        let alternate = profiles.appendingPathComponent("other-style.json")
+        try Data("{\"id\":\"other-style\",\"version\":\"0.1.0\",\"rules\":[]}".utf8).write(to: alternate)
+        let blob = Blob(path: alternate.path, sha256: SHA256Hex.hex(try Data(contentsOf: alternate)))
+        let located = StyleToolchain.locate(context: MaterialsTestSupport.context(), profile: blob)
+        XCTAssertEqual(located.profile?.lastPathComponent, "other-style.json")
+        let verified = try located.verified()
+        XCTAssertEqual(verified.oracleHashes[alternate.path], blob.sha256)
+    }
 }

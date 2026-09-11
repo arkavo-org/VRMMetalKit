@@ -18,6 +18,9 @@ import Foundation
 
 /// Pinned QA oracles and the locked v1 scenario packs.
 public enum QAPins {
+    /// The fallback style a QA plan grades against when the project has no
+    /// attached style: `style attach` and template packs that bind their own
+    /// profile both take precedence, so a second style needs no change here.
     public static let defaultProfilePath = "docs/style/profiles/vroid-lineage-anime.json"
     public static let defaultProfileSha256 = "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
     public static let styleLinterSha256 = "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881"
