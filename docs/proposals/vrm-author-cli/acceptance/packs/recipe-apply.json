@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "5ba4bd1bf31f280a402d9a8e63eb21af21fc21643065c2935f43f03c13677518",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "46a30d603306a3b93b4830b59f3e38f8c97796d1550cb2caee40bd59b75100de",
+  "packHash": "972239cc8b8fc2299c2099c36f0b77c0e262d920d5123af92d44e21196e09421",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,10 +20,10 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
+      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
+      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "docs/proposals/vrm-author-cli/parameters.md (Recipe and production template; Assets, rights and credentials)",
       "docs/proposals/vrm-author-cli/commands.md (`recipe apply` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Shape/deformation + provenance, visually-validated)"
@@ -89,7 +89,7 @@
     "kind": "swift-test",
     "entryPoint": "ExportPackTests",
     "environment": {
-      "pinnedCommit": "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3",
+      "pinnedCommit": "b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "403b25860029a553999eaa225222cf5ca08ac1e8ce5da5491f174abe8af66ebc",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",

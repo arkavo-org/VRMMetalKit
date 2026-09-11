@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "6ed9a8fe6dc1f9303edde7aec5b8baa436142395aa33dd351aec608fb7b9d98a",
   "resultSchemaHash": "dc56052db7443e7081fa60014012f05b6a8b1c30dbcd6c0b2780034dfdacbff0",
-  "packHash": "4d1c7aaf0f7c0ddee9470ac402b80cd04676fc5e47346ad29f827efddf65ba41",
+  "packHash": "290399763c8a2e3d93d68c098fcd0caf4baaa94af97154b136ce99fb81e567af",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,8 +20,8 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "docs/proposals/vrm-author-cli/commands.md (`project inspect` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Revision/transaction, fixture-tested)"
     ],
@@ -77,7 +77,7 @@
     "kind": "swift-test",
     "entryPoint": "ProjectPackTests",
     "environment": {
-      "pinnedCommit": "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3",
+      "pinnedCommit": "b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6"

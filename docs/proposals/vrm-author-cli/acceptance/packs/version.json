@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "52e6fc2067bb7fdce1905713b8a7d39dc312346e8e6775b24f38a37b8bd84f10",
   "resultSchemaHash": "4ac456d39569fa1081f93784f15d48aaeb98b10c61ec030962a8eee1d560ffcc",
-  "packHash": "ff6e31d1f35913555be01d13798c2ecb1604dcdd54616ffd1ae6a909f56a7a95",
+  "packHash": "264af1bcbf04fdf44c22fc1016133c1cc42e260ab6301cc582ed83b11fe3267b",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,8 +20,8 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "Tests/VRMAuthorKitTests/Core/CLIParsingTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
+      "Tests/VRMAuthorKitTests/Core/CLIParsingTests.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "docs/proposals/vrm-author-cli/commands.md (Invocation and discovery)",
       "docs/proposals/vrm-author-cli/commands.md (`version` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
@@ -76,7 +76,7 @@
     "kind": "swift-test",
     "entryPoint": "DiscoveryPackTests",
     "environment": {
-      "pinnedCommit": "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3",
+      "pinnedCommit": "b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "a873b33ecdc15820454d1a925dd03700a34a6978dc3a109733008b337e2bcf62",
         "Tests/VRMAuthorKitTests/Core/CLIParsingTests.swift": "5fbe1a0e5a8468c611c8000a5b1565ab366058f2d068fae12584be049296db0d"

@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "ef077c5a7c083f677fa42b1fcd07f9339f915e9ab144ccc26f388953959fd7a1",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "5d523dd69af03a8ef4368f4d8169088157deb11496b7b87b5cae050dc93dc6bb",
+  "packHash": "f2a82b7f53e4a171bded007d2fb8f9a3fee09011b3b9317e9784dc5945933e9e",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,9 +20,9 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "docs/style/profiles/vroid-lineage-anime.json @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
+      "docs/style/profiles/vroid-lineage-anime.json @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "docs/proposals/vrm-author-cli/verification.md \u00a72 (Pinned oracles)",
       "docs/proposals/vrm-author-cli/commands.md (`style attach` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Revision/transaction, fixture-tested)"
@@ -84,7 +84,7 @@
     "kind": "swift-test",
     "entryPoint": "MaterialsPackTests",
     "environment": {
-      "pinnedCommit": "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3",
+      "pinnedCommit": "b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "9c066fb879714d245c69b07271bd172ab6ce92c32ebc95355bc8fe05f23d9a6e",
         "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",

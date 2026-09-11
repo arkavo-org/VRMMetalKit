@@ -692,7 +692,12 @@ class ShippedPackTests(unittest.TestCase):
         self.assertEqual(oracles["scripts/style_lint.py"], "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881")
         self.assertEqual(oracles["docs/style/profiles/vroid-lineage-anime.json"], "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35")
         self.assertEqual(oracles["docs/style/corpus/vroid-lineage-anime.manifest.json"], "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6")
-        self.assertEqual(self.pack["runner"]["environment"]["pinnedCommit"], "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3")
+        commit = self.pack["runner"]["environment"]["pinnedCommit"]
+        self.assertTrue(RP.is_ancestor(REPO, commit), f"pinnedCommit {commit} is not reachable from HEAD")
+        for rel in ("scripts/style_lint.py", "docs/style/profiles/vroid-lineage-anime.json",
+                    "docs/style/corpus/vroid-lineage-anime.manifest.json"):
+            self.assertEqual(RP.blob_sha256(REPO, commit, rel), oracles[rel],
+                             f"{rel} does not carry its pinned hash at {commit}")
 
     def test_shipped_pack_covers_every_fixture_class_and_mutant_kind(self):
         self.assertEqual({f["class"] for f in self.pack["fixtures"]}, {"positive", "negative", "degenerate"})

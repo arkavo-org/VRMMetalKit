@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "bb82ec3a80d4a114a02cb4bf8c0f66612384fa7ef9b336a2b8cf7e2bf906bf87",
   "resultSchemaHash": "fe78c4a002fe467471d652b1cc3ce2b8674fd1bc7f14b7317f3404c3155a6e94",
-  "packHash": "d6a693913ba264d111bf4f63240418ce6ac77abefc2f19c68760f92f18ef0472",
+  "packHash": "8ae80d6d31ca45e594d77ef910347bd0efd7948489f191e01eeeaba1f21bde49",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,7 +20,7 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "docs/proposals/vrm-author-cli/verification.md \u00a71 (a missing handler produces an expected harness failure, not a passing skip)",
       "docs/proposals/vrm-author-cli/commands.md (`template list` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
@@ -83,7 +83,7 @@
     "kind": "swift-test",
     "entryPoint": "TemplateListPackTests",
     "environment": {
-      "pinnedCommit": "d6ba55d7e44251a8f7ba356a4b6e2f436292d8c3",
+      "pinnedCommit": "b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "74a0246047f76ae7f66a7a00d31fac8a5cd3de46e44e67763904eddde190b5ac"
       }
