@@ -110,6 +110,24 @@ whether a style brings its own template or shares one.
 Per family: the solved control values, the per-metric residual, the `eligible` flag, the
 solver budget and seed, and both hashes it was solved against.
 
+The recorded replay steps begin by disabling the template's default garment. The solve
+measures the body control space, and a garment is not part of it: a candidate the
+garment rejects on clearance grounds says nothing about whether the body controls reach
+that family. Every metric in the target vector is bone-derived except `asset.height_m`,
+which is a mesh bounding-box extent a torso garment cannot widen past head or feet, so
+disabling the garment leaves the measured vector unchanged and leaves conformance
+unchanged. That was measured directly on `native-anime-v1`: all twenty-three metrics
+identical, both artifacts linting conforming with identical must, should and may
+tallies, differences confined to mesh and vertex counts and to the profile's
+information-only fingerprint rules.
+
+Garment fit is not discarded. After a family solves, one additional build at the solved
+controls with the garment enabled records `garmentFit` as `"pass"` or `"fail"` on that
+family's witness. The field is diagnostic: it never participates in eligibility, and a
+family that is ineligible or unsolved carries no such field. This keeps "the body cannot
+reach this family" and "the body reaches it but the default garment does not fit"
+separable, which the alternative destroys.
+
 The solver must be a bounded deterministic search: a fixed iteration budget and a fixed
 seed, no wall-clock or thread-count dependence, so re-running it on the same pair
 reproduces the file byte for byte.
@@ -200,6 +218,13 @@ A family is eligible when:
   which have no analytic inverse and are solved numerically.
 
 Otherwise the family is ineligible, recorded with its residuals.
+
+Eligibility is a statement about metric residuals and nothing else. A rejection the
+template raises on a candidate — a control outside its validity range, a garment
+clearance violation — makes that candidate infeasible, not the family ineligible. The
+search rejects the candidate and continues. A family whose target lies outside the
+control validity ranges is ineligible without any build, and is never clamped into
+range.
 
 ## 8. Per-pack assertions
 
