@@ -1,0 +1,231 @@
+{
+  "id": "recipe-apply",
+  "version": "0.1.0",
+  "operation": "recipe apply",
+  "operationVersion": 1,
+  "requestSchemaHash": "5ba4bd1bf31f280a402d9a8e63eb21af21fc21643065c2935f43f03c13677518",
+  "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
+  "packHash": "dc8480353224e1f297773746584be1c3723ff827081f47e332b909de51671982",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "docs/proposals/vrm-author-cli/parameters.md (Recipe and production template; Assets, rights and credentials)",
+      "docs/proposals/vrm-author-cli/commands.md (`recipe apply` row)",
+      "docs/proposals/vrm-author-cli/verification.md §4 (Shape/deformation + provenance, visually-validated)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "Recipe for the installed export stub pack",
+      "recipe with mutated body height and an extra material"
+    ],
+    "parameterRanges": {
+      "expectedRevision": "current revision",
+      "dryRun": [
+        false,
+        true
+      ],
+      "expectedPlanHash": "planHash from the dry run"
+    },
+    "invariants": [
+      "apply materialises the dependency graph (21 nodes, 2 materials, 4 expressions in the factory avatar), reports invalidations and bumps the revision",
+      "dryRun mutates nothing and consumes no requestId; a replay is idempotent",
+      "stale expectedRevision is a conflict; wrong template sha256 is validationFailed; unknown template is missingCapability; a schema-only recipe is invalidRequest; the revision is unchanged after every rejection",
+      "the rights resolver runs on every apply: a conflicting declaration is gateFailed at /rights/meta/authors with revision 0; a renaming resolver's name reaches the built VRM meta",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "metres (body.heightM), normalized control values, quaternion transforms",
+    "excluded": [
+      "native-anime-v1 geometry response (TemplatePackTests, NativeAnime* suites)",
+      "garment fit and hair regeneration (control-set and build packs)"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "default-recipe",
+      "path": "synthetic:factory project applying the stub pack default recipe, then a taller recipe with an extra material",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testRecipeApplyMaterializesObjectsInvalidationsAndRevision: objects, invalidations and revision bump; idempotent replay"
+    },
+    {
+      "id": "rejections",
+      "path": "synthetic:stale expectedRevision, wrong template sha256, unknown template id, schema-only recipe, conflicting rights hook",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testRecipeApplyMaterializesObjectsInvalidationsAndRevision and testRecipeApplyInvokesRightsHook: conflict / validationFailed / missingCapability / invalidRequest / gateFailed, revision unchanged"
+    },
+    {
+      "id": "dry-run",
+      "path": "synthetic:recipe apply with dryRun true",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testRecipeApplyMaterializesObjectsInvalidationsAndRevision: revision stays 0, no receipt, plan returned"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ExportPackTests",
+    "environment": {
+      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "a598e0d27c205ab4060ad3b9ff0b6710e9b3ec748f2c3521184dc1623306de2f",
+        "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
+        "Tests/VRMAuthorKitTests/Core/ModelTests.swift": "0bee5342eeb781fe0b4e37f3b53ecbb0b2a989926fa6b9f97a2be8ba5690495b",
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "30fd02f402b322385ea24d21bb74aba0a29e755158615570241839abb53812e0"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "stale-sha-unknown-template",
+      "description": "testRecipeApplyMaterializesObjectsInvalidationsAndRevision: stale revision, wrong template sha256, unknown template and a schema-only recipe must each be rejected with the revision unchanged.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testRecipeApplyMaterializesObjectsInvalidationsAndRevision"
+      }
+    },
+    {
+      "id": "rights-conflict-blocks-apply",
+      "description": "testRecipeApplyInvokesRightsHook: a conflicting rights declaration must be gateFailed at /rights/meta/authors and leave revision 0; the resolver cannot be bypassed.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testRecipeApplyInvokesRightsHook"
+      }
+    },
+    {
+      "id": "duplicate-ids-rejected",
+      "description": "ModelTests.testRecipeDecodesWithDefaultsAndRejectsDuplicateIds: a recipe with duplicate object ids must not decode.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testRecipeDecodesWithDefaultsAndRejectsDuplicateIds",
+        "suite": "ModelTests"
+      }
+    },
+    {
+      "id": "control-at-default-no-op",
+      "description": "TemplatePackTests.testControlAtDefaultIsExactNoOp: applying every native control at its default must be an exact no-op on the compiled geometry; drift is a mutant.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testControlAtDefaultIsExactNoOp",
+        "suite": "TemplatePackTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ExportPackTests test passed (executed 11, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Export/ExportPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ExportPackTests",
+            "executed": 11,
+            "passed": 11,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "62bda4a41930021d62f0661e376d09053c9cf4e917f296b987f15343ccc1a1ab",
+            "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
+            "Tests/VRMAuthorKitTests/Core/ModelTests.swift": "0bee5342eeb781fe0b4e37f3b53ecbb0b2a989926fa6b9f97a2be8ba5690495b",
+            "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "30fd02f402b322385ea24d21bb74aba0a29e755158615570241839abb53812e0"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": true,
+    "views": [
+      "front",
+      "threeQuarter",
+      "profile"
+    ],
+    "motions": [
+      "idle"
+    ],
+    "landmarks": [
+      "eyelids",
+      "lips",
+      "silhouette"
+    ],
+    "thresholds": {},
+    "adjudication": "different-family judge, zero false accepts on the 12-case calibration set (verification.md §5)"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "visually-validated",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "required",
+      "visual": "required",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md §6)."
+  },
+  "corpus": {
+    "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json",
+    "sha256": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
+    "familyKey": "body_family",
+    "expectedFamilies": 18
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/recipe-apply.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ExportPackTests --filter ModelTests --filter TemplatePackTests test-case lines"
+    ]
+  }
+}

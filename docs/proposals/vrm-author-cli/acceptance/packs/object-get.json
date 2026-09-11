@@ -1,0 +1,196 @@
+{
+  "id": "object-get",
+  "version": "0.1.0",
+  "operation": "object get",
+  "operationVersion": 1,
+  "requestSchemaHash": "a1bc5c6799a5e69fbb16599942add869e3c23c2890adb833bef16034b28d9b5b",
+  "resultSchemaHash": "ef9dca01c76016fe668b7c19ac1506098af3c0bb75ccca55b800c03a92edcf23",
+  "packHash": "0acd6cc103412392a6ee6ce826f40d5820af97fee9180c11f60a101c3e391bdb",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Core/ProjectStoreTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "docs/proposals/vrm-author-cli/parameters.md (Rig, expression, gaze, spring and first-person fields)",
+      "docs/proposals/vrm-author-cli/commands.md (`object get` row)",
+      "docs/proposals/vrm-author-cli/verification.md §4 (Discovery/registry, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "stub-template project objects (hair, spring, material, expression, ...)"
+    ],
+    "parameterRanges": {
+      "id": "existing object id"
+    },
+    "invariants": [
+      "returns the typed object, its provenance (source template/preset) and its writable pointers",
+      "read-only fields (spring joint node, the joints array itself, ids, revision, credentials) are never listed as writable",
+      "an unknown id is objectNotFound",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "revisions are nonnegative integers; timeoutSeconds seconds; maxMemoryMb megabytes; control values in their descriptor units (metres, degrees, normalized)",
+    "excluded": [
+      "editing (object set)",
+      "derived geometry payloads"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "typed-objects",
+      "path": "synthetic:object get for hair:bob, spring:hair and material:cloth",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testGetReturnsTypedObjectProvenanceAndWritablePointers: typed fields, provenance source template, writable pointers"
+    },
+    {
+      "id": "unknown-id",
+      "path": "synthetic:object get hair:nope",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testGetReturnsTypedObjectProvenanceAndWritablePointers: invalidRequest / objectNotFound"
+    },
+    {
+      "id": "read-only-pointers",
+      "path": "synthetic:spring:hair whose writablePointers include /joints/1/hitRadius but not /joints/1/node or /joints",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testGetReturnsTypedObjectProvenanceAndWritablePointers: read-only pointers excluded"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ObjectPackTests",
+    "environment": {
+      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift": "f7d1c563654658fc307d73dc8b347da7476b223413b3b3872659f19aa7ea5796",
+        "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+        "Tests/VRMAuthorKitTests/Core/ProjectStoreTests.swift": "6d4f5cc9fb7f2ec1c7ec342f3ef2da8a1df3d51ffae474764bdf48a7474be495"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "unknown-id-rejected",
+      "description": "testGetReturnsTypedObjectProvenanceAndWritablePointers: an unknown id must be objectNotFound; read-only pointers must not appear as writable.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testGetReturnsTypedObjectProvenanceAndWritablePointers"
+      }
+    },
+    {
+      "id": "read-only-enforced",
+      "description": "testSetCannotTouchIdsHistoryCredentialsOrDerivedFields: every pointer get reports as non-writable must be refused by set with the revision unchanged.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testSetCannotTouchIdsHistoryCredentialsOrDerivedFields"
+      }
+    },
+    {
+      "id": "store-pointer-policy",
+      "description": "ProjectStoreTests.testWritablePointersAreEnforced: the store must enforce the writable-pointer policy that get reports.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testWritablePointersAreEnforced",
+        "suite": "ProjectStoreTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ObjectPackTests test passed (executed 7, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ObjectPackTests",
+            "executed": 7,
+            "passed": 7,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift": "0bc71cf09534bdd26fe7603c4d73e0df55bfe9c247a231ec35b4e71828f56735",
+            "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+            "Tests/VRMAuthorKitTests/Core/ProjectStoreTests.swift": "6d4f5cc9fb7f2ec1c7ec342f3ef2da8a1df3d51ffae474764bdf48a7474be495"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "object get is a read over one typed project object and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/object-get.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ObjectPackTests --filter ProjectStoreTests test-case lines"
+    ]
+  }
+}

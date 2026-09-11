@@ -289,6 +289,16 @@ case "$FAKE_SWIFT_MODE" in
     echo "Build complete! (0.48 sec)"
     echo "warning: No matching test cases were run" >&2
     exit 0 ;;
+  override)
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testAlpha]' passed (0.001 seconds)."
+    echo "Test Case '-[VRMAuthorKitTests.FakeSuite testMutantRejected]' passed (0.001 seconds)."
+    echo "Test Case '-[VRMAuthorKitTests.OtherSuite testOtherMutantRejected]' passed (0.001 seconds)."
+    printf '\t Executed 3 tests, with 0 failures (0 unexpected) in 0.003 (0.003) seconds\n'
+    exit 0 ;;
+  override-only)
+    echo "Test Case '-[VRMAuthorKitTests.OtherSuite testOtherMutantRejected]' passed (0.001 seconds)."
+    printf '\t Executed 1 test, with 0 failures (0 unexpected) in 0.001 (0.001) seconds\n'
+    exit 0 ;;
   compile-error)
     echo "/repo/Sources/X.swift:1:1: error: cannot find 'Nope' in scope" >&2
     echo "error: fatalError" >&2
@@ -414,6 +424,72 @@ class SwiftTestRunnerTests(unittest.TestCase):
         self.assertIn("oracle hash mismatch", result["reason"])
         self.assertFalse(os.path.exists(self.args_file))
 
+    def synthetic_pack(self, **overrides):
+        pack = self.pack(**overrides)
+        pack["fixtures"] = [{"id": "in-process", "path": "synthetic:project built by the suite", "synthetic": True,
+                             "class": "positive", "expected": {}}]
+        pack["packHash"] = R.compute_pack_hash(pack)
+        return pack
+
+    def test_synthetic_fixture_validation(self):
+        schema = R.load_json(SCHEMA_PATH)
+        self.assertEqual(R.validate_pack(self.synthetic_pack(), schema), [])
+        no_hash = self.pack()
+        del no_hash["fixtures"][0]["sha256"]
+        self.assertTrue(any("sha256 is required" in e for e in R.validate_pack(no_hash, schema)))
+        pinned_synthetic = self.synthetic_pack()
+        pinned_synthetic["fixtures"][0]["sha256"] = "5" * 64
+        self.assertTrue(any("omit sha256" in e for e in R.validate_pack(pinned_synthetic, schema)))
+        py = self.f.pack()
+        py["fixtures"] = [{"id": "s", "path": "synthetic:x", "synthetic": True, "class": "positive", "expected": {}}]
+        self.assertTrue(any("require runner.kind swift-test" in e for e in R.validate_pack(py, schema)))
+        fab = self.pack(mutants=[{"id": "fab", "description": "", "expectedClassification": "reject",
+                                  "transform": {"kind": "report-fabricated", "suite": "OtherSuite", "envelope": {"report": None, "oracleHashes": {}, "exitCode": 0}}}])
+        self.assertTrue(any("transform.suite applies only" in e for e in R.validate_pack(fab, schema)))
+
+    def test_synthetic_fixture_is_graded_from_the_suite_without_a_file(self):
+        code, result, err = self.run_mode("pass", self.synthetic_pack())
+        self.assertEqual(code, 0, err)
+        fx = result["fixtures"][0]
+        self.assertEqual(fx["status"], "pass")
+        self.assertTrue(fx["synthetic"])
+        self.assertEqual(fx["sha256"], "")
+        self.assertNotIn("resolvedPath", fx)
+        code, result, _ = self.run_mode("fail", self.synthetic_pack())
+        self.assertEqual(code, 1)
+        self.assertEqual(result["fixtures"][0]["status"], "fail")
+
+    def test_mutant_suite_override_adds_filter_and_locates_the_test(self):
+        pack = self.synthetic_pack(mutants=[
+            {"id": "in-suite", "description": "", "expectedClassification": "reject", "transform": {"kind": "swift-test", "test": "testMutantRejected"}},
+            {"id": "elsewhere", "description": "", "expectedClassification": "reject",
+             "transform": {"kind": "swift-test", "suite": "OtherSuite", "test": "testOtherMutantRejected"}}],
+            assertions=[{"id": "exit_code", "kind": "exit-code", "target": "process", "expected": 0},
+                        {"id": "failed", "kind": "report-field", "target": "failed", "expected": 0}])
+        code, result, err = self.run_mode("override", pack)
+        self.assertEqual(code, 0, err)
+        by_id = {m["id"]: m for m in result["mutants"]}
+        self.assertEqual(by_id["in-suite"]["test"], "FakeSuite.testMutantRejected")
+        self.assertEqual(by_id["elsewhere"]["test"], "OtherSuite.testOtherMutantRejected")
+        self.assertEqual(by_id["elsewhere"]["classification"], "reject")
+        with open(self.args_file, encoding="utf-8") as fh:
+            self.assertEqual(fh.read().split(), ["test", "--disable-sandbox", "--filter", "FakeSuite", "--filter", "OtherSuite"])
+        code, result, _ = self.run_mode("pass", pack)
+        self.assertEqual(code, 1)
+        by_id = {m["id"]: m for m in result["mutants"]}
+        self.assertEqual(by_id["in-suite"]["classification"], "reject")
+        self.assertEqual(by_id["elsewhere"]["classification"], "not-executed")
+
+    def test_entry_point_suite_absent_is_missing_handler_even_when_an_override_suite_ran(self):
+        pack = self.synthetic_pack(mutants=[{"id": "elsewhere", "description": "", "expectedClassification": "reject",
+                                             "transform": {"kind": "swift-test", "suite": "OtherSuite", "test": "testOtherMutantRejected"}}])
+        code, result, _ = self.run_mode("override-only", pack)
+        self.assertEqual(code, 3)
+        self.assertEqual(result["status"], "missing-handler")
+        self.assertIn("FakeSuite", result["reason"])
+        self.assertEqual(result["fixtures"], [])
+        self.assertEqual(result["mutants"], [])
+
     def test_parse_output_keeps_last_status_per_test(self):
         text = ("Test Case '-[M.S testA]' started.\nTest Case '-[M.S testA]' passed (0.1 seconds).\n"
                 "Test Case '-[M.S testB]' failed (0.1 seconds).\nTest Case '-[M.S testB]' passed (0.1 seconds).\n")
@@ -457,6 +533,25 @@ class ShippedPackTests(unittest.TestCase):
         bad["evidencePolicy"]["requiredLevel"] = "hand-wavy"
         with self.assertRaises(Exception):
             Draft202012Validator(self.schema).validate(bad)
+
+    def test_every_shipped_pack_validates_and_hashes(self):
+        packs_dir = os.path.join(ACCEPTANCE, "packs")
+        names = sorted(n for n in os.listdir(packs_dir) if n.endswith(".json"))
+        self.assertIn("style-lint.json", names)
+        ids = set()
+        for name in names:
+            pack = R.load_json(os.path.join(packs_dir, name))
+            with self.subTest(pack=name):
+                self.assertEqual(R.validate_pack(pack, self.schema), [])
+                self.assertEqual(pack["packHash"], R.compute_pack_hash(pack))
+                self.assertEqual(pack["id"] + ".json", name)
+                self.assertNotIn(pack["operation"], ids)
+                ids.add(pack["operation"])
+                if pack["runner"]["kind"] == "swift-test":
+                    self.assertEqual({f["class"] for f in pack["fixtures"]}, {"positive", "negative", "degenerate"})
+                    kinds = [m["transform"]["kind"] for m in pack["mutants"]]
+                    self.assertGreaterEqual(kinds.count("swift-test"), 2)
+                    self.assertIn("report-fabricated", kinds)
 
     def test_evidence_registry_is_empty_and_pinned(self):
         reg = R.load_json(os.path.join(ACCEPTANCE, "evidence.json"))

@@ -1,0 +1,223 @@
+{
+  "id": "export-vrm",
+  "version": "0.1.0",
+  "operation": "export vrm",
+  "operationVersion": 1,
+  "requestSchemaHash": "773f39ed3921091b3fd89235ebf8b76ae9da2e5c258b77de98b38bc3ea852465",
+  "resultSchemaHash": "2850fa3329e6e9b389996986755d2532cdeca0299ed1c4f157c7e0ae2887fda8",
+  "packHash": "a86c33e5e425d2d9e269cc88d37abef9eb89e195a5437ba1cbcb63b8aca40ffc",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Export/InteropTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2 (VRMMetalKit consumer; XCTSkip without a Metal device)",
+      "docs/proposals/vrm-author-cli/README.md (consumer matrix)",
+      "docs/proposals/vrm-author-cli/commands.md (`export vrm` row)",
+      "docs/proposals/vrm-author-cli/verification.md §4 (Import/export/provenance + consumer matrix, visually-validated)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "built project with complete mandatory meta",
+      "project whose rights meta lacks version"
+    ],
+    "parameterRanges": {
+      "target": [
+        "portable-vrm1"
+      ],
+      "out": "path that does not exist unless replace"
+    },
+    "invariants": [
+      "export writes the final unsigned bytes plus an export report; the bytes equal a direct GLBWriter.write of the compiled pack and the loss report is empty",
+      "unresolved mandatory meta (13 fields) is gateFailed/validationFailed at the missing pointer and writes no file",
+      "a stale dependency is rejected exactly as build rejects it",
+      "the exported bytes load in the independent VRMMetalKit consumer with the authored bone, expression, spring and material counts (InteropTests; skipped without a Metal device)",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "metres (glTF), MToon 1.0 factor space, VRMC_vrm 1.0 meta enums",
+    "excluded": [
+      "signing (deliver)",
+      "consumers other than VRMMetalKit (README consumer matrix rows pending)",
+      "VRM 0.x output"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "complete-meta",
+      "path": "synthetic:built factory project with all 13 mandatory meta fields",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testExportVRMRequiresResolvedMandatoryMeta: final and export-report artifacts, empty loss report, bytes equal GLBWriter output"
+    },
+    {
+      "id": "missing-meta-version",
+      "path": "synthetic:recipe whose rights.meta.version is nil",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testExportVRMRequiresResolvedMandatoryMeta: gateFailed/validationFailed at /meta/version, no file written"
+    },
+    {
+      "id": "blanked-meta-vocabulary",
+      "path": "synthetic:factory meta with name, version, authors and licenseUrl blanked",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testMissingMandatoryMetaVocabulary: exactly those four reported missing"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ExportPackTests",
+    "environment": {
+      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "a598e0d27c205ab4060ad3b9ff0b6710e9b3ec748f2c3521184dc1623306de2f",
+        "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "unresolved-meta",
+      "description": "testExportVRMRequiresResolvedMandatoryMeta: a missing mandatory meta field must block the export and write nothing.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testExportVRMRequiresResolvedMandatoryMeta"
+      }
+    },
+    {
+      "id": "stale-dependency",
+      "description": "testBuildRejectsStaleDependencies: export vrm on a stale dependency must be gateFailed/staleDependency with no output.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testBuildRejectsStaleDependencies"
+      }
+    },
+    {
+      "id": "dangling-references",
+      "description": "testGLBWriterRejectsDanglingReferences: dangling material, bone, morph and image references must throw exportFailed rather than serialise.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testGLBWriterRejectsDanglingReferences"
+      }
+    },
+    {
+      "id": "broken-glb-rejected",
+      "description": "testSpecValidatorPassesFactoryAvatarAndRejectsBrokenGLB: truncated, garbage and extension-stripped GLBs must fail the spec validator.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testSpecValidatorPassesFactoryAvatarAndRejectsBrokenGLB"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ExportPackTests test passed (executed 11, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Export/ExportPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ExportPackTests",
+            "executed": 11,
+            "passed": 11,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "48130157355f5c3e4c27a9a8dda5d10a3e58b888fa178406f44396a9b3a328d2",
+            "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": true,
+    "views": [
+      "front",
+      "threeQuarter",
+      "profile"
+    ],
+    "motions": [
+      "idle"
+    ],
+    "landmarks": [
+      "eyelids",
+      "lips",
+      "silhouette"
+    ],
+    "thresholds": {},
+    "adjudication": "different-family judge, zero false accepts on the 12-case calibration set (verification.md §5)"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "visually-validated",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "required",
+      "visual": "required",
+      "interoperability": "required",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md §6)."
+  },
+  "corpus": {
+    "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json",
+    "sha256": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
+    "familyKey": "body_family",
+    "expectedFamilies": 18
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/export-vrm.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ExportPackTests test-case lines"
+    ]
+  }
+}
