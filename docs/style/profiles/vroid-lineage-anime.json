@@ -1,0 +1,2333 @@
+{
+  "id": "vroid-lineage-anime",
+  "version": "0.1.0",
+  "title": "VRoid-lineage anime style profile",
+  "description": "The de facto 'VRM anime' look as practised by VRoid Studio exports and hand-tuned derivatives: proportions as bone ratios and head counts, a three-tier MToon factor-shading convention (face region never fully shaded under direct light, body/cloth hard two-tone, hair up to a soft two-tone), inverted-hull outlines on surfaces but not on facial features, layered translucent eye materials, spring-bone hair, and a VRoid-typical performance budget. Envelopes are measured from the corpus below and regenerated with `style_lint.py envelopes --write`; fingerprint rules record tool constants and are informational only. pixiv documents the face convention and the gamma-to-linear change for VRoid Studio stable (https://vroid.pixiv.help/hc/en-us/articles/4405597671193): 'shades are weaker at the front and follow the face outline'. This profile is the numerical characterisation of that behaviour.",
+  "corpus": {
+    "n": 22,
+    "effective_n": 18,
+    "note": "Local assets measured 2026-09-10 with scripts/style_lint.py. Re-exports of the same VRoid body (AvatarSample_A 0.0/1.0; VRoid_V110_Female, AvatarBlondeRedDress and VRM1_Constraint_Twist_Sample; AvatarSample_V and The President) collapse to effective_n. Two synthetic generator outputs from ../vrm-conformance (smoke_default.vrm, springbone_default.vrm) were used as negative controls and are not in the corpus.",
+    "assets": [
+      "VRMMetalKit/AvatarSample_A_1.0.vrm.glb",
+      "VRMMetalKit/AvatarSample_A_0.0.vrm.glb",
+      "GameOfMods/VRM0-archive/AvatarSample_B.vrm",
+      "VRMMetalKit/AvatarSample_H_1.0.vrm",
+      "VRMMetalKit/AvatarSample_K_1.0.vrm",
+      "VRMMetalKit/AvatarSample_O_1.0.vrm",
+      "VRMMetalKit/AvatarSample_U_1.0.vrm.glb",
+      "GameOfMods/AvatarSample_V_1.0.vrm",
+      "gom-mod/heroes-all-vrm/The President.vrm",
+      "GameOfMods/AvatarBlondeRedDress_1.0.vrm",
+      "GameOfMods/VRM0-archive/VRoid_V110_Female_v1.1.3.vrm",
+      "three-vrm/examples/VRM1_Constraint_Twist_Sample.vrm",
+      "GameOfMods/VRM0-archive/VRoid_V110_Male_v1.1.3.vrm",
+      "VRMMetalKit/vroid_default_F_1_0.vrm",
+      "GameOfMods/VRM0-archive/AliciaSolid.vrm",
+      "GameOfMods/VRM0-archive/AnnieV0.vrm",
+      "GameOfMods/VRM0-archive/PompaGirl_v0.vrm",
+      "GameOfMods/VRM0-archive/Vita_clothing.vrm",
+      "Muse/5824032820619220341.vrm",
+      "gom-mod/heroes-all-vrm/Alex Scott (Heroes All).vrm",
+      "gom-mod/heroes-all-vrm/Chinese Space Commander.vrm",
+      "gom-mod/heroes-all-vrm/Mike Scott (Heroes All).vrm"
+    ],
+    "manifest": "vroid-lineage-anime.manifest.json",
+    "sha256": {
+      "AvatarSample_A_1.0.vrm.glb": "3a1956bf4e5aebae1013334af5bc16875154e3b8cd3bed1ff77e963d74f4b1ef",
+      "AvatarSample_A_0.0.vrm.glb": "a8b4c8e0f3e350012e6c0d2c4a2ce68654f44c1267b0761a115ecb60c0fe74e7",
+      "AvatarSample_B.vrm": "a6f4d2d8ea887afffc437865c6bc6daca86b7ec61011861f536e174764acf8ef",
+      "AvatarSample_H_1.0.vrm": "78f9296a2941752cfe722f7f1f18ae32aa5c6d8f96f49895528237ed3e67c31a",
+      "AvatarSample_K_1.0.vrm": "8a2e8d8b5858f3496325b084f031adba8e173094b0663363a0a316ed98f6c4da",
+      "AvatarSample_O_1.0.vrm": "0d2df6a49d8d9f848c5d2d236d86bbeed254a59e58ae55cbd216e76fc12665aa",
+      "AvatarSample_U_1.0.vrm.glb": "1ab52aef2cf599be20ea7e04bb814a233d52052628941954f0c48412f5904c85",
+      "AvatarSample_V_1.0.vrm": "a74930a321e44d26ca4dc3fddaba75204270d24abe8f2c831e229e54d140b971",
+      "The President.vrm": "2dfa7c49765f33e10ccbc6e9195adf9e06efd252edd5d9f482ad65c6ec4d3b35",
+      "AvatarBlondeRedDress_1.0.vrm": "0f4662b27b62e6158e9a8efa2ef782dec1c1dfa70629107a7000a6be74020a9d",
+      "VRoid_V110_Female_v1.1.3.vrm": "36d6d242999d580bd0d3bcd8656bb2d4d5d4839f187d8198226bda905e1d9114",
+      "VRM1_Constraint_Twist_Sample.vrm": "12c2b97e95e700783a6a550dc0eee2d7880aeedccef9ae67bc4c5a2f0f2631a2",
+      "VRoid_V110_Male_v1.1.3.vrm": "7526838f4a45086a1d0abb23e9f38ad3f0103889f1efa70d2605ef25e7e6ef99",
+      "vroid_default_F_1_0.vrm": "f997335b15a4e8e727ee5a69f802ef6190e6a9608ebc922b43a576bc94ec3cb0",
+      "AliciaSolid.vrm": "5e2f624a9d276b4f818a662011cc342c7fd1616454757b4032140590573b2965",
+      "AnnieV0.vrm": "2c1cd68a6d65e5fa10867799273bc2adb4c10c253395cd2b4b25154b16558bc3",
+      "PompaGirl_v0.vrm": "92fba7aa3b30686681e2677df0139a0655a491a63770962feb22c2c128b6bd54",
+      "Vita_clothing.vrm": "c0491a6eb5137a336a59e9d75419f14bdcd0bfde7abb315db0c1bfaceaffd345",
+      "5824032820619220341.vrm": "3c81940054c4cd177c60f5816e9e47f5d4ad80d0e1b5ea60669d6f8758ac8e55",
+      "Alex Scott (Heroes All).vrm": "48883ebb8ee57afaebcec48d2ce5ebefe460d407d01e5b97d13b03d86f91a66f",
+      "Chinese Space Commander.vrm": "977720bd80652416e98e116f9b73c9436f0780e5fb8c98246b87a5426a3731aa",
+      "Mike Scott (Heroes All).vrm": "38626f542b7a101d58406ed3dd83baa9e1c486f488f3206d136943a6d83fcd97"
+    }
+  },
+  "metric_definitions": {
+    "asset.height_m": "max Y of all mesh positions in rest pose minus min(0, bbox min Y). Skinned meshes are taken in bind space (VRM rest == bind).",
+    "proportions.eye_height_ratio": "mean world Y of leftEye/rightEye humanoid bones divided by height.",
+    "proportions.hips_height_ratio": "hips bone Y / height.",
+    "proportions.upper_leg_height_ratio": "leftUpperLeg bone Y / height.",
+    "proportions.shoulder_width_ratio": "distance leftUpperArm–rightUpperArm / height.",
+    "proportions.ipd_m": "distance between leftEye and rightEye bones, metres.",
+    "proportions.lower_upper_arm_ratio": "|lowerArm–hand| / |upperArm–lowerArm|, left side.",
+    "proportions.lower_upper_leg_ratio": "|lowerLeg–foot| / |upperLeg–lowerLeg|, left side.",
+    "proportions.arm_span_height_ratio": "distance leftHand–rightHand bones / height (hand bones, not fingertips).",
+    "proportions.rest_pose_arm_horizontal_cos": "|x component| of the unit vector upperArm→hand in rest pose; 1.0 is a perfect T-pose.",
+    "proportions.limb_asymmetry": "max over arm/leg of |left length − right length| / max(left, right).",
+    "proportions.head_height_m": "Vertices whose dominant skin joint is head, leftEye, rightEye or jaw, restricted to the centre column |x − head.x| < 15 mm. chin = lowest such vertex with z > head.z (in front of the head bone); crown = highest such vertex. head_height = crown − chin. Includes crown hair and any neck skin weighted to head; does not depend on mesh or material names.",
+    "proportions.head_count": "height / head_height_m.",
+    "proportions.head_bone_fraction": "(head bone Y − chin) / head_height_m.",
+    "proportions.eye_height_in_head": "(eye bone Y − chin) / head_height_m. 0.5 is the realistic vertical midpoint; anime faces sit lower.",
+    "proportions.head_width_m": "X extent of head-dominant vertices within ±10 mm of eye height (includes hair over the temples).",
+    "proportions.ipd_head_width_ratio": "ipd_m / head_width_m.",
+    "proportions.head_width_height_ratio": "head_width_m / head_height_m.",
+    "springs.hair_chains": "spring chains whose first joint is a descendant of the head bone.",
+    "springs.head_colliders": "colliders attached to the head bone or a descendant.",
+    "lookat.offset_y": "lookAt.offsetFromHeadBone[1] (VRM 1.0) or firstPersonBoneOffset.y (VRM 0.x).",
+    "expressions.presets": "VRM 1.0 preset names present; VRM 0.x presetNames are mapped to their 1.0 equivalents (joy→happy, sorrow→sad, fun→relaxed, a/i/u/e/o→aa/ih/ou/ee/oh).",
+    "material.shadow_end": "MToon 1.0 shading = linearstep(−1 + toony, 1 − toony, NdotL + shift). shadow_end = −1 + toony − shift: the NdotL below which the surface is fully in shade colour. −1 means never shaded; 0 means a terminator at grazing light.",
+    "material.lit_start": "1 − toony − shift: NdotL above which the surface is fully lit.",
+    "material.terminator_width": "lit_start − shadow_end = 2(1 − toony). 0 is a hard two-tone edge; 2 is a full Lambert gradient.",
+    "material.shade_luminance_ratio": "Rec.709 luminance of shadeColorFactor / luminance of baseColorFactor (textures not sampled).",
+    "material.shade_warmth": "(shade.r/shade.g) / (base.r/base.g); > 1 means the shade colour is redder than the base.",
+    "material.outline_luminance": "luminance of outlineColorFactor (linear).",
+    "material.outline_warm": "outlineColorFactor.r >= outlineColorFactor.b.",
+    "material.outline_width_m": "outlineWidthFactor when outlineWidthMode == worldCoordinates, else null. VRM 0.x _OutlineWidth (cm) is converted ×0.01.",
+    "material.rim_luminance": "luminance of parametricRimColorFactor.",
+    "material.emissive_luminance": "luminance of emissiveFactor.",
+    "material.*": "VRM 0.x MToon properties are converted to 1.0 space following three-vrm's VRMMaterialsV0CompatPlugin: colour factors (_Color rgb, _ShadeColor, _EmissionColor, _RimColor, _OutlineColor) are sRGB-decoded to linear because 0.x stores gamma-space colours and 1.0 stores linear (exact sRGB EOTF as in UniVRM and VRoid's exporter; three-vrm approximates with pow 2.2); shadingToony = lerp(_ShadeToony, 1, 0.5 + 0.5·_ShadeShift); shadingShift = −_ShadeShift − (1 − shadingToony); giEqualization = 1 − _IndirectLightIntensity; transparent render queues map in order to offsets −9…0; _UvAnimScrollY flips sign. Shading-shift textures, shade textures, normals and renderer shadowing are not sampled: every shading metric here is a factor-only, direct-light statement.",
+    "mtoon_defaults": "Absent MToon 1.0 fields take the schema defaults (VRMC_materials_mtoon.schema.json): shadeColorFactor [1,1,1], shadingToony 0.9, shadingShift 0, giEqualization 0.9, rim fresnel 5, rim lift 0, rimLightingMix 1. The MToon prose describes a black default shade colour while the schema says white; the linter follows the schema. VRoid always writes the field, so the corpus is unaffected.",
+    "asset.vrm0_material_properties_aligned": "VRM 0.x only: len(VRM.materialProperties) == len(materials). UniVRM writes one entry per glTF material (placeholders for non-MToon shaders) and pairs them by index; an exporter that skips entries cannot be paired safely. null on VRM 1.0."
+  },
+  "material_roles": {
+    "roles": [
+      "face_skin",
+      "body_skin",
+      "hair",
+      "cloth",
+      "accessory",
+      "iris",
+      "eye_white",
+      "eye_highlight",
+      "eyeline",
+      "eyelash",
+      "brow",
+      "mouth",
+      "other"
+    ],
+    "groups": {
+      "face_region": [
+        "face_skin",
+        "iris",
+        "eye_white",
+        "eye_highlight",
+        "eyeline",
+        "eyelash",
+        "brow",
+        "mouth"
+      ],
+      "facial_feature": [
+        "iris",
+        "eye_white",
+        "eye_highlight",
+        "eyeline",
+        "eyelash",
+        "brow",
+        "mouth"
+      ],
+      "surface": [
+        "face_skin",
+        "body_skin",
+        "cloth",
+        "accessory"
+      ],
+      "skin": [
+        "face_skin",
+        "body_skin"
+      ],
+      "lit_cutout": [
+        "body_skin",
+        "cloth",
+        "hair",
+        "accessory"
+      ]
+    }
+  },
+  "reference_tiers": {
+    "vrchat_avatar_performance_ranks": {
+      "source": "https://creators.vrchat.com/avatars/avatar-performance-ranking-system/ (fetched 2026-09-10)",
+      "pc": {
+        "excellent": {
+          "triangles": 32000,
+          "texture_memory_mb": 40,
+          "skinned_meshes": 1,
+          "material_slots": 4,
+          "bones": 75,
+          "physbone_components": 4,
+          "physbone_transforms": 16,
+          "physbone_colliders": 4
+        },
+        "good": {
+          "triangles": 70000,
+          "texture_memory_mb": 75,
+          "skinned_meshes": 2,
+          "material_slots": 8,
+          "bones": 150,
+          "physbone_components": 8,
+          "physbone_transforms": 64,
+          "physbone_colliders": 8
+        },
+        "medium": {
+          "triangles": 70000,
+          "texture_memory_mb": 110,
+          "skinned_meshes": 8,
+          "material_slots": 16,
+          "bones": 256,
+          "physbone_components": 16,
+          "physbone_transforms": 128,
+          "physbone_colliders": 16
+        },
+        "poor": {
+          "triangles": 70000,
+          "texture_memory_mb": 150,
+          "skinned_meshes": 16,
+          "material_slots": 32,
+          "bones": 400,
+          "physbone_components": 32,
+          "physbone_transforms": 256,
+          "physbone_colliders": 32
+        }
+      },
+      "mobile": {
+        "excellent": {
+          "triangles": 7500,
+          "texture_memory_mb": 10,
+          "skinned_meshes": 1,
+          "material_slots": 1,
+          "bones": 75,
+          "physbone_components": 0
+        },
+        "good": {
+          "triangles": 10000,
+          "texture_memory_mb": 18,
+          "skinned_meshes": 1,
+          "material_slots": 1,
+          "bones": 90,
+          "physbone_components": 4,
+          "physbone_transforms": 16,
+          "physbone_colliders": 4
+        },
+        "medium": {
+          "triangles": 15000,
+          "texture_memory_mb": 25,
+          "skinned_meshes": 2,
+          "material_slots": 2,
+          "bones": 150,
+          "physbone_components": 6,
+          "physbone_transforms": 32,
+          "physbone_colliders": 8
+        },
+        "poor": {
+          "triangles": 20000,
+          "texture_memory_mb": 40,
+          "skinned_meshes": 2,
+          "material_slots": 4,
+          "bones": 150,
+          "physbone_components": 8,
+          "physbone_transforms": 64,
+          "physbone_colliders": 16
+        }
+      },
+      "note": "Cited for context only. VRChat ranks are computed by its SDK on the imported Unity asset (compressed texture memory, PhysBone components), which none of the metrics here reproduce; the corpus' 77k-triangle maximum already exceeds the PC 'Poor' triangle ceiling. The budget rules below encode the VRoid-typical envelope, not VRChat ranks."
+    }
+  },
+  "rules": [
+    {
+      "id": "prop.eye_height_ratio",
+      "class": "aesthetic",
+      "severity": "must",
+      "metric": "proportions.eye_height_ratio",
+      "title": "Eyes sit in the top sixth of the figure",
+      "check": {
+        "type": "range",
+        "min": 0.82,
+        "max": 0.94
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.8433,
+        "median": 0.8976,
+        "max": 0.9243
+      }
+    },
+    {
+      "id": "prop.hips_height_ratio",
+      "class": "aesthetic",
+      "severity": "must",
+      "metric": "proportions.hips_height_ratio",
+      "title": "Hips at 50–62% of height",
+      "check": {
+        "type": "range",
+        "min": 0.5,
+        "max": 0.62
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.538,
+        "median": 0.5643,
+        "max": 0.5811
+      }
+    },
+    {
+      "id": "prop.upper_leg_height_ratio",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "proportions.upper_leg_height_ratio",
+      "title": "Long legs: leg root above mid-height",
+      "check": {
+        "type": "range",
+        "min": 0.48,
+        "max": 0.58
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.5107,
+        "median": 0.5399,
+        "max": 0.5562
+      }
+    },
+    {
+      "id": "prop.shoulder_width_ratio",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "proportions.shoulder_width_ratio",
+      "title": "Narrow shoulders",
+      "check": {
+        "type": "range",
+        "min": 0.07,
+        "max": 0.2
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.0836,
+        "median": 0.1339,
+        "max": 0.1702
+      }
+    },
+    {
+      "id": "prop.ipd_m",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "proportions.ipd_m",
+      "title": "Eye-bone spacing 20–70 mm",
+      "check": {
+        "type": "range",
+        "min": 0.02,
+        "max": 0.07
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "note": "AliciaSolid is the 55 mm outlier.",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.0252,
+        "median": 0.0305,
+        "max": 0.0553
+      }
+    },
+    {
+      "id": "prop.head_count",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "proportions.head_count",
+      "title": "4.5–8 heads tall",
+      "check": {
+        "type": "range",
+        "min": 4.5,
+        "max": 8.0
+      },
+      "rationale": "Realistic adults measure ~7.5–8 heads with a bare skull; this metric includes crown hair so anime figures land lower. Chibi (2–4 heads) is a different profile. VRM 0.x models face −Z, VRM 1.0 models face +Z; the chin search uses the version's forward axis.",
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 4.595,
+        "median": 6.303,
+        "max": 7.473
+      }
+    },
+    {
+      "id": "prop.eye_height_in_head",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "proportions.eye_height_in_head",
+      "title": "Eyes below the head's vertical midpoint",
+      "check": {
+        "type": "range",
+        "min": 0.25,
+        "max": 0.5
+      },
+      "rationale": "Large-eye anime construction places the eye line at roughly 35–40% of chin-to-crown; realistic construction places it at 50%.",
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.3099,
+        "median": 0.387,
+        "max": 0.4491
+      }
+    },
+    {
+      "id": "prop.head_width_height_ratio",
+      "class": "aesthetic",
+      "severity": "may",
+      "metric": "proportions.head_width_height_ratio",
+      "title": "Head width 60–110% of head height",
+      "check": {
+        "type": "range",
+        "min": 0.6,
+        "max": 1.1
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "note": "includes hair over the temples",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.6409,
+        "median": 0.8056,
+        "max": 0.9764
+      }
+    },
+    {
+      "id": "prop.ipd_head_width_ratio",
+      "class": "aesthetic",
+      "severity": "may",
+      "metric": "proportions.ipd_head_width_ratio",
+      "title": "Eye spacing 10–30% of head width",
+      "check": {
+        "type": "range",
+        "min": 0.1,
+        "max": 0.3
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.125,
+        "median": 0.1495,
+        "max": 0.2641
+      }
+    },
+    {
+      "id": "prop.head_bone_fraction",
+      "class": "aesthetic",
+      "severity": "may",
+      "metric": "proportions.head_bone_fraction",
+      "title": "Head bone near the jaw line",
+      "check": {
+        "type": "range",
+        "min": 0.0,
+        "max": 0.3
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.1219,
+        "median": 0.1399,
+        "max": 0.2289
+      }
+    },
+    {
+      "id": "prop.lower_upper_arm_ratio",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "proportions.lower_upper_arm_ratio",
+      "title": "Forearm ≈ upper arm",
+      "check": {
+        "type": "range",
+        "min": 0.8,
+        "max": 1.2
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.8935,
+        "median": 0.9764,
+        "max": 1.1371
+      }
+    },
+    {
+      "id": "prop.lower_upper_leg_ratio",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "proportions.lower_upper_leg_ratio",
+      "title": "Shin longer than thigh",
+      "check": {
+        "type": "range",
+        "min": 1.0,
+        "max": 1.3
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 1.1166,
+        "median": 1.17,
+        "max": 1.1868
+      }
+    },
+    {
+      "id": "prop.arm_span_height_ratio",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "proportions.arm_span_height_ratio",
+      "title": "Hand-to-hand span 55–78% of height",
+      "check": {
+        "type": "range",
+        "min": 0.55,
+        "max": 0.78
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.5923,
+        "median": 0.6733,
+        "max": 0.7226
+      }
+    },
+    {
+      "id": "prop.height_m",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "asset.height_m",
+      "title": "Life-scale figure",
+      "check": {
+        "type": "range",
+        "min": 1.1,
+        "max": 2.0
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "conforming": "22/22",
+        "n": 22,
+        "min": 1.1764,
+        "median": 1.6186,
+        "max": 1.8776
+      }
+    },
+    {
+      "id": "prop.rest_pose_t",
+      "class": "interop",
+      "severity": "must",
+      "metric": "proportions.rest_pose_arm_horizontal_cos",
+      "title": "Rest pose is a T-pose",
+      "check": {
+        "type": "range",
+        "min": 0.98
+      },
+      "provenance": {
+        "source": "spec",
+        "note": "VRMC_vrm humanoid requires T-pose rest; retargeting in VRMAnimationLoader assumes it.",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.9986,
+        "median": 1.0,
+        "max": 1.0
+      }
+    },
+    {
+      "id": "prop.limb_symmetry",
+      "class": "interop",
+      "severity": "must",
+      "metric": "proportions.limb_asymmetry",
+      "title": "Left/right limb lengths match",
+      "check": {
+        "type": "range",
+        "max": 0.02
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.0,
+        "median": 0.0,
+        "max": 0.0
+      }
+    },
+    {
+      "id": "shade.face_never_deep_shadowed",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "face_region"
+      ],
+      "metric": "shadow_end",
+      "title": "Face region is never fully in shade for front-facing light",
+      "check": {
+        "type": "range",
+        "max": -0.6
+      },
+      "rationale": "The headline anime rule: no nose or brow shadows. VRoid's 'toon' preset does it with shift +0.71 (fully lit above NdotL −0.62); its 'soft' preset with toony 0.05 (gradient spanning the whole hemisphere). Both leave the fully-shaded region behind the head.",
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "note": "18/21 face_skin materials conform; PompaGirl, AnnieV0 and pixiv's constraint sample use plain toon faces.",
+        "conforming": "135/158",
+        "n": 158,
+        "min": -1.0,
+        "median": -0.8,
+        "max": 0.4833
+      }
+    },
+    {
+      "id": "shade.body_two_tone",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "body_skin",
+        "cloth",
+        "accessory"
+      ],
+      "metric": "terminator_width",
+      "title": "Body and clothing use a hard two-tone terminator",
+      "check": {
+        "type": "range",
+        "max": 0.4
+      },
+      "rationale": "toony ≥ 0.8. The soft-gradient VRoid preset (toony 0.2, width 1.6) is a recognised minority style and fails this rule by design.",
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "note": "19/21 body_skin materials conform; the soft-gradient minority is AvatarSample_A/B-era exports, Mike Scott and Vita.",
+        "conforming": "139/146",
+        "n": 146,
+        "min": 0,
+        "median": 0.1,
+        "max": 1.6
+      }
+    },
+    {
+      "id": "shade.body_terminator_at_grazing",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "body_skin",
+        "cloth",
+        "accessory"
+      ],
+      "metric": "shadow_end",
+      "title": "Body shade begins at or behind grazing light",
+      "check": {
+        "type": "range",
+        "min": -1.0,
+        "max": 0.6
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "146/146",
+        "n": 146,
+        "min": -1,
+        "median": 0.0,
+        "max": 0.575
+      }
+    },
+    {
+      "id": "shade.hair_softer_two_tone",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "hair"
+      ],
+      "metric": "terminator_width",
+      "title": "Hair terminator width up to 1.4 (not full Lambert)",
+      "check": {
+        "type": "range",
+        "max": 1.4
+      },
+      "rationale": "Hair is allowed a softer terminator than body (VRoid default 0.4 vs 0.1) but this rule does not require it to be softer; hard-edged hair also conforms.",
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "60/60",
+        "n": 60,
+        "min": 0.0,
+        "median": 0.4,
+        "max": 1.3
+      }
+    },
+    {
+      "id": "shade.hair_shadow_end",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "hair"
+      ],
+      "metric": "shadow_end",
+      "title": "Hair shade begins near grazing light",
+      "check": {
+        "type": "range",
+        "max": 0.3
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "60/60",
+        "n": 60,
+        "min": -1.0,
+        "median": -0.0,
+        "max": 0.2167
+      }
+    },
+    {
+      "id": "shade.skin_shade_warm",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "skin"
+      ],
+      "metric": "shade_warmth",
+      "title": "Skin shade colour is warmer (redder) than the base",
+      "check": {
+        "type": "range",
+        "min": 1.0
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "42/42",
+        "n": 42,
+        "min": 1.0,
+        "median": 1.2041,
+        "max": 1.5028
+      }
+    },
+    {
+      "id": "shade.skin_shade_not_dark",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "skin"
+      ],
+      "metric": "shade_luminance_ratio",
+      "title": "Skin shade luminance ≥ 60% of base",
+      "check": {
+        "type": "range",
+        "min": 0.6,
+        "max": 1.0
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "42/42",
+        "n": 42,
+        "min": 0.6938,
+        "median": 0.8619,
+        "max": 1.0
+      }
+    },
+    {
+      "id": "shade.cloth_shade_not_black",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "cloth",
+        "hair"
+      ],
+      "metric": "shade_luminance_ratio",
+      "title": "Cloth and hair shade luminance ≥ 25% of base",
+      "check": {
+        "type": "range",
+        "min": 0.25,
+        "max": 1.0
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "168/168",
+        "n": 168,
+        "min": 0.254,
+        "median": 0.8608,
+        "max": 1.0
+      }
+    },
+    {
+      "id": "shade.rim_subtle",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "surface",
+        "hair"
+      ],
+      "metric": "rim_luminance",
+      "title": "Parametric rim is off or subtle",
+      "check": {
+        "type": "range",
+        "max": 0.3
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "227/227",
+        "n": 227,
+        "min": 0.0,
+        "median": 0.0,
+        "max": 0.2407
+      }
+    },
+    {
+      "id": "shade.skin_no_emissive",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "skin",
+        "cloth"
+      ],
+      "metric": "emissive_luminance",
+      "title": "Skin and cloth are not emissive",
+      "check": {
+        "type": "equals",
+        "value": 0.0
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "note": "hair emissive is used deliberately (28/60 hair materials) and is not constrained.",
+        "conforming": "150/150",
+        "n": 150,
+        "min": 0.0,
+        "median": 0.0,
+        "max": 0.0
+      }
+    },
+    {
+      "id": "roles.all_classified",
+      "class": "interop",
+      "severity": "should",
+      "metric": "asset.unclassified_materials",
+      "title": "Every material has a role",
+      "check": {
+        "type": "equals",
+        "value": 0
+      },
+      "rationale": "Material-scoped rules only see materials with a role. An unclassified material is silently exempt, so the report must say so; pass --roles to assign roles by name.",
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "20/22",
+        "n": 22,
+        "min": 0,
+        "median": 0.0,
+        "max": 3
+      }
+    },
+    {
+      "id": "interop.vrm0_material_properties_aligned",
+      "class": "interop",
+      "severity": "should",
+      "vrm_versions": [
+        "0.x"
+      ],
+      "metric": "asset.vrm0_material_properties_aligned",
+      "title": "VRM 0.x materialProperties has one entry per glTF material",
+      "check": {
+        "type": "equals",
+        "value": true
+      },
+      "rationale": "Material properties are paired with glTF materials by index. A mismatched array length means material rules were evaluated against the wrong properties, so the report flags it rather than trusting the pairing.",
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 8,
+        "conforming": "8/8",
+        "n": 8,
+        "observed": {
+          "true": 8
+        }
+      }
+    },
+    {
+      "id": "shade.mtoon_everywhere",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "asset.non_mtoon_materials",
+      "title": "Every material is MToon",
+      "check": {
+        "type": "equals",
+        "value": 0
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "21/22",
+        "n": 22,
+        "min": 0,
+        "median": 0.0,
+        "max": 6
+      }
+    },
+    {
+      "id": "outline.surface_present",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "face_skin",
+        "body_skin",
+        "cloth"
+      ],
+      "metric": "outlineWidthMode",
+      "title": "Skin and cloth carry a world-space inverted-hull outline",
+      "check": {
+        "type": "equals",
+        "value": "worldCoordinates"
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "note": "accessories (cat ears, tails, glasses) are excluded; 5 of them ship without an outline.",
+        "conforming": "150/150",
+        "n": 150,
+        "observed": {
+          "\"worldCoordinates\"": 150
+        }
+      }
+    },
+    {
+      "id": "outline.surface_width",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "face_skin",
+        "body_skin",
+        "cloth"
+      ],
+      "filter": {
+        "outlineWidthMode": "worldCoordinates"
+      },
+      "metric": "outline_width_m",
+      "title": "Outline width 0.3–3 mm",
+      "check": {
+        "type": "range",
+        "min": 0.0003,
+        "max": 0.003
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "150/150",
+        "n": 150,
+        "min": 0.0005,
+        "median": 0.0008,
+        "max": 0.0025
+      }
+    },
+    {
+      "id": "outline.surface_dark",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "face_skin",
+        "body_skin",
+        "cloth"
+      ],
+      "metric": "outline_luminance",
+      "title": "Outline is dark",
+      "check": {
+        "type": "range",
+        "max": 0.2
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "150/150",
+        "n": 150,
+        "min": 0.0202,
+        "median": 0.0202,
+        "max": 0.0202
+      }
+    },
+    {
+      "id": "outline.surface_warm",
+      "class": "aesthetic",
+      "severity": "may",
+      "scope": "material",
+      "roles": [
+        "face_skin",
+        "body_skin",
+        "cloth"
+      ],
+      "metric": "outline_warm",
+      "title": "Outline is warm-dark, not blue-black",
+      "check": {
+        "type": "equals",
+        "value": true
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "150/150",
+        "n": 150,
+        "observed": {
+          "true": 150
+        }
+      }
+    },
+    {
+      "id": "outline.facial_feature_none",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "facial_feature"
+      ],
+      "metric": "outlineWidthMode",
+      "title": "Eyes, brows, lashes and mouth have no outline",
+      "check": {
+        "type": "equals",
+        "value": "none"
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "137/137",
+        "n": 137,
+        "observed": {
+          "\"none\"": 137
+        }
+      }
+    },
+    {
+      "id": "alpha.cutout_surfaces",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "lit_cutout"
+      ],
+      "metric": "alphaMode",
+      "title": "Body, cloth and hair are cutout or opaque, never blended",
+      "check": {
+        "type": "enum",
+        "values": [
+          "MASK",
+          "OPAQUE"
+        ]
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "202/206",
+        "n": 206,
+        "observed": {
+          "\"MASK\"": 196,
+          "\"BLEND\"": 4,
+          "\"OPAQUE\"": 6
+        }
+      }
+    },
+    {
+      "id": "alpha.cutoff_half",
+      "class": "aesthetic",
+      "severity": "may",
+      "scope": "material",
+      "roles": [
+        "lit_cutout",
+        "face_skin"
+      ],
+      "filter": {
+        "alphaMode": "MASK"
+      },
+      "metric": "alphaCutoff",
+      "title": "Cutout threshold around 0.5",
+      "check": {
+        "type": "range",
+        "min": 0.3,
+        "max": 0.7
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 17,
+        "conforming": "215/215",
+        "n": 215,
+        "min": 0.5,
+        "median": 0.5,
+        "max": 0.5
+      }
+    },
+    {
+      "id": "alpha.eye_layers_blend",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "iris",
+        "eye_highlight",
+        "eyeline",
+        "eyelash",
+        "brow"
+      ],
+      "metric": "alphaMode",
+      "title": "Iris, highlight, eyeline, lash and brow are alpha-blended layers",
+      "check": {
+        "type": "enum",
+        "values": [
+          "BLEND",
+          "MASK"
+        ]
+      },
+      "provenance": {
+        "effective_n": 17,
+        "source": "corpus",
+        "conforming": "91/95",
+        "n": 95,
+        "observed": {
+          "\"BLEND\"": 90,
+          "\"OPAQUE\"": 4,
+          "\"MASK\"": 1
+        }
+      }
+    },
+    {
+      "id": "alpha.eye_layers_ordered",
+      "class": "aesthetic",
+      "severity": "should",
+      "scope": "material",
+      "roles": [
+        "facial_feature"
+      ],
+      "metric": "renderQueueOffsetNumber",
+      "title": "Facial layers draw at or before the default queue",
+      "check": {
+        "type": "range",
+        "min": -10,
+        "max": 0
+      },
+      "provenance": {
+        "source": "corpus",
+        "note": "VRoid orders eyeline/iris −4…−1 under the highlight; the face skin stays at 0.",
+        "effective_n": 17,
+        "conforming": "137/137",
+        "n": 137,
+        "min": -4,
+        "median": -1,
+        "max": 0
+      }
+    },
+    {
+      "id": "alpha.no_transparent_zwrite",
+      "class": "aesthetic",
+      "severity": "may",
+      "scope": "material",
+      "metric": "transparentWithZWrite",
+      "title": "transparentWithZWrite unused",
+      "check": {
+        "type": "equals",
+        "value": false
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 17,
+        "conforming": "365/365",
+        "n": 365,
+        "observed": {
+          "false": 365
+        }
+      }
+    },
+    {
+      "id": "alpha.eye_white_single_sided",
+      "class": "aesthetic",
+      "severity": "may",
+      "scope": "material",
+      "roles": [
+        "iris",
+        "eye_white",
+        "mouth"
+      ],
+      "metric": "doubleSided",
+      "title": "Iris, sclera and mouth are single-sided",
+      "check": {
+        "type": "equals",
+        "value": false
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 17,
+        "conforming": "60/63",
+        "n": 63,
+        "observed": {
+          "false": 60,
+          "true": 3
+        }
+      }
+    },
+    {
+      "id": "hair.spring_chains",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "springs.hair_chains",
+      "title": "At least three spring-bone hair chains rooted under the head",
+      "check": {
+        "type": "range",
+        "min": 3,
+        "max": 40
+      },
+      "provenance": {
+        "effective_n": 18,
+        "source": "corpus",
+        "note": "PompaGirl (a hand-tuned VRM 0.x asset) has no spring chains rooted under the head and no head collider.",
+        "conforming": "21/22",
+        "n": 22,
+        "min": 0,
+        "median": 11.0,
+        "max": 16
+      }
+    },
+    {
+      "id": "hair.chain_length",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "springs.joints_per_chain_max",
+      "title": "Chains are 2–16 joints",
+      "check": {
+        "type": "range",
+        "min": 2,
+        "max": 16
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 3,
+        "median": 5.0,
+        "max": 10
+      }
+    },
+    {
+      "id": "hair.stiffness_max",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "springs.stiffness_max",
+      "title": "Stiffness ≤ 4",
+      "check": {
+        "type": "range",
+        "max": 4.0
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.75,
+        "median": 1.0,
+        "max": 4
+      }
+    },
+    {
+      "id": "hair.drag_max",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "springs.drag_max",
+      "title": "Drag ≤ 1",
+      "check": {
+        "type": "range",
+        "max": 1.0
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.05,
+        "median": 0.5,
+        "max": 0.8
+      }
+    },
+    {
+      "id": "hair.gravity_power_max",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "springs.gravity_power_max",
+      "title": "gravityPower ≤ 1",
+      "check": {
+        "type": "range",
+        "max": 1.0
+      },
+      "provenance": {
+        "source": "corpus",
+        "note": "See project memory on VMK#324/#326: authored gravityPower is applied at spec scale, never substituted.",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0,
+        "median": 0.0,
+        "max": 0.5
+      }
+    },
+    {
+      "id": "hair.hit_radius_max",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "springs.hit_radius_max",
+      "title": "Joint hit radius ≤ 12 cm",
+      "check": {
+        "type": "range",
+        "max": 0.12
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.0066,
+        "median": 0.0281,
+        "max": 0.1
+      }
+    },
+    {
+      "id": "hair.head_collider",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "springs.head_colliders",
+      "title": "A head collider keeps hair off the face",
+      "check": {
+        "type": "range",
+        "min": 1
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "21/22",
+        "n": 22,
+        "min": 0,
+        "median": 1.0,
+        "max": 1
+      }
+    },
+    {
+      "id": "hair.collider_radius",
+      "class": "aesthetic",
+      "severity": "may",
+      "metric": "springs.collider_radius_max",
+      "title": "Largest collider 5–20 cm",
+      "check": {
+        "type": "range",
+        "min": 0.05,
+        "max": 0.2
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 17,
+        "conforming": "21/22",
+        "n": 22,
+        "min": 0.0932,
+        "median": 0.1143,
+        "max": 0.1296
+      }
+    },
+    {
+      "id": "expr.core_presets",
+      "class": "aesthetic",
+      "severity": "must",
+      "metric": "expressions.presets",
+      "title": "Five visemes, blink and four emotions are authored",
+      "check": {
+        "type": "superset_of",
+        "values": [
+          "aa",
+          "ih",
+          "ou",
+          "ee",
+          "oh",
+          "blink",
+          "happy",
+          "angry",
+          "sad",
+          "relaxed"
+        ]
+      },
+      "rationale": "A profile requirement, not a specification one: VRMC_vrm expressions.md states that all preset expressions are optional. Lip-sync, blinking and emotion drivers in this style assume these ten exist.",
+      "provenance": {
+        "source": "spec+corpus",
+        "note": "surprised has no VRM 0.x equivalent, so it is a separate 1.0-only rule.",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "observed": {
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 13,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\"]": 4,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"lookDown\", \"lookLeft\", \"lookRight\", \"lookUp\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\"]": 4,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"lookDown\", \"lookLeft\", \"lookRight\", \"lookUp\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 1
+        }
+      }
+    },
+    {
+      "id": "expr.surprised",
+      "class": "interop",
+      "severity": "should",
+      "vrm_versions": [
+        "1.0"
+      ],
+      "metric": "expressions.presets",
+      "title": "surprised authored (VRM 1.0 preset with no 0.x equivalent)",
+      "check": {
+        "type": "superset_of",
+        "values": [
+          "surprised"
+        ]
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 12,
+        "conforming": "14/14",
+        "n": 14,
+        "observed": {
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 13,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"lookDown\", \"lookLeft\", \"lookRight\", \"lookUp\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 1
+        }
+      }
+    },
+    {
+      "id": "expr.blink_sides",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "expressions.presets",
+      "title": "Per-eye blinks for winks",
+      "check": {
+        "type": "superset_of",
+        "values": [
+          "blinkLeft",
+          "blinkRight"
+        ]
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "observed": {
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 13,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\"]": 4,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"lookDown\", \"lookLeft\", \"lookRight\", \"lookUp\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\"]": 4,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"lookDown\", \"lookLeft\", \"lookRight\", \"lookUp\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 1
+        }
+      }
+    },
+    {
+      "id": "expr.presets_valid",
+      "class": "interop",
+      "severity": "must",
+      "metric": "expressions.presets",
+      "title": "Only spec preset names",
+      "check": {
+        "type": "subset_of",
+        "values": [
+          "aa",
+          "ih",
+          "ou",
+          "ee",
+          "oh",
+          "blink",
+          "blinkLeft",
+          "blinkRight",
+          "happy",
+          "angry",
+          "sad",
+          "relaxed",
+          "surprised",
+          "neutral",
+          "lookUp",
+          "lookDown",
+          "lookLeft",
+          "lookRight"
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "note": "VRMC_vrm-1.0/expressions.md preset list",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "observed": {
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 13,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\"]": 4,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"lookDown\", \"lookLeft\", \"lookRight\", \"lookUp\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\"]": 4,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"lookDown\", \"lookLeft\", \"lookRight\", \"lookUp\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 1
+        }
+      }
+    },
+    {
+      "id": "expr.morph_budget",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.morph_targets_max",
+      "title": "≤ 128 morph targets on any primitive",
+      "check": {
+        "type": "range",
+        "max": 128
+      },
+      "provenance": {
+        "source": "corpus",
+        "note": "VRMMetalKit's morph kernel caps active targets at 8 per dispatch; authored count only bounds memory.",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 49,
+        "median": 57.0,
+        "max": 124
+      }
+    },
+    {
+      "id": "lookat.type",
+      "class": "interop",
+      "severity": "must",
+      "metric": "lookat.type",
+      "title": "lookAt type declared",
+      "check": {
+        "type": "enum",
+        "values": [
+          "bone",
+          "expression"
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "observed": {
+          "\"bone\"": 22
+        }
+      }
+    },
+    {
+      "id": "lookat.offset_y",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "lookat.offset_y",
+      "title": "Eye offset 2–12 cm above the head bone",
+      "check": {
+        "type": "range",
+        "min": 0.02,
+        "max": 0.12
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.06,
+        "median": 0.06,
+        "max": 0.061
+      }
+    },
+    {
+      "id": "meta.license_url",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "1.0"
+      ],
+      "metric": "meta.licenseUrl",
+      "title": "VRM 1.0 meta points at the VRM Public License",
+      "check": {
+        "type": "equals",
+        "value": "https://vrm.dev/licenses/1.0/"
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 12,
+        "conforming": "14/14",
+        "n": 14,
+        "observed": {
+          "\"https://vrm.dev/licenses/1.0/\"": 14
+        }
+      }
+    },
+    {
+      "id": "meta.avatar_permission",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "1.0"
+      ],
+      "metric": "meta.avatarPermission",
+      "title": "avatarPermission is a valid enum",
+      "check": {
+        "type": "enum",
+        "values": [
+          "onlyAuthor",
+          "onlySeparatelyLicensedPerson",
+          "everyone"
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 12,
+        "conforming": "14/14",
+        "n": 14,
+        "observed": {
+          "\"everyone\"": 10,
+          "\"onlyAuthor\"": 4
+        }
+      }
+    },
+    {
+      "id": "meta.commercial_usage",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "1.0"
+      ],
+      "metric": "meta.commercialUsage",
+      "title": "commercialUsage is a valid enum",
+      "check": {
+        "type": "enum",
+        "values": [
+          "personalNonProfit",
+          "personalProfit",
+          "corporation"
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 12,
+        "conforming": "14/14",
+        "n": 14,
+        "observed": {
+          "\"corporation\"": 10,
+          "\"personalNonProfit\"": 4
+        }
+      }
+    },
+    {
+      "id": "meta.modification",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "1.0"
+      ],
+      "metric": "meta.modification",
+      "title": "modification is a valid enum",
+      "check": {
+        "type": "enum",
+        "values": [
+          "prohibited",
+          "allowModification",
+          "allowModificationRedistribution"
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 12,
+        "conforming": "14/14",
+        "n": 14,
+        "observed": {
+          "\"allowModificationRedistribution\"": 10,
+          "\"prohibited\"": 4
+        }
+      }
+    },
+    {
+      "id": "meta.credit_notation",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "1.0"
+      ],
+      "metric": "meta.creditNotation",
+      "title": "creditNotation is a valid enum",
+      "check": {
+        "type": "enum",
+        "values": [
+          "required",
+          "unnecessary"
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 12,
+        "conforming": "14/14",
+        "n": 14,
+        "observed": {
+          "\"unnecessary\"": 10,
+          "\"required\"": 4
+        }
+      }
+    },
+    {
+      "id": "meta.redistribution_declared",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "1.0"
+      ],
+      "metric": "meta.allowRedistribution",
+      "title": "allowRedistribution declared",
+      "check": {
+        "type": "enum",
+        "values": [
+          true,
+          false
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 12,
+        "conforming": "14/14",
+        "n": 14,
+        "observed": {
+          "true": 10,
+          "false": 4
+        }
+      }
+    },
+    {
+      "id": "meta.authors",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "1.0"
+      ],
+      "metric": "meta.authors",
+      "title": "authors present",
+      "check": {
+        "type": "present"
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 12,
+        "conforming": "14/14",
+        "n": 14,
+        "observed": {
+          "[\"pixiv VRoid Project\"]": 6,
+          "[\"Arkavo\"]": 7,
+          "[\"pixiv Inc.\"]": 1
+        }
+      }
+    },
+    {
+      "id": "meta.name",
+      "class": "interop",
+      "severity": "should",
+      "vrm_versions": [
+        "1.0"
+      ],
+      "metric": "meta.name",
+      "title": "name present",
+      "check": {
+        "type": "present"
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 12,
+        "conforming": "14/14",
+        "n": 14,
+        "observed": {
+          "\"AvatarSample_A\"": 1,
+          "\"AvatarSample_B\"": 1,
+          "\"AvatarSample_H_1.0\"": 1,
+          "\"AvatarSample_K_1.0\"": 1,
+          "\"AvatarSample_O_1.0\"": 1,
+          "\"AvatarSample_U_hair\"": 1,
+          "\"AvatarSample_V_1.0\"": 1,
+          "\"The President\"": 1,
+          "\"BlondeRedDress\"": 1,
+          "\"VRM1_Constraint_Twist_Sample\"": 1,
+          "\"vroid_default_F_1_0\"": 1,
+          "\"Alex Scott (Heroes All)\"": 1,
+          "\"Chinese Space Commander\"": 1,
+          "\"Mike Scott (Heroes All)\"": 1
+        }
+      }
+    },
+    {
+      "id": "meta.thumbnail",
+      "class": "interop",
+      "severity": "may",
+      "metric": "meta.thumbnail_present",
+      "title": "thumbnail embedded",
+      "check": {
+        "type": "equals",
+        "value": true
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "observed": {
+          "true": 22
+        }
+      }
+    },
+    {
+      "id": "meta.vrm0_license",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "0.x"
+      ],
+      "metric": "meta.licenseName",
+      "title": "VRM 0.x licenseName is a valid enum",
+      "check": {
+        "type": "enum",
+        "values": [
+          "Redistribution_Prohibited",
+          "CC0",
+          "CC_BY",
+          "CC_BY_NC",
+          "CC_BY_SA",
+          "CC_BY_NC_SA",
+          "CC_BY_ND",
+          "CC_BY_NC_ND",
+          "Other"
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 8,
+        "conforming": "8/8",
+        "n": 8,
+        "observed": {
+          "\"CC_BY\"": 1,
+          "\"Redistribution_Prohibited\"": 5,
+          "\"Other\"": 2
+        }
+      }
+    },
+    {
+      "id": "meta.vrm0_allowed_user",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "0.x"
+      ],
+      "metric": "meta.allowedUserName",
+      "title": "VRM 0.x allowedUserName is a valid enum",
+      "check": {
+        "type": "enum",
+        "values": [
+          "OnlyAuthor",
+          "ExplicitlyLicensedPerson",
+          "Everyone"
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 8,
+        "conforming": "8/8",
+        "n": 8,
+        "observed": {
+          "\"OnlyAuthor\"": 3,
+          "\"Everyone\"": 5
+        }
+      }
+    },
+    {
+      "id": "meta.vrm0_commercial",
+      "class": "interop",
+      "severity": "must",
+      "vrm_versions": [
+        "0.x"
+      ],
+      "metric": "meta.commercialUssageName",
+      "title": "VRM 0.x commercialUssageName is a valid enum",
+      "check": {
+        "type": "enum",
+        "values": [
+          "Disallow",
+          "Allow"
+        ]
+      },
+      "provenance": {
+        "source": "spec",
+        "effective_n": 8,
+        "conforming": "8/8",
+        "n": 8,
+        "observed": {
+          "\"Allow\"": 6,
+          "\"Disallow\"": 2
+        }
+      }
+    },
+    {
+      "id": "budget.triangles",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.triangles",
+      "title": "≤ 80k triangles",
+      "check": {
+        "type": "range",
+        "max": 80000
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 26138,
+        "median": 36944.0,
+        "max": 77236
+      }
+    },
+    {
+      "id": "budget.vertices",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.vertices",
+      "title": "≤ 100k stored vertices",
+      "check": {
+        "type": "range",
+        "max": 100000
+      },
+      "provenance": {
+        "source": "corpus",
+        "note": "Distinct POSITION accessors; asset.vertex_references sums per-primitive counts and is 2–15× larger on VRoid exports because primitives share one accessor.",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 18388,
+        "median": 25289.5,
+        "max": 47471
+      }
+    },
+    {
+      "id": "budget.skinned_meshes",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.skinned_meshes",
+      "title": "≤ 8 skinned meshes",
+      "check": {
+        "type": "range",
+        "min": 1,
+        "max": 8
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 3,
+        "median": 3.0,
+        "max": 7
+      }
+    },
+    {
+      "id": "budget.material_slots",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.material_slots",
+      "title": "≤ 32 material slots",
+      "check": {
+        "type": "range",
+        "max": 32
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 6,
+        "median": 16.0,
+        "max": 24
+      }
+    },
+    {
+      "id": "budget.texture_max_dim",
+      "class": "budget",
+      "severity": "must",
+      "metric": "asset.texture_max_dim",
+      "title": "No texture above 2048²",
+      "check": {
+        "type": "range",
+        "max": 2048
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 2048,
+        "median": 2048.0,
+        "max": 2048
+      }
+    },
+    {
+      "id": "budget.texture_pow2",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.texture_non_pow2",
+      "title": "Power-of-two textures",
+      "check": {
+        "type": "equals",
+        "value": 0
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0,
+        "median": 0.0,
+        "max": 0
+      }
+    },
+    {
+      "id": "budget.texture_decoded_mb",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.texture_decoded_mb",
+      "title": "≤ 256 MB decoded RGBA8 (no mips)",
+      "check": {
+        "type": "range",
+        "max": 256
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 51.4,
+        "median": 126.6,
+        "max": 222.0
+      }
+    },
+    {
+      "id": "budget.joints",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.joint_count_max",
+      "title": "≤ 300 skin joints",
+      "check": {
+        "type": "range",
+        "max": 300
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 73,
+        "median": 135.5,
+        "max": 276
+      }
+    },
+    {
+      "id": "budget.nodes",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.node_count",
+      "title": "≤ 400 nodes",
+      "check": {
+        "type": "range",
+        "max": 400
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 94,
+        "median": 161.5,
+        "max": 347
+      }
+    },
+    {
+      "id": "budget.spring_joints",
+      "class": "budget",
+      "severity": "should",
+      "metric": "springs.joints",
+      "title": "≤ 300 spring joints",
+      "check": {
+        "type": "range",
+        "max": 300
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 34,
+        "median": 88.5,
+        "max": 257
+      }
+    },
+    {
+      "id": "budget.colliders",
+      "class": "budget",
+      "severity": "should",
+      "metric": "springs.colliders",
+      "title": "≤ 32 colliders",
+      "check": {
+        "type": "range",
+        "max": 32
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0,
+        "median": 22.0,
+        "max": 28
+      }
+    },
+    {
+      "id": "budget.file_mb",
+      "class": "budget",
+      "severity": "should",
+      "metric": "asset.file_mb",
+      "title": "≤ 30 MB on disk",
+      "check": {
+        "type": "range",
+        "max": 30
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 10.71,
+        "median": 18.175,
+        "max": 23.3
+      }
+    },
+    {
+      "id": "fingerprint.vroid_mesh_split",
+      "class": "fingerprint",
+      "severity": "info",
+      "metric": "asset.skinned_meshes",
+      "title": "VRoid Studio exports exactly Face/Body/Hair skinned meshes",
+      "check": {
+        "type": "equals",
+        "value": 3
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "21/22",
+        "n": 22,
+        "min": 3,
+        "median": 3.0,
+        "max": 7
+      }
+    },
+    {
+      "id": "fingerprint.vroid_morph_count",
+      "class": "fingerprint",
+      "severity": "info",
+      "metric": "asset.morph_targets_max",
+      "title": "VRoid Studio 1.x face carries 57 morph targets",
+      "check": {
+        "type": "equals",
+        "value": 57
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "18/22",
+        "n": 22,
+        "min": 49,
+        "median": 57.0,
+        "max": 124
+      }
+    },
+    {
+      "id": "fingerprint.vroid_lookat_offset",
+      "class": "fingerprint",
+      "severity": "info",
+      "metric": "lookat.offset_y",
+      "title": "VRoid lookAt offset is exactly 0.06",
+      "check": {
+        "type": "equals",
+        "value": 0.06
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "21/22",
+        "n": 22,
+        "min": 0.06,
+        "median": 0.06,
+        "max": 0.061
+      }
+    },
+    {
+      "id": "fingerprint.vroid_lookat_ranges",
+      "class": "fingerprint",
+      "severity": "info",
+      "metric": "lookat.output_scales",
+      "title": "VRoid lookAt rangeMap scales are 8/12/10/10",
+      "check": {
+        "type": "equals",
+        "value": [
+          8,
+          12,
+          10,
+          10
+        ]
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "17/22",
+        "n": 22,
+        "observed": {
+          "[8, 12, 10, 10]": 17,
+          "[10, 10, 10, 10]": 1,
+          "[10, 10, 10, 8]": 1,
+          "[8, 11.5, 10, 10]": 1,
+          "[12, 12, 10, 10]": 1,
+          "[8.89401, 14.4239626, 15.9907837, 15.9907837]": 1
+        }
+      }
+    },
+    {
+      "id": "fingerprint.vroid_preset_set",
+      "class": "fingerprint",
+      "severity": "info",
+      "metric": "expressions.presets",
+      "title": "VRoid authors exactly 14 presets (no look*)",
+      "check": {
+        "type": "equals",
+        "value": [
+          "aa",
+          "angry",
+          "blink",
+          "blinkLeft",
+          "blinkRight",
+          "ee",
+          "happy",
+          "ih",
+          "neutral",
+          "oh",
+          "ou",
+          "relaxed",
+          "sad",
+          "surprised"
+        ]
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "13/22",
+        "n": 22,
+        "observed": {
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 13,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\"]": 4,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"lookDown\", \"lookLeft\", \"lookRight\", \"lookUp\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\"]": 4,
+          "[\"aa\", \"angry\", \"blink\", \"blinkLeft\", \"blinkRight\", \"ee\", \"happy\", \"ih\", \"lookDown\", \"lookLeft\", \"lookRight\", \"lookUp\", \"neutral\", \"oh\", \"ou\", \"relaxed\", \"sad\", \"surprised\"]": 1
+        }
+      }
+    },
+    {
+      "id": "fingerprint.vroid_gi_eq",
+      "class": "fingerprint",
+      "severity": "info",
+      "scope": "material",
+      "metric": "giEqualizationFactor",
+      "title": "giEqualizationFactor left at 0.9",
+      "check": {
+        "type": "equals",
+        "value": 0.9
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 17,
+        "conforming": "365/365",
+        "n": 365,
+        "min": 0.9,
+        "median": 0.9,
+        "max": 0.9
+      }
+    },
+    {
+      "id": "fingerprint.vroid_rim_fresnel",
+      "class": "fingerprint",
+      "severity": "info",
+      "scope": "material",
+      "roles": [
+        "surface",
+        "hair"
+      ],
+      "metric": "parametricRimFresnelPowerFactor",
+      "title": "VRoid sets rim fresnel power 100 and lift 0.1 (rim effectively off)",
+      "check": {
+        "type": "equals",
+        "value": 100.0
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 17,
+        "conforming": "163/227",
+        "n": 227,
+        "min": 1.0,
+        "median": 100,
+        "max": 100
+      }
+    },
+    {
+      "id": "fingerprint.vroid_outline_colour",
+      "class": "fingerprint",
+      "severity": "info",
+      "scope": "material",
+      "roles": [
+        "skin",
+        "cloth"
+      ],
+      "metric": "outline_luminance",
+      "title": "VRoid outline colour is linear (0.061, 0.009, 0.014)",
+      "check": {
+        "type": "range",
+        "min": 0.0195,
+        "max": 0.021
+      },
+      "provenance": {
+        "source": "corpus",
+        "note": "The 0.x value (0.2745, 0.0902, 0.1255) sRGB-decodes to the same linear colour the 1.0 exporter writes, so both generations agree once colour space is normalised.",
+        "effective_n": 17,
+        "conforming": "150/150",
+        "n": 150,
+        "min": 0.0202,
+        "median": 0.0202,
+        "max": 0.0202
+      }
+    }
+  ]
+}

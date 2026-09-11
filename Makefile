@@ -1,7 +1,7 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-visionos bench-visionos-sim
+.PHONY: help style-lint shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-hotspots bench-visionos bench-visionos-sim
 
 help:
 	@echo "VRMMetalKit Build Targets:"
@@ -14,6 +14,7 @@ help:
 	@echo "  make gltf-shaders  - Compile GLTFMetalKit (PBR) shaders into metallib"
 	@echo "  make clean         - Remove temporary build files"
 	@echo "  make test          - Run Swift tests"
+	@echo "  make style-lint    - Lint the repo-root VRM fixtures against the VRoid-lineage anime style profile"
 	@echo "  make gputrace      - Capture a .gputrace of the bundled avatar render (inspect with gpudebug)"
 	@echo "  make gputrace-baseline - Capture a .gputrace matching the VRMBenchmark baseline (animated + spring, 1024px)"
 	@echo "  make bench-baseline - Record the authoritative perf baseline (run on the dedicated perf machine)"
@@ -153,6 +154,17 @@ test:
 	@echo "🧪 Running tests..."
 	@swift test
 
+# Style-profile lint over the repo-root fixtures (see docs/style/README.md).
+# Override the profile with STYLE_PROFILE=... and the assets with STYLE_ASSETS=...
+STYLE_PROFILE ?= docs/style/profiles/vroid-lineage-anime.json
+STYLE_ASSETS ?= $(wildcard *.vrm *.vrm.glb)
+style-lint:
+	@if [ -z "$(STYLE_ASSETS)" ]; then \
+		echo "style-lint: no .vrm / .vrm.glb fixtures at the repo root (they are gitignored); pass STYLE_ASSETS=path/to/model.vrm"; \
+	else \
+		python3 scripts/style_lint.py lint --profile $(STYLE_PROFILE) $(STYLE_ASSETS); \
+	fi
+
 # Capture a GPU trace of the bundled avatar render for offline debugging.
 # Override the output path with GPUTRACE_OUT=/path/to/out.gputrace and the
 # fixture with GPUTRACE_MODEL=vrm0 (default renders the VRM 1.0 fixture).
@@ -210,6 +222,27 @@ bench-gate:
 	@echo "🚦  Gating current build against $(BENCH_BASELINE)..."
 	@swift build -c release --product VRMBenchmark
 	@.build/release/VRMBenchmark $(BENCH_VRM) $(BENCH_ARGS) --label gate-$$(hostname -s) --baseline $(BENCH_BASELINE)
+
+# Hotspot-shaped bench: one avatar's per-frame CPU is too small to move any
+# single phase measurably, so amplify the code under review by piling on the
+# work each hotspot scales with — animation (skinning, transforms, morphs),
+# spring physics (target capture, substeps, readback) and multiple avatars
+# (render-item build, palette rebuilds). Run before/after a change and diff the
+# `--json` reports; `bench-gate` intersects common phase keys, so a committed
+# hotspot baseline gates them automatically. Not a replacement for bench-gate.
+BENCH_HOTSPOT_AVATARS ?= 4
+BENCH_HOTSPOT_FRAMES  ?= 300
+BENCH_HOTSPOT_ARGS     = --mode render --frames $(BENCH_HOTSPOT_FRAMES) --warmup $(BENCH_WARMUP) \
+                         --vrma $(BENCH_VRMA) --spring-bone --spring-bone-quality ultra \
+                         --avatar-count $(BENCH_HOTSPOT_AVATARS)
+bench-hotspots:
+	@echo "🔥  Hotspot bench ($(BENCH_HOTSPOT_AVATARS) avatars, animated + spring)..."
+	@swift build -c release --product VRMBenchmark
+	@mkdir -p perf-review-output
+	@.build/release/VRMBenchmark $(BENCH_VRM) $(BENCH_HOTSPOT_ARGS) \
+		--label hotspots-$$(hostname -s) \
+		--json perf-review-output/bench-hotspots.json
+	@echo "✅ Wrote perf-review-output/bench-hotspots.json (per-phase stats under .stats)"
 
 # Compositor-shaped stereo bench (Mac stand-in for visionOS). Does not
 # replace bench-gate. Preferred submit simulates once; host submit is the
