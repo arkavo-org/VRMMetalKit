@@ -382,6 +382,8 @@ def validate_pack(pack, schema):
             style_ids = [e.get("styleId") for e in entries]
             if len(set(style_ids)) != len(style_ids):
                 errors.append("corpus styleId values must be unique")
+            if pack["runner"]["kind"] == "python" and len(entries) > 1:
+                errors.append("multi-style corpus is supported on the swift-test path only")
             for i, e in enumerate(entries):
                 if pack["runner"]["kind"] == "swift-test":
                     for field in ("driver", "witnesses", "witnessesSha256"):

@@ -97,7 +97,10 @@ is reported in the result manifest for provenance and is not itself a check.
 
 Witnesses are per template as well as per style set: a second template measured against
 the same style adds a witnesses row of its own. A second style adds a group. Family
-counts, tolerances and eligibility floors are per style set, never global.
+counts, tolerances and eligibility floors are per style set, never global. A pack may
+declare more than one style set only on the `swift-test` path; a `python`-kind pack
+declaring two is rejected as invalid rather than measuring the first and discarding
+the rest.
 
 The profile content hash is the freeze. `style_lint.py envelopes --write` must not be
 run against the pinned profile without bumping the profile version and re-hashing;

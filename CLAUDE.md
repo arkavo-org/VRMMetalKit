@@ -42,7 +42,7 @@ python3 scripts/style_lint.py lint --profile docs/style/profiles/vroid-lineage-a
 ```
 
 ### vrm-author CLI (autonomous VRM authoring)
-`Sources/VRMAuthorKit` (Foundation + CryptoKit only), `vrm-author` and `vrm-author-render` executables; contract in `docs/proposals/vrm-author-cli/`. Acceptance packs live under `docs/proposals/vrm-author-cli/acceptance/packs/` and run through `scripts/acceptance_run.py`; every swift-test pack pins its test files by sha256, so after editing a suite re-pin the pack (`oracleHashes` + `packHash`).
+`Sources/VRMAuthorKit` (Foundation + CryptoKit only), `vrm-author` and `vrm-author-render` executables; contract in `docs/proposals/vrm-author-cli/`. Acceptance packs live under `docs/proposals/vrm-author-cli/acceptance/packs/` and run through `scripts/acceptance_run.py`; every swift-test pack pins its test files by sha256, so after editing a suite re-pin the pack (`oracleHashes` + `packHash`). `scripts/repin_packs.py --check` reports pins that no longer carry their oracles; run it without `--check` to move the pack set and `evidence.json` onto the current head.
 ```bash
 swift test --filter VRMAuthorKitTests --disable-sandbox
 .build/debug/vrm-author project init --dir a.vrmauthor --template native-anime-v1 --seed 42

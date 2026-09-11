@@ -33,6 +33,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import acceptance_run as R  # noqa: E402
+import repin_packs as RP  # noqa: E402
 import test_style_lint as T  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -338,6 +339,44 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(out["manifest"], manifest_path)
         self.assertEqual(out["status"], "pending")
         self.assertEqual(out["families"]["solo"]["status"], "pending")
+
+    def python_corpus_pack(self, entries):
+        pack = self.f.pack(evidencePolicy={"requiredLevel": "corpus-validated",
+                                           "dimensions": {"fixture": "required", "corpus": "required",
+                                                          "visual": "inapplicable", "interoperability": "inapplicable",
+                                                          "provenance": "required"},
+                                           "heldOutPolicy": "none"})
+        return with_corpus(pack, entries)
+
+    def python_corpus_entry(self, style_id="vroid-lineage-anime"):
+        manifest_bytes = json.dumps({"assets": [{"path": "missing.vrm.glb", "body_family": "solo"}]}).encode()
+        manifest_path = os.path.join(self.f.dir, f"corpus-manifest-{style_id}.json")
+        with open(manifest_path, "wb") as fh:
+            fh.write(manifest_bytes)
+        manifest_sha = R.sha256_bytes(manifest_bytes)
+        return {"styleId": style_id,
+                "profile": PROFILE, "profileSha256": R.sha256_file(os.path.join(REPO, PROFILE)),
+                "manifest": manifest_path, "manifestSha256": manifest_sha,
+                "measurements": manifest_path, "measurementsSha256": manifest_sha,
+                "familyKey": "body_family", "tolerance": 0.25,
+                "expectedFamilies": 1, "minEligibleFamilies": 1}
+
+    def test_two_style_sets_on_the_python_path_are_rejected(self):
+        pack = self.python_corpus_pack([self.python_corpus_entry("vroid-lineage-anime"),
+                                        self.python_corpus_entry("second-aesthetic")])
+        errors = R.validate_pack(pack, self.schema)
+        self.assertIn("multi-style corpus is supported on the swift-test path only", errors)
+        self.assertNotIn("corpus styleId values must be unique", errors)
+
+    def test_a_single_style_set_on_the_python_path_still_validates_and_runs(self):
+        entry = self.python_corpus_entry()
+        pack = self.python_corpus_pack([entry])
+        self.assertEqual(R.validate_pack(pack, self.schema), [])
+        code, result, err = self.f.run(pack)
+        self.assertEqual(code, R.EXIT["pending"], err)
+        self.assertEqual(len(result["corpus"]), 1)
+        self.assertEqual(result["corpus"][0]["manifest"], entry["manifest"])
+        self.assertEqual(result["dimensions"]["corpus"], "pending")
 
     def test_fabricated_report_with_correct_hashes_is_not_rejected(self):
         pack = self.f.pack()
@@ -689,31 +728,177 @@ class ShippedPackTests(unittest.TestCase):
     def test_every_shipped_pack_pins_a_commit_carrying_its_oracles(self):
         packs_dir = os.path.join(ACCEPTANCE, "packs")
         names = sorted(n for n in os.listdir(packs_dir) if n.endswith(".json"))
-        blobs = {}
-
-        def blob_sha256(commit, rel):
-            key = (commit, rel)
-            if key not in blobs:
-                proc = subprocess.run(["git", "-C", REPO, "cat-file", "blob", f"{commit}:{rel}"],
-                                      capture_output=True, timeout=30)
-                blobs[key] = R.sha256_bytes(proc.stdout) if proc.returncode == 0 else None
-            return blobs[key]
-
         for name in names:
             pack = R.load_json(os.path.join(packs_dir, name))
             env = pack["runner"]["environment"]
             commit = env["pinnedCommit"]
+            self.assertTrue(RP.is_ancestor(REPO, commit),
+                            f"{name}: pinnedCommit {commit} is not reachable from HEAD")
             for rel, want in sorted(env["oracleHashes"].items()):
                 with self.subTest(pack=name, path=rel):
-                    got = blob_sha256(commit, rel)
+                    got = RP.blob_sha256(REPO, commit, rel)
                     self.assertIsNotNone(got, f"{name}: {rel} does not exist at pinnedCommit {commit}")
                     self.assertEqual(got, want,
                                      f"{name}: {rel} at pinnedCommit {commit} hashes to {got}, "
                                      f"not the pinned {want}")
 
-    def test_evidence_registry_is_empty_and_pinned(self):
+    def test_evidence_registry_is_empty_and_pins_what_the_packs_pin(self):
+        packs_dir = os.path.join(ACCEPTANCE, "packs")
+        pins = {R.load_json(os.path.join(packs_dir, n))["runner"]["environment"]["pinnedCommit"]
+                for n in sorted(os.listdir(packs_dir)) if n.endswith(".json")}
+        self.assertEqual(len(pins), 1, f"the packs pin more than one commit: {sorted(pins)}")
         reg = R.load_json(os.path.join(ACCEPTANCE, "evidence.json"))
-        self.assertEqual(reg, {"schemaVersion": 1, "pinnedCommit": "a020125384c0c15b6479e7dc304ec48c899887dc", "entries": []})
+        self.assertEqual(reg, {"schemaVersion": 1, "pinnedCommit": pins.pop(), "entries": []})
+
+
+
+class RepinPacks(unittest.TestCase):
+    """scripts/repin_packs.py: mechanical re-pinning, and its refusal to pin past a missing oracle."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="repin_test_")
+        self.packs = os.path.join(self.dir, "packs")
+        shutil.copytree(os.path.join(ACCEPTANCE, "packs"), self.packs)
+        self.evidence = os.path.join(self.dir, "evidence.json")
+        shutil.copyfile(os.path.join(ACCEPTANCE, "evidence.json"), self.evidence)
+        self.head = RP.rev_parse(REPO, "HEAD")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def run_repin(self, *extra):
+        out = io.StringIO()
+        err = io.StringIO()
+        argv = ["--repo", REPO, "--packs", self.packs, "--evidence", self.evidence] + list(extra)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = RP.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def read_bytes(self, name):
+        with open(os.path.join(self.packs, name), "rb") as fh:
+            return fh.read()
+
+    def snapshot(self):
+        return {n: self.read_bytes(n) for n in sorted(os.listdir(self.packs))}
+
+    def unpin(self, name="version.json", commit="0" * 40):
+        path = os.path.join(self.packs, name)
+        pack = R.load_json(path)
+        pack["runner"]["environment"]["pinnedCommit"] = commit
+        pack["packHash"] = ""
+        pack["packHash"] = R.compute_pack_hash(pack)
+        RP.write_json(path, pack)
+        return path
+
+    def test_report_only_against_the_shipped_tree_reports_no_changes(self):
+        code, out, err = self.run_repin("--check")
+        self.assertEqual(code, RP.EXIT["ok"], out + err)
+        self.assertIn("no changes needed", out)
+
+    def test_report_only_writes_nothing_when_a_pin_is_stale(self):
+        self.unpin()
+        before = self.snapshot()
+        code, out, _ = self.run_repin("--check")
+        self.assertEqual(code, RP.EXIT["pending"])
+        self.assertIn("would change", out)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_stale_pin_moves_the_whole_set_onto_the_target_commit(self):
+        self.unpin()
+        code, out, err = self.run_repin()
+        self.assertEqual(code, RP.EXIT["ok"], out + err)
+        for name in sorted(os.listdir(self.packs)):
+            pack = R.load_json(os.path.join(self.packs, name))
+            with self.subTest(pack=name):
+                self.assertEqual(pack["runner"]["environment"]["pinnedCommit"], self.head)
+                self.assertEqual(pack["packHash"], R.compute_pack_hash(pack))
+        self.assertEqual(R.load_json(self.evidence)["pinnedCommit"], self.head)
+
+    def test_repinning_touches_nothing_but_the_pin_and_its_hash(self):
+        self.unpin()
+        before = {n: R.load_json(os.path.join(ACCEPTANCE, "packs", n)) for n in sorted(os.listdir(self.packs))}
+        self.assertEqual(self.run_repin()[0], RP.EXIT["ok"])
+        for name, original in before.items():
+            after = R.load_json(os.path.join(self.packs, name))
+            after["runner"]["environment"]["pinnedCommit"] = original["runner"]["environment"]["pinnedCommit"]
+            after["packHash"] = original["packHash"]
+            with self.subTest(pack=name):
+                self.assertEqual(after, original)
+
+    def test_an_oracle_absent_at_the_target_refuses_and_writes_nothing(self):
+        path = self.unpin()
+        pack = R.load_json(path)
+        pack["runner"]["environment"]["oracleHashes"]["scripts/no_such_oracle.py"] = "f" * 64
+        pack["packHash"] = ""
+        pack["packHash"] = R.compute_pack_hash(pack)
+        RP.write_json(path, pack)
+        before = self.snapshot()
+        code, _, err = self.run_repin()
+        self.assertEqual(code, RP.EXIT["refused"])
+        self.assertIn("version.json", err)
+        self.assertIn("scripts/no_such_oracle.py", err)
+        self.assertIn("nothing written", err)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_an_oracle_that_hashes_differently_at_the_target_refuses(self):
+        path = self.unpin()
+        pack = R.load_json(path)
+        rel = sorted(pack["runner"]["environment"]["oracleHashes"])[0]
+        pack["runner"]["environment"]["oracleHashes"][rel] = "a" * 64
+        pack["packHash"] = ""
+        pack["packHash"] = R.compute_pack_hash(pack)
+        RP.write_json(path, pack)
+        before = self.snapshot()
+        code, _, err = self.run_repin()
+        self.assertEqual(code, RP.EXIT["refused"])
+        self.assertIn(rel, err)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_all_moves_a_set_whose_pins_already_hold(self):
+        self.assertEqual(self.run_repin("--check")[0], RP.EXIT["ok"])
+        code, out, err = self.run_repin("--all")
+        self.assertEqual(code, RP.EXIT["ok"], out + err)
+        pins = {R.load_json(os.path.join(self.packs, n))["runner"]["environment"]["pinnedCommit"]
+                for n in os.listdir(self.packs)}
+        self.assertEqual(pins, {self.head})
+
+    def test_an_unresolvable_target_commit_is_refused(self):
+        code, _, err = self.run_repin("--commit", "not-a-commit")
+        self.assertEqual(code, RP.EXIT["refused"])
+        self.assertIn("does not resolve", err)
+
+    def test_written_packs_keep_the_shipped_byte_formatting(self):
+        self.assertEqual(self.run_repin("--all", "--commit", self.head)[0], RP.EXIT["ok"])
+        for name in sorted(os.listdir(self.packs)):
+            raw = self.read_bytes(name)
+            with self.subTest(pack=name):
+                self.assertEqual(raw, (json.dumps(json.loads(raw), indent=2, ensure_ascii=True) + "\n").encode())
+
+    def test_a_target_commit_unreachable_from_head_is_refused(self):
+        unreachable = subprocess.run(["git", "-C", REPO, "commit-tree", f"{self.head}^{{tree}}", "-m", "detached"],
+                                     capture_output=True, text=True, timeout=30)
+        self.assertEqual(unreachable.returncode, 0, unreachable.stderr)
+        before = self.snapshot()
+        code, _, err = self.run_repin("--all", "--commit", unreachable.stdout.strip())
+        self.assertEqual(code, RP.EXIT["refused"])
+        self.assertIn("not reachable from HEAD", err)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_an_empty_pack_directory_is_refused(self):
+        empty = os.path.join(self.dir, "empty")
+        os.makedirs(empty)
+        out = io.StringIO()
+        err = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = RP.main(["--repo", REPO, "--packs", empty, "--evidence", self.evidence])
+        self.assertEqual(code, RP.EXIT["refused"])
+        self.assertIn("no packs to pin", err.getvalue())
+
+    def test_blob_sha256_is_none_for_a_path_absent_at_the_commit(self):
+        self.assertIsNone(RP.blob_sha256(REPO, self.head, "scripts/no_such_oracle.py"))
+        self.assertEqual(RP.blob_sha256(REPO, self.head, LINTER),
+                         R.sha256_bytes(subprocess.run(["git", "-C", REPO, "cat-file", "blob", f"{self.head}:{LINTER}"],
+                                                       capture_output=True, timeout=30).stdout))
 
 
 class TargetDerivation(unittest.TestCase):
