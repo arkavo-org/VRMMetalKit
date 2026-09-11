@@ -206,6 +206,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
     /// Test hook: per-chain root wake anchors, same indexing as `testChainAsleep`.
     var testRootWakeAnchors: [SIMD3<Float>] { previousRootPositionsForSleep }
+    /// Test hook: authored sphere-collider wake anchors, in upload order.
+    var testSphereWakeAnchors: [SphereCollider] { previousSphereCollidersForSleep }
     /// Per-bone chain index and per-chain sleep flag, bound at buffers 16/17.
     private var boneChainIndexBuffer: MTLBuffer?
     private var chainSleepBuffer: MTLBuffer?
