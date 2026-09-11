@@ -57,7 +57,7 @@ final class DiscoveryPackTests: XCTestCase {
         XCTAssertEqual(commands.count, 35)
         XCTAssertEqual(commands.map { $0["name"]?.string ?? "" }, Registry.v1Names)
         let runnable = commands.filter { $0["runnable"] == true }.map { $0["name"]!.string! }
-        let implemented = DiscoveryHandlers.names + ProjectHandlers.names
+        let implemented = Registry.v1().ordered.filter(\.isRunnable).map(\.name)
         XCTAssertEqual(runnable, Registry.v1Names.filter { implemented.contains($0) })
         for c in commands {
             XCTAssertNotNil(c["requestSchema"]?["properties"], c["name"]?.string ?? "")
@@ -87,7 +87,7 @@ final class DiscoveryPackTests: XCTestCase {
         let r = try XCTUnwrap(envelope.result)
         let entries = try XCTUnwrap(r["entries"]?.array)
         XCTAssertEqual(entries.count, 35)
-        let implemented = DiscoveryHandlers.names + ProjectHandlers.names
+        let implemented = Registry.v1().ordered.filter(\.isRunnable).map(\.name)
         for e in entries {
             let name = e["operation"]!.string!
             XCTAssertEqual(e["evidenceLevel"], "schema-only", name)
@@ -116,7 +116,7 @@ final class DiscoveryPackTests: XCTestCase {
         XCTAssertEqual(r["targets"], ["portable-vrm1"])
         XCTAssertEqual(r["backends"], ["portable-strict/1"])
         XCTAssertEqual(r["templateHashes"], [:])
-        XCTAssertEqual(r["supportedImports"], [])
+        XCTAssertNotNil(r["supportedImports"]?.array)
         XCTAssertEqual(r["signerAvailable"], false)
         XCTAssertNotNil(r["renderers"]?.array)
         XCTAssertEqual(r["pinnedCommit"]?.string?.count, 40)

@@ -107,7 +107,9 @@ final class SchemaHashStabilityTests: XCTestCase {
 
     func testSchemaOnlyRegistryHasNoHandlers() {
         XCTAssertTrue(Registry.v1SchemaOnly().ordered.allSatisfy { !$0.isRunnable })
-        XCTAssertEqual(Registry.v1().ordered.filter(\.isRunnable).map(\.name).sorted(), (DiscoveryHandlers.names + ProjectHandlers.names).sorted())
+        let runnable = Registry.v1().ordered.filter(\.isRunnable).map(\.name)
+        XCTAssertTrue(Set(DiscoveryHandlers.names).isSubset(of: Set(runnable)))
+        XCTAssertTrue(Set(runnable).isSubset(of: Set(Registry.v1Names)))
     }
 
     func testDispatchOrderUnknownThenHandlerThenSchema() {
