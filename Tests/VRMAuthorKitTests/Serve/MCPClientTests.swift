@@ -51,9 +51,14 @@ final class MCPClientTests: XCTestCase {
         return evidence
     }
 
-    private func session(env: [String: String] = [:], evidence: EvidenceRegistry = EvidenceRegistry(), policy: EvidencePolicy = .release) -> ServeSession {
-        ServeSession(context: ProjectTestHarness.context(cwd: root, env: env, evidence: evidence), protocol: .mcp, policy: policy, harness: ServeHandlers.isHarness(env: env))
+    private func session(env: [String: String] = [:], evidence: EvidenceRegistry = EvidenceRegistry(), policy: EvidencePolicy = .release,
+                         registry: Registry = Registry.v1()) -> ServeSession {
+        ServeSession(context: ProjectTestHarness.context(cwd: root, env: env, evidence: evidence, registry: registry), protocol: .mcp, policy: policy,
+                     harness: ServeHandlers.isHarness(env: env))
     }
+
+    /// Discovery and project handlers only, so `build` is handler-less by construction.
+    private var withoutBuild: Registry { ProjectTestHarness.registry(installing: [DiscoveryHandlers.install, ProjectHandlers.install]) }
 
     private func exchange(_ session: inout ServeSession, _ line: String) throws -> JSONValue {
         let response = try XCTUnwrap(session.handle(line: line), line)
@@ -83,8 +88,11 @@ final class MCPClientTests: XCTestCase {
         XCTAssertEqual(names, Registry.v1().ordered.filter { $0.isRunnable && $0.name != "serve" }.map(\.rpcMethod))
         XCTAssertTrue(names.contains("project.init"))
         XCTAssertTrue(names.contains("control.set"))
-        XCTAssertFalse(names.contains("build"))
         XCTAssertFalse(names.contains("serve"))
+        var reduced = session(env: ["VRM_AUTHOR_SESSION": "harness"], registry: withoutBuild)
+        let reducedNames = try XCTUnwrap(try exchange(&reduced, #"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)["result"]?["tools"]?.array).compactMap { $0["name"]?.string }
+        XCTAssertTrue(reducedNames.contains("version"))
+        XCTAssertFalse(reducedNames.contains("build"), "tools without a handler are not listed")
         let control = try XCTUnwrap(tools.first { $0["name"] == "control.set" })
         XCTAssertEqual(control["title"], "control set")
         XCTAssertNotNil(control["description"]?.string)
@@ -119,7 +127,7 @@ final class MCPClientTests: XCTestCase {
     }
 
     func testToolCallMutationsFailuresAndUnknownTools() throws {
-        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"])
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"], registry: withoutBuild)
         _ = try exchange(&server, #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"c","version":"1"}}}"#)
         let args: JSONValue = ["project": .string(dir.path), "requestId": "mcp-1", "expectedRevision": 0, "edit": ["object": "avatar:main", "values": ["body.heightM": 1.7]]]
         let call = try CanonicalJSON.string(["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "control.set", "arguments": args]])

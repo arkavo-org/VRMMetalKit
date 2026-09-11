@@ -425,7 +425,9 @@ final class ExportQACLITests: XCTestCase {
         XCTAssertEqual(envelope["status"], "incomplete")
         XCTAssertEqual(envelope["result"]?["verdict"], "incomplete")
         XCTAssertTrue(FileManager.default.fileExists(atPath: project.path("qa/findings.json")))
-        XCTAssertTrue(err.contains("style lint handler is not installed"))
+        XCTAssertEqual(envelope["errors"]?[0]?["code"], "MISSING_CAPABILITY")
+        XCTAssertEqual(envelope["errors"]?[0]?["path"], "style.lint.profile")
+        XCTAssertTrue(err.contains("MISSING_CAPABILITY"), err)
 
         let inspection = project.path("inspection.json")
         try CanonicalJSON.data(["inspection": [

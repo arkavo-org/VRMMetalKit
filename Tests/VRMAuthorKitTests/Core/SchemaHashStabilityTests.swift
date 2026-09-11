@@ -98,9 +98,11 @@ final class SchemaHashStabilityTests: XCTestCase {
     }
 
     func testInstallRejectsUnknownAndDuplicateHandlers() {
-        var registry = Registry.v1()
+        var registry = Registry.v1SchemaOnly()
         XCTAssertThrowsError(try registry.install(handler: { _, r in .succeeded(requestId: r["requestId"]?.string, result: nil) }, for: "nope"))
+        XCTAssertNoThrow(try registry.install(handler: { _, r in .succeeded(requestId: r["requestId"]?.string, result: nil) }, for: "version"))
         XCTAssertThrowsError(try registry.install(handler: { _, r in .succeeded(requestId: r["requestId"]?.string, result: nil) }, for: "version"))
+        XCTAssertFalse(registry.operation(named: "build")!.isRunnable)
         XCTAssertNoThrow(try registry.install(handler: { _, r in .succeeded(requestId: r["requestId"]?.string, result: ["ok": true]) }, for: "build"))
         XCTAssertTrue(registry.operation(named: "build")!.isRunnable)
     }
@@ -113,7 +115,9 @@ final class SchemaHashStabilityTests: XCTestCase {
     }
 
     func testDispatchOrderUnknownThenHandlerThenSchema() {
-        let registry = Registry.v1()
+        var registry = Registry.v1SchemaOnly()
+        DiscoveryHandlers.install(&registry)
+        XCTAssertFalse(registry.operation(named: "build")!.isRunnable)
         let context = OperationContext(cwd: URL(fileURLWithPath: NSTemporaryDirectory()), registry: registry)
         XCTAssertEqual(registry.invoke("nope", request: [:], context: context).exitCode, .invalidRequest)
         let missing = registry.invoke("build", request: [:], context: context)

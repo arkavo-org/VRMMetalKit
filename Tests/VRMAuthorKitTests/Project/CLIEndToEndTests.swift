@@ -109,6 +109,6 @@ final class CLIEndToEndTests: XCTestCase {
         let commands = try XCTUnwrap(describe["result"]?["commands"]?.array)
         let runnable = commands.filter { $0["runnable"] == true }.compactMap { $0["name"]?.string }
         for name in ProjectHandlers.names { XCTAssertTrue(runnable.contains(name), name) }
-        XCTAssertFalse(runnable.contains("build"))
+        XCTAssertEqual(Set(runnable), Set(Registry.v1().ordered.filter(\.isRunnable).map(\.name)), "describe reports exactly the operations with an installed handler")
     }
 }

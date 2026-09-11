@@ -71,8 +71,17 @@ enum ProjectTestHarness {
     }
 
     static func context(cwd: URL, projectPath: URL? = nil, env: [String: String] = [:], evidence: EvidenceRegistry = EvidenceRegistry(),
+                        registry: Registry = Registry.v1(),
                         templates: TemplateRegistry = TemplateRegistry(packs: [StubTemplatePack()])) -> OperationContext {
-        OperationContext(projectPath: projectPath, cwd: cwd, env: env, evidenceRegistry: evidence, registry: Registry.v1(), templates: templates)
+        OperationContext(projectPath: projectPath, cwd: cwd, env: env, evidenceRegistry: evidence, registry: registry, templates: templates)
+    }
+
+    /// A schema-only v1 registry with just the given installers applied, so a
+    /// test can rely on every other operation being handler-less.
+    static func registry(installing installers: [RegistryInstaller]) -> Registry {
+        var registry = Registry.v1SchemaOnly()
+        for installer in installers { installer(&registry) }
+        return registry
     }
 
     static func invoke(_ context: OperationContext, _ name: String, _ request: JSONValue) -> ResultEnvelope {

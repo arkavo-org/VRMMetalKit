@@ -163,6 +163,7 @@ final class ServePackTests: XCTestCase {
     }
 
     func testMissingHandlerReturnsNotImplementedEnvelopeWithExitThree() throws {
+        session = ServeSession(context: ProjectTestHarness.context(cwd: root, registry: Registry.v1SchemaOnly()), protocol: .jsonrpc)
         let response = try XCTUnwrap(try send(try request("b1", "build", ["out": "draft.vrm"])))
         XCTAssertEqual(response["id"], "b1")
         XCTAssertNil(response["error"])
