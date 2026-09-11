@@ -55,7 +55,7 @@ class PackFactory:
 
     def __init__(self):
         self.dir = tempfile.mkdtemp(prefix="acceptance_test_")
-        self.fixture_bytes = T.pack_glb(*T.minimal_vrm(T.RobustnessTests.REQUIRED))
+        self.fixture_bytes = T.pack_glb(*T.minimal_vrm(T.RobustnessTests.MINIMAL_BONES))
         self.fixture_path = os.path.join(self.dir, "minimal.bin")
         with open(self.fixture_path, "wb") as fh:
             fh.write(self.fixture_bytes)

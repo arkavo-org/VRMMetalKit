@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "",
   "resultSchemaHash": "",
-  "packHash": "81cc628ad60de58a132fe90c32e9d078a24c02e80736c38eacc7e3999a118b3a",
+  "packHash": "a5564d6bccf18bde9ecd20366f40fa5cb4a69a68ab004dcd380e07d9e4924242",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -113,7 +113,7 @@
         "should_fail": 19,
         "exit_code": 1
       },
-      "note": "test_style_lint.minimal_vrm with the seven required bones, one triangle, no materials; unavailable metrics must fail, not pass"
+      "note": "test_style_lint.minimal_vrm with seven of the fifteen humanoid bones VRMC_vrm requires, one triangle, no materials; unavailable metrics must fail, not pass"
     }
   ],
   "seeds": [],

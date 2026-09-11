@@ -46,7 +46,7 @@ in-process by the suite, no bytes to pin) unless a git-tracked file is pinned by
 | `version`, `describe`, `capabilities`, `doctor`, `schema-show` | `DiscoveryPackTests` | fixture-tested |
 | `serve` | `ServePackTests` (+ `MCPClientTests`) | fixture-tested |
 | `project-init`, `project-inspect`, `history-list`, `history-restore` | `ProjectPackTests` | fixture-tested |
-| `template-list` | `TemplateListPackTests` (absent: no handler, expected missing-handler) | fixture-tested |
+| `template-list` | `TemplateListPackTests` | fixture-tested |
 | `recipe-export` | `ExportPackTests` | fixture-tested |
 | `recipe-apply`, `build`, `export-vrm` | `ExportPackTests` (+ `QAMutantInjectionTests`, `WearableHairTests`, `TemplatePackTests`) | visually-validated |
 | `control-list`, `control-describe` | `ControlPackTests` | fixture-tested |
@@ -61,9 +61,10 @@ in-process by the suite, no bytes to pin) unless a git-tracked file is pinned by
 | `qa-run`, `export-verify` | `QAPackTests` (+ `QAMutantInjectionTests`) | fixture-tested (mutant injection) |
 | `deliver` | `DeliverPackTests` | fixture-tested |
 
-The runner resolves only the `fixture` and `provenance` dimensions for Swift packs; a pack whose
-policy also requires `corpus`, `visual` or `interoperability` reports `pending` (exit 2) until
-those gates exist, never a pass.
+The runner resolves the `fixture`, `provenance` and `corpus` dimensions for Swift packs, the
+last by replaying the pack's pinned witnesses through the shipped CLI and linting each emitted
+artifact; a pack whose policy also requires `visual` or `interoperability` reports `pending`
+(exit 2) until those gates exist, never a pass.
 
 `evidence.json` is the evidence registry, written only by the evaluator (a different model
 family or a human running the pack from a clean checkout at `pinnedCommit`), who records the

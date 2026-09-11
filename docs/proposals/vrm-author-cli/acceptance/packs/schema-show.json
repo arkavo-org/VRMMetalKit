@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "6986b6cc7b8556c221fea3fc75ca8879ba416c098a1e0c9cd43c0c07377d4036",
   "resultSchemaHash": "6e1028ac11c36a333864582e6b0d6a2fd2a120979034b65e3aa2291b722c2865",
-  "packHash": "5925c47aab021a9e2095b10e2e0ca1aebc2d346debe3a4db5b4865dfdd016355",
+  "packHash": "2c0d46ea3a6a3d21d4cd7acde4eca65c34bc0c490d993dd138ef7aa01ab5d9bc",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -41,7 +41,7 @@
     },
     "invariants": [
       "the result enumerates every leaf pointer of the fully expanded projection and its content hash",
-      "schema show Material enumerates all 142 glTF 2.0 metallic-roughness + VRMC_materials_mtoon 1.0 leaves; a silently omitted factor fails",
+      "schema show Material enumerates all 143 Material leaves: 141 glTF 2.0 metallic-roughness + VRMC_materials_mtoon 1.0 leaves plus the object's own /id and /role; a silently omitted factor fails",
       "an unknown name, and a request without a name, are invalid requests, not empty results",
       "a changed schema changes its hash",
       "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
@@ -120,7 +120,7 @@
     },
     {
       "id": "material-leaf-coverage",
-      "description": "MaterialsPackTests.testSchemaShowMaterialEnumeratesEveryLeaf: the 142-leaf hard-coded answer key must match exactly; a dropped MToon factor or an added undeclared field fails.",
+      "description": "MaterialsPackTests.testSchemaShowMaterialEnumeratesEveryLeaf: the 143-leaf hard-coded answer key must match exactly; a dropped MToon factor or an added undeclared field fails.",
       "expectedClassification": "reject",
       "transform": {
         "kind": "swift-test",
