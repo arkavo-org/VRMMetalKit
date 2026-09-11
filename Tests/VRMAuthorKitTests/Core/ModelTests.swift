@@ -186,11 +186,13 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(roundTrip, avatar)
     }
 
-    func testTemplateRegistryIsEmptyUntilPacksRegister() {
+    func testTemplateRegistryListsBuiltinPacks() {
         let registry = TemplateRegistry.standard()
-        XCTAssertEqual(registry.ids, [])
-        XCTAssertNil(registry.pack(id: "native-anime-v1"))
-        XCTAssertEqual(registry.templateHashes(), [:])
+        XCTAssertEqual(registry.ids, ["native-anime-v1"])
+        XCTAssertNotNil(registry.pack(id: "native-anime-v1"))
+        XCTAssertEqual(registry.templateHashes().count, 1)
+        XCTAssertTrue(SHA256Hex.isValid(registry.templateHashes()["native-anime-v1"] ?? ""))
+        XCTAssertNil(registry.pack(id: "missing"))
         let descriptor = ControlDescriptor(key: "body.heightM", unit: .metres, validRange: [1.2, 2.0], recommendedRange: [1.4, 1.8], defaultValue: 1.65, affects: [.avatar, .garment], description: "Stature")
         XCTAssertTrue(descriptor.accepts(1.65))
         XCTAssertFalse(descriptor.accepts(2.5))

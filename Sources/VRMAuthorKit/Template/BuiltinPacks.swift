@@ -19,5 +19,5 @@ import Foundation
 extension TemplateRegistry {
     /// The single registration point for built-in template packs. The template
     /// area adds `NativeAnimeV1Pack()` here; nothing else edits this file.
-    public static var builtinPacks: [any TemplatePack] { [] }
+    public static var builtinPacks: [any TemplatePack] { [NativeAnimeV1Pack()] }
 }
