@@ -1,0 +1,237 @@
+{
+  "id": "asset-import",
+  "version": "0.1.0",
+  "operation": "asset import",
+  "operationVersion": 1,
+  "requestSchemaHash": "27cdfed01c45249c904a75eb006acdf019fe3c53cdc9a42fb1d936a1a2c4bacb",
+  "resultSchemaHash": "227eb08dc6c802a115aab1471b5801183eee9cca50bb231db2eb80d5464679c2",
+  "packHash": "1c3adc0186532536813a1b35945353f771e7c538d0f415d74d3dd5bf89f88da5",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "docs/proposals/vrm-author-cli/parameters.md (Assets, rights and credentials)",
+      "docs/proposals/vrm-author-cli/README.md §9 (ingredient preservation)",
+      "docs/proposals/vrm-author-cli/commands.md (`asset import` row)",
+      "docs/proposals/vrm-author-cli/verification.md §4 (Import/export/provenance, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "png (synthetic 4x2 header-only PNG)",
+      "vrm/gltf GLB (git-tracked conformance fixture; AvatarSample_U when present)",
+      "optional C2PA sidecar manifest",
+      "optional RightsDeclaration"
+    ],
+    "parameterRanges": {
+      "kind": [
+        "vrm",
+        "gltf",
+        "png",
+        "jpeg"
+      ],
+      "manifestPath": "sidecar path or absent",
+      "declaration": "RightsDeclaration or absent",
+      "dryRun": [
+        false,
+        true
+      ]
+    },
+    "invariants": [
+      "import copies the hashed bytes into the content-addressed store, writes a preservation/loss report and a ledger entry; a dry run stores nothing",
+      "non-GLB bytes as vrm, garbage GLBs, text as png, a nonexistent path and an unknown kind are rejected with the revision unchanged and the ledger empty",
+      "a conflicting rights declaration is gateFailed/RIGHTS_CONFLICT",
+      "a sidecar is validated: untrusted without a policy, invalid when bound to different bytes or malformed; the import still succeeds while downgrading credentialStatus",
+      "re-importing identical bytes warns ASSET_ALREADY_IMPORTED",
+      "a third-party VRM round-trips VRMC_vrm, VRMC_materials_mtoon and VRMC_springBone and preserves unknown extensions opaquely (interoperability)",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "bytes and sha256; image width/height pixels; triangles",
+    "excluded": [
+      "conversion to native controls (imported avatars never acquire them)",
+      "jpeg decoding beyond facts",
+      "network fetch of sourceUri"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "synthetic-png",
+      "path": "synthetic:4x2 header-only PNG imported dry then real",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testImportPNGRecordsImageFactsAndDryRunStoresNothing: dry run stores nothing; real import records 4x2 facts and a ledger entry"
+    },
+    {
+      "id": "smoke-spring-vrm",
+      "path": "Tests/VRMMetalKitTests/TestData/Conformance/smoke_spring.vrm",
+      "sha256": "6bb6f5ef1711487bf89aa642b86be3d648b1e88cfc70a4194fbe7dc291a105be",
+      "class": "positive",
+      "expected": {},
+      "note": "testImportSmallVRMReportsOpaqueExtensionsAndLedger: preservedOpaqueExtensions [KHR_materials_unlit], 0 degenerate triangles, generation recorded (falls back to mtoon_default.vrm)"
+    },
+    {
+      "id": "avatar-sample-u-1.0",
+      "path": "AvatarSample_U_1.0.vrm.glb",
+      "pathEnv": "VRM_ACCEPTANCE_FIXTURES",
+      "sha256": "1ab52aef2cf599be20ea7e04bb814a233d52052628941954f0c48412f5904c85",
+      "class": "positive",
+      "expected": {},
+      "note": "testImportAvatarSampleUProducesPreservationReport (XCTSkip when absent): >=50 human bones, springs, extensions round-tripped, empty lossReport.lost; the interoperability reference"
+    },
+    {
+      "id": "not-a-glb",
+      "path": "synthetic:JSON as vrm, 4-byte garbage as glb, text as png, nonexistent path, unknown kind obj",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testImportNonGLBAsVRMIsRejected: invalidRequest (missingCapability for the nonexistent path), revision 0, ledger empty"
+    },
+    {
+      "id": "mismatched-sidecar",
+      "path": "synthetic:PNG with a sidecar bound to different bytes, and with a junk .c2pa.json",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testImportWithSidecarReportsCredentialStatus: import succeeds with credentialStatus invalid"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ProvenancePackTests",
+    "environment": {
+      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift": "ab82d2176afcd1f776e4b9e583d2b49221910e736c9388b1b9a6d97b500125af",
+        "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "61d50bf07e6652e1dfb76516d5173f173a26f6b1d35f5a1bd0ecbb74164b141e"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "non-glb-rejected",
+      "description": "testImportNonGLBAsVRMIsRejected: non-GLB bytes, garbage, text as png, a missing file and an unknown kind must each be rejected without touching the ledger.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testImportNonGLBAsVRMIsRejected"
+      }
+    },
+    {
+      "id": "conflicting-declaration",
+      "description": "testImportWithConflictingDeclarationFails: an import carrying a declaration whose authors mismatch its meta must be gateFailed/RIGHTS_CONFLICT with revision 0.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testImportWithConflictingDeclarationFails"
+      }
+    },
+    {
+      "id": "sidecar-binding",
+      "description": "testImportWithSidecarReportsCredentialStatus: a sidecar bound to other bytes or malformed must report credentialStatus invalid, never untrusted or valid.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testImportWithSidecarReportsCredentialStatus"
+      }
+    },
+    {
+      "id": "dry-run-stores-nothing",
+      "description": "testImportPNGRecordsImageFactsAndDryRunStoresNothing: a dry-run import must write neither a ledger entry nor a blob.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testImportPNGRecordsImageFactsAndDryRunStoresNothing"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ProvenancePackTests test passed (executed 23, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ProvenancePackTests",
+            "executed": 23,
+            "passed": 23,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift": "45258356f79a02f3e90b42154dbeef9740ae1be692b6352b754c1a1ab5506859",
+            "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "61d50bf07e6652e1dfb76516d5173f173a26f6b1d35f5a1bd0ecbb74164b141e"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "asset import is a hashed copy plus a preservation report and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "required",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/asset-import.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ProvenancePackTests test-case lines"
+    ]
+  }
+}

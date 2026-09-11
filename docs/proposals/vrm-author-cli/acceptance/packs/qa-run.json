@@ -1,0 +1,255 @@
+{
+  "id": "qa-run",
+  "version": "0.1.0",
+  "operation": "qa run",
+  "operationVersion": 1,
+  "requestSchemaHash": "3ad73e26c0c4a7439a50b5c22f26dc718b09c32b247e1f18ac1aad50d268fad9",
+  "resultSchemaHash": "d76302d7c2d8203fbf3bd7a42c4951ca4d106bfae75460b7ca2b50f38bf95a15",
+  "packHash": "0a4443e3b0409fcd32b1535155756c4c76cd018f98cbbdf5b0d897bb88b338e8",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/QA/QAPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2 (the five declared mutant classes)",
+      "docs/proposals/vrm-author-cli/parameters.md (QA and inspection)",
+      "docs/proposals/vrm-author-cli/commands.md (`qa run` row)",
+      "docs/proposals/vrm-author-cli/verification.md §4 (QA machinery (mutant injection), fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "built draft VRM (file+suite form)",
+      "qa plan Blob (plan form)",
+      "acceptance form {pack, candidateBuild} in an isolated evaluator session"
+    ],
+    "parameterRanges": {
+      "suite": [
+        "spec+style",
+        "authoring-v1"
+      ],
+      "out": "findings directory that does not exist",
+      "VRM_AUTHOR_SESSION": "harness for the acceptance form"
+    },
+    "invariants": [
+      "a conforming export passes; a nonconforming style verdict is gateFailed with verdict fail and fail dominates incomplete",
+      "a missing capability (no style-lint handler, no renderer, no consumer) reports incomplete, never pass and never fail; required artifacts carry null hashes",
+      "each declared mutant class produces verdict fail and exit 1: identity transform (spec.identityEdit), wrong units (spec.scale), discarded morphs (spec.expressions.binds + expression.blinkInert), broken eyelids (expression.blinkInert), fabricated report (reportBindingMismatch)",
+      "report hashes bind the exact input bytes: a rebuilt file against an old plan is reportBindingMismatch",
+      "the acceptance form requires VRM_AUTHOR_SESSION=harness and creates no output otherwise; handlers never write evidence.json",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "metres (scale check), normalized morph weights, sha256 hashes",
+    "excluded": [
+      "Metal rendering (renderer absent in the suite; render scenarios report incomplete)",
+      "python style lint (a stub handler supplies the verdict)"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "conforming-export",
+      "path": "synthetic:built draft with a conforming stub style-lint handler",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testQARunPassesWithStyleLintHandlerAndFailDominatesIncomplete: verdict pass; QAMutantInjectionTests.testBaselineExportPasses: the unmutated control"
+    },
+    {
+      "id": "nonconforming-and-tampered",
+      "path": "synthetic:nonconforming style verdict; wrong plan sha; tampered plan; rebuilt file against an old plan",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testQARunPassesWithStyleLintHandlerAndFailDominatesIncomplete and testQARunPlanFormVerifiesPlanAndFileBinding: gateFailed / validationFailed / reportBindingMismatch"
+    },
+    {
+      "id": "missing-capabilities",
+      "path": "synthetic:registry without a style-lint handler; authoring-v1 without renderer or consumer; acceptance form outside a harness session",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testQARunSpecStyleIsIncompleteWithoutStyleLintAndNeverPasses, testAuthoringV1IsIncompleteWithoutRendererAndConsumer, testAcceptanceFormRequiresIsolatedEvaluatorSession: incomplete, never pass"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "QAPackTests",
+    "environment": {
+      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/QA/QAPackTests.swift": "974077ea7ba2045cb05af14096db86e7d9f661d99eb4471a2ba3465df0349e8a",
+        "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
+        "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift": "8a97ce5743f3deb7f456cc091a63af10841b883680b803c356f732e28b07f83c"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "identity-transform",
+      "description": "QAMutantInjectionTests.testIdentityTransformMutantIsFlaggedNoOpEdit: a pack that ignores body.heightM must fail spec.identityEdit (noOpEdit) while the honest pack passes.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testIdentityTransformMutantIsFlaggedNoOpEdit",
+        "suite": "QAMutantInjectionTests"
+      }
+    },
+    {
+      "id": "wrong-units",
+      "description": "QAMutantInjectionTests.testWrongUnitsMutantFailsScale: a 160 m (centimetre) avatar and a 0.2 m avatar must fail spec.scale.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testWrongUnitsMutantFailsScale",
+        "suite": "QAMutantInjectionTests"
+      }
+    },
+    {
+      "id": "discarded-morphs",
+      "description": "QAMutantInjectionTests.testDiscardedMorphsMutantFailsExpressionBinds: stripping primitive targets and targetNames must fail spec.expressions.binds and expression.blinkInert.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testDiscardedMorphsMutantFailsExpressionBinds",
+        "suite": "QAMutantInjectionTests"
+      }
+    },
+    {
+      "id": "broken-eyelids",
+      "description": "QAMutantInjectionTests.testBrokenEyelidsMutantFailsBlinkInert: a blink morph that moves nothing must fail expression.blinkInert (EXPRESSION_INERT).",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testBrokenEyelidsMutantFailsBlinkInert",
+        "suite": "QAMutantInjectionTests"
+      }
+    },
+    {
+      "id": "fabricated-report",
+      "description": "QAMutantInjectionTests.testFabricatedReportFailsInspectionVerify: an honest incomplete report rewritten to pass with fff... hashes, and a verdict-only forgery, must both be gateFailed/reportBindingMismatch.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testFabricatedReportFailsInspectionVerify",
+        "suite": "QAMutantInjectionTests"
+      }
+    },
+    {
+      "id": "plan-binding",
+      "description": "testQARunPlanFormVerifiesPlanAndFileBinding: wrong sha, tampered scenario list and a rebuilt file must each be rejected.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testQARunPlanFormVerifiesPlanAndFileBinding"
+      }
+    },
+    {
+      "id": "isolated-session",
+      "description": "testAcceptanceFormRequiresIsolatedEvaluatorSession: the acceptance form must be missingCapability outside VRM_AUTHOR_SESSION=harness and create no output; an unknown candidate build is missingInput.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testAcceptanceFormRequiresIsolatedEvaluatorSession"
+      }
+    },
+    {
+      "id": "no-registry-writes",
+      "description": "testHandlersNeverWriteTheEvidenceRegistry: no Export/QA handler source may reference evidence.json or the acceptance packs directory for writing.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testHandlersNeverWriteTheEvidenceRegistry"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every QAPackTests test passed (executed 11, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/QA/QAPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "QAPackTests",
+            "executed": 11,
+            "passed": 11,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/QA/QAPackTests.swift": "5cf0c380e6e1876fffc1c6a5f8d16f5c7cf84bb99fe415db5d2fc8d5ee022515",
+            "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
+            "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift": "8a97ce5743f3deb7f456cc091a63af10841b883680b803c356f732e28b07f83c"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "qa run is numeric and structural checking whose visual scenarios are owned by the visual packs (control set, build, export vrm) and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/qa-run.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter QAPackTests --filter QAMutantInjectionTests test-case lines"
+    ]
+  }
+}

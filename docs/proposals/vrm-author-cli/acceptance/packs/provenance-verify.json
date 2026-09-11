@@ -1,0 +1,216 @@
+{
+  "id": "provenance-verify",
+  "version": "0.1.0",
+  "operation": "provenance verify",
+  "operationVersion": 1,
+  "requestSchemaHash": "70b2e2c469ea9080b2c2e782034be936dff17de0ec99e8398af25d5fbf5153c3",
+  "resultSchemaHash": "9b7cfd6965bea8c7dfa26a822ac4968e3a9c8544917c6bdbd978b60803aca3fa",
+  "packHash": "a894648dabc0db87374bcee0af1e0239b9ea80850e704b7440ad4ad5746d97d8",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "docs/proposals/vrm-author-cli/README.md §9 (delivery binding)",
+      "docs/proposals/vrm-author-cli/commands.md (`provenance verify` row)",
+      "docs/proposals/vrm-author-cli/verification.md §4 (Import/export/provenance, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "VRM bytes (git-tracked mtoon_default.vrm when present, else 4 KB synthetic bytes)",
+      "signed C2PA sidecar manifest",
+      "trust policy Blob naming trusted Ed25519 signers"
+    ],
+    "parameterRanges": {
+      "file": "path",
+      "manifest": "sidecar path",
+      "trustPolicy": "Blob with matching sha256"
+    },
+    "invariants": [
+      "a valid sidecar passes binding, signature and trust separately",
+      "a missing sidecar is MISSING_INPUT with exit missingCapability and verdict incomplete",
+      "an untrusted signer is UNTRUSTED_SIGNER/gateFailed while binding and signature still pass",
+      "a one-bit tamper is BINDING_FAILED with observed/required hashes; re-exported (appended) bytes are a stale-manifest BINDING_FAILED",
+      "a forged claim under the old signature is SIGNATURE_INVALID; a trust policy with the wrong sha256 is VALIDATION_FAILED at /trustPolicy/sha256",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "sha256 hashes, byte sizes",
+    "excluded": [
+      "revocation and network trust lookups",
+      "signing (deliver)"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "mtoon-default-vrm",
+      "path": "Tests/VRMMetalKitTests/TestData/Conformance/mtoon_default.vrm",
+      "sha256": "6033199dd25443703e143918d06399e7ec74350c999a7c914fa9971eb08efd62",
+      "class": "positive",
+      "expected": {},
+      "note": "testVerifyPassesOnValidSidecar: signed in-process, verdict pass with binding/signature/trust all pass (falls back to synthetic bytes when absent)"
+    },
+    {
+      "id": "untrusted-tampered-stale-forged",
+      "path": "synthetic:signer outside the policy; one flipped bit; appended bytes; rewritten claim; wrong policy sha256",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testVerifyUntrustedSignerSeparatesTrustFromBindingAndSignature, testVerifyTamperedBindingFailsBindingOnly, testVerifyStaleManifestForReexportedBytesFailsBinding, testVerifyRejectsForgedClaimAndWrongPolicyHash"
+    },
+    {
+      "id": "missing-sidecar",
+      "path": "synthetic:manifest deleted before verification",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testVerifyMissingSidecarIsMissingInput: MISSING_INPUT, exit missingCapability, verdict incomplete"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ProvenancePackTests",
+    "environment": {
+      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift": "ab82d2176afcd1f776e4b9e583d2b49221910e736c9388b1b9a6d97b500125af",
+        "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "61d50bf07e6652e1dfb76516d5173f173a26f6b1d35f5a1bd0ecbb74164b141e"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "missing-sidecar",
+      "description": "testVerifyMissingSidecarIsMissingInput: a missing manifest must be incomplete/MISSING_INPUT, never pass.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testVerifyMissingSidecarIsMissingInput"
+      }
+    },
+    {
+      "id": "untrusted-signer",
+      "description": "testVerifyUntrustedSignerSeparatesTrustFromBindingAndSignature: a signer absent from the trust policy must fail trust only.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testVerifyUntrustedSignerSeparatesTrustFromBindingAndSignature"
+      }
+    },
+    {
+      "id": "tampered-binding",
+      "description": "testVerifyTamperedBindingFailsBindingOnly: a flipped bit must fail binding with observed and required hashes.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testVerifyTamperedBindingFailsBindingOnly"
+      }
+    },
+    {
+      "id": "stale-manifest",
+      "description": "testVerifyStaleManifestForReexportedBytesFailsBinding: a manifest for earlier bytes must fail binding as stale.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testVerifyStaleManifestForReexportedBytesFailsBinding"
+      }
+    },
+    {
+      "id": "forged-claim-wrong-policy",
+      "description": "testVerifyRejectsForgedClaimAndWrongPolicyHash: a rewritten claim must be SIGNATURE_INVALID and a wrong trust-policy hash VALIDATION_FAILED.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testVerifyRejectsForgedClaimAndWrongPolicyHash"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ProvenancePackTests test passed (executed 23, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ProvenancePackTests",
+            "executed": 23,
+            "passed": 23,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift": "2c284a15a4de2ba98702a3b80b81288369c223c33be3bab8e94e668996a2718e",
+            "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "61d50bf07e6652e1dfb76516d5173f173a26f6b1d35f5a1bd0ecbb74164b141e"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "provenance verify is a credential and binding check over bytes and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/provenance-verify.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ProvenancePackTests test-case lines"
+    ]
+  }
+}

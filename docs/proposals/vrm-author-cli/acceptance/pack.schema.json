@@ -47,12 +47,13 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "path", "sha256", "class", "expected"],
+        "required": ["id", "path", "class", "expected"],
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
-          "path": { "type": "string", "description": "Relative to the `pathEnv` directory when set, otherwise to the repository root." },
+          "path": { "type": "string", "description": "Relative to the `pathEnv` directory when set, otherwise to the repository root. Synthetic fixtures use `synthetic:<description>`." },
           "pathEnv": { "type": "string", "description": "Environment variable naming the directory that holds gitignored fixtures; `--fixtures DIR` overrides it, and the repository root is the fallback." },
-          "sha256": { "$ref": "#/$defs/sha256" },
+          "sha256": { "$ref": "#/$defs/sha256", "description": "Required unless `synthetic` is true; the runner refuses a file whose bytes differ." },
+          "synthetic": { "type": "boolean", "description": "swift-test packs only: the fixture is built in-process by the suite, so there are no bytes to pin; `sha256` is omitted and the fixture is graded from the suite's results." },
           "class": { "type": "string", "enum": ["positive", "negative", "degenerate"] },
           "expected": { "type": "object", "description": "Per-assertion expected values keyed by assertion id; a null value skips that assertion for this fixture. Keys must name declared assertions." },
           "note": { "type": "string" }
@@ -121,6 +122,7 @@
             "properties": {
               "kind": { "type": "string", "pattern": "^(metadata-noop|report-fabricated|style-mutation:[a-z0-9_-]+|swift-test)$" },
               "test": { "type": "string", "description": "swift-test: XCTest method in the runner's suite that injects this mutant and must be executed and pass." },
+              "suite": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "swift-test: XCTest suite holding `test` when it is not the runner's entryPoint suite; the runner adds it as a further `--filter`." },
               "fixture": { "type": "string", "description": "Fixture id the transform is applied to (metadata-noop, style-mutation:*)." },
               "field": { "type": "string", "description": "metadata-noop: dotted path into the glTF JSON chunk to overwrite." },
               "value": { "description": "metadata-noop: value written at `field`." },

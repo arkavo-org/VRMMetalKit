@@ -1,0 +1,222 @@
+{
+  "id": "object-set",
+  "version": "0.1.0",
+  "operation": "object set",
+  "operationVersion": 1,
+  "requestSchemaHash": "ea54a82d74e714754a418ec20ecfb5d9c967d9f7d0e2f882f2b746a4267105da",
+  "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
+  "packHash": "4479f88defc4da072aef8784b9e699ab00e3541ae798b052aa6261b73f16af10",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "Tests/VRMAuthorKitTests/Core/ProjectStoreTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "docs/proposals/vrm-author-cli/commands.md (`object set` is typed field access, not an arbitrary JSON patch bypass)",
+      "docs/proposals/vrm-author-cli/commands.md (`object set` row)",
+      "docs/proposals/vrm-author-cli/verification.md §4 (Revision/transaction, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "stub-template project objects"
+    ],
+    "parameterRanges": {
+      "id": "existing object id",
+      "values": "non-empty map of RFC 6901 pointers to typed values; pointers must be writable",
+      "expectedRevision": "current revision"
+    },
+    "invariants": [
+      "a writable-pointer edit is atomic: revision bumps once, the plan records before/after, invalidations are reported and the recipe stays in sync",
+      "ids, revision, provenance, presets, writable-pointer lists, rights, style hash, template, spring joint nodes, array appends and types are never editable; the project revision stays 0 after every refusal",
+      "the whole object is validated through its model type: range violations, unknown fields, wrong-arity rgba, dangling references, negative radii and mutually exclusive shapes are rejected",
+      "an empty values map, a non-pointer key, an unknown object, a missing values field and an extra field in the edit are rejected",
+      "a no-op edit succeeds with empty invalidations and still records a revision",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "revisions are nonnegative integers; timeoutSeconds seconds; maxMemoryMb megabytes; control values in their descriptor units (metres, degrees, normalized)",
+    "excluded": [
+      "arbitrary JSON patch",
+      "editing derived geometry, history or credentials"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "writable-edit",
+      "path": "synthetic:object set on hair:bob with two writable pointers",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testSetWritesWritablePointersAtomicallyAndReportsInvalidations: revision 0 to 1, plan before/after, invalidations, recipe in sync"
+    },
+    {
+      "id": "forbidden-and-invalid-edits",
+      "path": "synthetic:11 forbidden pointers and 13 model-invalid edits",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testSetCannotTouchIdsHistoryCredentialsOrDerivedFields and testSetValidatesWholeObjectThroughItsModelType: every one rejected, revision still 0"
+    },
+    {
+      "id": "empty-and-no-op",
+      "path": "synthetic:empty values map, non-pointer key, missing values, extra field; then a no-op edit",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testSetRequiresNonEmptyValuesAndValidPointers: rejected; testNoOpEditRecordsRevisionWithoutInvalidations: succeeds with empty invalidations"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ObjectPackTests",
+    "environment": {
+      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift": "f7d1c563654658fc307d73dc8b347da7476b223413b3b3872659f19aa7ea5796",
+        "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+        "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
+        "Tests/VRMAuthorKitTests/Core/ProjectStoreTests.swift": "6d4f5cc9fb7f2ec1c7ec342f3ef2da8a1df3d51ffae474764bdf48a7474be495"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "forbidden-pointers",
+      "description": "testSetCannotTouchIdsHistoryCredentialsOrDerivedFields: each of the 11 forbidden pointers must be an invalid request with the project revision unchanged.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testSetCannotTouchIdsHistoryCredentialsOrDerivedFields"
+      }
+    },
+    {
+      "id": "whole-object-validation",
+      "description": "testSetValidatesWholeObjectThroughItsModelType: 13 model-invalid edits must be rejected before any of the 7 valid ones apply.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testSetValidatesWholeObjectThroughItsModelType"
+      }
+    },
+    {
+      "id": "empty-values-and-bad-pointers",
+      "description": "testSetRequiresNonEmptyValuesAndValidPointers: empty values, a key without a leading slash, an unknown object, a missing values field and an unknown edit field must be rejected.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testSetRequiresNonEmptyValuesAndValidPointers"
+      }
+    },
+    {
+      "id": "atomic-rollback",
+      "description": "ProjectPackTests.testAtomicRollbackOnFailedValidationMidEdit: a multi-value object set with one invalid value must apply nothing and write no receipt.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testAtomicRollbackOnFailedValidationMidEdit",
+        "suite": "ProjectPackTests"
+      }
+    },
+    {
+      "id": "store-pointer-policy",
+      "description": "ProjectStoreTests.testWritablePointersAreEnforced: the store must refuse non-writable pointers independently of the handler.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testWritablePointersAreEnforced",
+        "suite": "ProjectStoreTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ObjectPackTests test passed (executed 7, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ObjectPackTests",
+            "executed": 7,
+            "passed": 7,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift": "703950f2d1d35f6a59088e07b63d375654e59e25899b97395da7b6e7d61f7f7e",
+            "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+            "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
+            "Tests/VRMAuthorKitTests/Core/ProjectStoreTests.swift": "6d4f5cc9fb7f2ec1c7ec342f3ef2da8a1df3d51ffae474764bdf48a7474be495"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "object set is a typed-field revision transaction and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/object-set.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ObjectPackTests --filter ProjectPackTests --filter ProjectStoreTests test-case lines"
+    ]
+  }
+}

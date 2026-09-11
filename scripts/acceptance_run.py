@@ -23,9 +23,10 @@ the corpus dimension passes per body family when the pack declares one.
 
 `runner.kind == "swift-test"` packs name an XCTest suite as their entry point. The runner
 executes `swift test --disable-sandbox --filter <suite>` from the repository root under the
-pack's deadline, grades the fixture dimension from the suite's test-case results, requires
-each `swift-test` mutant's named test to run and pass, and reports missing-handler when the
-filter matches no test case.
+pack's deadline (adding a `--filter` for every mutant `suite` override), grades the fixture
+dimension from the suite's test-case results, requires each `swift-test` mutant's named test
+to run and pass, and reports missing-handler when no test case of the entry-point suite ran.
+Fixtures marked `synthetic` are built in-process by the suite and carry no bytes to hash.
 
 Exit status: 0 pass, 1 fail, 2 pending (a fixture or corpus asset is absent),
 3 missing-handler (entry point absent), 4 pack invalid.
@@ -182,6 +183,13 @@ def validate_pack(pack, schema):
         for k in f["expected"]:
             if k not in assertion_ids:
                 errors.append(f"fixture {f['id']}: expected key {k!r} names no assertion")
+        if f.get("synthetic"):
+            if f.get("sha256"):
+                errors.append(f"fixture {f['id']}: synthetic fixtures have no bytes to pin; omit sha256")
+            if pack["runner"]["kind"] != "swift-test":
+                errors.append(f"fixture {f['id']}: synthetic fixtures require runner.kind swift-test")
+        elif not f.get("sha256"):
+            errors.append(f"fixture {f['id']}: sha256 is required unless synthetic is true")
     for m in pack["mutants"]:
         tr = m["transform"]
         kind = tr["kind"]
@@ -216,6 +224,9 @@ def validate_pack(pack, schema):
                 errors.append(f"mutant {m['id']}: swift-test packs only support swift-test and report-fabricated mutants")
     elif any(m["transform"]["kind"] == "swift-test" for m in pack["mutants"]):
         errors.append("swift-test mutants require runner.kind swift-test")
+    for m in pack["mutants"]:
+        if "suite" in m["transform"] and m["transform"]["kind"] != "swift-test":
+            errors.append(f"mutant {m['id']}: transform.suite applies only to swift-test mutants")
     if pack["evidencePolicy"]["dimensions"]["corpus"] == "required" and "corpus" not in pack:
         errors.append("evidencePolicy.dimensions.corpus is required but the pack has no corpus block")
     if not pack["visual"]["applicable"] and not pack["visual"].get("applicabilityRecord"):
@@ -577,18 +588,29 @@ class Runner:
             tests[f"{m.group('suite')}.{m.group('test')}"] = m.group("status")
         return tests
 
+    def swift_suites(self):
+        """The entry-point suite followed by every distinct mutant `suite` override, in pack order."""
+        suites = [self.pack["runner"]["entryPoint"]]
+        for m in self.pack["mutants"]:
+            s = m["transform"].get("suite")
+            if s and s not in suites:
+                suites.append(s)
+        return suites
+
     def run_swift_suite(self):
         """Run the suite once and wrap the parsed results in a report envelope."""
         suite = self.pack["runner"]["entryPoint"]
         swift = shutil.which("swift")
         if swift is None:
             return {"report": None, "oracleHashes": dict(self.oracle_hashes), "exitCode": None, "stderr": "swift toolchain not found on PATH", "tests": {}, "command": None}
-        cmd = [swift, "test", "--disable-sandbox", "--filter", suite]
+        cmd = [swift, "test", "--disable-sandbox"]
+        for s in self.swift_suites():
+            cmd += ["--filter", s]
         deadline = self.pack["resources"]["deadlineSeconds"]
         env = dict(os.environ)
         if self.fixtures_dir:
             for f in self.pack["fixtures"]:
-                if f.get("pathEnv"):
+                if f.get("pathEnv") and not f.get("synthetic"):
                     env[f["pathEnv"]] = self.fixtures_dir
         try:
             proc = subprocess.run(cmd, cwd=self.repo, capture_output=True, text=True, timeout=deadline, env=env)
@@ -616,9 +638,11 @@ class Runner:
             result.update(status="fail", reason=env["stderr"])
             result["dimensions"]["fixture"] = "fail"
             return result
-        if not env["tests"]:
+        entry = self.pack["runner"]["entryPoint"]
+        entry_tests = {t for t in env["tests"] if t.split(".", 1)[0] == entry}
+        if not entry_tests:
             if env["exitCode"] == 0:
-                result.update(status="missing-handler", reason=f"no test case matched suite {self.pack['runner']['entryPoint']!r}")
+                result.update(status="missing-handler", reason=f"no test case matched suite {entry!r}")
             else:
                 result.update(status="fail", reason=f"swift test did not run any test case (exit {env['exitCode']}): {env['stderr'][-500:]}")
                 result["dimensions"]["fixture"] = "fail"
@@ -630,12 +654,17 @@ class Runner:
             return result
         failing = env["report"]["failingTests"]
         for f in self.pack["fixtures"]:
-            out = {"id": f["id"], "class": f["class"], "path": f["path"], "sha256": f["sha256"]}
-            path = self.resolve_fixture(f)
-            out["resolvedPath"] = path
-            if not os.path.exists(path):
+            out = {"id": f["id"], "class": f["class"], "path": f["path"], "sha256": f.get("sha256", "")}
+            synthetic = bool(f.get("synthetic"))
+            if synthetic:
+                out["synthetic"] = True
+                path = None
+            else:
+                path = self.resolve_fixture(f)
+                out["resolvedPath"] = path
+            if not synthetic and not os.path.exists(path):
                 out.update(status="pending", reason=f"fixture file absent: {path}")
-            elif sha256_file(path) != f["sha256"]:
+            elif not synthetic and sha256_file(path) != f["sha256"]:
                 out.update(status="fail", reason=f"fixture sha256 {sha256_file(path)} differs from pinned {f['sha256']}")
             else:
                 checks = self.check_assertions(f, env)
@@ -657,7 +686,7 @@ class Runner:
                 out.update(status="fail", classification="accepted", reason="fabricated report envelope was accepted") if ok else \
                     out.update(status="pass", classification="reject", reason=why)
             else:
-                name = f"{self.pack['runner']['entryPoint']}.{tr['test']}"
+                name = f"{tr.get('suite') or entry}.{tr['test']}"
                 status = env["tests"].get(name)
                 if status == "passed":
                     out.update(status="pass", classification="reject", test=name)

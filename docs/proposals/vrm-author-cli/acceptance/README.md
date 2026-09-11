@@ -32,6 +32,39 @@ mutant indistinguishable from its baseline fails the pack), and lints the develo
 per body family when the corpus dimension is required. An absent fixture or corpus asset is
 reported as `pending`, never as a pass.
 
+Swift packs (`runner.kind: swift-test`) name the XCTest suite that covers the command; the
+runner executes `swift test --disable-sandbox --filter <suite>` (plus a `--filter` for every
+mutant `suite` override), grades fixtures from the suite's test-case results and requires each
+`swift-test` mutant's named test to run and pass. Their fixtures are `synthetic` (built
+in-process by the suite, no bytes to pin) unless a git-tracked file is pinned by sha256.
+`swift test --build-tests` once before running them; a cold test build eats the deadline.
+
+## Pack index
+
+| Pack | Entry point | Required level |
+|---|---|---|
+| `version`, `describe`, `capabilities`, `doctor`, `schema-show` | `DiscoveryPackTests` | fixture-tested |
+| `serve` | `ServePackTests` (+ `MCPClientTests`) | fixture-tested |
+| `project-init`, `project-inspect`, `history-list`, `history-restore` | `ProjectPackTests` | fixture-tested |
+| `template-list` | `TemplateListPackTests` (absent: no handler, expected missing-handler) | fixture-tested |
+| `recipe-export` | `ExportPackTests` | fixture-tested |
+| `recipe-apply`, `build`, `export-vrm` | `ExportPackTests` (+ `QAMutantInjectionTests`, `WearableHairTests`, `TemplatePackTests`) | visually-validated |
+| `control-list`, `control-describe` | `ControlPackTests` | fixture-tested |
+| `control-set` | `ControlPackTests` (+ `ProjectPackTests`, `NativeAnimeGeometryTests`, `WearableOutfitTests`, `WearableHairTests`) | visually-validated |
+| `object-list`, `object-get`, `object-set` | `ObjectPackTests` | fixture-tested |
+| `asset-import`, `asset-inspect` | `ProvenancePackTests` | fixture-tested + interoperability |
+| `provenance-inspect`, `provenance-resolve`, `provenance-verify` | `ProvenancePackTests` | fixture-tested |
+| `style-attach` | `MaterialsPackTests` | fixture-tested |
+| `style-lint` | `scripts/style_lint.py` (python) | corpus-validated |
+| `material-shading` | `MaterialsPackTests` | visually-validated |
+| `qa-plan`, `inspection-record`, `inspection-verify` | `QAPackTests` | fixture-tested |
+| `qa-run`, `export-verify` | `QAPackTests` (+ `QAMutantInjectionTests`) | fixture-tested (mutant injection) |
+| `deliver` | `DeliverPackTests` | fixture-tested |
+
+The runner resolves only the `fixture` and `provenance` dimensions for Swift packs; a pack whose
+policy also requires `corpus`, `visual` or `interoperability` reports `pending` (exit 2) until
+those gates exist, never a pass.
+
 `evidence.json` is the evidence registry, written only by the evaluator (a different model
 family or a human running the pack from a clean checkout at `pinnedCommit`), who records the
 pack hash, build hash and result hash of the run they witnessed. Handlers and pack authors never
