@@ -17,6 +17,7 @@ A high-performance Swift Package for loading and rendering 3D assets on Apple's 
 - **Animation System** — VRMA loader with rest-pose retargeting, humanoid bone mapping, non-humanoid node animation, and an AnimationPlayer with looping and speed control.
 - **GPU-Accelerated Physics** — SpringBone XPBD simulation in Metal compute shaders at fixed 120Hz substeps, with sphere/capsule colliders.
 - **Advanced Rendering** — MToon NPR with matcap, rim, and outline passes; GPU morph targets; skinning up to 1024 joints; triple-buffered uniforms.
+- **Device-Driven Input** — `ArmIKLayer` hand targets with finger curl, `AudioVisemeDriver` microphone lip-sync, and `VMCDriver`/`VMCReceiver` for VMC Protocol.
 - **Performance & Debugging** — built-in metrics, three-level StrictMode validation, and zero-cost conditional debug logging.
 
 ### GLTFMetalKit *(new)*
@@ -118,6 +119,7 @@ Full API reference, integration guides, and migration notes:
 - **Rendering Avatars** — renderer config, MSAA, outlines
 - **Animation and Retargeting** — VRMA loading and playback
 - **ARKit Integration** — face and body driving
+- **Device-Driven Avatars** — arm IK for keyboard/mouse hands, microphone lip-sync, VMC Protocol
 - **SpringBone Physics** — hair and cloth simulation
 - **Strict Mode** — runtime validation
 - **Migrating from VRM 0.x** — automatic 0.x compatibility notes

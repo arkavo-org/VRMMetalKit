@@ -80,7 +80,7 @@ final class SpringBoneSleepDriftWakeTests: XCTestCase {
                 throw XCTSkip("fixture collider is not a capsule")
             }
             model.springBone?.colliders[0].shape =
-                .capsule(offset: offset + delta, radius: radius, tail: tail)
+                .capsule(offset: offset + delta, radius: radius, tail: tail + delta)
         }
 
         func shiftRoot(by delta: SIMD3<Float>) {

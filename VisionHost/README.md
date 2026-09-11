@@ -98,7 +98,12 @@ head-locked one would not move.
   non-foveated drawable is locked to a soft system default that smears
   thin line art; a foveated drawable without the rate map rejects the
   pass. The simulator typically reports no foveation support, so this
-  is a no-op there and required for full quality on device.
+  is a no-op there and required for full quality on device. The host
+  prefers the `dedicated` layout: it encodes one pass per view, and a
+  rate map's layers are selected by render-target array index, which a
+  per-slice pass into a `layered` texture never sets — a layered
+  drawable hands back one two-layer map for two views, so both eyes
+  would rasterize with the first eye's pattern.
 - **Reverse-Z.** CompositorServices works in reverse-Z: the SDK documents
   `cp_drawable_get_depth_range` as returning "values in reverse-z ordering,
   with the value for the far plane in the vector's `x` property and the
@@ -113,7 +118,26 @@ head-locked one would not move.
   eye. That is the preferred submit path — calling `drawOffscreen` once
   per eye still works, but it double-steps physics and consumes two
   triple-buffer slots. Attachments are selected via `view.textureMap`,
-  so the code works under either the `layered` or `dedicated` layout.
+  so the code works under either the `layered` or `dedicated` layout;
+  `dedicated` is preferred, see foveation above.
+- **Real 4x MSAA (hardware).** Each eye rasterizes into memoryless multisample
+  colour and depth targets that resolve into the drawable at the end of
+  the pass (`storeAction = .multisampleResolve`); on Apple GPUs the samples
+  never leave tile memory. Depth is resolved rather than discarded because
+  the compositor reprojects from it, with `depthResolveFilter = .min` —
+  the farthest sample under reverse-Z, the conservative choice for
+  reprojection. The renderer is told the sample count
+  (`RendererConfig.sampleCount = 4`) so its pipeline states match the
+  pass, and `alphaToCoverageForMASK` turns the hard alpha test on `MASK`
+  materials — the lip line, hair edges — into coverage, which is what
+  stops them reading as staircases at headset resolution. The renderer
+  allocates no multisample texture of its own for this path;
+  `drawOffscreen` draws into whatever attachments the pass names.
+- **Pipeline format matches the layer.** `RendererConfig.colorPixelFormat`
+  is `.bgra8Unorm_srgb`, the layer's colour format. Building the
+  pipelines for the default `.bgra8Unorm` against an sRGB drawable trips
+  the Metal validation layer on every draw, and stores the shader's
+  linear output raw into an sRGB target, so the avatar displays too dark.
 - **Placement.** The avatar stands 1.5 m in front of the viewer. Floor
   height comes from the first tracked device pose rather than assuming the
   session origin is on the floor — in the simulator the origin is the head
@@ -147,14 +171,20 @@ head-locked one would not move.
   `encodeCompositorViews`). Older hosts that called `drawOffscreen` per
   eye stepped physics twice. The GPU bench loads a separate model so it
   cannot leave the live rig in a posed rest state.
-- No gesture input. Drawable textures are still single-sampled;
-  `config.sampleCount = 4` alone does not produce MSAA on a compositor
-  drawable — the host must allocate memoryless 4× colour+depth targets
-  that resolve into the drawable, with `depthResolveFilter = .min`
-  under reverse-Z. That recipe is documented in GettingStarted, not
-  wired here.
+- No gesture input.
+- Foveation and MSAA are hardware-only. The simulator reports no foveation
+  support, and its GPU cannot resolve a multisampled depth attachment (an
+  Apple3+ feature; the compositor needs the resolved depth for
+  reprojection), so the host falls back to the single-sample pass there.
+  Simulator screenshots are therefore non-foveated, at the default
+  quality, without MSAA.
+- `.mixed` only. A `.full` immersion host has nothing behind the layer but
+  black, so the frame must arrive with alpha `1` and finite depth
+  everywhere — glass blending and alpha-to-coverage both leave alpha
+  below `1`, and pixels still at the depth clear are treated as "no
+  content" and substituted. That host needs an alpha seal and a far-depth
+  seal at the end of its pass; this one does not do that.
 - Device-validated against `1.1.0` on Vision Pro (see
   [#87](https://github.com/arkavo-org/VRMMetalKit/issues/87)). The
   floor-height derivation assumes the first tracked device pose is at
-  eye height. Foveation / full-immersion seals / MSAA follow-ups:
-  [#423](https://github.com/arkavo-org/VRMMetalKit/issues/423).
+  eye height. Follow-ups: [#423](https://github.com/arkavo-org/VRMMetalKit/issues/423).

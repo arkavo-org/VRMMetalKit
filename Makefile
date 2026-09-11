@@ -1,7 +1,7 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-hotspots bench-visionos bench-visionos-sim
+.PHONY: help style-lint shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-hotspots bench-visionos bench-visionos-sim
 
 help:
 	@echo "VRMMetalKit Build Targets:"
@@ -14,6 +14,7 @@ help:
 	@echo "  make gltf-shaders  - Compile GLTFMetalKit (PBR) shaders into metallib"
 	@echo "  make clean         - Remove temporary build files"
 	@echo "  make test          - Run Swift tests"
+	@echo "  make style-lint    - Lint the repo-root VRM fixtures against the VRoid-lineage anime style profile"
 	@echo "  make gputrace      - Capture a .gputrace of the bundled avatar render (inspect with gpudebug)"
 	@echo "  make gputrace-baseline - Capture a .gputrace matching the VRMBenchmark baseline (animated + spring, 1024px)"
 	@echo "  make bench-baseline - Record the authoritative perf baseline (run on the dedicated perf machine)"
@@ -153,6 +154,17 @@ clean:
 test:
 	@echo "🧪 Running tests..."
 	@swift test
+
+# Style-profile lint over the repo-root fixtures (see docs/style/README.md).
+# Override the profile with STYLE_PROFILE=... and the assets with STYLE_ASSETS=...
+STYLE_PROFILE ?= docs/style/profiles/vroid-lineage-anime.json
+STYLE_ASSETS ?= $(wildcard *.vrm *.vrm.glb)
+style-lint:
+	@if [ -z "$(STYLE_ASSETS)" ]; then \
+		echo "style-lint: no .vrm / .vrm.glb fixtures at the repo root (they are gitignored); pass STYLE_ASSETS=path/to/model.vrm"; \
+	else \
+		python3 scripts/style_lint.py lint --profile $(STYLE_PROFILE) $(STYLE_ASSETS); \
+	fi
 
 # Capture a GPU trace of the bundled avatar render for offline debugging.
 # Override the output path with GPUTRACE_OUT=/path/to/out.gputrace and the
