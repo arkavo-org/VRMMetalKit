@@ -86,7 +86,11 @@ runs once per primitive) is summed, so the percentiles compare frames, not calls
 
 `make bench-hotspots` amplifies each stage by combining animation with ultra
 spring physics on a single avatar (the tracker is attached to one renderer, so
-extra avatars would not reach the per-phase samples). `bench-gate` intersects
+extra avatars would not reach the per-phase samples). The spring phases only
+do real work with `--fixed-step`: the benchmark loop is unpaced, so without it
+the renderer's wall-clock delta is near zero, the XPBD loop runs no substeps
+and `springReadback` samples on a handful of frames (probe rows in the table
+below); `BENCH_HOTSPOT_ARGS` does not yet pass the flag. `bench-gate` intersects
 common phase keys against `baselines/baseline.json`, so re-recording the
 baseline gates the phases its `BENCH_ARGS` exercise — `transformUpdate`,
 `skinPalette`, `morphSetup`, `renderItemBuild`, `outlinePass` and
@@ -168,18 +172,20 @@ absolute numbers are inflated and the min/max spread is the noise floor.
 
 **Claim (a), 759a1c6 dirty-flag skip of local-matrix rebuilds:** supported —
 `transformUpdate` and `cpuBudget` are lower in A than B in every interleaved
-pair, with no overlap between the A and B run-median ranges; `springReadback`
-and `springBone` move too because the readback re-walks the spring chain
-nodes. The commit message's original figure was an unattributed `cpuBudget`
-median from an unnamed machine; the table above is what replaces it (the
-effect on this model is larger than that figure because U has more nodes and
-spring bone adds a second walk per frame).
+pair with no overlap between the A and B run-median ranges; `springReadback`
+and `springBone` move with it because `writeBonesToNodes` calls
+`updateLocalMatrix()` + `updateWorldTransform()` per chain node, which in B
+rebuilds those subtrees a second time. The commit message's original figure
+was a `cpuBudget` median from an unnamed machine and is superseded by the
+table; the effect on this model is likely larger because U has more nodes and
+spring bone adds a second walk per frame.
 
 **Claim (b), 789bfe5 readback-buffer reuse:** not supported as a measurable
-win — every A-vs-C phase delta is inside the run-to-run spread, so the
-unconditional copy under `snapshotLock` is neutral on the render thread, and
-the removed COW copy (which only fired when the completion handler raced the
-short `writeBonesToNodes` window, on the completion thread) is not visible in
-any per-frame phase. Note that `springReadback` begins after the lock in both
-A and C, so the enclosing `springBone` phase is the discriminating one for this
-claim. Keep the commit for its hoist and instrumentation, not for the copy.
+win — every A-vs-C delta is within one percent, smaller than the spread of C's
+own run medians, so the unconditional copy under `snapshotLock` is neutral on
+the render thread. The completion handler updates `latestPositionsSnapshot`
+in place (`withUnsafeMutableBufferPointer`), so the old second reference only
+forced a COW copy while it was alive during that write — a race window on the
+completion thread that no per-frame phase can observe. `springReadback` begins
+after the lock in both A and C, so `springBone` is the discriminating phase.
+The commit stands on its hoist and instrumentation, not on the copy.
