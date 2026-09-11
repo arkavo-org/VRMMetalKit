@@ -42,6 +42,7 @@ struct BenchmarkOptions {
     var debugUVs: Int32 = 0
     var cameraOffsetY: Float = 0  // Shift camera target/eye in Y to push avatar off-screen for cull tests
     var springBoneQuality: String = "ultra"  // off, low, medium, high, ultra
+    var fixedStep: Bool = false
     var skipPreDrawTransform: Bool = false   // opt out of renderer's safety-net root transform pass
     var jsonOutPath: String? = nil           // --json [PATH]; nil = no JSON, "-" = stdout
     var baselinePath: String? = nil          // --baseline FILE
@@ -74,6 +75,9 @@ func usage() {
       --frames N       Number of measured frames (default 500)
       --warmup N       Warm-up frames (default 30)
       --fps N          Animation playback rate in frames/sec (default 60)
+      --fixed-step     Step spring-bone physics by 1/fps per frame instead of
+                       wall-clock time (renderer.simulationDeltaTime); without
+                       it an unpaced offline loop runs near-zero substeps
       --width W        Render width  (default 1024)
       --height H       Render height (default 1024)
       --sample-count N MSAA sample count (default 1)
@@ -153,6 +157,8 @@ func parseArguments() -> BenchmarkOptions? {
         case "--outline-width":
             guard let v = nextValue(for: a) else { return nil }
             opts.outlineWidth = Float(v) ?? opts.outlineWidth
+        case "--fixed-step":
+            opts.fixedStep = true
         case "--spring-bone":
             opts.enableSpringBone = true
         case "--wireframe":
@@ -735,6 +741,7 @@ struct VRMBenchmarkCLI {
             r.loadModel(avatarModel)
             r.outlineWidth = opts.outlineWidth
             r.enableSpringBone = opts.enableSpringBone
+            if opts.fixedStep { r.simulationDeltaTime = 1.0 / opts.fps }
             r.skipPreDrawTransformUpdate = opts.skipPreDrawTransform
             switch opts.springBoneQuality {
             case "off":    r.springBoneQuality = .off
