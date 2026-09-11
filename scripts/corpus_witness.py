@@ -85,7 +85,12 @@ def eligible(res, tolerance):
 
 
 def solve(family, target, evaluate, widths, tolerance, budget, seed):
-    """Set the directly invertible controls exactly, then search the rest deterministically."""
+    """Set the directly invertible controls exactly, then search the rest deterministically.
+
+    Each search coordinate keeps its own step size: a rejected move shrinks only that
+    coordinate's step, and an accepted move resets it to the initial size. A shared step
+    would let a bad sign guess on one coordinate collapse the exploration radius for every
+    other coordinate too, well before the budget is spent."""
     rng = random.Random(f"{seed}:{family}")
     controls = {}
     for metric, key in DIRECT_CONTROLS.items():
@@ -98,24 +103,61 @@ def solve(family, target, evaluate, widths, tolerance, budget, seed):
     best_res = residuals(evaluate(best), target, widths)
     best_score = max(best_res.values()) if best_res else float("inf")
 
-    step = 0.5
+    initial_step = 0.5
+    steps = {key: initial_step for key in SEARCH_CONTROLS}
     for i in range(budget):
         if best_score <= tolerance:
             break
         candidate = dict(best)
         key = SEARCH_CONTROLS[i % len(SEARCH_CONTROLS)]
-        delta = step * (1 if rng.random() < 0.5 else -1)
+        delta = steps[key] * (1 if rng.random() < 0.5 else -1)
         candidate[key] = max(-1.0, min(1.0, candidate[key] + delta))
         res = residuals(evaluate(candidate), target, widths)
         score = max(res.values()) if res else float("inf")
         if score < best_score:
             best, best_res, best_score = candidate, res, score
+            steps[key] = initial_step
         else:
-            step = max(step * 0.75, 0.01)
+            steps[key] = max(steps[key] * 0.75, 0.01)
 
     return {"family": family, "eligible": eligible(best_res, tolerance),
             "controls": {k: round(v, 6) for k, v in sorted(best.items())},
             "residuals": {k: round(v, 6) for k, v in sorted(best_res.items())}}
+
+
+def out_of_range_witness(family, target, control_ranges, widths):
+    """An ineligible witness for a family whose target needs a direct control outside the
+    template's declared validRange, or None if every direct control is in range. The CLI
+    rejects out-of-range values rather than clamping them, so this is knowable without a
+    single CLI call: any violation makes the family ineligible regardless of magnitude."""
+    residuals_out = {}
+    for metric, key in DIRECT_CONTROLS.items():
+        if metric not in target:
+            continue
+        bounds = control_ranges.get(key)
+        if not bounds or len(bounds) != 2:
+            continue
+        lo, hi = bounds
+        value = float(target[metric])
+        if lo <= value <= hi:
+            continue
+        distance = (lo - value) if value < lo else (value - hi)
+        width = widths.get(metric)
+        residuals_out[key] = distance / width if width else distance
+    if not residuals_out:
+        return None
+    controls = {key: round(float(target[metric]), 6) for metric, key in DIRECT_CONTROLS.items() if metric in target}
+    return {"family": family, "eligible": False, "controls": controls,
+            "residuals": {k: round(v, 6) for k, v in sorted(residuals_out.items())}}
+
+
+def solve_family(family, target, control_ranges, widths, evaluate, tolerance, budget, seed):
+    """Reject a family before touching the CLI if a direct control falls outside the
+    template's valid range; otherwise solve it exactly as before."""
+    witness = out_of_range_witness(family, target, control_ranges, widths)
+    if witness is not None:
+        return witness
+    return solve(family, target, evaluate, widths, tolerance, budget, seed)
 
 
 def cli_evaluator(binary, template, seed, linter, workdir, metrics):
@@ -166,7 +208,7 @@ def main(argv=None):
         print(f"vrm-author not found at {args.binary}; run swift build first", file=sys.stderr)
         return 2
 
-    template_sha = template_hash(binary, args.template)
+    template_sha, control_ranges = template_info(binary, args.template)
     out_path = os.path.join(REPO, args.out)
     document = {
         "corpusManifestSha256": sha256_file(os.path.join(REPO, args.manifest)),
@@ -183,8 +225,8 @@ def main(argv=None):
         evaluate = cli_evaluator(binary, args.template, args.seed, os.path.join(REPO, args.linter),
                                  workdir, list(widths))
         for family in sorted(targets):
-            witness = solve(family, targets[family], evaluate, widths,
-                            args.tolerance, args.budget, args.seed)
+            witness = solve_family(family, targets[family], control_ranges, widths, evaluate,
+                                   args.tolerance, args.budget, args.seed)
             document["families"][family] = {k: witness[k] for k in ("eligible", "controls", "residuals")}
             write_document(out_path, document)
             print(f"{family}: {'eligible' if witness['eligible'] else 'INELIGIBLE'}", file=sys.stderr)
@@ -195,12 +237,15 @@ def main(argv=None):
     return 0
 
 
-def template_hash(binary, template_id):
+def template_info(binary, template_id):
+    """A template's sha256 and each control's [min, max] validRange, from one `template list` call."""
     proc = run_checked([binary, "template", "list"], REPO)
     packs = json.loads(proc.stdout)["result"]["packs"]
     for pack in packs:
         if pack["id"] == template_id:
-            return pack["sha256"]
+            ranges = {c["key"]: (c["validRange"][0], c["validRange"][1])
+                     for c in pack.get("controls", []) if len(c.get("validRange", [])) == 2}
+            return pack["sha256"], ranges
     raise SystemExit(f"template {template_id!r} is not installed")
 
 

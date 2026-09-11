@@ -104,6 +104,71 @@ class Solve(unittest.TestCase):
         self.assertLess(max(a["residuals"].values()), starting_score)
         self.assertNotEqual(a["controls"]["body.proportion.legLength"], 0.0)
 
+    def test_search_reaches_a_target_needing_several_coordinates_to_move_together(self):
+        """A shared, monotonically shrinking step collapses to its floor after roughly 14
+        rejections and then can barely move any coordinate for the rest of the budget. A
+        target that needs three coordinates to move substantially and simultaneously is
+        reachable only if a rejection on one coordinate leaves the others' exploration
+        radius intact."""
+        profile = {"rules": [
+            {"metric": "proportions.hips_height_ratio", "severity": "must", "check": {"type": "range", "min": 0.5, "max": 0.62}},
+            {"metric": "proportions.shoulder_width_ratio", "severity": "must", "check": {"type": "range", "min": 0.05, "max": 0.18}},
+            {"metric": "proportions.arm_span_height_ratio", "severity": "must", "check": {"type": "range", "min": 0.5, "max": 0.7}},
+        ]}
+        widths = W.rule_widths(profile)
+
+        def evaluate(controls):
+            return {
+                "proportions.hips_height_ratio": 0.5 + 0.06 * controls["body.proportion.legLength"],
+                "proportions.shoulder_width_ratio": 0.10 + 0.06 * controls["body.proportion.shoulderWidth"],
+                "proportions.arm_span_height_ratio": 0.55 + 0.10 * controls["body.proportion.armLength"],
+            }
+
+        target = {"proportions.hips_height_ratio": 0.55, "proportions.shoulder_width_ratio": 0.155,
+                  "proportions.arm_span_height_ratio": 0.64}
+
+        a = W.solve("multi", target, evaluate, widths, tolerance=0.05, budget=200, seed=42)
+        b = W.solve("multi", target, evaluate, widths, tolerance=0.05, budget=200, seed=42)
+
+        self.assertEqual(a, b)
+        self.assertTrue(a["eligible"])
+        for key in ("body.proportion.legLength", "body.proportion.shoulderWidth", "body.proportion.armLength"):
+            self.assertGreater(abs(a["controls"][key]), 0.3)
+
+
+class OutOfRangeControls(unittest.TestCase):
+    def test_family_outside_a_direct_controls_range_is_ineligible_without_calling_evaluate(self):
+        widths = W.rule_widths(PROFILE)
+        control_ranges = {"body.heightM": (1.2, 2.0), "body.headCount": (4.5, 8.0)}
+        target = {"asset.height_m": 1.1764, "proportions.head_count": 5.674}
+
+        def evaluate(controls):
+            raise AssertionError("evaluate() must not be called for an out-of-range family")
+
+        witness = W.solve_family("heroes-alex", target, control_ranges, widths, evaluate,
+                                 tolerance=0.25, budget=200, seed=42)
+
+        self.assertFalse(witness["eligible"])
+        self.assertIn("body.heightM", witness["residuals"])
+        self.assertNotIn("body.headCount", witness["residuals"])
+
+    def test_in_range_target_is_unaffected_and_still_calls_evaluate(self):
+        widths = W.rule_widths(PROFILE)
+        control_ranges = {"body.heightM": (1.2, 2.0), "body.headCount": (4.5, 8.0)}
+        target = {"asset.height_m": 1.65, "proportions.head_count": 6.0}
+        calls = []
+
+        def evaluate(controls):
+            calls.append(controls)
+            return {"asset.height_m": controls["body.heightM"], "proportions.head_count": controls["body.headCount"]}
+
+        witness = W.solve_family("in-range", target, control_ranges, widths, evaluate,
+                                 tolerance=0.01, budget=50, seed=42)
+
+        self.assertTrue(witness["eligible"])
+        self.assertGreater(len(calls), 0)
+
+
 class MainZeroFamilies(unittest.TestCase):
     """A measurements input with no families must still produce a complete, valid document."""
 
