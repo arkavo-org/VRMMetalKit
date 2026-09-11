@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "70b2e2c469ea9080b2c2e782034be936dff17de0ec99e8398af25d5fbf5153c3",
   "resultSchemaHash": "9b7cfd6965bea8c7dfa26a822ac4968e3a9c8544917c6bdbd978b60803aca3fa",
-  "packHash": "a894648dabc0db87374bcee0af1e0239b9ea80850e704b7440ad4ad5746d97d8",
+  "packHash": "bc035f4f8a2129e53e8e405e215d0777eec2a3c3343c5b0761815addfae90003",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -22,9 +22,9 @@
     "sources": [
       "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
       "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "docs/proposals/vrm-author-cli/README.md §9 (delivery binding)",
+      "docs/proposals/vrm-author-cli/README.md \u00a79 (delivery binding)",
       "docs/proposals/vrm-author-cli/commands.md (`provenance verify` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Import/export/provenance, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Import/export/provenance, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -84,7 +84,7 @@
     "kind": "swift-test",
     "entryPoint": "ProvenancePackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift": "ab82d2176afcd1f776e4b9e583d2b49221910e736c9388b1b9a6d97b500125af",
         "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "61d50bf07e6652e1dfb76516d5173f173a26f6b1d35f5a1bd0ecbb74164b141e"

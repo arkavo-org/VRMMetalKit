@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "ea54a82d74e714754a418ec20ecfb5d9c967d9f7d0e2f882f2b746a4267105da",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "4479f88defc4da072aef8784b9e699ab00e3541ae798b052aa6261b73f16af10",
+  "packHash": "11d3a6c68fca484437af66b6842586252389de2c8dddecaff3c13fd4930dbc11",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -26,7 +26,7 @@
       "Tests/VRMAuthorKitTests/Core/ProjectStoreTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
       "docs/proposals/vrm-author-cli/commands.md (`object set` is typed field access, not an arbitrary JSON patch bypass)",
       "docs/proposals/vrm-author-cli/commands.md (`object set` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Revision/transaction, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Revision/transaction, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -84,7 +84,7 @@
     "kind": "swift-test",
     "entryPoint": "ObjectPackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift": "f7d1c563654658fc307d73dc8b347da7476b223413b3b3872659f19aa7ea5796",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",

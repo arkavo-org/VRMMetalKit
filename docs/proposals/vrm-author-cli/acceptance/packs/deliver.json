@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "d0e95952bc63babac2d1b8792529bd3ca7b807c07a1a142522a6d1914180c940",
   "resultSchemaHash": "ae4d2e79ef18d680eee198b2cd90874d869cd7c01a256c37d8d1f56e52384efb",
-  "packHash": "f719b777d09b9ec970e9885405988a30516db664dd25789ebe0701c3d7678192",
+  "packHash": "4991bce577eb97aa923ed2c64f61a597f3de83a5bd07546c7e6282ed32e305b4",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -22,9 +22,9 @@
     "sources": [
       "Tests/VRMAuthorKitTests/Provenance/DeliverPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
       "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "docs/proposals/vrm-author-cli/README.md §9 (delivery binding, ingredient preservation)",
+      "docs/proposals/vrm-author-cli/README.md \u00a79 (delivery binding, ingredient preservation)",
       "docs/proposals/vrm-author-cli/commands.md (`deliver` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Delivery, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Delivery, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -92,7 +92,7 @@
     "kind": "swift-test",
     "entryPoint": "DeliverPackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Provenance/DeliverPackTests.swift": "c1d4c3fbf5a7668e6bbabaca628140c265359e93f4a75801156b8663e2987e56",
         "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "61d50bf07e6652e1dfb76516d5173f173a26f6b1d35f5a1bd0ecbb74164b141e"

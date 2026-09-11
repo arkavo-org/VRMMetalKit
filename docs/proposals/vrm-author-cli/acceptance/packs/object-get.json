@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "a1bc5c6799a5e69fbb16599942add869e3c23c2890adb833bef16034b28d9b5b",
   "resultSchemaHash": "ef9dca01c76016fe668b7c19ac1506098af3c0bb75ccca55b800c03a92edcf23",
-  "packHash": "0acd6cc103412392a6ee6ce826f40d5820af97fee9180c11f60a101c3e391bdb",
+  "packHash": "0fd5e32946a9a65f684cf1b096906f3ffc744e9d1fd83e1a8fd7b38bb1277f01",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -25,7 +25,7 @@
       "Tests/VRMAuthorKitTests/Core/ProjectStoreTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
       "docs/proposals/vrm-author-cli/parameters.md (Rig, expression, gaze, spring and first-person fields)",
       "docs/proposals/vrm-author-cli/commands.md (`object get` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Discovery/registry, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -79,7 +79,7 @@
     "kind": "swift-test",
     "entryPoint": "ObjectPackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift": "f7d1c563654658fc307d73dc8b347da7476b223413b3b3872659f19aa7ea5796",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",

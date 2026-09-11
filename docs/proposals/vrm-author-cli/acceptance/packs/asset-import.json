@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "27cdfed01c45249c904a75eb006acdf019fe3c53cdc9a42fb1d936a1a2c4bacb",
   "resultSchemaHash": "227eb08dc6c802a115aab1471b5801183eee9cca50bb231db2eb80d5464679c2",
-  "packHash": "1c3adc0186532536813a1b35945353f771e7c538d0f415d74d3dd5bf89f88da5",
+  "packHash": "f7cde6c0abc595a3323925522063e9e9e46d2f2b4d9b695de84e925de288bd7c",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -23,9 +23,9 @@
       "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
       "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
       "docs/proposals/vrm-author-cli/parameters.md (Assets, rights and credentials)",
-      "docs/proposals/vrm-author-cli/README.md §9 (ingredient preservation)",
+      "docs/proposals/vrm-author-cli/README.md \u00a79 (ingredient preservation)",
       "docs/proposals/vrm-author-cli/commands.md (`asset import` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Import/export/provenance, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Import/export/provenance, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -114,7 +114,7 @@
     "kind": "swift-test",
     "entryPoint": "ProvenancePackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift": "ab82d2176afcd1f776e4b9e583d2b49221910e736c9388b1b9a6d97b500125af",
         "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "61d50bf07e6652e1dfb76516d5173f173a26f6b1d35f5a1bd0ecbb74164b141e"

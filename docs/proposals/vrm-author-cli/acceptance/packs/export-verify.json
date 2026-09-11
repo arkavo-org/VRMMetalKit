@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "98645b06205a41f0b388d7eaf68fad09f55671b1e0b09a1f74db2d641c7c2e62",
   "resultSchemaHash": "eb5e2c5452adfacc697a49387d561baa3f745acb9001beb9c27b9a748134d2ed",
-  "packHash": "522ff40494e90db7767fc9719e792679155848b44df5ae1f1cbddcafd1257103",
+  "packHash": "c6bb1e66f4470385e9c85f6c43bd97d22ba289c3b1489a566de12d28129c54b3",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -26,7 +26,7 @@
       "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2 (the five declared mutant classes)",
       "docs/proposals/vrm-author-cli/parameters.md (QA and inspection)",
       "docs/proposals/vrm-author-cli/commands.md (`export verify` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (QA machinery (mutant injection), fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (QA machinery (mutant injection), fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -85,9 +85,9 @@
     "kind": "swift-test",
     "entryPoint": "QAPackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/QA/QAPackTests.swift": "974077ea7ba2045cb05af14096db86e7d9f661d99eb4471a2ba3465df0349e8a",
+        "Tests/VRMAuthorKitTests/QA/QAPackTests.swift": "ef1ab233139b55036a27a3f133d20979ee7b2f640b58df90a2180be6c187f4db",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
         "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift": "8a97ce5743f3deb7f456cc091a63af10841b883680b803c356f732e28b07f83c"
       }

@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "bb82ec3a80d4a114a02cb4bf8c0f66612384fa7ef9b336a2b8cf7e2bf906bf87",
   "resultSchemaHash": "fe78c4a002fe467471d652b1cc3ce2b8674fd1bc7f14b7317f3404c3155a6e94",
-  "packHash": "5a91a7b3837c83bd4d6c45aab7e7ce5e218abe902dcfcee0a6a7dd75f77ac832",
+  "packHash": "2134227a5da2be7b52199b0aba626d02f42342505e293b4b93637122cb527ace",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -21,9 +21,9 @@
     },
     "sources": [
       "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "docs/proposals/vrm-author-cli/verification.md §1 (a missing handler produces an expected harness failure, not a passing skip)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a71 (a missing handler produces an expected harness failure, not a passing skip)",
       "docs/proposals/vrm-author-cli/commands.md (`template list` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Discovery/registry, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -83,9 +83,9 @@
     "kind": "swift-test",
     "entryPoint": "TemplateListPackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "30fd02f402b322385ea24d21bb74aba0a29e755158615570241839abb53812e0"
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "74a0246047f76ae7f66a7a00d31fac8a5cd3de46e44e67763904eddde190b5ac"
       }
     }
   },

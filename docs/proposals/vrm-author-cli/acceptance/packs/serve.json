@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "50d7ef6fd17fa70c7a74156edd317a1c383f82e460658d50a96b6ad1f12839fd",
   "resultSchemaHash": "b8bcdcb501f3ccf865b98645a30bcd182ef26fd22c27d8246ff4883d7bd145fd",
-  "packHash": "30aceeb9aa1b765348bc97a90e52ddf9b0120252d5bd9c43a86c114144558155",
+  "packHash": "35d87a262fba84b131ff3edab3897a88b26d98b1e9c1dce6ec1d2fca047b3584",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -25,7 +25,7 @@
       "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
       "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2 (independent raw-wire MCP client, second reference)",
       "docs/proposals/vrm-author-cli/commands.md (`serve` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (RPC/transport, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (RPC/transport, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -90,7 +90,7 @@
     "kind": "swift-test",
     "entryPoint": "ServePackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift": "90ed251285d146ed4482d5eaa53dd3f426943bcee96e9f01b7ba77d481b00eb5",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",

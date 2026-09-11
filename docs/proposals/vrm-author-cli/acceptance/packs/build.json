@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "26d99273f2b06e063fbe2b9da8b96962d27617d464c3adc28f009cd35ab56259",
   "resultSchemaHash": "cd16072b7fcfb65f40b2a2c08a668b6d7e616d1c4e37cc5ce762058f5634dd14",
-  "packHash": "bb69e202cdd7d992d3d8f3cf6260452040422e99d715e39ce597dff282b36e9f",
+  "packHash": "9f17c145c300ac478ddaf9be6231b9d36b3080d7f88a1f5b7405b2d29ee19934",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -27,7 +27,7 @@
       "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
       "docs/proposals/vrm-author-cli/parameters.md (Hair, outfits and accessories; Rig, expression, gaze, spring and first-person fields)",
       "docs/proposals/vrm-author-cli/commands.md (`build` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Compile (Shape + Hair/springs + Materials aggregated), visually-validated)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Compile (Shape + Hair/springs + Materials aggregated), visually-validated)"
     ],
     "reviewReceipt": ""
   },
@@ -91,7 +91,7 @@
     "kind": "swift-test",
     "entryPoint": "ExportPackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "a598e0d27c205ab4060ad3b9ff0b6710e9b3ec748f2c3521184dc1623306de2f",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
@@ -216,7 +216,7 @@
       "silhouette"
     ],
     "thresholds": {},
-    "adjudication": "different-family judge, zero false accepts on the 12-case calibration set (verification.md §5)"
+    "adjudication": "different-family judge, zero false accepts on the 12-case calibration set (verification.md \u00a75)"
   },
   "evidencePolicy": {
     "requiredLevel": "visually-validated",
@@ -227,7 +227,7 @@
       "interoperability": "inapplicable",
       "provenance": "required"
     },
-    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md §6)."
+    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md \u00a76)."
   },
   "corpus": {
     "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json",

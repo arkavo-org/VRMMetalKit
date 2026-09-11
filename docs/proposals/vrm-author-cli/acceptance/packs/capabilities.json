@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "12d0677991dc912da9b0619be481f6fd312a45283c14f4233e7d86cedbb88b65",
   "resultSchemaHash": "383149d3f92fd72f53637c9d37eb1568c1d94b951ee26663225f1226cd3df677",
-  "packHash": "098a6ee80c150174bb683b5deabc86b2e47940429a06f1704ccc111fec5881b9",
+  "packHash": "921de1f23b881b71fe360ac6ce2a267c36e5c5eb39de835620273d0b7a303f41",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -21,9 +21,9 @@
     },
     "sources": [
       "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ d930432a851f1256e206fc5ed2c140c62edeacc2",
-      "docs/proposals/vrm-author-cli/verification.md §7 (Evidence records and admission)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a77 (Evidence records and admission)",
       "docs/proposals/vrm-author-cli/commands.md (`capabilities` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Discovery/registry, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -82,9 +82,9 @@
     "kind": "swift-test",
     "entryPoint": "DiscoveryPackTests",
     "environment": {
-      "pinnedCommit": "d930432a851f1256e206fc5ed2c140c62edeacc2",
+      "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "2f70e960a1d8af5b4d76d60226d55ae471b8b1170a6d0f39fc74f11cb5a42a75"
+        "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "7ac2a7b9693cf4f6b1b983c75e13adfe912e7a038888f232916c837e6f8ba4e7"
       }
     }
   },
