@@ -137,15 +137,16 @@ public class IdleBreathingLayer: AnimationLayer {
         spineTransform.rotation = simd_quatf(angle: -swayValue * 0.5, axis: SIMD3<Float>(0, 0, 1))
         cachedOutput.bones[.spine] = spineTransform
 
-        // Arms down from T-pose - rotate upper arms down ~70 degrees
-        // In VRM, upper arm X-axis points along the arm, Z-axis points forward
-        // Rotate around Z-axis to bring arms down to sides
+        // Arms down from T-pose - rotate upper arms down ~70 degrees.
+        // Normalized VRM rest pose: left upper arm points along +X, right along -X,
+        // +Z is the model's front. A negative rotation about +Z takes +X toward -Y,
+        // so the left arm needs a negative angle and the right arm a positive one.
         var leftUpperArmTransform = ProceduralBoneTransform.identity
-        leftUpperArmTransform.rotation = simd_quatf(angle: 1.2, axis: SIMD3<Float>(0, 0, 1))  // ~70° down
+        leftUpperArmTransform.rotation = simd_quatf(angle: -1.2, axis: SIMD3<Float>(0, 0, 1))  // ~70° down
         cachedOutput.bones[.leftUpperArm] = leftUpperArmTransform
 
         var rightUpperArmTransform = ProceduralBoneTransform.identity
-        rightUpperArmTransform.rotation = simd_quatf(angle: -1.2, axis: SIMD3<Float>(0, 0, 1))  // ~70° down (opposite direction)
+        rightUpperArmTransform.rotation = simd_quatf(angle: 1.2, axis: SIMD3<Float>(0, 0, 1))  // ~70° down (opposite direction)
         cachedOutput.bones[.rightUpperArm] = rightUpperArmTransform
 
         // Bend elbows slightly for natural pose (~20 degrees)

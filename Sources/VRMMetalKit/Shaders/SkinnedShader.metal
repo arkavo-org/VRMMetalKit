@@ -459,16 +459,19 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  out.animatedTexCoord = in.texCoord;  // Will be animated in fragment shader if needed
  out.color = in.color;
 
- // First-person head-bone culling: degenerate the position so the triangle is clipped.
- if (uniforms.cameraMode == 1u && firstPersonHiddenFlags[vertexID] != 0u) {
-     out.position = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped by homogeneous divide
- }
-
  if (instanceId == 1u) {
  applyMToonOutlineExtrusion(out.worldPosition, out.position, out.worldNormal,
                             out.texCoord, uniforms, material,
                             outlineWidthMultiplyTexture, outlineWidthSampler,
                             material.hasOutlineWidthMultiplyTexture > 0);
+ }
+
+ // First-person head-bone culling: degenerate the position so the triangle is
+ // clipped. Runs AFTER the hull extrusion: the world-coordinates branch
+ // recomputes clipPos from worldPos, which would resurrect a vertex degenerated
+ // before it and draw the hidden head's outline hull straight into the camera.
+ if (uniforms.cameraMode == 1u && firstPersonHiddenFlags[vertexID] != 0u) {
+     out.position = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped by homogeneous divide
  }
 
  return out;
@@ -482,57 +485,13 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
  VertexOut out;
  out.instanceId = 0;
 
- // Store RAW weights for threshold check
- float4 rawWeights = in.weights;
-
- // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
- float4 weights = rawWeights;
- float weightSum = dot(weights, float4(1.0));
- if (weightSum > 1e-6) {
- weights = weights / weightSum;
- } else {
- weights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
- }
-
- // Apply skeletal skinning - use RAW weights for threshold check
- float4x4 skinMatrix = float4x4(0.0);
- float threshold = WEIGHT_THRESHOLD;
-
- // Safe buffer limit: clamp to 255 to prevent reading garbage memory
- uint maxJoint = kMaxSafeJointIndex;
- uint4 safeJoints = min(in.joints, uint4(maxJoint));
-
- if (rawWeights[0] > threshold) {
- skinMatrix += jointMatrices[safeJoints[0]] * weights[0];
- }
- if (rawWeights[1] > threshold) {
- skinMatrix += jointMatrices[safeJoints[1]] * weights[1];
- }
- if (rawWeights[2] > threshold) {
- skinMatrix += jointMatrices[safeJoints[2]] * weights[2];
- }
- if (rawWeights[3] > threshold) {
- skinMatrix += jointMatrices[safeJoints[3]] * weights[3];
- }
-
- // Fallback: if skinMatrix is zero, use first joint
- if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
- skinMatrix = jointMatrices[safeJoints[0]];
- }
-
- // Apply skinning to position and normal
- float4 skinnedPosition = skinMatrix * float4(in.position, 1.0);
- float3 skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
-
- // SANITY CHECK: Detect NaN/Inf or extreme skinned positions and fall back to original
- bool posHasNaN = any(isnan(skinnedPosition.xyz)) || any(isinf(skinnedPosition.xyz));
- bool posHasExtreme = length(skinnedPosition.xyz) > 50.0;
- bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
- if (posHasNaN || posHasExtreme || normalHasNaN) {
- skinnedPosition = float4(in.position, 1.0);
- skinnedNormal = in.normal;
- }
- skinnedNormal = normalize(skinnedNormal);
+ // Skinning through the shared helper, like every other skinned entry point,
+ // so this debug shader cannot drift from the path it is used to inspect.
+ float4 skinnedPosition;
+ float3 skinnedNormal;
+ vrm_skin(in.position, in.normal, in.joints, in.weights,
+          jointMatrices, uniforms.useDualQuaternionSkinning > 0.5,
+          skinnedPosition, skinnedNormal);
 
  // Transform to world space
  float4 worldPos = uniforms.modelMatrix * skinnedPosition;
@@ -563,132 +522,72 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
  return out;
 }
 
-// Skinned MToon outline vertex shader (inverted hull technique)
+// Skinned MToon outline vertex shader (inverted hull technique).
+//
+// Takes the same per-vertex inputs as the body shader (morphed positions,
+// first-person hidden flags, outline width multiply texture) and runs the same
+// two shared helpers — `vrm_skin` for the skinning and
+// `applyMToonOutlineExtrusion` for the hull — so a hull drawn by the dedicated
+// pass tracks the surface the body draw produced. This pass is what
+// double-sided materials use (`MToonOutlineDraw.shouldMerge` rejects them), and
+// face/eye items are force-double-sided, so it is the path faces take.
 vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
                                               constant Uniforms& uniforms [[buffer(1)]],
                                               constant MToonMaterial& material [[buffer(8)]],
-                                              constant float4x4* jointMatrices [[buffer(25)]]) {
+                                              constant float4x4* jointMatrices [[buffer(25)]],
+                                              device const float3* morphedPositions [[buffer(20)]],
+                                              constant uint& hasMorphed [[buffer(22)]],
+                                              device const uint8_t* firstPersonHiddenFlags [[buffer(26)]],
+                                              texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
+                                              sampler outlineWidthSampler [[sampler(0)]],
+                                              uint vertexID [[vertex_id]]) {
  VertexOut out;
  out.instanceId = 0;
 
- // Store RAW weights for threshold check
- float4 rawWeights = in.weights;
+ // Morph before skinning, exactly as the body shader does; otherwise the hull
+ // sits at the rest silhouette while an expression moves the surface.
+ float3 basePosition = (hasMorphed > 0) ? float3(morphedPositions[vertexID]) : in.position;
 
- // Normalize weights to ensure they sum to 1.0 (prevents partial transforms)
- float4 weights = rawWeights;
- float weightSum = dot(weights, float4(1.0));
- if (weightSum > 1e-6) {
- weights = weights / weightSum;
- } else {
- weights = float4(1.0, 0.0, 0.0, 0.0); // Fallback to first joint
- }
-
- // Apply skeletal skinning - use RAW weights for threshold check
- float threshold = WEIGHT_THRESHOLD;
-
- // Safe buffer limit: clamp to 255 to prevent reading garbage memory
- uint maxJoint = kMaxSafeJointIndex;
- uint4 safeJoints = min(in.joints, uint4(maxJoint));
-
- float4 gatedWeights = float4(
-     rawWeights[0] > threshold ? weights[0] : 0.0,
-     rawWeights[1] > threshold ? weights[1] : 0.0,
-     rawWeights[2] > threshold ? weights[2] : 0.0,
-     rawWeights[3] > threshold ? weights[3] : 0.0);
-
- // Skin the outline hull with the SAME path as the body (#197) so the
- // inverted-hull outline tracks the DQS-skinned surface instead of an LBS one.
+ // Skin the outline hull with the SAME path as the body (#197) via the
+ // shared vrm_skin helper, so the inverted-hull outline tracks the
+ // DQS-skinned surface instead of an LBS one.
  float4 skinnedPosition;
  float3 skinnedNormal;
- if (uniforms.useDualQuaternionSkinning > 0.5) {
- float3 dqPos = in.position;
- float3 dqNrm = in.normal;
- dqsSkin(jointMatrices[safeJoints[0]], jointMatrices[safeJoints[1]],
-         jointMatrices[safeJoints[2]], jointMatrices[safeJoints[3]],
-         gatedWeights, dqPos, dqNrm);
- skinnedPosition = float4(dqPos, 1.0);
- skinnedNormal = dqNrm;
- } else {
- float4x4 skinMatrix = float4x4(0.0);
- skinMatrix += jointMatrices[safeJoints[0]] * gatedWeights[0];
- skinMatrix += jointMatrices[safeJoints[1]] * gatedWeights[1];
- skinMatrix += jointMatrices[safeJoints[2]] * gatedWeights[2];
- skinMatrix += jointMatrices[safeJoints[3]] * gatedWeights[3];
- if (skinMatrix[0][0] == 0.0 && skinMatrix[1][1] == 0.0 && skinMatrix[2][2] == 0.0) {
- skinMatrix = jointMatrices[safeJoints[0]];
- }
- skinnedPosition = skinMatrix * float4(in.position, 1.0);
- skinnedNormal = (skinMatrix * float4(in.normal, 0.0)).xyz;
- }
-
- // SANITY CHECK: Detect NaN/Inf or extreme skinned positions and fall back to original
- bool posHasNaN = any(isnan(skinnedPosition.xyz)) || any(isinf(skinnedPosition.xyz));
- bool posHasExtreme = length(skinnedPosition.xyz) > 50.0;
- bool normalHasNaN = any(isnan(skinnedNormal)) || any(isinf(skinnedNormal));
- if (posHasNaN || posHasExtreme || normalHasNaN) {
- skinnedPosition = float4(in.position, 1.0);
- skinnedNormal = in.normal;
- }
- skinnedNormal = normalize(skinnedNormal);
+ vrm_skin(basePosition, in.normal, in.joints, in.weights,
+          jointMatrices, uniforms.useDualQuaternionSkinning > 0.5,
+          skinnedPosition, skinnedNormal);
 
  // Transform to world space
  float4 worldPos = uniforms.modelMatrix * skinnedPosition;
  float3 worldNormal = normalize((uniforms.normalMatrix * float4(skinnedNormal, 0.0)).xyz);
 
- // Get outline width from material
- float outlineWidth = material.outlineWidthFactor;
-
- // Extract camera world position from view matrix: cameraPos = -R^T * translation
- // Done once at the start for use in both outline modes and view direction
  float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
                                    uniforms.viewMatrix[1].xyz,
                                    uniforms.viewMatrix[2].xyz);
  float3 cameraWorldPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
 
- // Calculate view direction
- float3 viewDir = normalize(cameraWorldPos - worldPos.xyz);
-
- // Apply outline extrusion along normal
- // outlineMode: 0=none, 1=worldCoordinates, 2=screenCoordinates
- // Must match MToonShader.metal for visual consistency
- if (material.outlineMode == 1) {
-  // World coordinates: width scales with camera distance (matches non-skinned)
-  float distanceScale = length(worldPos.xyz - cameraWorldPos) * 0.01;
-  worldPos.xyz += worldNormal * outlineWidth * distanceScale;
- } else if (material.outlineMode == 2) {
-  // Screen coordinates: fixed pixel width (matches non-skinned NDC approach)
-  float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos;
-  float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
-  float2 screenNormal = normalize(viewNormal.xy);
-  float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
-  float2 offsetNDC = screenNormal * outlineWidth * pixelsToNDC;
-  clipPos.xy += offsetNDC * clipPos.w;
-  out.position = clipPos;
-  out.worldPosition = worldPos.xyz;
-  out.worldNormal = worldNormal;
-  out.viewDirection = viewDir;
-  out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
-  out.texCoord = in.texCoord;
-  out.animatedTexCoord = in.texCoord;
-  out.color = in.color;
-  return out;
- }
-
  out.worldPosition = worldPos.xyz;
  out.worldNormal = worldNormal;
-
- // Transform to clip space
- float4 viewPosition = uniforms.viewMatrix * worldPos;
- out.position = uniforms.projectionMatrix * viewPosition;
-
- // Calculate view direction and view normal
- out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
- out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
-
- // Pass through texture coordinates and vertex color
+ out.position = uniforms.projectionMatrix * (uniforms.viewMatrix * worldPos);
  out.texCoord = in.texCoord;
  out.animatedTexCoord = in.texCoord;
  out.color = in.color;
+
+ // Shared with the merged hull in `skinned_mtoon_vertex`, so both hull paths
+ // extrude identically and both honour outlineWidthMultiplyTexture (VMK#289).
+ applyMToonOutlineExtrusion(out.worldPosition, out.position, out.worldNormal,
+                            out.texCoord, uniforms, material,
+                            outlineWidthMultiplyTexture, outlineWidthSampler,
+                            material.hasOutlineWidthMultiplyTexture > 0);
+
+ out.viewDirection = normalize(cameraWorldPos - out.worldPosition);
+ out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
+
+ // First-person head-bone culling, after the extrusion for the same reason as
+ // in the body shader: the world-coordinates branch rebuilds clipPos.
+ if (uniforms.cameraMode == 1u && firstPersonHiddenFlags[vertexID] != 0u) {
+     out.position = float4(0.0, 0.0, -2.0, 0.0); // w=0 → clipped by homogeneous divide
+ }
 
  return out;
 }

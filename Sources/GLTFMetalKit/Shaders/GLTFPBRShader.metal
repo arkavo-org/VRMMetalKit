@@ -318,8 +318,10 @@ static inline float2 applyTextureTransform(float2 uv, float2 offset, float2 scal
         float c = cos(rotation);
         float s = sin(rotation);
         float2 rotatedUV;
-        rotatedUV.x = scaledUV.x * c - scaledUV.y * s;
-        rotatedUV.y = scaledUV.x * s + scaledUV.y * c;
+        // KHR_texture_transform rotation is counter-clockwise in U-right /
+        // V-down UV space (KhronosGroup/glTF#1563; three.js setUvTransform).
+        rotatedUV.x = scaledUV.x * c + scaledUV.y * s;
+        rotatedUV.y = -scaledUV.x * s + scaledUV.y * c;
         return rotatedUV + offset;
     }
     return scaledUV + offset;

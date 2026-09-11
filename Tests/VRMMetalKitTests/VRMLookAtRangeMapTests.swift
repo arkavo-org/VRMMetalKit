@@ -84,7 +84,7 @@ final class VRMLookAtRangeMapBoneModeTests: XCTestCase {
 
     // G4: inner/outer distinction — right eye looking right uses outer map
     func testBoneModeRightEyeOuterMapUsedWhenLookingRight() {
-        // For right eye, yaw > 0 is outer; we verify rangeMapOutput uses outer map correctly
+        // For the right eye, yaw < 0 (looking right) is outer; we verify rangeMapOutput uses the outer map correctly
         let outerMap = VRMLookAtRangeMap(inputMaxValue: 90.0, outputScale: 30.0)
         let innerMap = VRMLookAtRangeMap(inputMaxValue: 90.0, outputScale: 60.0)
         let inputRad: Float = 90.0 * (.pi / 180.0)

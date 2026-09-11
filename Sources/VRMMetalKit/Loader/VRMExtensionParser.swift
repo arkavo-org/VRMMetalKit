@@ -1113,10 +1113,12 @@ public class VRMExtensionParser {
                         // The default `(0, -1, 0)` is Ry180-invariant, so common
                         // assets are unaffected; this flip matches three-vrm's
                         // VRM0 → VRM1 converter for stylized gravity directions.
+                        // Components arrive as AnyCodable Double/Int, never Float,
+                        // so coerce through `parseFloatValue`.
                         if let gravityDir = groupDict["gravityDir"] as? [String: Any] {
-                            let x = gravityDir["x"] as? Float ?? 0
-                            let y = gravityDir["y"] as? Float ?? -1
-                            let z = gravityDir["z"] as? Float ?? 0
+                            let x = parseFloatValue(gravityDir["x"]) ?? 0
+                            let y = parseFloatValue(gravityDir["y"]) ?? -1
+                            let z = parseFloatValue(gravityDir["z"]) ?? 0
                             joint.gravityDir = SIMD3<Float>(-x, y, -z)
                         }
 
@@ -1151,15 +1153,13 @@ public class VRMExtensionParser {
                             continue
                         }
 
-                        // VRM 0.0 collider format.
-                        // VRM 0.0 (Unity) uses a left-handed -Z forward system; VRM 1.0 / glTF uses +Z forward.
-                        // The node hierarchy is conjugated by `Ry180` at load time
-                        // (see `VRMModel.buildNodeHierarchy`), so the parent's local frame is
-                        // now rotated in world.  To keep the collider at the same world
-                        // position, the offset (expressed in the parent's local frame) must
-                        // be rotated too: `offset_new = Ry180·offset_old = (-x, y, -z)`.
+                        // VRM 0.0 collider offsets retain Unity's handedness:
+                        // first reflect Z to enter the glTF node's local frame,
+                        // as three-vrm's VRM0 loader does. Then apply the same
+                        // Ry180 facing conversion as buildNodeHierarchy.
+                        // Ry180 * reflectZ * (x,y,z) = (-x,y,z).
                         let rawOffset = parseVRM0Vector3(colliderDict["offset"]) ?? SIMD3<Float>(0, 0, 0)
-                        let offset = SIMD3<Float>(-rawOffset.x, rawOffset.y, -rawOffset.z)
+                        let offset = SIMD3<Float>(-rawOffset.x, rawOffset.y, rawOffset.z)
                         let radius = parseFloatValue(colliderDict["radius"]) ?? 0.0
 
                         // VRM 0.0 only supports spheres in most implementations
@@ -1231,11 +1231,13 @@ public class VRMExtensionParser {
         }
     }
 
+    /// VRM 0.x `{x, y, z}` object. Components arrive as AnyCodable Double/Int
+    /// (never Float), so each goes through `parseFloatValue`.
     private func parseVRM0Vector3(_ value: Any?) -> SIMD3<Float>? {
         if let dict = value as? [String: Any] {
-            let x = dict["x"] as? Float ?? 0
-            let y = dict["y"] as? Float ?? 0
-            let z = dict["z"] as? Float ?? 0
+            let x = parseFloatValue(dict["x"]) ?? 0
+            let y = parseFloatValue(dict["y"]) ?? 0
+            let z = parseFloatValue(dict["z"]) ?? 0
             return SIMD3<Float>(x, y, z)
         }
         return nil

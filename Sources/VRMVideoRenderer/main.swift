@@ -96,6 +96,8 @@ func printUsage() {
         -d, --duration <secs>   Duration in seconds (default: 5.0)
         --orbit                 Enable orbiting camera
         --orbit-target <target> Orbit focus: face, hips, body (default: body)
+        --gaze-sweep           Circle the look-at target in front of the face over the clip
+                               (up, model's left, down, model's right) to validate gaze direction
         --ortho                 Use orthographic projection
         --hevc                  Use HEVC codec instead of H.264
         --root-motion           Enable root motion (hips translation)
@@ -207,6 +209,7 @@ struct RenderOptions {
     var staggerGain: Float? = nil       // shoveGain override (calibration knob)
     var springGravity: Float? = nil     // Override app-layer spring gravity (nil = auto)
     var dumpColliders: Bool = false     // Print the spring-bone collider setup and exit
+    var gazeSweep: Bool = false         // Sweep the look-at target around the face (validation)
 }
 
 /// Diagnostics go to stderr so a typo'd option stays visible when stdout is
@@ -366,6 +369,8 @@ func parseArguments() -> RenderOptions? {
             }
         case "--realtime":
             options.crowdRealtime = true
+        case "--gaze-sweep":
+            options.gazeSweep = true
         default:
             break
         }
@@ -889,6 +894,13 @@ struct VRMVideoRendererCLI {
             for frameIndex in 0..<totalFrames {
                 // Update animation
                 player.update(deltaTime: 1.0 / Float(options.fps), model: model)
+                if options.gazeSweep {
+                    // Start looking up, then sweep through the model's left (+X),
+                    // down, and the model's right, 0.5 m in front of the head.
+                    let t = Float(frameIndex) / Float(max(totalFrames, 1)) * 2 * Float.pi
+                    let headY: Float = (model.humanoid?.getBoneNode(.head)).map { model.nodes[$0].worldPosition.y } ?? 1.4
+                    lookAtController.target = .point(SIMD3<Float>(sin(t) * 0.5, headY + cos(t) * 0.5, 0.5))
+                }
                 lookAtController.applyImmediately()
 
                 // Update camera

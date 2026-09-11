@@ -19,9 +19,16 @@ import Metal
 
 /// Calculates depth bias values for materials to resolve Z-fighting
 ///
-/// Depth bias (polygon offset) pushes fragments toward the camera in depth buffer space,
-/// ensuring they pass depth tests against coplanar surfaces. This resolves true Z-fighting
-/// between overlapping geometry.
+/// Depth bias (polygon offset) is added to the rasterized depth. Under standard Z
+/// (near = 0, far = 1, compare less/lessEqual) a positive bias moves a fragment
+/// away from the camera. This table assigns the *larger* bias to overlays
+/// (`overlayBiasOffset` and the progressive base values), which under that
+/// sign pushes overlays farther from the camera, the opposite of what a
+/// coplanar overlay needs to win. It has no visible effect because every
+/// constant here is below one depth-buffer ULP after rasterization; the
+/// layering that actually holds comes from `.lessEqual`, draw order, and the
+/// slope-scale term. Treat the constants as legacy tuning, not as the
+/// mechanism.
 ///
 /// ## Thread safety
 /// This class caches resolved bias values in a non-synchronised dictionary.
@@ -103,7 +110,7 @@ public final class DepthBiasCalculator {
     /// - Parameters:
     ///   - materialName: Name of the material
     ///   - isOverlay: Whether this is an overlay material (renders on top of base)
-    /// - Returns: Depth bias value in depth buffer units (positive = toward camera)
+    /// - Returns: Depth bias value in depth buffer units (positive = larger depth, i.e. away from the camera under standard Z)
     public func depthBias(for materialName: String, isOverlay: Bool) -> Float {
         // Look up base bias for material
         let baseBias = lookupBias(for: materialName)
@@ -251,8 +258,11 @@ public final class DepthBiasCalculator {
  - Numerical differences in matrix math
  
  ### Solution
- Depth bias pushes fragments toward the camera (lower depth value) so they
- consistently pass the depth test against coplanar surfaces behind them.
+ Depth bias is added to the fragment depth. Under standard Z a positive bias
+ pushes fragments away from the camera (higher depth value). The values
+ below give overlays the larger bias, so read literally they push overlays
+ away from the camera; they are all sub-ULP, so in practice they are inert
+ and overlays win through `.lessEqual`, draw order, and slope scale.
  
  ### Bias Values
  

@@ -144,7 +144,7 @@ enum SpringBoneBreastCollider {
             let o0 = invAnchor * SIMD4<Float>(p0, 1)
             let o1 = invAnchor * SIMD4<Float>(p1, 1)
             let offset = SIMD3<Float>(o0.x, o0.y, o0.z)
-            let tail = SIMD3<Float>(o1.x - o0.x, o1.y - o0.y, o1.z - o0.z)
+            let tail = SIMD3<Float>(o1.x, o1.y, o1.z)
             let radius = fit.radius * radiusScale
             guard offset.x.isFinite, tail.x.isFinite, radius.isFinite, radius > 1e-4 else { continue }
             out.append(VRMCollider(node: fit.anchor, shape: .capsule(offset: offset, radius: radius, tail: tail)))
@@ -286,7 +286,7 @@ enum SpringBoneBreastCollider {
         let o0 = inv * SIMD4<Float>(p0, 1)
         let o1 = inv * SIMD4<Float>(p1, 1)
         let offset = SIMD3<Float>(o0.x, o0.y, o0.z)
-        let tail = SIMD3<Float>(o1.x - o0.x, o1.y - o0.y, o1.z - o0.z)
+        let tail = SIMD3<Float>(o1.x, o1.y, o1.z)
         guard offset.x.isFinite, tail.x.isFinite else { return [] }
         return [VRMCollider(node: spineNode, shape: .capsule(offset: offset, radius: radius, tail: tail))]
     }

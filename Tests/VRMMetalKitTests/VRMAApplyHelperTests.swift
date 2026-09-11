@@ -172,8 +172,8 @@ final class VRMAApplyHelperTests: XCTestCase {
         let player = AnimationPlayer()
 
         var clip = AnimationClip(duration: 1.0)
-        // Same head-local 1 m to the right — must drive LookRight.
-        clip.lookAtTargetSampler = { _ in SIMD3<Float>(1, 0, 0) }
+        // Same head-local 1 m to the model's right (-X) — must drive LookRight.
+        clip.lookAtTargetSampler = { _ in SIMD3<Float>(-1, 0, 0) }
 
         player.applyClip(
             clip, atTime: 0, to: rig.model,

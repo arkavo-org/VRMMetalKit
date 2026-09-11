@@ -297,13 +297,15 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
         verifyNoNaNPositions(model: model)
     }
 
-    /// Test that capsule tail is interpreted relative to offset (verifies bug fix)
-    /// VRM Spec: tail is relative to offset, not node position
-    /// BUG FIX: worldP1 = colliderNode.worldPosition + offset + tail (not just + tail)
+    /// A capsule whose `offset` and `tail` are both non-zero local positions
+    /// (VRMC_springBone-1.0: `tail` is "the center position of the capsule
+    /// end-side semicircle in the local coordinates of the target node")
+    /// simulates without NaNs. Endpoint placement is pinned by
+    /// `SpringBoneCapsuleTailTests`.
     func testCapsuleTailOffsetInterpretation() throws {
         let model = try buildModelWithCapsuleOffset(
-            offset: SIMD3<Float>(0.1, 0, 0),  // Capsule offset from node
-            tail: SIMD3<Float>(0.2, 0, 0),    // Tail relative to offset
+            offset: SIMD3<Float>(0.1, 0, 0),
+            tail: SIMD3<Float>(0.3, 0, 0),
             radius: 0.1
         )
 
@@ -599,7 +601,7 @@ final class SpringBoneCollisionGroupTests: XCTestCase {
             let colliderIndex = vrmColliders.count
             vrmColliders.append(VRMCollider(
                 node: 0,
-                shape: .capsule(offset: capsule.p0, radius: capsule.radius, tail: capsule.p1 - capsule.p0)
+                shape: .capsule(offset: capsule.p0, radius: capsule.radius, tail: capsule.p1)
             ))
             groupToColliders[capsule.group, default: []].append(colliderIndex)
         }

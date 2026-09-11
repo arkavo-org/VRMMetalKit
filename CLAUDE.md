@@ -91,7 +91,7 @@ Add `--json` for machine-readable output (agent-friendly). Sessions persist betw
   *   **MSAA Alpha-to-Coverage:** `RendererConfig(sampleCount: 4)` enables 4x MSAA with alpha-to-coverage for MASK materials. Smoothly fades alpha cutout edges using subpixel coverage.
 *   **Animation:**
   *   **VRMA Retargeting:** Automatically maps animation rest pose to model rest pose (T-pose).
-  *   **Hybrid Compute:** Uses GPU compute shaders for morphs when >8 targets are active.
+  *   **Morph Compute:** Morph accumulation always runs on a GPU compute kernel, capped at 8 active targets per primitive dispatch; surplus lowest-weight targets are dropped. There is no CPU morph path.
 *   **Physics (`SpringBone*`):**
   *   XPBD simulation running at fixed 120Hz substeps in Compute Shaders.
 *   **ARKit Integration:**

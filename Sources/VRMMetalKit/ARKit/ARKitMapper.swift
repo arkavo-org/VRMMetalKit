@@ -139,10 +139,21 @@ public struct ARKitToVRMMapper: Sendable {
     /// Mapping from VRM expression preset to blend shape formula
     public var mappings: [String: BlendShapeFormula]
 
+    /// Swap every left/right expression pair (`lookLeft`/`lookRight`,
+    /// `blinkLeft`/`blinkRight`) on evaluation.
+    ///
+    /// ARKit blend shapes are face-relative and VRM lateral presets name the
+    /// model's own side, so the default (`false`) keeps laterality: the avatar
+    /// stands in for the user, which is what a recording or a stream needs.
+    /// Set `true` for a self-view where the user watches their avatar like a
+    /// mirror, so a glance to the user's left appears on the same screen side.
+    public var mirrorLateral: Bool = false
+
     /// Creates a mapper with an explicit dictionary of VRM-expression-key to ``BlendShapeFormula``.
     /// The default value `[:]` is useful when assembling mappings post-init via ``mappings``.
-    public init(mappings: [String: BlendShapeFormula] = [:]) {
+    public init(mappings: [String: BlendShapeFormula] = [:], mirrorLateral: Bool = false) {
         self.mappings = mappings
+        self.mirrorLateral = mirrorLateral
     }
 
     /// Evaluate all mapped expressions from ARKit blend shapes
@@ -150,15 +161,27 @@ public struct ARKitToVRMMapper: Sendable {
     public func evaluate(_ blendShapes: ARKitFaceBlendShapes) -> [String: Float] {
         var result: [String: Float] = [:]
         for (vrmExpression, formula) in mappings {
-            result[vrmExpression] = formula.evaluateClamped(blendShapes)
+            result[Self.outputKey(for: vrmExpression, mirrored: mirrorLateral)] = formula.evaluateClamped(blendShapes)
         }
         return result
     }
 
     /// Evaluate single expression
     public func evaluate(_ blendShapes: ARKitFaceBlendShapes, expression: String) -> Float {
-        guard let formula = mappings[expression] else { return 0 }
+        guard let formula = mappings[Self.outputKey(for: expression, mirrored: mirrorLateral)] else { return 0 }
         return formula.evaluateClamped(blendShapes)
+    }
+
+    /// Lateral presets and their mirror partners. Swapping is an involution,
+    /// so the same table maps an output key back to its source formula.
+    private static let lateralPartners: [String: String] = [
+        "lookLeft": "lookRight", "lookRight": "lookLeft",
+        "blinkLeft": "blinkRight", "blinkRight": "blinkLeft",
+    ]
+
+    private static func outputKey(for expression: String, mirrored: Bool) -> String {
+        guard mirrored, let partner = lateralPartners[expression] else { return expression }
+        return partner
     }
 
     // MARK: - Default Mappings
@@ -253,14 +276,17 @@ public struct ARKitToVRMMapper: Sendable {
             ARKitFaceBlendShapes.eyeLookDownRight
         ]),
 
+        // ARKit names gaze by the eyelid it moves: a leftward gaze is
+        // eyeLookOutLeft + eyeLookInRight (Apple ARFaceAnchor.BlendShapeLocation).
+        // Laterality is kept, like the blinks above; see `mirrorLateral`.
         "lookLeft": .weighted([
-            (ARKitFaceBlendShapes.eyeLookInLeft, Float(0.5)),
-            (ARKitFaceBlendShapes.eyeLookOutRight, Float(0.5))
+            (ARKitFaceBlendShapes.eyeLookOutLeft, Float(0.5)),
+            (ARKitFaceBlendShapes.eyeLookInRight, Float(0.5))
         ]),
 
         "lookRight": .weighted([
-            (ARKitFaceBlendShapes.eyeLookOutLeft, Float(0.5)),
-            (ARKitFaceBlendShapes.eyeLookInRight, Float(0.5))
+            (ARKitFaceBlendShapes.eyeLookInLeft, Float(0.5)),
+            (ARKitFaceBlendShapes.eyeLookOutRight, Float(0.5))
         ]),
 
         // Neutral (default expression)

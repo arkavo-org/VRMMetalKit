@@ -13,7 +13,7 @@ final class MatCapTests: XCTestCase {
 
     /// Helper function matching the shader's calculateMatCapUV
     func calculateMatCapUV(_ viewNormal: SIMD3<Float>) -> SIMD2<Float> {
-        return SIMD2<Float>(viewNormal.x, viewNormal.y) * 0.5 + 0.5
+        return SIMD2<Float>(viewNormal.x, -viewNormal.y) * 0.5 + 0.5
     }
 
     /// Center normal (pointing at camera) should map to center UV
@@ -49,7 +49,7 @@ final class MatCapTests: XCTestCase {
         let uv = calculateMatCapUV(viewNormal)
 
         XCTAssertEqual(uv.x, 0.5, accuracy: 0.001, "Top normal should map to UV.x = 0.5")
-        XCTAssertEqual(uv.y, 1.0, accuracy: 0.001, "Top normal should map to UV.y = 1.0")
+        XCTAssertEqual(uv.y, 0.0, accuracy: 0.001, "Top normal should map to UV.y = 0 (image top; textures are uploaded top row first)")
     }
 
     /// Down-pointing normal should map to bottom edge
@@ -58,7 +58,7 @@ final class MatCapTests: XCTestCase {
         let uv = calculateMatCapUV(viewNormal)
 
         XCTAssertEqual(uv.x, 0.5, accuracy: 0.001, "Bottom normal should map to UV.x = 0.5")
-        XCTAssertEqual(uv.y, 0.0, accuracy: 0.001, "Bottom normal should map to UV.y = 0.0")
+        XCTAssertEqual(uv.y, 1.0, accuracy: 0.001, "Bottom normal should map to UV.y = 1 (image bottom)")
     }
 
     /// Diagonal normals should map correctly
@@ -69,7 +69,7 @@ final class MatCapTests: XCTestCase {
 
         let expected: Float = 0.707 * 0.5 + 0.5  // ≈ 0.854
         XCTAssertEqual(uv.x, expected, accuracy: 0.01)
-        XCTAssertEqual(uv.y, expected, accuracy: 0.01)
+        XCTAssertEqual(uv.y, 1 - expected, accuracy: 0.01, "up-right normal samples the upper-right of the image (v toward 0)")
     }
 
     // MARK: - MatCap Factor Tests

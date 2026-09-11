@@ -966,6 +966,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     // Scratch dictionary reused by the transparency-sort pass to avoid a
     // per-frame dictionary allocation. Keys are primitiveIndex.
     private var viewZByIndex: [Float] = []
+
+    // Reuse the authored material conversion across primitives and outline draws.
+    // Reset per pass so edits made between frames/views remain visible.
+    private var baseMToonUniformsByMaterial: [Int: MToonMaterialUniforms] = [:]
     private var morphedBuffers: [MorphKey: MTLBuffer] = [:]
     /// Expression-weight fingerprint that produced ``morphedBuffers``.
     private var lastMorphWeightsFingerprint: UInt64?
@@ -1663,8 +1667,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     /// Applies depth bias respecting the depth direction. All authored bias
-    /// constants in this file assume standard Z, where negative bias pushes
-    /// fragments away from the camera. Under reverse-Z the depth axis inverts,
+    /// constants in this file assume standard Z, where a positive bias raises
+    /// the depth value and pushes fragments away from the camera (Metal adds
+    /// the bias to the rasterized depth). Under reverse-Z the depth axis inverts,
     /// so bias, slope scale, and clamp are negated to preserve the intended
     /// push direction (a negative clamp is a lower bound per Metal semantics).
     private func applyDepthBias(_ encoder: MTLRenderCommandEncoder, _ bias: Float, slopeScale: Float, clamp: Float) {
@@ -2012,6 +2017,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             return
         }
         encoderStateCache.reset()
+        baseMToonUniformsByMaterial.removeAll(keepingCapacity: true)
 
         // Debug: Log rendering statistics
         var totalMeshesWithNodes = 0
@@ -2066,7 +2072,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             vrmLog("[UPDATE ORDER] Frame \(frameCounter): Updating all skin palettes BEFORE drawing")
 
             // Reset skinning cache at frame boundary
-            skinningSystem?.beginFrame()
+            skinningSystem?.beginFrame(bufferIndex: currentUniformBufferIndex)
 
             // Rebuild only skins whose joints actually moved. The legacy
             // `animationState` path still dirties every skin because it can
@@ -3341,7 +3347,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                     // If material has MToon extension, use those properties
                     if let mtoon = material.mtoon {
-                        mtoonUniforms = MToonMaterialUniforms(from: mtoon)
+                        mtoonUniforms = baseMToonUniforms(materialIndex: materialIndex, mtoon: mtoon)
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
                         // glTF-core normalTextureInfo.scale lives on
                         // VRMMaterial (the glTF base layer), not on the
@@ -3592,8 +3598,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                     encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
-                    // Z-FIGHTING FIX: Body renders first but pushed back in depth
-                    // Negative bias pushes away from camera, allowing overlays to win
+                    // Z-FIGHTING FIX: body renders first. The constant term is
+                    // sub-ULP and inert; the larger slope scale (4.0 vs the
+                    // overlays' 2.0) pushes the body away from the camera on
+                    // sloped surfaces so overlays win.
                     applyDepthBias(encoder, -0.1, slopeScale: 4.0, clamp: 1.0)
                     if frameCounter % 60 == 0 {
                         vrmLog("[FACE] order=body  z=\(viewZ)  mat=\(item.materialName)")
@@ -4603,6 +4611,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         )
     }
 
+    private func baseMToonUniforms(materialIndex: Int, mtoon: VRMMToonMaterial) -> MToonMaterialUniforms {
+        if let cached = baseMToonUniformsByMaterial[materialIndex] { return cached }
+        let uniforms = MToonMaterialUniforms(from: mtoon)
+        baseMToonUniformsByMaterial[materialIndex] = uniforms
+        return uniforms
+    }
+
     private func renderMToonOutlines(
         encoder: MTLRenderCommandEncoder,
         renderItems: [RenderItem],
@@ -4740,6 +4755,24 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             encoder.setVertexBuffer(vertexBuffer, offset: 0, index: ResourceIndices.vertexBuffer)
             bindAttributeStream(encoder, primitive: primitive)
 
+            // Morphed positions, same lookup and dummy-buffer fallback as the
+            // depth prepass. Without them the hull extrudes from the rest
+            // surface while the body draw uses the morphed one, so an active
+            // expression detaches the outline from the geometry it traces.
+            let outlineMorphKey: MorphKey = (UInt64(item.meshIndex) << 32) | UInt64(item.primIdxInMesh)
+            if let morphedPosBuffer = morphedBuffers[outlineMorphKey] {
+                encoder.setVertexBuffer(morphedPosBuffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
+                var hasMorphedFlag: UInt32 = 1
+                encoder.setVertexBytes(&hasMorphedFlag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+            } else {
+                if emptyFloat3Buffer == nil {
+                    emptyFloat3Buffer = device.makeBuffer(length: MemoryLayout<SIMD3<Float>>.stride, options: .storageModeShared)
+                }
+                encoder.setVertexBuffer(emptyFloat3Buffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
+                var hasMorphedFlag: UInt32 = 0
+                encoder.setVertexBytes(&hasMorphedFlag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+            }
+
             // Per-draw modelMatrix: skinned outlines bake transforms into the
             // joint palette (so modelMatrix stays identity); rigid outlines need
             // the node's world transform multiplied in.  Mirrors the main pass
@@ -4760,7 +4793,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
 
             // Set MToon material uniforms
-            var mtoonUniforms = MToonMaterialUniforms(from: mtoon)
+            var mtoonUniforms = baseMToonUniforms(materialIndex: materialIndex, mtoon: mtoon)
             mtoonUniforms.baseColorFactor = material.baseColorFactor
             // Preserve source version for shader paths that truly differ
             // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
@@ -4785,24 +4818,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             encoder.setVertexBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
             encoder.setFragmentBytes(&mtoonUniforms, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
 
-            // Bind outlineWidthMultiplyTexture to the outline VERTEX stage
-            // at texture(0) so `mtoon_outline_vertex` can sample the G
-            // channel and modulate the per-vertex extrusion width per the
-            // VRMC_materials_mtoon-1.0 spec. Without this binding,
-            // `hasOutlineWidthMultiplyTexture > 0` causes the shader to
-            // sample an unbound texture slot — the kernel multiplies
-            // outlineWidth by an undefined sample, effectively zeroing
-            // (or otherwise corrupting) the extrusion width and making
-            // outlineWidthFactor / outlineWidthMode inert. VMK#289.
-            if let textureIndex = mtoon.outlineWidthMultiplyTexture,
-               textureIndex < model.textures.count,
-               let mtlTexture = model.textures[textureIndex].mtlTexture {
-                encoder.setVertexTexture(mtlTexture, index: 0)
-                encoderStateCache.setVertexSamplerState(
-                    encoder,
-                    model.textures[textureIndex].sampler ?? samplerStates["default"],
-                    index: 0)
-            }
+            // Bind outlineWidthMultiplyTexture to the outline VERTEX stage at
+            // texture(0) so both outline shaders can sample the G channel and
+            // modulate the per-vertex extrusion width per the
+            // VRMC_materials_mtoon-1.0 spec (VMK#289). Both shaders declare the
+            // slot, so this always binds — the shared helper substitutes a white
+            // fallback texture when the material authors none, rather than
+            // leaving the slot unbound.
+            bindOutlineWidthVertexTexture(encoder: encoder, mtoon: mtoon, model: model)
 
             // Set joint matrices for skinned meshes
             if isSkinned, let skinIndex = item.node.skin, skinIndex < model.skins.count {
@@ -4810,6 +4833,22 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 if let jointBuffer = skinningSystem?.getJointMatricesBuffer() {
                     let byteOffset = skin.matrixOffset * MemoryLayout<float4x4>.stride
                     encoder.setVertexBuffer(jointBuffer, offset: byteOffset, index: ResourceIndices.jointMatricesBuffer)
+                }
+            }
+
+            // First-person hidden flags, as bound by the color pass and the
+            // depth prepass. In `.firstPerson` the body draw degenerates
+            // head-weighted vertices; without these the hull of that same
+            // primitive is still drawn, putting a dark shell in front of the
+            // camera. Only the skinned outline shader declares the slot.
+            if isSkinned {
+                if primitive.firstPersonHiddenFlagsBuffer == nil && primitive.vertexCount > 0 {
+                    let zeros = [UInt8](repeating: 0, count: primitive.vertexCount)
+                    primitive.firstPersonHiddenFlagsBuffer = device.makeBuffer(
+                        bytes: zeros, length: zeros.count, options: .storageModeShared)
+                }
+                if let fpBuffer = primitive.firstPersonHiddenFlagsBuffer {
+                    encoder.setVertexBuffer(fpBuffer, offset: 0, index: ResourceIndices.firstPersonHiddenFlagsBuffer)
                 }
             }
 

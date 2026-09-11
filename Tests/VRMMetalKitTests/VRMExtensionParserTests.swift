@@ -15,6 +15,7 @@
 //
 
 import XCTest
+import simd
 @testable import VRMMetalKit
 
 /// Unit tests for VRMExtensionParser
@@ -867,7 +868,7 @@ final class VRMExtensionParserTests: XCTestCase {
 
     // MARK: - N5: VRM 0.0 Collider Offset Coordinate Flip Tests
 
-    func testVRM0SphereColliderOffsetXZNegated() throws {
+    func testVRM0SphereColliderOffsetCombinesHandednessAndFacing() throws {
         let vrmDict: [String: Any] = [
             "version": "0.0",
             "meta": ["title": "Test", "author": "Test"],
@@ -898,7 +899,7 @@ final class VRMExtensionParserTests: XCTestCase {
                     [
                         "node": 0,
                         "colliders": [
-                            ["offset": ["x": Float(1.0), "y": Float(0.0), "z": Float(1.0)], "radius": Float(0.1)]
+                            ["offset": ["x": 1.0, "y": 0, "z": 1.0], "radius": 0.1]
                         ]
                     ]
                 ]
@@ -914,7 +915,21 @@ final class VRMExtensionParserTests: XCTestCase {
         if case let .sphere(offset, _) = collider?.shape {
             XCTAssertEqual(offset.x, -1.0, accuracy: 0.0001)
             XCTAssertEqual(offset.y, 0.0, accuracy: 0.0001)
-            XCTAssertEqual(offset.z, -1.0, accuracy: 0.0001)
+            XCTAssertEqual(offset.z, 1.0, accuracy: 0.0001)
+
+            // Reference order: Unity-local offset -> glTF local -> world ->
+            // VMK facing. Include a rotated/translated parent so a world-space
+            // reflection cannot accidentally stand in for the local reflection.
+            let reflectZ = float4x4(diagonal: SIMD4<Float>(1, 1, -1, 1))
+            let facing = float4x4(diagonal: SIMD4<Float>(-1, 1, -1, 1))
+            var parent = float4x4(simd_quatf(angle: 0.7, axis: simd_normalize(SIMD3<Float>(1, 2, 3))))
+            parent.columns.3 = SIMD4<Float>(0.2, 1.3, -0.4, 1)
+            let expected = facing * parent * reflectZ * SIMD4<Float>(1, 0, 1, 1)
+            let convertedParent = facing * parent * facing
+            let actual = convertedParent * SIMD4<Float>(offset, 1)
+            for axis in 0..<3 {
+                XCTAssertEqual(actual[axis], expected[axis], accuracy: 0.00001)
+            }
         } else {
             XCTFail("Expected sphere collider shape")
         }
@@ -951,7 +966,7 @@ final class VRMExtensionParserTests: XCTestCase {
                     [
                         "node": 0,
                         "colliders": [
-                            ["offset": ["x": Float(0.5), "y": Float(2.0), "z": Float(-0.3)], "radius": Float(0.05)]
+                            ["offset": ["x": 0.5, "y": 2, "z": -0.3], "radius": 0.05]
                         ]
                     ]
                 ]
@@ -965,7 +980,7 @@ final class VRMExtensionParserTests: XCTestCase {
         if case let .sphere(offset, _) = collider?.shape {
             XCTAssertEqual(offset.x, -0.5, accuracy: 0.0001)
             XCTAssertEqual(offset.y, 2.0, accuracy: 0.0001)
-            XCTAssertEqual(offset.z, 0.3, accuracy: 0.0001)
+            XCTAssertEqual(offset.z, -0.3, accuracy: 0.0001)
         } else {
             XCTFail("Expected sphere collider shape")
         }
@@ -1056,7 +1071,7 @@ final class VRMExtensionParserTests: XCTestCase {
                         "comment": "Hair",
                         "stiffiness": Float(0.85),
                         "gravityPower": Float(1.0),
-                        "gravityDir": ["x": Float(0.3), "y": Float(-0.95), "z": Float(0.1)],
+                        "gravityDir": ["x": 0.3, "y": -0.95, "z": 0.1],
                         "dragForce": Float(0.4),
                         "hitRadius": Float(0.02),
                         "bones": [0],
@@ -1114,7 +1129,7 @@ final class VRMExtensionParserTests: XCTestCase {
                         "comment": "Hair",
                         "stiffiness": Float(0.85),
                         "gravityPower": Float(1.0),
-                        "gravityDir": ["x": Float(0.0), "y": Float(-1.0), "z": Float(0.0)],
+                        "gravityDir": ["x": 0, "y": -1, "z": 0],
                         "dragForce": Float(0.4),
                         "hitRadius": Float(0.02),
                         "bones": [0],

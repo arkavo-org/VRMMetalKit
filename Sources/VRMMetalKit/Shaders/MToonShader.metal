@@ -230,11 +230,14 @@ static inline uint mtoonEffectiveLightCount() {
 
 // KHR_texture_transform: apply static scale, rotation and offset to UV
 // Must be applied BEFORE animateUV (transform is static; UV animation is dynamic on top)
+// Rotation is counter-clockwise in glTF's U-right / V-down UV space
+// (KhronosGroup/glTF#1563; same matrix as VRMC_materials_mtoon and three.js
+// Matrix3.setUvTransform): uv' = (c*u + s*v, -s*u + c*v).
 static inline float2 applyTextureTransform(float2 uv, constant MToonMaterial& material) {
  float c = cos(material.textureTransformRotation);
  float s = sin(material.textureTransformRotation);
  float2 scaled = uv * float2(material.textureTransformScaleX, material.textureTransformScaleY);
- float2 rotated = float2(c * scaled.x - s * scaled.y, s * scaled.x + c * scaled.y);
+ float2 rotated = float2(c * scaled.x + s * scaled.y, -s * scaled.x + c * scaled.y);
  return rotated + float2(material.textureTransformOffsetX, material.textureTransformOffsetY);
 }
 
@@ -267,8 +270,10 @@ static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
 
 // MatCap coordinate calculation
 float2 calculateMatCapUV(float3 viewNormal) {
- // Convert view normal to UV coordinates for MatCap sampling
- return viewNormal.xy * 0.5 + 0.5;
+ // Textures are uploaded with row 0 = image top (v = 0), so an upward view
+ // normal must sample the top of the matcap: negate y (three-vrm mtoon.frag
+ // `sphereUv = 0.5 + 0.5 * vec2(dot(x, n), -dot(y, n))`).
+ return float2(viewNormal.x, -viewNormal.y) * 0.5 + 0.5;
 }
 
 static inline bool hasParametricRim(constant MToonMaterial& material) {
@@ -1357,10 +1362,17 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
                                constant Uniforms& uniforms [[buffer(1)]],
                                constant MToonMaterial& material [[buffer(8)]],
+                               device const float3* morphedPositions [[buffer(20)]],
+                               constant uint& hasMorphed [[buffer(22)]],
                                texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
-                               sampler textureSampler [[sampler(0)]]) {
+                               sampler textureSampler [[sampler(0)]],
+                               uint vertexID [[vertex_id]]) {
  VertexOut out;
  out.instanceId = 0;
+
+ // Match `mtoon_vertex`: the hull extrudes from the morphed surface, not the
+ // rest surface, so an active expression does not detach the outline.
+ float3 basePosition = (hasMorphed > 0) ? float3(morphedPositions[vertexID]) : in.position;
 
  // Resolve effective feature flags (see the equivalent block in the
  // fragment shader). For the fallback path the uniform-buffer flags are
@@ -1385,7 +1397,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
                                    uniforms.viewMatrix[1].xyz,
                                    uniforms.viewMatrix[2].xyz);
  float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
- float3 worldPos = (uniforms.modelMatrix * float4(in.position, 1.0)).xyz;
+ float3 worldPos = (uniforms.modelMatrix * float4(basePosition, 1.0)).xyz;
 
  // Calculate view direction
  float3 viewDir = normalize(cameraPos - worldPos);
@@ -1401,7 +1413,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  } else if (material.outlineMode == 2.0) {
  // Screen coordinates mode - extrude in screen space
- float4 worldPos4 = uniforms.modelMatrix * float4(in.position, 1.0);
+ float4 worldPos4 = uniforms.modelMatrix * float4(basePosition, 1.0);
  out.worldPosition = worldPos4.xyz;
 
  // Transform to clip space
@@ -1421,7 +1433,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  } else {
  // No outline (mode 0)
- float4 worldPos4 = uniforms.modelMatrix * float4(in.position, 1.0);
+ float4 worldPos4 = uniforms.modelMatrix * float4(basePosition, 1.0);
  out.worldPosition = worldPos4.xyz;
  out.position = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos4;
  }

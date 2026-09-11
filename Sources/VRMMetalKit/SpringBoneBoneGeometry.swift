@@ -87,7 +87,9 @@ enum SpringBoneBoneGeometry {
                                 ratios: SpringBoneColliderAugmentor.Ratios) -> VRMCollider? {
         guard let (headNode, rHead) = headReferenceRadius(humanoid: humanoid, model: model) else { return nil }
         let offset = SIMD3<Float>(0, ratios.headOffsetUpFraction * rHead, ratios.headOffsetFwdFraction * rHead)
-        let tail = SIMD3<Float>(0, -ratios.headDownFraction * rHead, ratios.headForwardFraction * rHead)
+        // The drop/forward ratios were calibrated (#309) as a sweep from the
+        // anchor, so the far end is anchor + sweep expressed as a local position.
+        let tail = offset + SIMD3<Float>(0, -ratios.headDownFraction * rHead, ratios.headForwardFraction * rHead)
         let radius = ratios.headRadiusFraction * rHead
         return VRMCollider(node: headNode, shape: .capsule(offset: offset, radius: radius, tail: tail))
     }
