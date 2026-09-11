@@ -236,7 +236,7 @@ bench-hotspots:
 # replace bench-gate. Preferred submit simulates once; host submit is the
 # older per-eye drawOffscreen path.
 BENCH_VISIONOS_VRM ?= AvatarSample_U_1.0.vrm.glb
-BENCH_VISIONOS_ARGS = --mode visionos --frames 200 --warmup 30 --vrma $(BENCH_VRMA) --spring-bone --fps 90
+BENCH_VISIONOS_ARGS = --mode visionos --frames 200 --warmup 30 --vrma $(BENCH_VRMA) --spring-bone --fixed-step --fps 90
 
 bench-visionos:
 	@echo "🥽  visionOS-shaped stereo bench (preferred, then host)..."

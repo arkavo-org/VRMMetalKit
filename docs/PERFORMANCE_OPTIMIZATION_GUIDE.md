@@ -353,8 +353,12 @@ make bench-visionos
 # or
 swift run -c release VRMBenchmark AvatarSample_U_1.0.vrm.glb \
   --mode visionos --visionos-submit preferred --vrma VRMA_01.vrma \
-  --spring-bone --frames 200
+  --spring-bone --fixed-step --frames 200
 ```
+
+Pass `--fixed-step` whenever `--spring-bone` is on: the benchmark loop is
+unpaced, so without it the simulation receives a near-zero delta and runs
+almost no substeps, leaving the spring phases unmeasured.
 
 `--visionos-submit host` is the older per-eye `drawOffscreen` path, kept
 so the two can be compared on the same machine.
