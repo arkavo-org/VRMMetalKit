@@ -53,7 +53,7 @@ Use four distinct authorities, recorded in every relevant control descriptor:
    (v0.1.0), [linter](https://github.com/arkavo-org/VRMMetalKit/blob/430e890906f9c53b1c944cf30a0aeee8625ff84d/scripts/style_lint.py)
    and [corpus manifest](https://github.com/arkavo-org/VRMMetalKit/blob/430e890906f9c53b1c944cf30a0aeee8625ff84d/docs/style/corpus/vroid-lineage-anime.manifest.json),
    pinned at main commit `430e890906f9c53b1c944cf30a0aeee8625ff84d` by content hash:
-   - `scripts/style_lint.py` sha256 `ff9d41334e670747df1f8c28561cfb263b40325d427690c3aef052a173f05fcb`
+   - `scripts/style_lint.py` sha256 `01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881`
    - `docs/style/profiles/vroid-lineage-anime.json` (v0.1.0) sha256 `7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35`
    - `docs/style/corpus/vroid-lineage-anime.manifest.json` sha256 `b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6`
 

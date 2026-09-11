@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "1a7d74ea02aa4006dc2a64b976e58d64831294950d496bf6fc56879f013217af",
   "resultSchemaHash": "2443159494918e8ecdf47a73ed802dbbc8ac019e11acac0d3bcef634b1cf5ade",
-  "packHash": "ec9c90c163b2e4006c926bc454ac033e47dac58af910169ecb75d8fdb6053745",
+  "packHash": "889e99ffdaaa3dea607481536e6d71c8af32c866d7fd50e8b6b8f030618bdced",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -48,7 +48,8 @@
       "dry run plans the two pointer edits with the same planHash as the applied edit and does not bump the revision",
       "out-of-range solve is gateFailed with the revision unchanged; terminatorWidth 3 is invalidRequest; an unknown material is OBJECT_NOT_FOUND; a stale expectedRevision is a conflict",
       "the 13 role defaults satisfy every must/should material rule of the pinned profile and the (-1, 0) edge case solves",
-      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass",
+      "shadowEnd and terminatorWidth at their range extremes and the (-1, 0) edge solve to legal toony/shift for every material role"
     ],
     "units": "MToon 1.0 factor space (shadingShiftFactor, shadingToonyFactor normalized)",
     "excluded": [
@@ -80,6 +81,14 @@
       "class": "degenerate",
       "expected": {},
       "note": "testShadingProbes: edge solves, NaN is INVALID_REQUEST; dry run plans without a revision"
+    },
+    {
+      "id": "parameter-extremes",
+      "path": "synthetic:shadowEnd/terminatorWidth at their range extremes across every material role",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testShadingSolvesAtParameterExtremesForEveryRole: the four corners of the (shadowEnd, terminatorWidth) box and the (-1, 0) edge solve to toony in [0, 1] and shift in [-1, 1] for every role"
     }
   ],
   "seeds": [],
@@ -89,7 +98,7 @@
     "environment": {
       "pinnedCommit": "e57ac81eb3436a58049c088087d6425ce356604c",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "0213ddace07cc315f8d2c682443b3b1625cf5330d9b706b1a5b78e236fefb2cd",
+        "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "842d2830621ed51e3e5b9b7e5d49e3782fee93216dcd1417c90aff65ee628a2f",
         "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",
         "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
       }
@@ -148,15 +157,15 @@
     },
     {
       "id": "fabricated-suite-report",
-      "description": "A report envelope claiming every MaterialsPackTests test passed (executed 8, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "description": "A report envelope claiming every MaterialsPackTests test passed (executed 9, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
       "expectedClassification": "reject",
       "transform": {
         "kind": "report-fabricated",
         "envelope": {
           "report": {
             "suite": "MaterialsPackTests",
-            "executed": 8,
-            "passed": 8,
+            "executed": 9,
+            "passed": 9,
             "failed": 0,
             "failingTests": [],
             "exitCode": 0
@@ -193,18 +202,13 @@
     "requiredLevel": "visually-validated",
     "dimensions": {
       "fixture": "required",
-      "corpus": "required",
+      "corpus": "inapplicable",
       "visual": "required",
       "interoperability": "inapplicable",
       "provenance": "required"
     },
-    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md \u00a76)."
-  },
-  "corpus": {
-    "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json",
-    "sha256": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
-    "familyKey": "body_family",
-    "expectedFamilies": 18
+    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md \u00a76).",
+    "corpusApplicabilityRecord": "material shading is body-independent: its input class is a project material object with MToon fields, so partitioning by body family is pseudo-precision for any style. The parameter space is covered instead by a fixture sweep over shadowEnd and terminatorWidth extremes across every material role the attached profile declares. Recorded by the acceptance author; the independent reviewer confirms or overturns this in reviewReceipt."
   },
   "resources": {
     "cpuSeconds": 600,

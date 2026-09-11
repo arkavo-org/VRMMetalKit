@@ -270,6 +270,19 @@ final class MaterialsPackTests: XCTestCase {
         XCTAssertThrowsError(try MaterialShading.solve(shadowEnd: 0, terminatorWidth: .nan)) { XCTAssertEqual(($0 as? AuthorError)?.code, .invalidRequest) }
     }
 
+    func testShadingSolvesAtParameterExtremesForEveryRole() throws {
+        let extremes: [(shadowEnd: Double, terminatorWidth: Double)] = [
+            (-1.0, 0.0), (-1.0, 2.0), (0.0, 0.0), (0.0, 2.0), (-1.0, 0.0),
+        ]
+        for role in MaterialRole.allCases {
+            for point in extremes {
+                let solved = try MaterialShading.solve(shadowEnd: point.shadowEnd, terminatorWidth: point.terminatorWidth)
+                XCTAssertTrue((-1.0...1.0).contains(solved.shadingShiftFactor), "\(role) shift out of range at \(point)")
+                XCTAssertTrue((0.0...1.0).contains(solved.shadingToonyFactor), "\(role) toony out of range at \(point)")
+            }
+        }
+    }
+
     func testMaterialShadingCommandMutatesProjectMaterial() throws {
         let projectURL = root.appendingPathComponent("avatar.vrmauthor")
         let store = try MaterialsTestSupport.makeProject(at: projectURL, materials: [MaterialRoleDefaults.material(id: "material:face", role: .faceSkin)])
@@ -371,7 +384,7 @@ final class MaterialsPackTests: XCTestCase {
     func testHandlersAreRegisteredAndPinsMatchVerificationTable() throws {
         let registry = Registry.v1()
         for name in MaterialsHandlers.names { XCTAssertTrue(registry.operation(named: name)?.isRunnable ?? false, name) }
-        XCTAssertEqual(StyleToolchain.pinnedLinterSHA256, "ff9d41334e670747df1f8c28561cfb263b40325d427690c3aef052a173f05fcb")
+        XCTAssertEqual(StyleToolchain.pinnedLinterSHA256, "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881")
         XCTAssertEqual(StyleToolchain.pinnedProfileSHA256, "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35")
         let diagnosis = StyleToolchain.diagnose(context: MaterialsTestSupport.context())
         XCTAssertEqual(diagnosis["styleLinter"]?["matches"], true)

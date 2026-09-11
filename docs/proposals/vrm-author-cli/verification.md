@@ -76,7 +76,7 @@ is reported in the result manifest for provenance and is not itself a check.
 
 | Oracle | Path | sha256 |
 |---|---|---|
-| Style linter | [`scripts/style_lint.py`](../../../scripts/style_lint.py) | `ff9d41334e670747df1f8c28561cfb263b40325d427690c3aef052a173f05fcb` |
+| Style linter | [`scripts/style_lint.py`](../../../scripts/style_lint.py) | `01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881` |
 | Style profile v0.1.0 | [`docs/style/profiles/vroid-lineage-anime.json`](../../style/profiles/vroid-lineage-anime.json) | `7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35` |
 | Corpus manifest | [`docs/style/corpus/vroid-lineage-anime.manifest.json`](../../style/corpus/vroid-lineage-anime.manifest.json) | `b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6` |
 
@@ -121,7 +121,7 @@ Stage B release. Parenthesised items are fixtures the pack must contain.
 | `asset import`, `asset inspect` | Import/export/provenance | fixture-tested + interoperability dimension | n/a | n/a |
 | `style attach` | Revision/transaction | fixture-tested | n/a | n/a |
 | `style lint` | Materials/style (oracle = pinned `style_lint.py` + profile) | corpus-validated | required | n/a (numeric-only, reviewed applicability) |
-| `material shading` | Materials/style | visually-validated | required | required |
+| `material shading` | Materials/style | visually-validated | n/a (body-independent, reviewed applicability; covered by a parameter sweep) | required |
 | `build` | Compile (Shape + Hair/springs + Materials aggregated) | visually-validated | required | required |
 | `qa plan` | QA machinery | fixture-tested | n/a | n/a |
 | `qa run`, `export verify` | QA machinery | fixture-tested via mutant injection (must fail on each declared mutant class: identity transform, wrong units, discarded morphs, broken eyelids, fabricated report) | n/a | n/a |

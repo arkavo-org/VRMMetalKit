@@ -570,7 +570,7 @@ class SwiftTestRunnerTests(unittest.TestCase):
 
 
 PACKS_PENDING_CORPUS_ARRAY_MIGRATION = {"build.json", "control-set.json", "export-vrm.json",
-                                        "recipe-apply.json", "material-shading.json"}
+                                        "recipe-apply.json"}
 
 
 class ShippedPackTests(unittest.TestCase):
@@ -586,7 +586,7 @@ class ShippedPackTests(unittest.TestCase):
 
     def test_shipped_pack_pins_the_decided_oracles(self):
         oracles = self.pack["runner"]["environment"]["oracleHashes"]
-        self.assertEqual(oracles["scripts/style_lint.py"], "ff9d41334e670747df1f8c28561cfb263b40325d427690c3aef052a173f05fcb")
+        self.assertEqual(oracles["scripts/style_lint.py"], "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881")
         self.assertEqual(oracles["docs/style/profiles/vroid-lineage-anime.json"], "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35")
         self.assertEqual(oracles["docs/style/corpus/vroid-lineage-anime.manifest.json"], "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6")
         self.assertEqual(self.pack["runner"]["environment"]["pinnedCommit"], "a020125384c0c15b6479e7dc304ec48c899887dc")

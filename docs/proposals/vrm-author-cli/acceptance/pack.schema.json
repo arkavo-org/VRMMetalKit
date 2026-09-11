@@ -169,7 +169,8 @@
             "provenance": { "$ref": "#/$defs/dimension" }
           }
         },
-        "heldOutPolicy": { "type": "string" }
+        "heldOutPolicy": { "type": "string" },
+        "corpusApplicabilityRecord": { "type": "string", "description": "Required when dimensions.corpus is inapplicable: who decided the corpus dimension does not apply and why, and what covers the parameter space instead." }
       }
     },
     "corpus": {

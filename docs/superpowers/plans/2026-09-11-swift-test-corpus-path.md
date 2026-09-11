@@ -1411,7 +1411,7 @@ Replace the paragraph beginning "Three in-tree files are the v1 oracles" with a 
 ```markdown
 | Oracle | Path | sha256 |
 |---|---|---|
-| Style linter (global) | [`scripts/style_lint.py`](../../../scripts/style_lint.py) | `ff9d41334e670747df1f8c28561cfb263b40325d427690c3aef052a173f05fcb` |
+| Style linter (global) | [`scripts/style_lint.py`](../../../scripts/style_lint.py) | `01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881` |
 
 **Style set `vroid-lineage-anime`:**
 

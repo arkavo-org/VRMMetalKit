@@ -20,7 +20,7 @@ import Foundation
 public enum QAPins {
     public static let defaultProfilePath = "docs/style/profiles/vroid-lineage-anime.json"
     public static let defaultProfileSha256 = "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
-    public static let styleLinterSha256 = "ff9d41334e670747df1f8c28561cfb263b40325d427690c3aef052a173f05fcb"
+    public static let styleLinterSha256 = "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881"
     public static let consumerVRMMetalKit = "vrmmetalkit"
     public static let harnessSessionValue = "harness"
     public static let sessionEnvironmentKey = "VRM_AUTHOR_SESSION"

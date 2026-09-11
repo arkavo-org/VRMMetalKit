@@ -494,8 +494,9 @@ def measure(path, role_overrides=None):
              height_m=round(H, 4), bbox_min=[round(float(x), 4) for x in allmin], bbox_max=[round(float(x), 4) for x in allmax])
 
     # ---- proportions (humanoid bones; spec-mandated)
-    # Only hips, spine, head and the four upper limb bones are required by VRMC_vrm humanoid;
-    # every metric that needs an optional bone reports None (which fails its rule) instead of raising.
+    # Fifteen bones are required by VRMC_vrm humanoid: hips, spine, head, and upper arm, lower arm,
+    # hand, upper leg, lower leg and foot on each side; every metric that needs an optional bone
+    # reports None (which fails its rule) instead of raising.
     def dist(a, b):
         if a not in pos or b not in pos:
             return None
