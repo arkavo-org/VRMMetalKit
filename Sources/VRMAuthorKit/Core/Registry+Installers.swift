@@ -24,6 +24,7 @@ extension Registry {
     /// call `install(handler:for:)` and must not replace existing handlers.
     public static let installers: [RegistryInstaller] = [
         DiscoveryHandlers.install,
+        TemplateListHandler.install,
         ProjectHandlers.install,
         ProvenanceHandlers.install,
         MaterialsHandlers.install,

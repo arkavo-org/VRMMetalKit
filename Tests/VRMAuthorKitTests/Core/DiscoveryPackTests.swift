@@ -112,7 +112,7 @@ final class DiscoveryPackTests: XCTestCase {
         XCTAssertFalse(lint["blockers"]!.array!.isEmpty)
         let build = entries.first { $0["operation"] == "build" }!
         XCTAssertTrue(build["blockers"]!.array!.contains("visual gate pending"))
-        XCTAssertNil(build["acceptancePackHash"])
+        XCTAssertEqual(build["acceptancePackHash"]?.string?.count, 64)
         XCTAssertEqual(r["targets"], ["portable-vrm1"])
         XCTAssertEqual(r["backends"], ["portable-strict/1"])
         XCTAssertEqual(r["templateHashes"]?.object?.keys.sorted(), ["native-anime-v1"])
@@ -205,7 +205,7 @@ final class DiscoveryPackTests: XCTestCase {
         XCTAssertEqual(r["determinism"]?["threads"], 1)
         XCTAssertEqual(r["styleLinter"]?["found"], true)
         XCTAssertEqual(r["styleLinter"]?["pinnedSha256"]?.string?.count, 64)
-        XCTAssertEqual(r["acceptance"]?["packs"], 1)
+        XCTAssertEqual(r["acceptance"]?["packs"], 35)
         XCTAssertTrue(envelope.warnings.contains { $0.code == "SIGNER_UNAVAILABLE" })
         let noPython = try invoke("doctor", env: ["PATH": "/nonexistent"])
         XCTAssertEqual(noPython.result?["python3"]?["found"], false)
