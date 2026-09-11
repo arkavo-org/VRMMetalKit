@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Solve per-family control values for one (corpus, template) pair and write a witnesses file.
 
-Drives the shipped vrm-author CLI: project init, control set, build, then
-style_lint.py measure on the built avatar. Runs once per pair, off the critical
-path of any acceptance pack.
+Drives the shipped vrm-author CLI: project init, object set (disabling the template's
+default garment), control set, build, then style_lint.py measure on the built avatar.
+Runs once per pair, off the critical path of any acceptance pack.
 
     python3 scripts/corpus_witness.py \
         --measurements docs/style/corpus/vroid-lineage-anime.measurements.json \
@@ -42,9 +42,26 @@ class InfeasibleCandidate(Exception):
     rejection, not an infrastructure failure."""
 
 
-def run_checked(cmd, cwd):
+DEFAULT_GARMENT_ID = "outfit.top"
+
+
+def disable_default_garment_request():
+    """The object set request that takes the template's default garment out of the build."""
+    return {"edit": {"id": DEFAULT_GARMENT_ID, "values": {"/enabled": False}}}
+
+
+def replay_steps(controls):
+    """The ordered vrm-author steps that reproduce a solved build, garment disable included in
+    position. Paths belong to the replayer; the template id and seed are already on the document."""
+    return [{"command": "project init", "request": None},
+            {"command": "object set", "request": disable_default_garment_request()},
+            {"command": "control set", "request": {"edit": {"object": "avatar:main", "values": controls}}},
+            {"command": "build", "request": None}]
+
+
+def run_checked(cmd, cwd, stdin_text=None):
     """Run a subprocess and raise a diagnosable error naming the command and its stderr on failure."""
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, input=stdin_text)
     if proc.returncode != 0:
         raise RuntimeError(f"command failed ({proc.returncode}): {' '.join(cmd)}\n{proc.stderr}")
     return proc
@@ -190,17 +207,44 @@ def out_of_range_witness(family, target, control_ranges, widths):
             "infeasible": "; ".join(sorted(reasons))}
 
 
-def solve_family(family, target, control_ranges, widths, evaluate, tolerance, budget, seed):
+def garment_fit(verify, controls):
+    """Build once more at the solved controls with the default garment left enabled. A garment
+    rejection is a statement about that garment's clearance, not about the body control space,
+    so it is recorded as a fit failure and never as ineligibility; an infrastructure failure on
+    this build aborts the run exactly as it does anywhere else."""
+    try:
+        verify(controls)
+    except InfeasibleCandidate:
+        return "fail"
+    return "pass"
+
+
+def solve_family(family, target, control_ranges, widths, evaluate, tolerance, budget, seed, verify=None):
     """Reject a family before touching the CLI if a direct control falls outside the
-    template's valid range; otherwise solve it exactly as before."""
+    template's valid range; otherwise solve it exactly as before, and record on a solved
+    family the steps that replay it and, when a verifying evaluator is given, whether the
+    default garment still fits the solved body."""
     witness = out_of_range_witness(family, target, control_ranges, widths)
     if witness is not None:
         return witness
-    return solve(family, target, evaluate, widths, tolerance, budget, seed)
+    witness = solve(family, target, evaluate, widths, tolerance, budget, seed)
+    if not witness["eligible"]:
+        return witness
+    witness["replaySteps"] = replay_steps(witness["controls"])
+    if verify is not None:
+        witness["garmentFit"] = garment_fit(verify, witness["controls"])
+    return witness
 
 
-def cli_evaluator(binary, template, seed, linter, workdir, metrics):
-    """Build an avatar at the given controls and return its measured metric vector."""
+def cli_evaluator(binary, template, seed, linter, workdir, metrics, disable_default_garment=True):
+    """Build an avatar at the given controls and return its measured metric vector.
+
+    The template's default garment is disabled before any control is set, so that the garment's
+    clearance margins cannot decide whether a body-control target is reachable. The disable is
+    candidate-independent and runs on a freshly initialised project, so it goes through
+    run_checked: a non-zero exit there is a generator fault, not a rejection of this candidate.
+    Pass disable_default_garment=False for an evaluator that builds the same controls with the
+    garment in place."""
 
     def evaluate(controls):
         project = os.path.join(workdir, "a.vrmauthor")
@@ -210,6 +254,9 @@ def cli_evaluator(binary, template, seed, linter, workdir, metrics):
             os.remove(out)
         run_checked([binary, "project", "init", "--dir", project, "--template", template,
                     "--seed", str(seed)], REPO)
+        if disable_default_garment:
+            run_checked([binary, "object", "set", "--project", project, "--request", "-"], REPO,
+                        stdin_text=json.dumps(disable_default_garment_request()))
         request = os.path.join(workdir, "edit.json")
         with open(request, "w", encoding="utf-8") as fh:
             json.dump({"edit": {"object": "avatar:main", "values": controls}}, fh)
@@ -261,15 +308,18 @@ def main(argv=None):
     }
     write_document(out_path, document)
     with tempfile.TemporaryDirectory(prefix="corpus_witness_") as workdir:
-        evaluate = cli_evaluator(binary, args.template, args.seed, os.path.join(REPO, args.linter),
-                                 workdir, list(widths))
+        linter = os.path.join(REPO, args.linter)
+        evaluate = cli_evaluator(binary, args.template, args.seed, linter, workdir, list(widths))
+        verify = cli_evaluator(binary, args.template, args.seed, linter, workdir, list(widths),
+                               disable_default_garment=False)
         for family in sorted(targets):
             witness = solve_family(family, targets[family], control_ranges, widths, evaluate,
-                                   args.tolerance, args.budget, args.seed)
-            document["families"][family] = {k: witness[k] for k in ("eligible", "controls", "residuals", "infeasible")}
+                                   args.tolerance, args.budget, args.seed, verify=verify)
+            document["families"][family] = {k: v for k, v in witness.items() if k != "family"}
             write_document(out_path, document)
             tag = "eligible" if witness["eligible"] else ("INFEASIBLE" if witness.get("infeasible") else "INELIGIBLE")
-            print(f"{family}: {tag}", file=sys.stderr)
+            fit = witness.get("garmentFit")
+            print(f"{family}: {tag}" + (f", garment {fit}" if fit else ""), file=sys.stderr)
 
     families = document["families"]
     eligible_count = sum(1 for f in families.values() if f["eligible"])

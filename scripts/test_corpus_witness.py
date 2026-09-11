@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for the corpus witness generator. Run: python3 scripts/test_corpus_witness.py"""
+import itertools
 import json
 import os
 import sys
@@ -18,6 +19,47 @@ if sys.argv[1:3] == ["template", "list"]:
     sys.exit(0)
 sys.exit(1)
 """
+
+EXIT_STUB = """#!/usr/bin/env python3
+import sys
+
+sys.stderr.write("stub stderr marker\\n")
+sys.exit(%d)
+"""
+
+LOGGING_STUB = """#!/usr/bin/env python3
+import json
+import sys
+
+stdin = None
+if "--request" in sys.argv:
+    index = sys.argv.index("--request")
+    if index + 1 < len(sys.argv) and sys.argv[index + 1] == "-":
+        stdin = sys.stdin.read()
+with open(sys.argv[0] + ".log", "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({"argv": sys.argv[1:], "stdin": stdin}) + "\\n")
+sys.exit(0)
+"""
+
+LINTER_STUB = """#!/usr/bin/env python3
+import json
+
+print(json.dumps([{"asset": {"height_m": 1.6}}]))
+"""
+
+DISABLE_REQUEST = {"edit": {"id": "outfit.top", "values": {"/enabled": False}}}
+
+
+def command_name(argv):
+    return " ".join(itertools.takewhile(lambda token: not token.startswith("--"), argv))
+
+
+def write_stub(path, source, executable=False):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(source)
+    if executable:
+        os.chmod(path, 0o755)
+    return path
 
 
 PROFILE = {"rules": [
@@ -252,6 +294,135 @@ class MainZeroFamilies(unittest.TestCase):
                 self.assertIn(key, document)
             self.assertIn("styleLintSha256", document["generated"])
             self.assertIn("measurementsSha256", document["generated"])
+
+
+class CLIExitClassification(unittest.TestCase):
+    """Exit 1 and 2 are domain rejections; every other non-zero exit, and a failure to launch
+    the binary at all, is infrastructure and must abort the run."""
+
+    def test_exit_beyond_the_domain_codes_aborts_instead_of_rejecting_the_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for code in (3, 4, 5):
+                with self.subTest(code=code):
+                    binary = write_stub(os.path.join(tmp, f"exit{code}"), EXIT_STUB % code, executable=True)
+                    with self.assertRaises(RuntimeError) as ctx:
+                        W.run_cli([binary], tmp)
+                    self.assertNotIsInstance(ctx.exception, W.InfeasibleCandidate)
+                    self.assertIn(f"({code})", str(ctx.exception))
+                    self.assertIn("stub stderr marker", str(ctx.exception))
+
+    def test_a_launch_failure_aborts_and_is_not_a_domain_rejection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(OSError) as ctx:
+                W.run_cli([os.path.join(tmp, "no-such-binary"), "build"], tmp)
+            self.assertNotIsInstance(ctx.exception, W.InfeasibleCandidate)
+
+
+class DefaultGarmentDisable(unittest.TestCase):
+    def test_disable_is_issued_after_project_init_and_before_the_first_control_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = write_stub(os.path.join(tmp, "vrm-author"), LOGGING_STUB, executable=True)
+            linter = write_stub(os.path.join(tmp, "style_lint.py"), LINTER_STUB)
+            workdir = os.path.join(tmp, "work")
+            os.makedirs(workdir)
+
+            evaluate = W.cli_evaluator(binary, "test-template", 42, linter, workdir, ["asset.height_m"])
+            observed = evaluate({"body.heightM": 1.65})
+
+            self.assertEqual(observed, {"asset.height_m": 1.6})
+            with open(binary + ".log", encoding="utf-8") as fh:
+                calls = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual([command_name(c["argv"]) for c in calls],
+                             ["project init", "object set", "control set", "build"])
+            disable = calls[1]
+            self.assertEqual(disable["argv"],
+                             ["object", "set", "--project", os.path.join(workdir, "a.vrmauthor"),
+                              "--request", "-"])
+            self.assertEqual(json.loads(disable["stdin"]), DISABLE_REQUEST)
+
+    def test_the_verification_evaluator_builds_the_same_controls_with_the_garment_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = write_stub(os.path.join(tmp, "vrm-author"), LOGGING_STUB, executable=True)
+            linter = write_stub(os.path.join(tmp, "style_lint.py"), LINTER_STUB)
+            workdir = os.path.join(tmp, "work")
+            os.makedirs(workdir)
+
+            verify = W.cli_evaluator(binary, "test-template", 42, linter, workdir, ["asset.height_m"],
+                                     disable_default_garment=False)
+            verify({"body.heightM": 1.65})
+
+            with open(binary + ".log", encoding="utf-8") as fh:
+                calls = [json.loads(line) for line in fh if line.strip()]
+            self.assertEqual([command_name(c["argv"]) for c in calls],
+                             ["project init", "control set", "build"])
+
+
+class GarmentFit(unittest.TestCase):
+    WIDTHS = W.rule_widths(PROFILE)
+    RANGES = {"body.heightM": (1.2, 2.0), "body.headCount": (4.5, 8.0)}
+    TARGET = {"asset.height_m": 1.75, "proportions.head_count": 7.0}
+
+    @staticmethod
+    def evaluate(controls):
+        return {"asset.height_m": controls["body.heightM"],
+                "proportions.head_count": controls["body.headCount"]}
+
+    def solve(self, verify, target=None, ranges=None):
+        return W.solve_family("f", target or self.TARGET, ranges if ranges is not None else self.RANGES,
+                              self.WIDTHS, self.evaluate, tolerance=0.01, budget=50, seed=42,
+                              verify=verify)
+
+    def test_a_solved_witness_records_the_disable_step_in_its_replay_steps(self):
+        witness = self.solve(lambda controls: {})
+        steps = witness["replaySteps"]
+        self.assertEqual([s["command"] for s in steps],
+                         ["project init", "object set", "control set", "build"])
+        self.assertEqual(steps[1]["request"], DISABLE_REQUEST)
+        self.assertEqual(steps[2]["request"], {"edit": {"object": "avatar:main", "values": witness["controls"]}})
+
+    def test_a_garment_rejection_on_the_verification_build_is_recorded_not_penalised(self):
+        seen = []
+
+        def verify(controls):
+            seen.append(dict(controls))
+            raise W.InfeasibleCandidate("GARMENT_PENETRATION: top-v1 penetrates the body")
+
+        rejected = self.solve(verify)
+        accepted = self.solve(lambda controls: {})
+
+        self.assertTrue(rejected["eligible"])
+        self.assertEqual(rejected["garmentFit"], "fail")
+        self.assertEqual(rejected["controls"], accepted["controls"])
+        self.assertEqual(rejected["residuals"], accepted["residuals"])
+        self.assertEqual(seen, [accepted["controls"]])
+
+    def test_a_verification_build_that_succeeds_is_recorded_as_a_pass(self):
+        witness = self.solve(lambda controls: {"asset.height_m": 1.75})
+        self.assertTrue(witness["eligible"])
+        self.assertEqual(witness["garmentFit"], "pass")
+
+    def test_an_ineligible_family_carries_no_garment_fit(self):
+        def verify(controls):
+            raise AssertionError("an ineligible family must not be verified")
+
+        unreachable = W.solve_family("f", {"asset.height_m": 9.0}, {}, self.WIDTHS,
+                                     lambda controls: {"asset.height_m": 1.6},
+                                     tolerance=0.01, budget=10, seed=42, verify=verify)
+        out_of_range = W.solve_family("f", {"asset.height_m": 1.1764}, self.RANGES, self.WIDTHS,
+                                      self.evaluate, tolerance=0.25, budget=200, seed=42, verify=verify)
+
+        for witness in (unreachable, out_of_range):
+            self.assertFalse(witness["eligible"])
+            self.assertNotIn("garmentFit", witness)
+            self.assertNotIn("replaySteps", witness)
+
+    def test_an_infrastructure_failure_on_the_verification_build_still_raises(self):
+        def verify(controls):
+            raise RuntimeError("command failed (5): vrm-author build")
+
+        with self.assertRaises(RuntimeError) as ctx:
+            self.solve(verify)
+        self.assertNotIsInstance(ctx.exception, W.InfeasibleCandidate)
 
 
 if __name__ == "__main__":
