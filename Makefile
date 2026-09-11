@@ -222,7 +222,7 @@ bench-gate:
 # gates them automatically. Not a replacement for bench-gate.
 BENCH_HOTSPOT_FRAMES  ?= 300
 BENCH_HOTSPOT_ARGS     = --mode render --frames $(BENCH_HOTSPOT_FRAMES) --warmup $(BENCH_WARMUP) \
-                         --vrma $(BENCH_VRMA) --spring-bone --spring-bone-quality ultra
+                         --vrma $(BENCH_VRMA) --spring-bone --spring-bone-quality ultra --fixed-step
 bench-hotspots:
 	@echo "🔥  Hotspot bench (animated + ultra spring)..."
 	@swift build -c release --product VRMBenchmark
