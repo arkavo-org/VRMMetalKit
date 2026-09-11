@@ -103,13 +103,7 @@ public enum DiscoveryHandlers {
     // MARK: capabilities
 
     public static func renderers(context: OperationContext) -> [String] {
-        var found: [String] = []
-        if let configured = context.env["VRM_AUTHOR_RENDERER"], FileManager.default.isExecutableFile(atPath: configured) { found.append(configured) }
-        if let dir = context.executableURL?.deletingLastPathComponent() {
-            let candidate = dir.appendingPathComponent("VRMAuthorRender")
-            if FileManager.default.isExecutableFile(atPath: candidate.path) { found.append("VRMAuthorRender") }
-        }
-        return found
+        VRMAuthorRenderLocator.renderers(executableURL: context.executableURL, env: context.env)
     }
 
     public static func signerAvailable(context: OperationContext) -> Bool { false }
@@ -212,7 +206,7 @@ public enum DiscoveryHandlers {
         else if !linterMatches { warnings.append(AuthorWarning(code: "STYLE_LINTER_UNPINNED", message: "scripts/style_lint.py does not match the pinned oracle hash.")) }
 
         let renderers = renderers(context: context)
-        if renderers.isEmpty { warnings.append(AuthorWarning(code: "RENDERER_MISSING", message: "VRMAuthorRender not found next to the executable; authoring-v1 visual scenarios report incomplete.")) }
+        if renderers.isEmpty { warnings.append(AuthorWarning(code: "RENDERER_MISSING", message: "vrm-author-render not found next to the executable or via VRM_AUTHOR_RENDERER; authoring-v1 visual scenarios report incomplete.")) }
         warnings.append(AuthorWarning(code: "SIGNER_UNAVAILABLE", message: "No signer is configured; deliver returns incomplete."))
 
         var acceptance: [String: JSONValue] = ["packs": .number(Double(context.evidenceRegistry.packs.count)), "entries": .number(Double(context.evidenceRegistry.entries.count))]

@@ -40,6 +40,10 @@ let package = Package(
         .executable(
             name: "vrm-author",
             targets: ["VRMAuthor"]
+        ),
+        .executable(
+            name: "vrm-author-render",
+            targets: ["VRMAuthorRender"]
         )
     ],
     dependencies: [
