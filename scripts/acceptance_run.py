@@ -34,7 +34,6 @@ Exit status: 0 pass, 1 fail, 2 pending (a fixture or corpus asset is absent),
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import json
 import os
@@ -55,10 +54,6 @@ DEFAULT_SCHEMA = os.path.join(REPO, "docs", "proposals", "vrm-author-cli", "acce
 GLB_MAGIC = 0x46546C67
 JSON_CHUNK = 0x4E4F534A
 BIN_CHUNK = 0x004E4942
-
-
-class PackInvalid(Exception):
-    pass
 
 
 # --------------------------------------------------------------------------- hashing
@@ -299,9 +294,8 @@ def delete_path(obj, dotted):
 # --------------------------------------------------------------------------- runner
 
 class Runner:
-    def __init__(self, pack, pack_path, fixtures_dir=None, repo=REPO):
+    def __init__(self, pack, fixtures_dir=None, repo=REPO):
         self.pack = pack
-        self.pack_path = pack_path
         self.fixtures_dir = fixtures_dir
         self.repo = repo
         self.oracle_hashes = {}
@@ -834,7 +828,7 @@ def main(argv=None):
         print(f"pack invalid: packHash {pack['packHash'] or '(empty)'} does not match canonical content hash {want}", file=sys.stderr)
         return EXIT["invalid"]
 
-    result = Runner(pack, os.path.abspath(args.pack), args.fixtures).run()
+    result = Runner(pack, args.fixtures).run()
     result["resultHash"] = sha256_bytes(canonical_json(result).encode("utf-8"))
     if args.out:
         with open(args.out, "w", encoding="utf-8") as fh:
