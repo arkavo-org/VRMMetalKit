@@ -163,12 +163,12 @@ enum TestAvatarFactory {
 
 /// A template pack whose compile() returns the factory avatar, scaled by the
 /// `body.heightM` control and carrying the recipe's resolved meta.
-struct StubTemplatePack: TemplatePack {
+struct ExportStubTemplatePack: TemplatePack {
     static let packSha256 = "5f0c1a7e3d2b4c6a8e9f0123456789abcdef0123456789abcdef0123456789ab"
     static let profileSha256 = QAPins.defaultProfileSha256
 
     var id: String { "stub-v1" }
-    var sha256: String { StubTemplatePack.packSha256 }
+    var sha256: String { ExportStubTemplatePack.packSha256 }
     var ignoresControls = false
     var blinkDelta: Float = -0.02
 
@@ -180,7 +180,7 @@ struct StubTemplatePack: TemplatePack {
         let meta = TestAvatarFactory.meta()
         return Recipe(name: "stub avatar", template: TemplateRef(id: id, sha256: sha256), seed: 0, body: ["body.heightM": 1.6], face: [:], hair: [], outfits: [],
                       textures: [], materials: [], expressions: [], lookAt: LookAtObject(), springs: [], colliders: [], colliderGroups: [],
-                      style: Blob(path: QAPins.defaultProfilePath, sha256: StubTemplatePack.profileSha256),
+                      style: Blob(path: QAPins.defaultProfilePath, sha256: ExportStubTemplatePack.profileSha256),
                       rights: RightsDeclaration(id: "rights:stub", declarant: "Test Author", evidence: [], authors: meta.authors, meta: meta))
     }
 
@@ -210,7 +210,7 @@ struct TestProject {
         return registry
     }
 
-    static func make(pack: any TemplatePack = StubTemplatePack(), registry: Registry = TestProject.registry(), env: [String: String] = [:]) throws -> TestProject {
+    static func make(pack: any TemplatePack = ExportStubTemplatePack(), registry: Registry = TestProject.registry(), env: [String: String] = [:]) throws -> TestProject {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("vrmauthor-e-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let projectURL = root.appendingPathComponent("avatar.vrmauthor")
@@ -235,7 +235,7 @@ struct TestProject {
 
     @discardableResult
     func applyDefaultRecipe(requestId: String = "apply-1", mutate: (inout Recipe) -> Void = { _ in }) throws -> ResultEnvelope {
-        var recipe = StubTemplatePack().defaults
+        var recipe = ExportStubTemplatePack().defaults
         mutate(&recipe)
         let envelope = invoke("recipe apply", ["requestId": .string(requestId), "recipe": try recipe.jsonValue()])
         guard envelope.status == .succeeded else { throw AuthorError(code: .internalError, message: "recipe apply failed: \(envelope.errors)") }

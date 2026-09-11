@@ -17,7 +17,7 @@
 import Foundation
 
 /// Outcome of resolving a recipe's rights declaration into VRM metadata.
-public struct RightsResolution: Codable, Hashable, Sendable {
+public struct RecipeRightsResolution: Codable, Hashable, Sendable {
     public var meta: VRMMeta
     public var attribution: JSONValue
     public var conflicts: [AuthorError]
@@ -33,15 +33,15 @@ public struct RightsResolution: Codable, Hashable, Sendable {
 /// provenance area supplies the real implementation and the integrator wires it
 /// through `ExportQAInstaller.installer(rights:render:consumer:)`.
 public protocol RecipeRightsHook: Sendable {
-    func resolve(declaration: RightsDeclaration, recipe: Recipe, context: OperationContext) throws -> RightsResolution
+    func resolve(declaration: RightsDeclaration, recipe: Recipe, context: OperationContext) throws -> RecipeRightsResolution
 }
 
 /// Default: the declaration's own meta, no attribution, no conflicts.
 public struct NoRightsHook: RecipeRightsHook {
     public init() {}
 
-    public func resolve(declaration: RightsDeclaration, recipe: Recipe, context: OperationContext) throws -> RightsResolution {
-        RightsResolution(meta: declaration.meta)
+    public func resolve(declaration: RightsDeclaration, recipe: Recipe, context: OperationContext) throws -> RecipeRightsResolution {
+        RecipeRightsResolution(meta: declaration.meta)
     }
 }
 

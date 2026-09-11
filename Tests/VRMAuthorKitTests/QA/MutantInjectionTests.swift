@@ -47,7 +47,7 @@ final class QAMutantInjectionTests: XCTestCase {
     }
 
     func testIdentityTransformMutantIsFlaggedNoOpEdit() throws {
-        let inert = try TestProject.make(pack: StubTemplatePack(ignoresControls: true), registry: TestProject.registry(extra: [StubStyleLint.installer(verdict: "conforming")]))
+        let inert = try TestProject.make(pack: ExportStubTemplatePack(ignoresControls: true), registry: TestProject.registry(extra: [StubStyleLint.installer(verdict: "conforming")]))
         defer { inert.cleanup() }
         try inert.applyDefaultRecipe()
         XCTAssertEqual(inert.invoke("build", ["out": .string(inert.path("b1.vrm"))]).exitCode, .success)
@@ -112,7 +112,7 @@ final class QAMutantInjectionTests: XCTestCase {
         XCTAssertEqual(failedCheckIds(envelope), ["expression.blinkInert"])
         XCTAssertEqual(envelope.errors.first?.code.rawValue, "EXPRESSION_INERT")
 
-        let inert = try TestProject.make(pack: StubTemplatePack(blinkDelta: 0), registry: TestProject.registry(extra: [StubStyleLint.installer(verdict: "conforming")]))
+        let inert = try TestProject.make(pack: ExportStubTemplatePack(blinkDelta: 0), registry: TestProject.registry(extra: [StubStyleLint.installer(verdict: "conforming")]))
         defer { inert.cleanup() }
         try inert.applyDefaultRecipe()
         XCTAssertEqual(inert.invoke("build", ["out": .string(inert.path("draft.vrm"))]).exitCode, .success)

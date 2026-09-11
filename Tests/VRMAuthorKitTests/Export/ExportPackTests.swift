@@ -206,7 +206,7 @@ final class ExportPackTests: XCTestCase {
         let recipe = try Recipe.decode(bytes)
         XCTAssertEqual(recipe.name, "custom")
         XCTAssertEqual(recipe.body["body.heightM"], 1.7)
-        XCTAssertEqual(recipe.template.sha256, StubTemplatePack.packSha256)
+        XCTAssertEqual(recipe.template.sha256, ExportStubTemplatePack.packSha256)
         XCTAssertEqual(recipe.style.sha256, QAPins.defaultProfileSha256)
         XCTAssertEqual(try CanonicalJSON.data(try recipe.jsonValue()), bytes)
         XCTAssertEqual(envelope.result?["recipe"], try JSONValue.parse(bytes))
@@ -232,7 +232,7 @@ final class ExportPackTests: XCTestCase {
     // MARK: recipe apply
 
     func testRecipeApplyMaterializesObjectsInvalidationsAndRevision() throws {
-        var recipe = StubTemplatePack().defaults
+        var recipe = ExportStubTemplatePack().defaults
         let dry = project.invoke("recipe apply", ["requestId": "dry", "recipe": try recipe.jsonValue(), "dryRun": true])
         XCTAssertEqual(dry.exitCode, .success, "\(dry.errors)")
         XCTAssertEqual(dry.revisionAfter, 0)
@@ -291,37 +291,37 @@ final class ExportPackTests: XCTestCase {
         let mismatch = project.invoke("recipe apply", ["requestId": "a4", "recipe": try recipe.jsonValue()])
         XCTAssertEqual(mismatch.errors.first?.code, .validationFailed)
         XCTAssertEqual(mismatch.errors.first?.path, "/template/sha256")
-        recipe.template = TemplateRef(id: "other", sha256: StubTemplatePack.packSha256)
+        recipe.template = TemplateRef(id: "other", sha256: ExportStubTemplatePack.packSha256)
         XCTAssertEqual(project.invoke("recipe apply", ["requestId": "a5", "recipe": try recipe.jsonValue()]).errors.first?.code, .missingCapability)
         XCTAssertEqual(project.invoke("recipe apply", ["requestId": "a6", "recipe": ["schemaVersion": "1.0"]]).exitCode, .invalidRequest)
         XCTAssertEqual(try project.store.state().revision, 2)
     }
 
     private struct ConflictingRights: RecipeRightsHook {
-        func resolve(declaration: RightsDeclaration, recipe: Recipe, context: OperationContext) throws -> RightsResolution {
-            RightsResolution(meta: declaration.meta, conflicts: [AuthorError(code: .validationFailed, path: "/rights/meta/authors", message: "Author attribution conflicts with the ingredient ledger.")])
+        func resolve(declaration: RightsDeclaration, recipe: Recipe, context: OperationContext) throws -> RecipeRightsResolution {
+            RecipeRightsResolution(meta: declaration.meta, conflicts: [AuthorError(code: .validationFailed, path: "/rights/meta/authors", message: "Author attribution conflicts with the ingredient ledger.")])
         }
     }
 
     private struct RenamingRights: RecipeRightsHook {
-        func resolve(declaration: RightsDeclaration, recipe: Recipe, context: OperationContext) throws -> RightsResolution {
+        func resolve(declaration: RightsDeclaration, recipe: Recipe, context: OperationContext) throws -> RecipeRightsResolution {
             var meta = declaration.meta
             meta.name = "Resolved Name"
-            return RightsResolution(meta: meta, attribution: ["name": "ledger"])
+            return RecipeRightsResolution(meta: meta, attribution: ["name": "ledger"])
         }
     }
 
     func testRecipeApplyInvokesRightsHook() throws {
         let conflicting = try TestProject.make(registry: TestProject.registry(rights: ConflictingRights()))
         defer { conflicting.cleanup() }
-        let refused = conflicting.invoke("recipe apply", ["requestId": "r1", "recipe": try StubTemplatePack().defaults.jsonValue()])
+        let refused = conflicting.invoke("recipe apply", ["requestId": "r1", "recipe": try ExportStubTemplatePack().defaults.jsonValue()])
         XCTAssertEqual(refused.exitCode, .gateFailed)
         XCTAssertEqual(refused.errors.first?.path, "/rights/meta/authors")
         XCTAssertEqual(try conflicting.store.state().revision, 0)
 
         let renaming = try TestProject.make(registry: TestProject.registry(rights: RenamingRights()))
         defer { renaming.cleanup() }
-        XCTAssertEqual(renaming.invoke("recipe apply", ["requestId": "r1", "recipe": try StubTemplatePack().defaults.jsonValue()]).exitCode, .success)
+        XCTAssertEqual(renaming.invoke("recipe apply", ["requestId": "r1", "recipe": try ExportStubTemplatePack().defaults.jsonValue()]).exitCode, .success)
         XCTAssertEqual(try renaming.store.state().recipe?["rights"]?["meta"]?["name"], "Resolved Name")
         let build = renaming.invoke("build", ["out": .string(renaming.path("a.vrm"))])
         XCTAssertEqual(build.exitCode, .success)
@@ -415,7 +415,7 @@ final class ExportPackTests: XCTestCase {
         XCTAssertEqual(report["file"]?["sha256"], .string(envelope.artifacts[0].sha256))
         XCTAssertEqual(report["lossReport"]?["lost"], [])
         XCTAssertEqual(report["buildHash"], envelope.result?["buildHash"])
-        XCTAssertEqual(data, try GLBWriter.write(try StubTemplatePack().compile(StubTemplatePack().defaults, seed: 0)).data)
+        XCTAssertEqual(data, try GLBWriter.write(try ExportStubTemplatePack().compile(ExportStubTemplatePack().defaults, seed: 0)).data)
     }
 
     func testMissingMandatoryMetaVocabulary() {

@@ -21,7 +21,6 @@ extension AuthorErrorCode {
     public static let bindingFailed: AuthorErrorCode = "BINDING_FAILED"
     public static let signatureInvalid: AuthorErrorCode = "SIGNATURE_INVALID"
     public static let untrustedSigner: AuthorErrorCode = "UNTRUSTED_SIGNER"
-    public static let inspectionMissing: AuthorErrorCode = "INSPECTION_MISSING"
     public static let reportMismatch: AuthorErrorCode = "REPORT_MISMATCH"
 }
 

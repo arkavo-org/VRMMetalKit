@@ -27,6 +27,6 @@ extension Registry {
         ProjectHandlers.install,
         ProvenanceHandlers.install,
         MaterialsHandlers.install,
-        ExportQAInstaller.install,
+        ExportQAInstaller.installer(rights: LedgerRightsHook()),
     ]
 }
