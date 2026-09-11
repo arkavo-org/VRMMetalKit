@@ -57,7 +57,7 @@ struct NativeAnimeEyeBuilder {
             for (ri, row) in rows.enumerated() {
                 for (j, idx) in row.enumerated() {
                     let phi = 2 * Double.pi * Double(j) / Double(segs)
-                    mesh.vertices[idx].uv = V2(0.5 + radii[ri] * cos(phi), 0.5 - radii[ri] * sin(phi))
+                    mesh.vertices[idx].uv = NAVec2(0.5 + radii[ri] * cos(phi), 0.5 - radii[ri] * sin(phi))
                 }
             }
         }
@@ -68,7 +68,7 @@ struct NativeAnimeEyeBuilder {
         let scleraRows = sclera.loft(scleraRings, segments: segs, capStart: E - NAMath.zAxis * r, capEnd: nil)
         stampUV(&sclera, rows: scleraRows, radii: Self.scleraUVRadii + [Self.irisUVRadius])
         sclera.tag("iris", scleraRows[scleraRows.count - 1])
-        if let pole = sclera.regions[globe]?.last { sclera.vertices[pole].uv = V2(1, 0.5) }
+        if let pole = sclera.regions[globe]?.last { sclera.vertices[pole].uv = NAVec2(1, 0.5) }
 
         var iris = BuildMesh()
         let irisRings = [ring(eye.irisAngle, region: "iris"), ring(eye.pupilAngle, region: "pupil")]
@@ -76,14 +76,14 @@ struct NativeAnimeEyeBuilder {
         stampUV(&iris, rows: irisRows, radii: [Self.irisUVRadius, Self.pupilUVRadius])
         iris.tag("iris", irisRows[1])
         if let pole = iris.regions["pupil"]?.last {
-            iris.vertices[pole].uv = V2(0.5, 0.5)
+            iris.vertices[pole].uv = NAVec2(0.5, 0.5)
             iris.tag("iris", [pole])
         }
 
         var highlight = BuildMesh()
         let theta = eye.irisAngle * 0.55
         let phi = eye.sideSign > 0 ? NAMath.degrees(135) : NAMath.degrees(45)
-        let dir = V3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta))
+        let dir = NAVec3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta))
         let centre = E + dir * (r * 1.02)
         let tangentU = NAMath.normalize(NAMath.cross(NAMath.yAxis, dir))
         let tangentV = NAMath.normalize(NAMath.cross(dir, tangentU))
@@ -94,7 +94,7 @@ struct NativeAnimeEyeBuilder {
             centre + tangentU * size + tangentV * size,
             centre - tangentU * size + tangentV * size,
         ]
-        let uvs = [V2(0, 1), V2(1, 1), V2(1, 0), V2(0, 0)]
+        let uvs = [NAVec2(0, 1), NAVec2(1, 1), NAVec2(1, 0), NAVec2(0, 0)]
         var ids: [Int] = []
         for (k, c) in corners.enumerated() { ids.append(highlight.addVertex(c, uv: uvs[k], pivot: E, regions: [globe, "highlight"])) }
         highlight.addQuad(ids[0], ids[1], ids[2], ids[3])

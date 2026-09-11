@@ -88,10 +88,10 @@ struct NativeAnimeMorphBuilder {
     }
 
     /// Per primitive, the ordered list of (name, deltas).
-    func build() -> [[(String, [V3])]] {
-        var out = [[(String, [V3])]](repeating: [], count: head.count)
+    func build() -> [[(String, [NAVec3])]] {
+        var out = [[(String, [NAVec3])]](repeating: [], count: head.count)
         for (name, shape) in shapes() {
-            var deltas = head.map { [V3](repeating: .zero, count: $0.vertexCount) }
+            var deltas = head.map { [NAVec3](repeating: .zero, count: $0.vertexCount) }
             applyLids(shape, &deltas)
             applyMouth(shape.mouth, &deltas)
             applyBrows(shape.brows, &deltas)
@@ -100,7 +100,7 @@ struct NativeAnimeMorphBuilder {
         return out
     }
 
-    private func applyLids(_ shape: Shape, _ deltas: inout [[V3]]) {
+    private func applyLids(_ shape: Shape, _ deltas: inout [[NAVec3]]) {
         for side in ["left", "right"] {
             guard let lid = shape.lids[side], let verts = handles.lids[side], let eye = layout.eyes[side] else { continue }
             for v in verts {
@@ -118,7 +118,7 @@ struct NativeAnimeMorphBuilder {
         }
     }
 
-    private func applyMouth(_ m: MouthShape, _ deltas: inout [[V3]]) {
+    private func applyMouth(_ m: MouthShape, _ deltas: inout [[NAVec3]]) {
         guard m.open != 0 || m.width != 1 || m.pout != 0 || m.corner != 0 else { return }
         let prim = HeadPrimitive.mouth.rawValue
         let mesh = head[prim]
@@ -127,34 +127,34 @@ struct NativeAnimeMorphBuilder {
             let sa = sin(alpha)
             return sa < 0 ? -m.open * scale * pow(-sa, 0.7) : m.open * 0.15 * scale * pow(sa, 0.7)
         }
-        func lipDelta(_ v: LoopVertex, dropScale: Double, cornerScale: Double) -> V3 {
+        func lipDelta(_ v: LoopVertex, dropScale: Double, cornerScale: Double) -> NAVec3 {
             let p = mesh.vertices[v.index].position
             let ca = cos(v.alpha)
             let dx = (p.x - cx) * (m.width - 1)
             let dy = drop(v.alpha, dropScale) + m.corner * ca * ca * cornerScale
             let dz = m.pout * (1 - abs(ca))
-            return V3(dx, dy, dz)
+            return NAVec3(dx, dy, dz)
         }
         for v in handles.lipOuter { deltas[prim][v.index] += lipDelta(v, dropScale: 0.9, cornerScale: 1) }
         for v in handles.lipInner { deltas[prim][v.index] += lipDelta(v, dropScale: 1, cornerScale: 0.9) }
         for v in handles.cavityFront {
             let p = mesh.vertices[v.index].position
-            deltas[prim][v.index] += V3((p.x - cx) * (m.width - 1), drop(v.alpha, 0.6), 0)
+            deltas[prim][v.index] += NAVec3((p.x - cx) * (m.width - 1), drop(v.alpha, 0.6), 0)
         }
         for v in handles.cavityBack {
             let p = mesh.vertices[v.index].position
-            deltas[prim][v.index] += V3((p.x - cx) * (m.width - 1) * 0.5, drop(v.alpha, 0.3), 0)
+            deltas[prim][v.index] += NAVec3((p.x - cx) * (m.width - 1) * 0.5, drop(v.alpha, 0.3), 0)
         }
         let skin = HeadPrimitive.skin.rawValue
-        for jw in handles.jawWeights { deltas[skin][jw.index] += V3(0, -0.8 * m.open * jw.weight, 0) }
+        for jw in handles.jawWeights { deltas[skin][jw.index] += NAVec3(0, -0.8 * m.open * jw.weight, 0) }
     }
 
-    private func applyBrows(_ b: BrowShape, _ deltas: inout [[V3]]) {
+    private func applyBrows(_ b: BrowShape, _ deltas: inout [[NAVec3]]) {
         guard b.inner != 0 || b.outer != 0 else { return }
         let prim = HeadPrimitive.brow.rawValue
         for side in ["left", "right"] {
             for v in handles.brows[side] ?? [] {
-                deltas[prim][v.index] += V3(0, NAMath.lerp(b.inner, b.outer, v.innerFraction), 0)
+                deltas[prim][v.index] += NAVec3(0, NAMath.lerp(b.inner, b.outer, v.innerFraction), 0)
             }
         }
     }

@@ -36,35 +36,32 @@ public enum NativeAnimeMaterials {
     /// Roles the template's own primitives reference.
     public static let templateIds = [faceSkin, bodySkin, iris, eyeWhite, eyeHighlight, eyeline, eyelash, brow, mouth]
 
+    /// Strips texture-slot leaves (`*Texture`) so colour-only placeholders never
+    /// reference images the template does not compile.
+    static func withoutTextures(_ value: JSONValue) -> JSONValue {
+        guard let o = value.object else { return value }
+        var out: [String: JSONValue] = [:]
+        for (k, v) in o where !k.hasSuffix("Texture") { out[k] = withoutTextures(v) }
+        return .object(out)
+    }
+
+    /// The materials area's calibrated factors for `role`, textures removed,
+    /// base/shade colours overridden and schema defaults applied so the result
+    /// is a fixed point of `MaterialObject.decode`.
     static func material(id: String, role: MaterialRole, base: [Double], shade: [Double], outline: Bool, emissive: [Double] = [0, 0, 0]) -> MaterialObject {
-        let gltf: JSONValue = [
-            "pbrMetallicRoughness": ["baseColorFactor": JSONValue(base + [1]), "metallicFactor": 0, "roughnessFactor": 1],
-            "emissiveFactor": JSONValue(emissive),
-            "alphaMode": "OPAQUE",
-            "alphaCutoff": 0.5,
-            "doubleSided": false,
-        ]
-        let mtoon: JSONValue = [
-            "specVersion": "1.0",
-            "transparentWithZWrite": false,
-            "renderQueueOffsetNumber": 0,
-            "shadeColorFactor": JSONValue(shade),
-            "shadingShiftFactor": -0.05,
-            "shadingToonyFactor": 0.95,
-            "giEqualizationFactor": 0.9,
-            "matcapFactor": [1, 1, 1],
-            "parametricRimColorFactor": [0, 0, 0],
-            "parametricRimFresnelPowerFactor": 5,
-            "parametricRimLiftFactor": 0,
-            "outlineWidthMode": .string(outline ? "worldCoordinates" : "none"),
-            "outlineWidthFactor": .number(outline ? 0.0012 : 0),
-            "outlineColorFactor": [0.12, 0.08, 0.08],
-            "outlineLightingMixFactor": 1,
-            "uvAnimationScrollXSpeedFactor": 0,
-            "uvAnimationScrollYSpeedFactor": 0,
-            "uvAnimationRotationSpeedFactor": 0,
-        ]
-        return MaterialObject(id: id, role: role, gltf: gltf, mtoon: mtoon)
+        var gltf = withoutTextures(MaterialRoleDefaults.gltf(for: role)).object ?? [:]
+        var pbr = gltf["pbrMetallicRoughness"]?.object ?? [:]
+        pbr["baseColorFactor"] = JSONValue(base + [1])
+        gltf["pbrMetallicRoughness"] = .object(pbr)
+        gltf["emissiveFactor"] = JSONValue(emissive)
+        var mtoon = withoutTextures(MaterialRoleDefaults.mtoon(for: role)).object ?? [:]
+        mtoon["shadeColorFactor"] = JSONValue(shade)
+        if !outline {
+            mtoon["outlineWidthMode"] = "none"
+            mtoon["outlineWidthFactor"] = 0
+        }
+        return MaterialObject(id: id, role: role, gltf: MaterialSchemas.gltf.applyingDefaults(to: .object(gltf)),
+                              mtoon: MaterialSchemas.mtoon.applyingDefaults(to: .object(mtoon)))
     }
 
     public static var placeholders: [MaterialObject] {

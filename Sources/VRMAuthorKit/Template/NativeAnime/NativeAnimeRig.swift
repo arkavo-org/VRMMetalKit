@@ -128,7 +128,7 @@ struct NativeAnimeRig {
 
     // MARK: Weights
 
-    private func segmentEnd(_ bone: VRMHumanBone) -> V3 {
+    private func segmentEnd(_ bone: VRMHumanBone) -> NAVec3 {
         let H = layout.height
         let start = layout.joint(bone)
         switch bone {
@@ -137,7 +137,7 @@ struct NativeAnimeRig {
         case .chest: return layout.joint(.upperChest)
         case .upperChest: return layout.joint(.neck)
         case .neck: return layout.joint(.head)
-        case .head: return start + V3(0, layout.headHeight * 0.5, 0)
+        case .head: return start + NAVec3(0, layout.headHeight * 0.5, 0)
         case .leftShoulder: return layout.joint(.leftUpperArm)
         case .rightShoulder: return layout.joint(.rightUpperArm)
         case .leftUpperArm: return layout.joint(.leftLowerArm)
@@ -152,7 +152,7 @@ struct NativeAnimeRig {
         case .rightLowerLeg: return layout.joint(.rightFoot)
         case .leftFoot: return layout.joint(.leftToes)
         case .rightFoot: return layout.joint(.rightToes)
-        case .leftToes, .rightToes: return start + V3(0, 0, 0.03 * H)
+        case .leftToes, .rightToes: return start + NAVec3(0, 0, 0.03 * H)
         case .leftEye, .rightEye, .jaw: return start
         default:
             let children = Self.boneOrder.filter { $0.1 == bone }.map(\.0)

@@ -112,7 +112,7 @@ public enum NativeAnimeControls {
                           "Eye opening width; lids, globe and pivot regenerate together.", regions: eyeRegions))
             rows.append(B(sided("face.eye.{side}.spacing", side: side), faceKinds + [.node, .lookat], [d.geometry, d.rig, d.morphs, d.lookAt],
                           "Eye pivot lateral offset from the head centre.", regions: eyeRegions))
-            rows.append(B(sided("face.eye.{side}.tilt", side: side), faceKinds + [.node, .lookat], [d.geometry, d.morphs],
+            rows.append(B(sided("face.eye.{side}.tilt", side: side), faceKinds, [d.geometry, d.morphs],
                           "Lid ring tilt blend (outer corner up for positive); not degrees.", regions: eyeRegions))
         }
         for side in sides {

@@ -19,22 +19,22 @@ import Foundation
 /// A vertex under construction: double-precision position, its UV, and the
 /// pivot (ring centre or feature anchor) that radial shape offsets scale about.
 struct BuildVertex {
-    var position: V3
-    var uv: V2
-    var pivot: V3
+    var position: NAVec3
+    var uv: NAVec2
+    var pivot: NAVec3
 }
 
 /// An elliptical cross-section: `u`/`v` span the ring plane and `u × v` points
 /// along the loft direction so emitted quads wind outward.
 struct Ring {
-    var center: V3
-    var u: V3
-    var v: V3
+    var center: NAVec3
+    var u: NAVec3
+    var v: NAVec3
     var ru: Double
     var rv: Double
     var region: String
 
-    func point(_ theta: Double) -> V3 {
+    func point(_ theta: Double) -> NAVec3 {
         center + u * (cos(theta) * ru) + v * (sin(theta) * rv)
     }
 }
@@ -50,7 +50,7 @@ struct BuildMesh {
     var vertexCount: Int { vertices.count }
 
     @discardableResult
-    mutating func addVertex(_ p: V3, uv: V2, pivot: V3, regions tags: [String] = []) -> Int {
+    mutating func addVertex(_ p: NAVec3, uv: NAVec2, pivot: NAVec3, regions tags: [String] = []) -> Int {
         vertices.append(BuildVertex(position: p, uv: uv, pivot: pivot))
         let i = vertices.count - 1
         for t in tags { regions[t, default: []].append(i) }
@@ -70,7 +70,7 @@ struct BuildMesh {
     /// each ring. Caps are pole fans, never collapsed rings. Returns the
     /// per-ring vertex indices.
     @discardableResult
-    mutating func loft(_ rings: [Ring], segments: Int, capStart: V3?, capEnd: V3?, extraRegions: [String] = []) -> [[Int]] {
+    mutating func loft(_ rings: [Ring], segments: Int, capStart: NAVec3?, capEnd: NAVec3?, extraRegions: [String] = []) -> [[Int]] {
         precondition(rings.count >= 2 && segments >= 3)
         var rows: [[Int]] = []
         for (ri, ring) in rings.enumerated() {
@@ -79,7 +79,7 @@ struct BuildMesh {
             for j in 0..<segments {
                 let theta = 2 * Double.pi * Double(j) / Double(segments)
                 let u = Double(j) / Double(segments)
-                row.append(addVertex(ring.point(theta), uv: V2(u, v), pivot: ring.center, regions: [ring.region] + extraRegions))
+                row.append(addVertex(ring.point(theta), uv: NAVec2(u, v), pivot: ring.center, regions: [ring.region] + extraRegions))
             }
             rows.append(row)
         }
@@ -91,13 +91,13 @@ struct BuildMesh {
             }
         }
         if let cap = capStart {
-            let pole = addVertex(cap, uv: V2(0.5, 0), pivot: rings[0].center, regions: [rings[0].region] + extraRegions)
+            let pole = addVertex(cap, uv: NAVec2(0.5, 0), pivot: rings[0].center, regions: [rings[0].region] + extraRegions)
             let row = rows[0]
             for j in 0..<segments { addTri(pole, row[(j + 1) % segments], row[j]) }
         }
         if let cap = capEnd {
             let last = rings[rings.count - 1]
-            let pole = addVertex(cap, uv: V2(0.5, 1), pivot: last.center, regions: [last.region] + extraRegions)
+            let pole = addVertex(cap, uv: NAVec2(0.5, 1), pivot: last.center, regions: [last.region] + extraRegions)
             let row = rows[rows.count - 1]
             for j in 0..<segments { addTri(pole, row[j], row[(j + 1) % segments]) }
         }
@@ -130,8 +130,8 @@ struct BuildMesh {
         return out
     }
 
-    func normals() -> [V3] {
-        var acc = [V3](repeating: .zero, count: vertices.count)
+    func normals() -> [NAVec3] {
+        var acc = [NAVec3](repeating: .zero, count: vertices.count)
         for t in triangles() {
             let a = vertices[t.x].position, b = vertices[t.y].position, c = vertices[t.z].position
             let n = NAMath.cross(b - a, c - a)
@@ -143,7 +143,7 @@ struct BuildMesh {
     }
 
     /// Float32 quantization happens here, once, for positions, normals, UVs and morph deltas.
-    func emit(materialId: String, joints: [SIMD4<UInt16>]?, weights: [SIMD4<Float>]?, morphs: [(String, [V3])]) -> CompiledPrimitive {
+    func emit(materialId: String, joints: [SIMD4<UInt16>]?, weights: [SIMD4<Float>]?, morphs: [(String, [NAVec3])]) -> CompiledPrimitive {
         let positions = vertices.map { NAMath.f($0.position) }
         let uvs = vertices.map { NAMath.f($0.uv) }
         let nrm = normals().map { NAMath.f($0) }

@@ -16,23 +16,23 @@
 
 import Foundation
 
-typealias V3 = SIMD3<Double>
-typealias V2 = SIMD2<Double>
+typealias NAVec3 = SIMD3<Double>
+typealias NAVec2 = SIMD2<Double>
 
 enum NAMath {
-    static let xAxis = V3(1, 0, 0)
-    static let yAxis = V3(0, 1, 0)
-    static let zAxis = V3(0, 0, 1)
+    static let xAxis = NAVec3(1, 0, 0)
+    static let yAxis = NAVec3(0, 1, 0)
+    static let zAxis = NAVec3(0, 0, 1)
 
-    static func dot(_ a: V3, _ b: V3) -> Double { a.x * b.x + a.y * b.y + a.z * b.z }
+    static func dot(_ a: NAVec3, _ b: NAVec3) -> Double { a.x * b.x + a.y * b.y + a.z * b.z }
 
-    static func cross(_ a: V3, _ b: V3) -> V3 {
-        V3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
+    static func cross(_ a: NAVec3, _ b: NAVec3) -> NAVec3 {
+        NAVec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x)
     }
 
-    static func length(_ a: V3) -> Double { dot(a, a).squareRoot() }
+    static func length(_ a: NAVec3) -> Double { dot(a, a).squareRoot() }
 
-    static func normalize(_ a: V3, fallback: V3 = V3(0, 0, 1)) -> V3 {
+    static func normalize(_ a: NAVec3, fallback: NAVec3 = NAVec3(0, 0, 1)) -> NAVec3 {
         let l = length(a)
         return l > 1e-18 ? a / l : fallback
     }
@@ -46,12 +46,12 @@ enum NAMath {
     }
 
     static func lerp(_ a: Double, _ b: Double, _ t: Double) -> Double { a + (b - a) * t }
-    static func lerp(_ a: V3, _ b: V3, _ t: Double) -> V3 { a + (b - a) * t }
+    static func lerp(_ a: NAVec3, _ b: NAVec3, _ t: Double) -> NAVec3 { a + (b - a) * t }
 
     static func degrees(_ d: Double) -> Double { d * .pi / 180 }
 
     /// Rotates `p` about the unit `axis` through `angle` radians around `pivot`.
-    static func rotate(_ p: V3, about axis: V3, angle: Double, pivot: V3) -> V3 {
+    static func rotate(_ p: NAVec3, about axis: NAVec3, angle: Double, pivot: NAVec3) -> NAVec3 {
         let v = p - pivot
         let c = cos(angle), s = sin(angle)
         let r = v * c + cross(axis, v) * s + axis * (dot(axis, v) * (1 - c))
@@ -59,7 +59,7 @@ enum NAMath {
     }
 
     /// Distance from `p` to segment `ab`.
-    static func segmentDistance(_ p: V3, _ a: V3, _ b: V3) -> Double {
+    static func segmentDistance(_ p: NAVec3, _ a: NAVec3, _ b: NAVec3) -> Double {
         let ab = b - a
         let l2 = dot(ab, ab)
         if l2 < 1e-18 { return length(p - a) }
@@ -67,6 +67,6 @@ enum NAMath {
         return length(p - (a + ab * t))
     }
 
-    static func f(_ v: V3) -> SIMD3<Float> { SIMD3<Float>(Float(v.x), Float(v.y), Float(v.z)) }
-    static func f(_ v: V2) -> SIMD2<Float> { SIMD2<Float>(Float(v.x), Float(v.y)) }
+    static func f(_ v: NAVec3) -> SIMD3<Float> { SIMD3<Float>(Float(v.x), Float(v.y), Float(v.z)) }
+    static func f(_ v: NAVec2) -> SIMD2<Float> { SIMD2<Float>(Float(v.x), Float(v.y)) }
 }

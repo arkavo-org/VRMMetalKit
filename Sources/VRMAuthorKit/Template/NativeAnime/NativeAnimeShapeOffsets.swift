@@ -26,10 +26,10 @@ struct NativeAnimeShapeOffsets {
     let handles: HeadHandles
 
     private var hh: Double { layout.headHeight }
-    private var C: V3 { layout.headCenter }
-    private var R: V3 { layout.headRadii }
+    private var C: NAVec3 { layout.headCenter }
+    private var R: NAVec3 { layout.headRadii }
 
-    typealias Endpoint = (_ p: V3, _ pivot: V3) -> V3
+    typealias Endpoint = (_ p: NAVec3, _ pivot: NAVec3) -> NAVec3
 
     private struct Key {
         var control: String
@@ -54,7 +54,7 @@ struct NativeAnimeShapeOffsets {
         applyBrowThickness(&head[HeadPrimitive.brow.rawValue], base: headBase[HeadPrimitive.brow.rawValue])
     }
 
-    private static func blend(_ mesh: inout BuildMesh, base: [V3], key: Key, value: Double) {
+    private static func blend(_ mesh: inout BuildMesh, base: [NAVec3], key: Key, value: Double) {
         let t = abs(value)
         let endpoint = value > 0 ? key.plus : key.minus
         var touched = Set<Int>()
@@ -68,7 +68,7 @@ struct NativeAnimeShapeOffsets {
     }
 
     private static func radial(_ sx: Double, _ sy: Double, _ sz: Double) -> Endpoint {
-        { p, piv in piv + (p - piv) * V3(sx, sy, sz) }
+        { p, piv in piv + (p - piv) * NAVec3(sx, sy, sz) }
     }
 
     private func bodyKeys() -> [Key] {
@@ -86,31 +86,31 @@ struct NativeAnimeShapeOffsets {
         let shell = NativeAnimeControls.headShellRegions
         let eyeLineY = layout.eyeLineY
         let jawLineY = C.y - 0.35 * hh
-        let jawWeight: (V3) -> Double = { p in NAMath.smoothstep(eyeLineY, jawLineY, p.y) }
-        let chinWeight: (V3) -> Double = { p in NAMath.smoothstep(layout.mouthLineY, C.y - 0.50 * hh, p.y) }
+        let jawWeight: (NAVec3) -> Double = { p in NAMath.smoothstep(eyeLineY, jawLineY, p.y) }
+        let chinWeight: (NAVec3) -> Double = { p in NAMath.smoothstep(layout.mouthLineY, C.y - 0.50 * hh, p.y) }
         var keys: [Key] = [
-            Key(control: "face.head.width", regions: shell, plus: { p, _ in V3(p.x * 1.08, p.y, p.z) }, minus: { p, _ in V3(p.x * 0.92, p.y, p.z) }),
+            Key(control: "face.head.width", regions: shell, plus: { p, _ in NAVec3(p.x * 1.08, p.y, p.z) }, minus: { p, _ in NAVec3(p.x * 0.92, p.y, p.z) }),
             Key(control: "face.head.depth", regions: shell,
-                plus: { p, _ in V3(p.x, p.y, p.z * (p.z < 0 ? 1.10 : 1.03)) }, minus: { p, _ in V3(p.x, p.y, p.z * (p.z < 0 ? 0.90 : 0.97)) }),
+                plus: { p, _ in NAVec3(p.x, p.y, p.z * (p.z < 0 ? 1.10 : 1.03)) }, minus: { p, _ in NAVec3(p.x, p.y, p.z * (p.z < 0 ? 0.90 : 0.97)) }),
             Key(control: "face.jaw.width", regions: ["face", "jaw", "chin", "earL", "earR"],
-                plus: { p, _ in V3(p.x * (1 + 0.10 * jawWeight(p)), p.y, p.z) }, minus: { p, _ in V3(p.x * (1 - 0.10 * jawWeight(p)), p.y, p.z) }),
+                plus: { p, _ in NAVec3(p.x * (1 + 0.10 * jawWeight(p)), p.y, p.z) }, minus: { p, _ in NAVec3(p.x * (1 - 0.10 * jawWeight(p)), p.y, p.z) }),
             Key(control: "face.chin.length", regions: ["jaw", "chin"],
-                plus: { p, _ in V3(p.x, p.y - 0.05 * hh * chinWeight(p), p.z) }, minus: { p, _ in V3(p.x, p.y + 0.035 * hh * chinWeight(p), p.z) }),
+                plus: { p, _ in NAVec3(p.x, p.y - 0.05 * hh * chinWeight(p), p.z) }, minus: { p, _ in NAVec3(p.x, p.y + 0.035 * hh * chinWeight(p), p.z) }),
             Key(control: "face.chin.pointedness", regions: ["jaw", "chin"],
-                plus: { p, _ in V3(p.x * (1 - 0.35 * chinWeight(p)), p.y, p.z) }, minus: { p, _ in V3(p.x * (1 + 0.25 * chinWeight(p)), p.y, p.z) }),
+                plus: { p, _ in NAVec3(p.x * (1 - 0.35 * chinWeight(p)), p.y, p.z) }, minus: { p, _ in NAVec3(p.x * (1 + 0.25 * chinWeight(p)), p.y, p.z) }),
             Key(control: "face.nose.height", regions: ["nose"], plus: Self.radial(1, 1.3, 1), minus: Self.radial(1, 0.7, 1)),
             Key(control: "face.nose.width", regions: ["nose"], plus: Self.radial(1.3, 1, 1), minus: Self.radial(0.7, 1, 1)),
             Key(control: "face.nose.projection", regions: ["nose"], plus: Self.radial(1, 1, 1.4), minus: Self.radial(1, 1, 0.6)),
             Key(control: "face.mouth.width", regions: ["lipsUpper", "lipsLower", "innerMouth"], plus: Self.radial(1.2, 1, 1), minus: Self.radial(0.8, 1, 1)),
             Key(control: "face.mouth.height", regions: ["lipsUpper", "lipsLower", "innerMouth"], plus: Self.radial(1, 1.25, 1), minus: Self.radial(1, 0.75, 1)),
             Key(control: "face.lip.fullness", regions: ["lipsUpper", "lipsLower"],
-                plus: { p, piv in V3(p.x, piv.y + (p.y - piv.y) * 1.35, p.z + 0.0005) }, minus: { p, piv in V3(p.x, piv.y + (p.y - piv.y) * 0.7, p.z - 0.0003) }),
+                plus: { p, piv in NAVec3(p.x, piv.y + (p.y - piv.y) * 1.35, p.z + 0.0005) }, minus: { p, piv in NAVec3(p.x, piv.y + (p.y - piv.y) * 0.7, p.z - 0.0003) }),
         ]
         for (side, sign) in [("left", 1.0), ("right", -1.0)] {
             let sfx = side == "left" ? "L" : "R"
             let root = handles.earRoots[side] ?? .zero
             keys.append(Key(control: NativeAnimeControls.sided("face.brow.{side}.height", side: side), regions: ["brow\(sfx)"],
-                            plus: { p, _ in V3(p.x, p.y + 0.02 * hh, p.z) }, minus: { p, _ in V3(p.x, p.y - 0.02 * hh, p.z) }))
+                            plus: { p, _ in NAVec3(p.x, p.y + 0.02 * hh, p.z) }, minus: { p, _ in NAVec3(p.x, p.y - 0.02 * hh, p.z) }))
             keys.append(Key(control: NativeAnimeControls.sided("face.brow.{side}.angle", side: side), regions: ["brow\(sfx)"],
                             plus: { p, piv in NAMath.rotate(p, about: NAMath.zAxis, angle: sign * NAMath.degrees(15), pivot: piv) },
                             minus: { p, piv in NAMath.rotate(p, about: NAMath.zAxis, angle: -sign * NAMath.degrees(15), pivot: piv) }))
@@ -124,7 +124,7 @@ struct NativeAnimeShapeOffsets {
     }
 
     /// Brow thickness moves only the top row of the strip, so it needs the brow handles.
-    private func applyBrowThickness(_ mesh: inout BuildMesh, base: [V3]) {
+    private func applyBrowThickness(_ mesh: inout BuildMesh, base: [NAVec3]) {
         let thickness = 0.16 * layout.defaultLidRadius
         for side in ["left", "right"] {
             let v = controls.side("face.brow.{side}.thickness", side)

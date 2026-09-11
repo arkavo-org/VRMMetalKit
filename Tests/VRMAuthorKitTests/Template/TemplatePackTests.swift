@@ -40,6 +40,9 @@ enum NativeAnimeFixture {
 final class TemplatePackTests: XCTestCase {
     private let pack = NativeAnimeFixture.pack
 
+    /// Cross-process pin of the default compile; verified identical over separate `swift test` invocations.
+    static let goldenDefaultBuildHash = "c636ff31266d9d0e550ac0a2a80feb98c558f0e2dc0c2d97273db6e4f3dba24c"
+
     static let expectedKeys: [String] = {
         var keys = ["body.heightM", "body.headCount"]
         keys += ["shoulderWidth", "torsoLength", "armLength", "legLength", "hipWidth"].map { "body.proportion.\($0)" }
@@ -155,6 +158,8 @@ final class TemplatePackTests: XCTestCase {
         XCTAssertEqual(try a.buildHash(), try b.buildHash())
         XCTAssertEqual(try a.buildHash(), try c.buildHash())
         XCTAssertEqual(try a.sorted().buildHash(), try a.buildHash())
+        XCTAssertEqual(try a.buildHash(), TemplatePackTests.goldenDefaultBuildHash,
+                       "default build hash changed across processes or geometry; update goldenDefaultBuildHash only for an intentional template change")
     }
 
     func testControlAtDefaultIsExactNoOp() throws {

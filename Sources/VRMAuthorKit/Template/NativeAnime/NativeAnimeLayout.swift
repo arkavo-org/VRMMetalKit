@@ -22,8 +22,8 @@ import Foundation
 struct NativeAnimeLayout {
     let height: Double
     let headHeight: Double
-    let headCenter: V3
-    let headRadii: V3
+    let headCenter: NAVec3
+    let headRadii: NAVec3
     let neckLength: Double
     let hipsY: Double
     let hipJointY: Double
@@ -57,10 +57,10 @@ struct NativeAnimeLayout {
     func defaultEyeX(_ sign: Double) -> Double { sign * NativeAnimeLayout.eyeSpacingFactor * headRadii.x * 2 }
 
     /// World-space rest positions for every humanoid bone.
-    let joints: [VRMHumanBone: V3]
+    let joints: [VRMHumanBone: NAVec3]
 
     struct EyeParams {
-        var center: V3
+        var center: NAVec3
         var globeRadius: Double
         var lidRadius: Double
         var openingHalfWidth: Double
@@ -108,23 +108,23 @@ struct NativeAnimeLayout {
         toesForward = 0.085 * H
 
         let headBottom = H - hh
-        headCenter = V3(0, headBottom + hh / 2, 0)
-        headRadii = V3(0.41 * hh, 0.5 * hh, 0.45 * hh)
+        headCenter = NAVec3(0, headBottom + hh / 2, 0)
+        headRadii = NAVec3(0.41 * hh, 0.5 * hh, 0.45 * hh)
 
-        var j: [VRMHumanBone: V3] = [:]
-        j[.hips] = V3(0, hipsY, 0)
-        j[.spine] = V3(0, hipsY + 0.20 * torso, 0)
-        j[.chest] = V3(0, hipsY + 0.45 * torso, 0)
-        j[.upperChest] = V3(0, hipsY + 0.70 * torso, 0)
-        j[.neck] = V3(0, neckBaseY, 0)
-        j[.head] = V3(0, headBottom, 0)
-        j[.jaw] = V3(0, headBottom + 0.12 * hh, 0.28 * hh)
+        var j: [VRMHumanBone: NAVec3] = [:]
+        j[.hips] = NAVec3(0, hipsY, 0)
+        j[.spine] = NAVec3(0, hipsY + 0.20 * torso, 0)
+        j[.chest] = NAVec3(0, hipsY + 0.45 * torso, 0)
+        j[.upperChest] = NAVec3(0, hipsY + 0.70 * torso, 0)
+        j[.neck] = NAVec3(0, neckBaseY, 0)
+        j[.head] = NAVec3(0, headBottom, 0)
+        j[.jaw] = NAVec3(0, headBottom + 0.12 * hh, 0.28 * hh)
         for (side, sign) in [("left", 1.0), ("right", -1.0)] {
             let s = side == "left"
-            let shoulder = V3(sign * clavicleHalfWidth, shoulderY, 0)
-            let upperArm = V3(sign * shoulderHalfWidth, shoulderY, 0)
-            let lowerArm = upperArm + V3(sign * upperArmLength, 0, 0)
-            let hand = lowerArm + V3(sign * lowerArmLength, 0, 0)
+            let shoulder = NAVec3(sign * clavicleHalfWidth, shoulderY, 0)
+            let upperArm = NAVec3(sign * shoulderHalfWidth, shoulderY, 0)
+            let lowerArm = upperArm + NAVec3(sign * upperArmLength, 0, 0)
+            let hand = lowerArm + NAVec3(sign * lowerArmLength, 0, 0)
             j[s ? .leftShoulder : .rightShoulder] = shoulder
             j[s ? .leftUpperArm : .rightUpperArm] = upperArm
             j[s ? .leftLowerArm : .rightLowerArm] = lowerArm
@@ -137,20 +137,20 @@ struct NativeAnimeLayout {
                 : [[.rightIndexProximal, .rightIndexIntermediate, .rightIndexDistal], [.rightMiddleProximal, .rightMiddleIntermediate, .rightMiddleDistal],
                    [.rightRingProximal, .rightRingIntermediate, .rightRingDistal], [.rightLittleProximal, .rightLittleIntermediate, .rightLittleDistal]]
             for (fi, chain) in fingers.enumerated() {
-                let base = hand + V3(sign * 0.50 * hl, 0, fingerZ[fi])
+                let base = hand + NAVec3(sign * 0.50 * hl, 0, fingerZ[fi])
                 j[chain[0]] = base
-                j[chain[1]] = base + V3(sign * 0.22 * hl, 0, 0)
-                j[chain[2]] = base + V3(sign * 0.40 * hl, 0, 0)
+                j[chain[1]] = base + NAVec3(sign * 0.22 * hl, 0, 0)
+                j[chain[2]] = base + NAVec3(sign * 0.40 * hl, 0, 0)
             }
-            let thumbMeta = hand + V3(sign * 0.15 * hl, -0.004 * H, 0.020 * H)
+            let thumbMeta = hand + NAVec3(sign * 0.15 * hl, -0.004 * H, 0.020 * H)
             j[s ? .leftThumbMetacarpal : .rightThumbMetacarpal] = thumbMeta
-            j[s ? .leftThumbProximal : .rightThumbProximal] = thumbMeta + V3(sign * 0.16 * hl, 0, 0.16 * hl)
-            j[s ? .leftThumbDistal : .rightThumbDistal] = thumbMeta + V3(sign * 0.28 * hl, 0, 0.28 * hl)
+            j[s ? .leftThumbProximal : .rightThumbProximal] = thumbMeta + NAVec3(sign * 0.16 * hl, 0, 0.16 * hl)
+            j[s ? .leftThumbDistal : .rightThumbDistal] = thumbMeta + NAVec3(sign * 0.28 * hl, 0, 0.28 * hl)
 
-            let upperLeg = V3(sign * hipHalfWidth, hipJointY, 0)
-            let lowerLeg = upperLeg + V3(0, -thighLength, 0)
-            let foot = lowerLeg + V3(0, -shinLength, 0)
-            let toes = foot + V3(0, -(ankleY - 0.015 * H), toesForward)
+            let upperLeg = NAVec3(sign * hipHalfWidth, hipJointY, 0)
+            let lowerLeg = upperLeg + NAVec3(0, -thighLength, 0)
+            let foot = lowerLeg + NAVec3(0, -shinLength, 0)
+            let toes = foot + NAVec3(0, -(ankleY - 0.015 * H), toesForward)
             j[s ? .leftUpperLeg : .rightUpperLeg] = upperLeg
             j[s ? .leftLowerLeg : .rightLowerLeg] = lowerLeg
             j[s ? .leftFoot : .rightFoot] = foot
@@ -168,7 +168,7 @@ struct NativeAnimeLayout {
             let ex = sign * NativeAnimeLayout.eyeSpacingFactor * headRadii.x * 2 * (1 + 0.15 * spacingB)
             let ey = headCenter.y - NativeAnimeLayout.eyeLineFactor * hh
             let surfaceZ = NativeAnimeLayout.shellZ(radii: headRadii, center: headCenter, x: ex, y: ey)
-            let center = V3(ex, ey, surfaceZ - 0.6 * globe)
+            let center = NAVec3(ex, ey, surfaceZ - 0.6 * globe)
             let irisAngle = NAMath.degrees(15 + 30 * c.side("face.iris.{side}.size", side))
             let pupilAngle = irisAngle * (0.25 + 0.5 * c.side("face.pupil.{side}.size", side))
             eyeTable[side] = EyeParams(center: center, globeRadius: globe, lidRadius: lid,
@@ -184,13 +184,13 @@ struct NativeAnimeLayout {
     }
 
     /// Egg-shaped head shell radii at height `y`: narrower below the centre.
-    static func shellRadii(radii: V3, center: V3, y: Double) -> (rx: Double, rz: Double) {
+    static func shellRadii(radii: NAVec3, center: NAVec3, y: Double) -> (rx: Double, rz: Double) {
         let t = max(0, (center.y - y) / radii.y)
         return (radii.x * (1 - 0.18 * t * t), radii.z * (1 - 0.10 * t * t))
     }
 
     /// Front-surface z of the head shell at (x, y); 0 when outside the ellipse.
-    static func shellZ(radii: V3, center: V3, x: Double, y: Double) -> Double {
+    static func shellZ(radii: NAVec3, center: NAVec3, x: Double, y: Double) -> Double {
         let (rx, rz) = shellRadii(radii: radii, center: center, y: y)
         let nx = x / rx, ny = (y - center.y) / radii.y
         let inside = 1 - nx * nx - ny * ny
@@ -200,12 +200,12 @@ struct NativeAnimeLayout {
     func shellZ(x: Double, y: Double) -> Double { NativeAnimeLayout.shellZ(radii: headRadii, center: headCenter, x: x, y: y) }
 
     /// Point on the head's front surface at (x, y) pushed outward by `offset` along the local normal.
-    func onShell(x: Double, y: Double, offset: Double) -> V3 {
+    func onShell(x: Double, y: Double, offset: Double) -> NAVec3 {
         let z = shellZ(x: x, y: y)
         let (rx, rz) = NativeAnimeLayout.shellRadii(radii: headRadii, center: headCenter, y: y)
-        let n = NAMath.normalize(V3(x / (rx * rx), (y - headCenter.y) / (headRadii.y * headRadii.y), z / (rz * rz)), fallback: V3(0, 0, 1))
-        return V3(x, y, z) + n * offset
+        let n = NAMath.normalize(NAVec3(x / (rx * rx), (y - headCenter.y) / (headRadii.y * headRadii.y), z / (rz * rz)), fallback: NAVec3(0, 0, 1))
+        return NAVec3(x, y, z) + n * offset
     }
 
-    func joint(_ bone: VRMHumanBone) -> V3 { joints[bone]! }
+    func joint(_ bone: VRMHumanBone) -> NAVec3 { joints[bone]! }
 }

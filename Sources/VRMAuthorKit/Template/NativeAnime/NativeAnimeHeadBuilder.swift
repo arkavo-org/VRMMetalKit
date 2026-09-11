@@ -48,11 +48,11 @@ struct HeadHandles {
     var lipInner: [LoopVertex] = []
     var cavityFront: [LoopVertex] = []
     var cavityBack: [LoopVertex] = []
-    var mouthCenter = V3.zero
+    var mouthCenter = NAVec3.zero
     var mouthHalfWidth = 0.0
     var jawWeights: [(index: Int, weight: Double)] = []
-    var earRoots: [String: V3] = [:]
-    var noseBridge = V3.zero
+    var earRoots: [String: NAVec3] = [:]
+    var noseBridge = NAVec3.zero
 }
 
 /// Head mesh primitives in emission order.
@@ -87,8 +87,8 @@ struct NativeAnimeHeadBuilder {
     let layout: NativeAnimeLayout
 
     private var hh: Double { layout.headHeight }
-    private var C: V3 { layout.headCenter }
-    private var R: V3 { layout.headRadii }
+    private var C: NAVec3 { layout.headCenter }
+    private var R: NAVec3 { layout.headRadii }
 
     func build() -> HeadParts {
         var prims = HeadPrimitive.allCases.map { _ in BuildMesh() }
@@ -114,10 +114,10 @@ struct NativeAnimeHeadBuilder {
             let psi = Double.pi - Double.pi * Double(i + 1) / Double(ringsN + 1)
             let y = C.y + R.y * cos(psi)
             let (rx, rz) = NativeAnimeLayout.shellRadii(radii: R, center: C, y: y)
-            rings.append(Ring(center: V3(0, y, 0), u: NAMath.xAxis, v: -NAMath.zAxis, ru: rx * sin(psi), rv: rz * sin(psi), region: "shell"))
+            rings.append(Ring(center: NAVec3(0, y, 0), u: NAMath.xAxis, v: -NAMath.zAxis, ru: rx * sin(psi), rv: rz * sin(psi), region: "shell"))
         }
         let base = mesh.vertexCount
-        mesh.loft(rings, segments: segs, capStart: V3(0, C.y - R.y, 0), capEnd: V3(0, C.y + R.y, 0))
+        mesh.loft(rings, segments: segs, capStart: NAVec3(0, C.y - R.y, 0), capEnd: NAVec3(0, C.y + R.y, 0))
         mesh.regions["shell"] = nil
         var regionSets: [String: [Int]] = [:]
         for i in base..<mesh.vertexCount {
@@ -142,7 +142,7 @@ struct NativeAnimeHeadBuilder {
         let defaultGlobe = layout.defaultLidRadius
         for (side, sign) in [("left", 1.0), ("right", -1.0)] {
             let eye = layout.eyes[side]!
-            let defaultCenter = V3(layout.defaultEyeX(sign), layout.eyeLineY, 0)
+            let defaultCenter = NAVec3(layout.defaultEyeX(sign), layout.eyeLineY, 0)
             var socket: [Int] = []
             for i in base..<mesh.vertexCount {
                 let p = mesh.vertices[i].position
@@ -177,15 +177,15 @@ struct NativeAnimeHeadBuilder {
         let (rx, _) = NativeAnimeLayout.shellRadii(radii: R, center: C, y: earY)
         for (side, sign) in [("left", 1.0), ("right", -1.0)] {
             let sfx = side == "left" ? "L" : "R"
-            let root = V3(sign * (rx - 0.012 * hh), earY, -0.02 * hh)
+            let root = NAVec3(sign * (rx - 0.012 * hh), earY, -0.02 * hh)
             let u = NAMath.yAxis
             let v = NAMath.zAxis * sign
             func ring(_ t: Double, _ ry: Double, _ rz: Double) -> Ring {
-                Ring(center: root + V3(sign * t, 0, 0), u: u, v: v, ru: ry, rv: rz, region: "ear\(sfx)")
+                Ring(center: root + NAVec3(sign * t, 0, 0), u: u, v: v, ru: ry, rv: rz, region: "ear\(sfx)")
             }
             let rings = [ring(0, 0.10 * hh, 0.065 * hh), ring(0.02 * hh, 0.11 * hh, 0.07 * hh), ring(0.036 * hh, 0.08 * hh, 0.05 * hh)]
-            mesh.loft(rings, segments: Self.earSegments, capStart: root - V3(sign * 0.008 * hh, 0, 0), capEnd: root + V3(sign * 0.046 * hh, 0, 0))
-            handles.earRoots[side] = V3(sign * rx, earY, -0.02 * hh)
+            mesh.loft(rings, segments: Self.earSegments, capStart: root - NAVec3(sign * 0.008 * hh, 0, 0), capEnd: root + NAVec3(sign * 0.046 * hh, 0, 0))
+            handles.earRoots[side] = NAVec3(sign * rx, earY, -0.02 * hh)
         }
     }
 
@@ -194,24 +194,24 @@ struct NativeAnimeHeadBuilder {
     private func buildNose(_ mesh: inout BuildMesh, handles: inout HeadHandles) {
         let y = layout.noseLineY
         let zBase = layout.shellZ(x: 0, y: y)
-        let base = V3(0, y, zBase)
+        let base = NAVec3(0, y, zBase)
         func ring(_ dz: Double, _ rx: Double, _ ry: Double) -> Ring {
-            Ring(center: base + V3(0, 0, dz), u: NAMath.xAxis, v: NAMath.yAxis, ru: rx, rv: ry, region: "nose")
+            Ring(center: base + NAVec3(0, 0, dz), u: NAMath.xAxis, v: NAMath.yAxis, ru: rx, rv: ry, region: "nose")
         }
         let rings = [ring(-0.006 * hh, 0.06 * hh, 0.045 * hh), ring(0.018 * hh, 0.045 * hh, 0.035 * hh), ring(0.034 * hh, 0.028 * hh, 0.022 * hh)]
-        mesh.loft(rings, segments: Self.noseSegments, capStart: base + V3(0, 0, -0.014 * hh), capEnd: base + V3(0, 0, 0.044 * hh))
-        handles.noseBridge = V3(0, y + 0.06 * hh, layout.shellZ(x: 0, y: y + 0.06 * hh))
+        mesh.loft(rings, segments: Self.noseSegments, capStart: base + NAVec3(0, 0, -0.014 * hh), capEnd: base + NAVec3(0, 0, 0.044 * hh))
+        handles.noseBridge = NAVec3(0, y + 0.06 * hh, layout.shellZ(x: 0, y: y + 0.06 * hh))
     }
 
     // MARK: Lids
 
-    static func lidPoint(_ eye: NativeAnimeLayout.EyeParams, lx: Double, ly: Double) -> V3 {
+    static func lidPoint(_ eye: NativeAnimeLayout.EyeParams, lx: Double, ly: Double) -> NAVec3 {
         let c = cos(eye.tilt), s = sin(eye.tilt)
         let x = lx * c - ly * s
         let y = lx * s + ly * c
         let r = eye.lidRadius
         let z = max(r * r - x * x - y * y, (0.05 * r) * (0.05 * r)).squareRoot()
-        return eye.center + V3(x, y, z)
+        return eye.center + NAVec3(x, y, z)
     }
 
     static func upperEdgeY(_ eye: NativeAnimeLayout.EyeParams, lx: Double) -> Double {
@@ -246,7 +246,7 @@ struct NativeAnimeHeadBuilder {
                     ? Self.upperEdgeY(eye, lx: lx) + f * Self.upperRootRise * eye.lidRadius
                     : Self.lowerEdgeY(eye, lx: lx) - f * Self.lowerRootDrop * eye.lidRadius
                 let p = Self.lidPoint(eye, lx: lx, ly: ly)
-                let uv = V2(Double(c) / Double(K - 1), upper ? 0.5 - 0.5 * f : 0.5 + 0.5 * f)
+                let uv = NAVec2(Double(c) / Double(K - 1), upper ? 0.5 - 0.5 * f : 0.5 + 0.5 * f)
                 let i = prims[prim.rawValue].addVertex(p, uv: uv, pivot: eye.center, regions: [region])
                 lidVertices.append(LidVertex(primitive: prim.rawValue, index: i, column: c, lx: lx, ly: ly, row: f, upper: upper))
                 out.append(i)
@@ -288,15 +288,15 @@ struct NativeAnimeHeadBuilder {
         var bottom: [Int] = []
         var top: [Int] = []
         var verts: [BrowVertex] = []
-        let pivot = V3(centerX, baseY, layout.shellZ(x: centerX, y: baseY))
+        let pivot = NAVec3(centerX, baseY, layout.shellZ(x: centerX, y: baseY))
         for j in 0..<n {
             let t = Double(j) / Double(n - 1)
             let x = centerX - half + 2 * half * t
             let innerFraction = side == "left" ? t : 1 - t
             let arch = 0.18 * lid * sin(Double.pi * innerFraction) + 0.06 * lid * innerFraction
             let yb = baseY + arch
-            let b = mesh.addVertex(layout.onShell(x: x, y: yb, offset: 0.0015), uv: V2(t, 1), pivot: pivot, regions: ["brow\(sfx)"])
-            let tp = mesh.addVertex(layout.onShell(x: x, y: yb + thickness, offset: 0.0015), uv: V2(t, 0), pivot: pivot, regions: ["brow\(sfx)"])
+            let b = mesh.addVertex(layout.onShell(x: x, y: yb, offset: 0.0015), uv: NAVec2(t, 1), pivot: pivot, regions: ["brow\(sfx)"])
+            let tp = mesh.addVertex(layout.onShell(x: x, y: yb + thickness, offset: 0.0015), uv: NAVec2(t, 0), pivot: pivot, regions: ["brow\(sfx)"])
             bottom.append(b)
             top.append(tp)
             verts.append(BrowVertex(index: b, innerFraction: innerFraction, top: false))
@@ -327,12 +327,12 @@ struct NativeAnimeHeadBuilder {
             let corner = abs(sa) <= 1e-9
             let regions = corner ? ["lipsUpper", "lipsLower"] : [upper ? "lipsUpper" : "lipsLower"]
             let oy = (sa >= 0 ? hUpper : hLower) * sa
-            let o = mesh.addVertex(layout.onShell(x: W * ca, y: mouthY + oy, offset: 0.0012), uv: V2(0.5 + 0.5 * ca, 0.5 - 0.5 * sa), pivot: center, regions: regions)
-            let i = mesh.addVertex(layout.onShell(x: 0.86 * W * ca, y: mouthY + innerGap * sa, offset: 0.0006), uv: V2(0.5 + 0.43 * ca, 0.5 - 0.1 * sa),
+            let o = mesh.addVertex(layout.onShell(x: W * ca, y: mouthY + oy, offset: 0.0012), uv: NAVec2(0.5 + 0.5 * ca, 0.5 - 0.5 * sa), pivot: center, regions: regions)
+            let i = mesh.addVertex(layout.onShell(x: 0.86 * W * ca, y: mouthY + innerGap * sa, offset: 0.0006), uv: NAVec2(0.5 + 0.43 * ca, 0.5 - 0.1 * sa),
                                    pivot: center, regions: regions)
-            let f = mesh.addVertex(center + V3(0.75 * W * ca, 0.010 * hh * sa, -0.02 * hh), uv: V2(0.5 + 0.3 * ca, 0.5 - 0.3 * sa), pivot: center,
+            let f = mesh.addVertex(center + NAVec3(0.75 * W * ca, 0.010 * hh * sa, -0.02 * hh), uv: NAVec2(0.5 + 0.3 * ca, 0.5 - 0.3 * sa), pivot: center,
                                    regions: ["innerMouth"])
-            let b = mesh.addVertex(center + V3(0.5 * W * ca, 0.012 * hh * sa, -0.05 * hh), uv: V2(0.5 + 0.15 * ca, 0.5 - 0.15 * sa), pivot: center,
+            let b = mesh.addVertex(center + NAVec3(0.5 * W * ca, 0.012 * hh * sa, -0.05 * hh), uv: NAVec2(0.5 + 0.15 * ca, 0.5 - 0.15 * sa), pivot: center,
                                    regions: ["innerMouth"])
             outer.append(o)
             inner.append(i)
@@ -346,7 +346,7 @@ struct NativeAnimeHeadBuilder {
         mesh.bridgeLoop(outer, inner)
         mesh.bridgeLoop(inner, front)
         mesh.bridgeLoop(front, back)
-        let pole = mesh.addVertex(center + V3(0, 0, -0.07 * hh), uv: V2(0.5, 0.5), pivot: center, regions: ["innerMouth"])
+        let pole = mesh.addVertex(center + NAVec3(0, 0, -0.07 * hh), uv: NAVec2(0.5, 0.5), pivot: center, regions: ["innerMouth"])
         for j in 0..<M { mesh.addTri(pole, back[j], back[(j + 1) % M]) }
     }
 }
