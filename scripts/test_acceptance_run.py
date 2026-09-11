@@ -148,6 +148,47 @@ def corpus_entry(**over):
     return e
 
 
+STUB_CLI = r"""#!/bin/sh
+dir=$(dirname "$0")
+printf '%s\n' "$*" >> "$dir/calls.log"
+if [ -f "$dir/fail-$1" ]; then
+  echo "stub refuses $1 $2" >&2
+  exit 4
+fi
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--out" ]; then printf 'glb' > "$a"; fi
+  prev="$a"
+done
+exit 0
+"""
+
+STUB_LINTER = r"""import json
+import os
+import sys
+
+here = os.path.dirname(os.path.abspath(__file__))
+asset = os.path.basename(sys.argv[2])
+with open(os.path.join(here, "measure-calls.log"), "a", encoding="utf-8") as fh:
+    fh.write(asset + "\n")
+with open(os.path.join(here, "measure.json"), encoding="utf-8") as fh:
+    table = json.load(fh)
+record = table.get(asset, table.get("default"))
+if record == "fail":
+    sys.stderr.write("stub linter cannot measure " + asset + "\n")
+    sys.exit(3)
+print(json.dumps([record]))
+"""
+
+
+def read_lines(path):
+    """The lines of a log a stub appended to, or none when the stub was never invoked."""
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as fh:
+        return fh.read().splitlines()
+
+
 def command_name(tokens):
     """The leading non-flag tokens of a recorded CLI invocation, e.g. "control set"."""
     name = []
@@ -588,9 +629,6 @@ class SwiftTestRunnerTests(unittest.TestCase):
         self.assertEqual(R.Runner.parse_swift_test_output("warning: No matching test cases were run"), {})
 
 
-PACKS_PENDING_CORPUS_ARRAY_MIGRATION = set()
-
-
 class ShippedPackTests(unittest.TestCase):
     def setUp(self):
         self.schema = R.load_json(SCHEMA_PATH)
@@ -636,8 +674,7 @@ class ShippedPackTests(unittest.TestCase):
         for name in names:
             pack = R.load_json(os.path.join(packs_dir, name))
             with self.subTest(pack=name):
-                if name not in PACKS_PENDING_CORPUS_ARRAY_MIGRATION:
-                    self.assertEqual(R.validate_pack(pack, self.schema), [])
+                self.assertEqual(R.validate_pack(pack, self.schema), [])
                 self.assertEqual(pack["packHash"], R.compute_pack_hash(pack))
                 self.assertEqual(pack["id"] + ".json", name)
                 self.assertNotIn(pack["operation"], ids)
@@ -647,15 +684,6 @@ class ShippedPackTests(unittest.TestCase):
                     kinds = [m["transform"]["kind"] for m in pack["mutants"]]
                     self.assertGreaterEqual(kinds.count("swift-test"), 2)
                     self.assertIn("report-fabricated", kinds)
-
-    def test_pending_corpus_array_migration_packs_still_need_the_exemption(self):
-        packs_dir = os.path.join(ACCEPTANCE, "packs")
-        for name in PACKS_PENDING_CORPUS_ARRAY_MIGRATION:
-            with self.subTest(pack=name):
-                pack = R.load_json(os.path.join(packs_dir, name))
-                self.assertTrue(R.validate_pack(pack, self.schema),
-                                f"{name} now validates against the array corpus schema; remove it from "
-                                f"PACKS_PENDING_CORPUS_ARRAY_MIGRATION")
 
     def test_evidence_registry_is_empty_and_pinned(self):
         reg = R.load_json(os.path.join(ACCEPTANCE, "evidence.json"))
@@ -1006,20 +1034,24 @@ class CorpusSwiftReplay(unittest.TestCase):
         os.chmod(binary, 0o755)
         return os.path.join(bin_dir, "calls.log")
 
-    def single_family_style(self, work, style_id, family, replay_steps=True):
+    def single_family_style(self, work, style_id, family, replay_steps=True, eligible=True, seed=1337):
         """One style set with a single eligible family, its own profile id/version, pinned by
         sha256 like the real corpus. replay_steps=False writes the witness without the recorded
-        steps, as a pre-replaySteps witnesses file would."""
+        steps, as a pre-replaySteps witnesses file would; eligible=False writes an ineligible
+        witness; seed=None writes a solver block with no seed. The seed is deliberately not 42,
+        so a replayer that hardcoded one could not pass the steps test."""
         profile_bytes = json.dumps({"id": style_id, "version": "1", "rules": []}).encode()
         manifest_bytes = json.dumps({"assets": []}).encode()
         measurements_bytes = json.dumps({"measurements": [self.measurement(family, head_count=6.4)]}).encode()
         witnesses_bytes = json.dumps({
             "corpusManifestSha256": "0" * 64, "templateId": "native-anime-v1", "templateSha256": "1" * 64,
-            "profileId": style_id, "solver": {"budget": 100, "seed": 42, "tolerance": 0.25},
+            "profileId": style_id,
+            "solver": dict({"budget": 100, "tolerance": 0.25}, **({"seed": seed} if seed is not None else {})),
             "generated": "2026-09-11T00:00:00Z",
-            "families": {family: dict({"eligible": True, "controls": {"height": 1.6},
-                                        "residuals": {"proportions.head_count": 0.1}},
-                                      **({"replaySteps": synthetic_replay_steps({"height": 1.6})} if replay_steps else {}))},
+            "families": {family: dict({"eligible": eligible, "controls": {"height": 1.6},
+                                        "residuals": {"proportions.head_count": 0.1 if eligible else 0.9}},
+                                      **({"replaySteps": synthetic_replay_steps({"height": 1.6})}
+                                         if replay_steps and eligible else {}))},
         }).encode()
         paths = {}
         for name, data in (("profile.json", profile_bytes), ("manifest.json", manifest_bytes),
@@ -1076,12 +1108,13 @@ class CorpusSwiftReplay(unittest.TestCase):
         self.addCleanup(shutil.rmtree, runner.tmp or work, ignore_errors=True)
 
         self.assertEqual(out["families"]["fam-a"]["status"], "pass")
-        calls = [line.split() for line in open(calls_log, encoding="utf-8").read().splitlines()]
+        calls = [line.split() for line in read_lines(calls_log)]
         self.assertEqual([command_name(c) for c in calls],
                          ["project init", "object set", "control set", "build"])
         init = calls[0]
         self.assertEqual(init[init.index("--template") + 1], "native-anime-v1")
-        self.assertEqual(init[init.index("--seed") + 1], "42")
+        self.assertEqual(init[init.index("--seed") + 1], "1337",
+                         "the seed is the document's, never a value the replayer chose")
         garment = R.load_json(calls[1][calls[1].index("--request") + 1])
         self.assertEqual(garment, {"edit": {"id": "outfit.top", "values": {"/enabled": False}}},
                          "the default garment must be disabled exactly as the witness was solved")
@@ -1104,6 +1137,34 @@ class CorpusSwiftReplay(unittest.TestCase):
         self.assertIn("replaySteps", record["reason"])
         self.assertFalse(os.path.exists(calls_log), "a witness without recorded steps must not fall back to a replay")
         self.assertEqual(out["status"], "fail")
+
+    def test_witnesses_without_a_solver_seed_fail_the_style_set(self):
+        work = tempfile.mkdtemp(prefix="corpus_swift_noseed_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a", seed=None)
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        calls_log = self.recording_cli_repo(work)
+
+        runner = R.Runner(pack, repo=work)
+        out = runner.run_corpus_swift(entry)
+
+        self.assertEqual(out["status"], "fail")
+        self.assertIn("solver.seed", out["reason"])
+        self.assertFalse(os.path.exists(calls_log), "an unusable witnesses document must not be replayed")
+
+    def test_an_all_ineligible_style_set_fails_with_the_floor_reason(self):
+        work = tempfile.mkdtemp(prefix="corpus_swift_floor_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        entry = self.single_family_style(work, "test-style", "fam-a", eligible=False)
+        pack = with_corpus(swift_test_pack(self.f), [entry])
+        self.stub_cli_repo(work)
+
+        out = R.Runner(pack, repo=work).run_corpus_swift(entry)
+
+        self.assertEqual(out["status"], "fail")
+        self.assertEqual(out["familiesEligible"], 0)
+        self.assertIn("below the floor of 1", out["reason"])
+        self.assertIn("0 of 1 families are reachable", out["reason"])
 
     def test_second_entry_does_not_inherit_the_first_entrys_profile_meta(self):
         work = tempfile.mkdtemp(prefix="corpus_swift_multi_")
@@ -1168,9 +1229,55 @@ class ReplayStepRecords(unittest.TestCase):
 
 
 class CorpusAssertions(unittest.TestCase):
+    @staticmethod
+    def swift_corpus_operations():
+        """The operations replay_family actually dispatches on: shipped packs whose runner is
+        swift-test and whose corpus dimension is required. style-lint.json is corpus-required
+        too, but runs the python run_corpus path and never reaches CORPUS_ASSERTIONS."""
+        packs_dir = os.path.join(ACCEPTANCE, "packs")
+        ops = []
+        for name in sorted(n for n in os.listdir(packs_dir) if n.endswith(".json")):
+            pack = R.load_json(os.path.join(packs_dir, name))
+            if (pack["runner"]["kind"] == "swift-test"
+                    and pack["evidencePolicy"]["dimensions"]["corpus"] == "required"):
+                ops.append(pack["operation"])
+        return ops
+
     def test_every_corpus_required_operation_has_an_assertion(self):
-        for name in ("build", "export vrm", "control set", "recipe apply"):
-            self.assertIn(name, R.CORPUS_ASSERTIONS, name)
+        ops = self.swift_corpus_operations()
+        self.assertTrue(ops, "no shipped swift-test pack requires the corpus dimension")
+        self.assertEqual(sorted(ops), sorted(R.CORPUS_ASSERTIONS),
+                         "replay_family falls back to the weakest mode for an unlisted operation, so "
+                         "CORPUS_ASSERTIONS must name exactly the corpus-required swift-test operations")
+
+    def test_the_derived_operations_are_the_four_migrated_packs(self):
+        self.assertEqual(sorted(self.swift_corpus_operations()),
+                         ["build", "control set", "export vrm", "recipe apply"])
+
+    def test_reach_fails_when_the_observed_vector_misses_a_target_metric(self):
+        target = {"asset.height_m": 1.6, "proportions.head_count": 6.4}
+        widths = {"asset.height_m": 0.9, "proportions.head_count": 2.0}
+        ok, detail = R.reach_holds({"asset.height_m": 1.6}, target, widths, 0.25)
+        self.assertFalse(ok, "a target metric the linter did not report is unreached, not ignored")
+        self.assertIn("proportions.head_count", detail)
+
+    def test_reach_fails_on_an_empty_observed_vector(self):
+        ok, detail = R.reach_holds({}, {"asset.height_m": 1.6}, {"asset.height_m": 0.9}, 0.25)
+        self.assertFalse(ok)
+        self.assertIn("asset.height_m", detail)
+
+    def test_reach_fails_when_the_profile_gives_no_width_to_score_against(self):
+        ok, detail = R.reach_holds({"asset.height_m": 9.0}, {"asset.height_m": 1.6}, {}, 0.25)
+        self.assertFalse(ok, "an unscorable metric must not count as reached")
+        self.assertIn("asset.height_m", detail)
+
+    def test_reach_fails_on_an_empty_target(self):
+        self.assertFalse(R.reach_holds({"asset.height_m": 1.6}, {}, {"asset.height_m": 0.9}, 0.25)[0])
+
+    def test_export_fails_when_either_vector_is_empty(self):
+        self.assertFalse(R.export_metrics_match({}, {})[0], "comparing nothing to nothing proves nothing")
+        self.assertFalse(R.export_metrics_match({"asset.height_m": 1.6}, {})[0])
+        self.assertFalse(R.export_metrics_match({}, {"asset.height_m": 1.6})[0])
 
     def test_material_shading_has_no_corpus_assertion(self):
         self.assertNotIn("material shading", R.CORPUS_ASSERTIONS)
@@ -1188,6 +1295,153 @@ class CorpusAssertions(unittest.TestCase):
         widths = {"asset.height_m": 0.9}
         self.assertTrue(R.reach_holds({"asset.height_m": 1.61}, target, widths, 0.25)[0])
         self.assertFalse(R.reach_holds({"asset.height_m": 1.10}, target, widths, 0.25)[0])
+
+
+class CorpusAssertionDispatch(unittest.TestCase):
+    """replay_family end to end, once per assertion mode, against a stub vrm-author and a stub
+    style_lint.py placed in a synthetic repo root. The mode dispatch, measured_vector's own body,
+    the export subprocess and the draft-to-final swap all execute here; the lint that follows
+    them is the only stubbed-in-process step."""
+
+    TARGET = {"asset.height_m": 1.6, "proportions.head_count": 6.4}
+    WIDTHS = {"asset.height_m": 0.9, "proportions.head_count": 2.0}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.f = PackFactory()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.f.cleanup()
+
+    @staticmethod
+    def measurement_record(height=1.6, head_count=6.4):
+        return {"asset": {"height_m": height}, "proportions": {"head_count": head_count}}
+
+    def repo(self, measure=None, fail=()):
+        """A repo root holding a stub CLI that logs its calls and materialises every --out file,
+        and a stub linter that answers from a per-asset table."""
+        work = tempfile.mkdtemp(prefix="corpus_dispatch_")
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        bin_dir = os.path.join(work, ".build", "debug")
+        os.makedirs(bin_dir)
+        binary = os.path.join(bin_dir, "vrm-author")
+        with open(binary, "w", encoding="utf-8") as fh:
+            fh.write(STUB_CLI)
+        os.chmod(binary, 0o755)
+        for command in fail:
+            open(os.path.join(bin_dir, f"fail-{command}"), "w", encoding="utf-8").close()
+        scripts_dir = os.path.join(work, "scripts")
+        os.makedirs(scripts_dir)
+        with open(os.path.join(scripts_dir, "style_lint.py"), "w", encoding="utf-8") as fh:
+            fh.write(STUB_LINTER)
+        with open(os.path.join(scripts_dir, "measure.json"), "w", encoding="utf-8") as fh:
+            json.dump(measure if measure is not None else {"default": self.measurement_record()}, fh)
+        return work
+
+    def calls(self, work):
+        return [command_name(line.split()) for line in read_lines(os.path.join(work, ".build", "debug", "calls.log"))]
+
+    def measured(self, work):
+        return read_lines(os.path.join(work, "scripts", "measure-calls.log"))
+
+    def replay(self, work, operation, target=None, widths=None, tolerance=0.25):
+        pack = swift_test_pack(self.f, operation=operation)
+        runner = R.Runner(pack, repo=work)
+        runner.profile_meta = {"id": "test-style", "version": "1"}
+        runner.run_lint_with = lambda profile_rel, asset_path: {
+            "report": {"profile": "test-style", "profile_version": "1", "verdict": "conforming",
+                       "summary": {"must": {"fail": 0}}, "results": []},
+            "oracleHashes": dict(pack["runner"]["environment"]["oracleHashes"]), "exitCode": 0, "stderr": ""}
+        entry = {"styleId": "test-style", "profile": "docs/style/profiles/test.json", "tolerance": tolerance}
+        witness = {"eligible": True, "controls": {"height": 1.6},
+                   "replaySteps": synthetic_replay_steps({"height": 1.6})}
+        record = runner.replay_family(entry, "fam-a", witness, self.TARGET if target is None else target,
+                                      self.WIDTHS if widths is None else widths, "native-anime-v1", 1337)
+        self.addCleanup(shutil.rmtree, runner.tmp or work, ignore_errors=True)
+        return record
+
+    def test_build_takes_the_conforming_mode_and_measures_nothing(self):
+        work = self.repo()
+        record = self.replay(work, "build")
+        self.assertEqual(record["status"], "pass")
+        self.assertEqual(record["verdict"], "conforming")
+        self.assertEqual(self.calls(work), ["project init", "object set", "control set", "build"])
+        self.assertEqual(self.measured(work), [], "conforming evidence is the lint verdict, not a metric vector")
+
+    def test_control_set_takes_the_reach_mode_and_passes_inside_the_tolerance(self):
+        work = self.repo({"default": self.measurement_record(height=1.61, head_count=6.45)})
+        record = self.replay(work, "control set")
+        self.assertEqual(record["status"], "pass")
+        self.assertEqual(self.measured(work), ["draft.vrm"])
+
+    def test_reach_failure_names_the_metric_and_carries_the_observed_vector(self):
+        work = self.repo({"default": self.measurement_record(head_count=5.0)})
+        record = self.replay(work, "control set")
+        self.assertEqual(record["status"], "fail")
+        self.assertIn("outside tolerance", record["reason"])
+        self.assertIn("proportions.head_count", record["reason"])
+        self.assertEqual(record["observed"]["proportions.head_count"], 5.0)
+
+    def test_reach_fails_when_the_linter_reports_no_value_for_a_target_metric(self):
+        work = self.repo({"default": {"asset": {"height_m": 1.6}}})
+        record = self.replay(work, "control set")
+        self.assertEqual(record["status"], "fail", "an absent metric must not pass by omission")
+        self.assertIn("unmeasured", record["reason"])
+        self.assertIn("proportions.head_count", record["reason"])
+
+    def test_recipe_apply_takes_the_same_reach_mode_as_control_set(self):
+        work = self.repo({"default": self.measurement_record(head_count=5.0)})
+        self.assertEqual(self.replay(work, "recipe apply")["status"], "fail")
+        self.assertEqual(self.measured(work), ["draft.vrm"])
+
+    def test_export_vrm_exports_compares_and_swaps_the_artifact(self):
+        work = self.repo({"draft.vrm": self.measurement_record(), "final.vrm": self.measurement_record()})
+        record = self.replay(work, "export vrm")
+        self.assertEqual(record["status"], "pass")
+        self.assertEqual(self.calls(work)[-1], "export vrm")
+        self.assertEqual(self.measured(work), ["draft.vrm", "final.vrm"])
+        self.assertTrue(record["artifact"].endswith("final.vrm"), "the exported file is what gets linted")
+
+    def test_export_drift_fails_and_names_the_drifting_metric(self):
+        work = self.repo({"draft.vrm": self.measurement_record(),
+                          "final.vrm": self.measurement_record(height=1.7)})
+        record = self.replay(work, "export vrm")
+        self.assertEqual(record["status"], "fail")
+        self.assertIn("metric drift through export", record["reason"])
+        self.assertIn("asset.height_m", record["reason"])
+
+    def test_a_failing_export_reports_the_command_not_a_drift(self):
+        work = self.repo(fail=("export",))
+        record = self.replay(work, "export vrm")
+        self.assertEqual(record["status"], "fail")
+        self.assertIn("export vrm exited 4", record["reason"])
+        self.assertIn("stub refuses export", record["reason"])
+        self.assertNotIn("drift", record["reason"])
+
+    def test_a_measure_failure_on_the_exported_file_is_not_reported_as_drift(self):
+        work = self.repo({"draft.vrm": self.measurement_record(), "final.vrm": "fail"})
+        record = self.replay(work, "export vrm")
+        self.assertEqual(record["status"], "fail")
+        self.assertIn("style_lint measure exited 3", record["reason"])
+        self.assertIn("final.vrm", record["reason"])
+        self.assertNotIn("drift", record["reason"])
+
+    def test_a_measure_failure_on_the_draft_reports_what_the_linter_said(self):
+        work = self.repo({"default": "fail"})
+        record = self.replay(work, "control set")
+        self.assertEqual(record["status"], "fail")
+        self.assertIn("style_lint measure exited 3", record["reason"])
+        self.assertIn("stub linter cannot measure draft.vrm", record["reason"])
+
+    def test_a_failing_replay_step_names_the_command_and_its_stderr(self):
+        work = self.repo(fail=("control",))
+        record = self.replay(work, "build")
+        self.assertEqual(record["status"], "fail")
+        self.assertIn("control set exited 4", record["reason"])
+        self.assertIn("stub refuses control", record["reason"])
+        self.assertEqual(self.calls(work), ["project init", "object set", "control set"],
+                         "a failed step stops the replay")
 
 
 class PrintSummaryCorpusBranch(unittest.TestCase):
@@ -1208,6 +1462,13 @@ class PrintSummaryCorpusBranch(unittest.TestCase):
         out = self.capture(result)
         self.assertIn("corpus  m.json 1/2 families pass: fail", out)
         self.assertIn("fam-a", out)
+
+    def test_a_failing_style_set_prints_its_reason(self):
+        result = self.base_result()
+        result["corpus"] = [{"styleId": "vroid-lineage-anime", "familiesPassed": 0, "familiesEligible": 0,
+                             "familiesTotal": 18, "status": "fail", "families": {},
+                             "reason": "0 of 18 families are reachable by the template, below the floor of 1"}]
+        self.assertIn("below the floor of 1", self.capture(result))
 
     def test_swift_style_corpus_record_prints_one_line_per_style_set(self):
         result = self.base_result()

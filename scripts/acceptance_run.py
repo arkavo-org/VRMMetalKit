@@ -181,26 +181,47 @@ def replay_argv(steps, work, context):
 
 
 def measured_vector(runner, asset_path, metrics):
-    """The pinned linter's metric vector for one asset, profile-independent."""
+    """The pinned linter's metric vector for one asset, profile-independent. Returns
+    (vector, None) on success and (None, cause) when the measure fails, so a caller reports
+    what the linter said rather than a generic message."""
     proc = subprocess.run([sys.executable, runner.repo_path("scripts/style_lint.py"), "measure", asset_path, "--json"],
                           cwd=runner.repo, capture_output=True, text=True,
                           timeout=runner.pack["resources"]["deadlineSeconds"])
+    name = os.path.basename(asset_path)
     if proc.returncode != 0:
-        return None
-    record = json.loads(proc.stdout)[0]
-    return {m: metric_value(record, m) for m in metrics if metric_value(record, m) is not None}
+        detail = (proc.stderr or proc.stdout or "").strip()[-400:]
+        return None, f"style_lint measure exited {proc.returncode} on {name}: {detail}"
+    try:
+        record = json.loads(proc.stdout)[0]
+    except (ValueError, IndexError, KeyError):
+        return None, f"style_lint measure emitted no record for {name}: {proc.stdout.strip()[-200:]}"
+    return {m: metric_value(record, m) for m in metrics if metric_value(record, m) is not None}, None
 
 
 def reach_holds(observed, target, widths, tolerance):
-    """Every target metric within tolerance of its corpus-derived value."""
+    """Every target metric within tolerance of its corpus-derived value. A target metric the
+    observed vector does not carry, or that the profile gives no width to score it against, is
+    unreached rather than ignored: an empty or partial vector is a failure, never a pass that
+    proves nothing."""
+    if not target:
+        return (False, "no target metrics to reach")
+    unscored = sorted(m for m in target if m not in observed or not widths.get(m))
     over = {m: round(abs(observed[m] - target[m]) / widths[m], 6)
             for m in target
-            if m in observed and widths.get(m) and abs(observed[m] - target[m]) / widths[m] > tolerance}
-    return (not over, None if not over else f"outside tolerance: {over}")
+            if m not in unscored and abs(observed[m] - target[m]) / widths[m] > tolerance}
+    detail = []
+    if unscored:
+        detail.append(f"unmeasured: {unscored}")
+    if over:
+        detail.append(f"outside tolerance: {over}")
+    return (not detail, None if not detail else "; ".join(detail))
 
 
 def export_metrics_match(draft_vector, export_vector):
-    """Export must preserve the draft's measured geometry exactly; both are GLB and byte-deterministic."""
+    """Export must preserve the draft's measured geometry exactly; both are GLB and
+    byte-deterministic. An empty vector on either side compares nothing, so it is a failure."""
+    if not draft_vector or not export_vector:
+        return (False, f"nothing to compare: {len(draft_vector)} draft metrics, {len(export_vector)} export metrics")
     differing = {m: (draft_vector.get(m), export_vector.get(m))
                  for m in set(draft_vector) | set(export_vector)
                  if draft_vector.get(m) != export_vector.get(m)}
@@ -757,6 +778,11 @@ class Runner:
                              "corpusHashes": profile.get("corpus", {}).get("sha256", {})}
         widths = self.profile_rule_widths(entry)
         out["familiesTotal"] = len(targets)
+        seed = (witnesses.get("solver") or {}).get("seed")
+        if seed is None:
+            out.update(status="fail",
+                       reason=f"{entry['witnesses']} carries no solver.seed; regenerate it with scripts/corpus_witness.py")
+            return out
 
         for family in sorted(targets):
             witness = witnesses["families"].get(family)
@@ -770,7 +796,7 @@ class Runner:
                 continue
             out["familiesEligible"] += 1
             record = self.replay_family(entry, family, witness, targets[family], widths,
-                                        witnesses["templateId"], witnesses.get("solver", {}).get("seed", 42))
+                                        witnesses["templateId"], seed)
             out["families"][family] = record
             if record["status"] == "pass":
                 out["familiesPassed"] += 1
@@ -815,9 +841,9 @@ class Runner:
                 return {"status": "fail", "reason": f"{step['command']} exited {proc.returncode}: {proc.stderr[-400:]}"}
         mode = CORPUS_ASSERTIONS.get(self.pack["operation"], "conforming")
         if mode in ("reach", "export"):
-            vector = measured_vector(self, draft, list(widths))
+            vector, why = measured_vector(self, draft, list(widths))
             if vector is None:
-                return {"status": "fail", "reason": "style_lint measure failed on the draft"}
+                return {"status": "fail", "reason": why}
             if mode == "reach":
                 ok, detail = reach_holds(vector, target, widths, entry["tolerance"])
                 if not ok:
@@ -828,7 +854,10 @@ class Runner:
                                       cwd=self.repo, capture_output=True, text=True, timeout=deadline)
                 if proc.returncode != 0:
                     return {"status": "fail", "reason": f"export vrm exited {proc.returncode}: {proc.stderr[-400:]}"}
-                ok, detail = export_metrics_match(vector, measured_vector(self, final, list(widths)) or {})
+                final_vector, why = measured_vector(self, final, list(widths))
+                if final_vector is None:
+                    return {"status": "fail", "reason": why}
+                ok, detail = export_metrics_match(vector, final_vector)
                 if not ok:
                     return {"status": "fail", "reason": detail}
                 draft = final
@@ -1089,8 +1118,11 @@ def print_summary(result):
         print(line)
     for c in result.get("corpus") or []:
         if "styleId" in c:
-            print(f"  corpus  [{c['styleId']}] {c.get('familiesPassed', 0)}/{c.get('familiesEligible', 0)} eligible pass, "
-                  f"{c.get('familiesTotal', 0)} families: {c['status']}")
+            line = (f"  corpus  [{c['styleId']}] {c.get('familiesPassed', 0)}/{c.get('familiesEligible', 0)} eligible pass, "
+                    f"{c.get('familiesTotal', 0)} families: {c['status']}")
+            if c.get("reason"):
+                line += f"  — {c['reason']}"
+            print(line)
         else:
             print(f"  corpus  {c.get('manifest', '?')} {c.get('familiesPassed', 0)}/{c.get('familiesTotal', 0)} families pass: {c['status']}")
             for fam, v in c.get("families", {}).items():
