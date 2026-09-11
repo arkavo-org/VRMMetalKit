@@ -274,8 +274,29 @@ def validate_pack(pack, schema):
     for m in pack["mutants"]:
         if "suite" in m["transform"] and m["transform"]["kind"] != "swift-test":
             errors.append(f"mutant {m['id']}: transform.suite applies only to swift-test mutants")
-    if pack["evidencePolicy"]["dimensions"]["corpus"] == "required" and "corpus" not in pack:
-        errors.append("evidencePolicy.dimensions.corpus is required but the pack has no corpus block")
+    if pack["evidencePolicy"]["dimensions"]["corpus"] == "required":
+        entries = pack.get("corpus")
+        if not isinstance(entries, list) or not entries:
+            errors.append("evidencePolicy.dimensions.corpus is required but the pack declares no style set")
+        else:
+            pinned = pack["runner"]["environment"]["oracleHashes"]
+            style_ids = [e.get("styleId") for e in entries]
+            if len(set(style_ids)) != len(style_ids):
+                errors.append("corpus styleId values must be unique")
+            for i, e in enumerate(entries):
+                if pack["runner"]["kind"] == "swift-test":
+                    for field in ("driver", "witnesses", "witnessesSha256"):
+                        if not e.get(field):
+                            errors.append(f"corpus[{i}].{field} is required when runner.kind is swift-test")
+                if e.get("minEligibleFamilies", 0) > e.get("expectedFamilies", 0):
+                    errors.append(f"corpus[{i}].minEligibleFamilies must not exceed expectedFamilies")
+                if not (0 < e.get("tolerance", 0) <= 1):
+                    errors.append(f"corpus[{i}].tolerance must be greater than 0 and at most 1")
+                for path_key, hash_key in (("profile", "profileSha256"), ("manifest", "manifestSha256"),
+                                           ("measurements", "measurementsSha256"), ("witnesses", "witnessesSha256")):
+                    path = e.get(path_key)
+                    if path and pinned.get(path) != e.get(hash_key):
+                        errors.append(f"corpus[{i}].{path_key} must be listed in runner.environment.oracleHashes with the same sha256")
     if not pack["visual"]["applicable"] and not pack["visual"].get("applicabilityRecord"):
         errors.append("visual.applicabilityRecord is required when visual.applicable is false")
     if len(fixture_ids) != len(pack["fixtures"]):
@@ -574,10 +595,10 @@ class Runner:
     # ---- corpus
 
     def run_corpus(self):
-        c = self.pack["corpus"]
+        c = self.pack["corpus"][0]
         out = {"manifest": c["manifest"], "families": {}, "assets": []}
         mpath = self.repo_path(c["manifest"])
-        if not os.path.exists(mpath) or sha256_file(mpath) != c["sha256"]:
+        if not os.path.exists(mpath) or sha256_file(mpath) != c["manifestSha256"]:
             out.update(status="fail", reason="corpus manifest absent or differs from pinned sha256")
             return out
         manifest = load_json(mpath)
@@ -765,7 +786,7 @@ class Runner:
                              "python": sys.version.split()[0], "oracleHashes": {}},
                   "review": {"reviewReceipt": "present" if pack["provenance"]["reviewReceipt"] else "pending",
                              "reviewer": pack["provenance"]["reviewer"]},
-                  "dimensions": {}, "fixtures": [], "mutants": [], "corpus": None}
+                  "dimensions": {}, "fixtures": [], "mutants": [], "corpus": []}
         dims = pack["evidencePolicy"]["dimensions"]
         for k, v in dims.items():
             result["dimensions"][k] = "inapplicable" if v == "inapplicable" else "pending"
@@ -796,15 +817,15 @@ class Runner:
             for m in pack["mutants"]:
                 result["mutants"].append(self.run_mutant(m))
             if dims["corpus"] == "required":
-                result["corpus"] = self.run_corpus()
+                result["corpus"] = [self.run_corpus()]
         finally:
             if self.tmp:
                 shutil.rmtree(self.tmp, ignore_errors=True)
         fx = [f["status"] for f in result["fixtures"]]
         mt = [m["status"] for m in result["mutants"]]
         result["dimensions"]["fixture"] = worst(fx + mt)
-        if result["corpus"] is not None:
-            result["dimensions"]["corpus"] = result["corpus"]["status"]
+        if result["corpus"]:
+            result["dimensions"]["corpus"] = result["corpus"][0]["status"]
         integrity_fail = any(f["status"] == "fail" and "sha256" in f.get("reason", "") for f in result["fixtures"]) or \
             any(m["status"] == "fail" for m in result["mutants"] if m["kind"] in ("report-fabricated", "metadata-noop"))
         result["dimensions"]["provenance"] = "fail" if integrity_fail else worst(fx + mt)
@@ -846,9 +867,8 @@ def print_summary(result):
         if m.get("reason") and m["status"] != "pass":
             line += f"  — {m['reason']}"
         print(line)
-    c = result.get("corpus")
-    if c:
-        print(f"  corpus  {c.get('familiesPassed', 0)}/{c.get('familiesTotal', 0)} families pass: {c['status']}")
+    for c in result.get("corpus") or []:
+        print(f"  corpus  {c.get('manifest', '?')} {c.get('familiesPassed', 0)}/{c.get('familiesTotal', 0)} families pass: {c['status']}")
         for fam, v in c.get("families", {}).items():
             print(f"          {fam:24s} {v['passed']}/{v['assets']} {v['status']}")
     print("  dimensions: " + ", ".join(f"{k}={v}" for k, v in result["dimensions"].items()))

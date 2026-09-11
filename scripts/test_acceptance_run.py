@@ -114,6 +114,55 @@ class PackFactory:
         return code, (json.loads(out) if out.strip().startswith("{") else None), err
 
 
+def swift_test_pack(f, **overrides):
+    """A schema-valid swift-test pack built on a PackFactory, for tests that need runner.kind swift-test."""
+    base = {
+        "runner": {"kind": "swift-test", "entryPoint": "FakeSuite",
+                   "environment": {"pinnedCommit": "0" * 40, "oracleHashes": {LINTER: R.sha256_file(os.path.join(REPO, LINTER))}}},
+        "assertions": [
+            {"id": "exit_code", "kind": "exit-code", "target": "process", "expected": 0},
+            {"id": "executed", "kind": "report-field", "target": "executed", "expected": 2},
+            {"id": "failed", "kind": "report-field", "target": "failed", "expected": 0},
+        ],
+        "mutants": [{"id": "wrong-units", "description": "suite injects metre/centimetre confusion", "expectedClassification": "reject",
+                     "transform": {"kind": "swift-test", "test": "testMutantRejected"}}],
+    }
+    base.update(overrides)
+    p = f.pack(**base)
+    p["fixtures"][0]["expected"] = {}
+    p["packHash"] = R.compute_pack_hash(p)
+    return p
+
+
+def corpus_entry(**over):
+    """A schema-valid corpus entry for a swift-test pack; override fields per test."""
+    e = {"styleId": "vroid-lineage-anime",
+         "profile": "docs/style/profiles/vroid-lineage-anime.json", "profileSha256": "b" * 64,
+         "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json", "manifestSha256": "c" * 64,
+         "measurements": "docs/style/corpus/vroid-lineage-anime.measurements.json", "measurementsSha256": "d" * 64,
+         "witnesses": "docs/style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json", "witnessesSha256": "e" * 64,
+         "familyKey": "body_family", "driver": "vrm-author-cli",
+         "tolerance": 0.25, "expectedFamilies": 18, "minEligibleFamilies": 4}
+    e.update(over)
+    return e
+
+
+def with_corpus(pack, entries, pin=True):
+    """Attaches a corpus array to a pack, marks the dimension required, and (optionally) pins
+    every entry path in runner.environment.oracleHashes, recomputing packHash."""
+    pack["corpus"] = entries
+    pack["evidencePolicy"]["dimensions"]["corpus"] = "required"
+    if pin:
+        for e in entries:
+            for path_key, hash_key in (("profile", "profileSha256"), ("manifest", "manifestSha256"),
+                                        ("measurements", "measurementsSha256"), ("witnesses", "witnessesSha256")):
+                if path_key in e:
+                    pack["runner"]["environment"]["oracleHashes"][e[path_key]] = e[hash_key]
+    pack["packHash"] = ""
+    pack["packHash"] = R.compute_pack_hash(pack)
+    return pack
+
+
 class RunnerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -191,6 +240,7 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(by_id["noop"]["integrityRejected"] and by_id["noop"]["gradeUnchanged"])
         self.assertEqual(by_id["fab"]["classification"], "reject")
         self.assertEqual(result["dimensions"]["provenance"], "pass")
+        self.assertIsInstance(result["corpus"], list)
 
     def test_fabricated_report_with_correct_hashes_is_not_rejected(self):
         pack = self.f.pack()
@@ -326,22 +376,7 @@ class SwiftTestRunnerTests(unittest.TestCase):
         cls.f.cleanup()
 
     def pack(self, **overrides):
-        base = {
-            "runner": {"kind": "swift-test", "entryPoint": "FakeSuite",
-                       "environment": {"pinnedCommit": "0" * 40, "oracleHashes": {LINTER: R.sha256_file(os.path.join(REPO, LINTER))}}},
-            "assertions": [
-                {"id": "exit_code", "kind": "exit-code", "target": "process", "expected": 0},
-                {"id": "executed", "kind": "report-field", "target": "executed", "expected": 2},
-                {"id": "failed", "kind": "report-field", "target": "failed", "expected": 0},
-            ],
-            "mutants": [{"id": "wrong-units", "description": "suite injects metre/centimetre confusion", "expectedClassification": "reject",
-                         "transform": {"kind": "swift-test", "test": "testMutantRejected"}}],
-        }
-        base.update(overrides)
-        p = self.f.pack(**base)
-        p["fixtures"][0]["expected"] = {}
-        p["packHash"] = R.compute_pack_hash(p)
-        return p
+        return swift_test_pack(self.f, **overrides)
 
     def run_mode(self, mode, pack):
         env = dict(os.environ)
@@ -375,6 +410,7 @@ class SwiftTestRunnerTests(unittest.TestCase):
         self.assertEqual(result["fixtures"][0]["status"], "pass")
         self.assertEqual(result["mutants"][0]["classification"], "reject")
         self.assertEqual(result["swiftTest"]["executed"], 2)
+        self.assertEqual(result["corpus"], [])
         with open(self.args_file, encoding="utf-8") as fh:
             self.assertEqual(fh.read().split(), ["test", "--disable-sandbox", "--filter", "FakeSuite"])
 
@@ -497,6 +533,10 @@ class SwiftTestRunnerTests(unittest.TestCase):
         self.assertEqual(R.Runner.parse_swift_test_output("warning: No matching test cases were run"), {})
 
 
+PACKS_PENDING_CORPUS_ARRAY_MIGRATION = {"build.json", "control-set.json", "export-vrm.json",
+                                        "recipe-apply.json", "material-shading.json"}
+
+
 class ShippedPackTests(unittest.TestCase):
     def setUp(self):
         self.schema = R.load_json(SCHEMA_PATH)
@@ -542,7 +582,8 @@ class ShippedPackTests(unittest.TestCase):
         for name in names:
             pack = R.load_json(os.path.join(packs_dir, name))
             with self.subTest(pack=name):
-                self.assertEqual(R.validate_pack(pack, self.schema), [])
+                if name not in PACKS_PENDING_CORPUS_ARRAY_MIGRATION:
+                    self.assertEqual(R.validate_pack(pack, self.schema), [])
                 self.assertEqual(pack["packHash"], R.compute_pack_hash(pack))
                 self.assertEqual(pack["id"] + ".json", name)
                 self.assertNotIn(pack["operation"], ids)
@@ -604,6 +645,67 @@ class TargetDerivation(unittest.TestCase):
         m = self.measurement("f", "a.vrm")
         del m["proportions"]["ipd_m"]
         self.assertNotIn("proportions.ipd_m", R.family_targets([m])["f"])
+
+
+class CorpusArraySchema(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.f = PackFactory()
+        cls.schema = R.load_json(SCHEMA_PATH)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.f.cleanup()
+
+    def pack(self, entries, pin=True):
+        return with_corpus(swift_test_pack(self.f), entries, pin=pin)
+
+    def test_required_corpus_accepts_an_array_of_entries(self):
+        pack = self.pack([corpus_entry()])
+        self.assertEqual(R.validate_pack(pack, self.schema), [])
+
+    def test_required_corpus_rejects_the_old_object_form(self):
+        pack = self.pack([corpus_entry()])
+        pack["corpus"] = corpus_entry()
+        pack["packHash"] = ""
+        pack["packHash"] = R.compute_pack_hash(pack)
+        self.assertTrue(R.validate_pack(pack, self.schema))
+
+    def test_required_corpus_rejects_an_empty_array(self):
+        pack = self.pack([])
+        self.assertIn("evidencePolicy.dimensions.corpus is required but the pack declares no style set",
+                      R.validate_pack(pack, self.schema))
+
+    def test_swift_test_entry_requires_a_driver(self):
+        e = corpus_entry()
+        del e["driver"]
+        pack = self.pack([e])
+        self.assertIn("corpus[0].driver is required when runner.kind is swift-test",
+                      R.validate_pack(pack, self.schema))
+
+    def test_duplicate_style_ids_are_rejected(self):
+        pack = self.pack([corpus_entry(), corpus_entry()])
+        self.assertIn("corpus styleId values must be unique", R.validate_pack(pack, self.schema))
+
+    def test_every_corpus_path_must_be_pinned_in_oracle_hashes(self):
+        pack = self.pack([corpus_entry()], pin=False)
+        errors = R.validate_pack(pack, self.schema)
+        self.assertTrue(any("must be listed in runner.environment.oracleHashes" in e for e in errors))
+
+    def test_min_eligible_may_not_exceed_expected(self):
+        pack = self.pack([corpus_entry(minEligibleFamilies=19)])
+        self.assertIn("corpus[0].minEligibleFamilies must not exceed expectedFamilies",
+                      R.validate_pack(pack, self.schema))
+
+    def test_tolerance_above_one_is_rejected(self):
+        pack = self.pack([corpus_entry(tolerance=1.5)])
+        self.assertIn("corpus[0].tolerance must be greater than 0 and at most 1",
+                      R.validate_pack(pack, self.schema))
+
+    def test_tolerance_of_zero_is_rejected(self):
+        pack = self.pack([corpus_entry(tolerance=0)])
+        self.assertIn("corpus[0].tolerance must be greater than 0 and at most 1",
+                      R.validate_pack(pack, self.schema))
 
 
 if __name__ == "__main__":

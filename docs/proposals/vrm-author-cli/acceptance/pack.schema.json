@@ -173,15 +173,30 @@
       }
     },
     "corpus": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["manifest", "sha256", "familyKey"],
-      "description": "Present when evidencePolicy.dimensions.corpus is required: the development-corpus manifest the runner lints per body family.",
-      "properties": {
-        "manifest": { "type": "string" },
-        "sha256": { "$ref": "#/$defs/sha256" },
-        "familyKey": { "type": "string" },
-        "expectedFamilies": { "type": "integer", "minimum": 1 }
+      "type": "array",
+      "description": "Present when evidencePolicy.dimensions.corpus is required: one entry per style set the pack measures. The dimension passes only if every entry passes. A pack declaring the dimension required must supply at least one entry; enforced in validate_pack, since minItems would short-circuit schema validation before the more specific cross-reference error runs.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["styleId", "profile", "profileSha256", "manifest", "manifestSha256",
+                     "measurements", "measurementsSha256", "familyKey", "tolerance",
+                     "expectedFamilies", "minEligibleFamilies"],
+        "properties": {
+          "styleId": { "type": "string", "description": "The profile's id, e.g. vroid-lineage-anime." },
+          "profile": { "type": "string" },
+          "profileSha256": { "$ref": "#/$defs/sha256" },
+          "manifest": { "type": "string" },
+          "manifestSha256": { "$ref": "#/$defs/sha256" },
+          "measurements": { "type": "string", "description": "Written by style_lint.py corpus; supplies the per-family target vectors." },
+          "measurementsSha256": { "$ref": "#/$defs/sha256" },
+          "witnesses": { "type": "string", "description": "swift-test packs: solved controls per family, keyed by the corpus and template hashes." },
+          "witnessesSha256": { "$ref": "#/$defs/sha256" },
+          "familyKey": { "type": "string" },
+          "driver": { "type": "string", "description": "swift-test packs: the replay driver. vrm-author-cli replays each witness through the shipped executable." },
+          "tolerance": { "type": "number", "description": "Fraction of each target metric's own rule range width in this style's profile inside which a residual counts as reached. Must be greater than 0 and at most 1; enforced in validate_pack, since exclusiveMinimum/maximum are outside the schema subset validate_schema supports." },
+          "expectedFamilies": { "type": "integer", "minimum": 1 },
+          "minEligibleFamilies": { "type": "integer", "minimum": 1, "description": "Floor below which the dimension is fail, never pass. Closes the vacuous pass at zero eligible families." }
+        }
       }
     },
     "resources": {

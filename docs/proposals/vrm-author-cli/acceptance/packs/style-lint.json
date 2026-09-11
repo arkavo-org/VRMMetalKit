@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "",
   "resultSchemaHash": "",
-  "packHash": "969d576ddcae30573ae09173a44cad13b927b183f222b2165fcf21d872c0f884",
+  "packHash": "81cc628ad60de58a132fe90c32e9d078a24c02e80736c38eacc7e3999a118b3a",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -126,7 +126,8 @@
       "oracleHashes": {
         "scripts/style_lint.py": "ff9d41334e670747df1f8c28561cfb263b40325d427690c3aef052a173f05fcb",
         "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
-        "docs/style/corpus/vroid-lineage-anime.manifest.json": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6"
+        "docs/style/corpus/vroid-lineage-anime.manifest.json": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
+        "docs/style/corpus/vroid-lineage-anime.measurements.json": "c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc"
       }
     }
   },
@@ -309,12 +310,21 @@
     },
     "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C."
   },
-  "corpus": {
-    "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json",
-    "sha256": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
-    "familyKey": "body_family",
-    "expectedFamilies": 18
-  },
+  "corpus": [
+    {
+      "styleId": "vroid-lineage-anime",
+      "profile": "docs/style/profiles/vroid-lineage-anime.json",
+      "profileSha256": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
+      "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json",
+      "manifestSha256": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
+      "measurements": "docs/style/corpus/vroid-lineage-anime.measurements.json",
+      "measurementsSha256": "c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc",
+      "familyKey": "body_family",
+      "tolerance": 0.25,
+      "expectedFamilies": 18,
+      "minEligibleFamilies": 18
+    }
+  ],
   "resources": {
     "cpuSeconds": 600,
     "gpuSeconds": 0,
