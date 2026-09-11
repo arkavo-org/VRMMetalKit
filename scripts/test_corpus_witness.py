@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
 """Unit tests for the corpus witness generator. Run: python3 scripts/test_corpus_witness.py"""
+import json
 import os
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import corpus_witness as W
+
+STUB_BINARY = """#!/usr/bin/env python3
+import json
+import sys
+
+if sys.argv[1:3] == ["template", "list"]:
+    print(json.dumps({"result": {"packs": [{"id": "test-template", "sha256": "deadbeef"}]}}))
+    sys.exit(0)
+sys.exit(1)
+"""
 
 
 PROFILE = {"rules": [
@@ -91,6 +103,45 @@ class Solve(unittest.TestCase):
         self.assertTrue(a["eligible"])
         self.assertLess(max(a["residuals"].values()), starting_score)
         self.assertNotEqual(a["controls"]["body.proportion.legLength"], 0.0)
+
+class MainZeroFamilies(unittest.TestCase):
+    """A measurements input with no families must still produce a complete, valid document."""
+
+    def test_zero_families_still_writes_a_complete_document(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            binary = os.path.join(tmp, "vrm-author")
+            with open(binary, "w", encoding="utf-8") as fh:
+                fh.write(STUB_BINARY)
+            os.chmod(binary, 0o755)
+
+            measurements = os.path.join(tmp, "measurements.json")
+            with open(measurements, "w", encoding="utf-8") as fh:
+                json.dump({"measurements": []}, fh)
+
+            manifest = os.path.join(tmp, "manifest.json")
+            with open(manifest, "w", encoding="utf-8") as fh:
+                json.dump({"assets": []}, fh)
+
+            profile = os.path.join(tmp, "profile.json")
+            with open(profile, "w", encoding="utf-8") as fh:
+                json.dump({"id": "test-profile", "rules": []}, fh)
+
+            out = os.path.join(tmp, "witnesses.json")
+
+            rc = W.main(["--measurements", measurements, "--manifest", manifest,
+                        "--profile", profile, "--template", "test-template", "--out", out,
+                        "--binary", binary, "--budget", "1", "--seed", "1"])
+
+            self.assertEqual(rc, 0)
+            self.assertTrue(os.path.exists(out))
+            with open(out, encoding="utf-8") as fh:
+                document = json.load(fh)
+            self.assertEqual(document["families"], {})
+            for key in ("corpusManifestSha256", "templateId", "templateSha256", "profileId",
+                       "solver", "generated", "families"):
+                self.assertIn(key, document)
+            self.assertIn("styleLintSha256", document["generated"])
+            self.assertIn("measurementsSha256", document["generated"])
 
 
 if __name__ == "__main__":

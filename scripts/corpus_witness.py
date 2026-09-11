@@ -178,6 +178,7 @@ def main(argv=None):
                       "measurementsSha256": sha256_file(os.path.join(REPO, args.measurements))},
         "families": {},
     }
+    write_document(out_path, document)
     with tempfile.TemporaryDirectory(prefix="corpus_witness_") as workdir:
         evaluate = cli_evaluator(binary, args.template, args.seed, os.path.join(REPO, args.linter),
                                  workdir, list(widths))
