@@ -25,5 +25,6 @@ extension Registry {
     public static let installers: [RegistryInstaller] = [
         DiscoveryHandlers.install,
         ProjectHandlers.install,
+        ProvenanceHandlers.install,
     ]
 }
