@@ -169,8 +169,74 @@ public enum MCPFacade {
         }
     }
 
-    static func discover(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue { throw RPCError(code: RPCError.internalError, message: "not implemented") }
-    static func recipe(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue { throw RPCError(code: RPCError.internalError, message: "not implemented") }
+    static func discover(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue {
+        let capabilities: JSONValue
+        switch try invoke("capabilities", params: [:], session: session, tool: "vrm_discover") {
+        case .refused(let r): return r
+        case .envelope(let e): capabilities = e
+        }
+        let templates: JSONValue
+        switch try invoke("template list", params: [:], session: session, tool: "vrm_discover") {
+        case .refused(let r): return r
+        case .envelope(let e): templates = e
+        }
+        var values: [String: JSONValue] = [:]
+        var revision: JSONValue = .null
+        if let project = arguments["project"]?.string {
+            switch try invoke("recipe export", params: ["project": .string(project), "out": .string(project + "/reports/mcp-recipe-export.json"), "replace": true], session: session, tool: "vrm_discover") {
+            case .refused(let r): return r
+            case .envelope(let e):
+                revision = self.revision(of: e)
+                for section in ["body", "face"] {
+                    for (k, v) in e["result"]?["recipe"]?[section]?.object ?? [:] { values[k] = v }
+                }
+            }
+        }
+        let packs = templates["result"]?["packs"]?.array ?? []
+        let controls: [JSONValue] = (packs.first?["controls"]?.array ?? []).map { descriptor in
+            var d = descriptor.object ?? [:]
+            if let key = d["key"]?.string, let v = values[key] { d["value"] = v }
+            return .object(d)
+        }
+        var presets: [String: [JSONValue]] = ["hair": [], "outfit": [], "accessory": []]
+        for item in templates["result"]?["items"]?.array ?? [] {
+            guard let category = item["category"]?.string else { continue }
+            presets[category, default: []].append(["id": item["id"] ?? .null, "controls": item["controls"] ?? []])
+        }
+        let admitted = (capabilities["result"]?["entries"]?.array ?? []).filter { $0["productionEligible"] == true }.compactMap { $0["operation"]?.string }
+        let structured: [String: JSONValue] = [
+            "templates": .array(packs.map { ["id": $0["id"] ?? .null, "sha256": $0["sha256"] ?? .null] }),
+            "controls": .array(controls),
+            "presets": .object(presets.mapValues { .array($0) }),
+            "renderers": capabilities["result"]?["renderers"] ?? [],
+            "starters": JSONValue(MCPResources.uris),
+            "evidence": ["admitted": JSONValue(admitted)],
+        ]
+        let text = "vrm_discover succeeded; \(controls.count) controls, \(presets.values.map(\.count).reduce(0, +)) presets, \(admitted.count) admitted operations"
+        return toolResult(envelope: .object(["protocol": .string(ResultEnvelope.protocolName), "status": "succeeded"]), revision: revision, isError: false, text: text, extra: structured)
+    }
+
+    static func recipe(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue {
+        let project = try projectArgument(arguments, session: session)
+        switch arguments["action"]?.string {
+        case "export":
+            switch try invoke("recipe export", params: ["project": .string(project), "out": .string(project + "/reports/mcp-recipe-export.json"), "replace": true], session: session, tool: "vrm_recipe") {
+            case .refused(let r): return r
+            case .envelope(let e): return toolResult(envelope: e, revision: revision(of: e), isError: e["status"] != "succeeded", text: summary(tool: "vrm_recipe export", envelope: e))
+            }
+        case "apply":
+            guard let recipe = arguments["recipe"] else { throw RPCError(code: RPCError.invalidParams, message: "Invalid params: recipe is required for apply", data: ["path": "/recipe"]) }
+            var params: [String: JSONValue] = ["project": .string(project), "recipe": recipe]
+            for key in ["expectedRevision", "requestId", "dryRun"] { if let v = arguments[key] { params[key] = v } }
+            switch try invoke("recipe apply", params: params, session: session, tool: "vrm_recipe") {
+            case .refused(let r): return r
+            case .envelope(let e): return toolResult(envelope: e, revision: revision(of: e), isError: e["status"] != "succeeded", text: summary(tool: "vrm_recipe apply", envelope: e))
+            }
+        default:
+            throw RPCError(code: RPCError.invalidParams, message: "Invalid params: action must be export or apply", data: ["path": "/action"])
+        }
+    }
+
     static func build(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue { throw RPCError(code: RPCError.internalError, message: "not implemented") }
     static func qa(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue { throw RPCError(code: RPCError.internalError, message: "not implemented") }
     static func export(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue { throw RPCError(code: RPCError.internalError, message: "not implemented") }

@@ -114,4 +114,71 @@ final class MCPFacadeTests: XCTestCase {
         XCTAssertEqual(try exchange(&server, #"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vrm_build","arguments":[]}}"#)["error"]?["code"], -32602)
         XCTAssertEqual(try exchange(&server, #"{"jsonrpc":"2.0","method":"tools/call","params":{"name":"vrm_discover","arguments":{}}}"#)["error"]?["code"], -32600)
     }
+
+    // MARK: vrm_discover
+
+    func testDiscoverWithoutProjectWritesNothingAndListsPackData() throws {
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"])
+        let before = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        let result = try call(&server, id: 1, "vrm_discover", [:])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), before)
+        XCTAssertEqual(result["result"]?["isError"], false)
+        let s = try XCTUnwrap(result["result"]?["structuredContent"])
+        XCTAssertEqual(s["templates"]?[0]?["id"], "native-anime-v1")
+        XCTAssertEqual(s["templates"]?[0]?["sha256"], .string(TemplateRegistry.standard().templateHashes()["native-anime-v1"]!))
+        let controls = try XCTUnwrap(s["controls"]?.array)
+        XCTAssertEqual(controls.count, 44)
+        XCTAssertEqual(controls.first { $0["key"] == "body.heightM" }?["validRange"], [1.2, 2.0])
+        XCTAssertNil(controls.first { $0["key"] == "body.heightM" }?["value"])
+        XCTAssertEqual(s["presets"]?["hair"]?.array?.compactMap { $0["id"]?.string }, ["bob-v1", "long-v1", "ponytail-v1"])
+        XCTAssertEqual(s["presets"]?["outfit"]?.array?.count, 4)
+        XCTAssertEqual(s["presets"]?["accessory"]?.array?.count, 3)
+        XCTAssertEqual(s["starters"], ["recipe://native-anime-v1/female", "recipe://native-anime-v1/male"])
+        XCTAssertEqual(s["evidence"]?["admitted"], [])
+        XCTAssertNotNil(s["renderers"]?.array)
+        XCTAssertEqual(s["revision"], .null)
+    }
+
+    func testDiscoverWithProjectCarriesCurrentValuesAndAdmittedOperations() throws {
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"], evidence: evidence(admitting: ["template list"]))
+        let dir = root.appendingPathComponent("d.vrmauthor")
+        _ = try call(&server, id: 1, "vrm_project", ["action": "init", "dir": .string(dir.path), "seed": 42])
+        let s = try XCTUnwrap(try call(&server, id: 2, "vrm_discover", ["project": .string(dir.path)])["result"]?["structuredContent"])
+        XCTAssertEqual(s["controls"]?.array?.first { $0["key"] == "body.heightM" }?["value"], 1.65)
+        XCTAssertEqual(s["evidence"]?["admitted"], ["template list"])
+        XCTAssertEqual(s["revision"], 0)
+    }
+
+    // MARK: vrm_recipe
+
+    func testRecipeExportApplyRoundTripAndRevisionRules() throws {
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"])
+        let dir = root.appendingPathComponent("r.vrmauthor")
+        _ = try call(&server, id: 1, "vrm_project", ["action": "init", "dir": .string(dir.path), "seed": 42])
+        let exported = try call(&server, id: 2, "vrm_recipe", ["action": "export", "project": .string(dir.path)])
+        XCTAssertEqual(exported["result"]?["isError"], false)
+        XCTAssertEqual(exported["result"]?["structuredContent"]?["revision"], 0)
+        var recipe = try XCTUnwrap(exported["result"]?["structuredContent"]?["result"]?["recipe"])
+        try JSONPointer("/body/body.heightM").set(in: &recipe, to: 1.5)
+
+        let missing = try call(&server, id: 3, "vrm_recipe", ["action": "apply", "project": .string(dir.path), "recipe": recipe])
+        XCTAssertEqual(missing["error"]?["code"], -32602, "expectedRevision is never auto-filled")
+
+        let applied = try call(&server, id: 4, "vrm_recipe", ["action": "apply", "project": .string(dir.path), "recipe": recipe, "expectedRevision": 0, "requestId": "apply-1"])
+        XCTAssertNil(applied["error"])
+        XCTAssertEqual(applied["result"]?["isError"], false)
+        XCTAssertEqual(applied["result"]?["structuredContent"]?["revision"], 1)
+        let appliedText = try XCTUnwrap(applied["result"]?["content"]?[0]?["text"]?.string)
+        XCTAssertTrue(appliedText.hasPrefix("vrm_recipe apply succeeded; revision 1"))
+        XCTAssertThrowsError(try JSONValue.parse(appliedText))
+
+        let stale = try call(&server, id: 5, "vrm_recipe", ["action": "apply", "project": .string(dir.path), "recipe": recipe, "expectedRevision": 0, "requestId": "apply-2"])
+        XCTAssertNil(stale["error"])
+        XCTAssertEqual(stale["result"]?["isError"], true, "a domain failure that changed nothing is a tool error")
+        XCTAssertEqual(stale["result"]?["structuredContent"]?["errors"]?[0]?["code"], "REVISION_CONFLICT")
+
+        let again = try call(&server, id: 6, "vrm_recipe", ["action": "export", "project": .string(dir.path)])
+        XCTAssertEqual(again["result"]?["structuredContent"]?["result"]?["recipe"]?["body"]?["body.heightM"], 1.5)
+        XCTAssertEqual(again["result"]?["structuredContent"]?["revision"], 1)
+    }
 }
