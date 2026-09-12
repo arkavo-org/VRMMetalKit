@@ -143,10 +143,20 @@ final class MCPFacadeTests: XCTestCase {
         var server = session(env: ["VRM_AUTHOR_SESSION": "harness"], evidence: evidence(admitting: ["template list"]))
         let dir = root.appendingPathComponent("d.vrmauthor")
         _ = try call(&server, id: 1, "vrm_project", ["action": "init", "dir": .string(dir.path), "seed": 42])
+        let before = try FileManager.default.subpathsOfDirectory(atPath: dir.path).sorted()
         let s = try XCTUnwrap(try call(&server, id: 2, "vrm_discover", ["project": .string(dir.path)])["result"]?["structuredContent"])
+        XCTAssertEqual(try FileManager.default.subpathsOfDirectory(atPath: dir.path).sorted(), before, "vrm_discover must not write to the project directory")
         XCTAssertEqual(s["controls"]?.array?.first { $0["key"] == "body.heightM" }?["value"], 1.65)
         XCTAssertEqual(s["evidence"]?["admitted"], ["template list"])
         XCTAssertEqual(s["revision"], 0)
+    }
+
+    func testDiscoverWithMissingProjectIsAToolError() throws {
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"])
+        let dir = root.appendingPathComponent("missing.vrmauthor")
+        let result = try call(&server, id: 1, "vrm_discover", ["project": .string(dir.path)])
+        XCTAssertEqual(result["result"]?["isError"], true)
+        XCTAssertEqual(result["result"]?["structuredContent"]?["errors"]?[0]?["code"], "PROJECT_NOT_FOUND")
     }
 
     // MARK: vrm_recipe

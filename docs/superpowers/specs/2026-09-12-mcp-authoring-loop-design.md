@@ -91,7 +91,7 @@ touches project state directly; it only composes handler envelopes.
 
 | Tool | Underlying operations | Input | Result (`structuredContent`) |
 |---|---|---|---|
-| `vrm_discover` | `capabilities`, `template list`; `control list` only when `project` is given | `{project?}` | `{templates:[{id,sha256}], controls:[avatar control descriptors, with `value` when a project was given], presets:{hair:[…],outfit:[…],accessory:[…]} each with controls, renderers:[…], starters:[resource URIs], evidence:{admitted:[op names]}}` |
+| `vrm_discover` | `capabilities`, `template list`; `object get` on `avatar:main` only when `project` is given | `{project?}` | `{templates:[{id,sha256}], controls:[avatar control descriptors, with `value` when a project was given], presets:{hair:[…],outfit:[…],accessory:[…]} each with controls, renderers:[…], starters:[resource URIs], evidence:{admitted:[op names]}}` |
 | `vrm_project` | `project init` / `project inspect` | `{action:"init", dir, template?, seed?, name?}` or `{action:"inspect", project?}` | `project init` result (with `recipe`) or `project inspect` result; `revision` at top level |
 | `vrm_recipe` | `recipe export` / `recipe apply` | `{action:"export", project?}` or `{action:"apply", project?, recipe, expectedRevision, requestId?, dryRun?}` | `recipe export` result (`recipe` inline) or `recipe apply` result; `revision` at top level |
 | `vrm_build` | `build` | `{project?, out?, replace?}` | `build` result (`buildHash`, `artifacts`, `stale`) |
@@ -141,7 +141,7 @@ level and the `capabilities` command, so the model learns what is admitted
 without the whole tool vanishing. `vrm_discover`'s `evidence.admitted` lists
 the same set.
 
-Mapping: `vrm_discover` → `capabilities`, `template list`, `control list`;
+Mapping: `vrm_discover` → `capabilities`, `template list`, `object get`;
 `vrm_project` → `project init`, `project inspect`; `vrm_recipe` →
 `recipe export`, `recipe apply`; `vrm_build` → `build`; `vrm_qa` → `qa run`;
 `vrm_export` → `export vrm`. With today's empty `evidence.json`, production

@@ -41,7 +41,7 @@ public enum MCPFacade {
 
     public static let tools: [MCPFacadeTool] = [
         MCPFacadeTool(name: "vrm_discover", title: "Discover", description: "Template packs, avatar control ranges, hair/outfit/accessory presets, renderers, starter resource URIs and admitted operations. Pass project to include current control values.",
-                      operations: ["capabilities", "template list", "recipe export"],
+                      operations: ["capabilities", "template list", "object get"],
                       inputSchema: .object(properties: ["project": projectField], required: [], description: "vrm_discover arguments"), readOnly: true, idempotent: true),
         MCPFacadeTool(name: "vrm_project", title: "Project", description: "init: create a project from a template pack and seed. inspect: revision, dependency state and status.",
                       operations: ["project init", "project inspect"],
@@ -169,26 +169,39 @@ public enum MCPFacade {
         }
     }
 
+    /// A failed underlying envelope becomes the tool's own failure instead of
+    /// being silently absorbed into a "succeeded" discover with partial data.
+    static func failure(_ e: JSONValue) -> JSONValue? {
+        guard e["status"] != "succeeded" else { return nil }
+        return toolResult(envelope: e, revision: revision(of: e), isError: true, text: summary(tool: "vrm_discover", envelope: e))
+    }
+
     static func discover(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue {
         let capabilities: JSONValue
         switch try invoke("capabilities", params: [:], session: session, tool: "vrm_discover") {
         case .refused(let r): return r
-        case .envelope(let e): capabilities = e
+        case .envelope(let e):
+            if let failure = failure(e) { return failure }
+            capabilities = e
         }
         let templates: JSONValue
         switch try invoke("template list", params: [:], session: session, tool: "vrm_discover") {
         case .refused(let r): return r
-        case .envelope(let e): templates = e
+        case .envelope(let e):
+            if let failure = failure(e) { return failure }
+            templates = e
         }
         var values: [String: JSONValue] = [:]
         var revision: JSONValue = .null
         if let project = arguments["project"]?.string {
-            switch try invoke("recipe export", params: ["project": .string(project), "out": .string(project + "/reports/mcp-recipe-export.json"), "replace": true], session: session, tool: "vrm_discover") {
+            switch try invoke("object get", params: ["project": .string(project), "id": "avatar:main"], session: session, tool: "vrm_discover") {
             case .refused(let r): return r
             case .envelope(let e):
+                if let failure = failure(e) { return failure }
                 revision = self.revision(of: e)
+                if revision.isNull { revision = e["result"]?["object"]?["revision"] ?? .null }
                 for section in ["body", "face"] {
-                    for (k, v) in e["result"]?["recipe"]?[section]?.object ?? [:] { values[k] = v }
+                    for (k, v) in e["result"]?["object"]?[section]?.object ?? [:] { values[k] = v }
                 }
             }
         }
