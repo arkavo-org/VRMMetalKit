@@ -213,6 +213,8 @@ public enum OutfitPresets {
                               message: "\(d.id) '\(item.id)' covers no complete body triangles with the requested length.", suggestedCommands: ["control set"])
         }
 
+        shapeGarment(d, builder: &builder, remap: remap, regionOfVertex: regionOfVertex, host: host)
+
         let minClearance = try clearance(builder: builder, sources: sources, host: host, item: item, descriptor: d, regionOfVertex: regionOfVertex)
 
         let meshId = "mesh:garment:\(item.id)"
@@ -222,6 +224,61 @@ public enum OutfitPresets {
                                coveredRegions: coveredRegions, hiddenRegions: d.hiddenRegions)
         return Build(mesh: mesh, meshNode: CompiledNode(id: nodeId, name: "Garment_\(item.id)"),
                      meshInstance: CompiledMeshInstance(nodeId: nodeId, meshId: meshId, skinId: host.bodySkin.id), info: info, warnings: warnings)
+    }
+
+    /// Region-aware shaping pass: sleeve cuffs and hems flare slightly and the
+    /// waist relaxes off the body curve, so garments read as cloth instead of a
+    /// vacuum-sealed shell. Only ever pushes vertices further from the body.
+    static func shapeGarment(_ d: OutfitPresetDescriptor, builder: inout MeshBuilder, remap: [Int: UInt32],
+                             regionOfVertex: [Int: String], host: WearableHost) {
+        var axialCache: [String: [Int: Float]] = [:]
+        func axial(_ region: String, _ i: Int) -> Float {
+            if axialCache[region] == nil {
+                axialCache[region] = axialParams(region: region, indices: host.region(region), host: host)
+            }
+            return axialCache[region]?[i] ?? 0
+        }
+        var torsoLo = Float.infinity, torsoHi = -Float.infinity
+        for (i, _) in remap {
+            guard let r = regionOfVertex[i], i < host.bodyPositions.count else { continue }
+            if r == WearableRegion.chest || r == WearableRegion.torso || r == WearableRegion.waist || r == WearableRegion.hips {
+                torsoLo = min(torsoLo, host.bodyPositions[i].y)
+                torsoHi = max(torsoHi, host.bodyPositions[i].y)
+            }
+        }
+        let torsoSpan = max(torsoHi - torsoLo, 1e-6)
+        for (i, vi) in remap {
+            guard let region = regionOfVertex[i], i < host.bodyNormals.count, i < host.bodyPositions.count else { continue }
+            var extra: Float = 0
+            switch d.kind {
+            case .top:
+                if region.hasPrefix("upperArm") {
+                    extra += 0.007 * shapeSmooth01((axial(region, i) - 0.72) / 0.28)
+                } else if region == WearableRegion.waist || region == WearableRegion.torso || region == WearableRegion.chest {
+                    if region == WearableRegion.waist { extra += 0.004 }
+                    let f = (host.bodyPositions[i].y - torsoLo) / torsoSpan
+                    extra += 0.010 * shapeSmooth01((0.16 - f) / 0.16)
+                }
+            case .bottom:
+                // Flare the shorts' hem on the outer silhouette only; pushing
+                // inner-thigh vertices would drive the shell toward the other leg.
+                if region.hasPrefix("thigh") {
+                    let n = host.bodyNormals[i]
+                    let outward: Float = region.hasSuffix("L") ? 1 : -1
+                    guard n.x * outward > 0.3 else { continue }
+                    extra += 0.006 * shapeSmooth01((axial(region, i) - 0.75) / 0.25)
+                }
+            case .footwear:
+                break
+            }
+            guard extra > 0 else { continue }
+            builder.positions[Int(vi)] += V3.normalize(host.bodyNormals[i]) * extra
+        }
+    }
+
+    static func shapeSmooth01(_ x: Float) -> Float {
+        let t = min(max(x, 0), 1)
+        return t * t * (3 - 2 * t)
     }
 
     /// Minimum signed distance from any garment vertex to the nearest body

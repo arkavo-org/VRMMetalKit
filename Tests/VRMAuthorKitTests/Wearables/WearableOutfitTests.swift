@@ -54,7 +54,9 @@ final class WearableOutfitTests: XCTestCase {
         var matched = 0
         for (v, p) in prim.positions.enumerated() {
             let base = covered.min { V3.distance(host.bodyPositions[$0], p) < V3.distance(host.bodyPositions[$1], p) }!
-            XCTAssertEqual(V3.distance(host.bodyPositions[base], p), Float(OutfitPresets.baseClearanceM), accuracy: 1e-5)
+            let shellDistance = V3.distance(host.bodyPositions[base], p)
+            XCTAssertGreaterThanOrEqual(shellDistance, Float(OutfitPresets.baseClearanceM) - 1e-5)
+            XCTAssertLessThanOrEqual(shellDistance, Float(OutfitPresets.baseClearanceM) + 0.02, "cuff/hem shaping stays a small outward offset")
             XCTAssertEqual(joints[v], host.bodyJoints[base])
             XCTAssertEqual(prim.uv0[v], host.bodyUV0[base])
             XCTAssertLessThan(V3.distance(prim.normals[v], host.bodyNormals[base]), 1e-5)
