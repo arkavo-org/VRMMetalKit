@@ -53,6 +53,9 @@ struct HeadHandles {
     var jawWeights: [(index: Int, weight: Double)] = []
     var earRoots: [String: NAVec3] = [:]
     var noseBridge = NAVec3.zero
+    /// Cheek vertices per side on the skin primitive (face region, below and
+    /// outside the eyes): emotion morphs raise them to sell a smile.
+    var cheeks: [String: [Int]] = [:]
 }
 
 /// Head mesh primitives in emission order.
@@ -138,6 +141,21 @@ struct NativeAnimeHeadBuilder {
             regionSets[region, default: []].append(i)
         }
         for key in regionSets.keys.sorted() { mesh.tag(key, regionSets[key]!) }
+
+        // Cheek handles: face verts below and outside the eyes.
+        for (side, sign) in [("left", 1.0), ("right", -1.0)] {
+            guard let eye = layout.eyes[side] else { continue }
+            var idx: [Int] = []
+            for i in regionSets["face"] ?? [] {
+                let p = mesh.vertices[i].position
+                let dx = (p.x - eye.center.x) * sign
+                let dy = p.y - eye.center.y
+                if dx > 0.2 * eye.lidRadius, dx < 1.6 * eye.lidRadius, dy < -0.4 * eye.lidRadius, dy > -1.6 * eye.lidRadius, p.z > 0 {
+                    idx.append(i)
+                }
+            }
+            handles.cheeks[side] = idx
+        }
 
         let defaultGlobe = layout.defaultLidRadius
         for (side, sign) in [("left", 1.0), ("right", -1.0)] {

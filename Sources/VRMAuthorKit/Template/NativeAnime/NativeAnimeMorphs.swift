@@ -70,7 +70,7 @@ struct NativeAnimeMorphBuilder {
             ("ee", Shape(mouth: MouthShape(open: 0.012 * hh, width: 1.30, corner: 0.004 * hh))),
             ("oh", Shape(mouth: MouthShape(open: 0.040 * hh, width: 0.80, pout: 0.008 * hh))),
             ("happy", Shape(mouth: MouthShape(open: 0.004 * hh, width: 1.08, corner: 0.016 * hh),
-                            lids: ["left": LidShape(lowerRise: 0.35), "right": LidShape(lowerRise: 0.35)],
+                            lids: ["left": LidShape(upperClose: 0.15, lowerRise: 0.7), "right": LidShape(upperClose: 0.15, lowerRise: 0.7)],
                             brows: BrowShape(inner: 0.004 * hh, outer: 0.006 * hh))),
             ("angry", Shape(mouth: MouthShape(width: 0.92, corner: -0.012 * hh),
                             lids: ["left": LidShape(upperClose: 0.25), "right": LidShape(upperClose: 0.25)],
@@ -147,6 +147,14 @@ struct NativeAnimeMorphBuilder {
         }
         let skin = HeadPrimitive.skin.rawValue
         for jw in handles.jawWeights { deltas[skin][jw.index] += NAVec3(0, -0.8 * m.open * jw.weight, 0) }
+        // A smile raises the cheeks and pushes them slightly out and forward.
+        if m.corner > 0 {
+            for (side, sign) in [("left", 1.0), ("right", -1.0)] {
+                for i in handles.cheeks[side] ?? [] {
+                    deltas[skin][i] += NAVec3(sign * m.corner * 0.12, m.corner * 0.45, m.corner * 0.2)
+                }
+            }
+        }
     }
 
     private func applyBrows(_ b: BrowShape, _ deltas: inout [[NAVec3]]) {
