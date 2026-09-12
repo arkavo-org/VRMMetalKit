@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "d0e95952bc63babac2d1b8792529bd3ca7b807c07a1a142522a6d1914180c940",
   "resultSchemaHash": "ae4d2e79ef18d680eee198b2cd90874d869cd7c01a256c37d8d1f56e52384efb",
-  "packHash": "ea3ab64a9065d3adeb7352880321c55f682821f76bb3d1300546d4eefdff887c",
+  "packHash": "f0440ee0c4989bcee1439cb71c901dd014d8ed974f49fb9ac1541bc72db0862d",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,8 +20,8 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Provenance/DeliverPackTests.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
-      "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "Tests/VRMAuthorKitTests/Provenance/DeliverPackTests.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8",
+      "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8",
       "docs/proposals/vrm-author-cli/README.md \u00a79 (delivery binding, ingredient preservation)",
       "docs/proposals/vrm-author-cli/commands.md (`deliver` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Delivery, fixture-tested)"
@@ -92,7 +92,7 @@
     "kind": "swift-test",
     "entryPoint": "DeliverPackTests",
     "environment": {
-      "pinnedCommit": "b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "pinnedCommit": "46b75b8b77e699eee954a24902c2d0185d3562b8",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Provenance/DeliverPackTests.swift": "57d792e24195109fb7d49d98421e473698661fa8f026f3b2d270af3ab413e3e5",
         "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "68ee7fbd59e8d9dceab9691e7f857392c859e65dbc6d4ce54c1e0db671caf265"

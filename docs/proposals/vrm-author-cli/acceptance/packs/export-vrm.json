@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "773f39ed3921091b3fd89235ebf8b76ae9da2e5c258b77de98b38bc3ea852465",
   "resultSchemaHash": "2850fa3329e6e9b389996986755d2532cdeca0299ed1c4f157c7e0ae2887fda8",
-  "packHash": "39ace7d9ecaa6aeaf0e04519c81086236d3861654616bba6166287fc44fa1273",
+  "packHash": "7ed79be9b4997837b87eb90530562fedc6b628ef045e9715f225e8a527f9f0cd",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,9 +20,9 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
-      "Tests/VRMAuthorKitTests/Export/InteropTests.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387 (VRMMetalKit consumer; XCTSkip without a Metal device)",
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8",
+      "Tests/VRMAuthorKitTests/Export/InteropTests.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8 (VRMMetalKit consumer; XCTSkip without a Metal device)",
       "docs/proposals/vrm-author-cli/README.md (consumer matrix)",
       "docs/proposals/vrm-author-cli/commands.md (`export vrm` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Import/export/provenance + consumer matrix, visually-validated)"
@@ -86,7 +86,7 @@
     "kind": "swift-test",
     "entryPoint": "ExportPackTests",
     "environment": {
-      "pinnedCommit": "b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "pinnedCommit": "46b75b8b77e699eee954a24902c2d0185d3562b8",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "403b25860029a553999eaa225222cf5ca08ac1e8ce5da5491f174abe8af66ebc",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
