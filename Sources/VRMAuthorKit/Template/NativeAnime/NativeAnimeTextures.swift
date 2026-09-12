@@ -22,7 +22,7 @@ import Foundation
 /// (inputs, seed).
 enum NativeAnimeTextures {
     static let version = "native-anime-textures/1"
-    static let hairImageSize = 512
+    static let hairImageSize = 1024
     static let thumbnailSize = 256
 
     /// Root→tip gradient along V (V = 0 at the scalp), coherent strand streaks
@@ -47,9 +47,10 @@ enum NativeAnimeTextures {
                 let tipMix = smoothstep(0.6, 1, v)
                 var c = base * (1 - rootMix) + root * rootMix
                 c = c * (1 - tipMix) + tip * tipMix
-                let flow = 2 * Float.pi * 48 * u + seedPhase + 1.2 * sin(2 * Float.pi * 3 * v)
+                let flow = 2 * Float.pi * 96 * u + seedPhase + 1.2 * sin(2 * Float.pi * 3 * v)
                 let strand = 0.5 + 0.5 * sin(flow)
-                c *= 0.90 + 0.18 * strand
+                let coarse = 0.5 + 0.5 * sin(2 * Float.pi * 12 * u + 0.7 * sin(2 * Float.pi * 2 * v))
+                c *= (0.93 + 0.11 * strand) * (0.95 + 0.09 * coarse)
                 let h = 1 - smoothstep(0, highlightHalfWidth, abs(v - highlightCentre))
                 let lift = h * highlightOpacity
                 c = c * (1 - lift) + SIMD3<Float>(1, 1, 1) * lift

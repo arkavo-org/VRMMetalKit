@@ -79,7 +79,7 @@ public enum NativeAnimeControls {
         rows.append(Entry(key: "body.heightM", unit: .metres, valid: [1.2, 2.0], recommended: [1.4, 1.85], defaultValue: 1.65, affects: rigKinds,
                           dependencies: [d.geometry, d.rig, d.fit, d.springs, d.morphs, d.lookAt, d.attachments],
                           description: "Overall stature in metres; the whole rig and mesh scale while relative shape is preserved.", regions: [allRegions]))
-        rows.append(Entry(key: "body.headCount", unit: .ratio, valid: [4.5, 8], recommended: [5.5, 7.5], defaultValue: 6.3, affects: rigKinds,
+        rows.append(Entry(key: "body.headCount", unit: .ratio, valid: [4.5, 8], recommended: [5.5, 7.5], defaultValue: 6.6, affects: rigKinds,
                           dependencies: [d.geometry, d.rig, d.fit, d.springs, d.morphs, d.lookAt, d.attachments],
                           description: "Head/body proportion as heads per stature; head and body re-proportion at fixed total height.", regions: [allRegions]))
         rows.append(B("body.proportion.shoulderWidth", rigKinds, [d.geometry, d.rig, d.fit], "Shoulder joint spread; arms follow.",

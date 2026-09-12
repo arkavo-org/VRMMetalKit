@@ -78,7 +78,7 @@ final class NativeAnimeGeometryTests: XCTestCase {
             for mesh in avatar.meshes { for p in mesh.primitives { for v in p.positions { minY = min(minY, v.y); maxY = max(maxY, v.y) } } }
             XCTAssertEqual(Double(minY), 0, accuracy: 0.002, "height \(height)")
             XCTAssertEqual(Double(maxY), height, accuracy: 0.01, "height \(height)")
-            XCTAssertEqual(Double(attachments.headHeightM), height / 6.3, accuracy: 1e-6)
+            XCTAssertEqual(Double(attachments.headHeightM), height / NativeAnimeControls.entries.first { $0.key == "body.headCount" }!.defaultValue, accuracy: 1e-6)
         }
     }
 

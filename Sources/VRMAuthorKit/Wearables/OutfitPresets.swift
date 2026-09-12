@@ -251,13 +251,9 @@ public enum OutfitPresets {
                 // into the arm lofts. Hosts without a neck region (or a neck
                 // wider than the rim) get rise only.
                 let frontness = 1 - OutfitPresets.shapeSmooth01((abs(out.x) - 0.5) / 0.25)
-                var q = p + SIMD3<Float>(0, 0.016 * frontness, 0) + n * 0.001
-                if neckR > 0 {
-                    let hr = hypot(p.x, p.z)
-                    let room = max(hr - neckR - 0.004, 0)
-                    q -= out * (min(0.010, room) * frontness)
-                }
-                return q
+                // Rise only: leaning in crosses the neck on slim hosts, and at
+                // big headCounts the chin is directly above the front rim.
+                return p + SIMD3<Float>(0, 0.012 * frontness, 0) + n * 0.001
             }
         }
 
@@ -359,6 +355,11 @@ public enum OutfitPresets {
                     if region == WearableRegion.waist { extra += 0.004 }
                     let f = (host.bodyPositions[i].y - torsoLo) / torsoSpan
                     extra += 0.014 * shapeSmooth01((0.18 - f) / 0.18)
+                    // Neckline relief: the front of the chest top flares out to
+                    // clear the chin, which juts further at big headCounts.
+                    if region == WearableRegion.chest, host.bodyNormals[i].z > 0.5 {
+                        extra += 0.010 * shapeSmooth01((f - 0.82) / 0.18)
+                    }
                 }
             case .bottom:
                 // Flare the shorts' hem on the outer silhouette only; pushing

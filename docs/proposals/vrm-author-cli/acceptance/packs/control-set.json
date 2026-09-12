@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "f42d2184ccbbe1cc9871dcab2df5987743a1726d5452131dab701a6ac82c70f6",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "ee381a3c122d26ab888e1dc326c231aaa13ba06b34ae189b5626da7e31cb01ab",
+  "packHash": "9a8502931cd028f037542ad9569cd5b922fec4fd64b8772ab37a04fd770054d1",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -100,7 +100,7 @@
         "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "d6bb21febee398b97d28525d6b7d1a12c7b5b746ca11bf9b59e71344970b995b",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
         "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
-        "Tests/VRMAuthorKitTests/Template/NativeAnimeGeometryTests.swift": "b31d6d93554019c148ee8381a623e71e17d6dde7a0b38168d598111e65c35822",
+        "Tests/VRMAuthorKitTests/Template/NativeAnimeGeometryTests.swift": "18220157ef067dcdd9c7732a125afdc21270ae8c63d05df53b6b2826507cba8f",
         "Tests/VRMAuthorKitTests/Wearables/WearableOutfitTests.swift": "830483895244166c0f40937e3d8ea9ba99d6a0ff322da3297544b40c83fbd9bf",
         "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift": "7dc1273b2cc4ec1dc6e019dee25382e738e040fe414b6faa37eaed99c2e734a8",
         "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift": "80a73106890111188ae264d06c58283688f119c557915654a11e554037a7a55e",

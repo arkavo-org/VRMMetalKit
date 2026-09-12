@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "bb82ec3a80d4a114a02cb4bf8c0f66612384fa7ef9b336a2b8cf7e2bf906bf87",
   "resultSchemaHash": "fe78c4a002fe467471d652b1cc3ce2b8674fd1bc7f14b7317f3404c3155a6e94",
-  "packHash": "e83c73e10dcd68c349d8680355bf593f0dd8c5e49ca9b658b344104de7ed2f6b",
+  "packHash": "45e49f73b18bd7c5bf895b875e5325a2762cf4f781f42c06f274654e0103eb2d",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -85,7 +85,7 @@
     "environment": {
       "pinnedCommit": "b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "64659aa4f11461382f417e0a4e65eabb0ff5893430230eae228c5cd58b633915"
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "4332390dbd8c2f37782349e9e367308ff3afff3243b22b3dbbfa920d5fced309"
       }
     }
   },
