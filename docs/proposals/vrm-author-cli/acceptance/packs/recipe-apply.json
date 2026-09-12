@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "5ba4bd1bf31f280a402d9a8e63eb21af21fc21643065c2935f43f03c13677518",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "7c1d5ef793911f90dad46b223d99c1a594958598d87f18c15a67f6b14c31f0e8",
+  "packHash": "4757b8d3324993db54e31ad96ee99ead6638e6551ec1671318ab2c089454a05a",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -94,7 +94,7 @@
         "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "403b25860029a553999eaa225222cf5ca08ac1e8ce5da5491f174abe8af66ebc",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
         "Tests/VRMAuthorKitTests/Core/ModelTests.swift": "0bee5342eeb781fe0b4e37f3b53ecbb0b2a989926fa6b9f97a2be8ba5690495b",
-        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "3e4cee8d1e3954c7a634856f323aed0473e230a37136777d43e11e5cd32e3ae9",
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "24c6817033c3b85c0a050c6a261ee1f684672a51f110d732aeab8c2e15760772",
         "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
         "docs/style/corpus/vroid-lineage-anime.manifest.json": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
         "docs/style/corpus/vroid-lineage-anime.measurements.json": "c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc",

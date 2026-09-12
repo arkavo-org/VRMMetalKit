@@ -152,9 +152,22 @@ struct NativeAnimeHeadBuilder {
             }
             for i in socket {
                 let p = mesh.vertices[i].position
-                let d = ((p.x - eye.center.x) * (p.x - eye.center.x) + (p.y - eye.center.y) * (p.y - eye.center.y)).squareRoot() / eye.lidRadius
-                let depress = 0.18 * eye.globeRadius * (1 - NAMath.smoothstep(0.7, 1.4, d))
-                mesh.vertices[i].position.z -= depress
+                let dx = p.x - eye.center.x, dy = p.y - eye.center.y
+                let d = (dx * dx + dy * dy).squareRoot() / eye.lidRadius
+                var z = p.z - 0.18 * eye.globeRadius * (1 - NAMath.smoothstep(0.7, 1.4, d))
+                // Outside the opening the recessed shell must stay proud of
+                // the globe — including under the lid cards, whose skin rows
+                // vacate that area when a blink pulls them down; otherwise the
+                // sclera frames the closed eye in white. Tilt-aware lid-local
+                // coordinates.
+                let c = cos(eye.tilt), s = sin(eye.tilt)
+                let lx = dx * c + dy * s, ly = dy * c - dx * s
+                let inOpening = abs(lx) < eye.openingHalfWidth && ly < Self.upperEdgeY(eye, lx: lx) && ly > Self.lowerEdgeY(eye, lx: lx)
+                if !inOpening {
+                    let gz = eye.globeRadius * eye.globeRadius - dx * dx - dy * dy
+                    if gz > 0 { z = max(z, eye.center.z + gz.squareRoot() + 0.0008) }
+                }
+                mesh.vertices[i].position.z = z
             }
             mesh.tag("eyeSocket" + NativeAnimeControls.suffix(side), socket)
         }
@@ -246,6 +259,11 @@ struct NativeAnimeHeadBuilder {
     static let lashRow = 0.18
     static let lineRow = 0.15
 
+    /// UV rectangle for the lid skin rows, next to `featureUVRect` in the
+    /// flat-skin area: the rows' natural UVs land on the scalp underlay, so an
+    /// unmapped closed lid would render hair-coloured.
+    static let lidUVRect = (u: 0.82...0.90, v: 0.40...0.50)
+
     private func buildLids(_ prims: inout [BuildMesh], side: String, handles: inout HeadHandles) {
         let eye = layout.eyes[side]!
         let sfx = NativeAnimeControls.suffix(side)
@@ -287,6 +305,13 @@ struct NativeAnimeHeadBuilder {
         let skinLine = addRow(.skin, row: Self.lineRow, upper: false, region: lowerRegion)
         let skinLowerRoot = addRow(.skin, row: 1, upper: false, region: lowerRegion)
         prims[HeadPrimitive.skin.rawValue].bridge(skinLowerRoot, skinLine)
+
+        let lidRect = Self.lidUVRect
+        for i in skinLash + skinMid + skinRoot + skinLine + skinLowerRoot {
+            let uv = prims[HeadPrimitive.skin.rawValue].vertices[i].uv
+            prims[HeadPrimitive.skin.rawValue].vertices[i].uv = NAVec2(lidRect.u.lowerBound + uv.x * (lidRect.u.upperBound - lidRect.u.lowerBound),
+                                                                       lidRect.v.lowerBound + uv.y * (lidRect.v.upperBound - lidRect.v.lowerBound))
+        }
 
         handles.lids[side] = lidVertices
     }

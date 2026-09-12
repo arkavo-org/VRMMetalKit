@@ -170,7 +170,7 @@ public enum MaterialRoleDefaults {
             return a > 0.003 ? SIMD4(base.x, base.y, base.z, a) : clear
         case .mouth:
             let cavity = 1 - Self.smooth01((r - 0.30) / 0.10)
-            var c = mix(base, SIMD3<Float>(0.08, 0.015, 0.02), cavity)
+            var c = mix(base, SIMD3<Float>(0.304, 0.039, 0.046), cavity)
             let lip = Self.smooth01((r - 0.40) / 0.05)
             let seam = (1 - Self.smooth01((abs(v - 0.5) - 0.004) / 0.008)) * lip
             c = mix(c, base * 0.55, 0.8 * seam)

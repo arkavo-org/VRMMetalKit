@@ -241,11 +241,23 @@ public enum OutfitPresets {
         if !chestIdx.isEmpty {
             let topY = chestIdx.map { host.bodyPositions[$0].y }.max()!
             let rim = chestIdx.filter { topY - host.bodyPositions[$0].y < 0.012 }
+            // The inward lean may never cross the neck surface.
+            let neckIdx = host.region("neck")
+            let neckR: Float = neckIdx.isEmpty ? 0 : neckIdx.map { hypot(host.bodyPositions[$0].x, host.bodyPositions[$0].z) }.min()!
             addBand(builder: &builder, host: host, rim: rim, remap: remap, sources: &sources, axis: SIMD3(0, 1, 0), aroundY: true) { p, n, out in
-                // The collar rises at the front and back; toward the shoulders
-                // it flattens onto the shell so it never climbs into the arm lofts.
+                // The collar rises at the front and back and leans IN toward
+                // the neck so it closes the neckline slit; toward the
+                // shoulders it flattens onto the shell so it never climbs
+                // into the arm lofts. Hosts without a neck region (or a neck
+                // wider than the rim) get rise only.
                 let frontness = 1 - OutfitPresets.shapeSmooth01((abs(out.x) - 0.5) / 0.25)
-                return p + out * 0.004 * frontness + SIMD3<Float>(0, 0.016 * frontness, 0) + n * 0.001 * (1 - frontness)
+                var q = p + SIMD3<Float>(0, 0.016 * frontness, 0) + n * 0.001
+                if neckR > 0 {
+                    let hr = hypot(p.x, p.z)
+                    let room = max(hr - neckR - 0.004, 0)
+                    q -= out * (min(0.010, room) * frontness)
+                }
+                return q
             }
         }
 
