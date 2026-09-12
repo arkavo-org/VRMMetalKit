@@ -249,6 +249,22 @@ final class WearableHairTests: XCTestCase {
         XCTAssertNoThrow(try WearableValidation.validateMesh(mesh))
     }
 
+    func testPonytailRoutesThroughTheTie() throws {
+        let out = try WearableCompiler.compile(host: host, hair: [Fixtures.hair("tail", preset: "ponytail-v1")], outfits: [], accessories: [], materialsById: Fixtures.materials)
+        let P = HairBobV1.LayoutParams.ponytail
+        let tie = host.headCentre + SIMD3<Float>(0, P.tail!.up * host.headRadius, -P.tail!.back * host.headRadius)
+        let tails = out.hairClumps.filter { !$0.isBang && $0.sectionCentres.last!.y < host.headCentre.y - host.headRadius * 0.5 }
+        XCTAssertGreaterThanOrEqual(tails.count, P.tail!.clumps - 1)
+        for clump in tails {
+            // Every tail passes near the tie before hanging below it.
+            let minToTie = clump.sectionCentres.map { V3.distance($0, tie) }.min()!
+            XCTAssertLessThan(minToTie, P.tail!.radiusM + 0.03, clump.id)
+            XCTAssertLessThan(clump.sectionCentres.last!.y, tie.y - 0.05, clump.id)
+        }
+        XCTAssertNoThrow(try WearableValidation.terminalTailPresent(out.springs, nodes: out.nodes))
+        XCTAssertNoThrow(try WearableValidation.noOverlappingChains(out.springs))
+    }
+
     func testUnknownPresetAndMissingScalpAreTypedErrors() {
         var item = Fixtures.hair()
         item.preset = "mohawk-v1"

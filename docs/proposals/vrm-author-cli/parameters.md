@@ -90,7 +90,7 @@ the reserved catalog are not accepted until promoted with a qualified constructi
 
 ## Hair, outfits and accessories
 
-`HairItem={id:ID!, preset:"bob-v1"|"long-v1"!, controls:HairControls!, texture:HairTexture!}`. `long-v1` grows the lengthM guide 2x with lower side roots and finer locks.
+`HairItem={id:ID!, preset:"bob-v1"|"long-v1"!, controls:HairControls!, texture:HairTexture!}`. `long-v1` grows the lengthM guide 2x with lower side roots and finer locks; `ponytail-v1` gathers ten tail clumps through a tie above the nape over a short crown cap.
 
 | HairControls field | Type / default | Effect |
 |---|---|---|

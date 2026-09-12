@@ -38,11 +38,11 @@ final class TemplateListPackTests: XCTestCase {
     func testListsWearablePresetsAsItemsWithCategoryFilter() throws {
         let all = ProjectTestHarness.invoke(context(), "template list", [:])
         let items = try XCTUnwrap(all.result?["items"]?.array)
-        XCTAssertEqual(Set(items.compactMap { $0["id"]?.string }), ["bob-v1", "long-v1", "top-v1", "bottom-v1", "skirt-v1", "footwear-v1", "glasses-v1", "earring-v1", "cat-ears-v1"])
+        XCTAssertEqual(Set(items.compactMap { $0["id"]?.string }), ["bob-v1", "long-v1", "ponytail-v1", "top-v1", "bottom-v1", "skirt-v1", "footwear-v1", "glasses-v1", "earring-v1", "cat-ears-v1"])
         XCTAssertTrue(items.allSatisfy { $0["sha256"]?.string?.count == 64 })
         let hair = ProjectTestHarness.invoke(context(), "template list", ["category": "hair"])
         XCTAssertEqual(hair.result?["packs"]?.array?.count, 0)
-        XCTAssertEqual(hair.result?["items"]?.array?.map { $0["id"]?.string }, ["bob-v1", "long-v1"])
+        XCTAssertEqual(hair.result?["items"]?.array?.map { $0["id"]?.string }, ["bob-v1", "long-v1", "ponytail-v1"])
         let hairControls = try XCTUnwrap(hair.result?["items"]?.array?.first?["controls"]?.array)
         XCTAssertEqual(hairControls.compactMap { $0["key"]?.string }, ["lengthM", "widthScale", "tipBendDeg", "bangClearanceM"])
         let avatar = ProjectTestHarness.invoke(context(), "template list", ["category": "avatar"])

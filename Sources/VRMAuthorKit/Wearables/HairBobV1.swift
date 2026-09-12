@@ -44,6 +44,18 @@ public enum HairBobV1 {
         public var bangLengthRatio: Float = 0.55
         /// Preset-level guide scale; bob grows lengthM 1x, long-v1 2x.
         public var lengthScale: Float = 1
+        /// Crown-cap locks run shorter than the hanging ones.
+        public var capLengthRatio: Float = 1
+        /// Ponytail: tail clumps route from their root to a tie point behind
+        /// the crown, then hang. Offsets are in head radii from the head centre.
+        public struct Tail: Sendable {
+            public var up: Float
+            public var back: Float
+            public var radiusM: Float
+            public var clumps: Int
+            public var lengthRatio: Float
+        }
+        public var tail: Tail? = nil
         public var headClearanceM: Float = 0.006
         public var bangEdgeMarginM: Float = 0.002
         public var sweepAllowanceFactor: Float = 1.1
@@ -65,6 +77,12 @@ public enum HairBobV1 {
         /// grown 2x.
         public static let long = LayoutParams(ringAElevationDeg: 14, ringBClumps: 10, rotatingBones: 4, baseWidthM: 0.024,
                                               lengthScale: 2, hitRadii: [0.012, 0.010, 0.008, 0.007, 0.006], stiffness: [1.2, 0.9, 0.65, 0.45, 0.35])
+
+        /// Ponytail: a short crown cap, front fringe, and ten tail clumps
+        /// gathered to a tie above the nape that hang past the shoulders.
+        public static let ponytail = LayoutParams(ringAClumps: 16, ringAElevationDeg: 40, ringAAzimuthRangeDeg: 40...320,
+                                                  ringBClumps: 6, ringBElevationDeg: 55, capLengthRatio: 0.45,
+                                                  tail: Tail(up: 0.75, back: 1.30, radiusM: 0.020, clumps: 10, lengthRatio: 1.8))
     }
 
     /// The bob's constants, kept for callers that predate preset variants.
@@ -100,6 +118,7 @@ public enum HairBobV1 {
         var azimuthDeg: Float
         var elevationDeg: Float
         var isBang: Bool
+        var isTail = false
     }
 
     static func rootTargets(_ P: LayoutParams) -> [RootTarget] {
@@ -116,6 +135,12 @@ public enum HairBobV1 {
         }
         for az in P.bangAzimuthsDeg {
             targets.append(RootTarget(azimuthDeg: az, elevationDeg: P.bangElevationDeg, isBang: true))
+        }
+        if let tail = P.tail {
+            for k in 0..<tail.clumps {
+                let az = 150 + 60 * (Float(k) + 0.5) / Float(tail.clumps)
+                targets.append(RootTarget(azimuthDeg: az, elevationDeg: 50, isBang: false, isTail: true))
+            }
         }
         return targets
     }
@@ -167,13 +192,14 @@ public enum HairBobV1 {
         switch preset {
         case HairBobV1.presetId: return .bob
         case HairLongV1.presetId: return .long
+        case HairPonytailV1.presetId: return .ponytail
         default: return .bob
         }
     }
 
     static func build(item: HairItem, host: WearableHost, materialId: String, colliderGroupIds: [String]) throws -> Build {
-        guard item.preset == presetId || item.preset == HairLongV1.presetId else {
-            throw AuthorError.invalidRequest("Unknown hair preset '\(item.preset)'.", path: "/preset", observed: .string(item.preset), required: .string("\(presetId)|\(HairLongV1.presetId)"))
+        guard item.preset == presetId || item.preset == HairLongV1.presetId || item.preset == HairPonytailV1.presetId else {
+            throw AuthorError.invalidRequest("Unknown hair preset '\(item.preset)'.", path: "/preset", observed: .string(item.preset), required: .string("\(presetId)|\(HairLongV1.presetId)|\(HairPonytailV1.presetId)"))
         }
         let P = params(for: item.preset, objectId: "hair:\(item.id)")
         guard !host.scalpSamples.isEmpty else {
@@ -202,7 +228,7 @@ public enum HairBobV1 {
             let nodeIds = (0..<P.nodesPerClump).map { "node:hair:\(item.id):\(clumpTag):j\($0)" }
             let jointBase = UInt16(jointIds.count)
 
-            let strip = try generateClump(sample: sample, isBang: target.isBang, controls: controls, host: host, face: face, clumpId: clumpId, P: P)
+            let strip = try generateClump(sample: sample, isBang: target.isBang, isTail: target.isTail, controls: controls, host: host, face: face, clumpId: clumpId, P: P)
             let vertexStart = builder.vertexCount
             let steps = P.sectionsPerClump - 1
             for i in 0..<P.sectionsPerClump {
@@ -336,13 +362,13 @@ public enum HairBobV1 {
         return q
     }
 
-    static func generateClump(sample: ScalpSample, isBang: Bool, controls: HairControls, host: WearableHost, face: SurfaceProbe?, clumpId: String, P: LayoutParams) throws -> Strip {
+    static func generateClump(sample: ScalpSample, isBang: Bool, isTail: Bool, controls: HairControls, host: WearableHost, face: SurfaceProbe?, clumpId: String, P: LayoutParams) throws -> Strip {
         let bangClearance = Float(controls.bangClearanceM)
         let tipBend = Float(controls.tipBendDeg) * .pi / 180
         var tilt = P.baseTilt
         var worst: Float = .infinity
         while tilt <= P.maxTilt + 1e-6 {
-            let strip = traceStrip(sample: sample, isBang: isBang, controls: controls, tilt: tilt, host: host, face: face, P: P)
+            let strip = traceStrip(sample: sample, isBang: isBang, isTail: isTail, controls: controls, tilt: tilt, host: host, face: face, P: P)
             guard isBang else { return strip }
             let clearance = sweepClearance(strip, tipBend: tipBend, host: host, face: face, P: P)
             worst = min(worst, clearance)
@@ -377,10 +403,11 @@ public enum HairBobV1 {
         return worst
     }
 
-    static func traceStrip(sample: ScalpSample, isBang: Bool, controls: HairControls, tilt: Float, host: WearableHost, face: SurfaceProbe?, P: LayoutParams) -> Strip {
+    static func traceStrip(sample: ScalpSample, isBang: Bool, isTail: Bool, controls: HairControls, tilt: Float, host: WearableHost, face: SurfaceProbe?, P: LayoutParams) -> Strip {
         let steps = P.sectionsPerClump - 1
-        // Bangs keep their absolute bob length; only back/side locks take the preset's guide scale.
-        let length = Float(controls.lengthM) * (isBang ? P.bangLengthRatio : P.lengthScale)
+        // Bangs keep their absolute bob length; cap locks run shorter; tail
+        // clumps take the tail ratio. Non-bang locks take the guide scale.
+        let length = Float(controls.lengthM) * (isBang ? P.bangLengthRatio : isTail ? P.tail!.lengthRatio : P.capLengthRatio) * P.lengthScale
         let step = length / Float(steps)
         let widthScale = Float(controls.widthScale)
         let rootHalfWidth = 0.5 * P.baseWidthM * widthScale * (isBang ? P.bangWidthFactor : 1)
@@ -407,6 +434,7 @@ public enum HairBobV1 {
 
         var centres = [sample.position]
         var dir = V3.normalize(tangentDown + n0 * tilt)
+        var tieReached = false
         for i in 0..<steps {
             var cand = centres[i] + dir * step
             let need = required(section: i + 1)
@@ -416,6 +444,17 @@ public enum HairBobV1 {
             }
             centres.append(cand)
             var next = V3.normalize(cand - centres[i], fallback: dir)
+            if isTail, let tail = P.tail, !tieReached {
+                let tie = host.headCentre + SIMD3<Float>(0, tail.up * host.headRadius, -tail.back * host.headRadius)
+                if V3.distance(cand, tie) > tail.radiusM {
+                    next = V3.normalize(tie - centres[i], fallback: next)
+                    dir = next
+                    continue
+                }
+                // Latch: once the tail reaches the tie it hangs under gravity;
+                // re-engaging the route would orbit the tie point.
+                tieReached = true
+            }
             next = V3.normalize(next * (1 - P.gravityBlend) + down * P.gravityBlend)
             if i + 1 >= steps - P.sectionsPerBone {
                 let inward = V3.normalize(SIMD3(host.headCentre.x - cand.x, 0, host.headCentre.z - cand.z), fallback: SIMD3(0, 0, -1))
@@ -449,4 +488,10 @@ public enum HairBobV1 {
 /// (lower side roots, finer locks, one more rotating bone, 2x guides).
 public enum HairLongV1 {
     public static let presetId = "long-v1"
+}
+
+/// The `ponytail-v1` hair preset: a short crown cap, the bob's fringe and a
+/// gathered tail routed through a tie point above the nape.
+public enum HairPonytailV1 {
+    public static let presetId = "ponytail-v1"
 }

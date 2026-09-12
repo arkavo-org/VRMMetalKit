@@ -30,6 +30,7 @@ public enum TemplateListHandler {
     static let wearablePresets: [(id: String, category: TemplateCategory, controls: [ControlDescriptor])] = [
         (HairBobV1.presetId, .hair, hairControls),
         (HairLongV1.presetId, .hair, hairControls),
+        (HairPonytailV1.presetId, .hair, hairControls),
         ("top-v1", .outfit, outfitControls(length: true)),
         ("bottom-v1", .outfit, outfitControls(length: true)),
         ("skirt-v1", .outfit, outfitControls(length: true)),
