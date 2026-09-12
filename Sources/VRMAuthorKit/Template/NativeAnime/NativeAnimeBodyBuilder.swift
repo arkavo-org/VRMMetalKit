@@ -19,11 +19,11 @@ import Foundation
 /// Lofted low-poly body: torso, neck, arms with mitt hands, legs and feet.
 /// Every part is a closed loft that overlaps into its parent volume.
 struct NativeAnimeBodyBuilder {
-    static let torsoSegments = 24
-    static let limbSegments = 16
-    static let handSegments = 12
-    static let neckSegments = 14
-    static let thumbSegments = 8
+    static let torsoSegments = 40
+    static let limbSegments = 28
+    static let handSegments = 16
+    static let neckSegments = 20
+    static let thumbSegments = 10
 
     let layout: NativeAnimeLayout
 
@@ -41,8 +41,10 @@ struct NativeAnimeBodyBuilder {
     private var H: Double { layout.height }
 
     /// Ring in a plane perpendicular to +Y (loft going up): u = +X, v = -Z.
-    private func yRing(_ y: Double, rx: Double, rz: Double, region: String) -> Ring {
-        Ring(center: NAVec3(0, y, 0), u: NAMath.xAxis, v: -NAMath.zAxis, ru: rx, rv: rz, region: region)
+    /// `zc` shifts the ring centre forward, giving the torso a front/back
+    /// profile (bust, waist indent, glutes) instead of a straight extrusion.
+    private func yRing(_ y: Double, rx: Double, rz: Double, region: String, zc: Double = 0) -> Ring {
+        Ring(center: NAVec3(0, y, zc), u: NAMath.xAxis, v: -NAMath.zAxis, ru: rx, rv: rz, region: region)
     }
 
     private func buildTorso(_ mesh: inout BuildMesh) {
@@ -52,17 +54,17 @@ struct NativeAnimeBodyBuilder {
         let hipW = layout.hipHalfWidth + 0.03 * H
         let shoulderW = layout.shoulderHalfWidth - 0.01 * H
         let rings = [
-            yRing(at(0.00), rx: hipW * 0.90, rz: 0.058 * H, region: "hips"),
-            yRing(at(0.12), rx: hipW, rz: 0.065 * H, region: "hips"),
-            yRing(at(0.26), rx: hipW * 0.86, rz: 0.058 * H, region: "waist"),
-            yRing(at(0.42), rx: 0.075 * H, rz: 0.055 * H, region: "waist"),
-            yRing(at(0.58), rx: 0.080 * H, rz: 0.064 * H, region: "chest"),
-            yRing(at(0.72), rx: 0.086 * H, rz: 0.066 * H, region: "chest"),
-            yRing(at(0.86), rx: shoulderW, rz: 0.058 * H, region: "chest"),
-            yRing(at(0.95), rx: shoulderW * 0.75, rz: 0.050 * H, region: "torso"),
+            yRing(at(0.00), rx: hipW * 0.86, rz: 0.058 * H, region: "hips", zc: -0.004 * H),
+            yRing(at(0.12), rx: hipW * 0.94, rz: 0.068 * H, region: "hips", zc: -0.006 * H),
+            yRing(at(0.26), rx: hipW * 0.84, rz: 0.058 * H, region: "waist", zc: -0.003 * H),
+            yRing(at(0.42), rx: 0.073 * H, rz: 0.050 * H, region: "waist", zc: -0.002 * H),
+            yRing(at(0.58), rx: 0.078 * H, rz: 0.060 * H, region: "chest", zc: 0.004 * H),
+            yRing(at(0.72), rx: 0.084 * H, rz: 0.068 * H, region: "chest", zc: 0.010 * H),
+            yRing(at(0.86), rx: shoulderW, rz: 0.056 * H, region: "chest", zc: 0.004 * H),
+            yRing(at(0.95), rx: shoulderW * 0.75, rz: 0.050 * H, region: "torso", zc: 0.001 * H),
             yRing(at(1.00), rx: 0.055 * H, rz: 0.046 * H, region: "torso"),
         ]
-        mesh.loft(rings, segments: Self.torsoSegments, capStart: NAVec3(0, y0 - 0.025 * H, 0), capEnd: NAVec3(0, y1 + 0.01 * H, 0), extraRegions: ["torso"])
+        mesh.loft(rings, segments: Self.torsoSegments, capStart: NAVec3(0, y0 - 0.025 * H, -0.002 * H), capEnd: NAVec3(0, y1 + 0.01 * H, 0), extraRegions: ["torso"])
     }
 
     private func buildNeck(_ mesh: inout BuildMesh) {

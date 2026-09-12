@@ -35,7 +35,7 @@ enum EyePrimitive: Int, CaseIterable {
 /// polar angle the iris/pupil controls set. UV radii per ring are constant so
 /// the iris texture region never moves: pupil ≤ 0.10, iris ≤ 0.25, sclera beyond.
 struct NativeAnimeEyeBuilder {
-    static let segments = 20
+    static let segments = 28
     static let scleraAngles: [Double] = [150, 120, 95, 75, 55]
     static let scleraUVRadii: [Double] = [0.50, 0.47, 0.42, 0.37, 0.32]
     static let irisUVRadius = 0.25

@@ -76,12 +76,12 @@ struct HeadParts {
 }
 
 struct NativeAnimeHeadBuilder {
-    static let shellSegments = 32
-    static let shellRings = 22
+    static let shellSegments = 48
+    static let shellRings = 30
     static let lidColumns = 11
     static let lipColumns = 16
-    static let earSegments = 8
-    static let noseSegments = 8
+    static let earSegments = 12
+    static let noseSegments = 12
     static let browColumns = 5
 
     let layout: NativeAnimeLayout
