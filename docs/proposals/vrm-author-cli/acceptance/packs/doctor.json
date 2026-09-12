@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "52e6fc2067bb7fdce1905713b8a7d39dc312346e8e6775b24f38a37b8bd84f10",
   "resultSchemaHash": "c17ee5d1f393859792ff8fd7d252802cb0d279239079a1ac73a2d7ef258be93a",
-  "packHash": "c0823896a066d70fc38034ad9c864bff28afa0a4ffbbdd38d123178c0f59b843",
+  "packHash": "1fca5575d7117669b41dfc0598dbe04aa51c38344b1d93ca57a36cd245889c18",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,10 +20,10 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "docs/style/profiles/vroid-lineage-anime.json @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/style/profiles/vroid-lineage-anime.json @ df72553df3b87234caeb1478584e978da713c9c1",
       "docs/proposals/vrm-author-cli/verification.md \u00a72 (Pinned oracles)",
       "docs/proposals/vrm-author-cli/commands.md (`doctor` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
@@ -79,7 +79,7 @@
     "kind": "swift-test",
     "entryPoint": "DiscoveryPackTests",
     "environment": {
-      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "b710b883f77e7e2ef3fa1eacb3a0cca392c255b2438122e907e53339a219b934",
         "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "645ca6e06477f99d9ab6eb96ba7bdf86117a2f87924b80831140d309d43f0063",

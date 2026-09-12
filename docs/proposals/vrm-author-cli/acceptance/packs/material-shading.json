@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "1a7d74ea02aa4006dc2a64b976e58d64831294950d496bf6fc56879f013217af",
   "resultSchemaHash": "2443159494918e8ecdf47a73ed802dbbc8ac019e11acac0d3bcef634b1cf5ade",
-  "packHash": "b0be224c87b7b58baa209e5d93d622997dafc11bd2b11b88f35a785b67ccdb79",
+  "packHash": "ccdcd32f71151dd66a262f01c3508f7e2d1a535c4503c25080b10cf79216e11d",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,9 +20,9 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "docs/style/profiles/vroid-lineage-anime.json @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/style/profiles/vroid-lineage-anime.json @ df72553df3b87234caeb1478584e978da713c9c1",
       "docs/proposals/vrm-author-cli/parameters.md (Textures and MToon: material shading computes toony and shift)",
       "docs/proposals/vrm-author-cli/verification.md \u00a72 (Pinned oracles)",
       "docs/proposals/vrm-author-cli/commands.md (`material shading` row)",
@@ -105,7 +105,7 @@
     "kind": "swift-test",
     "entryPoint": "MaterialsPackTests",
     "environment": {
-      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "645ca6e06477f99d9ab6eb96ba7bdf86117a2f87924b80831140d309d43f0063",
         "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",

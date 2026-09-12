@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "5ba4bd1bf31f280a402d9a8e63eb21af21fc21643065c2935f43f03c13677518",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "9e8fa7b4d912371fb79d96d1b750a7add2cb1ef4ef7c07ee913e0085cc296d29",
+  "packHash": "41fa470a425696e1118dd9d79e43a82d888c1807ca462d3b9605d72fac932e18",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,10 +20,10 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
       "docs/proposals/vrm-author-cli/parameters.md (Recipe and production template; Assets, rights and credentials)",
       "docs/proposals/vrm-author-cli/commands.md (`recipe apply` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Shape/deformation + provenance, visually-validated)"
@@ -89,9 +89,9 @@
     "kind": "swift-test",
     "entryPoint": "ExportPackTests",
     "environment": {
-      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "04cd469787947d3c1c3f74d4be73077428dff876a1e25badd2c58bfbd16641f4",
+        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "152679a875146a4ca5f771d34f177495ef78bf5907eb86fa11f2ac1f1442d6b0",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
         "Tests/VRMAuthorKitTests/Core/ModelTests.swift": "0bee5342eeb781fe0b4e37f3b53ecbb0b2a989926fa6b9f97a2be8ba5690495b",
         "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "da4708d385023664b428839beff31043779a9a7a2cf4509cf4e3cfe2f58843c3",

@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "26d99273f2b06e063fbe2b9da8b96962d27617d464c3adc28f009cd35ab56259",
   "resultSchemaHash": "cd16072b7fcfb65f40b2a2c08a668b6d7e616d1c4e37cc5ce762058f5634dd14",
-  "packHash": "51169adbca94499c097a06e54b75813702b4fab1d1d661e7cd3bc30e2c815bfa",
+  "packHash": "24ff0c679414da375e4756663ebed7042c9ba6271f81e662cdc8db6d5f0b38b5",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,11 +20,11 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift @ df72553df3b87234caeb1478584e978da713c9c1",
       "docs/proposals/vrm-author-cli/parameters.md (Hair, outfits and accessories; Rig, expression, gaze, spring and first-person fields)",
       "docs/proposals/vrm-author-cli/commands.md (`build` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Compile (Shape + Hair/springs + Materials aggregated), visually-validated)"
@@ -91,9 +91,9 @@
     "kind": "swift-test",
     "entryPoint": "ExportPackTests",
     "environment": {
-      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "04cd469787947d3c1c3f74d4be73077428dff876a1e25badd2c58bfbd16641f4",
+        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "152679a875146a4ca5f771d34f177495ef78bf5907eb86fa11f2ac1f1442d6b0",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
         "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift": "8a97ce5743f3deb7f456cc091a63af10841b883680b803c356f732e28b07f83c",
         "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift": "60272b2e34b794a3640f25239ea5e897688c6557ca83f9e0927c1e2d34fba52e",

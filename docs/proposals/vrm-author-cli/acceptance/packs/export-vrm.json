@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "773f39ed3921091b3fd89235ebf8b76ae9da2e5c258b77de98b38bc3ea852465",
   "resultSchemaHash": "2850fa3329e6e9b389996986755d2532cdeca0299ed1c4f157c7e0ae2887fda8",
-  "packHash": "9ab661fd56301515414d56fea6e1f9b5a068453672b0bae212f6605dae619fcf",
+  "packHash": "d7d05b3d68a990d2e863470349d72767bdec6eb229d51845729e66f86611d9eb",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,9 +20,9 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
-      "Tests/VRMAuthorKitTests/Export/InteropTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a (VRMMetalKit consumer; XCTSkip without a Metal device)",
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Export/InteropTests.swift @ df72553df3b87234caeb1478584e978da713c9c1 (VRMMetalKit consumer; XCTSkip without a Metal device)",
       "docs/proposals/vrm-author-cli/README.md (consumer matrix)",
       "docs/proposals/vrm-author-cli/commands.md (`export vrm` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Import/export/provenance + consumer matrix, visually-validated)"
@@ -86,9 +86,9 @@
     "kind": "swift-test",
     "entryPoint": "ExportPackTests",
     "environment": {
-      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "04cd469787947d3c1c3f74d4be73077428dff876a1e25badd2c58bfbd16641f4",
+        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "152679a875146a4ca5f771d34f177495ef78bf5907eb86fa11f2ac1f1442d6b0",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
         "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
         "docs/style/corpus/vroid-lineage-anime.manifest.json": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
