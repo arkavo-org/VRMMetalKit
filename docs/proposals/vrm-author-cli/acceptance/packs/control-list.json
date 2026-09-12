@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "56241da441e91156e8fb7c3b472cdd3513f6cde26cb8188e1847c244370256c8",
   "resultSchemaHash": "4c9488598b86c92494918ed89e0c0e2fa73f2e2dd5d66c1fffc313d18edbc594",
-  "packHash": "3bf0a8cdc3b0ba4af9f667f34d3c598baab064a28328093f829ae63393b2549c",
+  "packHash": "b63257d725bb5beec6f3f982c6ec3edfed3611a4d3a6ff924cb1775adb37922c",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -83,7 +83,7 @@
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "d6bb21febee398b97d28525d6b7d1a12c7b5b746ca11bf9b59e71344970b995b",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
-        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "24a1b44f316a43f071a2c9ef82e316aae7130313be2960551ae3f0276ec301f6"
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "83b12de4295dc29ddafa9476926600d7a83956e5fc7401d41805d9efb82cda34"
       }
     }
   },

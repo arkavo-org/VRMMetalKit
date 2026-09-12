@@ -47,11 +47,11 @@ final class WearableHairTests: XCTestCase {
     func testClumpLayoutIsPackConstant() throws {
         let out = try compileHair()
         XCTAssertEqual(out.hairClumps.count, HairBobV1.Layout.clumpCount)
-        XCTAssertEqual(out.hairClumps.count, 30)
+        XCTAssertEqual(out.hairClumps.count, HairBobV1.Layout.clumpCount)
         XCTAssertGreaterThanOrEqual(out.hairClumps.filter(\.isBang).count, HairBobV1.Layout.bangAzimuthsDeg.count)
-        XCTAssertEqual(out.hairClumps.map(\.id), (0..<30).map { String(format: "hair:bob:c%02d", $0) })
-        XCTAssertEqual(Set(out.hairClumps.map(\.rootSampleIndex)).count, 30)
-        XCTAssertEqual(out.nodes.count, 1 + 30 * HairBobV1.Layout.nodesPerClump)
+        XCTAssertEqual(out.hairClumps.map(\.id), (0..<HairBobV1.Layout.clumpCount).map { String(format: "hair:bob:c%02d", $0) })
+        XCTAssertEqual(Set(out.hairClumps.map(\.rootSampleIndex)).count, HairBobV1.Layout.clumpCount)
+        XCTAssertEqual(out.nodes.count, 1 + HairBobV1.Layout.clumpCount * HairBobV1.Layout.nodesPerClump)
     }
 
     func testEveryClumpRootIsOnAScalpSample() throws {
@@ -107,7 +107,7 @@ final class WearableHairTests: XCTestCase {
 
     func testSpringsHaveTerminalTailsAndNoOverlap() throws {
         let out = try compileHair()
-        XCTAssertEqual(out.springs.count, 30)
+        XCTAssertEqual(out.springs.count, HairBobV1.Layout.clumpCount)
         XCTAssertNoThrow(try WearableValidation.noOverlappingChains(out.springs))
         XCTAssertNoThrow(try WearableValidation.terminalTailPresent(out.springs, nodes: out.nodes))
         let nodeIds = Set(out.nodes.map(\.id))
@@ -205,7 +205,7 @@ final class WearableHairTests: XCTestCase {
         let weights = try XCTUnwrap(prim.weights0)
         let skin = try XCTUnwrap(out.skins.first { $0.id == "skin:hair:bob" })
         XCTAssertEqual(skin.jointNodeIds.count, skin.inverseBindMatrices.count)
-        XCTAssertEqual(skin.jointNodeIds.count, 30 * HairBobV1.Layout.nodesPerClump)
+        XCTAssertEqual(skin.jointNodeIds.count, HairBobV1.Layout.clumpCount * HairBobV1.Layout.nodesPerClump)
         for clump in out.hairClumps {
             XCTAssertEqual(prim.uv0[clump.vertexStart].y, 0)
             XCTAssertEqual(prim.uv0[clump.vertexStart + clump.vertexCount - 1].y, 1)

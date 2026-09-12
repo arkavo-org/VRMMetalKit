@@ -25,20 +25,20 @@ public enum HairBobV1 {
     /// Pack constants. Clump count, layout, bone layout and tessellation are
     /// fixed by the preset; only `HairControls` vary per recipe.
     public enum Layout {
-        public static let ringAClumps = 16
+        public static let ringAClumps = 24
         public static let ringAElevationDeg: Float = 22
         public static let ringAAzimuthRangeDeg: ClosedRange<Float> = 52...308
-        public static let ringBClumps = 8
+        public static let ringBClumps = 9
         public static let ringBElevationDeg: Float = 50
-        public static let bangAzimuthsDeg: [Float] = [-30, -18, -6, 6, 18, 30]
+        public static let bangAzimuthsDeg: [Float] = [-36, -24, -12, 0, 12, 24, 36]
         public static let bangElevationDeg: Float = 32
         public static let bangSectorDeg: Float = 50
         public static let rotatingBones = 3
-        public static let sectionsPerBone = 3
+        public static let sectionsPerBone = 4
         public static var nodesPerClump: Int { rotatingBones + 1 }
         public static var sectionsPerClump: Int { rotatingBones * sectionsPerBone + 1 }
         public static var clumpCount: Int { ringAClumps + ringBClumps + bangAzimuthsDeg.count }
-        public static let baseWidthM: Float = 0.032
+        public static let baseWidthM: Float = 0.026
         public static let tipWidthRatio: Float = 0.4
         public static let bangLengthRatio: Float = 0.55
         public static let headClearanceM: Float = 0.006
