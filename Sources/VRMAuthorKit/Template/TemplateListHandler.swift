@@ -29,6 +29,7 @@ public enum TemplateListHandler {
     /// their host pack so agents discover them through the same call.
     static let wearablePresets: [(id: String, category: TemplateCategory, controls: [ControlDescriptor])] = [
         (HairBobV1.presetId, .hair, hairControls),
+        (HairLongV1.presetId, .hair, hairControls),
         ("top-v1", .outfit, outfitControls(length: true)),
         ("bottom-v1", .outfit, outfitControls(length: true)),
         ("skirt-v1", .outfit, outfitControls(length: true)),

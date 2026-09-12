@@ -227,8 +227,8 @@ struct SyntheticHost: WearableHost {
 enum Fixtures {
     static let hairTexture = HairTexture(baseColour: Colour(rgba: [0.3, 0.2, 0.1, 1]), rootColour: Colour(rgba: [0.2, 0.1, 0.05, 1]), tipColour: Colour(rgba: [0.5, 0.35, 0.2, 1]))
 
-    static func hair(_ id: String = "bob", controls: HairControls = HairControls()) -> HairItem {
-        HairItem(id: id, preset: "bob-v1", controls: controls, texture: hairTexture)
+    static func hair(_ id: String = "bob", controls: HairControls = HairControls(), preset: String = "bob-v1") -> HairItem {
+        HairItem(id: id, preset: preset, controls: controls, texture: hairTexture)
     }
 
     static let materials: [String: MaterialRole] = ["material:hairA": .hair, "material:shirt": .cloth, "material:pants": .cloth, "material:shoes": .cloth,

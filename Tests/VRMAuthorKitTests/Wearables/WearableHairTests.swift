@@ -233,6 +233,22 @@ final class WearableHairTests: XCTestCase {
         XCTAssertEqual(out.warnings.map(\.code), ["MATERIAL_ROLE_MISSING"])
     }
 
+    func testLongPresetGrowsGuidesTwiceAsLong() throws {
+        let out = try WearableCompiler.compile(host: host, hair: [Fixtures.hair("long", preset: "long-v1")], outfits: [], accessories: [], materialsById: Fixtures.materials)
+        let mesh = try XCTUnwrap(out.meshes.first { $0.id == "mesh:hair:long" })
+        let prim = mesh.primitives[0]
+        let controls = HairControls()
+        let expected = Float(controls.lengthM) * HairBobV1.LayoutParams.long.lengthScale
+        let clump = try XCTUnwrap(out.hairClumps.first { !$0.isBang })
+        let length = zip(clump.sectionCentres.dropFirst(), clump.sectionCentres).map { V3.distance($0, $1) }.reduce(0, +)
+        XCTAssertEqual(length, expected, accuracy: 0.005)
+        // One more rotating bone per clump than the bob, with a terminal tail.
+        XCTAssertEqual(clump.nodeIds.count, HairBobV1.LayoutParams.long.nodesPerClump)
+        XCTAssertNoThrow(try WearableValidation.terminalTailPresent(out.springs, nodes: out.nodes))
+        XCTAssertNoThrow(try WearableValidation.noOverlappingChains(out.springs))
+        XCTAssertNoThrow(try WearableValidation.validateMesh(mesh))
+    }
+
     func testUnknownPresetAndMissingScalpAreTypedErrors() {
         var item = Fixtures.hair()
         item.preset = "mohawk-v1"

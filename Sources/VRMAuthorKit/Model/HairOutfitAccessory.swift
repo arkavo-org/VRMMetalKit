@@ -91,7 +91,7 @@ public struct HairItem: AuthorModel {
         self.texture = texture
     }
 
-    public static let presets = ["bob-v1"]
+    public static let presets = ["bob-v1", "long-v1"]
     public static let modelName = "HairItem"
     public static let schema = JSONSchema.object(properties: [
         "id": .id,

@@ -37,7 +37,7 @@ public enum WearableCompiler {
                 out.warnings.append(AuthorWarning(code: "MATERIAL_ROLE_MISSING", message: "No material with role 'hair'; hair meshes reference '\(hairMaterialFallbackId)'.",
                                                   path: "/materials"))
             }
-            let (colliders, groups) = try HairBobV1.colliders(host: host)
+            let (colliders, groups) = try HairBobV1.colliders(host: host, P: HairBobV1.params(for: hairItems.first?.preset ?? HairBobV1.presetId, objectId: ""))
             out.colliders = colliders
             out.colliderGroups = groups
             for item in hairItems {
