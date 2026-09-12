@@ -123,7 +123,6 @@ struct NativeAnimeBodyBuilder {
     }
 
     private func buildFingers(_ mesh: inout BuildMesh, side: String) {
-        let s = side == "left" ? 1.0 : -1.0
         let sfx = NativeAnimeControls.suffix(side)
         let hl = layout.handLength
         let fingerRadius: [Double] = [0.0055, 0.0058, 0.0054, 0.0047]
