@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "78607a4d66e7a1435a1a2b00fb8273864fb6c0bbb742137c4d5d98e9e0afad1d",
   "resultSchemaHash": "727dd014ce91f2c8effa55c53201b58d1a89f3fabedaae2618712e69d8211838",
-  "packHash": "a03077e42e13f0778e0a1da95f92ecc57d2d0d612f9a6fa0596f5ba4906545e0",
+  "packHash": "2995718e831ddbb51fc6a8cd6535c365137c18530125bbb26e3ba9e69f25035d",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,9 +20,9 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
+      "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "docs/proposals/vrm-author-cli/parameters.md (Native body and face controls)",
       "docs/proposals/vrm-author-cli/commands.md (`control describe` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
@@ -80,11 +80,11 @@
     "kind": "swift-test",
     "entryPoint": "ControlPackTests",
     "environment": {
-      "pinnedCommit": "11188c9e489139a726be13c1dd5abc114674c69a",
+      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "d6bb21febee398b97d28525d6b7d1a12c7b5b746ca11bf9b59e71344970b995b",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
-        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "b7746b07e092c74e536166fd4e374ff27e83ea45fd61d433e4fdcaebe918d885"
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "da4708d385023664b428839beff31043779a9a7a2cf4509cf4e3cfe2f58843c3"
       }
     }
   },

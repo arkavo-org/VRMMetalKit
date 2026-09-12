@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "3ad73e26c0c4a7439a50b5c22f26dc718b09c32b247e1f18ac1aad50d268fad9",
   "resultSchemaHash": "d76302d7c2d8203fbf3bd7a42c4951ca4d106bfae75460b7ca2b50f38bf95a15",
-  "packHash": "913143eee2fdfb3647ed55ba9eab0078bb547536b7c42b0c0916c8d899e1de41",
+  "packHash": "9777a4e1ebd01567c51d8fa92591b12b78f85f36d5cafabcf0ff747b1754da8b",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,10 +20,10 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/QA/QAPackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a (the five declared mutant classes)",
+      "Tests/VRMAuthorKitTests/QA/QAPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a (the five declared mutant classes)",
       "docs/proposals/vrm-author-cli/parameters.md (QA and inspection)",
       "docs/proposals/vrm-author-cli/commands.md (`qa run` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (QA machinery (mutant injection), fixture-tested)"
@@ -89,7 +89,7 @@
     "kind": "swift-test",
     "entryPoint": "QAPackTests",
     "environment": {
-      "pinnedCommit": "11188c9e489139a726be13c1dd5abc114674c69a",
+      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/QA/QAPackTests.swift": "ef1ab233139b55036a27a3f133d20979ee7b2f640b58df90a2180be6c187f4db",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",

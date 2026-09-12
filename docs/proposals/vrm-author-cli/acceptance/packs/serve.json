@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "50d7ef6fd17fa70c7a74156edd317a1c383f82e460658d50a96b6ad1f12839fd",
   "resultSchemaHash": "b8bcdcb501f3ccf865b98645a30bcd182ef26fd22c27d8246ff4883d7bd145fd",
-  "packHash": "dfdfd618c2c8c7ac031f82c01a25bfbe02809ab4b27dd781f68b12b8a8d29b0b",
+  "packHash": "5e72fd52ccdc10b5121d43b88938284da5a28393d9961c8755af7b053696f5a2",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,12 +20,14 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a (independent raw-wire MCP client, second reference)",
+      "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a (independent raw-wire MCP client, second reference)",
       "docs/proposals/vrm-author-cli/commands.md (`serve` row)",
-      "docs/proposals/vrm-author-cli/verification.md \u00a74 (RPC/transport, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (RPC/transport, fixture-tested)",
+      "Tests/VRMAuthorKitTests/Serve/MCPFacadeTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Serve/MCPResourcesTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a"
     ],
     "reviewReceipt": ""
   },
@@ -90,11 +92,13 @@
     "kind": "swift-test",
     "entryPoint": "ServePackTests",
     "environment": {
-      "pinnedCommit": "11188c9e489139a726be13c1dd5abc114674c69a",
+      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift": "90ed251285d146ed4482d5eaa53dd3f426943bcee96e9f01b7ba77d481b00eb5",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
-        "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift": "b9a8ca48bb0d7c2a811ebe33c58fb8b837de3f719d4260ce1808c9e1dccc7a30"
+        "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift": "5414b17ae76315d3227127f7a3eb59968255dcdde60a0bf11d8d4eebb71dd6a5",
+        "Tests/VRMAuthorKitTests/Serve/MCPFacadeTests.swift": "aff3b750e7388420fc45a5f0f723729fd02955208d46b43a11adfcdc9493fdf4",
+        "Tests/VRMAuthorKitTests/Serve/MCPResourcesTests.swift": "b6b4147a44243bf2e40b78a20b951c5e4f0fd417a0bd07327adb1bd8ba1f6ef3"
       }
     }
   },

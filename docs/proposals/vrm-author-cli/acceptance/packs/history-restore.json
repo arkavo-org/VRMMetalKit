@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "7bbde31a8eac895a621f529a68f1bb0de439e3226f035538b47e83bccfa0547f",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "11471fbbf88f1b9eff82d49e7295fd6b6a417ea282b8dfeb32b155f2dd567a6f",
+  "packHash": "4342297b5a6a9d4a1408f23dd7eeefca232ad1ee0c8cdd603f3f39a52f2b4d49",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,8 +20,8 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
+      "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "docs/proposals/vrm-author-cli/commands.md (`history restore` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Revision/transaction, fixture-tested)"
     ],
@@ -83,7 +83,7 @@
     "kind": "swift-test",
     "entryPoint": "ProjectPackTests",
     "environment": {
-      "pinnedCommit": "11188c9e489139a726be13c1dd5abc114674c69a",
+      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6"

@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "8081351cbcd2b9d4a40ec8b93c0e62bd9b03be1d8257eaa268387fd341adcb3d",
   "resultSchemaHash": "607f2d0295e6ac02da109732f7e2659435d5582c51eb80ef542179bf3eed81cb",
-  "packHash": "6e70979183781275709dfaead949bbcba77ffd9d1af8a0d953e7ca2196f2c49b",
+  "packHash": "f6960883fe89f9f7c535df2a27d5ff56b3766998284ccb6af71a9bdec31f53b7",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,9 +20,9 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "docs/proposals/vrm-author-cli/parameters.md (Recipe and production template)",
       "docs/proposals/vrm-author-cli/commands.md (`recipe export` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Import/export/provenance, fixture-tested)"
@@ -87,9 +87,9 @@
     "kind": "swift-test",
     "entryPoint": "ExportPackTests",
     "environment": {
-      "pinnedCommit": "11188c9e489139a726be13c1dd5abc114674c69a",
+      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "403b25860029a553999eaa225222cf5ca08ac1e8ce5da5491f174abe8af66ebc",
+        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "04cd469787947d3c1c3f74d4be73077428dff876a1e25badd2c58bfbd16641f4",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
         "Tests/VRMAuthorKitTests/Core/ModelTests.swift": "0bee5342eeb781fe0b4e37f3b53ecbb0b2a989926fa6b9f97a2be8ba5690495b"
       }

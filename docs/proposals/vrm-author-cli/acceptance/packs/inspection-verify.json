@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "e931ee28884b46c4e3292e88dfe2b823c79d9625bb45057119d06864a74b9cb7",
   "resultSchemaHash": "a522e412796bda19fd190364891a1029492e597cb9d09a58146c12dcb15b821d",
-  "packHash": "be61f24a1312bce2485f9849491f16eac4e9558d2bf5b5c33409bf74a8337657",
+  "packHash": "7b0a83afab62c8f4519a6a75233352990e0e6ac2a7ad0feb097313c780646865",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,9 +20,9 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/QA/QAPackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
+      "Tests/VRMAuthorKitTests/QA/QAPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "docs/proposals/vrm-author-cli/parameters.md (QA and inspection: Inspection)",
       "docs/proposals/vrm-author-cli/commands.md (`inspection verify` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Provenance/inspection, fixture-tested)"
@@ -81,7 +81,7 @@
     "kind": "swift-test",
     "entryPoint": "QAPackTests",
     "environment": {
-      "pinnedCommit": "11188c9e489139a726be13c1dd5abc114674c69a",
+      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/QA/QAPackTests.swift": "ef1ab233139b55036a27a3f133d20979ee7b2f640b58df90a2180be6c187f4db",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",

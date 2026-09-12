@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "5ba4bd1bf31f280a402d9a8e63eb21af21fc21643065c2935f43f03c13677518",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "5467a5433d2e10496e62d808bd3829443f946500c1c0cf059adc8508148caab4",
+  "packHash": "9e8fa7b4d912371fb79d96d1b750a7add2cb1ef4ef7c07ee913e0085cc296d29",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,10 +20,10 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
-      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
+      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "docs/proposals/vrm-author-cli/parameters.md (Recipe and production template; Assets, rights and credentials)",
       "docs/proposals/vrm-author-cli/commands.md (`recipe apply` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Shape/deformation + provenance, visually-validated)"
@@ -89,12 +89,12 @@
     "kind": "swift-test",
     "entryPoint": "ExportPackTests",
     "environment": {
-      "pinnedCommit": "11188c9e489139a726be13c1dd5abc114674c69a",
+      "pinnedCommit": "ec4f2e0c3147265500cc7f76f0c473d1367e8f2a",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "403b25860029a553999eaa225222cf5ca08ac1e8ce5da5491f174abe8af66ebc",
+        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "04cd469787947d3c1c3f74d4be73077428dff876a1e25badd2c58bfbd16641f4",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
         "Tests/VRMAuthorKitTests/Core/ModelTests.swift": "0bee5342eeb781fe0b4e37f3b53ecbb0b2a989926fa6b9f97a2be8ba5690495b",
-        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "b7746b07e092c74e536166fd4e374ff27e83ea45fd61d433e4fdcaebe918d885",
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "da4708d385023664b428839beff31043779a9a7a2cf4509cf4e3cfe2f58843c3",
         "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
         "docs/style/corpus/vroid-lineage-anime.manifest.json": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
         "docs/style/corpus/vroid-lineage-anime.measurements.json": "c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc",
