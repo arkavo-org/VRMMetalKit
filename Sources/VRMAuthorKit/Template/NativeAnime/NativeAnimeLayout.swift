@@ -48,7 +48,7 @@ struct NativeAnimeLayout {
     static let legRootFactor = 0.63
     static let hipJointOffsetFactor = 0.04
     static let hipHalfWidthFactor = 0.075
-    static let shoulderHalfWidthFactor = 0.09
+    static let shoulderHalfWidthFactor = 0.064
     static let upperArmFactor = 0.14
     static let lowerArmFactor = 0.135
     static let thighFraction = 0.46

@@ -229,4 +229,55 @@ final class NativeAnimeGeometryTests: XCTestCase {
         XCTAssertEqual(baseIris.uv0, grownIris.uv0, "iris UV region is static; geometry scales")
         XCTAssertNotEqual(baseIris.positions, grownIris.positions)
     }
+
+    /// One loft per limb: no cap pole sits on the limb axis between the
+    /// shoulder and the palm or between the hip and the ankle, the knee is
+    /// the leg's narrowest ring and the calf is wider than the knee.
+    func testLimbsAreContinuousLofts() throws {
+        let (avatar, attachments) = try NativeAnimeFixture.compiled()
+        let body = NativeAnimeFixture.primitive(avatar, mesh: "mesh.body")
+        let H = attachments.heightM
+        let j = attachments.jointWorldPositions
+        for (side, s) in [("L", Float(1)), ("R", Float(-1))] {
+            let upper = j[side == "L" ? .leftUpperArm : .rightUpperArm]!
+            let hand = j[side == "L" ? .leftHand : .rightHand]!
+            let arm = attachments.indices(of: "upperArm\(side)", mesh: "mesh.body") + attachments.indices(of: "forearm\(side)", mesh: "mesh.body")
+            for i in arm {
+                let p = body.positions[i]
+                guard (p.x - upper.x) * s > 0.02 * H, (p.x - hand.x) * s < 0.04 * H else { continue }
+                XCTAssertGreaterThan(hypot(p.y - upper.y, p.z), 0.003 * H, "arm\(side) vertex \(i) sits on the limb axis")
+            }
+            let hip = j[side == "L" ? .leftUpperLeg : .rightUpperLeg]!
+            let knee = j[side == "L" ? .leftLowerLeg : .rightLowerLeg]!
+            let ankle = j[side == "L" ? .leftFoot : .rightFoot]!
+            let leg = attachments.indices(of: "thigh\(side)", mesh: "mesh.body") + attachments.indices(of: "shin\(side)", mesh: "mesh.body")
+            var kneeRadius = Float.greatestFiniteMagnitude, calfRadius: Float = 0
+            let calfY = knee.y + (ankle.y - knee.y) * 0.35
+            for i in leg {
+                let p = body.positions[i]
+                guard p.y < hip.y, p.y > ankle.y + 0.01 * H else { continue }
+                let radial = hypot(p.x - hip.x, p.z)
+                XCTAssertGreaterThan(radial, 0.003 * H, "leg\(side) vertex \(i) sits on the limb axis")
+                if abs(p.y - knee.y) < 0.025 * H { kneeRadius = min(kneeRadius, radial) }
+                if abs(p.y - calfY) < 0.02 * H { calfRadius = max(calfRadius, radial) }
+            }
+            XCTAssertGreaterThan(calfRadius, kneeRadius + 0.004 * H, "leg\(side): calf must be wider than the knee")
+        }
+    }
+
+    func testShoulderNeckAndChestSitOnTheCorpusMedians() throws {
+        let (avatar, attachments) = try NativeAnimeFixture.compiled()
+        let body = NativeAnimeFixture.primitive(avatar, mesh: "mesh.body")
+        let H = attachments.heightM
+        let j = attachments.jointWorldPositions
+        XCTAssertEqual((j[.leftUpperArm]!.x - j[.rightUpperArm]!.x) / H, 0.128, accuracy: 0.003)
+        let collarbone = attachments.indices(of: "upperArmL", mesh: "mesh.body").filter { body.positions[$0].x < j[.leftUpperArm]!.x }.map { body.positions[$0].y }.max()!
+        XCTAssertLessThanOrEqual(collarbone, j[.neck]!.y + 0.002 * H, "the arm's inner ring must not rise above the torso top")
+        let neck = attachments.indices(of: "neck", mesh: "mesh.body").map { hypot(body.positions[$0].x, body.positions[$0].z) }.max()!
+        XCTAssertEqual(neck / H, 0.0345, accuracy: 0.004)
+        let chest = attachments.indices(of: "chest", mesh: "mesh.body").map { abs(body.positions[$0].x) }.max()!
+        XCTAssertLessThan(chest / H, 0.076)
+        let torsoBottom = attachments.indices(of: "hips", mesh: "mesh.body").map { body.positions[$0].y }.min()!
+        XCTAssertGreaterThan(torsoBottom, j[.leftUpperLeg]!.y - 0.03 * H, "torso pole must not hang below the hips ring")
+    }
 }

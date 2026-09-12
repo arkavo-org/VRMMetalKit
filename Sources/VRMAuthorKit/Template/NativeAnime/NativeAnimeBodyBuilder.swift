@@ -52,19 +52,19 @@ struct NativeAnimeBodyBuilder {
         let y1 = layout.neckBaseY
         func at(_ f: Double) -> Double { NAMath.lerp(y0, y1, f) }
         let hipW = layout.hipHalfWidth + 0.03 * H
-        let shoulderW = layout.shoulderHalfWidth - 0.01 * H
+        let shoulderW = layout.shoulderHalfWidth - 0.006 * H
         let rings = [
             yRing(at(0.00), rx: hipW * 0.86, rz: 0.058 * H, region: "hips", zc: -0.004 * H),
             yRing(at(0.12), rx: hipW * 0.94, rz: 0.068 * H, region: "hips", zc: -0.006 * H),
             yRing(at(0.26), rx: hipW * 0.84, rz: 0.058 * H, region: "waist", zc: -0.003 * H),
-            yRing(at(0.42), rx: 0.073 * H, rz: 0.050 * H, region: "waist", zc: -0.002 * H),
-            yRing(at(0.58), rx: 0.078 * H, rz: 0.060 * H, region: "chest", zc: 0.004 * H),
-            yRing(at(0.72), rx: 0.084 * H, rz: 0.068 * H, region: "chest", zc: 0.010 * H),
-            yRing(at(0.86), rx: shoulderW, rz: 0.056 * H, region: "chest", zc: 0.004 * H),
-            yRing(at(0.95), rx: shoulderW * 0.75, rz: 0.050 * H, region: "torso", zc: 0.001 * H),
-            yRing(at(1.00), rx: 0.055 * H, rz: 0.046 * H, region: "torso"),
+            yRing(at(0.42), rx: 0.064 * H, rz: 0.050 * H, region: "waist", zc: -0.002 * H),
+            yRing(at(0.58), rx: 0.068 * H, rz: 0.058 * H, region: "chest", zc: 0.004 * H),
+            yRing(at(0.72), rx: 0.072 * H, rz: 0.064 * H, region: "chest", zc: 0.010 * H),
+            yRing(at(0.86), rx: shoulderW, rz: 0.054 * H, region: "chest", zc: 0.004 * H),
+            yRing(at(0.95), rx: shoulderW * 0.80, rz: 0.048 * H, region: "torso", zc: 0.001 * H),
+            yRing(at(1.00), rx: 0.046 * H, rz: 0.042 * H, region: "torso"),
         ]
-        mesh.loft(rings, segments: Self.torsoSegments, capStart: NAVec3(0, y0 - 0.025 * H, -0.002 * H), capEnd: NAVec3(0, y1 + 0.01 * H, 0), extraRegions: ["torso"])
+        mesh.loft(rings, segments: Self.torsoSegments, capStart: NAVec3(0, y0 - 0.006 * H, -0.002 * H), capEnd: NAVec3(0, y1 + 0.01 * H, 0), extraRegions: ["torso"])
         // The cap poles sit on the axis inside the neck/hips. The top pole must
         // not join the "torso" region: garments copy regions, and a shirt ends
         // in a neck hole — covering the pole would seal it shut and, at big
@@ -78,7 +78,7 @@ struct NativeAnimeBodyBuilder {
     private func buildNeck(_ mesh: inout BuildMesh) {
         let y0 = layout.neckBaseY - 0.02 * H
         let y1 = layout.headBottomY + 0.05 * layout.headHeight
-        let r = 0.040 * H
+        let r = 0.030 * H
         let rings = [
             yRing(y0, rx: r * 1.15, rz: r * 1.1, region: "neck"),
             yRing(NAMath.lerp(y0, y1, 0.5), rx: r, rz: r * 0.95, region: "neck"),
@@ -92,6 +92,8 @@ struct NativeAnimeBodyBuilder {
         Ring(center: NAVec3(x, y, z), u: NAMath.yAxis, v: NAMath.zAxis * sign, ru: ry, rv: rz, region: region)
     }
 
+    /// One loft from inside the torso to the knuckle line; regions switch at
+    /// the elbow and wrist rings so garments and weights see the same names.
     private func buildArm(_ mesh: inout BuildMesh, side: String) {
         let s = side == "left" ? 1.0 : -1.0
         let sfx = NativeAnimeControls.suffix(side)
@@ -99,34 +101,33 @@ struct NativeAnimeBodyBuilder {
         let lower = layout.joint(side == "left" ? .leftLowerArm : .rightLowerArm)
         let hand = layout.joint(side == "left" ? .leftHand : .rightHand)
         let y = upper.y
-
-        let ua = [
-            xRing(upper.x - s * 0.035 * H, y: y, z: 0, ry: 0.040 * H, rz: 0.040 * H, sign: s, region: "upperArm\(sfx)"),
-            xRing(upper.x + s * 0.03 * H, y: y, z: 0, ry: 0.036 * H, rz: 0.036 * H, sign: s, region: "upperArm\(sfx)"),
-            xRing(NAMath.lerp(upper.x, lower.x, 0.6), y: y, z: 0, ry: 0.031 * H, rz: 0.031 * H, sign: s, region: "upperArm\(sfx)"),
-            xRing(lower.x, y: y, z: 0, ry: 0.027 * H, rz: 0.027 * H, sign: s, region: "upperArm\(sfx)"),
-        ]
-        mesh.loft(ua, segments: Self.limbSegments, capStart: NAVec3(upper.x - s * 0.05 * H, y, 0), capEnd: NAVec3(lower.x + s * 0.01 * H, y, 0))
-
-        let la = [
-            xRing(lower.x - s * 0.005 * H, y: y, z: 0, ry: 0.028 * H, rz: 0.028 * H, sign: s, region: "forearm\(sfx)"),
-            xRing(NAMath.lerp(lower.x, hand.x, 0.3), y: y, z: 0, ry: 0.026 * H, rz: 0.027 * H, sign: s, region: "forearm\(sfx)"),
-            xRing(NAMath.lerp(lower.x, hand.x, 0.7), y: y, z: 0, ry: 0.020 * H, rz: 0.022 * H, sign: s, region: "forearm\(sfx)"),
-            xRing(hand.x, y: y, z: 0, ry: 0.014 * H, rz: 0.019 * H, sign: s, region: "forearm\(sfx)"),
-        ]
-        mesh.loft(la, segments: Self.limbSegments, capStart: NAVec3(lower.x - s * 0.015 * H, y, 0), capEnd: NAVec3(hand.x + s * 0.008 * H, y, 0))
-
         let hl = layout.handLength
-        let palm = [
-            xRing(hand.x, y: y, z: 0, ry: 0.013 * H, rz: 0.021 * H, sign: s, region: "hand\(sfx)"),
-            xRing(hand.x + s * 0.25 * hl, y: y, z: 0, ry: 0.012 * H, rz: 0.029 * H, sign: s, region: "hand\(sfx)"),
-            xRing(hand.x + s * 0.45 * hl, y: y, z: 0, ry: 0.011 * H, rz: 0.031 * H, sign: s, region: "hand\(sfx)"),
+        func ring(_ x: Double, _ ry: Double, _ rz: Double, _ region: String) -> Ring {
+            xRing(x, y: y, z: 0, ry: ry * H, rz: rz * H, sign: s, region: region + sfx)
+        }
+        let arm = [
+            ring(upper.x - s * 0.030 * H, 0.026, 0.031, "upperArm"),
+            ring(upper.x + s * 0.030 * H, 0.029, 0.030, "upperArm"),
+            ring(NAMath.lerp(upper.x, lower.x, 0.55), 0.027, 0.027, "upperArm"),
+            ring(lower.x - s * 0.012 * H, 0.024, 0.024, "upperArm"),
+            ring(lower.x + s * 0.012 * H, 0.024, 0.024, "forearm"),
+            ring(NAMath.lerp(lower.x, hand.x, 0.40), 0.023, 0.024, "forearm"),
+            ring(NAMath.lerp(lower.x, hand.x, 0.80), 0.017, 0.019, "forearm"),
+            ring(hand.x - s * 0.006 * H, 0.014, 0.017, "forearm"),
+            ring(hand.x + s * 0.10 * hl, 0.010, 0.020, "hand"),
+            ring(hand.x + s * 0.30 * hl, 0.009, 0.026, "hand"),
+            ring(hand.x + s * 0.48 * hl, 0.008, 0.028, "hand"),
         ]
-        mesh.loft(palm, segments: Self.handSegments, capStart: NAVec3(hand.x - s * 0.005 * H, y, 0), capEnd: NAVec3(hand.x + s * 0.56 * hl, y, 0))
+        mesh.loft(arm, segments: Self.limbSegments, capStart: NAVec3(upper.x - s * 0.045 * H, y, 0), capEnd: NAVec3(hand.x + s * 0.52 * hl, y, 0))
+        buildFingers(&mesh, side: side)
+    }
 
-        // Four finger lofts along the rig's finger chains; the "hand" region's
-        // allowed-bone set already includes the finger bones, and the tighter
-        // hand sigma in bodySkinning binds each finger to its own chain.
+    private func buildFingers(_ mesh: inout BuildMesh, side: String) {
+        let s = side == "left" ? 1.0 : -1.0
+        let sfx = NativeAnimeControls.suffix(side)
+        let hand = layout.joint(side == "left" ? .leftHand : .rightHand)
+        let y = hand.y
+        let hl = layout.handLength
         let fingerRadius: [Double] = [0.0068, 0.0073, 0.0068, 0.0056]
         for (fi, finger) in ["Index", "Middle", "Ring", "Little"].enumerated() {
             let joints = ["Proximal", "Intermediate", "Distal"].map { layout.joint(VRMHumanBone(rawValue: side + finger + $0)!) }
@@ -143,7 +144,6 @@ struct NativeAnimeBodyBuilder {
             ]
             mesh.loft(rings, segments: Self.thumbSegments, capStart: joints[0] - NAMath.xAxis * (s * 0.11 * hl), capEnd: joints[2] + dir * (0.10 * hl))
         }
-
         let thumbBase = NAVec3(hand.x + s * 0.22 * hl, y - 0.002 * H, 0.018 * H)
         let thumbDir = NAMath.normalize(NAVec3(s * 0.45, 0, 1))
         let tu = NAMath.yAxis
@@ -160,29 +160,34 @@ struct NativeAnimeBodyBuilder {
         Ring(center: NAVec3(x, y, 0), u: NAMath.xAxis, v: NAMath.zAxis, ru: rx, rv: rz, region: region)
     }
 
+    /// One loft from inside the hips to the ankle with a knee narrowing and a
+    /// calf; the end pole sits inside the foot loft.
     private func buildLeg(_ mesh: inout BuildMesh, side: String) {
         let sfx = NativeAnimeControls.suffix(side)
         let upper = layout.joint(side == "left" ? .leftUpperLeg : .rightUpperLeg)
         let lower = layout.joint(side == "left" ? .leftLowerLeg : .rightLowerLeg)
         let foot = layout.joint(side == "left" ? .leftFoot : .rightFoot)
         let x = upper.x
-
-        let thigh = [
-            downRing(x, upper.y + 0.035 * H, rx: 0.047 * H, rz: 0.050 * H, region: "thigh\(sfx)"),
-            downRing(x, upper.y - 0.03 * H, rx: 0.049 * H, rz: 0.052 * H, region: "thigh\(sfx)"),
-            downRing(x, NAMath.lerp(upper.y, lower.y, 0.6), rx: 0.041 * H, rz: 0.043 * H, region: "thigh\(sfx)"),
-            downRing(x, lower.y, rx: 0.036 * H, rz: 0.038 * H, region: "thigh\(sfx)"),
+        func ring(_ y: Double, _ rx: Double, _ rz: Double, _ region: String) -> Ring {
+            downRing(x, y, rx: rx * H, rz: rz * H, region: region + sfx)
+        }
+        let leg = [
+            ring(upper.y + 0.035 * H, 0.045, 0.049, "thigh"),
+            ring(upper.y - 0.030 * H, 0.046, 0.050, "thigh"),
+            ring(NAMath.lerp(upper.y, lower.y, 0.55), 0.040, 0.043, "thigh"),
+            ring(lower.y + 0.020 * H, 0.034, 0.036, "thigh"),
+            ring(lower.y - 0.020 * H, 0.033, 0.035, "shin"),
+            ring(NAMath.lerp(lower.y, foot.y, 0.35), 0.035, 0.040, "shin"),
+            ring(NAMath.lerp(lower.y, foot.y, 0.75), 0.026, 0.028, "shin"),
+            ring(foot.y + 0.005 * H, 0.019, 0.021, "shin"),
         ]
-        mesh.loft(thigh, segments: Self.limbSegments, capStart: NAVec3(x, upper.y + 0.05 * H, 0), capEnd: NAVec3(x, lower.y - 0.01 * H, 0))
+        mesh.loft(leg, segments: Self.limbSegments, capStart: NAVec3(x, upper.y + 0.050 * H, 0), capEnd: NAVec3(x, foot.y - 0.020 * H, 0))
+        buildFoot(&mesh, side: side)
+    }
 
-        let shin = [
-            downRing(x, lower.y + 0.005 * H, rx: 0.037 * H, rz: 0.039 * H, region: "shin\(sfx)"),
-            downRing(x, NAMath.lerp(lower.y, foot.y, 0.3), rx: 0.036 * H, rz: 0.040 * H, region: "shin\(sfx)"),
-            downRing(x, NAMath.lerp(lower.y, foot.y, 0.7), rx: 0.028 * H, rz: 0.030 * H, region: "shin\(sfx)"),
-            downRing(x, foot.y, rx: 0.024 * H, rz: 0.026 * H, region: "shin\(sfx)"),
-        ]
-        mesh.loft(shin, segments: Self.limbSegments, capStart: NAVec3(x, lower.y + 0.015 * H, 0), capEnd: NAVec3(x, foot.y - 0.012 * H, 0))
-
+    private func buildFoot(_ mesh: inout BuildMesh, side: String) {
+        let sfx = NativeAnimeControls.suffix(side)
+        let x = layout.joint(side == "left" ? .leftUpperLeg : .rightUpperLeg).x
         func footRing(_ z: Double, rx: Double, ry: Double) -> Ring {
             Ring(center: NAVec3(x, ry, z), u: NAMath.xAxis, v: NAMath.yAxis, ru: rx, rv: ry, region: "foot\(sfx)")
         }
