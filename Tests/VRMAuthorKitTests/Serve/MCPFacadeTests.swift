@@ -232,4 +232,127 @@ final class MCPFacadeTests: XCTestCase {
             XCTAssertEqual((error as? AuthorError)?.suggestedCommands, ["build"])
         }
     }
+
+    // MARK: vrm_qa
+
+    func preparedProject(_ server: inout ServeSession, name: String) throws -> URL {
+        let dir = root.appendingPathComponent(name)
+        _ = try call(&server, id: 1, "vrm_project", ["action": "init", "dir": .string(dir.path), "seed": 42])
+        let built = try call(&server, id: 2, "vrm_build", ["project": .string(dir.path)])
+        XCTAssertEqual(built["result"]?["isError"], false)
+        return dir
+    }
+
+    func testQaWithoutRendererIsIncompleteNotError() throws {
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"])
+        let dir = try preparedProject(&server, name: "q1.vrmauthor")
+        let qa = try call(&server, id: 3, "vrm_qa", ["project": .string(dir.path)])
+        XCTAssertNil(qa["error"])
+        XCTAssertEqual(qa["result"]?["isError"], false)
+        let s = try XCTUnwrap(qa["result"]?["structuredContent"])
+        XCTAssertEqual(s["status"], "incomplete")
+        XCTAssertEqual(s["result"]?["verdict"], "incomplete")
+        XCTAssertEqual(s["previews"], [])
+        XCTAssertEqual(s["revision"], 0)
+        let content = try XCTUnwrap(qa["result"]?["content"]?.array)
+        XCTAssertEqual(content.count, 1)
+        let text = try XCTUnwrap(content[0]["text"]?.string)
+        XCTAssertTrue(text.contains("spec.structure.glb pass"))
+        XCTAssertTrue(text.contains("inspection record"), "the text block says the loop cannot reach complete through MCP")
+        XCTAssertTrue(text.contains("renderer"), "names the missing renderer")
+    }
+
+    func testQaFileDefaultsToLatestBuildAndSuiteCanBeSpecStyle() throws {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        try XCTSkipIf(StyleToolchain.python3(env: ["PATH": path]) == nil, "python3 not on PATH")
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness", "PATH": path])
+        let dir = try preparedProject(&server, name: "q2.vrmauthor")
+        let qa = try call(&server, id: 3, "vrm_qa", ["project": .string(dir.path), "suite": "spec+style", "images": "paths"])
+        let s = try XCTUnwrap(qa["result"]?["structuredContent"])
+        XCTAssertEqual(s["status"], "succeeded")
+        XCTAssertEqual(s["result"]?["verdict"], "pass")
+        XCTAssertEqual(qa["result"]?["content"]?.array?.count, 1)
+        var plainContext = server.context
+        plainContext.projectPath = dir
+        let plain = ProjectTestHarness.invoke(plainContext, "qa run", ["project": .string(dir.path), "request": ["file": .string(try MCPFacade.latestBuildFile(project: dir.path)), "suite": "spec+style"], "out": .string(root.appendingPathComponent("plain-qa").path)])
+        XCTAssertEqual(plain.result?["reportHash"], s["result"]?["reportHash"], "the facade runs the same locked qa run")
+    }
+
+    func testQaNoBuildFailsWithBuildSuggestion() throws {
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"])
+        let dir = root.appendingPathComponent("q3.vrmauthor")
+        _ = try call(&server, id: 1, "vrm_project", ["action": "init", "dir": .string(dir.path)])
+        let qa = try call(&server, id: 2, "vrm_qa", ["project": .string(dir.path)])
+        XCTAssertEqual(qa["result"]?["isError"], true)
+        XCTAssertEqual(qa["result"]?["structuredContent"]?["errors"]?[0]?["suggestedCommands"], ["build"])
+    }
+
+    func testQaPreviewImagesFollowTheImagesMode() throws {
+        let fake = FakeRenderer()
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"], previewRenderer: fake)
+        let dir = try preparedProject(&server, name: "q4.vrmauthor")
+
+        let key = try call(&server, id: 3, "vrm_qa", ["project": .string(dir.path), "previewSize": 256])
+        let keyContent = try XCTUnwrap(key["result"]?["content"]?.array)
+        XCTAssertEqual(keyContent.map { $0["type"]?.string }, ["text", "image", "image"])
+        XCTAssertEqual(keyContent[1]["mimeType"], "image/png")
+        let png = try XCTUnwrap(Data(base64Encoded: try XCTUnwrap(keyContent[1]["data"]?.string)))
+        XCTAssertEqual([UInt8](png.prefix(8)), [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        let previews = try XCTUnwrap(key["result"]?["structuredContent"]?["previews"]?.array)
+        XCTAssertEqual(previews.map { $0["scenarioId"]?.string }, ["visual.front", "expression.happy"])
+        XCTAssertEqual(previews[0]["evidence"], false)
+        XCTAssertEqual(previews[0]["width"], 256)
+        XCTAssertEqual(fake.sizes["visual.front"] as? Int, 256, "preview pass overrides the scenario size")
+        let path = try XCTUnwrap(previews[0]["path"]?.string)
+        XCTAssertTrue(path.contains("/preview/visual.front/"))
+        XCTAssertEqual(previews[0]["sha256"], .string(SHA256Hex.hex(try Data(contentsOf: URL(fileURLWithPath: path)))))
+        XCTAssertNil(fake.sizes["motion.idle"], "motion is never previewed")
+
+        let all = try call(&server, id: 4, "vrm_qa", ["project": .string(dir.path), "images": "all"])
+        XCTAssertEqual(all["result"]?["content"]?.array?.count, 7)
+        XCTAssertEqual(all["result"]?["structuredContent"]?["previews"]?.array?.compactMap { $0["scenarioId"]?.string },
+                       ["visual.front", "visual.threeQuarter", "visual.profile", "expression.blink", "expression.aa", "expression.happy"])
+
+        let paths = try call(&server, id: 5, "vrm_qa", ["project": .string(dir.path), "images": "paths"])
+        XCTAssertEqual(paths["result"]?["content"]?.array?.count, 1)
+        XCTAssertEqual(paths["result"]?["structuredContent"]?["previews"], [])
+
+        let report = try XCTUnwrap(all["result"]?["structuredContent"]?["result"]?["artifacts"]?.array).compactMap { $0["path"]?.string }
+        XCTAssertFalse(report.contains { $0.contains("/preview/") }, "preview files are not QA artifacts")
+    }
+
+    func testRealPreviewPassMatchesRequestedSize() throws {
+        let adapter = VRMAuthorRenderAdapter(executableURL: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/debug/vrm-author"))
+        try XCTSkipIf(adapter.identity == VRMAuthorRenderAdapter.unavailableIdentity, "vrm-author-render or Metal unavailable")
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"], previewRenderer: adapter)
+        let dir = try preparedProject(&server, name: "q5.vrmauthor")
+        let qa = try call(&server, id: 3, "vrm_qa", ["project": .string(dir.path), "previewSize": 256])
+        let previews = try XCTUnwrap(qa["result"]?["structuredContent"]?["previews"]?.array)
+        XCTAssertEqual(previews.count, 2)
+        for preview in previews {
+            let png = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(preview["path"]?.string)))
+            let ihdr = [UInt8](png[16 ..< 24])
+            let width = Int(ihdr[0]) << 24 | Int(ihdr[1]) << 16 | Int(ihdr[2]) << 8 | Int(ihdr[3])
+            let height = Int(ihdr[4]) << 24 | Int(ihdr[5]) << 16 | Int(ihdr[6]) << 8 | Int(ihdr[7])
+            XCTAssertEqual(width, 256)
+            XCTAssertEqual(height, 256)
+        }
+    }
+}
+
+/// Writes a valid, tiny PNG for every scenario so image plumbing is testable
+/// without Metal. It records the size each scenario asked for.
+final class FakeRenderer: RenderAdapter, @unchecked Sendable {
+    var identity: String { "fake/1" }
+    let sizes = NSMutableDictionary()
+
+    func render(scenario: RenderScenario, file: URL, data: Data, outputDirectory: URL, context: OperationContext) throws -> [ArtifactRef]? {
+        let w = scenario.configuration["width"]?.int ?? 1024
+        sizes[scenario.id] = w
+        try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        let png = try PNGEncoder.encode(width: 2, height: 2, rgba: [UInt8](repeating: 128, count: 16))
+        let url = outputDirectory.appendingPathComponent("\(scenario.id).png")
+        try png.write(to: url)
+        return [BuildSupport.artifact(url, data: png, mediaType: "image/png", role: "render", buildHash: nil)]
+    }
 }

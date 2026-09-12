@@ -260,7 +260,57 @@ public enum MCPFacade {
         }
     }
 
-    static func qa(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue { throw RPCError(code: RPCError.internalError, message: "not implemented") }
+    static let inspectionNote = "Previews are views, not evidence. Inspection records (CLI `inspection record`) are still required for `complete`; through MCP the project stays a draft."
+
+    static func qa(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue {
+        let project = try projectArgument(arguments, session: session)
+        let suite = arguments["suite"]?.string ?? "authoring-v1"
+        let mode = QAPreviewMode(rawValue: arguments["images"]?.string ?? "key") ?? .key
+        let size = arguments["previewSize"]?.int ?? 512
+        let file: String
+        if let f = arguments["file"]?.string { file = f } else {
+            do { file = try latestBuildFile(project: project) } catch let error as AuthorError {
+                let e = try ServeSession.rpcResult(.failed(requestId: nil, revision: nil, errors: [error]))
+                return toolResult(envelope: e, revision: .null, isError: true, text: summary(tool: "vrm_qa", envelope: e), extra: ["previews": []])
+            }
+        }
+        let revisionNumber = (try? ProjectStore.open(at: URL(fileURLWithPath: project)).state().revision) ?? 0
+        let out: String
+        if let o = arguments["out"]?.string { out = o } else {
+            let reports = URL(fileURLWithPath: project).appendingPathComponent("reports")
+            var n = 1
+            while FileManager.default.fileExists(atPath: reports.appendingPathComponent("mcp-qa-\(revisionNumber)-\(n)").path) { n += 1 }
+            out = reports.appendingPathComponent("mcp-qa-\(revisionNumber)-\(n)").path
+        }
+        let params: [String: JSONValue] = ["project": .string(project), "request": ["file": .string(file), "suite": .string(suite)], "out": .string(out)]
+        let envelope: JSONValue
+        switch try invoke("qa run", params: params, session: session, tool: "vrm_qa") {
+        case .refused(let r): return r
+        case .envelope(let e): envelope = e
+        }
+        let ran = envelope["result"]?["verdict"] != nil
+        var previews: [QAPreview] = []
+        var warnings: [String] = []
+        if ran, suite == "authoring-v1" {
+            let fileURL = URL(fileURLWithPath: file)
+            let data = try Data(contentsOf: fileURL)
+            var requestContext = session.context
+            requestContext.projectPath = URL(fileURLWithPath: project)
+            previews = try QAPreviewRenderer.render(mode: mode, size: size, file: fileURL, data: data, outputDirectory: URL(fileURLWithPath: out), render: session.previewRenderer, context: requestContext)
+            if mode != .paths, session.previewRenderer == nil || previews.isEmpty {
+                warnings.append("warning RENDERER_UNAVAILABLE no preview renderer in this session; render scenarios are incomplete")
+            }
+        }
+        var lines = ["vrm_qa \(envelope["status"]?.string ?? "unknown"); verdict \(envelope["result"]?["verdict"]?.string ?? "n/a"); revision \(revisionNumber)"]
+        for check in envelope["result"]?["checks"]?.array ?? [] {
+            lines.append("\(check["id"]?.string ?? "?") \(check["status"]?.string ?? "?") \(check["message"]?.string ?? "")")
+        }
+        if !ran { for error in envelope["errors"]?.array ?? [] { lines.append("error \(error["code"]?.string ?? "?") \(error["message"]?.string ?? "")") } }
+        lines += warnings
+        lines.append(inspectionNote)
+        return toolResult(envelope: envelope, revision: .number(Double(revisionNumber)), isError: !ran, text: lines.joined(separator: "\n"),
+                          extra: ["previews": .array(previews.map(QAPreviewRenderer.json))], images: previews.map(QAPreviewRenderer.imageBlock))
+    }
 
     static func export(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue {
         let project = try projectArgument(arguments, session: session)
