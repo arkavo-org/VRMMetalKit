@@ -227,9 +227,12 @@ final class DiscoveryPackTests: XCTestCase {
 
     func testEvidenceRegistryLocatorAndDefaults() throws {
         let cwd = DiscoveryPackTests.acceptanceDirectory.deletingLastPathComponent()
+        let emptyCwd = FileManager.default.temporaryDirectory.appendingPathComponent("vrmauthor-empty-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: emptyCwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: emptyCwd) }
         XCTAssertEqual(EvidenceRegistry.locate(cwd: cwd, executableURL: nil, env: [:])?.path, DiscoveryPackTests.acceptanceDirectory.path)
-        XCTAssertNil(EvidenceRegistry.locate(cwd: URL(fileURLWithPath: "/"), executableURL: nil, env: [:]))
-        XCTAssertEqual(EvidenceRegistry.locate(cwd: URL(fileURLWithPath: "/"), executableURL: nil, env: [EvidenceRegistry.environmentKey: DiscoveryPackTests.acceptanceDirectory.path])?.path,
+        XCTAssertNil(EvidenceRegistry.locate(cwd: emptyCwd, executableURL: nil, env: [:]))
+        XCTAssertEqual(EvidenceRegistry.locate(cwd: emptyCwd, executableURL: nil, env: [EvidenceRegistry.environmentKey: DiscoveryPackTests.acceptanceDirectory.path])?.path,
                        DiscoveryPackTests.acceptanceDirectory.path)
         let empty = EvidenceRegistry()
         let entry = empty.capability(for: Registry.v1().operation(named: "version")!, toolInfo: .current)

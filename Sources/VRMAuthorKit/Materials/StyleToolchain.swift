@@ -48,9 +48,8 @@ public struct StyleToolchain: Sendable {
         var dir = start.standardizedFileURL
         while true {
             if FileManager.default.fileExists(atPath: dir.appendingPathComponent(relativePath).path) { return dir }
-            let parent = dir.deletingLastPathComponent()
-            if parent.path == dir.path { return nil }
-            dir = parent
+            if dir.pathComponents.count <= 1 { return nil }
+            dir = dir.deletingLastPathComponent()
         }
     }
 

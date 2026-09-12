@@ -148,7 +148,7 @@ final class ConsumerImportTests: XCTestCase {
     // MARK: report parsing
 
     func testReportParsingRejectsWrongConsumerAndSurfacesErrors() throws {
-        let binary = URL(fileURLWithPath: "/usr/bin/false")
+        let binary = FileManager.default.temporaryDirectory.appendingPathComponent("false")
         XCTAssertThrowsError(try VRMMetalKitSubprocessConsumer.report(from: ["error": "boom"], binary: binary)) { error in
             XCTAssertEqual((error as? AuthorError)?.message, "boom")
         }

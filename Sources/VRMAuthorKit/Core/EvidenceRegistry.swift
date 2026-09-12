@@ -193,9 +193,8 @@ public struct EvidenceRegistry: Sendable {
             while true {
                 let candidate = dir.appendingPathComponent(relativePath)
                 if fm.fileExists(atPath: candidate.appendingPathComponent("evidence.json").path) { return candidate }
-                let parent = dir.deletingLastPathComponent()
-                if parent.path == dir.path { break }
-                dir = parent
+                if dir.pathComponents.count <= 1 { break }
+                dir = dir.deletingLastPathComponent()
             }
         }
         return nil
