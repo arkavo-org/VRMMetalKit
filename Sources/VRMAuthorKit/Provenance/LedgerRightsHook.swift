@@ -21,16 +21,17 @@ import Foundation
 public struct LedgerRightsHook: RecipeRightsHook {
     public init() {}
 
+    /// The pack is resolved from `recipe.template.id` — the pack that will compile, already sha256-validated by `recipe apply` — which is why it differs from `provenance resolve`'s `state.template`.
     public func resolve(declaration: RightsDeclaration, recipe: Recipe, context: OperationContext) throws -> RecipeRightsResolution {
-        var knownImageIds = Set<String>()
+        let packImageIds = context.templates.pack(id: recipe.template.id)?.imageIds ?? []
+        var knownImageIds = packImageIds
         var ledger = RightsLedger()
         if let projectPath = context.projectPath, let store = try? ProjectStore.open(at: projectPath) {
             ledger = (try? RightsLedger.load(store)) ?? RightsLedger()
             if let state = try? store.state() {
-                knownImageIds = ProvenanceHandlers.knownImageIds(state: state, ledger: ledger)
+                knownImageIds = ProvenanceHandlers.knownImageIds(state: state, ledger: ledger, packImageIds: packImageIds)
             }
         }
-        knownImageIds.formUnion(context.templates.pack(id: recipe.template.id)?.imageIds ?? [])
         let resolver = RightsResolver(baseURL: context.cwd, knownImageIds: knownImageIds, ledger: ledger)
         let resolution = try resolver.resolve(declaration)
         return RecipeRightsResolution(meta: resolution.meta,

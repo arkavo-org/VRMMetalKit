@@ -91,11 +91,14 @@ public enum MCPFacade {
 
     // MARK: Composition helpers
 
-    static func invoke(_ operationName: String, params: [String: JSONValue], session: ServeSession, tool: String) throws -> InvokeOutcome {
+    static func invoke(_ operationName: String, params: [String: JSONValue], session: ServeSession, tool: String,
+                       refusalExtra: [String: JSONValue] = [:], refusalNotes: [String] = []) throws -> InvokeOutcome {
         guard let op = session.context.registry.operation(named: operationName) else {
             throw RPCError(code: RPCError.internalError, message: "Facade maps to unknown operation '\(operationName)'")
         }
-        guard eligible(operationName, session: session) else { return .refused(missingCapability(tool: tool, operation: operationName, session: session)) }
+        guard eligible(operationName, session: session) else {
+            return .refused(missingCapability(tool: tool, operation: operationName, session: session, extra: refusalExtra, notes: refusalNotes))
+        }
         return .envelope(try session.invokeOperation(op, params: params, isNotification: false))
     }
 
@@ -129,7 +132,7 @@ public enum MCPFacade {
         return r.int.map(String.init) ?? "n/a"
     }
 
-    static func missingCapability(tool: String, operation: String, session: ServeSession) -> JSONValue {
+    static func missingCapability(tool: String, operation: String, session: ServeSession, extra: [String: JSONValue] = [:], notes: [String] = []) -> JSONValue {
         let op = session.context.registry.operation(named: operation)
         let error = AuthorError(code: .missingCapability, path: "/operation", observed: .string(operation),
                                 required: op.map { .string($0.requiredEvidence.rawValue) },
@@ -137,7 +140,7 @@ public enum MCPFacade {
                                 suggestedCommands: ["capabilities"])
         let envelope = ResultEnvelope.failed(requestId: nil, revision: nil, errors: [error])
         let json = (try? ServeSession.rpcResult(envelope)) ?? .object([:])
-        return toolResult(envelope: json, revision: .null, isError: true, text: summary(tool: tool, envelope: json))
+        return toolResult(envelope: json, revision: .null, isError: true, text: ([summary(tool: tool, envelope: json)] + notes).joined(separator: "\n"), extra: extra)
     }
 
     static func projectArgument(_ arguments: [String: JSONValue], session: ServeSession) throws -> String {
@@ -271,7 +274,7 @@ public enum MCPFacade {
         if let f = arguments["file"]?.string { file = f } else {
             do { file = try latestBuildFile(project: project) } catch let error as AuthorError {
                 let e = try ServeSession.rpcResult(.failed(requestId: nil, revision: nil, errors: [error]))
-                return toolResult(envelope: e, revision: .null, isError: true, text: summary(tool: "vrm_qa", envelope: e), extra: ["previews": []])
+                return toolResult(envelope: e, revision: .null, isError: true, text: summary(tool: "vrm_qa", envelope: e) + "\n" + inspectionNote, extra: ["previews": []])
             }
         }
         let revisionNumber = (try? ProjectStore.open(at: URL(fileURLWithPath: project)).state().revision) ?? 0
@@ -284,7 +287,7 @@ public enum MCPFacade {
         }
         let params: [String: JSONValue] = ["project": .string(project), "request": ["file": .string(file), "suite": .string(suite)], "out": .string(out)]
         let envelope: JSONValue
-        switch try invoke("qa run", params: params, session: session, tool: "vrm_qa") {
+        switch try invoke("qa run", params: params, session: session, tool: "vrm_qa", refusalExtra: ["previews": []], refusalNotes: [inspectionNote]) {
         case .refused(let r): return r
         case .envelope(let e): envelope = e
         }
@@ -299,7 +302,7 @@ public enum MCPFacade {
                 requestContext.projectPath = URL(fileURLWithPath: project)
                 previews = try QAPreviewRenderer.render(mode: mode, size: size, file: fileURL, data: data, outputDirectory: URL(fileURLWithPath: out), render: session.previewRenderer, context: requestContext)
                 if mode != .paths, session.previewRenderer == nil || previews.isEmpty {
-                    warnings.append("warning RENDERER_UNAVAILABLE no preview renderer in this session; render scenarios are incomplete")
+                    warnings.append("warning RENDERER_UNAVAILABLE no preview renderer in this session; no preview images were produced")
                 }
             } catch {
                 previews = []

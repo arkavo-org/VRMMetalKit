@@ -351,6 +351,26 @@ final class ExportPackTests: XCTestCase {
         XCTAssertEqual(applied.revisionAfter, 1)
     }
 
+    func testRecipeApplyStillRejectsForeignImageIdsAfterPackUnion() throws {
+        let root = try ProjectTestHarness.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = ProjectTestHarness.context(cwd: root, templates: TemplateRegistry.standard())
+        let dir = root.appendingPathComponent("native.vrmauthor")
+        let initialised = ProjectTestHarness.invoke(context, "project init", ["dir": .string(dir.path), "template": .string(NativeAnimeV1Pack.packId), "seed": .number(42)])
+        XCTAssertEqual(initialised.status, .succeeded, "\(initialised.errors)")
+        let projectContext = ProjectTestHarness.context(cwd: root, projectPath: dir, templates: TemplateRegistry.standard())
+
+        let exported = ProjectTestHarness.invoke(projectContext, "recipe export", ProjectTestHarness.request(dir, ["out": .string(root.appendingPathComponent("recipe.json").path)]))
+        XCTAssertEqual(exported.status, .succeeded, "\(exported.errors)")
+        var recipe = try XCTUnwrap(exported.result?["recipe"])
+        try JSONPointer("/rights/meta/thumbnailImage").set(in: &recipe, to: "image:not-a-pack-image")
+
+        let applied = ProjectTestHarness.invoke(projectContext, "recipe apply", ProjectTestHarness.request(dir, ["recipe": recipe, "expectedRevision": 0]))
+        XCTAssertEqual(applied.status, .failed)
+        XCTAssertEqual(applied.errors.first?.code, .rightsConflict)
+        XCTAssertTrue(try XCTUnwrap(applied.errors.first?.message).contains("THUMBNAIL_UNKNOWN_IMAGE"), "\(applied.errors)")
+    }
+
     // MARK: build
 
     func testBuildWritesArtifactsIdMapAndReusesUnchangedInputs() throws {

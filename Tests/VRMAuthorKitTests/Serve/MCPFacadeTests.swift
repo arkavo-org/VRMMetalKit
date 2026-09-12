@@ -285,6 +285,8 @@ final class MCPFacadeTests: XCTestCase {
         let qa = try call(&server, id: 2, "vrm_qa", ["project": .string(dir.path)])
         XCTAssertEqual(qa["result"]?["isError"], true)
         XCTAssertEqual(qa["result"]?["structuredContent"]?["errors"]?[0]?["suggestedCommands"], ["build"])
+        XCTAssertEqual(qa["result"]?["structuredContent"]?["previews"], [])
+        XCTAssertTrue(try XCTUnwrap(qa["result"]?["content"]?[0]?["text"]?.string).contains(MCPFacade.inspectionNote))
     }
 
     func testQaPreviewImagesFollowTheImagesMode() throws {
@@ -351,6 +353,45 @@ final class MCPFacadeTests: XCTestCase {
             XCTAssertEqual(width, 256)
             XCTAssertEqual(height, 256)
         }
+    }
+
+    // MARK: the whole loop
+
+    func testStarterLoopInOneSession() throws {
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness", VRMAuthorRenderLocator.environmentKey: "/nonexistent", "PATH": path])
+
+        let read = try exchange(&server, #"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"recipe://native-anime-v1/female"}}"#)
+        let starter = try JSONValue.parse(try XCTUnwrap(read["result"]?["contents"]?[0]?["text"]?.string))
+
+        let dir = root.appendingPathComponent("loop.vrmauthor")
+        let initialised = try call(&server, id: 2, "vrm_project", ["action": "init", "dir": .string(dir.path), "seed": 42])
+        XCTAssertEqual(initialised["result"]?["isError"], false, "\(initialised)")
+        XCTAssertEqual(initialised["result"]?["structuredContent"]?["revision"], 0)
+
+        let applied = try call(&server, id: 3, "vrm_recipe", ["action": "apply", "project": .string(dir.path), "recipe": starter, "expectedRevision": 0, "requestId": "loop-1"])
+        XCTAssertEqual(applied["result"]?["isError"], false, "\(applied)")
+        XCTAssertEqual(applied["result"]?["structuredContent"]?["revision"], 1)
+
+        let built = try call(&server, id: 4, "vrm_build", ["project": .string(dir.path)])
+        XCTAssertEqual(built["result"]?["isError"], false, "\(built)")
+        let buildHash = try XCTUnwrap(built["result"]?["structuredContent"]?["result"]?["buildHash"]?.string)
+        XCTAssertEqual(BuildSupport.latestBuildHash(try ProjectStore.open(at: dir)), buildHash)
+
+        let qa = try call(&server, id: 5, "vrm_qa", ["project": .string(dir.path), "images": "paths"])
+        XCTAssertEqual(qa["result"]?["isError"], false, "\(qa)")
+        XCTAssertNotNil(qa["result"]?["structuredContent"]?["result"]?["verdict"]?.string)
+        XCTAssertEqual(qa["result"]?["structuredContent"]?["previews"], [])
+
+        let out = root.appendingPathComponent("loop-final.vrm")
+        let exported = try call(&server, id: 6, "vrm_export", ["project": .string(dir.path), "out": .string(out.path)])
+        XCTAssertEqual(exported["result"]?["isError"], false, "\(exported)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: out.path))
+
+        let final = try call(&server, id: 7, "vrm_recipe", ["action": "export", "project": .string(dir.path)])
+        let recipe = try XCTUnwrap(final["result"]?["structuredContent"]?["result"]?["recipe"])
+        XCTAssertEqual(recipe["body"]?["body.heightM"], 1.60, "the applied starter round-trips")
+        XCTAssertEqual(recipe["outfits"]?[1]?["preset"], "skirt-v1")
     }
 }
 

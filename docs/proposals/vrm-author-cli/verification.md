@@ -293,9 +293,10 @@ and `corpus-validated` cannot be admitted from it.
 
 Implementation, schema, template, profile, oracle, dependency, judge or rubric changes
 invalidate affected evidence through the dependency graph: the entry moves to `stale`
-until re-evaluated. MCP `tools/list` exposes only tools runnable under the session's
-evidence policy; harness sessions may execute unqualified candidates in isolated
-scratch projects. The default production session requires current command-specific
+until re-evaluated. MCP `tools/list` exposes the six facade tools; a facade tool is
+listed when any operation it maps to is admitted under the session's evidence policy
+(or in a harness session), and a not-admitted action returns `MISSING_CAPABILITY`;
+harness sessions may execute unqualified candidates in isolated scratch projects. The default production session requires current command-specific
 evidence. `capabilities --evidence-policy PATH` reports eligibility under a stricter
 caller policy; a caller may narrow scope or raise the required level but cannot weaken
 the release policy. Exploration records are never production qualification.
