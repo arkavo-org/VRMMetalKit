@@ -191,4 +191,45 @@ final class MCPFacadeTests: XCTestCase {
         XCTAssertEqual(again["result"]?["structuredContent"]?["result"]?["recipe"]?["body"]?["body.heightM"], 1.5)
         XCTAssertEqual(again["result"]?["structuredContent"]?["revision"], 1)
     }
+
+    // MARK: vrm_build / vrm_export
+
+    func testBuildDefaultsToDraftAtProjectRootAndExportWritesFinal() throws {
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"])
+        let dir = root.appendingPathComponent("b.vrmauthor")
+        _ = try call(&server, id: 1, "vrm_project", ["action": "init", "dir": .string(dir.path), "seed": 42])
+        let built = try call(&server, id: 2, "vrm_build", ["project": .string(dir.path)])
+        XCTAssertEqual(built["result"]?["isError"], false)
+        let s = try XCTUnwrap(built["result"]?["structuredContent"])
+        XCTAssertEqual(s["revision"], 0)
+        let hash = try XCTUnwrap(s["result"]?["buildHash"]?.string)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.appendingPathComponent("draft.vrm").path))
+        let builds = try FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("builds").path).sorted()
+        XCTAssertEqual(builds, [hash, "latest.json"], "nothing but recordBuild output under builds/")
+        XCTAssertEqual(try MCPFacade.latestBuildFile(project: dir.path), dir.appendingPathComponent("builds/\(hash)/avatar.vrm").path)
+
+        let rebuilt = try call(&server, id: 3, "vrm_build", ["project": .string(dir.path)])
+        XCTAssertEqual(rebuilt["result"]?["isError"], false, "default replace:true lets the draft be rebuilt")
+        XCTAssertEqual(rebuilt["result"]?["structuredContent"]?["result"]?["buildHash"], .string(hash), "same recipe, same bytes")
+
+        var cliContext = server.context
+        cliContext.projectPath = dir
+        let cli = ProjectTestHarness.invoke(cliContext, "build", ["project": .string(dir.path), "out": .string(dir.appendingPathComponent("cli.vrm").path)])
+        XCTAssertEqual(cli.result?["buildHash"], .string(hash), "facade and CLI build the same bytes")
+
+        let exported = try call(&server, id: 4, "vrm_export", ["project": .string(dir.path), "out": .string(root.appendingPathComponent("final.vrm").path)])
+        XCTAssertEqual(exported["result"]?["isError"], false)
+        XCTAssertNotNil(exported["result"]?["structuredContent"]?["result"]?["lossReport"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("final.vrm").path))
+    }
+
+    func testLatestBuildFileFailsBeforeAnyBuild() throws {
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"])
+        let dir = root.appendingPathComponent("nb.vrmauthor")
+        _ = try call(&server, id: 1, "vrm_project", ["action": "init", "dir": .string(dir.path)])
+        XCTAssertThrowsError(try MCPFacade.latestBuildFile(project: dir.path)) { error in
+            XCTAssertEqual((error as? AuthorError)?.code, .missingInput)
+            XCTAssertEqual((error as? AuthorError)?.suggestedCommands, ["build"])
+        }
+    }
 }

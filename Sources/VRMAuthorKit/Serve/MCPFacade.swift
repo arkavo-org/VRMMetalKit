@@ -250,9 +250,41 @@ public enum MCPFacade {
         }
     }
 
-    static func build(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue { throw RPCError(code: RPCError.internalError, message: "not implemented") }
+    static func build(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue {
+        let project = try projectArgument(arguments, session: session)
+        let out = arguments["out"]?.string ?? URL(fileURLWithPath: project).appendingPathComponent("draft.vrm").path
+        let params: [String: JSONValue] = ["project": .string(project), "out": .string(out), "replace": arguments["replace"] ?? true]
+        switch try invoke("build", params: params, session: session, tool: "vrm_build") {
+        case .refused(let r): return r
+        case .envelope(let e): return toolResult(envelope: e, revision: revision(of: e), isError: e["status"] != "succeeded", text: summary(tool: "vrm_build", envelope: e))
+        }
+    }
+
     static func qa(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue { throw RPCError(code: RPCError.internalError, message: "not implemented") }
-    static func export(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue { throw RPCError(code: RPCError.internalError, message: "not implemented") }
+
+    static func export(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue {
+        let project = try projectArgument(arguments, session: session)
+        guard let out = arguments["out"]?.string else { throw RPCError(code: RPCError.invalidParams, message: "Invalid params: out is required", data: ["path": "/out"]) }
+        var params: [String: JSONValue] = ["project": .string(project), "out": .string(out)]
+        if let replace = arguments["replace"] { params["replace"] = replace }
+        switch try invoke("export vrm", params: params, session: session, tool: "vrm_export") {
+        case .refused(let r): return r
+        case .envelope(let e): return toolResult(envelope: e, revision: revision(of: e), isError: e["status"] != "succeeded", text: summary(tool: "vrm_export", envelope: e))
+        }
+    }
+
+    /// `builds/<hash>/avatar.vrm` for the project's newest build.
+    static func latestBuildFile(project: String) throws -> String {
+        let store = try ProjectStore.open(at: URL(fileURLWithPath: project))
+        guard let hash = BuildSupport.latestBuildHash(store) else {
+            throw AuthorError(code: .missingInput, path: "/file", message: "No build recorded for this project.", suggestedCommands: ["build"])
+        }
+        let url = BuildSupport.avatarURL(store, hash)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw AuthorError(code: .missingInput, path: "/file", observed: .string(url.path), message: "Latest build file is missing.", suggestedCommands: ["build"])
+        }
+        return url.path
+    }
 
     static func project(_ arguments: [String: JSONValue], session: ServeSession) throws -> JSONValue {
         switch arguments["action"]?.string {
