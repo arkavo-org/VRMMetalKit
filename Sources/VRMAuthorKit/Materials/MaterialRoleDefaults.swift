@@ -63,7 +63,8 @@ public enum MaterialRoleDefaults {
 
     public static func imageSize(for role: MaterialRole) -> Int {
         switch role {
-        case .faceSkin, .iris, .eyeWhite, .eyeHighlight, .eyeline, .eyelash, .brow, .mouth: return 1024
+        case .faceSkin, .bodySkin, .cloth: return 2048
+        case .iris, .eyeWhite, .eyeHighlight, .eyeline, .eyelash, .brow, .mouth: return 1024
         default: return 512
         }
     }
@@ -84,7 +85,7 @@ public enum MaterialRoleDefaults {
         case .eyeWhite: return ColourTransfer.linear(srgb8: 250, 250, 250)
         case .eyeHighlight: return SIMD3(1, 1, 1)
         case .eyeline, .eyelash: return ColourTransfer.linear(srgb8: 40, 28, 30)
-        case .mouth: return ColourTransfer.linear(srgb8: 200, 90, 100)
+        case .mouth: return ColourTransfer.linear(srgb8: 238, 178, 163)
         case .other: return ColourTransfer.linear(srgb8: 128, 128, 128)
         }
     }
@@ -123,8 +124,12 @@ public enum MaterialRoleDefaults {
             let strand = 0.5 + 0.5 * sin(v * 2 * Float.pi * 40 + strandPhases[band])
             return opaque(base * (0.85 + 0.3 * strand))
         case .cloth:
-            let noise = prng.nextUnit()
-            return opaque(base * (0.95 + 0.1 * noise))
+            // Fine warp/weft weave: row- and column-periodic so the deflate
+            // stage compresses it well, and it reads as fabric at close range
+            // instead of per-pixel static.
+            let weft = 0.5 + 0.5 * sin(v * 2 * Float.pi * 256)
+            let warp = 0.5 + 0.5 * sin(u * 2 * Float.pi * 256)
+            return opaque(base * (0.94 + 0.09 * weft * weft) * (0.97 + 0.05 * warp))
         case .iris: return irisPixel(base: base, u: u, v: v, r: r, du: du, dv: dv)
         case .eyeWhite:
             var c = base * (1 - 0.10 * r * r)
@@ -167,8 +172,8 @@ public enum MaterialRoleDefaults {
             let cavity = 1 - Self.smooth01((r - 0.30) / 0.10)
             var c = mix(base, SIMD3<Float>(0.08, 0.015, 0.02), cavity)
             let lip = Self.smooth01((r - 0.40) / 0.05)
-            let seam = (1 - Self.smooth01((abs(v - 0.5) - 0.008) / 0.014)) * lip
-            c = mix(c, base * 0.45, 0.85 * seam)
+            let seam = (1 - Self.smooth01((abs(v - 0.5) - 0.004) / 0.008)) * lip
+            c = mix(c, base * 0.55, 0.8 * seam)
             let corner = Self.smooth01((abs(2 * u - 1) - 0.75) / 0.2) * lip
             c *= 1 - 0.25 * corner
             let lipMid = 1 - Self.smooth01((abs(2 * u - 1) - 0.3) / 0.5)

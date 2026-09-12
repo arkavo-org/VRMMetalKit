@@ -45,7 +45,7 @@ final class MaterialsCompilerTests: XCTestCase {
             XCTAssertNotNil(try JSONPointer(leaf).get(in: face.mtoon), leaf)
         }
         let facePNG = try PNGEncoder.chunks(of: out.images[0].pngData)
-        XCTAssertEqual(facePNG[0].payload[0..<8].map { $0 }, [0, 0, 4, 0, 0, 0, 4, 0], "1024×1024")
+        XCTAssertEqual(facePNG[0].payload[0..<8].map { $0 }, [0, 0, 8, 0, 0, 0, 8, 0], "2048×2048")
         XCTAssertEqual(try PNGEncoder.chunks(of: out.images[1].pngData)[0].payload[0..<8].map { $0 }, [0, 0, 4, 0, 0, 0, 4, 0], "iris 1024×1024")
         XCTAssertEqual(out.images[0].colourSpace, .srgb)
         XCTAssertEqual(out.images[0].usage, .colour)

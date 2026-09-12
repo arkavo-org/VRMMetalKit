@@ -226,7 +226,7 @@ final class MaterialsPackTests: XCTestCase {
         XCTAssertEqual(iris.mtoon["outlineWidthMode"], "none")
         XCTAssertEqual(iris.gltf["alphaMode"], "BLEND")
         XCTAssertEqual(MaterialRoleDefaults.imageSpec(for: .iris).width, 1024)
-        XCTAssertEqual(MaterialRoleDefaults.imageSpec(for: .cloth).width, 512)
+        XCTAssertEqual(MaterialRoleDefaults.imageSpec(for: .cloth).width, 2048)
         let irisRaster = MaterialRoleDefaults.raster(for: .iris, width: 64, height: 64, seed: 0)
         XCTAssertEqual(irisRaster[0, 0].w, 0)
         XCTAssertEqual(irisRaster[32, 32].w, 1)

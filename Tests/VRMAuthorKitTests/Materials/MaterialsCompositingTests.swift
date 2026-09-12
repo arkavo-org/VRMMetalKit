@@ -130,7 +130,7 @@ final class MaterialsCompositingTests: XCTestCase {
             XCTAssertEqual(png, try b.png(colourSpace: .srgb, usage: .colour))
             XCTAssertEqual(try PNGEncoder.chunks(of: png).map(\.type), ["IHDR", "IDAT", "IEND"])
         }
-        XCTAssertNotEqual(MaterialRoleDefaults.raster(for: .cloth, width: 32, height: 32, seed: 1), MaterialRoleDefaults.raster(for: .cloth, width: 32, height: 32, seed: 2))
+        XCTAssertEqual(MaterialRoleDefaults.raster(for: .cloth, width: 32, height: 32, seed: 1), MaterialRoleDefaults.raster(for: .cloth, width: 32, height: 32, seed: 2), "the weave pattern is seed-independent")
         XCTAssertNotEqual(MaterialRoleDefaults.raster(for: .hair, width: 32, height: 32, seed: 1), MaterialRoleDefaults.raster(for: .hair, width: 32, height: 32, seed: 2))
         XCTAssertEqual(MaterialRoleDefaults.raster(for: .faceSkin, width: 32, height: 32, seed: 1), MaterialRoleDefaults.raster(for: .faceSkin, width: 32, height: 32, seed: 2), "flat roles ignore the seed")
         var prng = SplitMix64(seed: 0)
