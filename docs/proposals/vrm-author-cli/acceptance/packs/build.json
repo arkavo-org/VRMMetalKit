@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "26d99273f2b06e063fbe2b9da8b96962d27617d464c3adc28f009cd35ab56259",
   "resultSchemaHash": "cd16072b7fcfb65f40b2a2c08a668b6d7e616d1c4e37cc5ce762058f5634dd14",
-  "packHash": "6016c85ac5edc50f9b52546b47a036c9f2a64831e00889b34755ac0bd16661e2",
+  "packHash": "4ce2d49519a0201ef73c2bf01cb14fa27aa86a3272b34beadc34bffa808d2c80",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,11 +20,11 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8",
-      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8",
-      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8",
-      "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8",
-      "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift @ 46b75b8b77e699eee954a24902c2d0185d3562b8",
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
+      "Tests/VRMAuthorKitTests/QA/MutantInjectionTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
+      "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
+      "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift @ 11188c9e489139a726be13c1dd5abc114674c69a",
       "docs/proposals/vrm-author-cli/parameters.md (Hair, outfits and accessories; Rig, expression, gaze, spring and first-person fields)",
       "docs/proposals/vrm-author-cli/commands.md (`build` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Compile (Shape + Hair/springs + Materials aggregated), visually-validated)"
@@ -91,7 +91,7 @@
     "kind": "swift-test",
     "entryPoint": "ExportPackTests",
     "environment": {
-      "pinnedCommit": "46b75b8b77e699eee954a24902c2d0185d3562b8",
+      "pinnedCommit": "11188c9e489139a726be13c1dd5abc114674c69a",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "403b25860029a553999eaa225222cf5ca08ac1e8ce5da5491f174abe8af66ebc",
         "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
