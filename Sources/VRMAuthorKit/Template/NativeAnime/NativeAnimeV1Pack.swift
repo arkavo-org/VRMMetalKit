@@ -122,6 +122,19 @@ public struct NativeAnimeV1Pack: TemplatePack {
         let scalpUnderlay = recipe.hair.isEmpty ? nil : hairTexture
         let headSkin = template.meshes.first { $0.id == Self.headMeshId }!.primitives[HeadPrimitive.skin.rawValue]
         let scalp = Set(attachments.indices(of: "scalp", mesh: Self.headMeshId) + attachments.indices(of: "nape", mesh: Self.headMeshId))
+        // Cheek anchors: below and outside each eye, mapped to the nearest
+        // face-region vertex's UV so the blush lands on the shell's face band.
+        let faceVerts = attachments.indices(of: "face", mesh: Self.headMeshId)
+        let cheekUVs: [SIMD2<Float>] = attachments.eyes.compactMap { eye in
+            let sign: Float = eye.side == "left" ? 1 : -1
+            let anchor = eye.center + SIMD3(sign * 1.55 * eye.lidRadius, -1.15 * eye.lidRadius, 0.25 * eye.lidRadius)
+            var best = -1, bestD = Float.infinity
+            for v in faceVerts where v < headSkin.positions.count && v < headSkin.uv0.count {
+                let d = V3.distance(headSkin.positions[v], anchor)
+                if d < bestD { bestD = d; best = v }
+            }
+            return best >= 0 ? headSkin.uv0[best] : nil
+        }
         let faceSize = MaterialRoleDefaults.imageSize(for: .faceSkin)
         let images = [
             ImageSpec(id: NativeAnimeMaterials.faceImageId, width: faceSize, height: faceSize, colourSpace: .srgb, usage: .colour),
@@ -129,7 +142,7 @@ public struct NativeAnimeV1Pack: TemplatePack {
             ImageSpec(id: NativeAnimeMaterials.thumbnailImageId, width: NativeAnimeTextures.thumbnailSize, height: NativeAnimeTextures.thumbnailSize, colourSpace: .srgb, usage: .colour),
         ]
         let sources: [String: RasterImage] = [
-            NativeAnimeMaterials.faceImageId: NativeAnimeTextures.faceRaster(head: headSkin, scalp: scalp, hair: scalpUnderlay, seed: seed),
+            NativeAnimeMaterials.faceImageId: NativeAnimeTextures.faceRaster(head: headSkin, scalp: scalp, cheeks: cheekUVs, hair: scalpUnderlay, seed: seed),
             NativeAnimeMaterials.hairImageId: NativeAnimeTextures.hairRaster(texture: hairTexture, seed: seed),
             NativeAnimeMaterials.thumbnailImageId: NativeAnimeTextures.thumbnailRaster(hair: hairTexture, skin: MaterialRoleDefaults.baseColour(for: .faceSkin)),
         ]

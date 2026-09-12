@@ -27,7 +27,7 @@ public enum HairBobV1 {
     public enum Layout {
         public static let ringAClumps = 16
         public static let ringAElevationDeg: Float = 22
-        public static let ringAAzimuthRangeDeg: ClosedRange<Float> = 40...320
+        public static let ringAAzimuthRangeDeg: ClosedRange<Float> = 52...308
         public static let ringBClumps = 8
         public static let ringBElevationDeg: Float = 50
         public static let bangAzimuthsDeg: [Float] = [-30, -18, -6, 6, 18, 30]

@@ -86,23 +86,46 @@ enum NativeAnimeTextures {
 
     /// The face-skin role raster with the head shell's scalp and nape
     /// triangles painted in the hair base colour, so the crown reads as a hair
-    /// cap between the bob strips. Triangles are rasterised in UV space with a
-    /// one-texel bleed.
-    static func faceRaster(head: CompiledPrimitive, scalp: Set<Int>, hair: HairTexture?, seed: UInt64) -> RasterImage {
+    /// cap between the bob strips, plus a soft cheek blush at the given UV
+    /// centres. Triangles are rasterised in UV space with a one-texel bleed.
+    static func faceRaster(head: CompiledPrimitive, scalp: Set<Int>, cheeks: [SIMD2<Float>] = [], hair: HairTexture?, seed: UInt64) -> RasterImage {
         let size = MaterialRoleDefaults.imageSize(for: .faceSkin)
         var image = MaterialRoleDefaults.raster(for: .faceSkin, width: size, height: size, seed: seed)
-        guard let hair, !scalp.isEmpty else { return image }
-        let colour = rgb(hair.baseColour)
-        let paint = SIMD4<Float>(colour.x, colour.y, colour.z, 1)
-        let bleed: Float = 1.0 / Float(size)
-        var t = 0
-        while t + 2 < head.indices.count {
-            let a = Int(head.indices[t]), b = Int(head.indices[t + 1]), c = Int(head.indices[t + 2])
-            t += 3
-            guard scalp.contains(a), scalp.contains(b), scalp.contains(c), a < head.uv0.count, b < head.uv0.count, c < head.uv0.count else { continue }
-            fill(&image, head.uv0[a], head.uv0[b], head.uv0[c], bleed: bleed, colour: paint)
+        if let hair, !scalp.isEmpty {
+            let colour = rgb(hair.baseColour)
+            let paint = SIMD4<Float>(colour.x, colour.y, colour.z, 1)
+            let bleed: Float = 1.0 / Float(size)
+            var t = 0
+            while t + 2 < head.indices.count {
+                let a = Int(head.indices[t]), b = Int(head.indices[t + 1]), c = Int(head.indices[t + 2])
+                t += 3
+                guard scalp.contains(a), scalp.contains(b), scalp.contains(c), a < head.uv0.count, b < head.uv0.count, c < head.uv0.count else { continue }
+                fill(&image, head.uv0[a], head.uv0[b], head.uv0[c], bleed: bleed, colour: paint)
+            }
+        }
+        for centre in cheeks {
+            blush(&image, centre: centre, radius: 0.040, strength: 0.16, colour: ColourTransfer.linear(srgb8: 244, 173, 164))
         }
         return image
+    }
+
+    /// Soft Gaussian cheek tint blended over the base skin colour.
+    static func blush(_ image: inout RasterImage, centre: SIMD2<Float>, radius: Float, strength: Float, colour: SIMD3<Float>) {
+        let w = Float(image.width), h = Float(image.height)
+        let minX = max(Int((centre.x - 2.5 * radius) * w), 0), maxX = min(Int((centre.x + 2.5 * radius) * w) + 1, image.width - 1)
+        let minY = max(Int((centre.y - 2.5 * radius) * h), 0), maxY = min(Int((centre.y + 2.5 * radius) * h) + 1, image.height - 1)
+        guard minX <= maxX, minY <= maxY else { return }
+        for y in minY...maxY {
+            for x in minX...maxX {
+                let uv = image.uv(x: x, y: y)
+                let d = distance(SIMD2(Float(uv.x), Float(uv.y)), centre) / radius
+                let a = strength * exp(-d * d)
+                guard a > 0.004 else { continue }
+                let p = image[x, y]
+                let c = SIMD3(p.x, p.y, p.z) * (1 - a) + colour * a
+                image[x, y] = SIMD4(c.x, c.y, c.z, p.w)
+            }
+        }
     }
 
     static func fill(_ image: inout RasterImage, _ a: SIMD2<Float>, _ b: SIMD2<Float>, _ c: SIMD2<Float>, bleed: Float, colour: SIMD4<Float>) {
