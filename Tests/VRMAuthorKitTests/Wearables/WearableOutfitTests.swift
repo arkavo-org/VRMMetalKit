@@ -50,12 +50,15 @@ final class WearableOutfitTests: XCTestCase {
         let prim = try garment(out, "shirt")
         let joints = try XCTUnwrap(prim.joints0)
         let covered = Set(host.region("chest") + host.region("torso") + host.region("waist") + host.region("upperArmL") + host.region("upperArmR"))
-        XCTAssertEqual(prim.positions.count, covered.count)
+        // Shell vertices come first (sorted covered order); collar/cuff/hem
+        // trim vertices follow.
+        XCTAssertEqual(prim.positions.count, covered.count + 192)
         var matched = 0
         for (v, p) in prim.positions.enumerated() {
             let base = covered.min { V3.distance(host.bodyPositions[$0], p) < V3.distance(host.bodyPositions[$1], p) }!
             let shellDistance = V3.distance(host.bodyPositions[base], p)
             XCTAssertGreaterThanOrEqual(shellDistance, Float(OutfitPresets.baseClearanceM) - 1e-5)
+            guard v < covered.count else { continue }
             XCTAssertLessThanOrEqual(shellDistance, Float(OutfitPresets.baseClearanceM) + 0.02, "cuff/hem shaping stays a small outward offset")
             XCTAssertEqual(joints[v], host.bodyJoints[base])
             XCTAssertEqual(prim.uv0[v], host.bodyUV0[base])

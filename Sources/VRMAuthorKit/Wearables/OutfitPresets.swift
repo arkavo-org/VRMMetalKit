@@ -215,6 +215,10 @@ public enum OutfitPresets {
 
         shapeGarment(d, builder: &builder, remap: remap, regionOfVertex: regionOfVertex, host: host)
 
+        if d.kind == .top, item.controls.length >= 0 {
+            addTrimBands(&builder, host: host, regionOfVertex: regionOfVertex, remap: remap, covered: covered, sources: &sources)
+        }
+
         let minClearance = try clearance(builder: builder, sources: sources, host: host, item: item, descriptor: d, regionOfVertex: regionOfVertex)
 
         let meshId = "mesh:garment:\(item.id)"
@@ -224,6 +228,91 @@ public enum OutfitPresets {
                                coveredRegions: coveredRegions, hiddenRegions: d.hiddenRegions)
         return Build(mesh: mesh, meshNode: CompiledNode(id: nodeId, name: "Garment_\(item.id)"),
                      meshInstance: CompiledMeshInstance(nodeId: nodeId, meshId: meshId, skinId: host.bodySkin.id), info: info, warnings: warnings)
+    }
+
+    /// Trim bands: a crew collar around the neckline, cuff bands past the
+    /// sleeve ends and a hem band below the waist edge. Each band is an inner
+    /// row copied from the shaped shell's own rim vertices (so it tracks the
+    /// cuff/hem flare) plus an outer row, skinned and UV'd like its source.
+    static func addTrimBands(_ builder: inout MeshBuilder, host: WearableHost, regionOfVertex: [Int: String],
+                             remap: [Int: UInt32], covered: Set<Int>, sources: inout [Int]) {
+        // Collar: top rim of the covered chest, rising and flaring outward.
+        let chestIdx = host.region(WearableRegion.chest).filter { covered.contains($0) && remap[$0] != nil }
+        if !chestIdx.isEmpty {
+            let topY = chestIdx.map { host.bodyPositions[$0].y }.max()!
+            let rim = chestIdx.filter { topY - host.bodyPositions[$0].y < 0.012 }
+            addBand(builder: &builder, host: host, rim: rim, remap: remap, sources: &sources, axis: SIMD3(0, 1, 0), aroundY: true) { p, n, out in
+                // The collar rises at the front and back; toward the shoulders
+                // it flattens onto the shell so it never climbs into the arm lofts.
+                let frontness = 1 - OutfitPresets.shapeSmooth01((abs(out.x) - 0.5) / 0.25)
+                return p + out * 0.004 * frontness + SIMD3<Float>(0, 0.016 * frontness, 0) + n * 0.001 * (1 - frontness)
+            }
+        }
+
+        // Sleeve cuffs: distal rim of each covered upper arm.
+        for region in [WearableRegion.upperArmL, WearableRegion.upperArmR] {
+            let idx = host.region(region).filter { covered.contains($0) && remap[$0] != nil }
+            guard !idx.isEmpty else { continue }
+            let axis = limbAxis(region: region, indices: idx, host: host)
+            let params = axialParams(region: region, indices: idx, host: host)
+            let rim = idx.filter { (params[$0] ?? 0) > 0.96 }
+            guard !rim.isEmpty else { continue }
+            addBand(builder: &builder, host: host, rim: rim, remap: remap, sources: &sources, axis: axis, aroundY: false) { p, _, out in
+                // The cuff rides proud of the sleeve edge and folds slightly
+                // back over it; it must not extend distally into the forearm.
+                p + out * 0.006 - axis * 0.006
+            }
+        }
+
+        // Hem: bottom rim of the covered waist, dropping below the shell edge.
+        let waistIdx = host.region(WearableRegion.waist).filter { covered.contains($0) && remap[$0] != nil }
+        if !waistIdx.isEmpty {
+            let botY = waistIdx.map { host.bodyPositions[$0].y }.min()!
+            let rim = waistIdx.filter { host.bodyPositions[$0].y - botY < 0.012 }
+            addBand(builder: &builder, host: host, rim: rim, remap: remap, sources: &sources, axis: SIMD3(0, 1, 0), aroundY: true) { p, _, out in
+                p + SIMD3<Float>(0, -0.018, 0) + out * 0.005
+            }
+        }
+    }
+
+    /// Builds one two-row band from a rim loop: the inner row reuses the rim's
+    /// shaped shell vertices; `outerRow` positions the second row. The rim is
+    /// ordered by angle around the vertical axis (collar/hem) or the limb axis
+    /// (cuffs).
+    private static func addBand(builder: inout MeshBuilder, host: WearableHost, rim: [Int], remap: [Int: UInt32], sources: inout [Int],
+                                axis: SIMD3<Float>, aroundY: Bool,
+                                outerRow: (SIMD3<Float>, SIMD3<Float>, SIMD3<Float>) -> SIMD3<Float>) {
+        guard rim.count >= 3 else { return }
+        let centre: SIMD3<Float> = rim.map { host.bodyPositions[$0] }.reduce(SIMD3<Float>(0, 0, 0), +) / Float(rim.count)
+        let ordered: [Int]
+        if aroundY {
+            ordered = rim.sorted { atan2(host.bodyPositions[$0].z, host.bodyPositions[$0].x) < atan2(host.bodyPositions[$1].z, host.bodyPositions[$1].x) }
+        } else {
+            let tangent = V3.normalize(V3.cross(axis, SIMD3<Float>(0, 0, 1)), fallback: SIMD3<Float>(1, 0, 0))
+            let bitangent = V3.normalize(V3.cross(axis, tangent), fallback: SIMD3<Float>(0, 1, 0))
+            ordered = rim.sorted {
+                let a = host.bodyPositions[$0] - centre, b = host.bodyPositions[$1] - centre
+                return atan2(V3.dot(a, bitangent), V3.dot(a, tangent)) < atan2(V3.dot(b, bitangent), V3.dot(b, tangent))
+            }
+        }
+        var innerRow: [UInt32] = []
+        var outerRowIds: [UInt32] = []
+        for i in ordered {
+            guard let vi = remap[i], Int(vi) < builder.positions.count else { return }
+            let shellPos = builder.positions[Int(vi)]
+            let n = V3.normalize(host.bodyNormals[i])
+            let horizontal = V3.normalize(SIMD3<Float>(shellPos.x - centre.x, 0, shellPos.z - centre.z), fallback: n)
+            let outward = aroundY ? horizontal : n
+            innerRow.append(UInt32(builder.positions.count))
+            builder.addVertex(shellPos, normal: n, uv: host.bodyUV0[i], joints: host.bodyJoints[i], weights: host.bodyWeights[i])
+            outerRowIds.append(UInt32(builder.positions.count))
+            builder.addVertex(outerRow(shellPos, n, outward), normal: n, uv: host.bodyUV0[i], joints: host.bodyJoints[i], weights: host.bodyWeights[i])
+            sources.append(contentsOf: [i, i])
+        }
+        for k in 0..<innerRow.count {
+            let k1 = (k + 1) % innerRow.count
+            builder.addQuad(innerRow[k], innerRow[k1], outerRowIds[k1], outerRowIds[k])
+        }
     }
 
     /// Region-aware shaping pass: sleeve cuffs and hems flare slightly and the
