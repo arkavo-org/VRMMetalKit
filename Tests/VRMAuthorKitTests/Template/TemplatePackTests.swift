@@ -50,7 +50,7 @@ final class TemplatePackTests: XCTestCase {
     private let pack = NativeAnimeFixture.pack
 
     /// Cross-process pin of the default compile; verified identical over separate `swift test` invocations.
-    static let goldenDefaultBuildHash = "c93591315f8761e95449ccf13f5709be83feaf64a45ca149e369b449277cb307"
+    static let goldenDefaultBuildHash = "556b00d9ba99b54dc631cfd28dc36c8b3567e9c013b2f949216198a527e41892"
 
     static let expectedKeys: [String] = {
         var keys = ["body.heightM", "body.headCount"]

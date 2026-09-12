@@ -24,10 +24,10 @@ public enum HairBobV1 {
 
     /// Layout constants, fixed by the preset; only `HairControls` vary per recipe.
     public struct LayoutParams: Sendable {
-        public var ringAClumps = 24
+        public var ringAClumps = 23
         public var ringAElevationDeg: Float = 22
         public var ringAAzimuthRangeDeg: ClosedRange<Float> = 52...308
-        public var ringBClumps = 9
+        public var ringBClumps = 8
         public var ringBElevationDeg: Float = 50
         public var bangAzimuthsDeg: [Float] = [-36, -27, -18, -9, 0, 9, 18, 27, 36]
         public var bangElevationDeg: Float = 32
