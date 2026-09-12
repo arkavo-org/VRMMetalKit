@@ -236,7 +236,9 @@ six facade tools composed over the same handlers (`vrm_discover`, `vrm_project`,
 `vrm_recipe`, `vrm_build`, `vrm_qa`, `vrm_export`) and two starter Recipe resources
 (`recipe://native-anime-v1/female`, `recipe://native-anime-v1/male`). `vrm_qa` returns
 the locked QA checks plus small preview renders as MCP image content; previews are views
-for the agent, never evidence. A facade tool is listed when any operation it maps to has
+for the agent, never evidence; `images:"all"` at the default 512² puts roughly 1 MB of base64
+on one newline-delimited stdio line, so clients with message-size limits should use `key`
+or `paths`. A facade tool is listed when any operation it maps to has
 admitted evidence (or in a harness session); a not-yet-admitted action returns
 `MISSING_CAPABILITY`. The 1:1 surface is `--protocol jsonrpc`. JSON-RPC alone is not MCP
 compatibility; test the adapter with an independent client.
