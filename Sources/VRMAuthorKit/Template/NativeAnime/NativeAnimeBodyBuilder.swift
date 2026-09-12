@@ -107,14 +107,32 @@ struct NativeAnimeBodyBuilder {
         mesh.loft(la, segments: Self.limbSegments, capStart: NAVec3(lower.x - s * 0.015 * H, y, 0), capEnd: NAVec3(hand.x + s * 0.008 * H, y, 0))
 
         let hl = layout.handLength
-        let mitt = [
+        let palm = [
             xRing(hand.x, y: y, z: 0, ry: 0.013 * H, rz: 0.021 * H, sign: s, region: "hand\(sfx)"),
             xRing(hand.x + s * 0.25 * hl, y: y, z: 0, ry: 0.012 * H, rz: 0.029 * H, sign: s, region: "hand\(sfx)"),
-            xRing(hand.x + s * 0.55 * hl, y: y, z: 0, ry: 0.011 * H, rz: 0.032 * H, sign: s, region: "hand\(sfx)"),
-            xRing(hand.x + s * 0.80 * hl, y: y, z: 0, ry: 0.009 * H, rz: 0.028 * H, sign: s, region: "hand\(sfx)"),
-            xRing(hand.x + s * 1.00 * hl, y: y, z: 0, ry: 0.005 * H, rz: 0.019 * H, sign: s, region: "hand\(sfx)"),
+            xRing(hand.x + s * 0.45 * hl, y: y, z: 0, ry: 0.011 * H, rz: 0.031 * H, sign: s, region: "hand\(sfx)"),
         ]
-        mesh.loft(mitt, segments: Self.handSegments, capStart: NAVec3(hand.x - s * 0.005 * H, y, 0), capEnd: NAVec3(hand.x + s * 1.06 * hl, y, 0))
+        mesh.loft(palm, segments: Self.handSegments, capStart: NAVec3(hand.x - s * 0.005 * H, y, 0), capEnd: NAVec3(hand.x + s * 0.56 * hl, y, 0))
+
+        // Four finger lofts along the rig's finger chains; the "hand" region's
+        // allowed-bone set already includes the finger bones, and the tighter
+        // hand sigma in bodySkinning binds each finger to its own chain.
+        let fingerRadius: [Double] = [0.0068, 0.0073, 0.0068, 0.0056]
+        for (fi, finger) in ["Index", "Middle", "Ring", "Little"].enumerated() {
+            let joints = ["Proximal", "Intermediate", "Distal"].map { layout.joint(VRMHumanBone(rawValue: side + finger + $0)!) }
+            let r0 = fingerRadius[fi] * H
+            let dir = NAMath.normalize(joints[2] - joints[1])
+            func fring(_ p: NAVec3, _ r: Double) -> Ring {
+                Ring(center: p, u: NAMath.yAxis, v: NAMath.zAxis * s, ru: r, rv: r, region: "hand\(sfx)")
+            }
+            let rings = [
+                fring(joints[0] - NAMath.xAxis * (s * 0.06 * hl), r0 * 1.1),
+                fring(joints[0], r0),
+                fring(joints[1], r0 * 0.88),
+                fring(joints[2], r0 * 0.72),
+            ]
+            mesh.loft(rings, segments: Self.thumbSegments, capStart: joints[0] - NAMath.xAxis * (s * 0.11 * hl), capEnd: joints[2] + dir * (0.10 * hl))
+        }
 
         let thumbBase = NAVec3(hand.x + s * 0.22 * hl, y - 0.002 * H, 0.018 * H)
         let thumbDir = NAMath.normalize(NAVec3(s * 0.45, 0, 1))

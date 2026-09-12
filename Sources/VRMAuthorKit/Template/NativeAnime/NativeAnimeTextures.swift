@@ -25,16 +25,15 @@ enum NativeAnimeTextures {
     static let hairImageSize = 512
     static let thumbnailSize = 256
 
-    /// Root→tip gradient along V (V = 0 at the scalp), per-strand luminance
-    /// bands along U and a soft highlight band at a third of the length.
+    /// Root→tip gradient along V (V = 0 at the scalp), coherent strand streaks
+    /// across U that wave gently along the flow direction, and a soft
+    /// highlight band at a third of the length.
     static func hairRaster(texture: HairTexture, seed: UInt64) -> RasterImage {
-        var prng = SplitMix64(seed: seed ^ SplitMix64.fnv1a("hair") ^ SplitMix64.fnv1a(version))
         let base = rgb(texture.baseColour)
         let root = rgb(texture.rootColour)
         let tip = rgb(texture.tipColour)
-        let bands = 48
-        let phases: [Float] = (0..<bands).map { _ in prng.nextUnit() * 2 * Float.pi }
-        let gains: [Float] = (0..<bands).map { _ in 0.9 + 0.2 * prng.nextUnit() }
+        var seedPrng = SplitMix64(seed: seed ^ SplitMix64.fnv1a("hair") ^ SplitMix64.fnv1a(version))
+        let seedPhase = seedPrng.nextUnit() * 2 * Float.pi
         let size = hairImageSize
         var image = RasterImage(width: size, height: size)
         let highlightCentre: Float = 0.3
@@ -48,9 +47,9 @@ enum NativeAnimeTextures {
                 let tipMix = smoothstep(0.6, 1, v)
                 var c = base * (1 - rootMix) + root * rootMix
                 c = c * (1 - tipMix) + tip * tipMix
-                let band = min(Int(u * Float(bands)), bands - 1)
-                let strand = 0.5 + 0.5 * sin(v * 2 * Float.pi * 28 + phases[band])
-                c *= gains[band] * (0.92 + 0.16 * strand)
+                let flow = 2 * Float.pi * 48 * u + seedPhase + 1.2 * sin(2 * Float.pi * 3 * v)
+                let strand = 0.5 + 0.5 * sin(flow)
+                c *= 0.90 + 0.18 * strand
                 let h = 1 - smoothstep(0, highlightHalfWidth, abs(v - highlightCentre))
                 let lift = h * highlightOpacity
                 c = c * (1 - lift) + SIMD3<Float>(1, 1, 1) * lift

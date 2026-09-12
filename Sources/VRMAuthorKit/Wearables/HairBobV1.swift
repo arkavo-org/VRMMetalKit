@@ -182,14 +182,24 @@ public enum HairBobV1 {
                 let joints = SIMD4<UInt16>(jointBase + UInt16(b), jointBase + UInt16(b + 1), 0, 0)
                 let weights = SIMD4<Float>(1 - f, f, 0, 0)
                 let h = strip.halfWidths[i]
-                let c = strip.centres[i], w = strip.widthDirs[i], n = strip.normals[i]
-                builder.addVertex(c - w * h, normal: n, uv: SIMD2(0, u), joints: joints, weights: weights)
-                builder.addVertex(c + w * h, normal: n, uv: SIMD2(1, u), joints: joints, weights: weights)
+                let c = strip.centres[i], w = strip.widthDirs[i]
+                // The ridge bulges away from the head so it can never reduce
+                // face/head clearance below the strip edges' verified sweep.
+                var n = strip.normals[i]
+                if V3.dot(n, c - host.headCentre) < 0 { n = -n }
+                // Arched 3-vertex cross-section: a raised centre ridge reads as
+                // a rounded lock instead of a flat ribbon.
+                builder.addVertex(c - w * h, normal: V3.normalize(n - w, fallback: n), uv: SIMD2(0, u), joints: joints, weights: weights)
+                builder.addVertex(c + n * (h * 0.45), normal: n, uv: SIMD2(0.5, u), joints: joints, weights: weights)
+                builder.addVertex(c + w * h, normal: V3.normalize(n + w, fallback: n), uv: SIMD2(1, u), joints: joints, weights: weights)
             }
             for i in 0..<steps {
-                let l0 = UInt32(vertexStart + 2 * i), r0 = l0 + 1, l1 = l0 + 2, r1 = l0 + 3
-                builder.addTriangle(l0, r0, r1)
-                builder.addTriangle(l0, r1, l1)
+                let l0 = UInt32(vertexStart + 3 * i), m0 = l0 + 1, r0 = l0 + 2
+                let l1 = l0 + 3, m1 = l0 + 4, r1 = l0 + 5
+                builder.addTriangle(l0, m0, m1)
+                builder.addTriangle(l0, m1, l1)
+                builder.addTriangle(m0, r0, r1)
+                builder.addTriangle(m0, r1, m1)
             }
 
             var localCumulative = SIMD3<Float>.zero
@@ -217,9 +227,9 @@ public enum HairBobV1 {
 
             let pivotSection = steps - Layout.sectionsPerBone
             clumps.append(HairClumpInfo(id: clumpId, hairItemId: item.id, isBang: target.isBang, rootSampleIndex: sampleIndex, rootPosition: sample.position,
-                                        nodeIds: nodeIds, springId: springId, vertexStart: vertexStart, vertexCount: 2 * Layout.sectionsPerClump,
-                                        clearanceVertexStart: vertexStart + 2 * Layout.sectionsPerBone,
-                                        tipVertexStart: vertexStart + 2 * (pivotSection + 1), sweepPivot: strip.centres[pivotSection],
+                                        nodeIds: nodeIds, springId: springId, vertexStart: vertexStart, vertexCount: 3 * Layout.sectionsPerClump,
+                                        clearanceVertexStart: vertexStart + 3 * Layout.sectionsPerBone,
+                                        tipVertexStart: vertexStart + 3 * (pivotSection + 1), sweepPivot: strip.centres[pivotSection],
                                         sweepAxis: strip.widthDirs[pivotSection], sectionCentres: strip.centres))
         }
 

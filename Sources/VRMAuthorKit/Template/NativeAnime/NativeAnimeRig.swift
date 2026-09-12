@@ -201,20 +201,23 @@ struct NativeAnimeRig {
 
     /// Distance-to-segment weighting with Gaussian falloff over the bones a
     /// vertex's regions allow; top four influences, normalized in double precision.
+    /// Hand-region vertices use a tighter sigma so each finger binds to its own
+    /// chain instead of blending across the whole mitt.
     func bodySkinning(_ mesh: BuildMesh) -> Skinning {
+        let fingerBones = Set(Self.leftFingers + Self.rightFingers)
         var allowed = [[VRMHumanBone]](repeating: [], count: mesh.vertexCount)
         for region in mesh.regions.keys.sorted() {
             let bones = Self.bodyRegionBones(region)
             guard !bones.isEmpty else { continue }
             for i in mesh.regions[region]! { allowed[i] += bones }
         }
-        let sigma = 0.045 * layout.height
         let index = jointIndex
         var joints: [SIMD4<UInt16>] = []
         var weights: [SIMD4<Float>] = []
         joints.reserveCapacity(mesh.vertexCount)
         weights.reserveCapacity(mesh.vertexCount)
         for (i, v) in mesh.vertices.enumerated() {
+            let sigma = allowed[i].contains(where: fingerBones.contains) ? 0.014 * layout.height : 0.045 * layout.height
             var candidates: [(bone: VRMHumanBone, w: Double)] = []
             var seen = Set<VRMHumanBone>()
             for bone in allowed[i] where seen.insert(bone).inserted {

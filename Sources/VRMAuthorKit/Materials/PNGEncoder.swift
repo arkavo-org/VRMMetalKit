@@ -17,11 +17,11 @@
 import Foundation
 
 /// Deterministic, dependency-free PNG writer: 8-bit RGBA, filter type 0 on
-/// every row, zlib stream made of stored (uncompressed) deflate blocks, and
-/// exactly three chunks (IHDR, IDAT, IEND). No ancillary chunks are written,
-/// so the bytes depend only on the pixels and dimensions.
+/// every row, a zlib stream of fixed-Huffman deflate blocks with greedy LZ77
+/// matching, and exactly three chunks (IHDR, IDAT, IEND). No ancillary chunks
+/// are written, so the bytes depend only on the pixels and dimensions.
 public enum PNGEncoder {
-    public static let version = "png-stored/1"
+    public static let version = "png-fixed/1"
     public static let signature: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
     public static let maxStoredBlock = 65535
 
@@ -47,9 +47,125 @@ public enum PNGEncoder {
         ihdr.append(contentsOf: bigEndian(UInt32(height)))
         ihdr.append(contentsOf: [8, 6, 0, 0, 0])
         appendChunk(&out, type: "IHDR", payload: ihdr)
-        appendChunk(&out, type: "IDAT", payload: zlibStored(raw))
+        appendChunk(&out, type: "IDAT", payload: zlibDeflateFixed(raw))
         appendChunk(&out, type: "IEND", payload: [])
         return out
+    }
+
+    // MARK: zlib / deflate
+
+    /// zlib wrapper around a single fixed-Huffman deflate block produced by
+    /// greedy LZ77 matching (3-byte hash chains, bounded search depth). Fully
+    /// deterministic: ties break toward the nearest match, no lazy evaluation.
+    public static func zlibDeflateFixed(_ bytes: [UInt8]) -> [UInt8] {
+        [0x78, 0x01] + deflateFixed(bytes) + bigEndian(adler32(bytes))
+    }
+
+    public static func deflateFixed(_ bytes: [UInt8]) -> [UInt8] {
+        let lengthBase = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+        let lengthExtra = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+        let distBase = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+        let distExtra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+
+        var writer = BitWriter()
+        writer.writeBits(1, 1)  // BFINAL
+        writer.writeBits(1, 2)  // BTYPE = fixed Huffman
+
+        func writeSymbol(_ symbol: Int) {
+            if symbol < 144 {
+                writer.writeHuffman(0x30 + symbol, 8)
+            } else if symbol < 256 {
+                writer.writeHuffman(0x190 + symbol - 144, 9)
+            } else if symbol < 280 {
+                writer.writeHuffman(symbol - 256, 7)
+            } else {
+                writer.writeHuffman(0xC0 + symbol - 280, 8)
+            }
+        }
+        func writeMatch(_ length: Int, _ distance: Int) {
+            var li = 0
+            while li + 1 < lengthBase.count, lengthBase[li + 1] <= length { li += 1 }
+            writeSymbol(257 + li)
+            if lengthExtra[li] > 0 { writer.writeBits(length - lengthBase[li], lengthExtra[li]) }
+            var di = 0
+            while di + 1 < distBase.count, distBase[di + 1] <= distance { di += 1 }
+            writer.writeHuffman(di, 5)
+            if distExtra[di] > 0 { writer.writeBits(distance - distBase[di], distExtra[di]) }
+        }
+
+        var head = [Int](repeating: -1, count: 1 << 15)
+        var prev = [Int](repeating: -1, count: max(bytes.count, 1))
+        func hash(_ i: Int) -> Int {
+            Int((UInt32(bytes[i]) &* 31 &+ UInt32(bytes[i + 1])) &* 31 &+ UInt32(bytes[i + 2])) & 0x7FFF
+        }
+        var i = 0
+        while i < bytes.count {
+            var bestLength = 0, bestDistance = 0
+            if i + 2 < bytes.count {
+                let h = hash(i)
+                var candidate = head[h]
+                var depth = 0
+                while candidate >= 0, i - candidate <= 32768, depth < 64 {
+                    var length = 0
+                    let maxLength = min(258, bytes.count - i)
+                    while length < maxLength, bytes[candidate + length] == bytes[i + length] { length += 1 }
+                    if length > bestLength {
+                        bestLength = length
+                        bestDistance = i - candidate
+                        if length >= 258 { break }
+                    }
+                    candidate = prev[candidate]
+                    depth += 1
+                }
+                prev[i] = head[h]
+                head[h] = i
+            }
+            if bestLength >= 3 {
+                writeMatch(bestLength, bestDistance)
+                var j = i + 1
+                while j < i + bestLength, j + 2 < bytes.count {
+                    let h = hash(j)
+                    prev[j] = head[h]
+                    head[h] = j
+                    j += 1
+                }
+                i += bestLength
+            } else {
+                writeSymbol(Int(bytes[i]))
+                i += 1
+            }
+        }
+        writeSymbol(256)  // end of block
+        return writer.finish()
+    }
+
+    /// LSB-first deflate bit stream; Huffman codes are emitted MSB-first.
+    struct BitWriter {
+        var bytes: [UInt8] = []
+        var current: UInt32 = 0
+        var count = 0
+
+        mutating func writeBits(_ value: Int, _ bits: Int) {
+            current |= UInt32(value) << count
+            count += bits
+            while count >= 8 {
+                bytes.append(UInt8(current & 0xFF))
+                current >>= 8
+                count -= 8
+            }
+        }
+
+        mutating func writeHuffman(_ code: Int, _ bits: Int) {
+            var reversed = 0
+            for k in 0..<bits { reversed |= ((code >> k) & 1) << (bits - 1 - k) }
+            writeBits(reversed, bits)
+        }
+
+        func finish() -> [UInt8] {
+            var out = bytes
+            if count > 0 { out.append(UInt8(current & 0xFF)) }
+            return out
+        }
     }
 
     // MARK: zlib / deflate stored blocks

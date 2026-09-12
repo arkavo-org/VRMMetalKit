@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "1a7d74ea02aa4006dc2a64b976e58d64831294950d496bf6fc56879f013217af",
   "resultSchemaHash": "2443159494918e8ecdf47a73ed802dbbc8ac019e11acac0d3bcef634b1cf5ade",
-  "packHash": "5fe56ac0d11b30f26feae7df3436ff94c0f3e45d64d42a8f908e8ab71444d4b5",
+  "packHash": "92cc94d3d45cf7b788cfc64882af38e0484914378a1523a1535edef27621ef4a",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -24,9 +24,9 @@
       "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "docs/style/profiles/vroid-lineage-anime.json @ b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "docs/proposals/vrm-author-cli/parameters.md (Textures and MToon: material shading computes toony and shift)",
-      "docs/proposals/vrm-author-cli/verification.md §2 (Pinned oracles)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a72 (Pinned oracles)",
       "docs/proposals/vrm-author-cli/commands.md (`material shading` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Materials/style, visually-validated)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Materials/style, visually-validated)"
     ],
     "reviewReceipt": ""
   },
@@ -107,7 +107,7 @@
     "environment": {
       "pinnedCommit": "b9cc9ac9fe6f066877aacbfe696703b23fcdf35c",
       "oracleHashes": {
-        "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "9c066fb879714d245c69b07271bd172ab6ce92c32ebc95355bc8fe05f23d9a6e",
+        "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "2199d52062ad90615a08f68b0a7a49b9bcf5b86594097f38d9e31386ded36fba",
         "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",
         "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
       }
@@ -205,7 +205,7 @@
       "silhouette"
     ],
     "thresholds": {},
-    "adjudication": "different-family judge, zero false accepts on the 12-case calibration set (verification.md §5)"
+    "adjudication": "different-family judge, zero false accepts on the 12-case calibration set (verification.md \u00a75)"
   },
   "evidencePolicy": {
     "requiredLevel": "visually-validated",
@@ -216,7 +216,7 @@
       "interoperability": "inapplicable",
       "provenance": "required"
     },
-    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md §6).",
+    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md \u00a76).",
     "corpusApplicabilityRecord": "material shading is body-independent: its input class is a project material object with MToon fields, so partitioning by body family is pseudo-precision for any style. The parameter space is covered instead by a fixture sweep over the four legal corners of the (shadowEnd, terminatorWidth) region, and the role dimension by a per-role round trip: each of the 13 role defaults the template pack declares derives a (shadowEnd, terminatorWidth) that solves back to that role's own factors. Those 13 defaults take three distinct (toony, shift) pairs, so the round trip covers three configurations, not 13, and it does not assert which pair a role maps to. Per-role coverage proper is testRoleDefaultsSatisfyEveryMaterialRuleOfThePinnedProfile, which checks every role against every material rule of the attached profile. The profile declares no per-role shading values; the defaults are the template pack's. Recorded by the acceptance author; the independent reviewer confirms or overturns this in reviewReceipt."
   },
   "resources": {

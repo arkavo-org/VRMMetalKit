@@ -63,7 +63,7 @@ public enum MaterialRoleDefaults {
 
     public static func imageSize(for role: MaterialRole) -> Int {
         switch role {
-        case .iris, .eyeWhite, .eyeHighlight: return 256
+        case .faceSkin, .iris, .eyeWhite, .eyeHighlight, .eyeline, .eyelash, .brow, .mouth: return 1024
         default: return 512
         }
     }
@@ -121,38 +121,90 @@ public enum MaterialRoleDefaults {
         case .cloth:
             let noise = prng.nextUnit()
             return opaque(base * (0.95 + 0.1 * noise))
-        case .iris:
-            guard r <= 0.48 else { return clear }
-            let t = r / 0.48
-            var c = base * (0.55 + 0.45 * (1 - t))
-            if r <= 0.16 { c = SIMD3(repeating: 0.01) }
-            let hu = u - 0.36, hv = v - 0.34
-            if (hu * hu + hv * hv).squareRoot() <= 0.07 { c = SIMD3(1, 1, 1) }
-            return opaque(c)
+        case .iris: return irisPixel(base: base, u: u, v: v, r: r, du: du, dv: dv)
         case .eyeWhite:
-            return opaque(base * (1 - 0.15 * r * r))
+            var c = base * (1 - 0.10 * r * r)
+            let topness = r > 1e-4 ? (0.5 - v) / r : 0
+            c *= 1 - 0.16 * Self.smooth01((topness - 0.35) / 0.5) * Self.smooth01((r - 0.22) / 0.08) * (1 - Self.smooth01((r - 0.5) / 0.05))
+            return opaque(c)
         case .eyeHighlight:
-            let e = (du / 0.3) * (du / 0.3) + (dv / 0.2) * (dv / 0.2)
-            return e <= 1 ? opaque(base) : clear
+            let d1 = (du + 0.10) / 0.26, e1 = (dv + 0.14) / 0.20
+            let a1 = 1 - Self.smooth01((d1 * d1 + e1 * e1 - 0.55) / 0.45)
+            let d2 = (du - 0.16) / 0.10, e2 = (dv - 0.18) / 0.075
+            let a2 = 1 - Self.smooth01((d2 * d2 + e2 * e2 - 0.6) / 0.3)
+            let a = min(a1 + 0.9 * a2, 1)
+            return a > 0.003 ? SIMD4(base.x, base.y, base.z, a) : clear
         case .eyeline:
-            let arc = 0.5 + 0.15 * (2 * u - 1) * (2 * u - 1)
-            return abs(v - arc) <= 0.03 ? opaque(base) : clear
+            let x = 2 * u - 1
+            let arc: Float = 0.512 + 0.045 * x * x
+            let line = 1 - Self.smooth01((abs(v - arc) - 0.012) / 0.012)
+            let flick = Self.smooth01((abs(x) - 0.55) / 0.35)
+            let tint = (1 - Self.smooth01((abs(v - (arc + 0.05)) - 0.008) / 0.018)) * 0.22
+            let a = min(line * (0.75 + 0.25 * flick) + tint, 1)
+            return a > 0.003 ? SIMD4(base.x, base.y, base.z, a) : clear
         case .eyelash:
-            let arc = 0.5 + 0.15 * (2 * u - 1) * (2 * u - 1)
-            if abs(v - arc) <= 0.03 { return opaque(base) }
-            for k in 0..<5 {
-                let uk = 0.15 + 0.175 * Float(k)
-                if abs(u - uk) < 0.02, v >= arc, v <= arc + 0.18 { return opaque(base) }
-            }
-            return clear
+            let x = 2 * u - 1
+            let thickness: Float = 0.032 + 0.055 * (1 - x * x)
+            let top: Float = 0.5 - thickness - 0.05 * x * x
+            guard v >= top - 0.01, v <= 0.5 else { return clear }
+            var a = Self.smooth01((v - top) / (thickness * 0.45))
+            a *= Self.smooth01((u - 0.015) / 0.09) * Self.smooth01((0.985 - u) / 0.09)
+            a *= 0.9 + 0.1 * sin(u * 200 + 3 * sin(u * 37))
+            return a > 0.003 ? SIMD4(base.x, base.y, base.z, a) : clear
         case .brow:
-            let arc = 0.5 + 0.1 * (2 * u - 1) * (2 * u - 1)
-            let taper = 1 - pow(abs(2 * u - 1), 4)
-            return abs(v - arc) <= 0.04 * taper ? opaque(base) : clear
+            let x = 2 * u - 1
+            let arc: Float = 0.5 + 0.1 * x * x
+            let half: Float = 0.02 + 0.075 * (1 - pow(abs(x), 1.8))
+            var a = 1 - Self.smooth01((abs(v - arc) - half * 0.55) / (half * 0.45))
+            a *= 0.82 + 0.18 * sin(u * 140 + 2 * sin(u * 23) + v * 40)
+            a *= Self.smooth01((u - 0.01) / 0.06) * Self.smooth01((0.99 - u) / 0.1)
+            return a > 0.003 ? SIMD4(base.x, base.y, base.z, a) : clear
         case .mouth:
-            let c = abs(v - 0.5) <= 0.02 ? base * 0.5 : base
+            let cavity = 1 - Self.smooth01((r - 0.30) / 0.10)
+            var c = mix(base, SIMD3<Float>(0.08, 0.015, 0.02), cavity)
+            let lip = Self.smooth01((r - 0.40) / 0.05)
+            let seam = (1 - Self.smooth01((abs(v - 0.5) - 0.008) / 0.014)) * lip
+            c = mix(c, base * 0.45, 0.85 * seam)
+            let corner = Self.smooth01((abs(2 * u - 1) - 0.75) / 0.2) * lip
+            c *= 1 - 0.25 * corner
+            let lipMid = 1 - Self.smooth01((abs(2 * u - 1) - 0.3) / 0.5)
+            let lipBand = 1 - Self.smooth01((abs(v - 0.58) - 0.03) / 0.05)
+            let lipLight = lipBand * lipMid * lip
+            c = mix(c, base * 1.25, 0.4 * lipLight)
             return opaque(c)
         }
+    }
+
+    static func smooth01(_ x: Float) -> Float {
+        let t = min(max(x, 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+
+    static func mix(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ t: Float) -> SIMD3<Float> {
+        a + (b - a) * t
+    }
+
+    /// Anime iris: dark-at-top gradient, radial fibre striations, a limbal
+    /// ring at the geometry's iris edge (UV radius 0.25), a soft-edged pupil at
+    /// the geometry's pupil ring (0.10) and a small lower catchlight; the main
+    /// highlight is the separate highlight card.
+    static func irisPixel(base: SIMD3<Float>, u: Float, v: Float, r: Float, du: Float, dv: Float) -> SIMD4<Float> {
+        let irisR: Float = 0.25, pupilR: Float = 0.10
+        let aa: Float = 0.004
+        guard r <= irisR + aa else { return SIMD4(0, 0, 0, 0) }
+        let m = (v - 0.5) / irisR
+        var c = mix(base * 0.38, base * 1.45, smooth01((m + 1) * 0.45 + 0.05))
+        c *= 1 - 0.30 * smooth01((-m - 0.15) / 0.85)
+        let angle = atan2(dv, du)
+        let fibre = 0.5 + 0.5 * sin(angle * 42 + 2 * sin(angle * 11))
+        let fibreWeight = smooth01((r - pupilR) / 0.05) * (1 - smooth01((r - 0.20) / 0.05))
+        c *= 1 + (fibre - 0.5) * 0.35 * fibreWeight
+        c = mix(c, base * 0.22, 0.85 * smooth01((r - 0.215) / 0.03))
+        c = mix(c, SIMD3(repeating: 0.012), 1 - smooth01((r - (pupilR - 0.012)) / 0.024))
+        let cd = ((du - 0.085) * (du - 0.085) + (dv - 0.095) * (dv - 0.095)).squareRoot()
+        c = mix(c, SIMD3(repeating: 1), 0.45 * (1 - smooth01(cd / 0.035)))
+        let alpha: Float = r <= irisR ? 1 : 1 - (r - irisR) / aa
+        return SIMD4(min(c.x, 1), min(c.y, 1), min(c.z, 1), min(max(alpha, 0), 1))
     }
 
     // MARK: Factor defaults

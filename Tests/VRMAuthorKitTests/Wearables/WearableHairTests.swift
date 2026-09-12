@@ -62,7 +62,7 @@ final class WearableHairTests: XCTestCase {
             XCTAssertLessThan(V3.distance(clump.rootPosition, sample.position), 0.001, clump.id)
             let rootNode = worldPosition(clump.nodeIds[0], in: out)
             XCTAssertLessThan(V3.distance(rootNode, sample.position), 0.001, clump.id)
-            let centre = (prim.positions[clump.vertexStart] + prim.positions[clump.vertexStart + 1]) / 2
+            let centre = (prim.positions[clump.vertexStart] + prim.positions[clump.vertexStart + 2]) / 2
             XCTAssertLessThan(V3.distance(centre, sample.position), 0.001, clump.id)
             let nearest = host.scalpSamples.map { V3.distance($0.position, rootNode) }.min()!
             XCTAssertLessThan(nearest, 0.001)
@@ -73,11 +73,11 @@ final class WearableHairTests: XCTestCase {
         let out = try compileHair()
         let prim = try hairPrimitive(out)
         for clump in out.hairClumps {
-            let sections = clump.vertexCount / 2
+            let sections = clump.vertexCount / 3
             var lengths: [Float] = []
             for i in 0..<(sections - 1) {
-                let a = (prim.positions[clump.vertexStart + 2 * i] + prim.positions[clump.vertexStart + 2 * i + 1]) / 2
-                let b = (prim.positions[clump.vertexStart + 2 * i + 2] + prim.positions[clump.vertexStart + 2 * i + 3]) / 2
+                let a = (prim.positions[clump.vertexStart + 3 * i] + prim.positions[clump.vertexStart + 3 * i + 2]) / 2
+                let b = (prim.positions[clump.vertexStart + 3 * i + 3] + prim.positions[clump.vertexStart + 3 * i + 5]) / 2
                 lengths.append(V3.distance(a, b))
             }
             for i in 1..<lengths.count {
@@ -174,7 +174,7 @@ final class WearableHairTests: XCTestCase {
             var bangCount = 0
             for clump in out.hairClumps where clump.isBang {
                 bangCount += 1
-                XCTAssertEqual(clump.clearanceVertexStart, clump.vertexStart + 2 * HairBobV1.Layout.sectionsPerBone)
+                XCTAssertEqual(clump.clearanceVertexStart, clump.vertexStart + 3 * HairBobV1.Layout.sectionsPerBone)
                 for v in clump.clearanceVertexStart..<(clump.vertexStart + clump.vertexCount) {
                     let p = prim.positions[v]
                     XCTAssertGreaterThanOrEqual(host.faceClearance(p), Float(clearance) - 1e-5, "\(clump.id) vertex \(v) at rest")
@@ -210,7 +210,7 @@ final class WearableHairTests: XCTestCase {
             XCTAssertEqual(prim.uv0[clump.vertexStart].y, 0)
             XCTAssertEqual(prim.uv0[clump.vertexStart + clump.vertexCount - 1].y, 1)
             XCTAssertEqual(prim.uv0[clump.vertexStart].x, 0)
-            XCTAssertEqual(prim.uv0[clump.vertexStart + 1].x, 1)
+            XCTAssertEqual(prim.uv0[clump.vertexStart + 2].x, 1)
             let clumpJoints = Set(clump.nodeIds.compactMap { skin.jointNodeIds.firstIndex(of: $0) }.map { UInt16($0) })
             for v in clump.vertexStart..<(clump.vertexStart + clump.vertexCount) {
                 XCTAssertEqual(weights[v].sum(), 1, accuracy: 1e-5)
