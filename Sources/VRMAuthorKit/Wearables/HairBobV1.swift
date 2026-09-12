@@ -29,7 +29,7 @@ public enum HairBobV1 {
         public var ringAAzimuthRangeDeg: ClosedRange<Float> = 52...308
         public var ringBClumps = 9
         public var ringBElevationDeg: Float = 50
-        public var bangAzimuthsDeg: [Float] = [-36, -24, -12, 0, 12, 24, 36]
+        public var bangAzimuthsDeg: [Float] = [-36, -27, -18, -9, 0, 9, 18, 27, 36]
         public var bangElevationDeg: Float = 32
         public var bangSectorDeg: Float = 50
         public var rotatingBones = 3
@@ -39,6 +39,8 @@ public enum HairBobV1 {
         public var clumpCount: Int { ringAClumps + ringBClumps + bangAzimuthsDeg.count }
         public var baseWidthM: Float = 0.026
         public var tipWidthRatio: Float = 0.4
+        /// Bangs run narrower than the locks framing the face.
+        public var bangWidthFactor: Float = 0.78
         public var bangLengthRatio: Float = 0.55
         /// Preset-level guide scale; bob grows lengthM 1x, long-v1 2x.
         public var lengthScale: Float = 1
@@ -381,7 +383,7 @@ public enum HairBobV1 {
         let length = Float(controls.lengthM) * (isBang ? P.bangLengthRatio : P.lengthScale)
         let step = length / Float(steps)
         let widthScale = Float(controls.widthScale)
-        let rootHalfWidth = 0.5 * P.baseWidthM * widthScale
+        let rootHalfWidth = 0.5 * P.baseWidthM * widthScale * (isBang ? P.bangWidthFactor : 1)
         let edgeDip = host.headRadius - (max(host.headRadius * host.headRadius - rootHalfWidth * rootHalfWidth, 0)).squareRoot()
         let bangRequired = Float(controls.bangClearanceM) + edgeDip + P.bangEdgeMarginM
         let pivotSection = steps - P.sectionsPerBone
