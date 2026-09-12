@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "50d7ef6fd17fa70c7a74156edd317a1c383f82e460658d50a96b6ad1f12839fd",
   "resultSchemaHash": "b8bcdcb501f3ccf865b98645a30bcd182ef26fd22c27d8246ff4883d7bd145fd",
-  "packHash": "56c4f464cf88ee4da39f4db12f334675f155379d0ebd4940c399c2d94595fa11",
+  "packHash": "7a51d43f9b2fd9f01713fa58ba090e94eb5b7ed231ab693f88f820215f7c325b",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,10 +20,10 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
-      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
-      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
-      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7 (independent raw-wire MCP client, second reference)",
+      "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387 (independent raw-wire MCP client, second reference)",
       "docs/proposals/vrm-author-cli/commands.md (`serve` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (RPC/transport, fixture-tested)"
     ],
@@ -90,7 +90,7 @@
     "kind": "swift-test",
     "entryPoint": "ServePackTests",
     "environment": {
-      "pinnedCommit": "9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
+      "pinnedCommit": "b9c334be00337acbff2e8eed1b93235cea7fb387",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift": "90ed251285d146ed4482d5eaa53dd3f426943bcee96e9f01b7ba77d481b00eb5",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",

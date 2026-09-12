@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "db71f0ba146f5293bf4e3821a1825a8ee93e17ce56face511cd6aa89a076fa07",
   "resultSchemaHash": "912c6d2dcd82970a1305aa5bb536c066cae568e0aebf69210101ac2cccd3f745",
-  "packHash": "6b94e56695c0db29598ee2caf070c22c0d1d950f065e8c3492ccadf2e7293a8a",
+  "packHash": "c9226cc56193265041f6d4bf778fcbc377d573933cecae153fa4c839145afc6e",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,9 +20,9 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
-      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
-      "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
+      "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift @ b9c334be00337acbff2e8eed1b93235cea7fb387",
       "docs/proposals/vrm-author-cli/parameters.md (Types, defaults and schema rules: ObjectKind)",
       "docs/proposals/vrm-author-cli/commands.md (`object list` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
@@ -79,7 +79,7 @@
     "kind": "swift-test",
     "entryPoint": "ObjectPackTests",
     "environment": {
-      "pinnedCommit": "9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
+      "pinnedCommit": "b9c334be00337acbff2e8eed1b93235cea7fb387",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift": "f7d1c563654658fc307d73dc8b347da7476b223413b3b3872659f19aa7ea5796",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",

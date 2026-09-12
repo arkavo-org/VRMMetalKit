@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "",
   "resultSchemaHash": "",
-  "packHash": "ed6cf17f3d44222d837603ba1163505dfa319f0ab9b0d9350a3b5cedab9af59d",
+  "packHash": "78fdd70bbad66e0eb27054ba6cbc8480a066892ae132f453952a67cc8452567d",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,9 +20,9 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "scripts/style_lint.py @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
-      "docs/style/profiles/vroid-lineage-anime.json v0.1.0 @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
-      "docs/style/corpus/vroid-lineage-anime.manifest.json @ 9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
+      "scripts/style_lint.py @ b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "docs/style/profiles/vroid-lineage-anime.json v0.1.0 @ b9c334be00337acbff2e8eed1b93235cea7fb387",
+      "docs/style/corpus/vroid-lineage-anime.manifest.json @ b9c334be00337acbff2e8eed1b93235cea7fb387",
       "scripts/test_style_lint.py MutationTests (mutation transforms reused verbatim)",
       "docs/style/README.md (verdict semantics, corpus of 22 assets / 18 body families)"
     ],
@@ -122,7 +122,7 @@
     "entryPoint": "scripts/style_lint.py",
     "profile": "docs/style/profiles/vroid-lineage-anime.json",
     "environment": {
-      "pinnedCommit": "9f0ee3cc5063aace0b8ccffd79ca8bed74133dd7",
+      "pinnedCommit": "b9c334be00337acbff2e8eed1b93235cea7fb387",
       "oracleHashes": {
         "scripts/style_lint.py": "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881",
         "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
