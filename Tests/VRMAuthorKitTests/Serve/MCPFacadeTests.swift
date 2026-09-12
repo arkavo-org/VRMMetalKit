@@ -244,7 +244,7 @@ final class MCPFacadeTests: XCTestCase {
     }
 
     func testQaWithoutRendererIsIncompleteNotError() throws {
-        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"])
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness", VRMAuthorRenderLocator.environmentKey: "/nonexistent"])
         let dir = try preparedProject(&server, name: "q1.vrmauthor")
         let qa = try call(&server, id: 3, "vrm_qa", ["project": .string(dir.path)])
         XCTAssertNil(qa["error"])
@@ -302,7 +302,7 @@ final class MCPFacadeTests: XCTestCase {
         XCTAssertEqual(previews.map { $0["scenarioId"]?.string }, ["visual.front", "expression.happy"])
         XCTAssertEqual(previews[0]["evidence"], false)
         XCTAssertEqual(previews[0]["width"], 256)
-        XCTAssertEqual(fake.sizes["visual.front"] as? Int, 256, "preview pass overrides the scenario size")
+        XCTAssertEqual(fake.sizes["visual.front"] as? String, "256x256", "preview pass overrides both scenario dimensions")
         let path = try XCTUnwrap(previews[0]["path"]?.string)
         XCTAssertTrue(path.contains("/preview/visual.front/"))
         XCTAssertEqual(previews[0]["sha256"], .string(SHA256Hex.hex(try Data(contentsOf: URL(fileURLWithPath: path)))))
@@ -319,6 +319,20 @@ final class MCPFacadeTests: XCTestCase {
 
         let report = try XCTUnwrap(all["result"]?["structuredContent"]?["result"]?["artifacts"]?.array).compactMap { $0["path"]?.string }
         XCTAssertFalse(report.contains { $0.contains("/preview/") }, "preview files are not QA artifacts")
+    }
+
+    func testQaSurvivesAThrowingPreviewRenderer() throws {
+        var server = session(env: ["VRM_AUTHOR_SESSION": "harness"], previewRenderer: ThrowingRenderer())
+        let dir = try preparedProject(&server, name: "q6.vrmauthor")
+        let qa = try call(&server, id: 3, "vrm_qa", ["project": .string(dir.path)])
+        XCTAssertNil(qa["error"])
+        XCTAssertEqual(qa["result"]?["isError"], false, "a preview failure never fails the QA run")
+        let s = try XCTUnwrap(qa["result"]?["structuredContent"])
+        XCTAssertNotNil(s["result"]?["verdict"])
+        XCTAssertEqual(s["previews"], [])
+        let content = try XCTUnwrap(qa["result"]?["content"]?.array)
+        XCTAssertEqual(content.count, 1)
+        XCTAssertTrue(try XCTUnwrap(content[0]["text"]?.string).contains("PREVIEW_FAILED"))
     }
 
     func testRealPreviewPassMatchesRequestedSize() throws {
@@ -348,11 +362,21 @@ final class FakeRenderer: RenderAdapter, @unchecked Sendable {
 
     func render(scenario: RenderScenario, file: URL, data: Data, outputDirectory: URL, context: OperationContext) throws -> [ArtifactRef]? {
         let w = scenario.configuration["width"]?.int ?? 1024
-        sizes[scenario.id] = w
+        let h = scenario.configuration["height"]?.int ?? 1024
+        sizes[scenario.id] = "\(w)x\(h)"
         try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
         let png = try PNGEncoder.encode(width: 2, height: 2, rgba: [UInt8](repeating: 128, count: 16))
         let url = outputDirectory.appendingPathComponent("\(scenario.id).png")
         try png.write(to: url)
         return [BuildSupport.artifact(url, data: png, mediaType: "image/png", role: "render", buildHash: nil)]
+    }
+}
+
+/// A renderer that fails the way a real one does when its subprocess misbehaves.
+struct ThrowingRenderer: RenderAdapter {
+    var identity: String { "throwing/1" }
+
+    func render(scenario: RenderScenario, file: URL, data: Data, outputDirectory: URL, context: OperationContext) throws -> [ArtifactRef]? {
+        throw AuthorError(code: .internalError, path: scenario.id, message: "Preview renderer exited with status 9.", suggestedCommands: ["doctor"])
     }
 }

@@ -292,13 +292,18 @@ public enum MCPFacade {
         var previews: [QAPreview] = []
         var warnings: [String] = []
         if ran, suite == "authoring-v1" {
-            let fileURL = URL(fileURLWithPath: file)
-            let data = try Data(contentsOf: fileURL)
-            var requestContext = session.context
-            requestContext.projectPath = URL(fileURLWithPath: project)
-            previews = try QAPreviewRenderer.render(mode: mode, size: size, file: fileURL, data: data, outputDirectory: URL(fileURLWithPath: out), render: session.previewRenderer, context: requestContext)
-            if mode != .paths, session.previewRenderer == nil || previews.isEmpty {
-                warnings.append("warning RENDERER_UNAVAILABLE no preview renderer in this session; render scenarios are incomplete")
+            do {
+                let fileURL = URL(fileURLWithPath: file)
+                let data = try Data(contentsOf: fileURL)
+                var requestContext = session.context
+                requestContext.projectPath = URL(fileURLWithPath: project)
+                previews = try QAPreviewRenderer.render(mode: mode, size: size, file: fileURL, data: data, outputDirectory: URL(fileURLWithPath: out), render: session.previewRenderer, context: requestContext)
+                if mode != .paths, session.previewRenderer == nil || previews.isEmpty {
+                    warnings.append("warning RENDERER_UNAVAILABLE no preview renderer in this session; render scenarios are incomplete")
+                }
+            } catch {
+                previews = []
+                warnings.append("warning PREVIEW_FAILED no previews for this run: \((error as? AuthorError)?.message ?? "\(error)"); the QA verdict above stands on its own")
             }
         }
         var lines = ["vrm_qa \(envelope["status"]?.string ?? "unknown"); verdict \(envelope["result"]?["verdict"]?.string ?? "n/a"); revision \(revisionNumber)"]
