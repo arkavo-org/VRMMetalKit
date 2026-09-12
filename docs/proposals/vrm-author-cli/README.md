@@ -230,8 +230,16 @@ base revision and hash; apply may require `expectedPlanHash` and rejects changed
 
 `serve --stdio --protocol mcp` is a v1 adapter over the same registry, pinned initially
 to MCP 2025-06-18 with version negotiation. It implements initialization, capability
-negotiation, `tools/list`, `tools/call`, structured tool results and stderr-only logs.
-JSON-RPC alone is not MCP compatibility; test the adapter with an independent client.
+negotiation, `tools/list`, `tools/call`, `resources/list`, `resources/read`, structured
+tool results and stderr-only logs. MCP does not project the 35 commands 1:1: it exposes
+six facade tools composed over the same handlers (`vrm_discover`, `vrm_project`,
+`vrm_recipe`, `vrm_build`, `vrm_qa`, `vrm_export`) and two starter Recipe resources
+(`recipe://native-anime-v1/female`, `recipe://native-anime-v1/male`). `vrm_qa` returns
+the locked QA checks plus small preview renders as MCP image content; previews are views
+for the agent, never evidence. A facade tool is listed when any operation it maps to has
+admitted evidence (or in a harness session); a not-yet-admitted action returns
+`MISSING_CAPABILITY`. The 1:1 surface is `--protocol jsonrpc`. JSON-RPC alone is not MCP
+compatibility; test the adapter with an independent client.
 See [MCP tool requirements](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
 An [A2A adapter](https://a2a-protocol.org/latest/specification/) is reserved and needs its own agent discovery, task lifecycle and
 artifact mapping; shared handlers reduce duplication but do not eliminate that work.

@@ -52,7 +52,7 @@ policy requires current, admitted evidence appropriate to each operation and inp
 `--evidence-policy PATH` can impose stricter requirements; it cannot weaken release gates.
 `--namespace reserved` exposes registered advanced schemas and their actual evidence,
 including schema-only entries. It never turns a schema into a callable implementation.
-MCP tool discovery filters to the session's admitted runnable tools.
+MCP exposes six facade tools over these handlers (see README §4); a facade tool is listed when any operation it maps to is admitted, and the full 1:1 surface is the jsonrpc protocol.
 
 ## Common fields and results
 
@@ -104,7 +104,7 @@ parameter catalog; all operations also return the common result envelope.
 | `capabilities` | spine | `target:portable-vrm1=portable-vrm1`, `evidencePolicy:path?` | Scoped availability/evidence manifest |
 | `doctor` | release | none | CPU/backend/renderer/signer/dependency diagnostics |
 | `schema show` | spine | `name:string!` | Registered schema, content hash and applicability |
-| `serve` | release | `stdio:true!`, `protocol:jsonrpc\|mcp=jsonrpc` | JSON-RPC 2.0 session; MCP adapter negotiates version |
+| `serve` | release | `stdio:true!`, `protocol:jsonrpc\|mcp=jsonrpc` | JSON-RPC 2.0 session (1:1 commands); MCP adapter negotiates version and exposes the six-tool facade plus starter recipe resources |
 | `project init` | spine | `dir:path!`, `template:ID!`, `seed:uint53=0` | New revision 0 and resolved prototype/production recipe |
 | `project inspect` | spine | none | Revision, dependency state, input lock and draft/completion status |
 | `history list` | release | `limit:int[1,1000]=100` | Revisions and receipts |

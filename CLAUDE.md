@@ -50,7 +50,7 @@ swift test --filter VRMAuthorKitTests --disable-sandbox
 .build/debug/vrm-author qa run --project a.vrmauthor --request - --out qa <<< '{"request":{"file":"draft.vrm","suite":"spec+style"}}'
 python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/build.json --json
 ```
-Production `capabilities`/MCP `tools/list` expose only commands with admitted evidence in `acceptance/evidence.json` (written by the independent evaluator, never by handlers); `VRM_AUTHOR_SESSION=harness` exposes every runnable handler.
+Production `capabilities` and the jsonrpc protocol gate on admitted evidence in `acceptance/evidence.json` (written by the independent evaluator, never by handlers); `VRM_AUTHOR_SESSION=harness` lifts that gate. MCP (`serve --stdio --protocol mcp`) exposes six facade tools (`vrm_discover`, `vrm_project`, `vrm_recipe`, `vrm_build`, `vrm_qa`, `vrm_export`) and two `recipe://native-anime-v1/{female,male}` resources; a tool is listed when any operation it maps to is admitted.
 
 ### Debug Flags (Conditional Compilation)
 Use `-Xswiftc -D{FLAG_NAME}` to enable zero-cost debug logging:
