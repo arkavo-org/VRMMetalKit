@@ -57,7 +57,7 @@ callers normally modify an exported resolved recipe. A partial control edit uses
 `native-anime-v1` supplies an original quad mesh, UVs, semantic regions, calibrated
 shape basis, humanoid bind/weights, sculpted globe eyes, eyelid/lip morphs, inner mouth,
 MToon roles, a bob, top/bottom/footwear, glasses/earrings and QA scenarios. It includes
-real blink, blinkLeft, blinkRight, aa/ih/ou/ee/oh and happy/angry/sad/relaxed/surprised
+real blink, blinkLeft, blinkRight, aa/ih/ou/ee/oh, happy/angry/sad/relaxed/surprised and lookUp/lookDown/lookLeft/lookRight (iris slide on the globes)
 morphs; neutral represents the rest state. Pack constructors must record provenance and budget/validate these
 assets as specified in README §6 and [verification.md](verification.md). Pack constants and endpoint fixture hashes are
 inspectable but not editable controls. No field below implies a retopology solver.

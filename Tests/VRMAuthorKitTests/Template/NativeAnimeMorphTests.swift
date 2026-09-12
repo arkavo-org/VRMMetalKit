@@ -34,7 +34,13 @@ final class NativeAnimeMorphTests: XCTestCase {
         }
         XCTAssertFalse(NativeAnimeMorphNames.all.contains("neutral"))
         for mesh in avatar.meshes where mesh.id != "mesh.head" {
-            for p in mesh.primitives { XCTAssertEqual(p.morphTargets, [], mesh.id) }
+            for p in mesh.primitives {
+                if mesh.id == "mesh.eyeL" || mesh.id == "mesh.eyeR" {
+                    XCTAssertEqual(p.morphTargets.map(\.name), NativeAnimeMorphNames.looks, mesh.id)
+                } else {
+                    XCTAssertEqual(p.morphTargets, [], mesh.id)
+                }
+            }
         }
     }
 
@@ -142,9 +148,10 @@ final class NativeAnimeMorphTests: XCTestCase {
     func testExpressionPresetsBindHeadMorphsWithSpecFlags() throws {
         let (avatar, _) = try NativeAnimeFixture.compiled()
         let byPreset = Dictionary(uniqueKeysWithValues: avatar.expressions.map { ($0.preset!, $0) })
-        XCTAssertEqual(byPreset.count, 14)
+        XCTAssertEqual(byPreset.count, 18)
         let head = avatar.meshes.first { $0.id == "mesh.head" }!
         let morphNames = Set(head.primitives[0].morphTargets.map(\.name))
+        let lookMorphs = Set(avatar.meshes.first { $0.id == "mesh.eyeL" }!.primitives.flatMap { $0.morphTargets.map(\.name) })
         for (preset, e) in byPreset {
             XCTAssertFalse(e.isBinary, preset.rawValue)
             XCTAssertNil(e.name)
@@ -152,6 +159,12 @@ final class NativeAnimeMorphTests: XCTestCase {
             XCTAssertEqual(e.textureTransformBinds, [])
             if preset == .neutral {
                 XCTAssertEqual(e.morphTargetBinds, [])
+                continue
+            }
+            if NativeAnimeMorphNames.looks.contains(preset.rawValue) {
+                XCTAssertEqual(e.morphTargetBinds, [MorphTargetBind(mesh: "mesh.eyeL", target: preset.rawValue, weight: 1),
+                                                    MorphTargetBind(mesh: "mesh.eyeR", target: preset.rawValue, weight: 1)], preset.rawValue)
+                XCTAssertTrue(lookMorphs.contains(preset.rawValue), preset.rawValue)
                 continue
             }
             XCTAssertEqual(e.morphTargetBinds, [MorphTargetBind(mesh: "mesh.head", target: preset.rawValue, weight: 1)], preset.rawValue)

@@ -50,7 +50,7 @@ final class TemplatePackTests: XCTestCase {
     private let pack = NativeAnimeFixture.pack
 
     /// Cross-process pin of the default compile; verified identical over separate `swift test` invocations.
-    static let goldenDefaultBuildHash = "18295ac16a3590af14deb818455eda2e9b1f5d0c8f49d0ef242cef19172236ab"
+    static let goldenDefaultBuildHash = "c93591315f8761e95449ccf13f5709be83feaf64a45ca149e369b449277cb307"
 
     static let expectedKeys: [String] = {
         var keys = ["body.heightM", "body.headCount"]
@@ -145,9 +145,9 @@ final class TemplatePackTests: XCTestCase {
         XCTAssertEqual(defaults.lookAt.type, .bone)
         let materialIds = Set(defaults.materials.map(\.id))
         for outfit in defaults.outfits { for m in outfit.materialIds { XCTAssertTrue(materialIds.contains(m), m) } }
-        XCTAssertEqual(defaults.expressions.count, 14)
+        XCTAssertEqual(defaults.expressions.count, 18)
         XCTAssertEqual(Set(defaults.expressions.compactMap(\.preset)),
-                       Set([.blink, .blinkLeft, .blinkRight, .aa, .ih, .ou, .ee, .oh, .happy, .angry, .sad, .relaxed, .surprised, .neutral]))
+                       Set([.blink, .blinkLeft, .blinkRight, .aa, .ih, .ou, .ee, .oh, .happy, .angry, .sad, .relaxed, .surprised, .lookUp, .lookDown, .lookLeft, .lookRight, .neutral]))
         XCTAssertEqual(defaults.style.sha256, NativeAnimeV1Pack.styleProfileSha256)
         XCTAssertNoThrow(try defaults.validate())
         let json = try defaults.jsonValue()

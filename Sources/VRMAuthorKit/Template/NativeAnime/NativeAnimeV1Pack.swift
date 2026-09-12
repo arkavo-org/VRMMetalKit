@@ -188,14 +188,15 @@ public struct NativeAnimeV1Pack: TemplatePack {
             headPrims.append(prim.emit(materialId: HeadPrimitive(rawValue: pi)!.materialId, joints: skin.joints, weights: skin.weights, morphs: morphs[pi]))
         }
         let headMesh = CompiledMesh(id: Self.headMeshId, name: "Head", primitives: headPrims)
-        func eyeMesh(_ parts: [BuildMesh], id: String, name: String, bone: VRMHumanBone) -> CompiledMesh {
-            CompiledMesh(id: id, name: name, primitives: parts.enumerated().map { pi, prim in
+        func eyeMesh(_ parts: [BuildMesh], id: String, name: String, bone: VRMHumanBone, eye: NativeAnimeLayout.EyeParams) -> CompiledMesh {
+            let looks = NativeAnimeMorphBuilder.lookTargets(prims: parts, eye: eye)
+            return CompiledMesh(id: id, name: name, primitives: parts.enumerated().map { pi, prim in
                 let skin = rig.rigidSkinning(prim, bone: bone)
-                return prim.emit(materialId: EyePrimitive(rawValue: pi)!.materialId, joints: skin.joints, weights: skin.weights, morphs: [])
+                return prim.emit(materialId: EyePrimitive(rawValue: pi)!.materialId, joints: skin.joints, weights: skin.weights, morphs: looks[pi])
             })
         }
-        let eyeLeftMesh = eyeMesh(eyeLeft, id: Self.eyeLeftMeshId, name: "EyeL", bone: .leftEye)
-        let eyeRightMesh = eyeMesh(eyeRight, id: Self.eyeRightMeshId, name: "EyeR", bone: .rightEye)
+        let eyeLeftMesh = eyeMesh(eyeLeft, id: Self.eyeLeftMeshId, name: "EyeL", bone: .leftEye, eye: layout.eyes["left"]!)
+        let eyeRightMesh = eyeMesh(eyeRight, id: Self.eyeRightMeshId, name: "EyeR", bone: .rightEye, eye: layout.eyes["right"]!)
         let meshes = [bodyMesh, headMesh, eyeLeftMesh, eyeRightMesh]
 
         let nodes = rig.nodes()

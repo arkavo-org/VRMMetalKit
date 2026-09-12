@@ -23,6 +23,7 @@ public enum NativeAnimeMorphNames {
     public static let blinkRight = "blinkRight"
     public static let visemes = ["aa", "ih", "ou", "ee", "oh"]
     public static let emotions = ["happy", "angry", "sad", "relaxed", "surprised"]
+    public static let looks = ["lookUp", "lookDown", "lookLeft", "lookRight"]
     public static let all = [blink, blinkLeft, blinkRight] + visemes + emotions
 }
 
@@ -85,6 +86,28 @@ struct NativeAnimeMorphBuilder {
                                 lids: ["left": LidShape(upperClose: -0.2), "right": LidShape(upperClose: -0.2)],
                                 brows: BrowShape(inner: 0.028 * hh, outer: 0.028 * hh))),
         ]
+    }
+
+    /// VRM 1.0 gaze presets: slide the iris/pupil/highlight regions around the
+    /// globe — ±12° about the vertical axis for lookLeft/lookRight (positive Y
+    /// rotation moves the iris toward +X, the avatar's left) and about the
+    /// transverse axis for lookUp/lookDown. The sclera stays put.
+    static func lookTargets(prims: [BuildMesh], eye: NativeAnimeLayout.EyeParams) -> [[(String, [NAVec3])]] {
+        let theta = NAMath.degrees(12)
+        let cases: [(String, NAVec3, Double)] = [
+            ("lookUp", NAMath.xAxis, -theta), ("lookDown", NAMath.xAxis, theta),
+            ("lookLeft", NAMath.yAxis, theta), ("lookRight", NAMath.yAxis, -theta),
+        ]
+        return prims.map { prim in
+            cases.map { name, axis, angle in
+                let deltas = prim.vertices.enumerated().map { i, v -> NAVec3 in
+                    guard prim.regions["iris"]?.contains(i) == true || prim.regions["pupil"]?.contains(i) == true
+                            || prim.regions["highlight"]?.contains(i) == true else { return .zero }
+                    return NAMath.rotate(v.position, about: axis, angle: angle, pivot: eye.center) - v.position
+                }
+                return (name, deltas)
+            }
+        }
     }
 
     /// Per primitive, the ordered list of (name, deltas).

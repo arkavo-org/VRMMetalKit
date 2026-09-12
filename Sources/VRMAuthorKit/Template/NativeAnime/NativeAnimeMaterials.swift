@@ -109,6 +109,13 @@ public enum NativeAnimeExpressions {
             out.append(ExpressionObject(id: expressionId(preset), preset: preset, isBinary: false, overrideBlink: .none, overrideLookAt: .none,
                                         overrideMouth: .none, morphTargetBinds: [MorphTargetBind(mesh: headMesh, target: preset.rawValue, weight: 1)]))
         }
+        // Gaze presets slide the iris/pupil/highlight on each globe.
+        for preset in [ExpressionPreset.lookUp, .lookDown, .lookLeft, .lookRight] {
+            out.append(ExpressionObject(id: expressionId(preset), preset: preset, isBinary: false, overrideBlink: .none, overrideLookAt: .none,
+                                        overrideMouth: .none,
+                                        morphTargetBinds: [MorphTargetBind(mesh: NativeAnimeV1Pack.eyeLeftMeshId, target: preset.rawValue, weight: 1),
+                                                           MorphTargetBind(mesh: NativeAnimeV1Pack.eyeRightMeshId, target: preset.rawValue, weight: 1)]))
+        }
         out.append(ExpressionObject(id: expressionId(.neutral), preset: .neutral))
         return out
     }
