@@ -52,7 +52,8 @@ public enum ServeHandlers {
         if let path = request["project"]?.string { sessionContext.projectPath = ProjectAccess.resolve(path, cwd: context.cwd) }
         let policy = try sessionPolicy(env: context.env, cwd: context.cwd)
         let stderr = FileHandle.standardError
-        var session = ServeSession(context: sessionContext, protocol: serveProtocol, policy: policy, harness: isHarness(env: context.env)) { line in
+        var session = ServeSession(context: sessionContext, protocol: serveProtocol, policy: policy, harness: isHarness(env: context.env),
+                                   previewRenderer: VRMAuthorRenderAdapter(executableURL: context.executableURL)) { line in
             stderr.write(Data(("vrm-author serve: " + line + "\n").utf8))
         }
         let stdout = FileHandle.standardOutput

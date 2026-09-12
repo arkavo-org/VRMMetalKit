@@ -65,15 +65,18 @@ public struct ServeSession: Sendable {
     public let `protocol`: ServeProtocol
     public let policy: EvidencePolicy
     public let harness: Bool
+    public let previewRenderer: (any RenderAdapter)?
     public let log: @Sendable (String) -> Void
     public private(set) var requestsHandled = 0
     public private(set) var negotiatedVersion: String?
 
-    public init(context: OperationContext, protocol: ServeProtocol, policy: EvidencePolicy = .release, harness: Bool = false, log: @escaping @Sendable (String) -> Void = { _ in }) {
+    public init(context: OperationContext, protocol: ServeProtocol, policy: EvidencePolicy = .release, harness: Bool = false,
+                previewRenderer: (any RenderAdapter)? = nil, log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.context = context
         self.protocol = `protocol`
         self.policy = policy
         self.harness = harness
+        self.previewRenderer = previewRenderer
         self.log = log
     }
 
@@ -220,27 +223,6 @@ public struct ServeSession: Sendable {
 
     // MARK: MCP adapter
 
-    /// Operations exposed as MCP tools under the session's evidence policy:
-    /// runnable and production-eligible, or merely runnable in a harness session.
-    public func exposedOperations() -> [Operation] {
-        context.registry.ordered.filter { op in
-            guard op.isRunnable, op.name != "serve" else { return false }
-            if harness { return true }
-            return context.evidenceRegistry.capability(for: op, toolInfo: context.toolInfo, policy: policy).productionEligible
-        }
-    }
-
-    public func toolDescriptor(_ operation: Operation) -> JSONValue {
-        [
-            "name": .string(operation.rpcMethod),
-            "title": .string(operation.name),
-            "description": .string("\(operation.summary). Result: \(operation.resultDescription). Required evidence: \(operation.requiredEvidence.rawValue)."),
-            "inputSchema": operation.requestSchema.json,
-            "annotations": ["title": .string(operation.name), "readOnlyHint": .bool(operation.kind != .mutation), "destructiveHint": false,
-                            "idempotentHint": .bool(operation.kind == .mutation), "openWorldHint": false],
-        ]
-    }
-
     mutating func dispatchMCP(method: String, params: JSONValue?, isNotification: Bool) throws -> JSONValue {
         switch method {
         case "initialize":
@@ -262,13 +244,14 @@ public struct ServeSession: Sendable {
         case "tools/list":
             let p = try paramsObject(params)
             if p["cursor"] != nil { throw RPCError(code: RPCError.invalidParams, message: "Invalid params: unknown cursor") }
-            return ["tools": .array(exposedOperations().map(toolDescriptor))]
+            return ["tools": .array(MCPFacade.listed(session: self).map(MCPFacade.descriptor))]
         case "tools/call":
             guard !isNotification else { throw RPCError(code: RPCError.invalidRequest, message: "Invalid Request: tools/call cannot be a notification") }
             let p = try paramsObject(params)
             guard let name = p["name"]?.string else { throw RPCError(code: RPCError.invalidParams, message: "Invalid params: name is required") }
-            guard let operation = exposedOperations().first(where: { $0.rpcMethod == name }) else {
-                throw RPCError(code: RPCError.invalidParams, message: "Unknown tool: \(name)", data: ["availableTools": JSONValue(exposedOperations().map(\.rpcMethod))])
+            let listed = MCPFacade.listed(session: self)
+            guard let tool = listed.first(where: { $0.name == name }) else {
+                throw RPCError(code: RPCError.invalidParams, message: "Unknown tool: \(name)", data: ["availableTools": JSONValue(listed.map(\.name))])
             }
             let arguments: [String: JSONValue]
             if let raw = p["arguments"] {
@@ -277,10 +260,7 @@ public struct ServeSession: Sendable {
             } else {
                 arguments = [:]
             }
-            let result = try invokeOperation(operation, params: arguments, isNotification: false)
-            let text = try CanonicalJSON.string(result)
-            let failed = result["status"] != "succeeded"
-            return ["content": [["type": "text", "text": .string(text)]], "structuredContent": result, "isError": .bool(failed)]
+            return try MCPFacade.call(tool, arguments: arguments, session: self)
         case "resources/list":
             let p = try paramsObject(params)
             if p["cursor"] != nil { throw RPCError(code: RPCError.invalidParams, message: "Invalid params: unknown cursor") }
