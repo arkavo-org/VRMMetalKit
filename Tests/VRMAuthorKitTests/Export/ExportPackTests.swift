@@ -329,6 +329,28 @@ final class ExportPackTests: XCTestCase {
         XCTAssertEqual(document.vrm?["meta"]?["name"], "Resolved Name")
     }
 
+    /// A fresh `project init` never materializes images (`ProjectObjects.materialize`
+    /// creates no `.image` objects), yet native-anime-v1's own rights declaration
+    /// names its pack-authored thumbnail. The real `LedgerRightsHook` must accept
+    /// that image on the very first `recipe apply`, before any build exists.
+    func testRecipeApplyAcceptsPackAuthoredThumbnailOnFreshNativeAnimeProject() throws {
+        let root = try ProjectTestHarness.makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = ProjectTestHarness.context(cwd: root, templates: TemplateRegistry.standard())
+        let dir = root.appendingPathComponent("native.vrmauthor")
+        let initialised = ProjectTestHarness.invoke(context, "project init", ["dir": .string(dir.path), "template": .string(NativeAnimeV1Pack.packId), "seed": .number(42)])
+        XCTAssertEqual(initialised.status, .succeeded, "\(initialised.errors)")
+        let projectContext = ProjectTestHarness.context(cwd: root, projectPath: dir, templates: TemplateRegistry.standard())
+
+        let exported = ProjectTestHarness.invoke(projectContext, "recipe export", ProjectTestHarness.request(dir, ["out": .string(root.appendingPathComponent("recipe.json").path)]))
+        XCTAssertEqual(exported.status, .succeeded, "\(exported.errors)")
+        let recipe = try XCTUnwrap(exported.result?["recipe"])
+
+        let applied = ProjectTestHarness.invoke(projectContext, "recipe apply", ProjectTestHarness.request(dir, ["recipe": recipe, "expectedRevision": 0]))
+        XCTAssertEqual(applied.status, .succeeded, "\(applied.errors)")
+        XCTAssertEqual(applied.revisionAfter, 1)
+    }
+
     // MARK: build
 
     func testBuildWritesArtifactsIdMapAndReusesUnchangedInputs() throws {

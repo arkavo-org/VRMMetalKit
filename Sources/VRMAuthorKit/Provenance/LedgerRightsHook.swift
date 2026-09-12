@@ -30,6 +30,7 @@ public struct LedgerRightsHook: RecipeRightsHook {
                 knownImageIds = ProvenanceHandlers.knownImageIds(state: state, ledger: ledger)
             }
         }
+        knownImageIds.formUnion(context.templates.pack(id: recipe.template.id)?.imageIds ?? [])
         let resolver = RightsResolver(baseURL: context.cwd, knownImageIds: knownImageIds, ledger: ledger)
         let resolution = try resolver.resolve(declaration)
         return RecipeRightsResolution(meta: resolution.meta,

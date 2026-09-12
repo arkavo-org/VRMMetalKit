@@ -316,4 +316,13 @@ final class TemplatePackTests: XCTestCase {
         XCTAssertEqual(avatar.materials.first { $0.id == NativeAnimeMaterials.faceSkin }?.gltf["alphaMode"], "MASK")
         XCTAssertEqual(avatar.materials.count, recipe.materials.count + 1)
     }
+
+    /// `imageIds` declares every image the pack authors itself, so rights
+    /// resolution can accept them before a build exists (`recipe apply` on a
+    /// freshly-`project init`'d project). Asserted equal to a real compile's
+    /// `images`, not a hand-maintained list, so the declaration can never drift.
+    func testImageIdsMatchesWhatCompileEmitsForTheDefaultRecipe() throws {
+        let (avatar, _) = try NativeAnimeFixture.integrated()
+        XCTAssertEqual(pack.imageIds, Set(avatar.images.map(\.id)))
+    }
 }

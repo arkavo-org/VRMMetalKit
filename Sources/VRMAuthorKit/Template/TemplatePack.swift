@@ -83,12 +83,15 @@ public protocol TemplatePack: Sendable {
     var controls: [ControlDescriptor] { get }
     var items: [TemplateItem] { get }
     var defaults: Recipe { get }
+    /// Image ids the pack authors itself during compile (face, hair, thumbnail, cloth), so rights resolution can accept them before a build exists.
+    var imageIds: Set<String> { get }
     func compile(_ recipe: Recipe, seed: UInt64) throws -> CompiledAvatar
 }
 
 extension TemplatePack {
     public var category: TemplateCategory { .avatar }
     public var items: [TemplateItem] { [] }
+    public var imageIds: Set<String> { [] }
     public func control(_ key: String) -> ControlDescriptor? { controls.first { $0.key == key } }
 }
 

@@ -43,6 +43,21 @@ public struct NativeAnimeV1Pack: TemplatePack {
     public let sha256: String
     public let defaults: Recipe
 
+    /// Every image id the compile emits for the default recipe: the explicitly
+    /// authored face/hair/thumbnail/garment images, plus the role-default
+    /// images MaterialCompiler adds for the template's other materials
+    /// (body skin, eyes, brow, mouth). Kept in sync with compile by a test
+    /// asserting equality with a compiled avatar's `images`, rather than a
+    /// hand-maintained list that could drift.
+    public var imageIds: Set<String> {
+        var ids: Set<String> = [NativeAnimeMaterials.faceImageId, NativeAnimeMaterials.hairImageId, NativeAnimeMaterials.thumbnailImageId]
+        ids.formUnion(NativeAnimeMaterials.garmentPalettes.keys)
+        for (materialId, role) in NativeAnimeMaterials.roles where NativeAnimeMaterials.templateIds.contains(materialId) && materialId != NativeAnimeMaterials.faceSkin {
+            ids.insert(MaterialRoleDefaults.imageId(for: role))
+        }
+        return ids
+    }
+
     /// Constructs the pack. `items` lists installable hair/outfit/accessory presets;
     /// the manifest (and therefore `sha256`) covers them.
     public init(items: [TemplateItem] = []) {

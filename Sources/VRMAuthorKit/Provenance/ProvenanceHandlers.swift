@@ -59,9 +59,12 @@ public enum ProvenanceHandlers {
         return try Blob.decode(json)
     }
 
-    /// Image IDs visible to the rights resolver: image objects in the project plus imported raster assets.
-    static func knownImageIds(state: ProjectState, ledger: RightsLedger) -> Set<String> {
+    /// Image IDs visible to the rights resolver: image objects in the project,
+    /// imported raster assets, plus `packImageIds` (a template pack's own
+    /// authored images, known before any build materializes them).
+    static func knownImageIds(state: ProjectState, ledger: RightsLedger, packImageIds: Set<String> = []) -> Set<String> {
         var ids = ledger.imageIds
+        ids.formUnion(packImageIds)
         for (id, json) in state.objects where json["kind"]?.string == ObjectKind.image.rawValue { ids.insert(id) }
         return ids
     }
@@ -75,7 +78,8 @@ public enum ProvenanceHandlers {
         let declaration = try RightsResolver.decodeDeclaration(declarationJSON)
         let state = try store.state()
         let ledger = try RightsLedger.load(store)
-        let resolver = RightsResolver(baseURL: context.cwd, knownImageIds: knownImageIds(state: state, ledger: ledger), ledger: ledger)
+        let packImageIds = context.templates.pack(id: state.template?.id ?? "")?.imageIds ?? []
+        let resolver = RightsResolver(baseURL: context.cwd, knownImageIds: knownImageIds(state: state, ledger: ledger, packImageIds: packImageIds), ledger: ledger)
         let resolution = try resolver.resolve(declaration)
         let payload: JSONValue = [
             "meta": try JSONValue.from(resolution.meta),
