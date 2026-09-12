@@ -50,7 +50,7 @@ final class TemplatePackTests: XCTestCase {
     private let pack = NativeAnimeFixture.pack
 
     /// Cross-process pin of the default compile; verified identical over separate `swift test` invocations.
-    static let goldenDefaultBuildHash = "d68717cca37f7efb47db299d9bb42dc6e0ce71118581f4a594ec3100d9048596"
+    static let goldenDefaultBuildHash = "7b9a28d3dbc13af012452f0639da60945322ce5a9ccce936c01f42f970518ae3"
 
     static let expectedKeys: [String] = {
         var keys = ["body.heightM", "body.headCount"]
@@ -284,7 +284,7 @@ final class TemplatePackTests: XCTestCase {
             let rootJoint = try XCTUnwrap(spring.joints.first)
             XCTAssertEqual(avatar.nodes.first { $0.id == rootJoint.node }?.parentId, attachments.attachmentNodes["head"], spring.id)
         }
-        XCTAssertEqual(avatar.images.map(\.id), ["image:body_skin", "image:brow", "image:cloth", "image:eye_highlight", "image:eye_white", "image:eyelash", "image:eyeline",
+        XCTAssertEqual(avatar.images.map(\.id), ["image:body_skin", "image:brow", "image:cloth.bottom", "image:cloth.footwear", "image:cloth.top", "image:eye_highlight", "image:eye_white", "image:eyelash", "image:eyeline",
                                                  NativeAnimeMaterials.faceImageId, NativeAnimeMaterials.hairImageId, "image:iris", "image:mouth", NativeAnimeMaterials.thumbnailImageId])
         for image in avatar.images { XCTAssertTrue(image.pngData.starts(with: [0x89, 0x50, 0x4E, 0x47]), image.id) }
         XCTAssertEqual(avatar.meta.thumbnailImage, NativeAnimeMaterials.thumbnailImageId)

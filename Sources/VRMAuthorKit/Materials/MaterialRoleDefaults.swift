@@ -92,8 +92,12 @@ public enum MaterialRoleDefaults {
     // MARK: Procedural rasters
 
     public static func raster(for role: MaterialRole, width: Int, height: Int, seed: UInt64) -> RasterImage {
+        raster(for: role, base: baseColour(for: role), width: width, height: height, seed: seed)
+    }
+
+    /// Same procedural pattern with a caller-supplied linear base colour.
+    public static func raster(for role: MaterialRole, base: SIMD3<Float>, width: Int, height: Int, seed: UInt64) -> RasterImage {
         var prng = SplitMix64(seed: seed ^ SplitMix64.fnv1a(role.rawValue) ^ SplitMix64.fnv1a(version))
-        let base = baseColour(for: role)
         var image = RasterImage(width: width, height: height)
         let strandPhases: [Float] = (0..<64).map { _ in prng.nextUnit() * 2 * Float.pi }
         for y in 0..<height {

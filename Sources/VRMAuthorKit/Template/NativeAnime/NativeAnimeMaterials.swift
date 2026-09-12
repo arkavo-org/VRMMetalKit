@@ -44,6 +44,23 @@ public enum NativeAnimeMaterials {
     /// Image `meta.thumbnailImage` points at.
     public static let thumbnailImageId = "image:thumbnail"
 
+    /// Per-garment cloth images: the garments share the cloth role's pattern
+    /// but carry distinct palettes so the default outfit is not a jumpsuit.
+    public static let clothTopImageId = "image:cloth.top"
+    public static let clothBottomImageId = "image:cloth.bottom"
+    public static let clothFootwearImageId = "image:cloth.footwear"
+
+    /// Linear base colours per garment image.
+    public static let garmentPalettes: [String: SIMD3<Float>] = [
+        clothTopImageId: ColourTransfer.linear(srgb8: 244, 240, 234),
+        clothBottomImageId: ColourTransfer.linear(srgb8: 96, 118, 158),
+        clothFootwearImageId: ColourTransfer.linear(srgb8: 122, 88, 62),
+    ]
+    /// Garment material id → its cloth image.
+    public static let garmentImages: [String: String] = [
+        clothTop: clothTopImageId, clothBottom: clothBottomImageId, clothFootwear: clothFootwearImageId,
+    ]
+
     /// Roles the template's own primitives reference.
     public static let templateIds = [faceSkin, bodySkin, iris, eyeWhite, eyeHighlight, eyeline, eyelash, brow, mouth]
 
@@ -66,7 +83,7 @@ public enum NativeAnimeMaterials {
         var m = MaterialRoleDefaults.material(id: id, role: role)
         var gltf = m.gltf.object ?? [:]
         gltf["name"] = .string(names[id] ?? id)
-        if let image = [hair: hairImageId, faceSkin: faceImageId][id] {
+        if let image = [hair: hairImageId, faceSkin: faceImageId][id] ?? garmentImages[id] {
             var pbr = gltf["pbrMetallicRoughness"]?.object ?? [:]
             pbr["baseColorTexture"] = ["imageId": .string(image), "texCoord": 0]
             gltf["pbrMetallicRoughness"] = .object(pbr)

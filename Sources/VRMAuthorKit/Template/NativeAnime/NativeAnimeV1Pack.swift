@@ -136,16 +136,21 @@ public struct NativeAnimeV1Pack: TemplatePack {
             return best >= 0 ? headSkin.uv0[best] : nil
         }
         let faceSize = MaterialRoleDefaults.imageSize(for: .faceSkin)
-        let images = [
+        let clothSize = MaterialRoleDefaults.imageSize(for: .cloth)
+        var images = [
             ImageSpec(id: NativeAnimeMaterials.faceImageId, width: faceSize, height: faceSize, colourSpace: .srgb, usage: .colour),
             ImageSpec(id: NativeAnimeMaterials.hairImageId, width: NativeAnimeTextures.hairImageSize, height: NativeAnimeTextures.hairImageSize, colourSpace: .srgb, usage: .colour),
             ImageSpec(id: NativeAnimeMaterials.thumbnailImageId, width: NativeAnimeTextures.thumbnailSize, height: NativeAnimeTextures.thumbnailSize, colourSpace: .srgb, usage: .colour),
         ]
-        let sources: [String: RasterImage] = [
+        var sources: [String: RasterImage] = [
             NativeAnimeMaterials.faceImageId: NativeAnimeTextures.faceRaster(head: headSkin, scalp: scalp, cheeks: cheekUVs, hair: scalpUnderlay, seed: seed),
             NativeAnimeMaterials.hairImageId: NativeAnimeTextures.hairRaster(texture: hairTexture, seed: seed),
             NativeAnimeMaterials.thumbnailImageId: NativeAnimeTextures.thumbnailRaster(hair: hairTexture, skin: MaterialRoleDefaults.baseColour(for: .faceSkin)),
         ]
+        for (imageId, palette) in NativeAnimeMaterials.garmentPalettes {
+            images.append(ImageSpec(id: imageId, width: clothSize, height: clothSize, colourSpace: .srgb, usage: .colour))
+            sources[imageId] = MaterialRoleDefaults.raster(for: .cloth, base: palette, width: clothSize, height: clothSize, seed: seed)
+        }
         let compiled = try MaterialCompiler.compile(materials: avatar.materials, textures: recipe.textures, images: images, seed: seed, sources: sources)
         avatar.images = compiled.images
         avatar.materials = compiled.materials

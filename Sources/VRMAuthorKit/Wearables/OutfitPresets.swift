@@ -54,10 +54,10 @@ public enum OutfitPresets {
 
     public static let topV1 = OutfitPresetDescriptor(
         id: "top-v1", kind: .top,
-        coreRegions: [WearableRegion.chest, WearableRegion.torso, WearableRegion.upperArmL, WearableRegion.upperArmR],
+        coreRegions: [WearableRegion.chest, WearableRegion.torso, WearableRegion.waist, WearableRegion.upperArmL, WearableRegion.upperArmR],
         distalCoreRegions: [WearableRegion.upperArmL, WearableRegion.upperArmR],
         extensionRegions: [WearableRegion.forearmL, WearableRegion.forearmR],
-        hiddenRegions: [WearableRegion.chest, WearableRegion.torso, WearableRegion.upperArmL, WearableRegion.upperArmR],
+        hiddenRegions: [WearableRegion.chest, WearableRegion.torso, WearableRegion.waist, WearableRegion.upperArmL, WearableRegion.upperArmR],
         permittedLayers: Array(0...8), supportedControls: ["length", "fit"])
 
     public static let bottomV1 = OutfitPresetDescriptor(
@@ -257,7 +257,7 @@ public enum OutfitPresets {
                 } else if region == WearableRegion.waist || region == WearableRegion.torso || region == WearableRegion.chest {
                     if region == WearableRegion.waist { extra += 0.004 }
                     let f = (host.bodyPositions[i].y - torsoLo) / torsoSpan
-                    extra += 0.010 * shapeSmooth01((0.16 - f) / 0.16)
+                    extra += 0.014 * shapeSmooth01((0.18 - f) / 0.18)
                 }
             case .bottom:
                 // Flare the shorts' hem on the outer silhouette only; pushing

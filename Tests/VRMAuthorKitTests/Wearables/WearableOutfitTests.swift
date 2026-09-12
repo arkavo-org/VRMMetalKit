@@ -49,7 +49,7 @@ final class WearableOutfitTests: XCTestCase {
         let out = try compile([Fixtures.top()])
         let prim = try garment(out, "shirt")
         let joints = try XCTUnwrap(prim.joints0)
-        let covered = Set(host.region("chest") + host.region("torso") + host.region("upperArmL") + host.region("upperArmR"))
+        let covered = Set(host.region("chest") + host.region("torso") + host.region("waist") + host.region("upperArmL") + host.region("upperArmR"))
         XCTAssertEqual(prim.positions.count, covered.count)
         var matched = 0
         for (v, p) in prim.positions.enumerated() {
@@ -97,8 +97,8 @@ final class WearableOutfitTests: XCTestCase {
         XCTAssertLessThan(base.positions.map(\.x).max()!, 0.40)
         XCTAssertLessThan(short.positions.map(\.x).max()!, base.positions.map(\.x).max()!)
         let longInfo = try XCTUnwrap(try compile([Fixtures.top(length: 1)]).garments.first)
-        XCTAssertEqual(longInfo.coveredRegions, ["chest", "torso", "upperArmL", "upperArmR", "forearmL", "forearmR"])
-        XCTAssertEqual(longInfo.hiddenRegions, ["chest", "torso", "upperArmL", "upperArmR"])
+        XCTAssertEqual(longInfo.coveredRegions, ["chest", "torso", "waist", "upperArmL", "upperArmR", "forearmL", "forearmR"])
+        XCTAssertEqual(longInfo.hiddenRegions, ["chest", "torso", "waist", "upperArmL", "upperArmR"])
         let pants = try garment(try compile([Fixtures.bottom(length: 1)]), "pants")
         XCTAssertLessThanOrEqual(pants.positions.map(\.y).min()!, 0.10 + 1e-4)
         XCTAssertGreaterThan(try garment(try compile([Fixtures.bottom()]), "pants").positions.map(\.y).min()!, 0.40)
