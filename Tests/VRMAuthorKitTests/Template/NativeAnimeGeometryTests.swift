@@ -280,4 +280,33 @@ final class NativeAnimeGeometryTests: XCTestCase {
         let torsoBottom = attachments.indices(of: "hips", mesh: "mesh.body").map { body.positions[$0].y }.min()!
         XCTAssertGreaterThan(torsoBottom, j[.leftUpperLeg]!.y - 0.03 * H, "torso pole must not hang below the hips ring")
     }
+
+    func testFingersFanAndFootIsNarrowWithAHeelAndToeBox() throws {
+        let (avatar, attachments) = try NativeAnimeFixture.compiled()
+        let body = NativeAnimeFixture.primitive(avatar, mesh: "mesh.body")
+        let H = attachments.heightM
+        let j = attachments.jointWorldPositions
+        let tips: [VRMHumanBone] = [.leftIndexDistal, .leftMiddleDistal, .leftRingDistal, .leftLittleDistal]
+        let zs = tips.map { j[$0]!.z }
+        XCTAssertGreaterThan(zs.max()! - zs.min()!, 0.040 * H, "fingertips must fan in z")
+        let mids: [VRMHumanBone] = [.leftIndexIntermediate, .leftMiddleIntermediate, .leftRingIntermediate, .leftLittleIntermediate]
+        let radii: [Float] = [0.0055, 0.0058, 0.0054, 0.0047].map { Float($0) * H }
+        for k in 0..<3 {
+            XCTAssertGreaterThan(abs(j[mids[k]]!.z - j[mids[k + 1]]!.z), radii[k] + radii[k + 1], "fingers \(k) and \(k + 1) overlap at the middle joint")
+        }
+        XCTAssertGreaterThan(j[.leftMiddleDistal]!.x, j[.leftLittleDistal]!.x + 0.006 * H, "middle finger is the longest")
+        XCTAssertGreaterThan(j[.leftIndexDistal]!.z, j[.leftMiddleDistal]!.z)
+        let hand = attachments.indices(of: "handL", mesh: "mesh.body")
+        let handThickness = hand.map { body.positions[$0].y }.max()! - hand.map { body.positions[$0].y }.min()!
+        XCTAssertLessThan(handThickness, 0.028 * H, "palm reads as a flat blade, not a mitt")
+        let foot = attachments.indices(of: "footL", mesh: "mesh.body")
+        let footWidth = foot.map { body.positions[$0].x }.max()! - foot.map { body.positions[$0].x }.min()!
+        XCTAssertLessThan(footWidth, 0.058 * H)
+        let footLength = foot.map { body.positions[$0].z }.max()! - foot.map { body.positions[$0].z }.min()!
+        XCTAssertGreaterThan(footLength, 0.15 * H)
+        let heelTop = foot.filter { body.positions[$0].z < -0.02 * H }.map { body.positions[$0].y }.max()!
+        let toeTop = foot.filter { body.positions[$0].z > 0.10 * H }.map { body.positions[$0].y }.max()!
+        XCTAssertGreaterThan(heelTop, toeTop + 0.02 * H, "heel is taller than the toe box")
+        XCTAssertEqual(foot.map { body.positions[$0].y }.min()!, 0, accuracy: 0.002, "sole touches the ground")
+    }
 }

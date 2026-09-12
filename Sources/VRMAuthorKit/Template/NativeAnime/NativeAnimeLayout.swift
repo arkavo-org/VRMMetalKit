@@ -54,6 +54,11 @@ struct NativeAnimeLayout {
     static let thighFraction = 0.46
     static let headBoneFactor = 0.15
 
+    /// Finger fan in the palm plane (degrees toward +Z, index first) and
+    /// finger lengths as fractions of hand length, index → little.
+    static let fingerFanDegrees: [Double] = [8, 3, -3, -8]
+    static let fingerLengthRatios: [Double] = [0.36, 0.40, 0.37, 0.30]
+
     /// Face landmark constants as fractions of head height (eye line, globe radius,
     /// eye pivot lateral offset as a fraction of head width, nose and mouth lines).
     static let globeRadiusFactor = 0.078
@@ -143,7 +148,7 @@ struct NativeAnimeLayout {
             j[s ? .leftLowerArm : .rightLowerArm] = lowerArm
             j[s ? .leftHand : .rightHand] = hand
             let hl = handLength
-            let fingerZ: [Double] = [0.012, 0.004, -0.004, -0.012].map { $0 * H }
+            let fingerZ: [Double] = [0.018, 0.006, -0.006, -0.018].map { $0 * H }
             let fingers: [[VRMHumanBone]] = s
                 ? [[.leftIndexProximal, .leftIndexIntermediate, .leftIndexDistal], [.leftMiddleProximal, .leftMiddleIntermediate, .leftMiddleDistal],
                    [.leftRingProximal, .leftRingIntermediate, .leftRingDistal], [.leftLittleProximal, .leftLittleIntermediate, .leftLittleDistal]]
@@ -151,14 +156,18 @@ struct NativeAnimeLayout {
                    [.rightRingProximal, .rightRingIntermediate, .rightRingDistal], [.rightLittleProximal, .rightLittleIntermediate, .rightLittleDistal]]
             for (fi, chain) in fingers.enumerated() {
                 let base = hand + NAVec3(sign * 0.50 * hl, 0, fingerZ[fi])
+                let theta = NAMath.degrees(NativeAnimeLayout.fingerFanDegrees[fi])
+                let dir = NAVec3(sign * cos(theta), 0, sin(theta))
+                let length = NativeAnimeLayout.fingerLengthRatios[fi] * hl
                 j[chain[0]] = base
-                j[chain[1]] = base + NAVec3(sign * 0.22 * hl, 0, 0)
-                j[chain[2]] = base + NAVec3(sign * 0.40 * hl, 0, 0)
+                j[chain[1]] = base + dir * (0.55 * length)
+                j[chain[2]] = base + dir * length
             }
-            let thumbMeta = hand + NAVec3(sign * 0.15 * hl, -0.004 * H, 0.020 * H)
+            let thumbMeta = hand + NAVec3(sign * 0.20 * hl, -0.004 * H, 0.020 * H)
+            let thumbDir = NAMath.normalize(NAVec3(sign * 0.5, -0.15, 1))
             j[s ? .leftThumbMetacarpal : .rightThumbMetacarpal] = thumbMeta
-            j[s ? .leftThumbProximal : .rightThumbProximal] = thumbMeta + NAVec3(sign * 0.16 * hl, 0, 0.16 * hl)
-            j[s ? .leftThumbDistal : .rightThumbDistal] = thumbMeta + NAVec3(sign * 0.28 * hl, 0, 0.28 * hl)
+            j[s ? .leftThumbProximal : .rightThumbProximal] = thumbMeta + thumbDir * (0.22 * hl)
+            j[s ? .leftThumbDistal : .rightThumbDistal] = thumbMeta + thumbDir * (0.40 * hl)
 
             let upperLeg = NAVec3(sign * hipHalfWidth, hipJointY, 0)
             let lowerLeg = upperLeg + NAVec3(0, -thighLength, 0)

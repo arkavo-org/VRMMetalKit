@@ -125,34 +125,36 @@ struct NativeAnimeBodyBuilder {
     private func buildFingers(_ mesh: inout BuildMesh, side: String) {
         let s = side == "left" ? 1.0 : -1.0
         let sfx = NativeAnimeControls.suffix(side)
-        let hand = layout.joint(side == "left" ? .leftHand : .rightHand)
-        let y = hand.y
         let hl = layout.handLength
-        let fingerRadius: [Double] = [0.0068, 0.0073, 0.0068, 0.0056]
+        let fingerRadius: [Double] = [0.0055, 0.0058, 0.0054, 0.0047]
         for (fi, finger) in ["Index", "Middle", "Ring", "Little"].enumerated() {
             let joints = ["Proximal", "Intermediate", "Distal"].map { layout.joint(VRMHumanBone(rawValue: side + finger + $0)!) }
             let r0 = fingerRadius[fi] * H
-            let dir = NAMath.normalize(joints[2] - joints[1])
+            let dir = NAMath.normalize(joints[2] - joints[0])
+            let v = NAMath.normalize(NAMath.cross(dir, NAMath.yAxis))
             func fring(_ p: NAVec3, _ r: Double) -> Ring {
-                Ring(center: p, u: NAMath.yAxis, v: NAMath.zAxis * s, ru: r, rv: r, region: "hand\(sfx)")
+                Ring(center: p, u: NAMath.yAxis, v: v, ru: r * 0.85, rv: r, region: "hand\(sfx)")
             }
             let rings = [
-                fring(joints[0] - NAMath.xAxis * (s * 0.06 * hl), r0 * 1.1),
-                fring(joints[0], r0),
-                fring(joints[1], r0 * 0.88),
-                fring(joints[2], r0 * 0.72),
+                fring(joints[0] - dir * (0.08 * hl), r0 * 1.15),
+                fring(joints[0] - dir * (0.04 * hl), r0 * 1.15),
+                fring(joints[0] + dir * (0.03 * hl), r0),
+                fring(joints[1], r0 * 0.92),
+                fring(joints[2], r0 * 0.80),
             ]
-            mesh.loft(rings, segments: Self.thumbSegments, capStart: joints[0] - NAMath.xAxis * (s * 0.11 * hl), capEnd: joints[2] + dir * (0.10 * hl))
+            mesh.loft(rings, segments: Self.thumbSegments, capStart: joints[0] - dir * (0.13 * hl), capEnd: joints[2] + dir * (0.09 * hl))
         }
-        let thumbBase = NAVec3(hand.x + s * 0.22 * hl, y - 0.002 * H, 0.018 * H)
-        let thumbDir = NAMath.normalize(NAVec3(s * 0.45, 0, 1))
+        let meta = layout.joint(side == "left" ? .leftThumbMetacarpal : .rightThumbMetacarpal)
+        let proximal = layout.joint(side == "left" ? .leftThumbProximal : .rightThumbProximal)
+        let distal = layout.joint(side == "left" ? .leftThumbDistal : .rightThumbDistal)
+        let thumbDir = NAMath.normalize(distal - meta)
         let tu = NAMath.yAxis
         let tv = NAMath.normalize(NAMath.cross(thumbDir, tu))
-        func thumbRing(_ t: Double, _ r: Double) -> Ring {
-            Ring(center: thumbBase + thumbDir * t, u: tu, v: tv, ru: r, rv: r, region: "hand\(sfx)")
+        func thumbRing(_ p: NAVec3, _ r: Double) -> Ring {
+            Ring(center: p, u: tu, v: tv, ru: r, rv: r, region: "hand\(sfx)")
         }
-        let thumb = [thumbRing(0, 0.010 * H), thumbRing(0.22 * hl, 0.0085 * H), thumbRing(0.40 * hl, 0.006 * H)]
-        mesh.loft(thumb, segments: Self.thumbSegments, capStart: thumbBase - thumbDir * (0.01 * H), capEnd: thumbBase + thumbDir * (0.45 * hl))
+        let thumb = [thumbRing(meta, 0.010 * H), thumbRing(proximal, 0.0085 * H), thumbRing(distal, 0.0065 * H)]
+        mesh.loft(thumb, segments: Self.thumbSegments, capStart: meta - thumbDir * (0.012 * H), capEnd: distal + thumbDir * (0.06 * hl))
     }
 
     /// Ring perpendicular to -Y (loft going down): u = +X, v = +Z.
@@ -189,15 +191,15 @@ struct NativeAnimeBodyBuilder {
         let sfx = NativeAnimeControls.suffix(side)
         let x = layout.joint(side == "left" ? .leftUpperLeg : .rightUpperLeg).x
         func footRing(_ z: Double, rx: Double, ry: Double) -> Ring {
-            Ring(center: NAVec3(x, ry, z), u: NAMath.xAxis, v: NAMath.yAxis, ru: rx, rv: ry, region: "foot\(sfx)")
+            Ring(center: NAVec3(x, ry * H, z * H), u: NAMath.xAxis, v: NAMath.yAxis, ru: rx * H, rv: ry * H, region: "foot\(sfx)")
         }
         let footRings = [
-            footRing(-0.032 * H, rx: 0.026 * H, ry: 0.026 * H),
-            footRing(0.0, rx: 0.030 * H, ry: 0.031 * H),
-            footRing(0.045 * H, rx: 0.032 * H, ry: 0.026 * H),
-            footRing(0.085 * H, rx: 0.031 * H, ry: 0.019 * H),
-            footRing(0.115 * H, rx: 0.025 * H, ry: 0.013 * H),
+            footRing(-0.030, rx: 0.022, ry: 0.024),
+            footRing(0.000, rx: 0.026, ry: 0.030),
+            footRing(0.040, rx: 0.027, ry: 0.024),
+            footRing(0.080, rx: 0.028, ry: 0.016),
+            footRing(0.115, rx: 0.024, ry: 0.010),
         ]
-        mesh.loft(footRings, segments: Self.limbSegments, capStart: NAVec3(x, 0.024 * H, -0.042 * H), capEnd: NAVec3(x, 0.012 * H, 0.128 * H))
+        mesh.loft(footRings, segments: Self.limbSegments, capStart: NAVec3(x, 0.022 * H, -0.040 * H), capEnd: NAVec3(x, 0.008 * H, 0.130 * H))
     }
 }
