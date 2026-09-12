@@ -50,7 +50,7 @@ final class TemplatePackTests: XCTestCase {
     private let pack = NativeAnimeFixture.pack
 
     /// Cross-process pin of the default compile; verified identical over separate `swift test` invocations.
-    static let goldenDefaultBuildHash = "3389e4db5bfd286127debe49c68df91d4ecf7330ac6b3a3aef9ae80f3b95733a"
+    static let goldenDefaultBuildHash = "03193cd826bfa0b50e36368a3fdab8a8bcc04f08fda5224e3bec36f07b790775"
 
     static let expectedKeys: [String] = {
         var keys = ["body.heightM", "body.headCount"]
@@ -115,7 +115,7 @@ final class TemplatePackTests: XCTestCase {
         let heads = pack.control("body.headCount")!
         XCTAssertEqual(heads.unit, .ratio)
         XCTAssertEqual(heads.validRange, [4.5, 8])
-        XCTAssertEqual(heads.defaultValue, 6.6)
+        XCTAssertEqual(heads.defaultValue, 6.9)
         for d in pack.controls where d.key.hasPrefix("face.iris.") || d.key.hasPrefix("face.pupil.") {
             XCTAssertEqual(d.unit, .normalized, d.key)
             XCTAssertEqual(d.validRange, [0, 1], d.key)

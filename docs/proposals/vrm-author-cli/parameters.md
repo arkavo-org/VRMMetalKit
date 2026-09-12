@@ -72,7 +72,7 @@ is independent sides. Global controls update associated bind/fit/morph data toge
 | Keys | Unit / default | Required response |
 |---|---|---|
 | `body.heightM` | metres [1.2,2.0], 1.65 | Overall stature; preserve relative shape |
-| `body.headCount` | ratio [4.5,8], 6.6 | Head/body proportion; reconcile with fixed total height |
+| `body.headCount` | ratio [4.5,8], 6.9 | Head/body proportion; reconcile with fixed total height |
 | `body.proportion.shoulderWidth`, `torsoLength`, `armLength`, `legLength`, `hipWidth` | B; each uses `body.proportion.` prefix | Calibrated regional proportions and dependent fit |
 | `body.shape.chest`, `waist`, `hip`, `muscle` | B; each uses `body.shape.` prefix | Original body basis, including fitted outfit response |
 | `face.head.width`, `face.head.depth`, `face.jaw.width`, `face.chin.length`, `face.chin.pointedness` | B | Head silhouette while preserving mouth/eye loops |

@@ -65,6 +65,14 @@ struct NativeAnimeBodyBuilder {
             yRing(at(1.00), rx: 0.055 * H, rz: 0.046 * H, region: "torso"),
         ]
         mesh.loft(rings, segments: Self.torsoSegments, capStart: NAVec3(0, y0 - 0.025 * H, -0.002 * H), capEnd: NAVec3(0, y1 + 0.01 * H, 0), extraRegions: ["torso"])
+        // The cap poles sit on the axis inside the neck/hips. The top pole must
+        // not join the "torso" region: garments copy regions, and a shirt ends
+        // in a neck hole — covering the pole would seal it shut and, at big
+        // headCounts where the pole exits the fused neck overlap, trip the
+        // penetration gate on interior geometry nobody sees.
+        let topPole = mesh.vertexCount - 1
+        mesh.regions["torso"]?.removeAll { $0 == topPole }
+        mesh.tag("torsoCap", [topPole])
     }
 
     private func buildNeck(_ mesh: inout BuildMesh) {

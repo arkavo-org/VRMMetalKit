@@ -100,7 +100,7 @@ struct NativeAnimeShapeOffsets {
                 plus: { p, _ in NAVec3(p.x * (1 - 0.35 * chinWeight(p)), p.y, p.z) }, minus: { p, _ in NAVec3(p.x * (1 + 0.25 * chinWeight(p)), p.y, p.z) }),
             Key(control: "face.nose.height", regions: ["nose"], plus: Self.radial(1, 1.3, 1), minus: Self.radial(1, 0.7, 1)),
             Key(control: "face.nose.width", regions: ["nose"], plus: Self.radial(1.3, 1, 1), minus: Self.radial(0.7, 1, 1)),
-            Key(control: "face.nose.projection", regions: ["nose"], plus: Self.radial(1, 1, 1.4), minus: Self.radial(1, 1, 0.6)),
+            Key(control: "face.nose.projection", regions: ["nose"], plus: Self.radial(1, 1, 1.55), minus: Self.radial(1, 1, 0.5)),
             Key(control: "face.mouth.width", regions: ["lipsUpper", "lipsLower", "innerMouth"], plus: Self.radial(1.2, 1, 1), minus: Self.radial(0.8, 1, 1)),
             Key(control: "face.mouth.height", regions: ["lipsUpper", "lipsLower", "innerMouth"], plus: Self.radial(1, 1.25, 1), minus: Self.radial(1, 0.75, 1)),
             Key(control: "face.lip.fullness", regions: ["lipsUpper", "lipsLower"],
