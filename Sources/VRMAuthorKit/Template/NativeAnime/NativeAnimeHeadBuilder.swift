@@ -273,7 +273,7 @@ struct NativeAnimeHeadBuilder {
     }
 
     static let upperRootRise = 0.42
-    static let lowerRootDrop = 0.30
+    static let lowerRootDrop = 0.55
     static let lashRow = 0.18
     static let lineRow = 0.15
 
