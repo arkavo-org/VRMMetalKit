@@ -147,6 +147,7 @@ struct NativeAnimeMorphBuilder {
         }
         let skin = HeadPrimitive.skin.rawValue
         for jw in handles.jawWeights { deltas[skin][jw.index] += NAVec3(0, -0.8 * m.open * jw.weight, 0) }
+        for i in handles.tongue { deltas[prim][i] += NAVec3(0, -1.0 * m.open, 0) }
         // A smile raises the cheeks and pushes them slightly out and forward.
         if m.corner > 0 {
             for (side, sign) in [("left", 1.0), ("right", -1.0)] {

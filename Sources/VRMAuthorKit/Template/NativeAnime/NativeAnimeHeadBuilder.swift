@@ -56,6 +56,8 @@ struct HeadHandles {
     /// Cheek vertices per side on the skin primitive (face region, below and
     /// outside the eyes): emotion morphs raise them to sell a smile.
     var cheeks: [String: [Int]] = [:]
+    /// Tongue slab vertices (mouth primitive): they drop with the jaw.
+    var tongue: [Int] = []
 }
 
 /// Head mesh primitives in emission order.
@@ -408,5 +410,19 @@ struct NativeAnimeHeadBuilder {
         mesh.bridgeLoop(front, back)
         let pole = mesh.addVertex(center + NAVec3(0, 0, -0.07 * hh), uv: NAVec2(0.5, 0.5), pivot: center, regions: ["innerMouth"])
         for j in 0..<M { mesh.addTri(pole, back[j], back[(j + 1) % M]) }
+
+        // Tongue: a thin slab rising off the cavity floor; it drops with the
+        // jaw so an open mouth shows it instead of an empty dark hole.
+        func tongueRing(_ dz: Double, _ lift: Double, _ rx: Double, _ ry: Double) -> Ring {
+            Ring(center: center + NAVec3(0, -0.70 * hLower - 0.006 * hh + lift, dz), u: NAMath.xAxis, v: NAMath.yAxis, ru: rx, rv: ry, region: "tongue")
+        }
+        let tongueRings = [
+            tongueRing(-0.048 * hh, 0, 0.30 * W, 0.008 * hh),
+            tongueRing(-0.032 * hh, 0.002 * hh, 0.45 * W, 0.010 * hh),
+            tongueRing(-0.016 * hh, 0.007 * hh, 0.34 * W, 0.007 * hh),
+        ]
+        let tongueRows = mesh.loft(tongueRings, segments: Self.earSegments, capStart: center + NAVec3(0, -0.70 * hLower - 0.006 * hh, -0.055 * hh),
+                                   capEnd: center + NAVec3(0, -0.70 * hLower - 0.006 * hh + 0.011 * hh, -0.012 * hh))
+        handles.tongue = tongueRows.flatMap { $0 }
     }
 }
