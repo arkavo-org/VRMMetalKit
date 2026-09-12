@@ -52,6 +52,12 @@ public struct RPCError: Error, Hashable, Sendable {
 public struct ServeSession: Sendable {
     public static let mcpProtocolVersion = "2025-06-18"
     public static let supportedMCPVersions = ["2025-06-18"]
+    public static let mcpInstructions = """
+    vrm-author authoring loop. 1) resources/read recipe://native-anime-v1/female or recipe://native-anime-v1/male for a complete starter Recipe. \
+    2) vrm_project {action:"init"} to create a project, then edit the Recipe document (for example /body/body.heightM) and vrm_recipe {action:"apply", recipe, expectedRevision}. \
+    3) vrm_build, then vrm_qa: read the checks and look at the preview images, patch the Recipe, apply again. 4) vrm_export when the checks pass. \
+    vrm_discover lists control ranges and presets. Every result carries revision; mutations require expectedRevision. Preview images are views, not evidence.
+    """
     public static let harnessEnvironmentKey = "VRM_AUTHOR_SESSION"
     public static let evidencePolicyEnvironmentKey = "VRM_AUTHOR_EVIDENCE_POLICY"
 
@@ -244,9 +250,9 @@ public struct ServeSession: Sendable {
             negotiatedVersion = version
             return [
                 "protocolVersion": .string(version),
-                "capabilities": ["tools": ["listChanged": false]],
+                "capabilities": ["tools": ["listChanged": false], "resources": ["subscribe": false, "listChanged": false]],
                 "serverInfo": ["name": .string(context.toolInfo.tool), "version": .string(context.toolInfo.version), "title": "vrm-author"],
-                "instructions": .string("Tools are vrm-author operations; arguments are the operation's request object (see inputSchema). Mutations require expectedRevision and accept requestId as an idempotency key. Every result is a vrmauthor/1 envelope with exitCode."),
+                "instructions": .string(ServeSession.mcpInstructions),
             ]
         case "notifications/initialized", "notifications/cancelled", "notifications/progress", "notifications/roots/list_changed":
             guard isNotification else { throw RPCError(code: RPCError.invalidRequest, message: "Invalid Request: '\(method)' is a notification") }
@@ -275,6 +281,16 @@ public struct ServeSession: Sendable {
             let text = try CanonicalJSON.string(result)
             let failed = result["status"] != "succeeded"
             return ["content": [["type": "text", "text": .string(text)]], "structuredContent": result, "isError": .bool(failed)]
+        case "resources/list":
+            let p = try paramsObject(params)
+            if p["cursor"] != nil { throw RPCError(code: RPCError.invalidParams, message: "Invalid params: unknown cursor") }
+            return MCPResources.list()
+        case "resources/templates/list":
+            return ["resourceTemplates": []]
+        case "resources/read":
+            let p = try paramsObject(params)
+            guard let uri = p["uri"]?.string else { throw RPCError(code: RPCError.invalidParams, message: "Invalid params: uri is required") }
+            return try MCPResources.read(uri: uri, templates: context.templates)
         default:
             throw RPCError(code: RPCError.methodNotFound, message: "Method not found: \(method)")
         }
