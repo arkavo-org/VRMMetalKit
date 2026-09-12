@@ -1,0 +1,204 @@
+{
+  "id": "recipe-export",
+  "version": "0.1.0",
+  "operation": "recipe export",
+  "operationVersion": 1,
+  "requestSchemaHash": "8081351cbcd2b9d4a40ec8b93c0e62bd9b03be1d8257eaa268387fd341adcb3d",
+  "resultSchemaHash": "607f2d0295e6ac02da109732f7e2659435d5582c51eb80ef542179bf3eed81cb",
+  "packHash": "1f70c8658ae4434ec42a304f959c2556e7ea9a82e9a8551427cb2837f873e5c7",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Core/ModelTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/parameters.md (Recipe and production template)",
+      "docs/proposals/vrm-author-cli/commands.md (`recipe export` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Import/export/provenance, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "project with an applied recipe (export stub pack)",
+      "project with a partially filled recipe"
+    ],
+    "parameterRanges": {
+      "resolved": [
+        true
+      ],
+      "out": "path that does not exist unless replace",
+      "replace": [
+        false,
+        true
+      ]
+    },
+    "invariants": [
+      "round trip is byte-identical: the exported canonical JSON re-imports and re-exports to the same bytes and sha256",
+      "every pack default is explicit in the resolved recipe",
+      "a project without an applied recipe is missingInput; an existing out path is outputExists",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "metres, degrees, normalized per the Recipe field units; canonical JSON (RFC 8785) bytes",
+    "excluded": [
+      "unresolved (partial) export",
+      "recipe schema migration"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "applied-default-recipe",
+      "path": "synthetic:factory project with the stub pack's default recipe applied",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testRecipeExportRoundTripIsByteIdenticalAndIncludesPackDefaults: byte-identical round trip, sha256 matches"
+    },
+    {
+      "id": "no-recipe-and-existing-out",
+      "path": "synthetic:project before any recipe apply, and re-export to an existing path",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testRecipeExportRoundTripIsByteIdenticalAndIncludesPackDefaults: missingInput, then outputExists"
+    },
+    {
+      "id": "partial-recipe",
+      "path": "synthetic:project file whose recipe body was emptied by hand",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testRecipeExportRoundTripIsByteIdenticalAndIncludesPackDefaults: defaults resolve (height 1.6) instead of failing"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ExportPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "152679a875146a4ca5f771d34f177495ef78bf5907eb86fa11f2ac1f1442d6b0",
+        "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
+        "Tests/VRMAuthorKitTests/Core/ModelTests.swift": "0bee5342eeb781fe0b4e37f3b53ecbb0b2a989926fa6b9f97a2be8ba5690495b"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "round-trip-identity",
+      "description": "testRecipeExportRoundTripIsByteIdenticalAndIncludesPackDefaults: a re-export whose bytes differ from the first, or that omits a pack default, fails; missingInput and outputExists must be reported.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testRecipeExportRoundTripIsByteIdenticalAndIncludesPackDefaults"
+      }
+    },
+    {
+      "id": "wrong-template-sha",
+      "description": "testRecipeApplyMaterializesObjectsInvalidationsAndRevision: a recipe naming the installed template with the wrong sha256 must be validationFailed at /template/sha256 and leave the revision unchanged.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testRecipeApplyMaterializesObjectsInvalidationsAndRevision"
+      }
+    },
+    {
+      "id": "duplicate-ids-rejected",
+      "description": "ModelTests.testRecipeDecodesWithDefaultsAndRejectsDuplicateIds: a recipe with duplicate object ids must not decode; defaults must fill absent fields.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testRecipeDecodesWithDefaultsAndRejectsDuplicateIds",
+        "suite": "ModelTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ExportPackTests test passed (executed 11, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Export/ExportPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ExportPackTests",
+            "executed": 11,
+            "passed": 11,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Export/ExportPackTests.swift": "682e8445804cf2ecc1f1376f0e73bc5128b56da921a6865dee6c1e602445cbfc",
+            "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c",
+            "Tests/VRMAuthorKitTests/Core/ModelTests.swift": "0bee5342eeb781fe0b4e37f3b53ecbb0b2a989926fa6b9f97a2be8ba5690495b"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "recipe export is a canonical-JSON serialisation of the project recipe and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/recipe-export.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ExportPackTests --filter ModelTests test-case lines"
+    ]
+  }
+}

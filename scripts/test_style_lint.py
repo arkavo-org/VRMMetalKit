@@ -101,7 +101,7 @@ def minimal_vrm(bones, children_cycle=False):
 
 
 class RobustnessTests(unittest.TestCase):
-    REQUIRED = ["hips", "spine", "head", "leftUpperArm", "rightUpperArm", "leftUpperLeg", "rightUpperLeg"]
+    MINIMAL_BONES = ["hips", "spine", "head", "leftUpperArm", "rightUpperArm", "leftUpperLeg", "rightUpperLeg"]
 
     def setUp(self):
         import tempfile
@@ -113,7 +113,7 @@ class RobustnessTests(unittest.TestCase):
         return L.measure(self.tmp)
 
     def test_optional_bones_missing_yields_none_not_crash(self):
-        M = self.measure(*minimal_vrm(self.REQUIRED))
+        M = self.measure(*minimal_vrm(self.MINIMAL_BONES))
         P = M["proportions"]
         self.assertIsNotNone(P["hips_height_ratio"])
         for k in ("lower_arm_m", "lower_upper_arm_ratio", "arm_span_height_ratio", "rest_pose_arm_horizontal_cos", "limb_asymmetry", "eye_height_ratio"):
@@ -127,7 +127,7 @@ class RobustnessTests(unittest.TestCase):
             self.measure(*minimal_vrm(["hips", "spine"]))
 
     def test_node_cycle_terminates(self):
-        self.measure(*minimal_vrm(self.REQUIRED, children_cycle=True))
+        self.measure(*minimal_vrm(self.MINIMAL_BONES, children_cycle=True))
 
     def test_jpeg_zero_length_segment_terminates(self):
         data = b"\xff\xd8\xff\xe0\x00\x00" + b"\x00" * 16

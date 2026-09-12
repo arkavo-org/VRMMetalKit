@@ -1,0 +1,209 @@
+{
+  "id": "describe",
+  "version": "0.1.0",
+  "operation": "describe",
+  "operationVersion": 1,
+  "requestSchemaHash": "3d7a0a929b672c56e00e0c8a406ca0bd029c28cdab3e3292b1f4886f43d6aa99",
+  "resultSchemaHash": "1e79112b47ff18f87483a1de4b062f6b307cbde041bda961e001c3e76fe05437",
+  "packHash": "47b7110bf8ede95b9cfe6a376b94175fe60483e10f781c0a4ab5f94a44cc133d",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Core/SchemaHashStabilityTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/commands.md (Invocation and discovery)",
+      "docs/proposals/vrm-author-cli/commands.md (`describe` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "none (project-free)"
+    ],
+    "parameterRanges": {
+      "command": "any registered v1 operation name, or absent",
+      "namespace": [
+        "v1",
+        "reserved"
+      ]
+    },
+    "invariants": [
+      "every accepted leaf is discoverable: bare describe lists exactly the 35 v1 commands in allowlist order with request/result schemas, 64-hex schema hashes, examples, units and the required evidence level",
+      "describe never returns evidence status; only capabilities does",
+      "an unknown command name is an invalid request, not an empty result",
+      "request and result schema hashes are stable across runs and builds",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "none (project-free); revisions are nonnegative integers",
+    "excluded": [
+      "reserved-namespace schemas (empty in this build, reported with RESERVED_NAMESPACE_EMPTY)",
+      "evidence status"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "all-commands",
+      "path": "synthetic:bare describe over the v1 registry",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testDescribeListsThirtyFiveCommandsWithSchemasUnitsAndEvidence: 35 entries in v1Names order, every entry with schemas, 64-char schemaHash, examples, no evidenceStatus"
+    },
+    {
+      "id": "unknown-command",
+      "path": "synthetic:describe with command \"nope\"",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testDescribeListsThirtyFiveCommandsWithSchemasUnitsAndEvidence: rejected as invalidRequest"
+    },
+    {
+      "id": "reserved-namespace",
+      "path": "synthetic:describe with namespace reserved in a build that registers no reserved schemas",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testDescribeListsThirtyFiveCommandsWithSchemasUnitsAndEvidence: empty command list plus warning RESERVED_NAMESPACE_EMPTY, never an error"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "DiscoveryPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "b710b883f77e7e2ef3fa1eacb3a0cca392c255b2438122e907e53339a219b934",
+        "Tests/VRMAuthorKitTests/Core/SchemaHashStabilityTests.swift": "2e17754fcfff81fc79be49bcef225c477f69792d5c252c7f334cb4aeb3b62a00"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "unknown-command-rejected",
+      "description": "testDescribeListsThirtyFiveCommandsWithSchemasUnitsAndEvidence: describe of an unregistered command must be an invalid request; returning an empty list would be accepted only by a broken oracle.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testDescribeListsThirtyFiveCommandsWithSchemasUnitsAndEvidence"
+      }
+    },
+    {
+      "id": "dispatch-order",
+      "description": "SchemaHashStabilityTests.testDispatchOrderUnknownThenHandlerThenSchema: an unknown operation must fail before handler lookup and schema validation; a registry that falls through to a schema-only answer is a mutant.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testDispatchOrderUnknownThenHandlerThenSchema",
+        "suite": "SchemaHashStabilityTests"
+      }
+    },
+    {
+      "id": "schema-hash-stability",
+      "description": "SchemaHashStabilityTests.testRequestAndResultSchemaHashesAreStableAcrossBuilds: the hashes describe reports must equal the frozen values; a drifted schema changes the hash and fails.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testRequestAndResultSchemaHashesAreStableAcrossBuilds",
+        "suite": "SchemaHashStabilityTests"
+      }
+    },
+    {
+      "id": "allowlist-order",
+      "description": "SchemaHashStabilityTests.testExactlyThirtyFiveOperationsInAllowlistOrder: exactly 35 operations in commands.md order; an added, dropped or reordered command fails.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testExactlyThirtyFiveOperationsInAllowlistOrder",
+        "suite": "SchemaHashStabilityTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every DiscoveryPackTests test passed (executed 8, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "DiscoveryPackTests",
+            "executed": 8,
+            "passed": 8,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "505376521a3c9af60230baa0abade455c34a6456fb9ee168bed14b9081a8f685",
+            "Tests/VRMAuthorKitTests/Core/SchemaHashStabilityTests.swift": "2e17754fcfff81fc79be49bcef225c477f69792d5c252c7f334cb4aeb3b62a00"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "describe is a registry read over the operation schemas and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/describe.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter DiscoveryPackTests --filter SchemaHashStabilityTests test-case lines"
+    ]
+  }
+}

@@ -1,0 +1,193 @@
+{
+  "id": "version",
+  "version": "0.1.0",
+  "operation": "version",
+  "operationVersion": 1,
+  "requestSchemaHash": "52e6fc2067bb7fdce1905713b8a7d39dc312346e8e6775b24f38a37b8bd84f10",
+  "resultSchemaHash": "4ac456d39569fa1081f93784f15d48aaeb98b10c61ec030962a8eee1d560ffcc",
+  "packHash": "0901406e6d285a1829a0abb088be282b194561bfe636f652c3a6d430eb967225",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Core/CLIParsingTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/commands.md (Invocation and discovery)",
+      "docs/proposals/vrm-author-cli/commands.md (`version` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "none (project-free)"
+    ],
+    "parameterRanges": {},
+    "invariants": [
+      "result carries tool, protocol (vrmauthor/1), abi and version with null revisionBefore/revisionAfter",
+      "stdout is exactly one compact canonical-JSON envelope; nothing else is written to stdout",
+      "an unknown flag, unknown command or a key supplied both in --request JSON and as a flag is an invalid request, never ignored",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "none (project-free); revisions are nonnegative integers",
+    "excluded": [
+      "implementationHash and backendHash (reported by capabilities)",
+      "build metadata beyond ToolInfo"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "default-context",
+      "path": "synthetic:default operation context with the in-tree evidence registry",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "DiscoveryPackTests.testVersion: exit success, tool/protocol/abi/version present, null revisions"
+    },
+    {
+      "id": "unknown-flag",
+      "path": "synthetic:version invoked with an unknown flag and with a duplicated key",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "CLIParsingTests.testUnknownFlagsCommandsAndDuplicates: rejected as an invalid request with a structured error"
+    },
+    {
+      "id": "stdin-request",
+      "path": "synthetic:request body read from stdin via --request -",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "CLIParsingTests.testRequestFromStdin and testDriverOutputIsCompactCanonicalJSONOnStdoutOnly: the envelope is the only stdout content"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "DiscoveryPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "b710b883f77e7e2ef3fa1eacb3a0cca392c255b2438122e907e53339a219b934",
+        "Tests/VRMAuthorKitTests/Core/CLIParsingTests.swift": "5fbe1a0e5a8468c611c8000a5b1565ab366058f2d068fae12584be049296db0d"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "unknown-flag-rejected",
+      "description": "CLIParsingTests.testUnknownFlagsCommandsAndDuplicates: an unknown flag, unknown command and a duplicated key must each be an invalid request, not silently dropped.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testUnknownFlagsCommandsAndDuplicates",
+        "suite": "CLIParsingTests"
+      }
+    },
+    {
+      "id": "json-and-flag-conflict",
+      "description": "CLIParsingTests.testConflictBetweenRequestJSONAndFlag: a key supplied both in --request JSON and as a flag must be an error, not last-one-wins.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testConflictBetweenRequestJSONAndFlag",
+        "suite": "CLIParsingTests"
+      }
+    },
+    {
+      "id": "exit-code-mapping",
+      "description": "CLIParsingTests.testDriverExitCodesAndEnvelopes: driver exit codes must follow the commands.md table (0/1/2/3/4/5); a failed envelope with exit 0 is a mutant.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testDriverExitCodesAndEnvelopes",
+        "suite": "CLIParsingTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every DiscoveryPackTests test passed (executed 8, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "DiscoveryPackTests",
+            "executed": 8,
+            "passed": 8,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "ec47a5e911a9897c05ea0fc4f76317404305fd621bf20058f2cead1e2f56b871",
+            "Tests/VRMAuthorKitTests/Core/CLIParsingTests.swift": "5fbe1a0e5a8468c611c8000a5b1565ab366058f2d068fae12584be049296db0d"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "version is a pure discovery read that reports ToolInfo constants and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/version.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter DiscoveryPackTests --filter CLIParsingTests test-case lines"
+    ]
+  }
+}

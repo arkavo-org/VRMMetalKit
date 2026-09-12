@@ -32,6 +32,18 @@ let package = Package(
         .library(
             name: "GLTFMetalKit",
             targets: ["GLTFMetalKit"]
+        ),
+        .library(
+            name: "VRMAuthorKit",
+            targets: ["VRMAuthorKit"]
+        ),
+        .executable(
+            name: "vrm-author",
+            targets: ["VRMAuthor"]
+        ),
+        .executable(
+            name: "vrm-author-render",
+            targets: ["VRMAuthorRender"]
         )
     ],
     dependencies: [
@@ -95,6 +107,27 @@ let package = Package(
         .testTarget(
             name: "VRMAProcessKitTests",
             dependencies: ["VRMAProcessKit"]
+        ),
+        .target(
+            name: "VRMAuthorKit",
+            dependencies: [],
+            swiftSettings: [
+                .enableUpcomingFeature("InferIsolatedConformances"),
+                .enableUpcomingFeature("ImmutableWeakCaptures"),
+                .enableUpcomingFeature("MemberImportVisibility")
+            ]
+        ),
+        .executableTarget(
+            name: "VRMAuthor",
+            dependencies: ["VRMAuthorKit"]
+        ),
+        .executableTarget(
+            name: "VRMAuthorRender",
+            dependencies: ["VRMMetalKit", "VRMAuthorKit"]
+        ),
+        .testTarget(
+            name: "VRMAuthorKitTests",
+            dependencies: ["VRMAuthorKit", "VRMMetalKit"]
         ),
         .executableTarget(
             name: "VRMRender",

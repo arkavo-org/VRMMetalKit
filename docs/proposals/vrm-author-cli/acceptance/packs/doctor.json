@@ -1,0 +1,198 @@
+{
+  "id": "doctor",
+  "version": "0.1.0",
+  "operation": "doctor",
+  "operationVersion": 1,
+  "requestSchemaHash": "52e6fc2067bb7fdce1905713b8a7d39dc312346e8e6775b24f38a37b8bd84f10",
+  "resultSchemaHash": "c17ee5d1f393859792ff8fd7d252802cb0d279239079a1ac73a2d7ef258be93a",
+  "packHash": "1fca5575d7117669b41dfc0598dbe04aa51c38344b1d93ca57a36cd245889c18",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/style/profiles/vroid-lineage-anime.json @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/verification.md \u00a72 (Pinned oracles)",
+      "docs/proposals/vrm-author-cli/commands.md (`doctor` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "none (project-free); host environment (PATH, signer/trust-policy variables)"
+    ],
+    "parameterRanges": {},
+    "invariants": [
+      "report carries python3, styleLinter, renderer, signer, determinism, acceptance and ok",
+      "styleLinter reports the pinned sha256 of scripts/style_lint.py and whether the working-tree file matches",
+      "a missing python3 degrades ok to false with warning PYTHON3_MISSING rather than failing the command",
+      "acceptance.packs counts the pack files the registry loaded",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "none (project-free); revisions are nonnegative integers",
+    "excluded": [
+      "Metal renderer probing beyond availability",
+      "network reachability"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "host-environment",
+      "path": "synthetic:default context on a macOS host with python3 on PATH",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testDoctorReportsEnvironment: every report key present, styleLinter found with a 64-char pinned sha256, determinism backend portable-strict/1 threads 1"
+    },
+    {
+      "id": "no-python",
+      "path": "synthetic:doctor with PATH=/nonexistent",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testDoctorReportsEnvironment: python3.found false, ok false, warning PYTHON3_MISSING"
+    },
+    {
+      "id": "no-signer",
+      "path": "synthetic:doctor with no signer or trust policy configured",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testDoctorReportsEnvironment: signer.available false with warning SIGNER_UNAVAILABLE, still exit success"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "DiscoveryPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "b710b883f77e7e2ef3fa1eacb3a0cca392c255b2438122e907e53339a219b934",
+        "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "645ca6e06477f99d9ab6eb96ba7bdf86117a2f87924b80831140d309d43f0063",
+        "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",
+        "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "missing-python-not-ok",
+      "description": "testDoctorReportsEnvironment: with python3 removed from PATH the report must say ok=false and warn PYTHON3_MISSING; a doctor that reports healthy is a mutant.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testDoctorReportsEnvironment"
+      }
+    },
+    {
+      "id": "empty-registry-not-healthy",
+      "description": "testEvidenceRegistryLocatorAndDefaults: an absent acceptance directory must locate to nil and an empty registry must keep every dimension pending with a blocker.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testEvidenceRegistryLocatorAndDefaults"
+      }
+    },
+    {
+      "id": "linter-pin-verified",
+      "description": "MaterialsPackTests.testHandlersAreRegisteredAndPinsMatchVerificationTable: the pinned linter/profile hashes must equal the verification.md table and the working-tree files must match them.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testHandlersAreRegisteredAndPinsMatchVerificationTable",
+        "suite": "MaterialsPackTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every DiscoveryPackTests test passed (executed 8, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "DiscoveryPackTests",
+            "executed": 8,
+            "passed": 8,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "cf4af411e777220e0697b134950ed15e93cc1b38ad237d7efc479ef108c02a6c",
+            "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "bb8a4994130a475b481632311fa497a494493204ac697d49c5456c8d5505390f",
+            "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",
+            "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "doctor is an environment diagnostic and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/doctor.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter DiscoveryPackTests --filter MaterialsPackTests test-case lines"
+    ]
+  }
+}

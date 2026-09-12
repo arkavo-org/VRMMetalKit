@@ -41,6 +41,17 @@ make style-lint                                                   # repo-root fi
 python3 scripts/style_lint.py lint --profile docs/style/profiles/vroid-lineage-anime.json --json a.vrm
 ```
 
+### vrm-author CLI (autonomous VRM authoring)
+`Sources/VRMAuthorKit` (Foundation + CryptoKit only), `vrm-author` and `vrm-author-render` executables; contract in `docs/proposals/vrm-author-cli/`. Acceptance packs live under `docs/proposals/vrm-author-cli/acceptance/packs/` and run through `scripts/acceptance_run.py`; every swift-test pack pins its test files by sha256, so after editing a suite re-pin the pack (`oracleHashes` + `packHash`). `scripts/repin_packs.py --check` reports pins that no longer carry their oracles; run it without `--check` to move the pack set and `evidence.json` onto the current head.
+```bash
+swift test --filter VRMAuthorKitTests --disable-sandbox
+.build/debug/vrm-author project init --dir a.vrmauthor --template native-anime-v1 --seed 42
+.build/debug/vrm-author build --project a.vrmauthor --out draft.vrm
+.build/debug/vrm-author qa run --project a.vrmauthor --request - --out qa <<< '{"request":{"file":"draft.vrm","suite":"spec+style"}}'
+python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/build.json --json
+```
+Production `capabilities` and the jsonrpc protocol gate on admitted evidence in `acceptance/evidence.json` (written by the independent evaluator, never by handlers); `VRM_AUTHOR_SESSION=harness` lifts that gate. MCP (`serve --stdio --protocol mcp`) exposes six facade tools (`vrm_discover`, `vrm_project`, `vrm_recipe`, `vrm_build`, `vrm_qa`, `vrm_export`) and two `recipe://native-anime-v1/{female,male}` resources; a tool is listed when any operation it maps to is admitted.
+
 ### Debug Flags (Conditional Compilation)
 Use `-Xswiftc -D{FLAG_NAME}` to enable zero-cost debug logging:
 - `VRM_METALKIT_ENABLE_LOGS`: General logging

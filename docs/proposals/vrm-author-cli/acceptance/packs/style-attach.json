@@ -1,0 +1,200 @@
+{
+  "id": "style-attach",
+  "version": "0.1.0",
+  "operation": "style attach",
+  "operationVersion": 1,
+  "requestSchemaHash": "ef077c5a7c083f677fa42b1fcd07f9339f915e9ab144ccc26f388953959fd7a1",
+  "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
+  "packHash": "3820518498a38523b4d321a473de563e0e87eda246cf19c5c6efb07854247d28",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/style/profiles/vroid-lineage-anime.json @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/verification.md \u00a72 (Pinned oracles)",
+      "docs/proposals/vrm-author-cli/commands.md (`style attach` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Revision/transaction, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "style profile Blob {path, sha256} (pinned vroid-lineage-anime v0.1.0)"
+    ],
+    "parameterRanges": {
+      "profile.sha256": "must equal the file's sha256",
+      "dryRun": [
+        false,
+        true
+      ]
+    },
+    "invariants": [
+      "attach verifies the hash, copies the profile into the content-addressed store and records id, version, sha256, pinned:true, the 13 roles and the material-role map",
+      "a wrong sha256 is an invalid request with observed/required hashes and the revision unchanged",
+      "a nonexistent path is missingCapability/MISSING_INPUT; valid JSON that is not a profile is VALIDATION_FAILED with the revision unchanged",
+      "a dry run copies nothing",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "sha256 hashes; profile metrics in MToon 1.0 factor space",
+    "excluded": [
+      "linting (style lint)",
+      "profile authoring"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "pinned-profile",
+      "path": "docs/style/profiles/vroid-lineage-anime.json",
+      "sha256": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
+      "class": "positive",
+      "expected": {},
+      "note": "testStyleAttachVerifiesHashCopiesAssetAndRecordsStyle: copied, recorded with pinned:true and 13 roles"
+    },
+    {
+      "id": "wrong-hash-and-not-a-profile",
+      "path": "synthetic:the pinned profile declared with a wrong sha256; a valid-JSON non-profile file; a nonexistent path",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testStyleAttachVerifiesHashCopiesAssetAndRecordsStyle: invalidRequest, VALIDATION_FAILED, missingCapability, revision unchanged"
+    },
+    {
+      "id": "dry-run",
+      "path": "synthetic:style attach with dryRun true",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testStyleAttachVerifiesHashCopiesAssetAndRecordsStyle: nothing copied, revision unchanged"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "MaterialsPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "645ca6e06477f99d9ab6eb96ba7bdf86117a2f87924b80831140d309d43f0063",
+        "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",
+        "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "hash-mismatch",
+      "description": "testStyleAttachVerifiesHashCopiesAssetAndRecordsStyle: a wrong profile sha256, a missing file and a non-profile JSON must be rejected without a revision.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testStyleAttachVerifiesHashCopiesAssetAndRecordsStyle"
+      }
+    },
+    {
+      "id": "pins-match-verification-table",
+      "description": "testHandlersAreRegisteredAndPinsMatchVerificationTable: the pinned linter and profile hashes must equal verification.md \u00a72 and match the working tree.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testHandlersAreRegisteredAndPinsMatchVerificationTable"
+      }
+    },
+    {
+      "id": "role-defaults-satisfy-profile",
+      "description": "testRoleDefaultsSatisfyEveryMaterialRuleOfThePinnedProfile: the material role defaults the attached profile governs must satisfy every must/should material rule of the pinned profile.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testRoleDefaultsSatisfyEveryMaterialRuleOfThePinnedProfile"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every MaterialsPackTests test passed (executed 8, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "MaterialsPackTests",
+            "executed": 8,
+            "passed": 8,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "57051550bacf86ca7e2ae7acf78fb542b3ee6eb094ed64c214cbe2ad5aacfa31",
+            "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",
+            "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "style attach is a hashed-copy revision transaction and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/style-attach.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter MaterialsPackTests test-case lines"
+    ]
+  }
+}

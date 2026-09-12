@@ -1,0 +1,196 @@
+{
+  "id": "object-list",
+  "version": "0.1.0",
+  "operation": "object list",
+  "operationVersion": 1,
+  "requestSchemaHash": "db71f0ba146f5293bf4e3821a1825a8ee93e17ce56face511cd6aa89a076fa07",
+  "resultSchemaHash": "912c6d2dcd82970a1305aa5bb536c066cae568e0aebf69210101ac2cccd3f745",
+  "packHash": "df396a486601136d312b093f51f2419ae836acf35830f3f8a689438e364396bc",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/parameters.md (Types, defaults and schema rules: ObjectKind)",
+      "docs/proposals/vrm-author-cli/commands.md (`object list` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "stub-template project with 12 objects"
+    ],
+    "parameterRanges": {
+      "kind": "ObjectKind (avatar, mesh, material, image, texture-layer, hair, garment, accessory, node, humanoid, expression, lookat, firstperson, spring, collider, collider-group) or absent"
+    },
+    "invariants": [
+      "summaries are sorted in CompiledAvatar.precedes order with writable pointers and revisions",
+      "a valid kind with no matches is an empty array; a value that is not a kind is an invalid request",
+      "object reads do not require the template pack to be installed",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "revisions are nonnegative integers; timeoutSeconds seconds; maxMemoryMb megabytes; control values in their descriptor units (metres, degrees, normalized)",
+    "excluded": [
+      "object contents (object get)",
+      "derived geometry"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "twelve-objects",
+      "path": "synthetic:object list on the stub project, and filtered by kind material",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testListReturnsSummariesSortedWithKindFilter: 12 summaries in precedence order, writablePointers present"
+    },
+    {
+      "id": "not-a-kind",
+      "path": "synthetic:object list with kind \"wig\"",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testListReturnsSummariesSortedWithKindFilter: invalidRequest"
+    },
+    {
+      "id": "kind-without-matches",
+      "path": "synthetic:object list with kind mesh on a project that has no mesh objects",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testListReturnsSummariesSortedWithKindFilter: empty array, exit success"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ObjectPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift": "f7d1c563654658fc307d73dc8b347da7476b223413b3b3872659f19aa7ea5796",
+        "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+        "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "d6bb21febee398b97d28525d6b7d1a12c7b5b746ca11bf9b59e71344970b995b"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "invalid-kind-rejected",
+      "description": "testListReturnsSummariesSortedWithKindFilter: kind \"wig\" must be an invalid request; kind mesh must be an empty array, not an error.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testListReturnsSummariesSortedWithKindFilter"
+      }
+    },
+    {
+      "id": "unknown-id-rejected",
+      "description": "testGetReturnsTypedObjectProvenanceAndWritablePointers: an id the listing does not contain must be objectNotFound on get.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testGetReturnsTypedObjectProvenanceAndWritablePointers"
+      }
+    },
+    {
+      "id": "reads-without-pack",
+      "description": "ControlPackTests.testListRequiresInstalledTemplatePack: object list must succeed on a context with no template pack while control list is missingCapability.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testListRequiresInstalledTemplatePack",
+        "suite": "ControlPackTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ObjectPackTests test passed (executed 7, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ObjectPackTests",
+            "executed": 7,
+            "passed": 7,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Project/ObjectPackTests.swift": "d057168872f25869c90fb6abd5133df97a4c7c292a42bf6d78b6bc1baa9ae2b5",
+            "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+            "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "d6bb21febee398b97d28525d6b7d1a12c7b5b746ca11bf9b59e71344970b995b"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "object list is a read over project object summaries and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/object-list.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ObjectPackTests --filter ControlPackTests test-case lines"
+    ]
+  }
+}

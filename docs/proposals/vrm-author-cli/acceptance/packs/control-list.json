@@ -1,0 +1,196 @@
+{
+  "id": "control-list",
+  "version": "0.1.0",
+  "operation": "control list",
+  "operationVersion": 1,
+  "requestSchemaHash": "56241da441e91156e8fb7c3b472cdd3513f6cde26cb8188e1847c244370256c8",
+  "resultSchemaHash": "4c9488598b86c92494918ed89e0c0e2fa73f2e2dd5d66c1fffc313d18edbc594",
+  "packHash": "9880b8ca0bcdc7715bdfe71abb17dd540e7e107bdd8b7f0cd38f12f6ecff8f50",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/parameters.md (Native body and face controls)",
+      "docs/proposals/vrm-author-cli/commands.md (`control list` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "stub-template project (two template controls: body.heightM metres, face.eye.left.height normalized)"
+    ],
+    "parameterRanges": {
+      "object": "existing object id, or absent for template controls"
+    },
+    "invariants": [
+      "lists each control with unit, validity range, recommended range, default, side, mirrorKey, affects and dependencies",
+      "an object with no controls yields an empty list; an unknown object is objectNotFound",
+      "a project whose lock names a pack that is not installed is missingCapability naming the pack (object reads still succeed)",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "metres, degrees, normalized as declared per descriptor",
+    "excluded": [
+      "native-anime-v1 descriptor values (TemplatePackTests)",
+      "reserved controls"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "template-and-object-scoped",
+      "path": "synthetic:control list on the stub project for the template, avatar:main, hair:bob and garment:top",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testListReturnsTemplateControlsAndPerObjectControls: descriptors with unit/ranges/default/side/mirrorKey/affects/dependencies"
+    },
+    {
+      "id": "unknown-object-and-missing-pack",
+      "path": "synthetic:control list for object \"nope\", and against a context with no template packs installed",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testListReturnsTemplateControlsAndPerObjectControls: objectNotFound; testListRequiresInstalledTemplatePack: missingCapability observed stub-v1"
+    },
+    {
+      "id": "object-without-controls",
+      "path": "synthetic:control list on material:cloth",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testListReturnsTemplateControlsAndPerObjectControls: empty list, exit success"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ControlPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "d6bb21febee398b97d28525d6b7d1a12c7b5b746ca11bf9b59e71344970b995b",
+        "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "da4708d385023664b428839beff31043779a9a7a2cf4509cf4e3cfe2f58843c3"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "missing-pack",
+      "description": "testListRequiresInstalledTemplatePack: with the template pack uninstalled, control list must be missingCapability naming stub-v1 while object list still succeeds.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testListRequiresInstalledTemplatePack"
+      }
+    },
+    {
+      "id": "unknown-object",
+      "description": "testListReturnsTemplateControlsAndPerObjectControls: an unknown object must be objectNotFound rather than the template list.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testListReturnsTemplateControlsAndPerObjectControls"
+      }
+    },
+    {
+      "id": "control-table-pinned",
+      "description": "TemplatePackTests.testControlTableMatchesParametersContract: the native pack's control descriptors must equal the parameters.md table.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testControlTableMatchesParametersContract",
+        "suite": "TemplatePackTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ControlPackTests test passed (executed 7, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Project/ControlPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ControlPackTests",
+            "executed": 7,
+            "passed": 7,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "134220621d8aa12bdc971a6de8a354ed81a67982fdb0a0bff0edb62065d3c2d0",
+            "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+            "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "30fd02f402b322385ea24d21bb74aba0a29e755158615570241839abb53812e0"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "control list is a registry read over control descriptors and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/control-list.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ControlPackTests --filter TemplatePackTests test-case lines"
+    ]
+  }
+}

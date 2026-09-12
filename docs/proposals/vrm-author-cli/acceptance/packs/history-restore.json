@@ -1,0 +1,206 @@
+{
+  "id": "history-restore",
+  "version": "0.1.0",
+  "operation": "history restore",
+  "operationVersion": 1,
+  "requestSchemaHash": "7bbde31a8eac895a621f529a68f1bb0de439e3226f035538b47e83bccfa0547f",
+  "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
+  "packHash": "87b3ca67cbf2bb4cd1ba5e1a1dc587347a84559860f1309861f2a5a698ffcae4",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/commands.md (`history restore` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Revision/transaction, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "existing project with at least one earlier revision"
+    ],
+    "parameterRanges": {
+      "revision": "existing nonnegative revision number",
+      "expectedRevision": "current revision (compare-and-swap)",
+      "dryRun": [
+        false,
+        true
+      ]
+    },
+    "invariants": [
+      "restore appends a new revision holding the restored state; earlier revisions are kept",
+      "an out-of-range or negative revision is an invalid request",
+      "dryRun leaves the revision unchanged",
+      "a stale expectedRevision is a revision conflict; a wrong expectedPlanHash is a plan-hash conflict",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "revisions are nonnegative integers; timeoutSeconds seconds; maxMemoryMb megabytes; control values in their descriptor units (metres, degrees, normalized)",
+    "excluded": [
+      "deleting history",
+      "restoring across template versions"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "restore-revision-zero",
+      "path": "synthetic:stub project at revision 2 restoring revision 0 with expectedRevision 2",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testHistoryRestoreCreatesNewRevisionAndKeepsHistory: revision 3 appended, revision 2 still holds 1.8, receipt recorded"
+    },
+    {
+      "id": "out-of-range-revisions",
+      "path": "synthetic:history restore with revision 9 and with revision -1",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testHistoryRestoreCreatesNewRevisionAndKeepsHistory: both invalidRequest"
+    },
+    {
+      "id": "dry-run",
+      "path": "synthetic:history restore with dryRun true",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testHistoryRestoreCreatesNewRevisionAndKeepsHistory: state stays at revision 3"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ProjectPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
+        "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "out-of-range-rejected",
+      "description": "testHistoryRestoreCreatesNewRevisionAndKeepsHistory: revision 9 and -1 must be invalid requests and dryRun must not mutate.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testHistoryRestoreCreatesNewRevisionAndKeepsHistory"
+      }
+    },
+    {
+      "id": "stale-writer-conflict",
+      "description": "testConcurrentStaleWriterGetsRevisionConflict: a stale expectedRevision must be a revisionConflict with no receipt for the loser.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testConcurrentStaleWriterGetsRevisionConflict"
+      }
+    },
+    {
+      "id": "plan-hash-mismatch",
+      "description": "testDryRunPlanThenApplyWithExpectedPlanHash: a bogus expectedPlanHash must be a planHashMismatch conflict; only the inspected plan may apply.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testDryRunPlanThenApplyWithExpectedPlanHash"
+      }
+    },
+    {
+      "id": "atomic-rollback",
+      "description": "testAtomicRollbackOnFailedValidationMidEdit: a failed mutation must leave no partial revision in the history.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testAtomicRollbackOnFailedValidationMidEdit"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ProjectPackTests test passed (executed 12, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ProjectPackTests",
+            "executed": 12,
+            "passed": 12,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "9ff1e23f62517effa9496d5d421a21e5118a766aea2b18cd1af7342f7a319217",
+            "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "history restore is a revision transaction over the project store and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/history-restore.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ProjectPackTests test-case lines"
+    ]
+  }
+}

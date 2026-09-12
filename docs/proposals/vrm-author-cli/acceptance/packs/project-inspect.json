@@ -1,0 +1,191 @@
+{
+  "id": "project-inspect",
+  "version": "0.1.0",
+  "operation": "project inspect",
+  "operationVersion": 1,
+  "requestSchemaHash": "6ed9a8fe6dc1f9303edde7aec5b8baa436142395aa33dd351aec608fb7b9d98a",
+  "resultSchemaHash": "dc56052db7443e7081fa60014012f05b6a8b1c30dbcd6c0b2780034dfdacbff0",
+  "packHash": "90b6e60cedb982fa391e30a9969547cc6c8ba1bb991f89c26e1a7d1d3177c277",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/commands.md (`project inspect` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Revision/transaction, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "existing project directory",
+      "nonexistent project path"
+    ],
+    "parameterRanges": {},
+    "invariants": [
+      "reports the current revision, dependency state, input lock and draft/complete status using the same revision twice",
+      "a build marker older than the current revision yields draft status with the stale set naming the invalidated nodes and qa",
+      "a missing project is missingCapability with error projectNotFound",
+      "inspect never mutates: revisionBefore equals revisionAfter",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "revisions are nonnegative integers; timeoutSeconds seconds; maxMemoryMb megabytes; control values in their descriptor units (metres, degrees, normalized)",
+    "excluded": [
+      "evidence status (capabilities)",
+      "artifact contents"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "draft-complete-transitions",
+      "path": "synthetic:stub project with a hand-written build marker, then a control edit",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testInspectReportsRevisionStaleLockAndDraftStatus: draft to complete to draft, stale set contains avatar:main/geometry, garment:top/fit and qa"
+    },
+    {
+      "id": "missing-project",
+      "path": "synthetic:project inspect on a path that holds no project",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testInspectReportsRevisionStaleLockAndDraftStatus: missingCapability with projectNotFound"
+    },
+    {
+      "id": "fresh-revision-zero",
+      "path": "synthetic:project inspect immediately after init",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testInspectReportsRevisionStaleLockAndDraftStatus: revision 0, template id and sha256 from the lock, draft status"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ProjectPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
+        "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "stale-marker-reported",
+      "description": "testInspectReportsRevisionStaleLockAndDraftStatus: a build marker behind the revision must surface as draft with a non-empty stale set; a missing project must not be reported as a project.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testInspectReportsRevisionStaleLockAndDraftStatus"
+      }
+    },
+    {
+      "id": "stale-writer-conflict",
+      "description": "testConcurrentStaleWriterGetsRevisionConflict: a stale writer must be rejected with revisionConflict and the revision inspect reports must remain the surviving writer's.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testConcurrentStaleWriterGetsRevisionConflict"
+      }
+    },
+    {
+      "id": "atomic-rollback",
+      "description": "testAtomicRollbackOnFailedValidationMidEdit: after a failed multi-value edit the inspected state must be byte-identical to before the edit.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testAtomicRollbackOnFailedValidationMidEdit"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ProjectPackTests test passed (executed 12, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ProjectPackTests",
+            "executed": 12,
+            "passed": 12,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "51d70f63642c320b843f0023374d1209b4a118acf940fb76e1a42e7a1ac4b248",
+            "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "project inspect is a read over the project store and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/project-inspect.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ProjectPackTests test-case lines"
+    ]
+  }
+}

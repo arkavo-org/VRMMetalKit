@@ -1,0 +1,189 @@
+{
+  "id": "qa-plan",
+  "version": "0.1.0",
+  "operation": "qa plan",
+  "operationVersion": 1,
+  "requestSchemaHash": "770f1a4fe638dedeb87eb20ac8c5755d88eaa59e14af1e18769bb143f8cb5343",
+  "resultSchemaHash": "be46e39319b2fc08b460989d67863af049fb039016d13f92c4cf1d7215993cd9",
+  "packHash": "1207e588c1c4c1e7e667ae60c9b9d788e2cdb5941d17544ff793f388152244b5",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/QA/QAPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/parameters.md (QA and inspection)",
+      "docs/proposals/vrm-author-cli/commands.md (`qa plan` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (QA machinery, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "built draft VRM from the factory project"
+    ],
+    "parameterRanges": {
+      "suite": [
+        "spec+style",
+        "authoring-v1"
+      ],
+      "file": "existing VRM path",
+      "out": "plan path"
+    },
+    "invariants": [
+      "the plan binds file sha256, project revision, buildHash, profile and linter hashes, thresholds hash, 12 required scenarios, 7 render scenarios, renderer and consumer pins",
+      "spec+style has no consumers or renders and a different planHash",
+      "a nonexistent file is missingInput",
+      "a tampered plan (fewer required scenarios) re-hashed honestly is still rejected by qa run: content, not only the hash, is checked",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "sha256 hashes; thresholds in the QA scenario pack's units (metres, normalized)",
+    "excluded": [
+      "executing the plan (qa run)",
+      "extra caller-selected views"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "authoring-v1-plan",
+      "path": "synthetic:qa plan authoring-v1 on the built draft",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testQAPlanBindsFileRevisionProfileThresholdsScenariosAndConsumers: bindings, 12 scenarios, 7 renders"
+    },
+    {
+      "id": "missing-file",
+      "path": "synthetic:qa plan naming a nonexistent file",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testQAPlanBindsFileRevisionProfileThresholdsScenariosAndConsumers: missingInput"
+    },
+    {
+      "id": "spec-style-plan",
+      "path": "synthetic:qa plan spec+style",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testQAPlanBindsFileRevisionProfileThresholdsScenariosAndConsumers: no consumers or renders, distinct planHash"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "QAPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/QA/QAPackTests.swift": "ef1ab233139b55036a27a3f133d20979ee7b2f640b58df90a2180be6c187f4db",
+        "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "missing-file-rejected",
+      "description": "testQAPlanBindsFileRevisionProfileThresholdsScenariosAndConsumers: a missing file must be missingInput and a style pin swap must change the plan.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testQAPlanBindsFileRevisionProfileThresholdsScenariosAndConsumers"
+      }
+    },
+    {
+      "id": "tampered-plan-rejected",
+      "description": "testQARunPlanFormVerifiesPlanAndFileBinding: a plan with a wrong declared sha256, a consistently re-hashed but shrunk scenario list, or an old plan against a rebuilt file must be rejected by qa run.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testQARunPlanFormVerifiesPlanAndFileBinding"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every QAPackTests test passed (executed 11, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/QA/QAPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "QAPackTests",
+            "executed": 11,
+            "passed": 11,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/QA/QAPackTests.swift": "2b3f00b6ccfd6753f4e7eb9cf92eaa6a40467df356a1edc8d5893c64b72e265e",
+            "Tests/VRMAuthorKitTests/Export/TestAvatarFactory.swift": "8a871f08bcf3ac640f7429e8aa22844839f6a824546037492548ad8afe0c496c"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "qa plan is a binding manifest, not a render and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/qa-plan.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter QAPackTests test-case lines"
+    ]
+  }
+}

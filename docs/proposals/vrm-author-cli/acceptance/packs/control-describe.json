@@ -1,0 +1,197 @@
+{
+  "id": "control-describe",
+  "version": "0.1.0",
+  "operation": "control describe",
+  "operationVersion": 1,
+  "requestSchemaHash": "78607a4d66e7a1435a1a2b00fb8273864fb6c0bbb742137c4d5d98e9e0afad1d",
+  "resultSchemaHash": "727dd014ce91f2c8effa55c53201b58d1a89f3fabedaae2618712e69d8211838",
+  "packHash": "a613cfaa34a518a1ec56c8a0dcba8479a9c54565a2fc91ba709b69d2a28519df",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/parameters.md (Native body and face controls)",
+      "docs/proposals/vrm-author-cli/commands.md (`control describe` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "stub-template project"
+    ],
+    "parameterRanges": {
+      "key": "control key declared for the object",
+      "object": "existing object id (required)"
+    },
+    "invariants": [
+      "returns the complete descriptor with min/max/default/current/recommended endpoints, units, dependencies and template/preset provenance",
+      "an unknown key is unknownField; a key that does not belong to the object is an invalid request; a missing object is an invalid request",
+      "current reflects the latest applied edit",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "metres, degrees, normalized as declared per descriptor",
+    "excluded": [
+      "endpoint fixture hashes of native packs",
+      "reserved controls"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "body-height-descriptor",
+      "path": "synthetic:control describe body.heightM on avatar:main",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testDescribeReturnsFullDescriptorEndpointsAndProvenance: descriptor, endpoints and provenance; current updates after control set"
+    },
+    {
+      "id": "unknown-and-mismatched-key",
+      "path": "synthetic:control describe body.nope, and body.heightM on hair:bob",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testDescribeReturnsFullDescriptorEndpointsAndProvenance: unknownField, then invalidRequest"
+    },
+    {
+      "id": "missing-object",
+      "path": "synthetic:control describe without an object field",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testDescribeReturnsFullDescriptorEndpointsAndProvenance: invalidRequest"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ControlPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "d6bb21febee398b97d28525d6b7d1a12c7b5b746ca11bf9b59e71344970b995b",
+        "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "da4708d385023664b428839beff31043779a9a7a2cf4509cf4e3cfe2f58843c3"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "unknown-key-rejected",
+      "description": "testDescribeReturnsFullDescriptorEndpointsAndProvenance: an unknown key, a key/object mismatch and a missing object must each be rejected.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testDescribeReturnsFullDescriptorEndpointsAndProvenance"
+      }
+    },
+    {
+      "id": "missing-pack",
+      "description": "testListRequiresInstalledTemplatePack: descriptor reads require the installed template pack; an uninstalled pack is missingCapability.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testListRequiresInstalledTemplatePack"
+      }
+    },
+    {
+      "id": "control-table-pinned",
+      "description": "TemplatePackTests.testControlTableMatchesParametersContract: native descriptors must equal the parameters.md table.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testControlTableMatchesParametersContract",
+        "suite": "TemplatePackTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ControlPackTests test passed (executed 7, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Project/ControlPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ControlPackTests",
+            "executed": 7,
+            "passed": 7,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "4d4b9991c387b77e6dae40ae331e94237ebba838c2610837ec7570591e7718b1",
+            "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+            "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "30fd02f402b322385ea24d21bb74aba0a29e755158615570241839abb53812e0"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "control describe is a registry read over one control descriptor and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/control-describe.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ControlPackTests --filter TemplatePackTests test-case lines"
+    ]
+  }
+}

@@ -1,0 +1,202 @@
+{
+  "id": "asset-inspect",
+  "version": "0.1.0",
+  "operation": "asset inspect",
+  "operationVersion": 1,
+  "requestSchemaHash": "0ea67f7f65db7ac2a38eaedb6214566cf29dda1ed133f6981e7507aef66b97c5",
+  "resultSchemaHash": "f2a18d63dc50da6a69f5da890d35e6c781163cb9ab082b8df1a9ecaa1a139abb",
+  "packHash": "57a94d1cdb7bc7c55c873ebacd62df77dc5744364e457f5b5d5136d4ad2b27ca",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/parameters.md (Assets, rights and credentials)",
+      "docs/proposals/vrm-author-cli/commands.md (`asset inspect` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Import/export/provenance, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "imported png",
+      "imported VRM (AvatarSample_U when present)"
+    ],
+    "parameterRanges": {
+      "id": "imported asset id"
+    },
+    "invariants": [
+      "reports format, geometry facts (null for images), extension coverage (round-trip / preserved-opaque) and credential status",
+      "an unknown asset id is an invalid request",
+      "inspect never mutates and is byte-identical on replay",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "pixels, triangles, bone counts, sha256",
+    "excluded": [
+      "rendering thumbnails",
+      "re-validation of sidecars (provenance verify)"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "imported-png",
+      "path": "synthetic:asset inspect on the imported 4x2 PNG",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testImportPNGRecordsImageFactsAndDryRunStoresNothing: format png, geometry null, extensions []"
+    },
+    {
+      "id": "avatar-sample-u-1.0",
+      "path": "AvatarSample_U_1.0.vrm.glb",
+      "pathEnv": "VRM_ACCEPTANCE_FIXTURES",
+      "sha256": "1ab52aef2cf599be20ea7e04bb814a233d52052628941954f0c48412f5904c85",
+      "class": "positive",
+      "expected": {},
+      "note": "testImportAvatarSampleUProducesPreservationReport (XCTSkip when absent): extension coverage all round-trip or preserved-opaque, identical replay; the interoperability reference"
+    },
+    {
+      "id": "unknown-asset",
+      "path": "synthetic:asset inspect asset:nope",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testImportPNGRecordsImageFactsAndDryRunStoresNothing: invalidRequest"
+    },
+    {
+      "id": "image-without-geometry",
+      "path": "synthetic:an image asset that has no geometry or extensions",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testImportPNGRecordsImageFactsAndDryRunStoresNothing: geometry null and extensions [] rather than fabricated facts"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ProvenancePackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift": "3d1df682adb9cdd56e38cc6c4f2fbfd8d94d8f66ae0b6f46e889d39f84a309dd",
+        "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "68ee7fbd59e8d9dceab9691e7f857392c859e65dbc6d4ce54c1e0db671caf265"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "unknown-asset-rejected",
+      "description": "testImportPNGRecordsImageFactsAndDryRunStoresNothing: asset inspect of an unknown id must be an invalid request.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testImportPNGRecordsImageFactsAndDryRunStoresNothing"
+      }
+    },
+    {
+      "id": "non-glb-never-stored",
+      "description": "testImportNonGLBAsVRMIsRejected: rejected imports must leave nothing to inspect: ledger empty, revision 0.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testImportNonGLBAsVRMIsRejected"
+      }
+    },
+    {
+      "id": "inspect-forms",
+      "description": "testProvenanceInspectLedgerAssetAndFileForms: an unknown asset and asset+file together must be invalid requests; a nonexistent file must be missingCapability.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testProvenanceInspectLedgerAssetAndFileForms"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ProvenancePackTests test passed (executed 23, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ProvenancePackTests",
+            "executed": 23,
+            "passed": 23,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Provenance/ProvenancePackTests.swift": "2f92bbfc2e3f34cc95404c2c94c3393b949facc1b5c0275c3bbc47e87026ca13",
+            "Tests/VRMAuthorKitTests/Provenance/ProvenanceFixtures.swift": "61d50bf07e6652e1dfb76516d5173f173a26f6b1d35f5a1bd0ecbb74164b141e"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "asset inspect is a read over the stored asset facts and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "required",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/asset-inspect.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ProvenancePackTests test-case lines"
+    ]
+  }
+}

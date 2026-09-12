@@ -1,0 +1,238 @@
+{
+  "id": "serve",
+  "version": "0.1.0",
+  "operation": "serve",
+  "operationVersion": 1,
+  "requestSchemaHash": "50d7ef6fd17fa70c7a74156edd317a1c383f82e460658d50a96b6ad1f12839fd",
+  "resultSchemaHash": "b8bcdcb501f3ccf865b98645a30bcd182ef26fd22c27d8246ff4883d7bd145fd",
+  "packHash": "79e067e7bc1702405538b0eab74f7001877262ab8066a3475d4aafd06ab53033",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ df72553df3b87234caeb1478584e978da713c9c1 (independent raw-wire MCP client, second reference)",
+      "docs/proposals/vrm-author-cli/commands.md (`serve` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (RPC/transport, fixture-tested)",
+      "Tests/VRMAuthorKitTests/Serve/MCPFacadeTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Serve/MCPResourcesTests.swift @ df72553df3b87234caeb1478584e978da713c9c1"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "newline-delimited JSON-RPC 2.0 over stdio",
+      "MCP 2025-06-18 (and 2024-11-05 negotiated up) over the same session"
+    ],
+    "parameterRanges": {
+      "stdio": [
+        true
+      ],
+      "protocol": [
+        "jsonrpc",
+        "mcp"
+      ]
+    },
+    "invariants": [
+      "request ids correlate; a mutation without expectedRevision is invalid params (-32602)",
+      "a stale writer receives a domain conflict envelope (REVISION_CONFLICT, exit 4) in the result, not a protocol error; the first writer's value survives",
+      "a replayed receipt (same requestId and payload, even across a restarted session) returns the original result without re-executing",
+      "a changed payload under the same requestId is REQUEST_ID_REUSED with the revision unchanged",
+      "malformed transport lines are -32700/-32600/-32601/-32602 with id null; a mutating notification is rejected and writes no receipt",
+      "logs go only to the log sink, never on the wire; tools/list exposes only tools runnable under the session evidence policy",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "revisions are nonnegative integers; timeoutSeconds seconds; maxMemoryMb megabytes; control values in their descriptor units (metres, degrees, normalized)",
+    "excluded": [
+      "process spawning (the session is driven in-process)",
+      "async/streaming",
+      "authentication"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "stub-project-session",
+      "path": "synthetic:in-process ServeSession over a stub-template project at revision 0",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testReadAndMutationRoundTripWithIdCorrelation: project.inspect, control.set and version correlate ids and persist revision 0 to 1"
+    },
+    {
+      "id": "stale-and-malformed",
+      "path": "synthetic:second writer at expectedRevision 0, changed payload under a reused requestId, malformed and wrong-version lines",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testStaleWriterGetsConflictEnvelopeInResult, testChangedPayloadUnderSameRequestIdIsRejected, testMalformedTransportLinesAreParseErrors"
+    },
+    {
+      "id": "notification-and-schema-only",
+      "path": "synthetic:a mutation sent as a notification, and build on a schema-only registry",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testMutatingNotificationsAreRejected (no receipt, revision 0) and testMissingHandlerReturnsNotImplementedEnvelopeWithExitThree (NOT_IMPLEMENTED, exit 3)"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ServePackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift": "90ed251285d146ed4482d5eaa53dd3f426943bcee96e9f01b7ba77d481b00eb5",
+        "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+        "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift": "5414b17ae76315d3227127f7a3eb59968255dcdde60a0bf11d8d4eebb71dd6a5",
+        "Tests/VRMAuthorKitTests/Serve/MCPFacadeTests.swift": "7dcb29e3c6403f7cdb06f58a4afb87c3078cd40b7d8f38b25964030ddc04842a",
+        "Tests/VRMAuthorKitTests/Serve/MCPResourcesTests.swift": "b6b4147a44243bf2e40b78a20b951c5e4f0fd417a0bd07327adb1bd8ba1f6ef3"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "stale-writer",
+      "description": "testStaleWriterGetsConflictEnvelopeInResult: two writers at expectedRevision 0: the second must get REVISION_CONFLICT (exit 4) in the result and the first value must survive.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testStaleWriterGetsConflictEnvelopeInResult"
+      }
+    },
+    {
+      "id": "replayed-receipt",
+      "description": "testReplayedReceiptReturnsOriginalResult: the same requestId and payload, including from a restarted session, must return the original result with the revision still 1.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testReplayedReceiptReturnsOriginalResult"
+      }
+    },
+    {
+      "id": "changed-payload-request-id",
+      "description": "testChangedPayloadUnderSameRequestIdIsRejected: a different payload under a reused requestId must be REQUEST_ID_REUSED with no mutation.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testChangedPayloadUnderSameRequestIdIsRejected"
+      }
+    },
+    {
+      "id": "malformed-transport",
+      "description": "testMalformedTransportLinesAreParseErrors: malformed JSON, wrong jsonrpc version, missing method, non-object params and unknown methods must map to the exact JSON-RPC error codes with id null.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testMalformedTransportLinesAreParseErrors"
+      }
+    },
+    {
+      "id": "mutating-notification",
+      "description": "testMutatingNotificationsAreRejected: a mutation without an id must be -32600 and write neither a revision nor a receipt.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testMutatingNotificationsAreRejected"
+      }
+    },
+    {
+      "id": "mcp-policy-gate",
+      "description": "MCPClientTests.testToolsListFollowsSessionEvidencePolicy: under the release policy with empty evidence tools/list must be empty and tools/call refused; a policy file cannot weaken requireCurrent.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testToolsListFollowsSessionEvidencePolicy",
+        "suite": "MCPClientTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ServePackTests test passed (executed 11, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Serve/ServePackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ServePackTests",
+            "executed": 11,
+            "passed": 11,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift": "297efe8260b99e7ac499cc0c156b3483ddb818ee6ac12ddf7e6e207511d80fb9",
+            "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+            "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift": "5b5ca11f24621c6216568ad46a6868da25d3a6f60b6575a2380e91e4f57b7d81"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "serve is a transport adapter over the same handlers and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/serve.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ServePackTests --filter MCPClientTests test-case lines"
+    ]
+  }
+}

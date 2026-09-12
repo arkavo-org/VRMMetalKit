@@ -1,0 +1,291 @@
+{
+  "id": "control-set",
+  "version": "0.1.0",
+  "operation": "control set",
+  "operationVersion": 1,
+  "requestSchemaHash": "f42d2184ccbbe1cc9871dcab2df5987743a1726d5452131dab701a6ac82c70f6",
+  "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
+  "packHash": "43e52b5fb5b0ea72578ba4733a692c46e5fd34b3cb3f042640f94364871856c0",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Template/NativeAnimeGeometryTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Wearables/WearableOutfitTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/parameters.md (Native body and face controls; Hair, outfits and accessories)",
+      "docs/proposals/vrm-author-cli/commands.md (`control set` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Shape/deformation, visually-validated)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "stub-template project (body.heightM, face.eye.left.height, hair lengthM, garment fit)",
+      "native-anime-v1 body/face controls and bob hair, top/bottom/footwear presets"
+    ],
+    "parameterRanges": {
+      "body.heightM": "metres [1.2, 2.0] (recommended [1.4, 1.9])",
+      "face.eye.left.height": "B [-1, 1]",
+      "hair lengthM": "metres [0.12, 0.30]",
+      "outfit fit/length": "B [-1, 1]",
+      "expectedRevision": "current revision",
+      "dryRun": [
+        false,
+        true
+      ]
+    },
+    "invariants": [
+      "a calibrated edit records the value, reports ordered invalidations with cross-object fan-out and qa last, and keeps the recipe in sync",
+      "out-of-range values are gateFailed/validationFailed with observed and required and are never clamped; an inclusive boundary value is accepted; unknown keys, wrong types, mirror keys, controls on the wrong object and empty values are rejected; only legal writes land",
+      "outside the recommended range succeeds with OUTSIDE_RECOMMENDED_RANGE; an identical value succeeds with NO_OP and no invalidations",
+      "dryRun and apply share the planHash; a stale writer is a revisionConflict; a bogus expectedPlanHash is a planHashMismatch",
+      "every native control moves its semantic regions and nothing else; garment penetration is a typed gate error; hair springs have terminal tails and no overlapping chains",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "metres, degrees, normalized (B in [-1,1], U in [0,1]) per descriptor",
+    "excluded": [
+      "freehand hair guides, arbitrary clothing patterns (reserved)",
+      "skin-weight painting (read-only in v1)",
+      "corpus reach for native-anime-v1: the template's solved-best eye spacing is about 0.21 of head width (0.265 at its default) against family targets of 0.13 to 0.17, leaving 16 of the 18 families unreachable, and the other two blocked by a height below the template's 1.2 m floor and by shoulder width already at its rail"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "calibrated-edits",
+      "path": "synthetic:control set on avatar:main, hair:bob and garment:top with in-range values",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testSetWritesCalibratedValuesAndInvalidatesAffectedKinds: no warnings, ordered invalidations, recipe in sync, describe reports current 1.8"
+    },
+    {
+      "id": "out-of-range-and-illegal",
+      "path": "synthetic:2.5 above max, -1.01 batched with a valid key, 0.31 hair length, unknown key, wrong type, mirror key, control on material:cloth, empty values",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testSetRejectsOutOfRangeWithoutClampingAndUnknownKeys: each rejected without clamping; only the legal inclusive 2.0 write lands (revision 1)"
+    },
+    {
+      "id": "recommended-range-and-no-op",
+      "path": "synthetic:1.95 outside the recommended range, then the same value again",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testSetWarnsOutsideRecommendedRangeAndOnNoOp: OUTSIDE_RECOMMENDED_RANGE then NO_OP with empty invalidations"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "ControlPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "d6bb21febee398b97d28525d6b7d1a12c7b5b746ca11bf9b59e71344970b995b",
+        "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+        "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
+        "Tests/VRMAuthorKitTests/Template/NativeAnimeGeometryTests.swift": "18220157ef067dcdd9c7732a125afdc21270ae8c63d05df53b6b2826507cba8f",
+        "Tests/VRMAuthorKitTests/Wearables/WearableOutfitTests.swift": "f6a1a3c94a8991dbcc0cbc51a004bf9081210ea3a78b9843f213d04c8dd4a84f",
+        "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift": "ac5a52e1c656fba323bc4f8069f51cf33e6bde481d48049489a5573b28ba95dd",
+        "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift": "60272b2e34b794a3640f25239ea5e897688c6557ca83f9e0927c1e2d34fba52e",
+        "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
+        "docs/style/corpus/vroid-lineage-anime.manifest.json": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
+        "docs/style/corpus/vroid-lineage-anime.measurements.json": "c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc",
+        "docs/style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json": "20635cf23e0c2214a49e82c0af269976cc2739d068dad4426eddaf0b72b6e803"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "no-clamping",
+      "description": "testSetRejectsOutOfRangeWithoutClampingAndUnknownKeys: an out-of-range value must be rejected with observed/required, never clamped; unknown keys, wrong types, mirror keys and empty maps must be rejected.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testSetRejectsOutOfRangeWithoutClampingAndUnknownKeys"
+      }
+    },
+    {
+      "id": "dry-run-plan-hash",
+      "description": "testDryRunPlanMatchesAppliedEdit: the dry-run plan must carry the same planHash as the applied edit and leave revision 0.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testDryRunPlanMatchesAppliedEdit"
+      }
+    },
+    {
+      "id": "stale-writer-conflict",
+      "description": "ProjectPackTests.testConcurrentStaleWriterGetsRevisionConflict: a stale expectedRevision must be a revisionConflict with the first writer's value surviving.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testConcurrentStaleWriterGetsRevisionConflict",
+        "suite": "ProjectPackTests"
+      }
+    },
+    {
+      "id": "plan-hash-mismatch",
+      "description": "ProjectPackTests.testDryRunPlanThenApplyWithExpectedPlanHash: a bogus expectedPlanHash must be a planHashMismatch conflict.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testDryRunPlanThenApplyWithExpectedPlanHash",
+        "suite": "ProjectPackTests"
+      }
+    },
+    {
+      "id": "regions-only",
+      "description": "NativeAnimeGeometryTests.testEveryControlMovesItsRegionsAndNothingElse: each native control must produce a measured nonzero change inside its semantic regions and none outside them.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testEveryControlMovesItsRegionsAndNothingElse",
+        "suite": "NativeAnimeGeometryTests"
+      }
+    },
+    {
+      "id": "garment-penetration-gate",
+      "description": "WearableOutfitTests.testPenetrationIsATypedGateError: a garment that penetrates the body must be a typed gate error, not a silently inflated or deleted shell.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testPenetrationIsATypedGateError",
+        "suite": "WearableOutfitTests"
+      }
+    },
+    {
+      "id": "spring-tails-no-overlap",
+      "description": "WearableHairTests.testSpringsHaveTerminalTailsAndNoOverlap: regenerated hair springs must end in terminal tails and never overlap chains.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testSpringsHaveTerminalTailsAndNoOverlap",
+        "suite": "WearableHairTests"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every ControlPackTests test passed (executed 7, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Project/ControlPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "ControlPackTests",
+            "executed": 7,
+            "passed": 7,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "b2d5cf250fd693ece051741068c4ef1d823ebe046b3e290f1fddcd6eff17f582",
+            "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
+            "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
+            "Tests/VRMAuthorKitTests/Template/NativeAnimeGeometryTests.swift": "b31d6d93554019c148ee8381a623e71e17d6dde7a0b38168d598111e65c35822",
+            "Tests/VRMAuthorKitTests/Wearables/WearableOutfitTests.swift": "bd517c8c921d85ee25d3183558b16f291506d0da14835769e78a412df5aeb539",
+            "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift": "7dc1273b2cc4ec1dc6e019dee25382e738e040fe414b6faa37eaed99c2e734a8",
+            "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift": "fcd02cd7d51ca4bc6eb3055f51c17b0c8cd6ce37a50e6b88adc87d11bc3f2566"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": true,
+    "views": [
+      "front",
+      "threeQuarter",
+      "profile"
+    ],
+    "motions": [
+      "idle"
+    ],
+    "landmarks": [
+      "eyelids",
+      "lips",
+      "silhouette"
+    ],
+    "thresholds": {},
+    "adjudication": "different-family judge, zero false accepts on the 12-case calibration set (verification.md \u00a75)"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "visually-validated",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "required",
+      "visual": "required",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md \u00a76)."
+  },
+  "corpus": [
+    {
+      "styleId": "vroid-lineage-anime",
+      "profile": "docs/style/profiles/vroid-lineage-anime.json",
+      "profileSha256": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
+      "manifest": "docs/style/corpus/vroid-lineage-anime.manifest.json",
+      "manifestSha256": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",
+      "measurements": "docs/style/corpus/vroid-lineage-anime.measurements.json",
+      "measurementsSha256": "c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc",
+      "witnesses": "docs/style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json",
+      "witnessesSha256": "20635cf23e0c2214a49e82c0af269976cc2739d068dad4426eddaf0b72b6e803",
+      "familyKey": "body_family",
+      "driver": "vrm-author-cli",
+      "tolerance": 0.25,
+      "expectedFamilies": 18,
+      "minEligibleFamilies": 1
+    }
+  ],
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/control-set.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter ControlPackTests --filter ProjectPackTests --filter NativeAnimeGeometryTests --filter WearableOutfitTests --filter WearableHairTests test-case lines"
+    ]
+  }
+}

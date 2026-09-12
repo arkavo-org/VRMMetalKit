@@ -105,12 +105,12 @@ quantity, not on the sliders. Body and clothing use a hard two-tone terminator
 (`terminator_width = 2(1 − toony) ≤ 0.4`, edge at grazing light). Hair is allowed a
 softer terminator (VRoid default 0.4) but the rule only caps it at 1.4; it does not
 require hair to be softer than the body. Skin shade colour is always warmer than the
-base and never below 70% of its luminance.
+base and never below 69.4% of its luminance.
 
 **Outlines are on surfaces, off features.** Skin and cloth carry a world-space inverted
-hull 0.5–1.3 mm wide in a warm near-black; iris, sclera, eyeline, lashes, brows and mouth
-never have one. Eye layers are alpha-blended and drawn at render-queue offsets −4…0
-under the highlight.
+hull 0.5–2.5 mm wide in a warm near-black, the widest being AnnieV0's face; iris, sclera,
+eyeline, lashes, brows and mouth never have one. Eye layers are alpha-blended and drawn
+at render-queue offsets −4…0 under the highlight.
 
 **Proportions, as bone ratios (tool-agnostic) and one skinning metric.** Eyes at
 0.84–0.92 of height, hips at 0.54–0.58, hand-to-hand span only 0.59–0.72 of height,
@@ -120,8 +120,9 @@ dominant skin joint is the head (centre column, chin in front of the head bone),
 below the realistic midpoint. VRM 0.x models face −Z and 1.0 models face +Z; the chin
 search follows the version's forward axis.
 
-**Hair and physics.** 7–16 spring chains rooted under the head, 3–7 joints each,
-stiffness 0.25–1.5, drag ≤ 0.8, authored gravityPower almost always 0, one head collider.
+**Hair and physics.** 7–16 spring chains rooted under the head, the longest chain in an
+asset running 3–10 joints, stiffness 0.25–4.0, drag ≤ 0.8, authored gravityPower almost
+always 0, one head collider.
 
 **Budgets.** 26–77k triangles, 18–47k stored vertices (primitives share POSITION
 accessors, so per-primitive sums run 2–15× higher), 6–24 materials, 2048² textures
@@ -155,15 +156,17 @@ trips only the face rule, removed outlines trip only the outline rule, a Lambert
 trips the two-tone rule, dropping optional meta keeps every `must` rule green, and
 dropping `blink` trips `expr.core_presets`.
 
-`lint` over the corpus returns `conforming` or `conforming-with-warnings` for all 22
-assets; the warnings are the known minority choices (soft-gradient body shading on two
-assets, toon faces on three non-VRoid-authored ones, non-spring hair on one). Two
-synthetic generator outputs from `../vrm-conformance/assets/generated` return
-`nonconforming` on `prop.eye_height_ratio` and `expr.core_presets`. Their single
-material has no role, so the material rules skip; with `--roles` assigning it
-`face_skin`, `shade.face_never_deep_shadowed`, `shade.skin_shade_not_dark` and
-`outline.surface_present` fail as well. The profile discriminates rather than merely
-describing.
+`lint` over the corpus returns `conforming` for 14 of the 22 assets and
+`conforming-with-warnings` for the other eight; the warnings are the known minority
+choices (soft-gradient body shading on two assets, toon faces on three non-VRoid-authored
+ones, non-spring hair and no head collider on one, blended rather than cutout lens or hair
+surfaces on four, an opaque iris on one, unclassified materials on two and non-MToon
+materials on one). Two synthetic generator outputs from
+`../vrm-conformance/assets/generated` return `nonconforming` on `prop.eye_height_ratio`
+and `expr.core_presets`. Their single material has no role, so the material rules skip;
+with `--roles` assigning it `face_skin`, `shade.face_never_deep_shadowed`,
+`shade.skin_shade_not_dark` and `outline.surface_present` fail as well. The profile
+discriminates rather than merely describing.
 
 ## Known gaps
 

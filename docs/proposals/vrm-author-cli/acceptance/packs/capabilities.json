@@ -1,0 +1,194 @@
+{
+  "id": "capabilities",
+  "version": "0.1.0",
+  "operation": "capabilities",
+  "operationVersion": 1,
+  "requestSchemaHash": "12d0677991dc912da9b0619be481f6fd312a45283c14f4233e7d86cedbb88b65",
+  "resultSchemaHash": "383149d3f92fd72f53637c9d37eb1568c1d94b951ee26663225f1226cd3df677",
+  "packHash": "70a65c645a30e77690d23a2deb3c5a1fafb24dc153a066d6d165a6504769e4ef",
+  "provenance": {
+    "author": {
+      "provider": "Anthropic",
+      "family": "Claude",
+      "version": "claude-fable-5-1",
+      "role": "acceptance-author"
+    },
+    "reviewer": {
+      "provider": "",
+      "family": "",
+      "version": "",
+      "role": "independent-reviewer"
+    },
+    "sources": [
+      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "docs/proposals/vrm-author-cli/verification.md \u00a77 (Evidence records and admission)",
+      "docs/proposals/vrm-author-cli/commands.md (`capabilities` row)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
+    ],
+    "reviewReceipt": ""
+  },
+  "scope": {
+    "inputClasses": [
+      "none (project-free)",
+      "evidencePolicy JSON file"
+    ],
+    "parameterRanges": {
+      "target": [
+        "portable-vrm1"
+      ],
+      "evidencePolicy": "path to a policy JSON; may only tighten the release policy"
+    },
+    "invariants": [
+      "one entry per operation with operation, schemaHash, implementationHash (absent for schema-only), backendHash, availability, evidenceLevel, evidenceStatus, dimensions, scope, acceptancePackHash, evaluationPolicyHash, evaluators, runnable, productionEligible, blockers and artifactRefs",
+      "with an empty evidence registry every entry is schema-only / pending / not production-eligible with non-empty blockers",
+      "a caller policy can narrow scope or raise the required level but cannot weaken the release policy",
+      "a pack-hash or request-schema-hash mismatch against an admitted entry marks it stale and removes production eligibility",
+      "a missing handler is the runner's missing-handler outcome (exit 3) when no test case of the entry-point suite runs; it is never a pass"
+    ],
+    "units": "none (project-free); revisions are nonnegative integers",
+    "excluded": [
+      "admitting evidence (evaluator-only, evidence.json)",
+      "MCP tools/list filtering (serve pack)"
+    ]
+  },
+  "fixtures": [
+    {
+      "id": "empty-evidence-registry",
+      "path": "synthetic:v1 registry with the in-tree evidence registry (no admitted entries)",
+      "synthetic": true,
+      "class": "positive",
+      "expected": {},
+      "note": "testCapabilitiesAreSchemaOnlyPendingExceptDiscoveryHandlers: 35 entries, schema-only/pending, runnable iff implemented, blockers non-empty, signerAvailable false"
+    },
+    {
+      "id": "bad-and-missing-policy",
+      "path": "synthetic:evidencePolicy files with minimumLevel hand-wavy and a nonexistent path",
+      "synthetic": true,
+      "class": "negative",
+      "expected": {},
+      "note": "testEvidencePolicyCanOnlyTighten: invalidRequest and missingCapability respectively"
+    },
+    {
+      "id": "weakening-policy",
+      "path": "synthetic:evidencePolicy that tries to clear requireCurrent",
+      "synthetic": true,
+      "class": "degenerate",
+      "expected": {},
+      "note": "testEvidencePolicyCanOnlyTighten: weakening ignored with warning EVIDENCE_POLICY_NOT_WEAKENED"
+    }
+  ],
+  "seeds": [],
+  "runner": {
+    "kind": "swift-test",
+    "entryPoint": "DiscoveryPackTests",
+    "environment": {
+      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "oracleHashes": {
+        "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "b710b883f77e7e2ef3fa1eacb3a0cca392c255b2438122e907e53339a219b934"
+      }
+    }
+  },
+  "assertions": [
+    {
+      "id": "exit_code",
+      "kind": "exit-code",
+      "target": "process",
+      "expected": 0
+    },
+    {
+      "id": "failed",
+      "kind": "report-field",
+      "target": "failed",
+      "expected": 0
+    }
+  ],
+  "mutants": [
+    {
+      "id": "policy-cannot-weaken",
+      "description": "testEvidencePolicyCanOnlyTighten: a policy that weakens requireCurrent must be ignored with a warning; a bad enum must be invalidRequest; a missing file must be missingCapability.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testEvidencePolicyCanOnlyTighten"
+      }
+    },
+    {
+      "id": "stale-evidence-detected",
+      "description": "testEvidenceEntriesDriveStatusAndStaleness: an admitted entry whose packHash or requestSchemaHash no longer matches must report stale and lose production eligibility; a failed entry must carry an evidence-failed blocker.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testEvidenceEntriesDriveStatusAndStaleness"
+      }
+    },
+    {
+      "id": "registry-locator",
+      "description": "testEvidenceRegistryLocatorAndDefaults: with no acceptance directory the locator returns nil and an empty registry yields schema-only/pending with a no-pack blocker, never a pass.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "swift-test",
+        "test": "testEvidenceRegistryLocatorAndDefaults"
+      }
+    },
+    {
+      "id": "fabricated-suite-report",
+      "description": "A report envelope claiming every DiscoveryPackTests test passed (executed 8, failed 0, exit 0) whose oracleHashes name a Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift other than the pinned one. The runner's report-acceptance path must refuse it before any assertion runs.",
+      "expectedClassification": "reject",
+      "transform": {
+        "kind": "report-fabricated",
+        "envelope": {
+          "report": {
+            "suite": "DiscoveryPackTests",
+            "executed": 8,
+            "passed": 8,
+            "failed": 0,
+            "failingTests": [],
+            "exitCode": 0
+          },
+          "oracleHashes": {
+            "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "552dc197b591cd5c9601d427f07f0be05c3514aab00638f5b50e9f36b9989108"
+          },
+          "exitCode": 0
+        }
+      }
+    }
+  ],
+  "visual": {
+    "applicable": false,
+    "applicabilityRecord": "capabilities is a registry read that joins operation schemas with the evidence registry and never renders a frame, so no view, motion or landmark can change its result. Recorded by the acceptance author (claude-fable-5-1); the independent reviewer confirms or overturns this in reviewReceipt.",
+    "views": [],
+    "motions": [],
+    "landmarks": [],
+    "thresholds": {},
+    "adjudication": "none"
+  },
+  "evidencePolicy": {
+    "requiredLevel": "fixture-tested",
+    "dimensions": {
+      "fixture": "required",
+      "corpus": "inapplicable",
+      "visual": "inapplicable",
+      "interoperability": "inapplicable",
+      "provenance": "required"
+    },
+    "heldOutPolicy": "Every fixture is synthetic and built in-process by the suite (or a git-tracked file pinned by sha256); no development-corpus asset is consumed, so no held-out family applies."
+  },
+  "resources": {
+    "cpuSeconds": 600,
+    "gpuSeconds": 0,
+    "judgeCalls": 0,
+    "deadlineSeconds": 900,
+    "maxRepairAttempts": 0,
+    "onFailure": "fail"
+  },
+  "reproduction": {
+    "entryPoint": "python3 scripts/acceptance_run.py docs/proposals/vrm-author-cli/acceptance/packs/capabilities.json --json",
+    "inputManifestSchema": "docs/proposals/vrm-author-cli/acceptance/pack.schema.json",
+    "outputManifestSchema": "scripts/acceptance_run.py result manifest, schemaVersion 1",
+    "canonicalArtifacts": [
+      "result manifest (stdout with --json, or --out)",
+      "resultHash: sha256 of the canonical result manifest",
+      "swift test --disable-sandbox --filter DiscoveryPackTests test-case lines"
+    ]
+  }
+}
