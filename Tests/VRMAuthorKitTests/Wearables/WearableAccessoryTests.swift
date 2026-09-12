@@ -88,6 +88,24 @@ final class WearableAccessoryTests: XCTestCase {
         }
     }
 
+    func testCatEarsSitOnTheCrown() throws {
+        let out = try compile([Fixtures.catEars()])
+        let mesh = try XCTUnwrap(out.meshes.first { $0.id == "mesh:accessory:ears" })
+        XCTAssertEqual(mesh.primitives.count, 2)
+        XCTAssertEqual(mesh.primitives[0].materialId, "material:fur")
+        XCTAssertEqual(mesh.primitives[1].materialId, "material:innerEar")
+        let skin = try XCTUnwrap(out.skins.first { $0.id == "skin:accessory:ears" })
+        XCTAssertEqual(skin.jointNodeIds, ["node:head"])
+        // Both ears sit on the crown: above the head centre, one per side,
+        // symmetric about x = 0.
+        let c = centroid(mesh.primitives[0])
+        XCTAssertGreaterThan(c.y, host.headCentre.y)
+        XCTAssertEqual(c.x, 0, accuracy: 1e-4)
+        let topY = mesh.primitives[0].positions.map(\.y).max()!
+        XCTAssertGreaterThan(topY, host.headCentre.y + host.headRadius + 0.03)
+        XCTAssertNoThrow(try WearableValidation.validateMesh(mesh))
+    }
+
     func testUnknownAttachmentIsTyped() {
         XCTAssertThrowsError(try compile([Fixtures.earring("x", attachment: "node:toeL")])) { error in
             let e = error as? AuthorError

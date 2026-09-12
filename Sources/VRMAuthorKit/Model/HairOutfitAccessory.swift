@@ -161,6 +161,7 @@ public struct OutfitItem: AuthorModel {
 public enum AccessoryPreset: String, Codable, Hashable, Sendable, CaseIterable {
     case glassesV1 = "glasses-v1"
     case earringV1 = "earring-v1"
+    case catEarsV1 = "cat-ears-v1"
 }
 
 public struct AccessoryItem: AuthorModel {

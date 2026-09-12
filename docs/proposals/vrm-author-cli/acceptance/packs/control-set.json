@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "f42d2184ccbbe1cc9871dcab2df5987743a1726d5452131dab701a6ac82c70f6",
   "resultSchemaHash": "f346475c33458f2281c4cc1a6e7e563283ac551fbe00edafe8ad8c4792596ff1",
-  "packHash": "9a8502931cd028f037542ad9569cd5b922fec4fd64b8772ab37a04fd770054d1",
+  "packHash": "03ae7d2d721fe3fa028ad4bfa5bbd6c265084539d4b4fe39711e959c3fea9dd2",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -102,7 +102,7 @@
         "Tests/VRMAuthorKitTests/Project/ProjectPackTests.swift": "d37884e0da7ddfca7a74b56d7d14fea3e7fba812f3e3d9c09dcd97373d237c2d",
         "Tests/VRMAuthorKitTests/Template/NativeAnimeGeometryTests.swift": "18220157ef067dcdd9c7732a125afdc21270ae8c63d05df53b6b2826507cba8f",
         "Tests/VRMAuthorKitTests/Wearables/WearableOutfitTests.swift": "830483895244166c0f40937e3d8ea9ba99d6a0ff322da3297544b40c83fbd9bf",
-        "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift": "7dc1273b2cc4ec1dc6e019dee25382e738e040fe414b6faa37eaed99c2e734a8",
+        "Tests/VRMAuthorKitTests/Wearables/SyntheticHost.swift": "02ca1259cc59e3d00787f144d6e603aeaf7a857b8ff863407f562fd6e7179327",
         "Tests/VRMAuthorKitTests/Wearables/WearableHairTests.swift": "80a73106890111188ae264d06c58283688f119c557915654a11e554037a7a55e",
         "docs/style/profiles/vroid-lineage-anime.json": "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35",
         "docs/style/corpus/vroid-lineage-anime.manifest.json": "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6",

@@ -232,7 +232,8 @@ enum Fixtures {
     }
 
     static let materials: [String: MaterialRole] = ["material:hairA": .hair, "material:shirt": .cloth, "material:pants": .cloth, "material:shoes": .cloth,
-                                                    "material:frame": .accessory, "material:lens": .accessory, "material:gold": .accessory]
+                                                    "material:frame": .accessory, "material:lens": .accessory, "material:gold": .accessory,
+                                                    "material:fur": .accessory, "material:innerEar": .accessory]
 
     static func top(_ id: String = "shirt", layer: Int = 0, length: Double = 0, fit: Double = 0, enabled: Bool = true) -> OutfitItem {
         OutfitItem(id: id, preset: "top-v1", enabled: enabled, layer: layer, controls: OutfitControls(length: length, fit: fit), materialIds: ["material:shirt"])
@@ -252,5 +253,9 @@ enum Fixtures {
 
     static func earring(_ id: String, attachment: String) -> AccessoryItem {
         AccessoryItem(id: id, preset: .earringV1, attachment: attachment, materialIds: ["material:gold"])
+    }
+
+    static func catEars(_ id: String = "ears", transform: Transform = .identity) -> AccessoryItem {
+        AccessoryItem(id: id, preset: .catEarsV1, attachment: "node:head", transform: transform, materialIds: ["material:fur", "material:innerEar"])
     }
 }

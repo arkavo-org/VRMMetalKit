@@ -112,7 +112,7 @@ keys (footwear may expose fit only). Fit uses precomputed body correspondences;
 unsupported combinations or collision failures block the QA gate. No XPBD draping
 or arbitrary clothing patterns are implied.
 
-`AccessoryItem={id:ID!,preset:glasses-v1|earring-v1!,attachment:ID!,
+`AccessoryItem={id:ID!,preset:glasses-v1|earring-v1|cat-ears-v1!,attachment:ID!,
 transform:Transform=identity,materialIds:ID[]!,enabled:bool=true}`. The attachment is
 a declared rig node; earring pairs are separate items. Scale/transform permits
 placement and size edits without topology changes. Spring earrings are reserved.

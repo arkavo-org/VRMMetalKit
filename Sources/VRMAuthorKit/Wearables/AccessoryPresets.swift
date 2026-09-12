@@ -37,6 +37,17 @@ public enum AccessoryPresets {
         public static let dropSides = 6
     }
 
+    /// Two tapered ear prisms, authored in the head node's local frame,
+    /// centred above the ears; the recipe transform places and tilts them.
+    public enum CatEars {
+        public static let baseHalfWidthM: Float = 0.032
+        public static let baseHalfDepthM: Float = 0.014
+        public static let heightM: Float = 0.062
+        public static let spacingM: Float = 0.052
+        public static let sides = 8
+        public static let innerSetbackM: Float = 0.004
+    }
+
     struct Build {
         var mesh: CompiledMesh
         var meshNode: CompiledNode
@@ -122,6 +133,52 @@ public enum AccessoryPresets {
                 face(bottom, a, b)
             }
             primitives.append(drop.primitive(materialId: materialIds[0], skinned: true))
+
+        case .catEarsV1:
+            // Two tapered ear prisms seated on the crown: bases follow the
+            // head sphere, tips flare slightly outward and forward. An
+            // inner-ear triangle sits proud of the front face.
+            var outer = MeshBuilder()
+            var inner = MeshBuilder()
+            for sign: Float in [1, -1] {
+                let worldNormal = V3.normalize(SIMD3<Float>(sign * 0.45, 0.89, 0.08))
+                let worldBase = host.headCentre + worldNormal * (host.headRadius - 0.004)
+                let base = attachInv.transformPoint(worldBase)
+                let up = V3.normalize(attachInv.transformDirection(worldNormal))
+                let across = V3.normalize(V3.cross(up, SIMD3<Float>(0, 0, 1)), fallback: SIMD3<Float>(1, 0, 0))
+                let depth = V3.normalize(V3.cross(across, up), fallback: SIMD3<Float>(0, 0, 1))
+                let apex = base + up * CatEars.heightM + across * (sign * 0.012)
+                var ring: [SIMD3<Float>] = []
+                for k in 0..<CatEars.sides {
+                    let a = 2 * Float.pi * Float(k) / Float(CatEars.sides)
+                    ring.append(base + across * (CatEars.baseHalfWidthM * cos(a)) + depth * (CatEars.baseHalfDepthM * sin(a)))
+                }
+                for k in 0..<CatEars.sides {
+                    let a = ring[k], b = ring[(k + 1) % CatEars.sides]
+                    let nSide = normalToWorld(V3.normalize(V3.cross(b - a, apex - a), fallback: up))
+                    let s0 = UInt32(outer.vertexCount)
+                    for p in [a, b, apex] { outer.addVertex(toWorld(p), normal: nSide, uv: SIMD2(0.5, 0.5), joints: SIMD4(0, 0, 0, 0), weights: SIMD4(1, 0, 0, 0)) }
+                    outer.addTriangle(s0, s0 + 1, s0 + 2)
+                    let nCap = normalToWorld(-up)
+                    let c0 = UInt32(outer.vertexCount)
+                    for p in [base, b, a] { outer.addVertex(toWorld(p), normal: nCap, uv: SIMD2(0.5, 0.5), joints: SIMD4(0, 0, 0, 0), weights: SIMD4(1, 0, 0, 0)) }
+                    outer.addTriangle(c0, c0 + 1, c0 + 2)
+                }
+                let front = depth
+                let i0 = UInt32(inner.vertexCount)
+                let ia = base + up * (CatEars.heightM * 0.16) + front * (CatEars.baseHalfDepthM * 0.75 + CatEars.innerSetbackM) - across * (CatEars.baseHalfWidthM * 0.52)
+                let ib = base + up * (CatEars.heightM * 0.16) + front * (CatEars.baseHalfDepthM * 0.75 + CatEars.innerSetbackM) + across * (CatEars.baseHalfWidthM * 0.52)
+                let ic = base + up * (CatEars.heightM * 0.58) + front * (CatEars.baseHalfDepthM * 0.35 + CatEars.innerSetbackM) + across * (sign * 0.006)
+                let nInner = normalToWorld(front)
+                for p in [ia, ib, ic] { inner.addVertex(toWorld(p), normal: nInner, uv: SIMD2(0.5, 0.5), joints: SIMD4(0, 0, 0, 0), weights: SIMD4(1, 0, 0, 0)) }
+                inner.addTriangle(i0, i0 + 1, i0 + 2)
+            }
+            primitives.append(outer.primitive(materialId: materialIds[0], skinned: true))
+            if materialIds.count > 1 {
+                primitives.append(inner.primitive(materialId: materialIds[1], skinned: true))
+            } else {
+                primitives.append(inner.primitive(materialId: materialIds[0], skinned: true))
+            }
         }
 
         let meshId = "mesh:accessory:\(item.id)"
