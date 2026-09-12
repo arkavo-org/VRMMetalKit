@@ -38,7 +38,7 @@ final class TemplateListPackTests: XCTestCase {
     func testListsWearablePresetsAsItemsWithCategoryFilter() throws {
         let all = ProjectTestHarness.invoke(context(), "template list", [:])
         let items = try XCTUnwrap(all.result?["items"]?.array)
-        XCTAssertEqual(Set(items.compactMap { $0["id"]?.string }), ["bob-v1", "top-v1", "bottom-v1", "footwear-v1", "glasses-v1", "earring-v1"])
+        XCTAssertEqual(Set(items.compactMap { $0["id"]?.string }), ["bob-v1", "top-v1", "bottom-v1", "skirt-v1", "footwear-v1", "glasses-v1", "earring-v1", "cat-ears-v1"])
         XCTAssertTrue(items.allSatisfy { $0["sha256"]?.string?.count == 64 })
         let hair = ProjectTestHarness.invoke(context(), "template list", ["category": "hair"])
         XCTAssertEqual(hair.result?["packs"]?.array?.count, 0)

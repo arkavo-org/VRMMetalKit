@@ -106,7 +106,7 @@ Hair material fields and every generated standard spring joint remain editable.
 Freehand guides, arbitrary clump additions, braids and SDF avoidance are reserved.
 
 `OutfitItem={id:ID!,preset:ID!,enabled:bool=true,layer:int[0,8]=0,
-controls:{length:B=0,fit:B=0}!,materialIds:ID[]!}`. Installed top, bottom and footwear
+controls:{length:B=0,fit:B=0}!,materialIds:ID[]!}`. Installed top, bottom, skirt and footwear
 presets declare their permitted layer combinations, own masks and supported control
 keys (footwear may expose fit only). Fit uses precomputed body correspondences;
 unsupported combinations or collision failures block the QA gate. No XPBD draping

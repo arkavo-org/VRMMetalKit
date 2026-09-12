@@ -31,9 +31,11 @@ public enum TemplateListHandler {
         (HairBobV1.presetId, .hair, hairControls),
         ("top-v1", .outfit, outfitControls(length: true)),
         ("bottom-v1", .outfit, outfitControls(length: true)),
+        ("skirt-v1", .outfit, outfitControls(length: true)),
         ("footwear-v1", .outfit, outfitControls(length: false)),
         ("glasses-v1", .accessory, []),
         ("earring-v1", .accessory, []),
+        ("cat-ears-v1", .accessory, []),
     ]
 
     static let hairControls: [ControlDescriptor] = [

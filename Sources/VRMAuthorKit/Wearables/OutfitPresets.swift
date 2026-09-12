@@ -75,7 +75,16 @@ public enum OutfitPresets {
         hiddenRegions: [WearableRegion.footL, WearableRegion.footR],
         permittedLayers: [0, 1, 2], supportedControls: ["fit"])
 
-    public static let all = [topV1, bottomV1, footwearV1]
+    /// A flared loft hanging from the waist, measured off the host's waist and
+    /// hip extents rather than shelling the body. Thighs stay visible.
+    public static let skirtV1 = OutfitPresetDescriptor(
+        id: "skirt-v1", kind: .bottom,
+        coreRegions: [WearableRegion.waist, WearableRegion.hips],
+        distalCoreRegions: [], extensionRegions: [],
+        hiddenRegions: [WearableRegion.waist, WearableRegion.hips],
+        permittedLayers: Array(0...8), supportedControls: ["length", "fit"])
+
+    public static let all = [topV1, bottomV1, footwearV1, skirtV1]
 
     public static func descriptor(_ id: String) -> OutfitPresetDescriptor? { all.first { $0.id == id } }
 
@@ -157,6 +166,10 @@ public enum OutfitPresets {
         if !d.supportedControls.contains("length"), item.controls.length != 0 {
             warnings.append(AuthorWarning(code: "CONTROL_UNSUPPORTED", message: "\(d.id) exposes fit only; length \(item.controls.length) on '\(item.id)' is ignored.",
                                           path: "/controls/length"))
+        }
+
+        if d.id == skirtV1.id {
+            return try buildSkirt(item: item, host: host, materialId: materialId, regionOfVertex: regionOfVertex, descriptor: d, length: length, warnings: warnings)
         }
 
         var covered = Set<Int>()
@@ -321,6 +334,74 @@ public enum OutfitPresets {
             let k1 = (k + 1) % innerRow.count
             builder.addQuad(innerRow[k], innerRow[k1], outerRowIds[k1], outerRowIds[k])
         }
+    }
+
+    /// The skirt loft: a cone from the waist's top band, flaring to a hem that
+    /// always clears the hips' widest point. Skinning copies the nearest
+    /// waist/hip/thigh vertex, so the skirt follows the legs stiffly.
+    static func buildSkirt(item: OutfitItem, host: WearableHost, materialId: String, regionOfVertex: [Int: String],
+                           descriptor d: OutfitPresetDescriptor, length: Double, warnings: [AuthorWarning]) throws -> Build {
+        let objectId = "garment:\(item.id)"
+        let waistIdx = host.region(WearableRegion.waist)
+        let hipsIdx = host.region(WearableRegion.hips)
+        guard !waistIdx.isEmpty, !hipsIdx.isEmpty else {
+            throw AuthorError(code: .hostRegionMissing, objectId: objectId, path: "/preset", observed: .string(skirtV1.id),
+                              message: "skirt-v1 needs host body regions 'waist' and 'hips'.", suggestedCommands: ["doctor", "build"])
+        }
+        let offset = Float(offset(layer: item.layer, fit: item.controls.fit))
+        let waistTop = waistIdx.map { host.bodyPositions[$0].y }.max()!
+        let waistBand = waistIdx.filter { waistTop - host.bodyPositions[$0].y < 0.03 }
+        let waistRx = waistBand.map { abs(host.bodyPositions[$0].x) }.max()!
+        let waistRz = waistBand.map { abs(host.bodyPositions[$0].z) }.max()!
+        let lower = waistIdx + hipsIdx + host.region(WearableRegion.thighL) + host.region(WearableRegion.thighR)
+        let hemRx = lower.map { abs(host.bodyPositions[$0].x) }.max()! + 0.030 - Float(item.controls.fit) * 0.012
+        let hemRz = lower.map { abs(host.bodyPositions[$0].z) }.max()! + 0.030 - Float(item.controls.fit) * 0.012
+        let hipsBottom = hipsIdx.map { host.bodyPositions[$0].y }.min()!
+        let topY = waistTop - 0.008
+        let hemY = hipsBottom - Float(0.06 + 0.08 * length)
+        let segments = 40
+        let flare = (max(hemRx, hemRz) - max(waistRx, waistRz)) / max(topY - hemY, 1e-3)
+
+        var builder = MeshBuilder()
+        var sources: [Int] = []
+        var rows: [[UInt32]] = []
+        let ringCount = 4
+        for r in 0..<ringCount {
+            let t = Float(r) / Float(ringCount - 1)
+            let y = topY + (hemY - topY) * t
+            let rx = waistRx + offset + (hemRx - waistRx) * t
+            let rz = waistRz + offset + (hemRz - waistRz) * t
+            var row: [UInt32] = []
+            for k in 0..<segments {
+                let a = 2 * Float.pi * Float(k) / Float(segments)
+                let p = SIMD3<Float>(rx * cos(a), y, rz * sin(a))
+                let n = V3.normalize(SIMD3(cos(a), flare, sin(a)))
+                var best = -1, bestD = Float.infinity
+                for i in lower {
+                    let dist = V3.distance(host.bodyPositions[i], p)
+                    if dist < bestD { bestD = dist; best = i }
+                }
+                row.append(builder.addVertex(p, normal: n, uv: SIMD2(Float(k) / Float(segments), t),
+                                             joints: host.bodyJoints[best], weights: host.bodyWeights[best]))
+                sources.append(best)
+            }
+            rows.append(row)
+        }
+        for r in 0..<(ringCount - 1) {
+            for k in 0..<segments {
+                let k1 = (k + 1) % segments
+                builder.addQuad(rows[r][k], rows[r][k1], rows[r + 1][k1], rows[r + 1][k])
+            }
+        }
+
+        let minClearance = try clearance(builder: builder, sources: sources, host: host, item: item, descriptor: d, regionOfVertex: regionOfVertex)
+        let meshId = "mesh:garment:\(item.id)"
+        let nodeId = "node:garment:\(item.id)"
+        let mesh = CompiledMesh(id: meshId, name: "Garment_\(item.id)", primitives: [builder.primitive(materialId: materialId, skinned: true)])
+        let info = GarmentInfo(id: item.id, preset: d.id, meshId: meshId, layer: item.layer, offsetM: Double(offset), minClearanceM: Double(minClearance),
+                               coveredRegions: d.coreRegions, hiddenRegions: d.hiddenRegions)
+        return Build(mesh: mesh, meshNode: CompiledNode(id: nodeId, name: "Garment_\(item.id)"),
+                     meshInstance: CompiledMeshInstance(nodeId: nodeId, meshId: meshId, skinId: host.bodySkin.id), info: info, warnings: warnings)
     }
 
     /// Region-aware shaping pass: sleeve cuffs and hems flare slightly and the

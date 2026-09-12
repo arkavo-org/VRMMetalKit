@@ -243,6 +243,10 @@ enum Fixtures {
         OutfitItem(id: id, preset: "bottom-v1", layer: layer, controls: OutfitControls(length: length, fit: fit), materialIds: ["material:pants"])
     }
 
+    static func skirt(_ id: String = "skirt", layer: Int = 0, length: Double = 0, fit: Double = 0) -> OutfitItem {
+        OutfitItem(id: id, preset: "skirt-v1", layer: layer, controls: OutfitControls(length: length, fit: fit), materialIds: ["material:pants"])
+    }
+
     static func footwear(_ id: String = "shoes", layer: Int = 0, fit: Double = 0) -> OutfitItem {
         OutfitItem(id: id, preset: "footwear-v1", layer: layer, controls: OutfitControls(length: 0, fit: fit), materialIds: ["material:shoes"])
     }

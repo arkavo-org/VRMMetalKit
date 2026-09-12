@@ -104,6 +104,6 @@ final class WearablesPackTests: XCTestCase {
         XCTAssertTrue(out.meshes.isEmpty)
         XCTAssertTrue(out.colliders.isEmpty)
         XCTAssertTrue(out.springs.isEmpty)
-        XCTAssertEqual(out.permittedLayers.count, 3)
+        XCTAssertEqual(out.permittedLayers.count, 4)
     }
 }

@@ -34,6 +34,28 @@ final class WearableOutfitTests: XCTestCase {
         return prim.positions.compactMap { probe.signedDistance(to: $0) }.min() ?? .infinity
     }
 
+    func testSkirtHangsFromTheWaistAndClearsTheBody() throws {
+        let out = try compile([Fixtures.skirt()])
+        let prim = try garment(out, "skirt")
+        let info = try XCTUnwrap(out.garments.first { $0.id == "skirt" })
+        XCTAssertEqual(info.preset, "skirt-v1")
+        XCTAssertEqual(info.hiddenRegions, ["waist", "hips"])
+        // The waistband hugs the waist; the hem flares past the hips' widest
+        // point and drops below the hip line, longer with length=1.
+        let waistMax = host.region("waist").map { abs(host.bodyPositions[$0].x) }.max()!
+        let hipsBottom = host.region("hips").map { host.bodyPositions[$0].y }.min()!
+        let topRingX = prim.positions.filter { $0.y > prim.positions.map(\.y).max()! - 0.001 }.map(\.x).map(abs).max()!
+        XCTAssertEqual(topRingX, waistMax + Float(OutfitPresets.baseClearanceM), accuracy: 0.01)
+        let hemY = prim.positions.map(\.y).min()!
+        XCTAssertLessThan(hemY, hipsBottom - 0.05)
+        let long = try garment(try compile([Fixtures.skirt(length: 1)]), "skirt")
+        XCTAssertLessThan(long.positions.map(\.y).min()!, hemY - 0.05)
+        XCTAssertGreaterThanOrEqual(minimumBodyClearance(prim), Float(OutfitPresets.minClearanceM))
+        // A skirt and shorts are both bottoms: same layer conflicts.
+        XCTAssertThrowsError(try compile([Fixtures.skirt(layer: 0), Fixtures.bottom(layer: 0)]))
+        XCTAssertNoThrow(try compile([Fixtures.skirt(layer: 1), Fixtures.bottom(layer: 0)]))
+    }
+
     func testEveryGarmentVertexClearsTheBodyAlongTheNormal() throws {
         let out = try compile([Fixtures.top(), Fixtures.bottom(), Fixtures.footwear()])
         for id in ["shirt", "pants", "shoes"] {
@@ -155,7 +177,7 @@ final class WearableOutfitTests: XCTestCase {
     func testFootwearExposesFitOnly() throws {
         let d = try XCTUnwrap(OutfitPresets.descriptor("footwear-v1"))
         XCTAssertEqual(d.supportedControls, ["fit"])
-        XCTAssertEqual(OutfitPresets.permittedLayers, ["top-v1": Array(0...8), "bottom-v1": Array(0...8), "footwear-v1": [0, 1, 2]])
+        XCTAssertEqual(OutfitPresets.permittedLayers, ["top-v1": Array(0...8), "bottom-v1": Array(0...8), "skirt-v1": Array(0...8), "footwear-v1": [0, 1, 2]])
         let item = OutfitItem(id: "shoes", preset: "footwear-v1", layer: 1, controls: OutfitControls(length: 1, fit: 0.5), materialIds: ["material:shoes"])
         let out = try compile([item])
         XCTAssertEqual(out.warnings.map(\.code), ["CONTROL_UNSUPPORTED"])
