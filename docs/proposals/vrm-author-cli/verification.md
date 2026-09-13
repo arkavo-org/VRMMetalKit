@@ -92,7 +92,7 @@ is reported in the result manifest for provenance and is not itself a check.
 |---|---|---|
 | Profile v0.2.0 | [`docs/style/profiles/vroid-lineage-anime.json`](../../style/profiles/vroid-lineage-anime.json) | `0579dc1d76d4bfad2fc44de9c9e6c129d092f55aee7c3faeb165f8141cd58aa4` |
 | Corpus manifest | [`docs/style/corpus/vroid-lineage-anime.manifest.json`](../../style/corpus/vroid-lineage-anime.manifest.json) | `b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6` |
-| Measurements | [`docs/style/corpus/vroid-lineage-anime.measurements.json`](../../style/corpus/vroid-lineage-anime.measurements.json) | `c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc` |
+| Measurements | [`docs/style/corpus/vroid-lineage-anime.measurements.json`](../../style/corpus/vroid-lineage-anime.measurements.json) | `a7575120113af2de9d43128cab657a1ac946f01e6159b44f014abf3f7aaef2c6` |
 | Witnesses, `native-anime-v1` | [`docs/style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json`](../../style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json) | `20635cf23e0c2214a49e82c0af269976cc2739d068dad4426eddaf0b72b6e803` |
 
 Witnesses are per template as well as per style set: a second template measured against
