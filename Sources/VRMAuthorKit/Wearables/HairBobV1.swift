@@ -56,6 +56,18 @@ public enum HairBobV1 {
             public var lengthRatio: Float
         }
         public var tail: Tail? = nil
+        /// Rigid scalp cap: short, wide clumps skinned to the head bone with
+        /// no chain, filling the crown between ring B and the part.
+        public struct RigidCap: Sendable {
+            public var ringClumps: Int
+            public var ringElevationDeg: Float
+            public var crownClumps: Int
+            public var crownElevationDeg: Float
+            public var lengthRatio: Float
+            public var widthFactor: Float
+        }
+        public var rigidCap: RigidCap? = RigidCap(ringClumps: 10, ringElevationDeg: 66, crownClumps: 4, crownElevationDeg: 80, lengthRatio: 0.45, widthFactor: 1.6)
+        public var rigidClumpCount: Int { rigidCap.map { $0.ringClumps + $0.crownClumps } ?? 0 }
         public var headClearanceM: Float = 0.006
         public var bangEdgeMarginM: Float = 0.002
         public var sweepAllowanceFactor: Float = 1.1
@@ -82,7 +94,7 @@ public enum HairBobV1 {
         /// gathered to a tie above the nape that hang past the shoulders.
         public static let ponytail = LayoutParams(ringAClumps: 16, ringAElevationDeg: 40, ringAAzimuthRangeDeg: 40...320,
                                                   ringBClumps: 6, ringBElevationDeg: 55, capLengthRatio: 0.45,
-                                                  tail: Tail(up: 0.75, back: 1.30, radiusM: 0.020, clumps: 10, lengthRatio: 1.8))
+                                                  tail: Tail(up: 0.75, back: 1.30, radiusM: 0.020, clumps: 10, lengthRatio: 1.8), rigidCap: nil)
     }
 
     /// The bob's constants, kept for callers that predate preset variants.
@@ -119,6 +131,7 @@ public enum HairBobV1 {
         var elevationDeg: Float
         var isBang: Bool
         var isTail = false
+        var isRigid = false
     }
 
     static func rootTargets(_ P: LayoutParams) -> [RootTarget] {
@@ -140,6 +153,14 @@ public enum HairBobV1 {
             for k in 0..<tail.clumps {
                 let az = 150 + 60 * (Float(k) + 0.5) / Float(tail.clumps)
                 targets.append(RootTarget(azimuthDeg: az, elevationDeg: 50, isBang: false, isTail: true))
+            }
+        }
+        if let cap = P.rigidCap {
+            for k in 0..<cap.ringClumps {
+                targets.append(RootTarget(azimuthDeg: 360 * (Float(k) + 0.5) / Float(cap.ringClumps), elevationDeg: cap.ringElevationDeg, isBang: false, isRigid: true))
+            }
+            for k in 0..<cap.crownClumps {
+                targets.append(RootTarget(azimuthDeg: 45 + 360 * Float(k) / Float(cap.crownClumps), elevationDeg: cap.crownElevationDeg, isBang: false, isRigid: true))
             }
         }
         return targets
@@ -219,25 +240,14 @@ public enum HairBobV1 {
         var clumps: [HairClumpInfo] = []
         var used = Set<Int>()
 
-        for (clumpIndex, target) in rootTargets(P).enumerated() {
-            let sampleIndex = nearestSample(host: host, target: host.headCentre + direction(azimuthDeg: target.azimuthDeg, elevationDeg: target.elevationDeg) * host.headRadius, used: used)
-            used.insert(sampleIndex)
-            let sample = host.scalpSamples[sampleIndex]
-            let clumpTag = String(format: "c%02d", clumpIndex)
-            let clumpId = "hair:\(item.id):\(clumpTag)"
-            let nodeIds = (0..<P.nodesPerClump).map { "node:hair:\(item.id):\(clumpTag):j\($0)" }
-            let jointBase = UInt16(jointIds.count)
-
-            let strip = try generateClump(sample: sample, isBang: target.isBang, isTail: target.isTail, controls: controls, host: host, face: face, clumpId: clumpId, P: P)
+        // Shared strip-to-vertex emission for both chained and rigid clumps;
+        // only the per-section joint/weight assignment differs between them.
+        func emitStrip(_ strip: Strip, jointsAndWeights: (Int) -> (SIMD4<UInt16>, SIMD4<Float>)) -> Int {
             let vertexStart = builder.vertexCount
             let steps = P.sectionsPerClump - 1
             for i in 0..<P.sectionsPerClump {
                 let u = Float(i) / Float(steps)
-                let boneParam = u * Float(P.rotatingBones)
-                let b = min(Int(boneParam.rounded(.down)), P.rotatingBones - 1)
-                let f = min(max(boneParam - Float(b), 0), 1)
-                let joints = SIMD4<UInt16>(jointBase + UInt16(b), jointBase + UInt16(b + 1), 0, 0)
-                let weights = SIMD4<Float>(1 - f, f, 0, 0)
+                let (joints, weights) = jointsAndWeights(i)
                 let h = strip.halfWidths[i]
                 let c = strip.centres[i], w = strip.widthDirs[i]
                 // The ridge bulges away from the head so it can never reduce
@@ -257,6 +267,48 @@ public enum HairBobV1 {
                 builder.addTriangle(l0, m1, l1)
                 builder.addTriangle(m0, r0, r1)
                 builder.addTriangle(m0, r1, m1)
+            }
+            return vertexStart
+        }
+
+        if P.rigidCap != nil {
+            jointIds.append(host.headNodeId)
+            ibms.append(headInv.m)
+        }
+
+        for (clumpIndex, target) in rootTargets(P).enumerated() {
+            let sampleIndex = nearestSample(host: host, target: host.headCentre + direction(azimuthDeg: target.azimuthDeg, elevationDeg: target.elevationDeg) * host.headRadius, used: used)
+            used.insert(sampleIndex)
+            let sample = host.scalpSamples[sampleIndex]
+            let clumpTag = String(format: "c%02d", clumpIndex)
+            let clumpId = "hair:\(item.id):\(clumpTag)"
+            let steps = P.sectionsPerClump - 1
+            let pivotSection = steps - P.sectionsPerBone
+
+            if target.isRigid, let cap = P.rigidCap {
+                var capControls = controls
+                capControls.lengthM *= Double(cap.lengthRatio)
+                capControls.widthScale *= Double(cap.widthFactor)
+                let strip = try generateClump(sample: sample, isBang: false, isTail: false, controls: capControls, host: host, face: face, clumpId: clumpId, P: P)
+                let vertexStart = emitStrip(strip) { _ in (SIMD4<UInt16>(0, 0, 0, 0), SIMD4<Float>(1, 0, 0, 0)) }
+                clumps.append(HairClumpInfo(id: clumpId, hairItemId: item.id, isBang: false, rootSampleIndex: sampleIndex, rootPosition: sample.position,
+                                            nodeIds: [], springId: "", vertexStart: vertexStart, vertexCount: 3 * P.sectionsPerClump,
+                                            clearanceVertexStart: vertexStart + 3 * P.sectionsPerBone,
+                                            tipVertexStart: vertexStart + 3 * (pivotSection + 1), sweepPivot: strip.centres[pivotSection],
+                                            sweepAxis: strip.widthDirs[pivotSection], sectionCentres: strip.centres, isRigid: true))
+                continue
+            }
+
+            let nodeIds = (0..<P.nodesPerClump).map { "node:hair:\(item.id):\(clumpTag):j\($0)" }
+            let jointBase = UInt16(jointIds.count)
+
+            let strip = try generateClump(sample: sample, isBang: target.isBang, isTail: target.isTail, controls: controls, host: host, face: face, clumpId: clumpId, P: P)
+            let vertexStart = emitStrip(strip) { i in
+                let u = Float(i) / Float(steps)
+                let boneParam = u * Float(P.rotatingBones)
+                let b = min(Int(boneParam.rounded(.down)), P.rotatingBones - 1)
+                let f = min(max(boneParam - Float(b), 0), 1)
+                return (SIMD4<UInt16>(jointBase + UInt16(b), jointBase + UInt16(b + 1), 0, 0), SIMD4<Float>(1 - f, f, 0, 0))
             }
 
             var localCumulative = SIMD3<Float>.zero
@@ -282,7 +334,6 @@ public enum HairBobV1 {
             }
             springs.append(SpringObject(id: springId, name: "hair \(item.id) \(clumpTag)", joints: joints, colliderGroups: colliderGroupIds))
 
-            let pivotSection = steps - P.sectionsPerBone
             clumps.append(HairClumpInfo(id: clumpId, hairItemId: item.id, isBang: target.isBang, rootSampleIndex: sampleIndex, rootPosition: sample.position,
                                         nodeIds: nodeIds, springId: springId, vertexStart: vertexStart, vertexCount: 3 * P.sectionsPerClump,
                                         clearanceVertexStart: vertexStart + 3 * P.sectionsPerBone,

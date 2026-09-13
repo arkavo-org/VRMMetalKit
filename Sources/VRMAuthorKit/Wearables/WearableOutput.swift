@@ -50,10 +50,13 @@ public struct HairClumpInfo: Codable, Hashable, Sendable {
     public var sweepPivot: SIMD3<Float>
     public var sweepAxis: SIMD3<Float>
     public var sectionCentres: [SIMD3<Float>]
+    /// Rigid cap clumps are skinned solely to the head joint, with no node
+    /// chain or spring.
+    public var isRigid: Bool
 
     public init(id: String, hairItemId: String, isBang: Bool, rootSampleIndex: Int, rootPosition: SIMD3<Float>, nodeIds: [String], springId: String,
                 vertexStart: Int, vertexCount: Int, clearanceVertexStart: Int, tipVertexStart: Int, sweepPivot: SIMD3<Float>, sweepAxis: SIMD3<Float>,
-                sectionCentres: [SIMD3<Float>]) {
+                sectionCentres: [SIMD3<Float>], isRigid: Bool = false) {
         self.id = id
         self.hairItemId = hairItemId
         self.isBang = isBang
@@ -68,6 +71,7 @@ public struct HairClumpInfo: Codable, Hashable, Sendable {
         self.sweepPivot = sweepPivot
         self.sweepAxis = sweepAxis
         self.sectionCentres = sectionCentres
+        self.isRigid = isRigid
     }
 }
 

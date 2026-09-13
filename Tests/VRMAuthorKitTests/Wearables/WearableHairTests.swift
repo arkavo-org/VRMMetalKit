@@ -46,18 +46,18 @@ final class WearableHairTests: XCTestCase {
 
     func testClumpLayoutIsPackConstant() throws {
         let out = try compileHair()
-        XCTAssertEqual(out.hairClumps.count, HairBobV1.Layout.clumpCount)
-        XCTAssertEqual(out.hairClumps.count, HairBobV1.Layout.clumpCount)
+        let P = HairBobV1.LayoutParams.bob
+        XCTAssertEqual(out.hairClumps.filter { !$0.isRigid }.count, HairBobV1.Layout.clumpCount)
         XCTAssertGreaterThanOrEqual(out.hairClumps.filter(\.isBang).count, HairBobV1.Layout.bangAzimuthsDeg.count)
-        XCTAssertEqual(out.hairClumps.map(\.id), (0..<HairBobV1.Layout.clumpCount).map { String(format: "hair:bob:c%02d", $0) })
-        XCTAssertEqual(Set(out.hairClumps.map(\.rootSampleIndex)).count, HairBobV1.Layout.clumpCount)
+        XCTAssertEqual(out.hairClumps.map(\.id), (0..<(HairBobV1.Layout.clumpCount + P.rigidClumpCount)).map { String(format: "hair:bob:c%02d", $0) })
+        XCTAssertEqual(Set(out.hairClumps.map(\.rootSampleIndex)).count, HairBobV1.Layout.clumpCount + P.rigidClumpCount)
         XCTAssertEqual(out.nodes.count, 1 + HairBobV1.Layout.clumpCount * HairBobV1.Layout.nodesPerClump)
     }
 
     func testEveryClumpRootIsOnAScalpSample() throws {
         let out = try compileHair()
         let prim = try hairPrimitive(out)
-        for clump in out.hairClumps {
+        for clump in out.hairClumps.filter({ !$0.isRigid }) {
             let sample = host.scalpSamples[clump.rootSampleIndex]
             XCTAssertLessThan(V3.distance(clump.rootPosition, sample.position), 0.001, clump.id)
             let rootNode = worldPosition(clump.nodeIds[0], in: out)
@@ -72,7 +72,7 @@ final class WearableHairTests: XCTestCase {
     func testStripAndBoneSegmentsAreContinuous() throws {
         let out = try compileHair()
         let prim = try hairPrimitive(out)
-        for clump in out.hairClumps {
+        for clump in out.hairClumps.filter({ !$0.isRigid }) {
             let sections = clump.vertexCount / 3
             var lengths: [Float] = []
             for i in 0..<(sections - 1) {
@@ -97,7 +97,7 @@ final class WearableHairTests: XCTestCase {
     func testLengthControlDrivesClumpLength() throws {
         let short = try compileHair(HairControls(lengthM: 0.12))
         let long = try compileHair(HairControls(lengthM: 0.30))
-        for (a, b) in zip(short.hairClumps, long.hairClumps) where !a.isBang {
+        for (a, b) in zip(short.hairClumps, long.hairClumps) where !a.isBang && !a.isRigid {
             let la = zip(a.sectionCentres.dropFirst(), a.sectionCentres).map { V3.distance($0, $1) }.reduce(0, +)
             let lb = zip(b.sectionCentres.dropFirst(), b.sectionCentres).map { V3.distance($0, $1) }.reduce(0, +)
             XCTAssertEqual(la, 0.12, accuracy: 0.003)
@@ -205,12 +205,13 @@ final class WearableHairTests: XCTestCase {
         let weights = try XCTUnwrap(prim.weights0)
         let skin = try XCTUnwrap(out.skins.first { $0.id == "skin:hair:bob" })
         XCTAssertEqual(skin.jointNodeIds.count, skin.inverseBindMatrices.count)
-        XCTAssertEqual(skin.jointNodeIds.count, HairBobV1.Layout.clumpCount * HairBobV1.Layout.nodesPerClump)
+        XCTAssertEqual(skin.jointNodeIds.count, HairBobV1.Layout.clumpCount * HairBobV1.Layout.nodesPerClump + 1)
         for clump in out.hairClumps {
             XCTAssertEqual(prim.uv0[clump.vertexStart].y, 0)
             XCTAssertEqual(prim.uv0[clump.vertexStart + clump.vertexCount - 1].y, 1)
             XCTAssertEqual(prim.uv0[clump.vertexStart].x, 0)
             XCTAssertEqual(prim.uv0[clump.vertexStart + 2].x, 1)
+            guard !clump.isRigid else { continue }
             let clumpJoints = Set(clump.nodeIds.compactMap { skin.jointNodeIds.firstIndex(of: $0) }.map { UInt16($0) })
             for v in clump.vertexStart..<(clump.vertexStart + clump.vertexCount) {
                 XCTAssertEqual(weights[v].sum(), 1, accuracy: 1e-5)
@@ -263,6 +264,33 @@ final class WearableHairTests: XCTestCase {
         }
         XCTAssertNoThrow(try WearableValidation.terminalTailPresent(out.springs, nodes: out.nodes))
         XCTAssertNoThrow(try WearableValidation.noOverlappingChains(out.springs))
+    }
+
+    func testRigidCapCoversTheCrownWithoutAddingSprings() throws {
+        let out = try compileHair()
+        let prim = try hairPrimitive(out)
+        let P = HairBobV1.LayoutParams.bob
+        let rigid = out.hairClumps.filter(\.isRigid)
+        XCTAssertEqual(rigid.count, P.rigidClumpCount)
+        XCTAssertEqual(out.hairClumps.count, HairBobV1.Layout.clumpCount + P.rigidClumpCount)
+        XCTAssertEqual(out.springs.count, HairBobV1.Layout.clumpCount)
+        let skin = try XCTUnwrap(out.skins.first { $0.id == "skin:hair:bob" })
+        XCTAssertEqual(skin.jointNodeIds.first, host.headNodeId)
+        for clump in rigid {
+            XCTAssertTrue(clump.nodeIds.isEmpty)
+            XCTAssertEqual(clump.springId, "")
+            for v in clump.vertexStart..<(clump.vertexStart + clump.vertexCount) {
+                XCTAssertEqual(prim.joints0![v], SIMD4(0, 0, 0, 0))
+                XCTAssertEqual(prim.weights0![v], SIMD4(1, 0, 0, 0))
+            }
+            XCTAssertGreaterThan((clump.rootPosition.y - host.headCentre.y) / host.headRadius, sin(60 * Float.pi / 180), "cap roots sit on the crown")
+        }
+        let probe = SurfaceProbe(positions: prim.positions, normals: prim.normals, indices: prim.indices)
+        let crown = host.scalpSamples.filter { ($0.position.y - host.headCentre.y) / host.headRadius > sin(35 * Float.pi / 180) }
+        XCTAssertGreaterThan(crown.count, 50)
+        var covered = 0
+        for s in crown where abs(probe.signedDistance(to: s.position + s.normal * 0.006) ?? .infinity) < 0.012 { covered += 1 }
+        XCTAssertGreaterThanOrEqual(Double(covered) / Double(crown.count), 0.95, "\(covered)/\(crown.count) crown samples lie under hair")
     }
 
     func testUnknownPresetAndMissingScalpAreTypedErrors() {
