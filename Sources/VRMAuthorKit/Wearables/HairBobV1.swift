@@ -242,9 +242,11 @@ public enum HairBobV1 {
 
         // Shared strip-to-vertex emission for both chained and rigid clumps;
         // only the per-section joint/weight assignment differs between them.
-        func emitStrip(_ strip: Strip, jointsAndWeights: (Int) -> (SIMD4<UInt16>, SIMD4<Float>)) -> Int {
+        func emitStrip(_ strip: Strip, column: Int, jointsAndWeights: (Int) -> (SIMD4<UInt16>, SIMD4<Float>)) -> Int {
             let vertexStart = builder.vertexCount
             let steps = P.sectionsPerClump - 1
+            let columns = Float(NativeAnimeTextures.highlightColumns)
+            let uLeft = Float(column) / columns, uMid = (Float(column) + 0.5) / columns, uRight = (Float(column) + 1) / columns
             for i in 0..<P.sectionsPerClump {
                 let u = Float(i) / Float(steps)
                 let (joints, weights) = jointsAndWeights(i)
@@ -256,9 +258,9 @@ public enum HairBobV1 {
                 if V3.dot(n, c - host.headCentre) < 0 { n = -n }
                 // Arched 3-vertex cross-section: a raised centre ridge reads as
                 // a rounded lock instead of a flat ribbon.
-                builder.addVertex(c - w * h, normal: V3.normalize(n - w, fallback: n), uv: SIMD2(0, u), joints: joints, weights: weights)
-                builder.addVertex(c + n * (h * 0.45), normal: n, uv: SIMD2(0.5, u), joints: joints, weights: weights)
-                builder.addVertex(c + w * h, normal: V3.normalize(n + w, fallback: n), uv: SIMD2(1, u), joints: joints, weights: weights)
+                builder.addVertex(c - w * h, normal: V3.normalize(n - w, fallback: n), uv: SIMD2(uLeft, u), joints: joints, weights: weights)
+                builder.addVertex(c + n * (h * 0.45), normal: n, uv: SIMD2(uMid, u), joints: joints, weights: weights)
+                builder.addVertex(c + w * h, normal: V3.normalize(n + w, fallback: n), uv: SIMD2(uRight, u), joints: joints, weights: weights)
             }
             for i in 0..<steps {
                 let l0 = UInt32(vertexStart + 3 * i), m0 = l0 + 1, r0 = l0 + 2
@@ -290,12 +292,13 @@ public enum HairBobV1 {
                 capControls.lengthM *= Double(cap.lengthRatio)
                 capControls.widthScale *= Double(cap.widthFactor)
                 let strip = try generateClump(sample: sample, isBang: false, isTail: false, controls: capControls, host: host, face: face, clumpId: clumpId, P: P)
-                let vertexStart = emitStrip(strip) { _ in (SIMD4<UInt16>(0, 0, 0, 0), SIMD4<Float>(1, 0, 0, 0)) }
+                let column = highlightColumn(strip, host: host)
+                let vertexStart = emitStrip(strip, column: column) { _ in (SIMD4<UInt16>(0, 0, 0, 0), SIMD4<Float>(1, 0, 0, 0)) }
                 clumps.append(HairClumpInfo(id: clumpId, hairItemId: item.id, isBang: false, rootSampleIndex: sampleIndex, rootPosition: sample.position,
                                             nodeIds: [], springId: "", vertexStart: vertexStart, vertexCount: 3 * P.sectionsPerClump,
                                             clearanceVertexStart: vertexStart + 3 * P.sectionsPerBone,
                                             tipVertexStart: vertexStart + 3 * (pivotSection + 1), sweepPivot: strip.centres[pivotSection],
-                                            sweepAxis: strip.widthDirs[pivotSection], sectionCentres: strip.centres, isRigid: true))
+                                            sweepAxis: strip.widthDirs[pivotSection], sectionCentres: strip.centres, isRigid: true, highlightColumn: column))
                 continue
             }
 
@@ -303,7 +306,8 @@ public enum HairBobV1 {
             let jointBase = UInt16(jointIds.count)
 
             let strip = try generateClump(sample: sample, isBang: target.isBang, isTail: target.isTail, controls: controls, host: host, face: face, clumpId: clumpId, P: P)
-            let vertexStart = emitStrip(strip) { i in
+            let column = highlightColumn(strip, host: host)
+            let vertexStart = emitStrip(strip, column: column) { i in
                 let u = Float(i) / Float(steps)
                 let boneParam = u * Float(P.rotatingBones)
                 let b = min(Int(boneParam.rounded(.down)), P.rotatingBones - 1)
@@ -338,7 +342,7 @@ public enum HairBobV1 {
                                         nodeIds: nodeIds, springId: springId, vertexStart: vertexStart, vertexCount: 3 * P.sectionsPerClump,
                                         clearanceVertexStart: vertexStart + 3 * P.sectionsPerBone,
                                         tipVertexStart: vertexStart + 3 * (pivotSection + 1), sweepPivot: strip.centres[pivotSection],
-                                        sweepAxis: strip.widthDirs[pivotSection], sectionCentres: strip.centres))
+                                        sweepAxis: strip.widthDirs[pivotSection], sectionCentres: strip.centres, highlightColumn: column))
         }
 
         let meshId = "mesh:hair:\(item.id)"
@@ -382,6 +386,24 @@ public enum HairBobV1 {
         var widthDirs: [SIMD3<Float>]
         var normals: [SIMD3<Float>]
         var halfWidths: [Float]
+    }
+
+    /// Column whose band, once painted, lands on the strip section closest to
+    /// the highlight height; 0 when the strip's root lies below that height,
+    /// or the strip never descends to it.
+    static func highlightColumn(_ strip: Strip, host: WearableHost) -> Int {
+        let target = host.headCentre.y + NativeAnimeTextures.highlightHeightFactor * host.headRadius
+        guard strip.centres[0].y >= target, strip.centres.map(\.y).min()! < target else { return 0 }
+        let steps = strip.centres.count - 1
+        var best = 0
+        var bestError = Float.infinity
+        for k in 1..<NativeAnimeTextures.highlightColumns {
+            guard let bandV = NativeAnimeTextures.highlightV(column: k) else { continue }
+            let section = (0...steps).min { abs(Float($0) / Float(steps) - bandV) < abs(Float($1) / Float(steps) - bandV) }!
+            let error = abs(strip.centres[section].y - target)
+            if error < bestError { bestError = error; best = k }
+        }
+        return best
     }
 
     /// Minimum distance from `p` to the head sphere, the eye spheres and the

@@ -179,4 +179,23 @@ final class MaterialsCompositingTests: XCTestCase {
         let cavity = pixel(image, at: SIMD2(0.5, 0.5 + 0.10))
         XCTAssertLessThan(lum(cavity), 0.3 * lum(SIMD4(base.x, base.y, base.z, 1)))
     }
+
+    func testHairRasterColumnsCarryTheBandAtTheirOwnV() {
+        let texture = HairTexture(baseColour: Colour(rgba: [0.3, 0.2, 0.1, 1]), rootColour: Colour(rgba: [0.3, 0.2, 0.1, 1]), tipColour: Colour(rgba: [0.3, 0.2, 0.1, 1]),
+                                  highlightOpacity: 0.6, highlightWidth: 0.10)
+        let image = NativeAnimeTextures.hairRaster(texture: texture, seed: 1)
+        func lum(_ p: SIMD4<Float>) -> Float { 0.2126 * p.x + 0.7152 * p.y + 0.0722 * p.z }
+        let w = image.width / NativeAnimeTextures.highlightColumns
+        for column in 0..<NativeAnimeTextures.highlightColumns {
+            let x = column * w + w / 2
+            let profile = (0..<image.height).map { lum(image[x, $0]) }
+            let peakRow = profile.indices.max { profile[$0] < profile[$1] }!
+            if let bandV = NativeAnimeTextures.highlightV(column: column) {
+                XCTAssertEqual(Float(image.uv(x: x, y: peakRow).y), bandV, accuracy: 0.03, "column \(column)")
+                XCTAssertGreaterThan(profile[peakRow], 1.5 * profile.min()!, "column \(column) has a visible band")
+            } else {
+                XCTAssertLessThan(profile.max()! - profile.min()!, 0.08, "column 0 carries no band")
+            }
+        }
+    }
 }

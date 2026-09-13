@@ -24,6 +24,14 @@ enum NativeAnimeTextures {
     static let version = "native-anime-textures/1"
     static let hairImageSize = 1024
     static let thumbnailSize = 256
+    static let highlightColumns = 8
+    static let highlightHeightFactor: Float = 0.50
+
+    /// Band centre (strip V) painted in `column`; column 0 carries no band.
+    static func highlightV(column: Int) -> Float? {
+        guard column >= 1, column < highlightColumns else { return nil }
+        return 0.08 + 0.84 * Float(column - 1) / Float(highlightColumns - 2)
+    }
 
     /// Root→tip gradient along V (V = 0 at the scalp), coherent strand streaks
     /// across U that wave gently along the flow direction, and a soft
@@ -36,7 +44,6 @@ enum NativeAnimeTextures {
         let seedPhase = seedPrng.nextUnit() * 2 * Float.pi
         let size = hairImageSize
         var image = RasterImage(width: size, height: size)
-        let highlightCentre: Float = 0.3
         let highlightHalfWidth = max(Float(texture.highlightWidth), 0.001) * 0.5
         let highlightOpacity = Float(texture.highlightOpacity)
         for y in 0..<size {
@@ -47,13 +54,17 @@ enum NativeAnimeTextures {
                 let tipMix = smoothstep(0.6, 1, v)
                 var c = base * (1 - rootMix) + root * rootMix
                 c = c * (1 - tipMix) + tip * tipMix
-                let flow = 2 * Float.pi * 96 * u + seedPhase + 1.2 * sin(2 * Float.pi * 3 * v)
+                let column = min(Int(u * Float(highlightColumns)), highlightColumns - 1)
+                let uLocal = u * Float(highlightColumns) - Float(column)
+                let flow = 2 * Float.pi * 96 * uLocal + seedPhase + 1.2 * sin(2 * Float.pi * 3 * v)
                 let strand = 0.5 + 0.5 * sin(flow)
-                let coarse = 0.5 + 0.5 * sin(2 * Float.pi * 12 * u + 0.7 * sin(2 * Float.pi * 2 * v))
+                let coarse = 0.5 + 0.5 * sin(2 * Float.pi * 12 * uLocal + 0.7 * sin(2 * Float.pi * 2 * v))
                 c *= (0.93 + 0.11 * strand) * (0.95 + 0.09 * coarse)
-                let h = 1 - smoothstep(0, highlightHalfWidth, abs(v - highlightCentre))
-                let lift = h * highlightOpacity
-                c = c * (1 - lift) + SIMD3<Float>(1, 1, 1) * lift
+                if let centre = highlightV(column: column) {
+                    let h = 1 - smoothstep(0, highlightHalfWidth, abs(v - centre))
+                    let lift = h * highlightOpacity
+                    c = c * (1 - lift) + SIMD3<Float>(1, 1, 1) * lift
+                }
                 image[x, y] = SIMD4(min(c.x, 1), min(c.y, 1), min(c.z, 1), 1)
             }
         }

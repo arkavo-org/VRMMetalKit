@@ -53,10 +53,13 @@ public struct HairClumpInfo: Codable, Hashable, Sendable {
     /// Rigid cap clumps are skinned solely to the head joint, with no node
     /// chain or spring.
     public var isRigid: Bool
+    /// Hair raster column (of `NativeAnimeTextures.highlightColumns`) this
+    /// clump's strip UVs sample; 0 carries no highlight band.
+    public var highlightColumn: Int
 
     public init(id: String, hairItemId: String, isBang: Bool, rootSampleIndex: Int, rootPosition: SIMD3<Float>, nodeIds: [String], springId: String,
                 vertexStart: Int, vertexCount: Int, clearanceVertexStart: Int, tipVertexStart: Int, sweepPivot: SIMD3<Float>, sweepAxis: SIMD3<Float>,
-                sectionCentres: [SIMD3<Float>], isRigid: Bool = false) {
+                sectionCentres: [SIMD3<Float>], isRigid: Bool = false, highlightColumn: Int = 0) {
         self.id = id
         self.hairItemId = hairItemId
         self.isBang = isBang
@@ -72,6 +75,7 @@ public struct HairClumpInfo: Codable, Hashable, Sendable {
         self.sweepAxis = sweepAxis
         self.sectionCentres = sectionCentres
         self.isRigid = isRigid
+        self.highlightColumn = highlightColumn
     }
 }
 

@@ -209,8 +209,8 @@ final class WearableHairTests: XCTestCase {
         for clump in out.hairClumps {
             XCTAssertEqual(prim.uv0[clump.vertexStart].y, 0)
             XCTAssertEqual(prim.uv0[clump.vertexStart + clump.vertexCount - 1].y, 1)
-            XCTAssertEqual(prim.uv0[clump.vertexStart].x, 0)
-            XCTAssertEqual(prim.uv0[clump.vertexStart + 2].x, 1)
+            XCTAssertEqual(prim.uv0[clump.vertexStart].x, Float(clump.highlightColumn) / 8)
+            XCTAssertEqual(prim.uv0[clump.vertexStart + 2].x, Float(clump.highlightColumn + 1) / 8)
             guard !clump.isRigid else { continue }
             let clumpJoints = Set(clump.nodeIds.compactMap { skin.jointNodeIds.firstIndex(of: $0) }.map { UInt16($0) })
             for v in clump.vertexStart..<(clump.vertexStart + clump.vertexCount) {
@@ -304,5 +304,27 @@ final class WearableHairTests: XCTestCase {
         XCTAssertThrowsError(try WearableCompiler.compile(host: bald, hair: [Fixtures.hair()], outfits: [], accessories: [], materialsById: [:])) { error in
             XCTAssertEqual((error as? AuthorError)?.code, .hostRegionMissing)
         }
+    }
+
+    func testHighlightColumnPutsTheBandAtOneWorldHeight() throws {
+        let out = try compileHair()
+        let prim = try hairPrimitive(out)
+        let target = host.headCentre.y + NativeAnimeTextures.highlightHeightFactor * host.headRadius
+        var lit = 0
+        for clump in out.hairClumps {
+            let column = clump.highlightColumn
+            XCTAssertTrue((0..<NativeAnimeTextures.highlightColumns).contains(column))
+            let mid = prim.uv0[clump.vertexStart + 1].x
+            XCTAssertEqual(mid, (Float(column) + 0.5) / Float(NativeAnimeTextures.highlightColumns), accuracy: 1e-5, "\(clump.id) strip u lives in its column")
+            guard let bandV = NativeAnimeTextures.highlightV(column: column) else {
+                XCTAssertTrue(clump.rootPosition.y < target + 0.002 || clump.sectionCentres.map(\.y).min()! > target - 0.002, "\(clump.id) is unlit only because its strip lies entirely below or entirely above the band height")
+                continue
+            }
+            let range = clump.vertexStart..<(clump.vertexStart + clump.vertexCount)
+            let nearest = range.min { abs(prim.uv0[$0].y - bandV) < abs(prim.uv0[$1].y - bandV) }!
+            XCTAssertEqual(prim.positions[nearest].y, target, accuracy: 0.02, "\(clump.id) band vertex height")
+            lit += 1
+        }
+        XCTAssertGreaterThan(lit, HairBobV1.LayoutParams.bob.ringBClumps, "ring B, bangs and the cap carry the band")
     }
 }
