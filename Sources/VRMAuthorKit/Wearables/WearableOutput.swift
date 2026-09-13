@@ -83,9 +83,12 @@ public struct GarmentInfo: Codable, Hashable, Sendable {
     public var hiddenRegions: [String]
     /// UV island names the garment's texture uses.
     public var uvIslands: [String]
+    /// Worst remaining front gap between the collar's outer row and the neck;
+    /// nil for garments without a collar.
+    public var collarGapM: Double?
 
     public init(id: String, preset: String, meshId: String, layer: Int, offsetM: Double, minClearanceM: Double, coveredRegions: [String], hiddenRegions: [String],
-                uvIslands: [String] = []) {
+                uvIslands: [String] = [], collarGapM: Double? = nil) {
         self.id = id
         self.preset = preset
         self.meshId = meshId
@@ -95,6 +98,7 @@ public struct GarmentInfo: Codable, Hashable, Sendable {
         self.coveredRegions = coveredRegions
         self.hiddenRegions = hiddenRegions
         self.uvIslands = uvIslands
+        self.collarGapM = collarGapM
     }
 }
 

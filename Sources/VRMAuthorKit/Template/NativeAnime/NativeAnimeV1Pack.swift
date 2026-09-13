@@ -120,7 +120,8 @@ public struct NativeAnimeV1Pack: TemplatePack {
     /// Compiles the recipe (template body/face, then wearables and materials)
     /// and returns the semantic attachment data alongside the dressed avatar.
     public func compileWithAttachments(_ recipe: Recipe, seed: UInt64) throws -> (avatar: CompiledAvatar, attachments: TemplateAttachments) {
-        let (template, attachments) = try compileTemplate(recipe, seed: seed)
+        let (template, templateAttachments) = try compileTemplate(recipe, seed: seed)
+        var attachments = templateAttachments
         let host = try NativeAnimeWearableHost(avatar: template, attachments: attachments)
         var materialsById: [String: MaterialRole] = [:]
         for material in template.materials { materialsById[material.id] = material.role }
@@ -169,6 +170,7 @@ public struct NativeAnimeV1Pack: TemplatePack {
         let compiled = try MaterialCompiler.compile(materials: avatar.materials, textures: recipe.textures, images: images, seed: seed, sources: sources)
         avatar.images = compiled.images
         avatar.materials = compiled.materials
+        attachments.garments = wearables.garments
         return (avatar.sorted(), attachments)
     }
 

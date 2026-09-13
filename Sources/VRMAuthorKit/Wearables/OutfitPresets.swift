@@ -231,8 +231,9 @@ public enum OutfitPresets {
 
         shapeGarment(d, builder: &builder, remap: remap, regionOfVertex: regionOfVertex, host: host)
 
+        var collarGap: Float? = nil
         if d.kind == .top, item.controls.length >= 0 {
-            addTrimBands(&builder, host: host, regionOfVertex: regionOfVertex, remap: remap, covered: covered, sources: &sources)
+            addTrimBands(&builder, host: host, regionOfVertex: regionOfVertex, remap: remap, covered: covered, sources: &sources, collarGap: &collarGap)
             usedIslands.insert(GarmentUVLayout.trim.name)
         }
 
@@ -242,7 +243,7 @@ public enum OutfitPresets {
         let nodeId = "node:garment:\(item.id)"
         let mesh = CompiledMesh(id: meshId, name: "Garment_\(item.id)", primitives: [builder.primitive(materialId: materialId, skinned: true)])
         let info = GarmentInfo(id: item.id, preset: d.id, meshId: meshId, layer: item.layer, offsetM: Double(offset), minClearanceM: Double(minClearance),
-                               coveredRegions: coveredRegions, hiddenRegions: d.hiddenRegions, uvIslands: usedIslands.sorted())
+                               coveredRegions: coveredRegions, hiddenRegions: d.hiddenRegions, uvIslands: usedIslands.sorted(), collarGapM: collarGap.map(Double.init))
         return Build(mesh: mesh, meshNode: CompiledNode(id: nodeId, name: "Garment_\(item.id)"),
                      meshInstance: CompiledMeshInstance(nodeId: nodeId, meshId: meshId, skinId: host.bodySkin.id), info: info, warnings: warnings)
     }
@@ -252,26 +253,29 @@ public enum OutfitPresets {
     /// row copied from the shaped shell's own rim vertices (so it tracks the
     /// cuff/hem flare) plus an outer row, skinned and UV'd like its source.
     static func addTrimBands(_ builder: inout MeshBuilder, host: WearableHost, regionOfVertex: [Int: String],
-                             remap: [Int: UInt32], covered: Set<Int>, sources: inout [Int]) {
-        // Collar: top rim of the covered chest, rising and flaring outward.
-        let chestIdx = host.region(WearableRegion.chest).filter { covered.contains($0) && remap[$0] != nil }
-        if !chestIdx.isEmpty {
-            let topY = chestIdx.map { host.bodyPositions[$0].y }.max()!
-            let rim = chestIdx.filter { topY - host.bodyPositions[$0].y < 0.012 }
-            // The inward lean may never cross the neck surface.
-            let neckIdx = host.region("neck")
-            let neckR: Float = neckIdx.isEmpty ? 0 : neckIdx.map { hypot(host.bodyPositions[$0].x, host.bodyPositions[$0].z) }.min()!
+                             remap: [Int: UInt32], covered: Set<Int>, sources: inout [Int], collarGap: inout Float?) {
+        // Collar: top rim of the covered chest/torso, on the shell's actual
+        // top edge, rising and leaning onto the neck.
+        let shell = covered.filter { remap[$0] != nil && (regionOfVertex[$0] == WearableRegion.chest || regionOfVertex[$0] == WearableRegion.torso) }
+        if !shell.isEmpty {
+            let topY = shell.map { host.bodyPositions[$0].y }.max()!
+            let rim = shell.filter { topY - host.bodyPositions[$0].y < 0.012 }.sorted()
+            let rimY = rim.map { host.bodyPositions[$0].y }.reduce(0, +) / Float(max(rim.count, 1))
+            let neckIdx = host.region("neck").filter { host.bodyPositions[$0].y >= rimY - 0.01 }
+            let neckR: Float = neckIdx.map { hypot(host.bodyPositions[$0].x, host.bodyPositions[$0].z) }.max() ?? 0
+            let topShellY = rim.compactMap { remap[$0] }.map { builder.positions[Int($0)].y }.max() ?? topY
+            var worst: Float = 0
             addBand(builder: &builder, host: host, rim: rim, remap: remap, sources: &sources, axis: SIMD3(0, 1, 0), aroundY: true) { p, n, out in
-                // The collar rises at the front and back and leans IN toward
-                // the neck so it closes the neckline slit; toward the
-                // shoulders it flattens onto the shell so it never climbs
-                // into the arm lofts. Hosts without a neck region (or a neck
-                // wider than the rim) get rise only.
                 let frontness = 1 - OutfitPresets.shapeSmooth01((abs(out.x) - 0.5) / 0.25)
-                // Rise only: leaning in crosses the neck on slim hosts, and at
-                // big headCounts the chin is directly above the front rim.
-                return p + SIMD3<Float>(0, 0.012 * frontness, 0) + n * 0.001
+                let radial = V3.normalize(SIMD3<Float>(p.x, 0, p.z), fallback: out)
+                let gap = neckR > 0 ? max(hypot(p.x, p.z) - neckR, 0) : 0
+                let lean = max(gap - 0.002, 0)
+                let rise = max(0.012 * frontness, topShellY - p.y + 0.001)
+                let q = p + SIMD3<Float>(0, rise, 0) - radial * lean
+                if neckR > 0 { worst = max(worst, hypot(q.x, q.z) - neckR) }
+                return q
             }
+            collarGap = neckR > 0 ? worst : nil
         }
 
         // Sleeve cuffs: distal rim of each covered upper arm.
@@ -359,6 +363,7 @@ public enum OutfitPresets {
         let waistRx = waistBand.map { abs(host.bodyPositions[$0].x) }.max()!
         let waistRz = waistBand.map { abs(host.bodyPositions[$0].z) }.max()!
         let lower = waistIdx + hipsIdx + host.region(WearableRegion.thighL) + host.region(WearableRegion.thighR)
+            + host.region(WearableRegion.shinL) + host.region(WearableRegion.shinR)
         let hemRx = lower.map { abs(host.bodyPositions[$0].x) }.max()! + 0.030 - Float(item.controls.fit) * 0.012
         let hemRz = lower.map { abs(host.bodyPositions[$0].z) }.max()! + 0.030 - Float(item.controls.fit) * 0.012
         let hipsBottom = hipsIdx.map { host.bodyPositions[$0].y }.min()!
@@ -366,17 +371,45 @@ public enum OutfitPresets {
         let hemY = hipsBottom - Float(0.06 + 0.08 * length)
         let segments = 40
         let flare = (max(hemRx, hemRz) - max(waistRx, waistRz)) / max(topY - hemY, 1e-3)
+        let lowerSet = Set(lower)
+        var lowerEdges: [(SIMD3<Float>, SIMD3<Float>)] = []
+        var ti = 0
+        while ti + 2 < host.bodyTriangles.count {
+            let a = Int(host.bodyTriangles[ti]), b = Int(host.bodyTriangles[ti + 1]), c = Int(host.bodyTriangles[ti + 2])
+            ti += 3
+            guard lowerSet.contains(a), lowerSet.contains(b), lowerSet.contains(c) else { continue }
+            lowerEdges.append((host.bodyPositions[a], host.bodyPositions[b]))
+            lowerEdges.append((host.bodyPositions[b], host.bodyPositions[c]))
+            lowerEdges.append((host.bodyPositions[c], host.bodyPositions[a]))
+        }
+        let ringCount = 6
+        let ringSpacing = (topY - hemY) / Float(ringCount - 1)
+        /// Widest point of the lower body's surface within half a ring spacing
+        /// of height y, from the edges of its triangles crossing those planes.
+        func bodyRadius(at y: Float) -> (rx: Float, rz: Float) {
+            var rx: Float = 0, rz: Float = 0
+            for k in -2...2 {
+                let plane = y + Float(k) * ringSpacing / 4
+                for (p, q) in lowerEdges where (p.y - plane) * (q.y - plane) <= 0 && p.y != q.y {
+                    let s = p + (q - p) * ((plane - p.y) / (q.y - p.y))
+                    rx = max(rx, abs(s.x))
+                    rz = max(rz, abs(s.z))
+                }
+            }
+            return (rx, rz)
+        }
 
         var builder = MeshBuilder()
         var sources: [Int] = []
         var rows: [[UInt32]] = []
-        let ringCount = 4
         var lastRx: Float = 0, lastRz: Float = 0
         for r in 0..<ringCount {
             let t = Float(r) / Float(ringCount - 1)
             let y = topY + (hemY - topY) * t
-            let rx = waistRx + offset + (hemRx - waistRx) * t
-            let rz = waistRz + offset + (hemRz - waistRz) * t
+            let body = bodyRadius(at: y)
+            let clearance = offset + Float(minClearanceM)
+            let rx = max(waistRx + offset + (hemRx - waistRx) * t, body.rx + clearance)
+            let rz = max(waistRz + offset + (hemRz - waistRz) * t, body.rz + clearance)
             lastRx = rx
             lastRz = rz
             var row: [UInt32] = []

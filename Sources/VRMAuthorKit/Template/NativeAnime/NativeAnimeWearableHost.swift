@@ -98,6 +98,7 @@ struct NativeAnimeWearableHost: WearableHost {
                 regions[name] = attachments.indices(of: name, mesh: attachments.bodyMeshId, primitive: 0)
             }
         }
+        regions["neck"] = attachments.indices(of: "neck", mesh: attachments.bodyMeshId, primitive: 0)
         self.regions = regions
 
         scalpSamples = attachments.scalpSamples.map { ScalpSample(position: $0.position, normal: $0.normal) }

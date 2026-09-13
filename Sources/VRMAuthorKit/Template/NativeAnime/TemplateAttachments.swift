@@ -84,11 +84,14 @@ public struct TemplateAttachments: Codable, Hashable, Sendable {
     public var headHeightM: Float
     public var headCenter: SIMD3<Float>
     public var headRadii: SIMD3<Float>
+    /// Compiled garment metadata, filled by `compileWithAttachments`; empty
+    /// from `compileTemplate` alone.
+    public var garments: [GarmentInfo]
 
     public init(regions: [String: [RegionRef]], scalpSamples: [SurfaceSample], attachmentNodes: [String: String], eyes: [EyeGeometry],
                 controlRegions: [String: [String]], lidEdges: [String: RegionRef], bodyMeshId: String, headMeshId: String, eyeMeshIds: [String],
                 skinId: String, jointWorldPositions: [VRMHumanBone: SIMD3<Float>], heightM: Float, headHeightM: Float, headCenter: SIMD3<Float>,
-                headRadii: SIMD3<Float>) {
+                headRadii: SIMD3<Float>, garments: [GarmentInfo] = []) {
         self.regions = regions
         self.scalpSamples = scalpSamples
         self.attachmentNodes = attachmentNodes
@@ -104,6 +107,7 @@ public struct TemplateAttachments: Codable, Hashable, Sendable {
         self.headHeightM = headHeightM
         self.headCenter = headCenter
         self.headRadii = headRadii
+        self.garments = garments
     }
 
     /// Vertex indices of `region` within one primitive, or empty.
