@@ -25,7 +25,7 @@
       "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
       "docs/proposals/vrm-author-cli/parameters.md (Native body and face controls)",
       "docs/proposals/vrm-author-cli/commands.md (`control describe` row)",
-      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md §4 (Discovery/registry, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -84,7 +84,7 @@
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Project/ControlPackTests.swift": "d6bb21febee398b97d28525d6b7d1a12c7b5b746ca11bf9b59e71344970b995b",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",
-        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "da4708d385023664b428839beff31043779a9a7a2cf4509cf4e3cfe2f58843c3"
+        "Tests/VRMAuthorKitTests/Template/TemplatePackTests.swift": "26bf91b3a4ac1937d2a2df0c6a9aa5e3ef448ea0178c9ef27d7a5ea2fe5a0074"
       }
     }
   },

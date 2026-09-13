@@ -690,7 +690,7 @@ class ShippedPackTests(unittest.TestCase):
     def test_shipped_pack_pins_the_decided_oracles(self):
         oracles = self.pack["runner"]["environment"]["oracleHashes"]
         self.assertEqual(oracles["scripts/style_lint.py"], "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881")
-        self.assertEqual(oracles["docs/style/profiles/vroid-lineage-anime.json"], "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35")
+        self.assertEqual(oracles["docs/style/profiles/vroid-lineage-anime.json"], "0579dc1d76d4bfad2fc44de9c9e6c129d092f55aee7c3faeb165f8141cd58aa4")
         self.assertEqual(oracles["docs/style/corpus/vroid-lineage-anime.manifest.json"], "b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6")
         commit = self.pack["runner"]["environment"]["pinnedCommit"]
         self.assertTrue(RP.is_ancestor(REPO, commit), f"pinnedCommit {commit} is not reachable from HEAD")
