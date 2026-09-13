@@ -266,6 +266,11 @@ None of these change camera, threshold or scenario oracles. Each item updates
 the affected NativeAnime or Wearables tests, and the affected packs are re-pinned
 afterwards.
 
+Superseded in part by `2026-09-12-starter-craft-design.md`: the hair-coverage
+acceptance holds with rigid cap clumps (spring count unchanged), the face-raster
+item is the lip band and blush change, and body basis, proportion fit and skirt
+clearance are new there.
+
 ## 7. Files
 
 New:

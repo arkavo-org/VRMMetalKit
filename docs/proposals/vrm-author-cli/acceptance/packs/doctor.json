@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "52e6fc2067bb7fdce1905713b8a7d39dc312346e8e6775b24f38a37b8bd84f10",
   "resultSchemaHash": "c17ee5d1f393859792ff8fd7d252802cb0d279239079a1ac73a2d7ef258be93a",
-  "packHash": "1fca5575d7117669b41dfc0598dbe04aa51c38344b1d93ca57a36cd245889c18",
+  "packHash": "0abbdb27e82dc408d0f081a6840e6138cfb2ad5e59eceed27f188af687ce0835",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,13 +20,13 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "docs/style/profiles/vroid-lineage-anime.json @ df72553df3b87234caeb1478584e978da713c9c1",
-      "docs/proposals/vrm-author-cli/verification.md §2 (Pinned oracles)",
+      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "docs/style/profiles/vroid-lineage-anime.json @ e65c7a92d1388b8383b287710865302000fe353c",
+      "docs/proposals/vrm-author-cli/verification.md \u00a72 (Pinned oracles)",
       "docs/proposals/vrm-author-cli/commands.md (`doctor` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Discovery/registry, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -79,7 +79,7 @@
     "kind": "swift-test",
     "entryPoint": "DiscoveryPackTests",
     "environment": {
-      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "pinnedCommit": "e65c7a92d1388b8383b287710865302000fe353c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "b710b883f77e7e2ef3fa1eacb3a0cca392c255b2438122e907e53339a219b934",
         "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "ad13e87ffa0ce5c4b85817e5f02e55a344db1e67f329177f5952f6305049103e",

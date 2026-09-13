@@ -360,6 +360,10 @@ but lacks anatomical/visual evidence cannot leave Stage B, however quickly it wa
 Fleet scheduling, per-project evaluation budgets and held-out evaluation are
 [reserved verification requirements (Stage C)](reserved.md#reserved-verification-requirements-stage-c).
 
+Starter craft (2026-09-12): the native-anime template lofts each limb once, fits
+shoulders, neck, chest and eye spacing to the profile's corpus provenance, and the
+style linter measures skin-role girth; see `docs/superpowers/specs/2026-09-12-starter-craft-design.md`.
+
 ### V1 eye decision
 
 Use **sculpted globe/ellipsoid eyeballs**, with separate sclera, iris/pupil and highlight

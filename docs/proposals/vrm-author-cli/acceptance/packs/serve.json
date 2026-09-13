@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "50d7ef6fd17fa70c7a74156edd317a1c383f82e460658d50a96b6ad1f12839fd",
   "resultSchemaHash": "b8bcdcb501f3ccf865b98645a30bcd182ef26fd22c27d8246ff4883d7bd145fd",
-  "packHash": "79e067e7bc1702405538b0eab74f7001877262ab8066a3475d4aafd06ab53033",
+  "packHash": "e6920eb3b3e9d56007ddf63c77640787435079cfe97a441a79e71246a2ae8680",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,14 +20,14 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ df72553df3b87234caeb1478584e978da713c9c1 (independent raw-wire MCP client, second reference)",
+      "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Serve/MCPClientTests.swift @ e65c7a92d1388b8383b287710865302000fe353c (independent raw-wire MCP client, second reference)",
       "docs/proposals/vrm-author-cli/commands.md (`serve` row)",
       "docs/proposals/vrm-author-cli/verification.md \u00a74 (RPC/transport, fixture-tested)",
-      "Tests/VRMAuthorKitTests/Serve/MCPFacadeTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Serve/MCPResourcesTests.swift @ df72553df3b87234caeb1478584e978da713c9c1"
+      "Tests/VRMAuthorKitTests/Serve/MCPFacadeTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Serve/MCPResourcesTests.swift @ e65c7a92d1388b8383b287710865302000fe353c"
     ],
     "reviewReceipt": ""
   },
@@ -92,7 +92,7 @@
     "kind": "swift-test",
     "entryPoint": "ServePackTests",
     "environment": {
-      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "pinnedCommit": "e65c7a92d1388b8383b287710865302000fe353c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Serve/ServePackTests.swift": "90ed251285d146ed4482d5eaa53dd3f426943bcee96e9f01b7ba77d481b00eb5",
         "Tests/VRMAuthorKitTests/Project/StubTemplatePack.swift": "2eb8c5dd442ae89565c13606236151c091611c822166178863690204b186e9e6",

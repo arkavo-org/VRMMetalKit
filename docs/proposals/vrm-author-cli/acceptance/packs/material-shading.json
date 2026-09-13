@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "1a7d74ea02aa4006dc2a64b976e58d64831294950d496bf6fc56879f013217af",
   "resultSchemaHash": "2443159494918e8ecdf47a73ed802dbbc8ac019e11acac0d3bcef634b1cf5ade",
-  "packHash": "ccdcd32f71151dd66a262f01c3508f7e2d1a535c4503c25080b10cf79216e11d",
+  "packHash": "90d4c1c622cd35dce23243daa71733aa8e1d412ef6102a30292495e4e8d37af2",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,13 +20,13 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "docs/style/profiles/vroid-lineage-anime.json @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "docs/style/profiles/vroid-lineage-anime.json @ e65c7a92d1388b8383b287710865302000fe353c",
       "docs/proposals/vrm-author-cli/parameters.md (Textures and MToon: material shading computes toony and shift)",
-      "docs/proposals/vrm-author-cli/verification.md §2 (Pinned oracles)",
+      "docs/proposals/vrm-author-cli/verification.md \u00a72 (Pinned oracles)",
       "docs/proposals/vrm-author-cli/commands.md (`material shading` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Materials/style, visually-validated)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Materials/style, visually-validated)"
     ],
     "reviewReceipt": ""
   },
@@ -105,7 +105,7 @@
     "kind": "swift-test",
     "entryPoint": "MaterialsPackTests",
     "environment": {
-      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "pinnedCommit": "e65c7a92d1388b8383b287710865302000fe353c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "ad13e87ffa0ce5c4b85817e5f02e55a344db1e67f329177f5952f6305049103e",
         "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift": "a832b4ded465d1f6a62fcef2ef91caa08b1fbe73e89d9bfd350ce6665e9b677a",
@@ -205,7 +205,7 @@
       "silhouette"
     ],
     "thresholds": {},
-    "adjudication": "different-family judge, zero false accepts on the 12-case calibration set (verification.md §5)"
+    "adjudication": "different-family judge, zero false accepts on the 12-case calibration set (verification.md \u00a75)"
   },
   "evidencePolicy": {
     "requiredLevel": "visually-validated",
@@ -216,7 +216,7 @@
       "interoperability": "inapplicable",
       "provenance": "required"
     },
-    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md §6).",
+    "heldOutPolicy": "The 22-asset / 18-family development corpus is calibration data for profile v0.1.0; every eligible family must pass with per-family denominators reported. A sealed holdout and evaluation budget are Stage C (verification.md \u00a76).",
     "corpusApplicabilityRecord": "material shading is body-independent: its input class is a project material object with MToon fields, so partitioning by body family is pseudo-precision for any style. The parameter space is covered instead by a fixture sweep over the four legal corners of the (shadowEnd, terminatorWidth) region, and the role dimension by a per-role round trip: each of the 13 role defaults the template pack declares derives a (shadowEnd, terminatorWidth) that solves back to that role's own factors. Those 13 defaults take three distinct (toony, shift) pairs, so the round trip covers three configurations, not 13, and it does not assert which pair a role maps to. Per-role coverage proper is testRoleDefaultsSatisfyEveryMaterialRuleOfThePinnedProfile, which checks every role against every material rule of the attached profile. The profile declares no per-role shading values; the defaults are the template pack's. Recorded by the acceptance author; the independent reviewer confirms or overturns this in reviewReceipt."
   },
   "resources": {

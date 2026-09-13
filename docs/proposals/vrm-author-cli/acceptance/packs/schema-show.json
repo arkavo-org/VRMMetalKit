@@ -5,7 +5,7 @@
   "operationVersion": 1,
   "requestSchemaHash": "6986b6cc7b8556c221fea3fc75ca8879ba416c098a1e0c9cd43c0c07377d4036",
   "resultSchemaHash": "6e1028ac11c36a333864582e6b0d6a2fd2a120979034b65e3aa2291b722c2865",
-  "packHash": "2a5d7041e392df6ade60fc3f718ff42d76465129f0a3dab4d3c10792cc426cd0",
+  "packHash": "09ac77318caa9e053eb398113b68c45ceed613f750aa1ceb5079e13670610600",
   "provenance": {
     "author": {
       "provider": "Anthropic",
@@ -20,15 +20,15 @@
       "role": "independent-reviewer"
     },
     "sources": [
-      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "docs/style/profiles/vroid-lineage-anime.json @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Core/JSONSchemaTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
-      "Tests/VRMAuthorKitTests/Core/SchemaHashStabilityTests.swift @ df72553df3b87234caeb1478584e978da713c9c1",
+      "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Materials/MaterialsTestSupport.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "docs/style/profiles/vroid-lineage-anime.json @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Core/JSONSchemaTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
+      "Tests/VRMAuthorKitTests/Core/SchemaHashStabilityTests.swift @ e65c7a92d1388b8383b287710865302000fe353c",
       "docs/proposals/vrm-author-cli/parameters.md (Textures and MToon: `schema show Material` must enumerate every leaf)",
       "docs/proposals/vrm-author-cli/commands.md (`schema show` row)",
-      "docs/proposals/vrm-author-cli/verification.md §4 (Discovery/registry, fixture-tested)"
+      "docs/proposals/vrm-author-cli/verification.md \u00a74 (Discovery/registry, fixture-tested)"
     ],
     "reviewReceipt": ""
   },
@@ -83,7 +83,7 @@
     "kind": "swift-test",
     "entryPoint": "DiscoveryPackTests",
     "environment": {
-      "pinnedCommit": "df72553df3b87234caeb1478584e978da713c9c1",
+      "pinnedCommit": "e65c7a92d1388b8383b287710865302000fe353c",
       "oracleHashes": {
         "Tests/VRMAuthorKitTests/Core/DiscoveryPackTests.swift": "b710b883f77e7e2ef3fa1eacb3a0cca392c255b2438122e907e53339a219b934",
         "Tests/VRMAuthorKitTests/Materials/MaterialsPackTests.swift": "ad13e87ffa0ce5c4b85817e5f02e55a344db1e67f329177f5952f6305049103e",
