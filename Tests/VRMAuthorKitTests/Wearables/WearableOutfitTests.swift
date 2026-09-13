@@ -224,6 +224,8 @@ final class WearableOutfitTests: XCTestCase {
         let shirt = try garment(out, "shirt")
         XCTAssertGreaterThan(shirt.uv0.filter { GarmentUVLayout.trim.contains($0) }.count, 0, "collar, cuffs and hem take trim UVs")
         XCTAssertEqual(Set(out.garments.first { $0.id == "shirt" }!.uvIslands), ["torso", "upperArmL", "upperArmR", "forearmL", "forearmR", "trim"])
+        XCTAssertEqual(Set(out.garments.first { $0.id == "pants" }!.uvIslands), ["waistHips", "thighL", "thighR"])
+        XCTAssertEqual(Set(out.garments.first { $0.id == "shoes" }!.uvIslands), ["footL", "footR"])
         let skirt = try garment(try compile([Fixtures.skirt()]), "skirt")
         XCTAssertTrue(skirt.uv0.allSatisfy { GarmentUVLayout.skirt.contains($0) || GarmentUVLayout.trim.contains($0) })
         XCTAssertGreaterThan(skirt.uv0.filter { GarmentUVLayout.trim.contains($0) }.count, 0, "the skirt carries a hem band")
