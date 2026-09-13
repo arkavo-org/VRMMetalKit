@@ -52,9 +52,9 @@ final class WearableGarmentFitTests: XCTestCase {
         XCTAssertLessThanOrEqual(gap, 0.002 + 1e-4, "front collar gap \(gap)")
         let shirt = try XCTUnwrap(avatar.meshes.first { $0.id == info.meshId }).primitives[0]
         let outerV = GarmentUVLayout.trim.map(SIMD2(0, 0.9)).y
-        let shellTop = shirt.positions.indices.filter { !GarmentUVLayout.trim.contains(shirt.uv0[$0]) && shirt.uv0[$0].x < 0.5 }.map { shirt.positions[$0].y }.max()!
+        let shellTop = shirt.positions.indices.filter { shirt.uv0[$0].x < 0.5 && shirt.uv0[$0].y < 0.905 }.map { shirt.positions[$0].y }.max()!
         let outerRowMin = shirt.positions.indices.filter { abs(shirt.uv0[$0].y - outerV) < 1e-4 && abs(shirt.positions[$0].x) < 0.10 && shirt.positions[$0].y > shellTop - 0.05 }.map { shirt.positions[$0].y }.min()!
-        XCTAssertGreaterThanOrEqual(outerRowMin, shellTop - 0.001, "collar band must sit on the shell's top edge, not below it")
+        XCTAssertGreaterThanOrEqual(outerRowMin, shellTop - 0.001, "collar band must sit on the shell's top edge, not below it: outer row \(outerRowMin), shell top \(shellTop)")
         let body = NativeAnimeFixture.primitive(avatar, mesh: "mesh.body")
         let neck = attachments.indices(of: "neck", mesh: "mesh.body")
         for (k, p) in shirt.positions.enumerated() where GarmentUVLayout.trim.contains(shirt.uv0[k]) && p.y > attachments.jointWorldPositions[.neck]!.y - 0.01 {
