@@ -154,4 +154,29 @@ final class MaterialsCompositingTests: XCTestCase {
         XCTAssertLessThan(row.max()! - row.min()!, 0.06 * lum(SIMD4(base.x, base.y, base.z, 1)), "no high-frequency weave across a row")
         XCTAssertEqual(image, NativeAnimeTextures.garmentRaster(kind: .top, base: base, seed: 4), "cloth is seed-independent")
     }
+
+    private func pixel(_ image: RasterImage, at target: SIMD2<Float>) -> SIMD4<Float> {
+        let x = min(max(Int(target.x * Float(image.width)), 0), image.width - 1)
+        let y = min(max(Int(target.y * Float(image.height)), 0), image.height - 1)
+        var best = (x, y, Float.infinity)
+        for dy in -1...1 { for dx in -1...1 {
+            let px = min(max(x + dx, 0), image.width - 1), py = min(max(y + dy, 0), image.height - 1)
+            let uv = image.uv(x: px, y: py)
+            let d = hypot(Float(uv.x) - target.x, Float(uv.y) - target.y)
+            if d < best.2 { best = (px, py, d) }
+        } }
+        return image[best.0, best.1]
+    }
+
+    func testMouthRasterPaintsTheInnerLipRingAsLipNotCavity() {
+        let image = MaterialRoleDefaults.raster(for: .mouth, width: 512, height: 512, seed: 1)
+        let base = MaterialRoleDefaults.baseColour(for: .mouth)
+        func lum(_ p: SIMD4<Float>) -> Float { 0.2126 * p.x + 0.7152 * p.y + 0.0722 * p.z }
+        let innerLip = pixel(image, at: SIMD2(0.5, 0.5 + 0.28))
+        XCTAssertEqual(innerLip.x, base.x, accuracy: 0.12 * base.x)
+        XCTAssertEqual(innerLip.y, base.y, accuracy: 0.12 * base.y)
+        XCTAssertEqual(innerLip.z, base.z, accuracy: 0.12 * base.z)
+        let cavity = pixel(image, at: SIMD2(0.5, 0.5 + 0.10))
+        XCTAssertLessThan(lum(cavity), 0.3 * lum(SIMD4(base.x, base.y, base.z, 1)))
+    }
 }

@@ -390,9 +390,9 @@ struct NativeAnimeHeadBuilder {
             let regions = corner ? ["lipsUpper", "lipsLower"] : [upper ? "lipsUpper" : "lipsLower"]
             let oy = (sa >= 0 ? hUpper : hLower) * sa
             let o = mesh.addVertex(layout.onShell(x: W * ca, y: mouthY + oy, offset: 0.0012), uv: NAVec2(0.5 + 0.5 * ca, 0.5 - 0.5 * sa), pivot: center, regions: regions)
-            let i = mesh.addVertex(layout.onShell(x: 0.86 * W * ca, y: mouthY + innerGap * sa, offset: 0.0006), uv: NAVec2(0.5 + 0.43 * ca, 0.5 - 0.1 * sa),
+            let i = mesh.addVertex(layout.onShell(x: 0.86 * W * ca, y: mouthY + innerGap * sa, offset: 0.0006), uv: NAVec2(0.5 + 0.43 * ca, 0.5 - 0.3 * sa),
                                    pivot: center, regions: regions)
-            let f = mesh.addVertex(center + NAVec3(0.75 * W * ca, 0.010 * hh * sa, -0.02 * hh), uv: NAVec2(0.5 + 0.3 * ca, 0.5 - 0.3 * sa), pivot: center,
+            let f = mesh.addVertex(center + NAVec3(0.75 * W * ca, 0.010 * hh * sa, -0.02 * hh), uv: NAVec2(0.5 + 0.22 * ca, 0.5 - 0.22 * sa), pivot: center,
                                    regions: ["innerMouth"])
             let b = mesh.addVertex(center + NAVec3(0.5 * W * ca, 0.012 * hh * sa, -0.05 * hh), uv: NAVec2(0.5 + 0.15 * ca, 0.5 - 0.15 * sa), pivot: center,
                                    regions: ["innerMouth"])

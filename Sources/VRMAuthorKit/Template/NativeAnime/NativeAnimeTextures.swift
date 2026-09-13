@@ -105,7 +105,7 @@ enum NativeAnimeTextures {
             }
         }
         for centre in cheeks {
-            blush(&image, centre: centre, radius: 0.040, strength: 0.16, colour: ColourTransfer.linear(srgb8: 244, 173, 164))
+            blush(&image, centre: centre, radius: 0.050, strength: 0.09, colour: ColourTransfer.linear(srgb8: 244, 173, 164))
         }
         return image
     }

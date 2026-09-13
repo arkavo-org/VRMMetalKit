@@ -85,7 +85,7 @@ public enum MaterialRoleDefaults {
         case .eyeWhite: return ColourTransfer.linear(srgb8: 250, 250, 250)
         case .eyeHighlight: return SIMD3(1, 1, 1)
         case .eyeline, .eyelash: return ColourTransfer.linear(srgb8: 40, 28, 30)
-        case .mouth: return ColourTransfer.linear(srgb8: 238, 178, 163)
+        case .mouth: return ColourTransfer.linear(srgb8: 232, 168, 158)
         case .other: return ColourTransfer.linear(srgb8: 128, 128, 128)
         }
     }
@@ -164,9 +164,9 @@ public enum MaterialRoleDefaults {
             a *= Self.smooth01((u - 0.01) / 0.06) * Self.smooth01((0.99 - u) / 0.1)
             return a > 0.003 ? SIMD4(base.x, base.y, base.z, a) : clear
         case .mouth:
-            let cavity = 1 - Self.smooth01((r - 0.30) / 0.10)
+            let cavity = 1 - Self.smooth01((r - 0.20) / 0.05)
             var c = mix(base, SIMD3<Float>(0.304, 0.039, 0.046), cavity)
-            let lip = Self.smooth01((r - 0.40) / 0.05)
+            let lip = Self.smooth01((r - 0.22) / 0.04)
             let seam = (1 - Self.smooth01((abs(v - 0.5) - 0.004) / 0.008)) * lip
             c = mix(c, base * 0.55, 0.8 * seam)
             let corner = Self.smooth01((abs(2 * u - 1) - 0.75) / 0.2) * lip

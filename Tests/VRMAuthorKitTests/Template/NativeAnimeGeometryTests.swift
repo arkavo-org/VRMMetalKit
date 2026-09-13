@@ -309,4 +309,24 @@ final class NativeAnimeGeometryTests: XCTestCase {
         XCTAssertGreaterThan(heelTop, toeTop + 0.02 * H, "heel is taller than the toe box")
         XCTAssertEqual(foot.map { body.positions[$0].y }.min()!, 0, accuracy: 0.002, "sole touches the ground")
     }
+
+    func testIrisAngleTracksTheSizeControl() throws {
+        var angles: [Float] = []
+        for size in [0.0, 0.5, 1.0] {
+            let (_, attachments) = try NativeAnimeFixture.compiled { $0.face["face.iris.left.size"] = size }
+            angles.append(attachments.eyes.first { $0.side == "left" }!.irisAngleRadians)
+        }
+        XCTAssertLessThan(angles[0], angles[1])
+        XCTAssertLessThan(angles[1], angles[2])
+        XCTAssertEqual(Double(angles[1]), 30 * Double.pi / 180, accuracy: 1e-4)
+    }
+
+    func testInnerLipRingSamplesTheLipBand() throws {
+        let (avatar, attachments) = try NativeAnimeFixture.compiled()
+        let mouth = NativeAnimeFixture.primitive(avatar, mesh: "mesh.head", primitive: HeadPrimitive.mouth.rawValue)
+        for i in attachments.indices(of: "lipsUpper", mesh: "mesh.head", primitive: HeadPrimitive.mouth.rawValue) + attachments.indices(of: "lipsLower", mesh: "mesh.head", primitive: HeadPrimitive.mouth.rawValue) {
+            let uv = mouth.uv0[i]
+            XCTAssertGreaterThanOrEqual(hypot(uv.x - 0.5, uv.y - 0.5), 0.28, "lip vertex \(i) samples the cavity")
+        }
+    }
 }
