@@ -150,6 +150,30 @@ enum NativeAnimeTextures {
         }
     }
 
+    /// Flat cloth with a slow tone drift, a darker trim strip with one
+    /// lighter stitch row, and a faint seam column at each island's u = 0.
+    static func garmentRaster(kind: OutfitKind, base: SIMD3<Float>, seed: UInt64) -> RasterImage {
+        let size = MaterialRoleDefaults.imageSize(for: .cloth)
+        var image = RasterImage(width: size, height: size)
+        let trim = GarmentUVLayout.trim
+        let islands = GarmentUVLayout.islands(for: kind).filter { $0.name != trim.name }
+        let texel = 1 / Float(size)
+        for y in 0..<size {
+            for x in 0..<size {
+                let uv = image.uv(x: x, y: y)
+                let u = Float(uv.x), v = Float(uv.y)
+                var c = base * (0.98 + 0.02 * sin(2 * Float.pi * 3 * v + 1.3 * sin(2 * Float.pi * 2 * u)))
+                if v >= trim.rect[1] {
+                    c = base * (abs(v - 0.92) < texel ? 0.92 : 0.80)
+                } else if let island = islands.first(where: { $0.contains(SIMD2(u, v), tolerance: 0) }), u - island.rect[0] < 2 * texel {
+                    c *= 0.98
+                }
+                image[x, y] = SIMD4(min(c.x, 1), min(c.y, 1), min(c.z, 1), 1)
+            }
+        }
+        return image
+    }
+
     static func rgb(_ colour: Colour) -> SIMD3<Float> {
         let c = ColourTransfer.linearRGBA(colour)
         return SIMD3(c.x, c.y, c.z)

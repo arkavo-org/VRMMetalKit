@@ -60,6 +60,8 @@ public enum NativeAnimeMaterials {
     public static let garmentImages: [String: String] = [
         clothTop: clothTopImageId, clothBottom: clothBottomImageId, clothFootwear: clothFootwearImageId,
     ]
+    /// Garment image id → the outfit kind it rasters UV islands for.
+    public static let garmentKinds: [String: OutfitKind] = [clothTopImageId: .top, clothBottomImageId: .bottom, clothFootwearImageId: .footwear]
 
     /// Roles the template's own primitives reference.
     public static let templateIds = [faceSkin, bodySkin, iris, eyeWhite, eyeHighlight, eyeline, eyelash, brow, mouth]

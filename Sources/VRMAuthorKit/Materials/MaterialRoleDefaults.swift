@@ -124,12 +124,7 @@ public enum MaterialRoleDefaults {
             let strand = 0.5 + 0.5 * sin(v * 2 * Float.pi * 40 + strandPhases[band])
             return opaque(base * (0.85 + 0.3 * strand))
         case .cloth:
-            // Fine warp/weft weave: row- and column-periodic so the deflate
-            // stage compresses it well, and it reads as fabric at close range
-            // instead of per-pixel static.
-            let weft = 0.5 + 0.5 * sin(v * 2 * Float.pi * 256)
-            let warp = 0.5 + 0.5 * sin(u * 2 * Float.pi * 256)
-            return opaque(base * (0.94 + 0.09 * weft * weft) * (0.97 + 0.05 * warp))
+            return opaque(base * (0.98 + 0.02 * sin(v * 2 * Float.pi * 3 + 1.3 * sin(u * 2 * Float.pi * 2))))
         case .iris: return irisPixel(base: base, u: u, v: v, r: r, du: du, dv: dv)
         case .eyeWhite:
             var c = base * (1 - 0.10 * r * r)

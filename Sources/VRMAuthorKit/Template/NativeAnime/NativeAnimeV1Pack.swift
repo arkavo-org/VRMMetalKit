@@ -164,7 +164,7 @@ public struct NativeAnimeV1Pack: TemplatePack {
         ]
         for (imageId, palette) in NativeAnimeMaterials.garmentPalettes {
             images.append(ImageSpec(id: imageId, width: clothSize, height: clothSize, colourSpace: .srgb, usage: .colour))
-            sources[imageId] = MaterialRoleDefaults.raster(for: .cloth, base: palette, width: clothSize, height: clothSize, seed: seed)
+            sources[imageId] = NativeAnimeTextures.garmentRaster(kind: NativeAnimeMaterials.garmentKinds[imageId] ?? .top, base: palette, seed: seed)
         }
         let compiled = try MaterialCompiler.compile(materials: avatar.materials, textures: recipe.textures, images: images, seed: seed, sources: sources)
         avatar.images = compiled.images

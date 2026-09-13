@@ -81,8 +81,11 @@ public struct GarmentInfo: Codable, Hashable, Sendable {
     public var minClearanceM: Double
     public var coveredRegions: [String]
     public var hiddenRegions: [String]
+    /// UV island names the garment's texture uses.
+    public var uvIslands: [String]
 
-    public init(id: String, preset: String, meshId: String, layer: Int, offsetM: Double, minClearanceM: Double, coveredRegions: [String], hiddenRegions: [String]) {
+    public init(id: String, preset: String, meshId: String, layer: Int, offsetM: Double, minClearanceM: Double, coveredRegions: [String], hiddenRegions: [String],
+                uvIslands: [String] = []) {
         self.id = id
         self.preset = preset
         self.meshId = meshId
@@ -91,6 +94,7 @@ public struct GarmentInfo: Codable, Hashable, Sendable {
         self.minClearanceM = minClearanceM
         self.coveredRegions = coveredRegions
         self.hiddenRegions = hiddenRegions
+        self.uvIslands = uvIslands
     }
 }
 

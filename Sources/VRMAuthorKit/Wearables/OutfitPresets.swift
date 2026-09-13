@@ -208,11 +208,14 @@ public enum OutfitPresets {
         var remap: [Int: UInt32] = [:]
         var sources: [Int] = []
         var builder = MeshBuilder()
+        var usedIslands = Set<String>()
         for i in ordered {
             guard i < host.bodyPositions.count, i < host.bodyNormals.count, i < host.bodyJoints.count, i < host.bodyWeights.count else { continue }
             let n = V3.normalize(host.bodyNormals[i])
-            let uv = i < host.bodyUV0.count ? host.bodyUV0[i] : SIMD2<Float>(0, 0)
-            remap[i] = builder.addVertex(host.bodyPositions[i] + n * offset, normal: n, uv: uv, joints: host.bodyJoints[i], weights: host.bodyWeights[i])
+            let raw = i < host.bodyUV0.count ? host.bodyUV0[i] : SIMD2<Float>(0, 0)
+            let island = GarmentUVLayout.island(for: regionOfVertex[i] ?? "", kind: d.kind)
+            if let island { usedIslands.insert(island.name) }
+            remap[i] = builder.addVertex(host.bodyPositions[i] + n * offset, normal: n, uv: island?.map(raw) ?? raw, joints: host.bodyJoints[i], weights: host.bodyWeights[i])
             sources.append(i)
         }
         var t = 0
@@ -230,6 +233,7 @@ public enum OutfitPresets {
 
         if d.kind == .top, item.controls.length >= 0 {
             addTrimBands(&builder, host: host, regionOfVertex: regionOfVertex, remap: remap, covered: covered, sources: &sources)
+            usedIslands.insert(GarmentUVLayout.trim.name)
         }
 
         let minClearance = try clearance(builder: builder, sources: sources, host: host, item: item, descriptor: d, regionOfVertex: regionOfVertex)
@@ -238,7 +242,7 @@ public enum OutfitPresets {
         let nodeId = "node:garment:\(item.id)"
         let mesh = CompiledMesh(id: meshId, name: "Garment_\(item.id)", primitives: [builder.primitive(materialId: materialId, skinned: true)])
         let info = GarmentInfo(id: item.id, preset: d.id, meshId: meshId, layer: item.layer, offsetM: Double(offset), minClearanceM: Double(minClearance),
-                               coveredRegions: coveredRegions, hiddenRegions: d.hiddenRegions)
+                               coveredRegions: coveredRegions, hiddenRegions: d.hiddenRegions, uvIslands: usedIslands.sorted())
         return Build(mesh: mesh, meshNode: CompiledNode(id: nodeId, name: "Garment_\(item.id)"),
                      meshInstance: CompiledMeshInstance(nodeId: nodeId, meshId: meshId, skinId: host.bodySkin.id), info: info, warnings: warnings)
     }
@@ -318,16 +322,17 @@ public enum OutfitPresets {
         }
         var innerRow: [UInt32] = []
         var outerRowIds: [UInt32] = []
-        for i in ordered {
+        for (k, i) in ordered.enumerated() {
             guard let vi = remap[i], Int(vi) < builder.positions.count else { return }
             let shellPos = builder.positions[Int(vi)]
             let n = V3.normalize(host.bodyNormals[i])
             let horizontal = V3.normalize(SIMD3<Float>(shellPos.x - centre.x, 0, shellPos.z - centre.z), fallback: n)
             let outward = aroundY ? horizontal : n
+            let u = Float(k) / Float(ordered.count)
             innerRow.append(UInt32(builder.positions.count))
-            builder.addVertex(shellPos, normal: n, uv: host.bodyUV0[i], joints: host.bodyJoints[i], weights: host.bodyWeights[i])
+            builder.addVertex(shellPos, normal: n, uv: GarmentUVLayout.trim.map(SIMD2(u, 0.1)), joints: host.bodyJoints[i], weights: host.bodyWeights[i])
             outerRowIds.append(UInt32(builder.positions.count))
-            builder.addVertex(outerRow(shellPos, n, outward), normal: n, uv: host.bodyUV0[i], joints: host.bodyJoints[i], weights: host.bodyWeights[i])
+            builder.addVertex(outerRow(shellPos, n, outward), normal: n, uv: GarmentUVLayout.trim.map(SIMD2(u, 0.9)), joints: host.bodyJoints[i], weights: host.bodyWeights[i])
             sources.append(contentsOf: [i, i])
         }
         for k in 0..<innerRow.count {
@@ -366,11 +371,14 @@ public enum OutfitPresets {
         var sources: [Int] = []
         var rows: [[UInt32]] = []
         let ringCount = 4
+        var lastRx: Float = 0, lastRz: Float = 0
         for r in 0..<ringCount {
             let t = Float(r) / Float(ringCount - 1)
             let y = topY + (hemY - topY) * t
             let rx = waistRx + offset + (hemRx - waistRx) * t
             let rz = waistRz + offset + (hemRz - waistRz) * t
+            lastRx = rx
+            lastRz = rz
             var row: [UInt32] = []
             for k in 0..<segments {
                 let a = 2 * Float.pi * Float(k) / Float(segments)
@@ -381,7 +389,7 @@ public enum OutfitPresets {
                     let dist = V3.distance(host.bodyPositions[i], p)
                     if dist < bestD { bestD = dist; best = i }
                 }
-                row.append(builder.addVertex(p, normal: n, uv: SIMD2(Float(k) / Float(segments), t),
+                row.append(builder.addVertex(p, normal: n, uv: GarmentUVLayout.skirt.map(SIMD2(Float(k) / Float(segments), t)),
                                              joints: host.bodyJoints[best], weights: host.bodyWeights[best]))
                 sources.append(best)
             }
@@ -394,12 +402,28 @@ public enum OutfitPresets {
             }
         }
 
+        var band: [UInt32] = []
+        let last = rows[ringCount - 1]
+        for k in 0..<segments {
+            let a = 2 * Float.pi * Float(k) / Float(segments)
+            let p = SIMD3<Float>((lastRx + 0.002) * cos(a), hemY - 0.015, (lastRz + 0.002) * sin(a))
+            let n = V3.normalize(SIMD3(cos(a), flare, sin(a)))
+            let src = sources[Int(last[k])]
+            band.append(builder.addVertex(p, normal: n, uv: GarmentUVLayout.trim.map(SIMD2(Float(k) / Float(segments), 0.9)),
+                                          joints: host.bodyJoints[src], weights: host.bodyWeights[src]))
+            sources.append(src)
+        }
+        for k in 0..<segments {
+            let k1 = (k + 1) % segments
+            builder.addQuad(last[k], last[k1], band[k1], band[k])
+        }
+
         let minClearance = try clearance(builder: builder, sources: sources, host: host, item: item, descriptor: d, regionOfVertex: regionOfVertex)
         let meshId = "mesh:garment:\(item.id)"
         let nodeId = "node:garment:\(item.id)"
         let mesh = CompiledMesh(id: meshId, name: "Garment_\(item.id)", primitives: [builder.primitive(materialId: materialId, skinned: true)])
         let info = GarmentInfo(id: item.id, preset: d.id, meshId: meshId, layer: item.layer, offsetM: Double(offset), minClearanceM: Double(minClearance),
-                               coveredRegions: d.coreRegions, hiddenRegions: d.hiddenRegions)
+                               coveredRegions: d.coreRegions, hiddenRegions: d.hiddenRegions, uvIslands: [GarmentUVLayout.skirt.name, GarmentUVLayout.trim.name])
         return Build(mesh: mesh, meshNode: CompiledNode(id: nodeId, name: "Garment_\(item.id)"),
                      meshInstance: CompiledMeshInstance(nodeId: nodeId, meshId: meshId, skinId: host.bodySkin.id), info: info, warnings: warnings)
     }

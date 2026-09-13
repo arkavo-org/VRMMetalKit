@@ -75,6 +75,7 @@ final class WearableOutfitTests: XCTestCase {
         // Shell vertices come first (sorted covered order); collar/cuff/hem
         // trim vertices follow.
         XCTAssertEqual(prim.positions.count, covered.count + 192)
+        let regionOfVertex = WearableCompiler.regionMap(host: host)
         var matched = 0
         for (v, p) in prim.positions.enumerated() {
             let base = covered.min { V3.distance(host.bodyPositions[$0], p) < V3.distance(host.bodyPositions[$1], p) }!
@@ -83,7 +84,8 @@ final class WearableOutfitTests: XCTestCase {
             guard v < covered.count else { continue }
             XCTAssertLessThanOrEqual(shellDistance, Float(OutfitPresets.baseClearanceM) + 0.02, "cuff/hem shaping stays a small outward offset")
             XCTAssertEqual(joints[v], host.bodyJoints[base])
-            XCTAssertEqual(prim.uv0[v], host.bodyUV0[base])
+            let island = try XCTUnwrap(GarmentUVLayout.island(for: regionOfVertex[base] ?? "", kind: .top))
+            XCTAssertEqual(prim.uv0[v], island.map(host.bodyUV0[base]))
             XCTAssertLessThan(V3.distance(prim.normals[v], host.bodyNormals[base]), 1e-5)
             matched += 1
         }
@@ -204,5 +206,26 @@ final class WearableOutfitTests: XCTestCase {
         XCTAssertEqual(out.meshes[0].primitives[0].materialId, WearableCompiler.garmentMaterialFallbackId)
         let unknown = try WearableCompiler.compile(host: host, hair: [], outfits: [Fixtures.top()], accessories: [], materialsById: [:])
         XCTAssertEqual(unknown.warnings.map(\.code), ["MATERIAL_UNKNOWN"])
+    }
+
+    func testShellUVsLandInRegionIslandsAndTrimInTheTrimStrip() throws {
+        let out = try compile([Fixtures.top(length: 1), Fixtures.bottom(), Fixtures.footwear()])
+        for (id, kind) in [("shirt", OutfitKind.top), ("pants", .bottom), ("shoes", .footwear)] {
+            let prim = try garment(out, id)
+            let info = try XCTUnwrap(out.garments.first { $0.id == id })
+            let islands = GarmentUVLayout.islands(for: kind)
+            for uv in prim.uv0 { XCTAssertTrue(islands.contains { $0.contains(uv) }, "\(id) uv \(uv) lies outside every island") }
+            for a in islands { for b in islands where a.name < b.name {
+                let overlap = min(a.rect[2], b.rect[2]) - max(a.rect[0], b.rect[0]) > 1e-6 && min(a.rect[3], b.rect[3]) - max(a.rect[1], b.rect[1]) > 1e-6
+                XCTAssertFalse(overlap, "\(kind) islands \(a.name) and \(b.name) overlap")
+            } }
+            XCTAssertTrue(info.uvIslands.allSatisfy { name in islands.contains { $0.name == name } }, "\(id) \(info.uvIslands)")
+        }
+        let shirt = try garment(out, "shirt")
+        XCTAssertGreaterThan(shirt.uv0.filter { GarmentUVLayout.trim.contains($0) }.count, 0, "collar, cuffs and hem take trim UVs")
+        XCTAssertEqual(Set(out.garments.first { $0.id == "shirt" }!.uvIslands), ["torso", "upperArmL", "upperArmR", "forearmL", "forearmR", "trim"])
+        let skirt = try garment(try compile([Fixtures.skirt()]), "skirt")
+        XCTAssertTrue(skirt.uv0.allSatisfy { GarmentUVLayout.skirt.contains($0) || GarmentUVLayout.trim.contains($0) })
+        XCTAssertGreaterThan(skirt.uv0.filter { GarmentUVLayout.trim.contains($0) }.count, 0, "the skirt carries a hem band")
     }
 }

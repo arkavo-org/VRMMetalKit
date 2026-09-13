@@ -136,4 +136,22 @@ final class MaterialsCompositingTests: XCTestCase {
         var prng = SplitMix64(seed: 0)
         XCTAssertEqual(prng.next(), 0xE220_A839_7B1D_CDAF, "SplitMix64 reference output for seed 0")
     }
+
+    func testGarmentRasterHasADarkTrimStripAndNoWeave() {
+        let base = SIMD3<Float>(0.6, 0.6, 0.6)
+        let image = NativeAnimeTextures.garmentRaster(kind: .top, base: base, seed: 3)
+        func lum(_ p: SIMD4<Float>) -> Float { 0.2126 * p.x + 0.7152 * p.y + 0.0722 * p.z }
+        var body: Float = 0, trim: Float = 0, nb = 0, nt = 0
+        for y in stride(from: 0, to: image.height, by: 4) {
+            for x in stride(from: 0, to: image.width, by: 8) {
+                let uv = image.uv(x: x, y: y)
+                if uv.y > 0.905 { trim += lum(image[x, y]); nt += 1 }
+                else if uv.y < 0.85, uv.x > 0.05, uv.x < 0.45 { body += lum(image[x, y]); nb += 1 }
+            }
+        }
+        XCTAssertLessThan(trim / Float(nt), 0.85 * body / Float(nb), "trim strip reads darker than the torso island")
+        let row = (0..<image.width).map { lum(image[$0, image.height / 4]) }
+        XCTAssertLessThan(row.max()! - row.min()!, 0.06 * lum(SIMD4(base.x, base.y, base.z, 1)), "no high-frequency weave across a row")
+        XCTAssertEqual(image, NativeAnimeTextures.garmentRaster(kind: .top, base: base, seed: 4), "cloth is seed-independent")
+    }
 }
