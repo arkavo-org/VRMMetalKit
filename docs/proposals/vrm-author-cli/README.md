@@ -50,13 +50,13 @@ Use four distinct authorities, recorded in every relevant control descriptor:
    suitable topology or a good render. The [VRM specification](https://github.com/vrm-c/vrm-specification/tree/master/specification)
    separates core avatar data, MToon, spring bones and node constraints.
 2. **Style targets:** the in-tree VRoid-lineage
-   [profile](../../style/profiles/vroid-lineage-anime.json) (v0.1.0),
+   [profile](../../style/profiles/vroid-lineage-anime.json) (v0.2.0),
    [linter](../../../scripts/style_lint.py) and
    [corpus manifest](../../style/corpus/vroid-lineage-anime.manifest.json),
    originating in PR #436. The content hash is the pin and no commit is; the
    authoritative table is [verification.md §2](verification.md):
-   - `scripts/style_lint.py` sha256 `01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881`
-   - `docs/style/profiles/vroid-lineage-anime.json` (v0.1.0) sha256 `7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35`
+   - `scripts/style_lint.py` sha256 `efa1dc11a57c7fd2e7a4ff2e704e2b4f19adeb63c11a6172834b405b0e7a5346`
+   - `docs/style/profiles/vroid-lineage-anime.json` (v0.2.0) sha256 `0579dc1d76d4bfad2fc44de9c9e6c129d092f55aee7c3faeb165f8141cd58aa4`
    - `docs/style/corpus/vroid-lineage-anime.manifest.json` sha256 `b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6`
 
    Bounds are empirical targets; fingerprints never become generation constraints. The

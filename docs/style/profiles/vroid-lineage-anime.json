@@ -1,6 +1,6 @@
 {
   "id": "vroid-lineage-anime",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "title": "VRoid-lineage anime style profile",
   "description": "The de facto 'VRM anime' look as practised by VRoid Studio exports and hand-tuned derivatives: proportions as bone ratios and head counts, a three-tier MToon factor-shading convention (face region never fully shaded under direct light, body/cloth hard two-tone, hair up to a soft two-tone), inverted-hull outlines on surfaces but not on facial features, layered translucent eye materials, spring-bone hair, and a VRoid-typical performance budget. Envelopes are measured from the corpus below and regenerated with `style_lint.py envelopes --write`; fingerprint rules record tool constants and are informational only. pixiv documents the face convention and the gamma-to-linear change for VRoid Studio stable (https://vroid.pixiv.help/hc/en-us/articles/4405597671193): 'shades are weaker at the front and follow the face outline'. This profile is the numerical characterisation of that behaviour.",
   "corpus": {
@@ -92,7 +92,12 @@
     "material.emissive_luminance": "luminance of emissiveFactor.",
     "material.*": "VRM 0.x MToon properties are converted to 1.0 space following three-vrm's VRMMaterialsV0CompatPlugin: colour factors (_Color rgb, _ShadeColor, _EmissionColor, _RimColor, _OutlineColor) are sRGB-decoded to linear because 0.x stores gamma-space colours and 1.0 stores linear (exact sRGB EOTF as in UniVRM and VRoid's exporter; three-vrm approximates with pow 2.2); shadingToony = lerp(_ShadeToony, 1, 0.5 + 0.5·_ShadeShift); shadingShift = −_ShadeShift − (1 − shadingToony); giEqualization = 1 − _IndirectLightIntensity; transparent render queues map in order to offsets −9…0; _UvAnimScrollY flips sign. Shading-shift textures, shade textures, normals and renderer shadowing are not sampled: every shading metric here is a factor-only, direct-light statement.",
     "mtoon_defaults": "Absent MToon 1.0 fields take the schema defaults (VRMC_materials_mtoon.schema.json): shadeColorFactor [1,1,1], shadingToony 0.9, shadingShift 0, giEqualization 0.9, rim fresnel 5, rim lift 0, rimLightingMix 1. The MToon prose describes a black default shade colour while the schema says white; the linter follows the schema. VRoid always writes the field, so the corpus is unaffected.",
-    "asset.vrm0_material_properties_aligned": "VRM 0.x only: len(VRM.materialProperties) == len(materials). UniVRM writes one entry per glTF material (placeholders for non-MToon shaders) and pairs them by index; an exporter that skips entries cannot be paired safely. null on VRM 1.0."
+    "asset.vrm0_material_properties_aligned": "VRM 0.x only: len(VRM.materialProperties) == len(materials). UniVRM writes one entry per glTF material (placeholders for non-MToon shaders) and pairs them by index; an exporter that skips entries cannot be paired safely. null on VRM 1.0.",
+    "girth.upper_arm_ratio": "silhouette extent (max of the two axes perpendicular to the bone) of skin-role vertices dominated by leftUpperArm over the middle 30 % of the segment, divided by height; null when fewer than 8 vertices qualify.",
+    "girth.lower_arm_ratio": "as girth.upper_arm_ratio for leftLowerArm→leftHand.",
+    "girth.thigh_ratio": "as girth.upper_arm_ratio for leftUpperLeg→leftLowerLeg (x/z extent).",
+    "girth.shin_ratio": "as girth.upper_arm_ratio for leftLowerLeg→leftFoot (x/z extent).",
+    "girth.neck_ratio": "as girth.upper_arm_ratio for neck→head (x/z extent)."
   },
   "material_roles": {
     "roles": [
@@ -574,6 +579,91 @@
         "min": 0.0,
         "median": 0.0,
         "max": 0.0
+      }
+    },
+    {
+      "id": "girth.upper_arm",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "girth.upper_arm_ratio",
+      "title": "Slim upper arms",
+      "check": {
+        "type": "range",
+        "min": 0.03,
+        "max": 0.11
+      },
+      "rationale": "Skin-role silhouette only; sleeves are excluded so a cardigan cannot mask a thick arm.",
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "21/22",
+        "n": 22,
+        "min": 0.0324,
+        "median": 0.0713,
+        "max": 0.1237
+      }
+    },
+    {
+      "id": "girth.thigh",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "girth.thigh_ratio",
+      "title": "Thigh silhouette",
+      "check": {
+        "type": "range",
+        "min": 0.06,
+        "max": 0.22
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.0718,
+        "median": 0.1026,
+        "max": 0.2136
+      }
+    },
+    {
+      "id": "girth.shin",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "girth.shin_ratio",
+      "title": "Shin silhouette",
+      "check": {
+        "type": "range",
+        "min": 0.04,
+        "max": 0.1
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "21/22",
+        "n": 22,
+        "min": 0.0528,
+        "median": 0.0655,
+        "max": 0.2407
+      }
+    },
+    {
+      "id": "girth.neck",
+      "class": "aesthetic",
+      "severity": "should",
+      "metric": "girth.neck_ratio",
+      "title": "Neck silhouette",
+      "check": {
+        "type": "range",
+        "min": 0.03,
+        "max": 0.13
+      },
+      "provenance": {
+        "source": "corpus",
+        "effective_n": 18,
+        "conforming": "22/22",
+        "n": 22,
+        "min": 0.0431,
+        "median": 0.0515,
+        "max": 0.1258
       }
     },
     {

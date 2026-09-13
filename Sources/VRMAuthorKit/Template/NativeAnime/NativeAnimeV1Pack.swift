@@ -34,7 +34,7 @@ public struct NativeAnimeV1Pack: TemplatePack {
     public static let eyeLeftMeshId = "mesh.eyeL"
     public static let eyeRightMeshId = "mesh.eyeR"
     public static let styleProfilePath = "docs/style/profiles/vroid-lineage-anime.json"
-    public static let styleProfileSha256 = "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
+    public static let styleProfileSha256 = "0579dc1d76d4bfad2fc44de9c9e6c129d092f55aee7c3faeb165f8141cd58aa4"
     static let manifestPlaceholderHash = String(repeating: "0", count: 64)
 
     public let id = NativeAnimeV1Pack.packId

@@ -367,7 +367,7 @@ final class MaterialsPackTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.assetsDirectory.appendingPathComponent(StyleToolchain.pinnedProfileSHA256).path))
         let state = try store.state()
         XCTAssertEqual(state.style?["profile"]?["id"], "vroid-lineage-anime")
-        XCTAssertEqual(state.style?["profile"]?["version"], "0.1.0")
+        XCTAssertEqual(state.style?["profile"]?["version"], "0.2.0")
         XCTAssertEqual(state.style?["profile"]?["sha256"], .string(StyleToolchain.pinnedProfileSHA256))
         XCTAssertEqual(state.style?["profile"]?["pinned"], true)
         XCTAssertEqual(state.style?["roles"]?.array?.count, 13)
@@ -394,8 +394,8 @@ final class MaterialsPackTests: XCTestCase {
     func testHandlersAreRegisteredAndPinsMatchVerificationTable() throws {
         let registry = Registry.v1()
         for name in MaterialsHandlers.names { XCTAssertTrue(registry.operation(named: name)?.isRunnable ?? false, name) }
-        XCTAssertEqual(StyleToolchain.pinnedLinterSHA256, "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881")
-        XCTAssertEqual(StyleToolchain.pinnedProfileSHA256, "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35")
+        XCTAssertEqual(StyleToolchain.pinnedLinterSHA256, "efa1dc11a57c7fd2e7a4ff2e704e2b4f19adeb63c11a6172834b405b0e7a5346")
+        XCTAssertEqual(StyleToolchain.pinnedProfileSHA256, "0579dc1d76d4bfad2fc44de9c9e6c129d092f55aee7c3faeb165f8141cd58aa4")
         let diagnosis = StyleToolchain.diagnose(context: MaterialsTestSupport.context())
         XCTAssertEqual(diagnosis["styleLinter"]?["matches"], true)
         XCTAssertEqual(diagnosis["styleProfile"]?["matches"], true)

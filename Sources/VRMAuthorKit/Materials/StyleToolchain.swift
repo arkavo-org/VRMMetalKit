@@ -19,8 +19,8 @@ import Foundation
 /// Locates and hash-verifies the pinned style oracles (verification.md §2)
 /// and runs `python3 scripts/style_lint.py lint --profile P --json FILE`.
 public struct StyleToolchain: Sendable {
-    public static let pinnedLinterSHA256 = "01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881"
-    public static let pinnedProfileSHA256 = "7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35"
+    public static let pinnedLinterSHA256 = "efa1dc11a57c7fd2e7a4ff2e704e2b4f19adeb63c11a6172834b405b0e7a5346"
+    public static let pinnedProfileSHA256 = "0579dc1d76d4bfad2fc44de9c9e6c129d092f55aee7c3faeb165f8141cd58aa4"
     public static let linterRelativePath = "scripts/style_lint.py"
     public static let profileRelativePath = "docs/style/profiles/vroid-lineage-anime.json"
     public static let linterEnvironmentKey = "VRM_AUTHOR_STYLE_LINTER"

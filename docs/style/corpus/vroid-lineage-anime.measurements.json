@@ -119,6 +119,13 @@
     "ipd_head_width_ratio": 0.1516,
     "head_width_height_ratio": 0.8013
    },
+   "girth": {
+    "upper_arm_ratio": 0.0963,
+    "lower_arm_ratio": 0.0632,
+    "thigh_ratio": 0.1244,
+    "shin_ratio": 0.0583,
+    "neck_ratio": 0.0457
+   },
    "springs": {
     "chains": 12,
     "joints": 46,
@@ -1279,6 +1286,13 @@
     "head_width_m": 0.1932,
     "ipd_head_width_ratio": 0.1516,
     "head_width_height_ratio": 0.8013
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0963,
+    "lower_arm_ratio": 0.0632,
+    "thigh_ratio": 0.1244,
+    "shin_ratio": 0.0583,
+    "neck_ratio": 0.0457
    },
    "springs": {
     "chains": 12,
@@ -2446,6 +2460,13 @@
     "head_width_m": 0.1845,
     "ipd_head_width_ratio": 0.162,
     "head_width_height_ratio": 0.7773
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0804,
+    "lower_arm_ratio": 0.0845,
+    "thigh_ratio": 0.1373,
+    "shin_ratio": 0.0572,
+    "neck_ratio": 0.0445
    },
    "springs": {
     "chains": 22,
@@ -3750,6 +3771,13 @@
     "head_width_m": 0.1925,
     "ipd_head_width_ratio": 0.1424,
     "head_width_height_ratio": 0.8755
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0465,
+    "lower_arm_ratio": 0.0385,
+    "thigh_ratio": 0.0928,
+    "shin_ratio": 0.0658,
+    "neck_ratio": 0.0596
    },
    "springs": {
     "chains": 20,
@@ -5266,6 +5294,13 @@
     "head_width_m": 0.212,
     "ipd_head_width_ratio": 0.1457,
     "head_width_height_ratio": 0.7905
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0602,
+    "lower_arm_ratio": 0.0746,
+    "thigh_ratio": 0.116,
+    "shin_ratio": 0.0905,
+    "neck_ratio": 0.0995
    },
    "springs": {
     "chains": 36,
@@ -6919,6 +6954,13 @@
     "ipd_head_width_ratio": 0.1584,
     "head_width_height_ratio": 0.8025
    },
+   "girth": {
+    "upper_arm_ratio": 0.0453,
+    "lower_arm_ratio": 0.0382,
+    "thigh_ratio": 0.0919,
+    "shin_ratio": 0.0651,
+    "neck_ratio": 0.0639
+   },
    "springs": {
     "chains": 69,
     "joints": 251,
@@ -8361,6 +8403,13 @@
     "head_width_m": 0.1876,
     "ipd_head_width_ratio": 0.1546,
     "head_width_height_ratio": 0.8087
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0408,
+    "lower_arm_ratio": 0.0343,
+    "thigh_ratio": 0.0827,
+    "shin_ratio": 0.0586,
+    "neck_ratio": 0.0567
    },
    "springs": {
     "chains": 68,
@@ -9870,6 +9919,13 @@
     "head_width_m": 0.1873,
     "ipd_head_width_ratio": 0.1345,
     "head_width_height_ratio": 0.7607
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0982,
+    "lower_arm_ratio": 0.0671,
+    "thigh_ratio": 0.2136,
+    "shin_ratio": 0.0859,
+    "neck_ratio": 0.1258
    },
    "springs": {
     "chains": 41,
@@ -11518,6 +11574,13 @@
     "ipd_head_width_ratio": 0.125,
     "head_width_height_ratio": 0.8174
    },
+   "girth": {
+    "upper_arm_ratio": 0.0706,
+    "lower_arm_ratio": 0.0645,
+    "thigh_ratio": 0.1483,
+    "shin_ratio": 0.0851,
+    "neck_ratio": 0.0603
+   },
    "springs": {
     "chains": 33,
     "joints": 120,
@@ -12761,6 +12824,13 @@
     "ipd_head_width_ratio": 0.159,
     "head_width_height_ratio": 0.8453
    },
+   "girth": {
+    "upper_arm_ratio": 0.0432,
+    "lower_arm_ratio": 0.0364,
+    "thigh_ratio": 0.0843,
+    "shin_ratio": 0.062,
+    "neck_ratio": 0.0479
+   },
    "springs": {
     "chains": 23,
     "joints": 88,
@@ -13725,6 +13795,13 @@
     "head_width_m": 0.2562,
     "ipd_head_width_ratio": 0.135,
     "head_width_height_ratio": 0.9644
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0844,
+    "lower_arm_ratio": 0.0361,
+    "thigh_ratio": 0.109,
+    "shin_ratio": 0.0771,
+    "neck_ratio": 0.0474
    },
    "springs": {
     "chains": 25,
@@ -14835,6 +14912,13 @@
     "ipd_head_width_ratio": 0.1458,
     "head_width_height_ratio": 0.9013
    },
+   "girth": {
+    "upper_arm_ratio": 0.0388,
+    "lower_arm_ratio": null,
+    "thigh_ratio": 0.0878,
+    "shin_ratio": 0.0621,
+    "neck_ratio": 0.046
+   },
    "springs": {
     "chains": 22,
     "joints": 79,
@@ -15869,6 +15953,13 @@
     "head_width_m": 0.2177,
     "ipd_head_width_ratio": 0.1654,
     "head_width_height_ratio": 0.7826
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0733,
+    "lower_arm_ratio": 0.044,
+    "thigh_ratio": 0.0995,
+    "shin_ratio": 0.0797,
+    "neck_ratio": 0.0517
    },
    "springs": {
     "chains": 20,
@@ -16971,6 +17062,13 @@
     "head_width_m": 0.2279,
     "ipd_head_width_ratio": 0.1325,
     "head_width_height_ratio": 0.9764
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0719,
+    "lower_arm_ratio": 0.0358,
+    "thigh_ratio": 0.087,
+    "shin_ratio": 0.0745,
+    "neck_ratio": 0.0498
    },
    "springs": {
     "chains": 44,
@@ -18685,6 +18783,13 @@
     "ipd_head_width_ratio": 0.2641,
     "head_width_height_ratio": 0.7737
    },
+   "girth": {
+    "upper_arm_ratio": 0.0324,
+    "lower_arm_ratio": 0.0595,
+    "thigh_ratio": 0.0718,
+    "shin_ratio": 0.0528,
+    "neck_ratio": 0.0514
+   },
    "springs": {
     "chains": 18,
     "joints": 48,
@@ -18868,6 +18973,13 @@
     "head_width_m": 0.2369,
     "ipd_head_width_ratio": 0.1296,
     "head_width_height_ratio": 0.8711
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0986,
+    "lower_arm_ratio": 0.0955,
+    "thigh_ratio": 0.1536,
+    "shin_ratio": 0.06,
+    "neck_ratio": 0.0457
    },
    "springs": {
     "chains": 42,
@@ -20644,6 +20756,13 @@
     "ipd_head_width_ratio": 0.1527,
     "head_width_height_ratio": 0.6409
    },
+   "girth": {
+    "upper_arm_ratio": 0.0599,
+    "lower_arm_ratio": 0.0676,
+    "thigh_ratio": 0.1806,
+    "shin_ratio": 0.2407,
+    "neck_ratio": 0.1157
+   },
    "springs": {
     "chains": 20,
     "joints": 46,
@@ -22203,6 +22322,13 @@
     "ipd_head_width_ratio": 0.1628,
     "head_width_height_ratio": 0.971
    },
+   "girth": {
+    "upper_arm_ratio": 0.0589,
+    "lower_arm_ratio": 0.0912,
+    "thigh_ratio": 0.0788,
+    "shin_ratio": 0.0584,
+    "neck_ratio": 0.0431
+   },
    "springs": {
     "chains": 27,
     "joints": 80,
@@ -23443,6 +23569,13 @@
     "head_width_m": 0.2305,
     "ipd_head_width_ratio": 0.1436,
     "head_width_height_ratio": 0.9013
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0433,
+    "lower_arm_ratio": 0.0364,
+    "thigh_ratio": 0.0877,
+    "shin_ratio": 0.0621,
+    "neck_ratio": 0.0479
    },
    "springs": {
     "chains": 28,
@@ -24687,6 +24820,13 @@
     "head_width_m": 0.1717,
     "ipd_head_width_ratio": 0.1474,
     "head_width_height_ratio": 0.828
+   },
+   "girth": {
+    "upper_arm_ratio": 0.1237,
+    "lower_arm_ratio": 0.0906,
+    "thigh_ratio": 0.2092,
+    "shin_ratio": 0.0765,
+    "neck_ratio": 0.0735
    },
    "springs": {
     "chains": 28,
@@ -26133,6 +26273,13 @@
     "ipd_head_width_ratio": 0.1361,
     "head_width_height_ratio": 0.7674
    },
+   "girth": {
+    "upper_arm_ratio": 0.0872,
+    "lower_arm_ratio": 0.0797,
+    "thigh_ratio": 0.0922,
+    "shin_ratio": 0.0725,
+    "neck_ratio": 0.0826
+   },
    "springs": {
     "chains": 25,
     "joints": 89,
@@ -27305,6 +27452,13 @@
     "head_width_m": 0.1973,
     "ipd_head_width_ratio": 0.1662,
     "head_width_height_ratio": 0.7369
+   },
+   "girth": {
+    "upper_arm_ratio": 0.0805,
+    "lower_arm_ratio": 0.0867,
+    "thigh_ratio": 0.1056,
+    "shin_ratio": 0.0957,
+    "neck_ratio": 0.1027
    },
    "springs": {
     "chains": 23,

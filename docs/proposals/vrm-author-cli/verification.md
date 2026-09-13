@@ -84,13 +84,13 @@ is reported in the result manifest for provenance and is not itself a check.
 
 | Oracle | Path | sha256 |
 |---|---|---|
-| Style linter (global) | [`scripts/style_lint.py`](../../../scripts/style_lint.py) | `01679f040546fa76b6c4b8f6c84244388201ad04f0f449157c5ec634716b5881` |
+| Style linter (global) | [`scripts/style_lint.py`](../../../scripts/style_lint.py) | `efa1dc11a57c7fd2e7a4ff2e704e2b4f19adeb63c11a6172834b405b0e7a5346` |
 
 **Style set `vroid-lineage-anime`:**
 
 | Oracle | Path | sha256 |
 |---|---|---|
-| Profile v0.1.0 | [`docs/style/profiles/vroid-lineage-anime.json`](../../style/profiles/vroid-lineage-anime.json) | `7eeb1f41bada650d39b7c32a31c273bbd889cca22d390164b8a7dd9b1f9c1f35` |
+| Profile v0.2.0 | [`docs/style/profiles/vroid-lineage-anime.json`](../../style/profiles/vroid-lineage-anime.json) | `0579dc1d76d4bfad2fc44de9c9e6c129d092f55aee7c3faeb165f8141cd58aa4` |
 | Corpus manifest | [`docs/style/corpus/vroid-lineage-anime.manifest.json`](../../style/corpus/vroid-lineage-anime.manifest.json) | `b393eb0c8c49050caab772f8bdd6ad884d6dd027ad310249ae9805a22b1a8cb6` |
 | Measurements | [`docs/style/corpus/vroid-lineage-anime.measurements.json`](../../style/corpus/vroid-lineage-anime.measurements.json) | `c71ab0f1fbdb268b7eb66e04b18a84a103e8a4649a5d49887560a196a10e35bc` |
 | Witnesses, `native-anime-v1` | [`docs/style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json`](../../style/corpus/vroid-lineage-anime.witnesses.native-anime-v1.json) | `20635cf23e0c2214a49e82c0af269976cc2739d068dad4426eddaf0b72b6e803` |

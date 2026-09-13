@@ -46,7 +46,7 @@ final class StyleLintTests: XCTestCase {
         XCTAssertEqual(envelope.status, .succeeded)
         XCTAssertEqual(envelope.result?["verdict"], "conforming")
         XCTAssertEqual(envelope.result?["report"]?["profile"], "vroid-lineage-anime")
-        XCTAssertEqual(envelope.result?["report"]?["profile_version"], "0.1.0")
+        XCTAssertEqual(envelope.result?["report"]?["profile_version"], "0.2.0")
         XCTAssertEqual(envelope.result?["report"]?["summary"]?["must"]?["fail"], 0)
         XCTAssertEqual(envelope.result?["report"]?["summary"]?["should"]?["fail"], 0)
         XCTAssertEqual(envelope.result?["oracleHashes"]?[StyleToolchain.linterRelativePath], .string(StyleToolchain.pinnedLinterSHA256))
@@ -110,7 +110,7 @@ final class StyleLintTests: XCTestCase {
         XCTAssertEqual(degenerate.exitCode, .gateFailed)
         XCTAssertEqual(degenerate.result?["verdict"], "nonconforming")
         XCTAssertEqual(degenerate.result?["report"]?["summary"]?["must"]?["fail"], 5)
-        XCTAssertEqual(degenerate.result?["report"]?["summary"]?["should"]?["fail"], 19)
+        XCTAssertEqual(degenerate.result?["report"]?["summary"]?["should"]?["fail"], 23)
         XCTAssertEqual(degenerate.errors.count, 5)
 
         let negative = lint(MaterialsTestSupport.acceptanceFixtures.appendingPathComponent("negative-not-a-glb.bin"))

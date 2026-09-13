@@ -463,6 +463,8 @@ def measure(path, role_overrides=None):
     allmin, allmax = np.full(3, np.inf), np.full(3, -np.inf)
     head_pts, skinned_meshes, max_morphs = [], 0, 0
     mat_vertex_counts = {}
+    roles = [assign_role(name, role_overrides) for name, _ in mats]
+    skin_pts, skin_dom = [], []
     for ni, n in enumerate(nodes):
         if "mesh" not in n:
             continue
@@ -486,6 +488,9 @@ def measure(path, role_overrides=None):
                 Wt = accessor_array(js, bin_, prim["attributes"]["WEIGHTS_0"]).astype(np.float64)
                 dom = np.asarray(joints)[J[np.arange(len(J)), Wt.argmax(1)]]
                 head_pts.append(Pw[np.isin(dom, list(head_set))])
+                if mid is not None and mid < len(roles) and roles[mid] in ("body_skin", "face_skin"):
+                    skin_pts.append(Pw)
+                    skin_dom.append(dom)
     H = float(allmax[1] - min(allmin[1], 0.0))
     verts = sum(js["accessors"][i]["count"] for i in position_accessors)
     A.update(triangles=int(tri), vertices=int(verts), vertex_references=int(vert_refs), skinned_meshes=skinned_meshes, morph_targets_max=int(max_morphs),
@@ -551,6 +556,31 @@ def measure(path, role_overrides=None):
         P_.update(head_height_m=None, head_count=None, head_bone_fraction=None, eye_height_in_head=None, head_width_m=None,
                   ipd_head_width_ratio=None, head_width_height_ratio=None)
     M["proportions"] = P_
+
+    # ---- girth: silhouette extent of skin-role vertices dominated by a bone, over the
+    # middle 30 % of the bone segment, perpendicular to the segment, divided by height.
+    sp = np.concatenate(skin_pts) if skin_pts else np.zeros((0, 3))
+    sd = np.concatenate(skin_dom) if skin_dom else np.zeros((0,), dtype=np.int64)
+
+    def girth(bone, child, axes):
+        if bone not in bones or child not in pos:
+            return None
+        sel = sp[sd == bones[bone]]
+        if len(sel) == 0:
+            return None
+        a, b = pos[bone], pos[child]
+        seg = b - a
+        t = ((sel - a) @ seg) / max(float(seg @ seg), 1e-9)
+        sel = sel[(t > 0.35) & (t < 0.65)]
+        if len(sel) < 8:
+            return None
+        return round(max(float(sel[:, i].max() - sel[:, i].min()) for i in axes) / H, 4)
+
+    M["girth"] = {"upper_arm_ratio": girth("leftUpperArm", "leftLowerArm", (1, 2)),
+                  "lower_arm_ratio": girth("leftLowerArm", "leftHand", (1, 2)),
+                  "thigh_ratio": girth("leftUpperLeg", "leftLowerLeg", (0, 2)),
+                  "shin_ratio": girth("leftLowerLeg", "leftFoot", (0, 2)),
+                  "neck_ratio": girth("neck", "head", (0, 2))}
 
     # ---- textures
     imgs = []

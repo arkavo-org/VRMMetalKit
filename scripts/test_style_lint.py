@@ -100,6 +100,61 @@ def minimal_vrm(bones, children_cycle=False):
     return js, buf
 
 
+def skinned_arm_vrm(skin_width, cloth_width):
+    """VRM 1.0 GLB with a T-pose left arm and two skinned 12-segment cylinders along
+    leftUpperArm→leftLowerArm: one named as skin, one (wider) named as cloth."""
+    names = ["hips", "spine", "head", "leftUpperArm", "leftLowerArm", "rightUpperArm", "leftUpperLeg", "rightUpperLeg"]
+    world = {"hips": (0, 0.9, 0), "spine": (0, 1.1, 0), "head": (0, 1.55, 0), "leftUpperArm": (0.2, 1.3, 0), "leftLowerArm": (0.45, 1.3, 0),
+             "rightUpperArm": (-0.2, 1.3, 0), "leftUpperLeg": (0.08, 0.85, 0), "rightUpperLeg": (-0.08, 0.85, 0)}
+    nodes = [{"name": n, "translation": [float(c) for c in world[n]]} for n in names]
+    ua = names.index("leftUpperArm")
+
+    def cylinder(width):
+        pts, idx = [], []
+        for k in range(12):
+            a = 2 * np.pi * k / 12
+            for t in (0.4, 0.6):
+                pts.append((0.2 + 0.25 * t, 1.3 + 0.5 * width * np.cos(a), 0.5 * width * np.sin(a)))
+        for k in range(12):
+            a, b = 2 * k, 2 * ((k + 1) % 12)
+            idx += [a, a + 1, b, b, a + 1, b + 1]
+        return np.array(pts, np.float32), np.array(idx, np.uint16)
+
+    buf, views, accessors, prims = b"", [], [], []
+
+    def push(arr, ctype, atype, extra=None):
+        nonlocal buf
+        views.append({"buffer": 0, "byteOffset": len(buf), "byteLength": arr.nbytes})
+        accessors.append({"bufferView": len(views) - 1, "componentType": ctype, "count": len(arr), "type": atype, **(extra or {})})
+        buf += arr.tobytes()
+        buf += b"\0" * (-len(buf) % 4)
+        return len(accessors) - 1
+
+    for mi, width in enumerate((skin_width, cloth_width)):
+        P, I = cylinder(width)
+        J = np.zeros((len(P), 4), np.uint16)
+        J[:, 0] = ua
+        Wt = np.zeros((len(P), 4), np.float32)
+        Wt[:, 0] = 1
+        attrs = {"POSITION": push(P, 5126, "VEC3", {"min": P.min(0).tolist(), "max": P.max(0).tolist()}),
+                 "JOINTS_0": push(J, 5123, "VEC4"), "WEIGHTS_0": push(Wt, 5126, "VEC4")}
+        prims.append({"attributes": attrs, "indices": push(I, 5123, "SCALAR"), "material": mi})
+    ibm = np.zeros((len(names), 16), np.float32)
+    for i, n in enumerate(names):
+        ibm[i, [0, 5, 10, 15]] = 1
+        ibm[i, 12:15] = -np.array(world[n], np.float32)
+    ibm_acc = push(ibm, 5126, "MAT4")
+    nodes.append({"name": "mesh", "mesh": 0, "skin": 0})
+    js = {"asset": {"version": "2.0"}, "nodes": nodes, "meshes": [{"primitives": prims}],
+          "skins": [{"joints": list(range(len(names))), "inverseBindMatrices": ibm_acc}],
+          "accessors": accessors, "bufferViews": views, "buffers": [{"byteLength": len(buf)}],
+          "materials": [{"name": "Body_00_SKIN"}, {"name": "Tops_01_CLOTH"}],
+          "extensions": {"VRMC_vrm": {"specVersion": "1.0", "humanoid": {"humanBones": {n: {"node": i} for i, n in enumerate(names)}},
+                                      "meta": {"name": "arm", "authors": ["t"], "licenseUrl": "https://vrm.dev/licenses/1.0/"},
+                                      "expressions": {"preset": {}}, "lookAt": {"type": "bone"}}}}
+    return js, buf
+
+
 class RobustnessTests(unittest.TestCase):
     MINIMAL_BONES = ["hips", "spine", "head", "leftUpperArm", "rightUpperArm", "leftUpperLeg", "rightUpperLeg"]
 
@@ -132,6 +187,13 @@ class RobustnessTests(unittest.TestCase):
     def test_jpeg_zero_length_segment_terminates(self):
         data = b"\xff\xd8\xff\xe0\x00\x00" + b"\x00" * 16
         self.assertIsNone(L.image_size(data))
+
+    def test_girth_measures_skin_role_silhouette_only(self):
+        M = self.measure(*skinned_arm_vrm(skin_width=0.10, cloth_width=0.30))
+        H = M["asset"]["height_m"]
+        self.assertAlmostEqual(M["girth"]["upper_arm_ratio"], 0.10 / H, places=3)
+        for k in ("lower_arm_ratio", "thigh_ratio", "shin_ratio", "neck_ratio"):
+            self.assertIsNone(M["girth"][k], k)
 
 
 class CorpusTests(unittest.TestCase):

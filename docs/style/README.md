@@ -85,6 +85,17 @@ VRM file does not encode this, so role assignment is an **input** to the linter:
 Role groups (`face_region`, `facial_feature`, `surface`, `skin`, `lit_cutout`) let rules
 address several roles at once.
 
+## Girth metrics
+
+`girth.*` metrics measure the body's silhouette, not its bones: for each of
+leftUpperArm, leftLowerArm, leftUpperLeg, leftLowerLeg and neck, the vertices
+of skin-role primitives (`face_skin`, `body_skin`) whose dominant joint is that
+bone and that sit in the middle 30 % of the bone segment are projected onto the
+two axes perpendicular to the bone; the larger extent divided by height is the
+metric. Cloth is excluded on purpose, so a puffed sleeve cannot hide a thick
+arm and a bare arm is measured the same way on every asset. Assets with fewer
+than eight qualifying vertices report `null`, which fails the rule.
+
 ## What the first profile found
 
 The VRoid-lineage look, measured rather than assumed:
