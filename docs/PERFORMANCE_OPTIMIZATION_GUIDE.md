@@ -2,6 +2,113 @@
 
 This guide explains how to use the performance optimizations in VRMMetalKit to achieve sub-2-second loading for 20MB VRM files.
 
+## Animated crowds
+
+Use `VRMCrowdRenderer` to schedule independently animated avatars and draw them
+into one render pass. Each avatar needs its own `VRMModel`, `VRMRenderer`, and
+`AnimationPlayer`; sharing a mutable model also shares its pose. Load each model,
+configure its camera and physics quality, then retain the scene across frames:
+
+```swift
+let crowd = VRMCrowdRenderer(
+    avatars: zip(renderers, players).map {
+        VRMCrowdRenderer.Avatar(renderer: $0.0, player: $0.1)
+    },
+    policy: .full
+)
+// Set each renderer's camera/placement before drawing. Use one producer and queue.
+crowd.draw(deltaTime: 1 / 60, viewportSize: viewportSize,
+           commandBuffer: commandBuffer, renderPassDescriptor: pass)
+commandBuffer.commit()
+```
+
+The host owns command-buffer submission, camera/placement, attachments, and any
+crowd-contact solver. Up to three frames can be in flight. Shared spring-bone
+inputs and completed-position snapshots are owned by their command buffer; they
+are recycled after completion. Pose writeback uses the latest completed physics
+frame, so asynchronous rendering still has physics latency. Drain outstanding
+work before replacing a model or switching between synchronous and asynchronous
+physics modes.
+
+`.full` updates every visible avatar at the supplied rate and configured physics
+quality. `.balanced` keeps the eight nearest avatars at full quality, samples
+background animation at 30 Hz, advances `.low` background physics on those
+samples using accumulated time, and freezes
+background morph computation. This is an explicit quality tradeoff, configurable
+through `Policy`. Skipped animation time accumulates and is consumed on the next
+sample. Offscreen avatars skip rendering, morphs, skinning, and physics; animation
+samples at 5 Hz so pose-driven bounds can re-enter view. Sampling phases are
+staggered across avatars to distribute CPU work. Root-motion players
+sample every frame. Use `alwaysUpdate: true` for avatars whose offscreen physics
+or contacts affect gameplay; these also keep full quality regardless of budget.
+Set `renderer.skipPreDrawTransformUpdate = true` only when all pose writers
+(including external placement) already propagate world transforms; this also
+skips the scheduler's pre-culling safety walk. The benchmark uses this setting
+because placement is in the camera matrix and `AnimationPlayer` owns pose updates.
+The scheduler uses the renderer's conservative inflated bounds, not occlusion
+queries. Transparent materials retain avatar submission order; it does not sort
+transparent triangles across avatars.
+
+Per-target morph compatibility buffers now allocate only when a caller reads
+`morphPositionBuffers`, `morphNormalBuffers`, or `morphTangentBuffers`. Rendering
+uses the flattened compute buffers. `legacyMorphBufferBytes` reports compatibility
+allocations without creating them. CPU morph arrays are retained for API compatibility.
+
+### Reproducible crowd benchmark
+
+```bash
+make bench-crowd BENCH_VRM=AvatarSample_U_1.0.vrm.glb BENCH_WARMUP=100
+make bench-crowd BENCH_VRM=AvatarSample_U_1.0.vrm.glb BENCH_CROWD_POLICY=balanced
+.build/release/VRMBenchmark AvatarSample_A_1.0.vrm.glb \
+  --mode crowd --avatar-count 64 --vrma VRMA_01.vrma --spring-bone \
+  --frames 500 --warmup 100 --frames-in-flight 3 --json /tmp/crowd-full.json
+```
+
+Crowd mode always advances animation and physics by `1 / --fps` (default 60),
+uses independent models in a grid, preserves depth, and totals counters across
+every avatar. `--avatar-count` greater than one in render mode selects crowd mode.
+Use `--crowd-submit individual` to compare separate passes with the shared pass,
+`--frames-in-flight 1` for a serial reference, `--crowd-layout stack` for overdraw,
+and `--camera-offset-y 100` to exercise whole-avatar culling.
+
+`render` measures each CPU submission iteration including backpressure; `cpuBudget`
+is scheduling, animation and encoding without GPU waits. `gpu` is measured once
+per scene command buffer. Drained throughput includes completion of the final
+frames. Per-phase samples sum each avatar's work in that scene frame before
+computing percentiles. JSON includes the GPU, OS version, workload, mean scene
+counters and Metal allocation bytes; the latter is allocated GPU-resource memory,
+not process RSS. Baseline gating rejects differing crowd workloads. Always compare
+the same model, animation, quality, layout, resolution and hardware. A 60 FPS result
+on one Apple Silicon GPU does not establish that target across the entire family.
+
+### Measured crowd envelope
+
+Release measurements on an Apple M4 Max (128 GiB), macOS 27.0, 1024×1024,
+MSAA 1×, 64 independent copies of the bundled avatar, `VRMA_01.vrma`, 100 warmup
+and 500 measured frames, three frames in flight. Full quality uses `.ultra`
+physics. These clips drive skeletal animation; morph dispatches were zero and
+cross-avatar contacts were not enabled.
+
+| Workload | Frame median | Frame p95 | GPU p95 | Metal allocated |
+|---|---:|---:|---:|---:|
+| Sample A, full, individual passes | 11.81 ms | 12.46 ms | 9.67 ms | 10.37 GiB |
+| Sample A, full, shared pass | 11.27 ms | 11.81 ms | 3.93 ms | 10.37 GiB |
+| Sample U, full, shared pass | 20.98 ms | 22.31 ms | 4.70 ms | 16.68 GiB |
+| Sample U, balanced, shared pass | 14.69 ms | 15.55 ms | 4.09 ms | 16.63 GiB |
+| Sample U, offscreen | 1.43 ms | 1.52 ms | 0.01 ms | 16.62 GiB |
+
+Sample A meets the 16.67 ms p95 target at full quality. Sample U reaches it with
+an explicit quality reduction (69.8 FPS drained throughput). A preceding run
+measured 16.61 ms p95, so allow for variation and additional application work;
+full-quality Sample U remains CPU-bound. Shared passes preserve
+1,280 draws for A and 1,920 for U, but remove repeated attachment load/store work.
+This implementation does not use indirect command buffers or impostors. Those,
+plus immutable asset sharing and further pose/encoding batching, remain follow-up
+work for heavier crowds and Macs with less memory. The offscreen run submits zero
+draws. Compatibility morph storage stays at zero bytes in every run; the former
+eager layout would allocate about 3.09 GiB for 64 A avatars or 3.69 GiB for 64 U
+avatars in addition to the compute representation.
+
 ## Quick Start
 
 ### Maximum Performance (Recommended)

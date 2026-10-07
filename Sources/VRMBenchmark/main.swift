@@ -50,6 +50,10 @@ struct BenchmarkOptions {
     var thresholdP95Pct: Double = 15.0
     var archiveDir: String? = nil            // --archive-dir DIR (pipeline mode)
     var avatarCount: Int = 1                  // --avatar-count N (Game of Mods multi-avatar)
+    var crowdPolicy: String = "full"
+    var crowdSubmit: String = "shared"
+    var crowdLayout: String = "grid"
+    var framesInFlight: Int = 3
     var avatarSpacing: Float = 1.2            // --avatar-spacing M (meters between avatars)
     var visionOSSubmit: String = "preferred"  // preferred | host
     var visionOSViews: Int = 2
@@ -67,7 +71,7 @@ func usage() {
                        animation playback so skinning and spring physics
                        do real work each frame (recommended).
       --mode NAME      Benchmark mode: render, animation, transforms, load,
-                       pipeline, visionos (default render). 'pipeline' needs
+                       pipeline, visionos, crowd (default render). 'pipeline' needs
                        no input model. 'visionos' is a stereo reverse-Z
                        compositor-shaped offscreen path (see --visionos-submit).
       --loading NAME   Loading options preset: default, safe, or max
@@ -101,8 +105,14 @@ func usage() {
                        binary archive in D. Run twice with the same D to compare
                        a cold first launch against a warm archive-loaded relaunch.
       --avatar-count N  Number of avatars to render (default 1).
-                         N copies of the model are placed in a row; tests
-                         multi-avatar throughput for Game of Mods.
+                         N independent models in a camera-fitted grid.
+                         --mode crowd uses this path even with one avatar.
+      --crowd-policy P full or balanced (8 heroes, background animation 30Hz,
+                         low physics, frozen background morphs). Default full.
+      --crowd-submit S shared (one pass) or individual. Default shared.
+      --crowd-layout L grid or stack (overdraw stress). Default grid.
+      --frames-in-flight N 1..3 for crowd mode (default 3); physics always
+                         advances by 1/fps, regardless of wall-clock speed.
       --avatar-spacing M Distance between avatars in meters (default 1.2).
       --visionos-submit S  preferred (simulate once, raster per eye) or
                          host (one drawOffscreen per eye). Default preferred.
@@ -206,7 +216,19 @@ func parseArguments() -> BenchmarkOptions? {
         case "--archive-dir":
             guard let v = nextValue(for: a) else { return nil }
             opts.archiveDir = v
-        case "--avatar-count":
+        case "--crowd-policy":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.crowdPolicy = v.lowercased()
+        case "--crowd-submit":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.crowdSubmit = v.lowercased()
+        case "--crowd-layout":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.crowdLayout = v.lowercased()
+        case "--frames-in-flight":
+            guard let v = nextValue(for: a) else { return nil }
+            opts.framesInFlight = Int(v) ?? 0
+        case "--avatar-count", "--count":
             guard let v = nextValue(for: a) else { return nil }
             opts.avatarCount = max(1, Int(v) ?? 1)
         case "--avatar-spacing":
@@ -243,6 +265,14 @@ func parseArguments() -> BenchmarkOptions? {
             usage(); return nil
         }
     }
+    guard opts.frames > 0, opts.warmup >= 0, opts.width > 0, opts.height > 0,
+          opts.fps.isFinite, opts.fps > 0, opts.avatarSpacing.isFinite, opts.avatarSpacing > 0,
+          (1...3).contains(opts.framesInFlight), ["full", "balanced"].contains(opts.crowdPolicy),
+          ["shared", "individual"].contains(opts.crowdSubmit), ["grid", "stack"].contains(opts.crowdLayout) else {
+        print("ERROR: invalid frame count, dimensions, rate, spacing, or crowd option")
+        exit(1)
+    }
+    if opts.mode == "render", opts.avatarCount > 1 { opts.mode = "crowd" }
     return opts
 }
 
@@ -369,7 +399,8 @@ private func systemDescriptor() -> BenchmarkReport.System {
 
 func makeReport(
     opts: BenchmarkOptions,
-    stats: [String: BenchmarkReport.FrameStatsSnapshot]
+    stats: [String: BenchmarkReport.FrameStatsSnapshot],
+    crowd: BenchmarkReport.Crowd? = nil
 ) -> BenchmarkReport {
     BenchmarkReport(
         timestamp: Date(),
@@ -385,10 +416,10 @@ func makeReport(
             height: opts.height,
             sampleCount: opts.sampleCount,
             loading: opts.loadingPreset,
-            springBoneQuality: (opts.mode == "render" || opts.mode == "visionos") ? opts.springBoneQuality : nil,
-            lighting: (opts.mode == "render" || opts.mode == "visionos") ? opts.lighting : nil),
+            springBoneQuality: (["render", "visionos", "crowd"].contains(opts.mode)) ? opts.springBoneQuality : nil,
+            lighting: (["render", "visionos", "crowd"].contains(opts.mode)) ? opts.lighting : nil),
         system: systemDescriptor(),
-        stats: stats)
+        stats: stats, crowd: crowd)
 }
 
 /// Writes the JSON report to `--json` destination (file path or stdout) and,
@@ -416,6 +447,14 @@ func finalizeReport(opts: BenchmarkOptions, report: BenchmarkReport) -> Int32 {
     do {
         let baseData = try Data(contentsOf: URL(fileURLWithPath: basePath))
         let baseline = try BenchmarkReport.decode(from: baseData)
+        if baseline.crowd != nil || report.crowd != nil {
+            guard baseline.crowd?.workload == report.crowd?.workload,
+                  baseline.config == report.config,
+                  baseline.input.vrm == report.input.vrm, baseline.input.vrma == report.input.vrma else {
+                print("ERROR: crowd baseline workload differs; use the same models, quality, layout and submission settings.")
+                return 1
+            }
+        }
         let threshold = BenchmarkComparison.Threshold(
             medianPercent: opts.thresholdMedianPct,
             p95Percent: opts.thresholdP95Pct)
@@ -553,6 +592,16 @@ struct VRMBenchmarkCLI {
         guard let commandQueue = device.makeCommandQueue() else {
             print("ERROR: failed to create command queue")
             exit(1)
+        }
+
+        if opts.mode == "crowd" {
+            do {
+                let report = try await runCrowdBenchmark(opts: opts, device: device, commandQueue: commandQueue)
+                exit(finalizeReport(opts: opts, report: report))
+            } catch {
+                print("ERROR: crowd benchmark failed: \(error)")
+                exit(1)
+            }
         }
 
         if opts.mode == "load" {
