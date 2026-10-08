@@ -93,6 +93,22 @@ final class BenchmarkReportTests: XCTestCase {
         }
     }
 
+
+    func testCrowdMetadataRoundTripsAndLegacyReportsRemainReadable() throws {
+        let legacy = makeReport(label: "legacy", render: (1, 2), encode: (0.5, 1))
+        XCTAssertNil(try BenchmarkReport.decode(from: legacy.encodeJSON()).crowd)
+        let crowd = BenchmarkReport.Crowd(
+            workload: .init(avatarCount: 64, spacing: 1.2, layout: "grid", policy: "full",
+                            submission: "shared", framesInFlight: 3, fps: 60, springBoneEnabled: true,
+                            outlineWidth: 0.02, cameraOffsetY: 0, depthPrepass: false, wireframe: false, debugUVs: 0),
+            device: "Test GPU", osVersion: "Test OS", metalAllocatedBytes: 1024,
+            legacyMorphBufferBytes: 0, loadMilliseconds: 10, wallMilliseconds: 100,
+            counters: ["drawCalls": 1280, "visibleAvatars": 64])
+        let report = BenchmarkReport(timestamp: legacy.timestamp, label: legacy.label, input: legacy.input,
+                                     config: legacy.config, system: legacy.system, stats: legacy.stats, crowd: crowd)
+        XCTAssertEqual(try BenchmarkReport.decode(from: report.encodeJSON()), report)
+    }
+
     // MARK: - Comparator: pass cases
 
     func testComparisonPassesWhenWithinThreshold() {

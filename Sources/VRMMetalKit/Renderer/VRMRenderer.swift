@@ -1306,7 +1306,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     /// Package-visible (not `private`) so tests can drive the fingerprint/gate
     /// bookkeeping directly across frames without a full render pass.
+    var updatesCrowdMorphs = true
+    var updatesCrowdPhysics = true
+
     func applyMorphTargetsCompute(commandBuffer: MTLCommandBuffer) -> [MorphKey: MTLBuffer] {
+        guard updatesCrowdMorphs else { return morphedBuffers }
         guard let model = model,
               let morphTargetSystem = morphTargetSystem else { return [:] }
 
@@ -1769,83 +1773,168 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     private func drawCore(viewport: ViewportSource, commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor) {
+        let lockedModel = model
+        lockedModel?.lock.lock()
+        defer { lockedModel?.lock.unlock() }
+        if !compositorSkipSimulation {
+            guard prepareFrame(commandBuffer: commandBuffer) else { return }
+        }
+        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) {
+            encodePreparedFrame(viewport: viewport, encoder: encoder)
+            encoder.endEncoding()
+        } else {
+            reportRenderEncoderFailure()
+        }
+        if !compositorDeferCompletion {
+            frameCounter += 1
+            finishOffscreenFrame(commandBuffer: commandBuffer)
+        }
+    }
+
+    /// Conservative posed bounds used to reject a whole avatar before compute preparation.
+    func crowdVisibility() -> (visible: Bool, distance: Float) {
+        guard let model else { return (false, .infinity) }
+        let local = model.modelLocalBounds
+        let inflation = (local.max - local.min) * 0.25
+        var transform = matrix_identity_float4x4
+        if let hips = model.humanoid?.getBoneNode(.hips), model.nodes.indices.contains(hips) {
+            transform = SkinnedCullBounds.cullModelMatrix(
+                hipsWorldPosition: model.nodes[hips].worldPosition,
+                restHipsWorldPosition: restHipsWorldPosition)
+        }
+        var bounds = AABBTransform.worldAABB(localMin: local.min - inflation,
+                                            localMax: local.max + inflation, modelMatrix: transform)
+        for node in model.nodes where node.skin == nil {
+            guard let index = node.mesh, model.meshes.indices.contains(index) else { continue }
+            for primitive in model.meshes[index].primitives where !primitive.hasJoints {
+                let rigid = AABBTransform.worldAABB(localMin: primitive.localMin,
+                    localMax: primitive.localMax, modelMatrix: node.worldMatrix)
+                bounds.min = simd_min(bounds.min, rigid.min)
+                bounds.max = simd_max(bounds.max, rigid.max)
+            }
+        }
+        let center = viewMatrix * SIMD4<Float>((bounds.min + bounds.max) * 0.5, 1)
+        let distance = simd_length(SIMD3<Float>(center.x, center.y, center.z))
+        return (!Frustum(viewProjection: projectionMatrix * viewMatrix).cullsAABB(min: bounds.min, max: bounds.max), distance)
+    }
+
+    /// Encodes multiple independently posed avatars into one render pass.
+    /// All compute preparation precedes the render encoder. Avatar order is
+    /// preserved, including each avatar's material and outline ordering.
+    /// The caller owns command-buffer submission and attachment load/store actions.
+    /// Supply each renderer and mutable model at most once and use one frame producer per renderer.
+    public static func encodeCrowd(
+        renderers: [VRMRenderer], viewportSize: CGSize,
+        commandBuffer: MTLCommandBuffer, renderPassDescriptor: MTLRenderPassDescriptor
+    ) {
+        precondition(Set(renderers.map(ObjectIdentifier.init)).count == renderers.count,
+                     "A crowd frame requires a distinct renderer for each avatar")
+        let models = renderers.compactMap(\.model).sorted {
+            UInt(bitPattern: ObjectIdentifier($0)) < UInt(bitPattern: ObjectIdentifier($1))
+        }
+        precondition(Set(models.map(ObjectIdentifier.init)).count == models.count,
+                     "Crowd renderers require distinct mutable models")
+        // Hold each pose stable from compute preparation through raster encoding.
+        // Stable lock order also permits other renderers to read these models safely.
+        for model in models { model.lock.lock() }
+        defer { for model in models.reversed() { model.lock.unlock() } }
+        var prepared: [VRMRenderer] = []
+        prepared.reserveCapacity(renderers.count)
+        for renderer in renderers {
+            renderer.compositorDeferCompletion = true
+            renderer.compositorHeldSlot = false
+            if renderer.prepareFrame(commandBuffer: commandBuffer) {
+                prepared.append(renderer)
+            } else {
+                renderer.compositorDeferCompletion = false
+            }
+        }
+        if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) {
+            for renderer in prepared {
+                renderer.encodePreparedFrame(viewport: .explicit(viewportSize), encoder: encoder)
+            }
+            encoder.endEncoding()
+        } else {
+            for renderer in prepared { renderer.reportRenderEncoderFailure() }
+        }
+        for renderer in prepared {
+            renderer.finishDeferredCompositorFrame(commandBuffer: commandBuffer)
+            renderer.compositorDeferCompletion = false
+        }
+    }
+
+    private func reportRenderEncoderFailure() {
+        guard config.strict != .off else { return }
+        do {
+            try strictValidator?.handle(.encoderCreationFailed(type: "render"))
+        } catch {
+            vrmLog("❌ [VRMRenderer] Failed to create render encoder: \(error)")
+        }
+    }
+
+    private func prepareFrame(commandBuffer: MTLCommandBuffer) -> Bool {
         // DEBUG: Confirm we're in drawCore
         if frameCounter <= 2 || frameCounter % 60 == 0 {
             vrmLog("[VRMRenderer] drawCore() executing, frame \(frameCounter)")
             vrmLog("[VRMRenderer] useOrthographic = \(useOrthographic)")
         }
 
-        let simulate = !compositorSkipSimulation
-        if simulate {
-            // Wait for a free uniform buffer (triple buffering sync)
-            _ = inflightSemaphore.wait(timeout: .distantFuture)
-            if compositorDeferCompletion {
-                compositorHeldSlot = true
-            }
+        // Wait for a free uniform buffer (triple buffering sync)
+        _ = inflightSemaphore.wait(timeout: .distantFuture)
+        if compositorDeferCompletion {
+            compositorHeldSlot = true
         }
 
-        if simulate {
-            // Optionally disable legacy animation state to prevent conflicts with AnimationPlayer
-            if disableLegacyAnimation && animationState != nil {
-                if frameCounter == 0 { vrmLog("[VRMRenderer] Disabling legacy animationState (prefer AnimationPlayer)") }
-                animationState = nil
-            }
-
-            // Start performance tracking
-            performanceTracker?.beginFrame()
-
-            // Start frame validation
-            strictValidator?.beginFrame()
+        // Optionally disable legacy animation state to prevent conflicts with AnimationPlayer
+        if disableLegacyAnimation && animationState != nil {
+            if frameCounter == 0 { vrmLog("[VRMRenderer] Disabling legacy animationState (prefer AnimationPlayer)") }
+            animationState = nil
         }
+
+        // Start performance tracking
+        performanceTracker?.beginFrame()
+
+        // Start frame validation
+        strictValidator?.beginFrame()
 
         guard let model = model else {
             vrmLog("[VRMRenderer] No model loaded!")
-            if simulate {
-                inflightSemaphore.signal()
-                compositorHeldSlot = false
-            }
-            return
+            inflightSemaphore.signal()
+            compositorHeldSlot = false
+            return false
         }
-
-        // LOCK THE MODEL: Prevent animation updates while we encode draw commands
-        model.lock.lock()
-        defer { model.lock.unlock() }
 
         vrmLog("[VRMRenderer] Model has \(model.nodes.count) nodes, \(model.meshes.count) meshes")
 
-        if simulate {
-            // CRITICAL: Update world transforms for all nodes.
-            // This must be done before rendering to calculate proper positions UNLESS the
-            // host has already done it (e.g. via AnimationPlayer.update, which calls
-            // model.updateNodeTransforms internally). Hosts that always tick per-frame can
-            // opt out via `skipPreDrawTransformUpdate`.
-            if !skipPreDrawTransformUpdate {
-                performanceTracker?.beginPhase(.transformUpdate)
-                for node in model.nodes where node.parent == nil {
-                    node.updateWorldTransform()
-                }
-                performanceTracker?.endPhase(.transformUpdate)
+        // CRITICAL: Update world transforms for all nodes.
+        // This must be done before rendering to calculate proper positions UNLESS the
+        // host has already done it (e.g. via AnimationPlayer.update, which calls
+        // model.updateNodeTransforms internally). Hosts that always tick per-frame can
+        // opt out via `skipPreDrawTransformUpdate`.
+        if !skipPreDrawTransformUpdate {
+            performanceTracker?.beginPhase(.transformUpdate)
+            for node in model.nodes where node.parent == nil {
+                node.updateWorldTransform()
             }
-
-            // DEBUG: Check if transforms are actually set
-            if frameCounter <= 2 {
-                for (idx, node) in model.nodes.prefix(5).enumerated() {
-                    let local = node.localMatrix.columns.3
-                    let world = node.worldMatrix.columns.3
-                    vrmLog("[TRANSFORM DEBUG] Node \(idx) '\(node.name ?? "unnamed")': local=(\(local.x),\(local.y),\(local.z)) world=(\(world.x),\(world.y),\(world.z))")
-                }
-            }
-
-            // Get the next uniform buffer in the ring
-            currentUniformBufferIndex = (currentUniformBufferIndex + 1) % Self.maxBufferedFrames
+            performanceTracker?.endPhase(.transformUpdate)
         }
+
+        // DEBUG: Check if transforms are actually set
+        if frameCounter <= 2 {
+            for (idx, node) in model.nodes.prefix(5).enumerated() {
+                let local = node.localMatrix.columns.3
+                let world = node.worldMatrix.columns.3
+                vrmLog("[TRANSFORM DEBUG] Node \(idx) '\(node.name ?? "unnamed")': local=(\(local.x),\(local.y),\(local.z)) world=(\(world.x),\(world.y),\(world.z))")
+            }
+        }
+
+        // Get the next uniform buffer in the ring
+        currentUniformBufferIndex = (currentUniformBufferIndex + 1) % Self.maxBufferedFrames
         guard currentUniformBufferIndex < uniformsBuffers.count else {
             vrmLog("[VRMRenderer] No uniform buffer available at index \(currentUniformBufferIndex)")
-            if simulate {
-                inflightSemaphore.signal()
-                compositorHeldSlot = false
-            }
-            return
+            inflightSemaphore.signal()
+            compositorHeldSlot = false
+            return false
         }
         let uniformsBuffer = uniformsBuffers[currentUniformBufferIndex]
 
@@ -1859,14 +1948,12 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             } catch {
                 if config.strict == .fail {
-                    if simulate {
-                        inflightSemaphore.signal()
-                        compositorHeldSlot = false
-                    }
+                    inflightSemaphore.signal()
+                    compositorHeldSlot = false
                     vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
                     // The slot is released; encoding the frame anyway would
                     // double-signal once the command buffer completes.
-                    return
+                    return false
                 } else {
                     vrmLog("⚠️ [VRMRenderer] Draw validation warning: \(error)")
                 }
@@ -1876,28 +1963,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // the bundled metallib didn't load — issue #336). Skip the frame
             // loudly instead of wedging the host in an assert at first draw.
             guard pipelinesReadyForDraw() else {
-                if simulate {
-                    inflightSemaphore.signal()
-                    compositorHeldSlot = false
-                }
-                return
+                inflightSemaphore.signal()
+                compositorHeldSlot = false
+                return false
             }
         }
 
         // Run compute pass for morphs BEFORE render encoder
         let morphedBuffers: [MorphKey: MTLBuffer]
-        if simulate {
-            performanceTracker?.beginPhase(.morphSetup)
-            let computed = applyMorphTargetsCompute(commandBuffer: commandBuffer)
-            performanceTracker?.endPhase(.morphSetup)
-            if !computed.isEmpty {
-                performanceTracker?.recordMorphCompute()
-            }
-            compositorMorphedBuffers = computed
-            morphedBuffers = computed
-        } else {
-            morphedBuffers = compositorMorphedBuffers
-        }
+        performanceTracker?.beginPhase(.morphSetup)
+        let computed = applyMorphTargetsCompute(commandBuffer: commandBuffer)
+        performanceTracker?.endPhase(.morphSetup)
+        compositorMorphedBuffers = computed
+        morphedBuffers = computed
 
         // Debug: Log morphed buffer count
         if frameCounter == 1 || frameCounter % 60 == 0 {
@@ -1913,7 +1991,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         var frameDeltaTime: Float = 1.0 / 60.0
-        if simulate {
         // Calculate actual deltaTime. `simulationDeltaTime` is the
         // explicit offline-rendering escape: when set, use it directly
         // so tests / video extractors / conformance harnesses get a
@@ -1949,7 +2026,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Spring-bone now shares the renderer's command buffer (audit's #2 bottleneck
         // fix), so its compute encoder must be opened+closed before any other encoder
         // (compute or render) is active on the same buffer — Metal forbids overlap.
-        if enableSpringBone, model.springBone != nil {
+        if updatesCrowdPhysics, enableSpringBone, model.springBone != nil {
             performanceTracker?.beginPhase(.springBone)
 
             // Update temporary forces if any
@@ -1982,11 +2059,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 // Read back GPU positions and update node transforms
                 springBoneCompute.writeBonesToNodes(model: model)
 
-                // CRITICAL: Propagate spring bone transforms through entire hierarchy before skinning
-                performanceTracker?.beginPhase(.transformUpdate)
-                model.updateNodeTransforms()
-                performanceTracker?.endPhase(.transformUpdate)
-
                 // Report sleep-gate stats to the performance tracker.
                 performanceTracker?.recordSleepingBones(springBoneCompute.sleepingBoneCount)
 
@@ -2002,29 +2074,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             }
             performanceTracker?.endPhase(.springBone)
         }
-        } // simulate: deltaTime + SpringBone
 
-        let hasSkinning = !model.skins.isEmpty
-
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
-            if config.strict != .off {
-                do {
-                    try strictValidator?.handle(.encoderCreationFailed(type: "render"))
-                } catch {
-                    vrmLog("❌ [VRMRenderer] Failed to create render encoder: \(error)")
-                }
-            }
-            return
-        }
-        encoderStateCache.reset()
-        baseMToonUniformsByMaterial.removeAll(keepingCapacity: true)
-
-        // Debug: Log rendering statistics
-        var totalMeshesWithNodes = 0
-        var totalPrimitivesDrawn = 0
-        var totalTriangles = 0
-
-        if simulate {
         // Update LookAt controller
         if let lookAtController = lookAtController, lookAtController.enabled {
             // Extract camera position from view matrix
@@ -2123,7 +2173,19 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             vrmLog("[UPDATE ORDER] All skins updated, now starting draw calls")
         }
-        } // simulate: lookAt + skin palettes
+        return true
+    }
+
+    private func encodePreparedFrame(viewport: ViewportSource, encoder: MTLRenderCommandEncoder) {
+        guard let model else { return }
+        let morphedBuffers = compositorMorphedBuffers
+        let uniformsBuffer = uniformsBuffers[currentUniformBufferIndex]
+        let hasSkinning = !model.skins.isEmpty
+        var totalMeshesWithNodes = 0
+        var totalPrimitivesDrawn = 0
+        var totalTriangles = 0
+        encoderStateCache.reset()
+        baseMToonUniformsByMaterial.removeAll(keepingCapacity: true)
 
         // We'll set the pipeline per-mesh based on whether it has a skin
         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
@@ -3872,7 +3934,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         )
                     } catch {
                         if config.strict == .fail {
-                            encoder.endEncoding()
                             vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
                         } else {
                             vrmLog("⚠️ [VRMRenderer] Draw validation warning: \(error)")
@@ -4242,7 +4303,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         )
                     } catch {
                         if config.strict == .fail {
-                            encoder.endEncoding()
                             vrmLog("❌ [VRMRenderer] Draw validation failed: \(error)")
                         } else {
                             vrmLog("⚠️ [VRMRenderer] Draw validation warning: \(error)")
@@ -4272,11 +4332,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 totalTriangles += primitive.vertexCount / 3
                 performanceTracker?.recordDrawCall(triangles: primitive.vertexCount / 3, vertices: primitive.vertexCount)
             }
-        }
-
-        // Log rendering statistics periodically
-        if !compositorDeferCompletion {
-            frameCounter += 1
         }
 
         // DEBUG: Log animation transforms every second
@@ -4312,13 +4367,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         performanceTracker?.endPhase(.outlinePass)
 
         performanceTracker?.endPhase(.commandEncode)
-        encoder.endEncoding()
-
-        if compositorDeferCompletion {
-            return
-        }
-
-        finishOffscreenFrame(commandBuffer: commandBuffer)
     }
 
     private func finishDeferredCompositorFrame(commandBuffer: MTLCommandBuffer) {
