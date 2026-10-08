@@ -82,6 +82,16 @@ public final class VRMCrowdRenderer {
         physicsElapsed = Array(repeating: 0, count: avatars.count)
     }
 
+    /// Changes an avatar's scheduling settings for the next draw without resetting its playback cadence.
+    /// Call on the frame-producing thread before `draw`. Omitted settings retain their current values.
+    /// The scene owns physics quality while drawing; change it here instead of on the renderer directly.
+    public func updateAvatar(at index: Int, alwaysUpdate: Bool? = nil,
+                             springBoneQuality: VRMConstants.SpringBoneQuality? = nil) {
+        precondition(avatars.indices.contains(index), "Crowd avatar index is out of range")
+        if let alwaysUpdate { avatars[index].alwaysUpdate = alwaysUpdate }
+        if let springBoneQuality { avatars[index].springBoneQuality = springBoneQuality }
+    }
+
     /// Advances the crowd by the host's timestep and encodes one frame.
     /// Background animation accumulates elapsed time, preserving playback speed.
     /// Root-motion players and `alwaysUpdate` avatars sample every frame.

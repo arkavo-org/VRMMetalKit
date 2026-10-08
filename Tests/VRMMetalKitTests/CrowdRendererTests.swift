@@ -125,6 +125,81 @@ final class CrowdRendererTests: XCTestCase {
         XCTAssertEqual(renderer.frameCounter, 1)
     }
 
+    func testRuntimeAvatarSettingsPreservePlaybackAndOffscreenPromotion() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let renderer = try await makeRenderer(device: device, sampleCount: 1)
+        let model = try XCTUnwrap(renderer.model)
+        let head = try XCTUnwrap(model.humanoid?.getBoneNode(.head))
+        let player = AnimationPlayer()
+        var clip = AnimationClip(duration: 10)
+        clip.addEulerTrack(bone: .head, axis: .y) { $0 }
+        player.load(clip)
+        player.play()
+        let scene = VRMCrowdRenderer(avatars: [.init(renderer: renderer, player: player)],
+                                    policy: .init(maxFullQualityAvatars: 0))
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let pass = try target(device: device, samples: 1)
+        func frame() throws {
+            let cb = try XCTUnwrap(queue.makeCommandBuffer())
+            scene.draw(deltaTime: 1 / 60, viewportSize: CGSize(width: 128, height: 128),
+                       commandBuffer: cb, renderPassDescriptor: pass)
+            cb.commit()
+            waitForGPU(cb)
+            XCTAssertNil(cb.error)
+        }
+        try frame()
+        try frame()
+        XCTAssertEqual(scene.animationUpdates, 0)
+        renderer.viewMatrix.columns.3.x = 1000
+        scene.updateAvatar(at: 0, alwaysUpdate: true, springBoneQuality: .medium)
+        try frame()
+        XCTAssertEqual(scene.fullQualityAvatarCount, 1)
+        XCTAssertEqual(renderer.springBoneQuality, .medium)
+        XCTAssertEqual(model.nodes[head].rotation.angle, 3 / 60, accuracy: 0.0001,
+                       "Promotion must consume time accumulated before the settings change")
+        XCTAssertTrue(scene.avatars[0].renderer === renderer)
+        XCTAssertTrue(scene.avatars[0].player === player)
+
+        let before = renderer.frameCounter
+        scene.updateAvatar(at: 0, alwaysUpdate: false)
+        try frame()
+        XCTAssertEqual(renderer.frameCounter, before, "Clearing the override must restore offscreen skipping")
+        XCTAssertEqual(scene.avatars[0].springBoneQuality, .medium, "Omitted settings must be retained")
+        scene.updateAvatar(at: 0, alwaysUpdate: true)
+        try frame()
+        XCTAssertEqual(model.nodes[head].rotation.angle, 5 / 60, accuracy: 0.0001)
+        XCTAssertEqual(renderer.springBoneQuality, .medium)
+    }
+
+    func testRuntimePhysicsQualitySurvivesBackgroundAndFullTransitions() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("No Metal device") }
+        let renderer = try await makeRenderer(device: device, sampleCount: 1)
+        let scene = VRMCrowdRenderer(avatars: [.init(renderer: renderer)],
+                                    policy: .init(maxFullQualityAvatars: 0))
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let pass = try target(device: device, samples: 1)
+        func frame() throws {
+            let cb = try XCTUnwrap(queue.makeCommandBuffer())
+            scene.draw(deltaTime: 1 / 60, viewportSize: CGSize(width: 128, height: 128),
+                       commandBuffer: cb, renderPassDescriptor: pass)
+            cb.commit()
+            waitForGPU(cb)
+            XCTAssertNil(cb.error)
+        }
+        scene.updateAvatar(at: 0, springBoneQuality: .high)
+        try frame()
+        XCTAssertEqual(renderer.springBoneQuality, .low)
+        XCTAssertEqual(scene.avatars[0].springBoneQuality, .high)
+        XCTAssertFalse(scene.avatars[0].alwaysUpdate)
+        scene.policy = .full
+        try frame()
+        XCTAssertEqual(renderer.springBoneQuality, .high, "Promotion must use the updated full-quality setting")
+        scene.updateAvatar(at: 0, springBoneQuality: .off)
+        try frame()
+        XCTAssertEqual(renderer.springBoneQuality, .off)
+        XCTAssertEqual(renderer.frameCounter, 3, "Updating settings must retain the renderer's frame state")
+    }
+
     private func waitForGPU(_ buffer: MTLCommandBuffer) { buffer.waitUntilCompleted() }
 
     private func makeRenderer(device: MTLDevice, sampleCount: Int) async throws -> VRMRenderer {

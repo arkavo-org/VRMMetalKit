@@ -45,6 +45,21 @@ Set `renderer.skipPreDrawTransformUpdate = true` only when all pose writers
 (including external placement) already propagate world transforms; this also
 skips the scheduler's pre-culling safety walk. The benchmark uses this setting
 because placement is in the camera matrix and `AnimationPlayer` owns pose updates.
+
+The engine can change `crowd.policy` and per-avatar settings before any draw on
+the frame-producing thread. Use `updateAvatar` to promote a speaker, enable
+offscreen contacts, or change the avatar's full-quality physics setting. Playback
+cadence and accumulated time are retained; omitted arguments keep their values.
+The crowd owns each renderer's physics quality during drawing, so update it through
+this API rather than assigning `renderer.springBoneQuality` directly:
+
+```swift
+crowd.policy = .balanced
+crowd.updateAvatar(at: speakerIndex, alwaysUpdate: true, springBoneQuality: .high)
+// When the interaction ends, return the avatar to normal distance-based scheduling.
+crowd.updateAvatar(at: speakerIndex, alwaysUpdate: false)
+```
+
 The scheduler uses the renderer's conservative inflated bounds, not occlusion
 queries. Transparent materials retain avatar submission order; it does not sort
 transparent triangles across avatars.
