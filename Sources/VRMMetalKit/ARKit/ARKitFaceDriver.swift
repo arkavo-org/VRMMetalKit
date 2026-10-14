@@ -114,6 +114,7 @@ public final class ARKitFaceDriver: @unchecked Sendable {
     // Configuration
     /// Composite mapper used when Perfect Sync is unavailable or for the preset side of partial Perfect Sync.
     public let mapper: ARKitToVRMMapper
+    private var effectiveMapper: ARKitToVRMMapper
     /// Smoothing configuration consulted when allocating per-key filters; mutate then call
     /// ``updateSmoothingConfig(_:)`` to apply.
     public var smoothingConfig: SmoothingConfig
@@ -146,6 +147,7 @@ public final class ARKitFaceDriver: @unchecked Sendable {
         smoothing: SmoothingConfig = .default
     ) {
         self.mapper = mapper
+        self.effectiveMapper = mapper
         self.smoothingConfig = smoothing
         self.filterManager = FilterManager(config: smoothing)
     }
@@ -160,6 +162,8 @@ public final class ARKitFaceDriver: @unchecked Sendable {
     ///
     /// - Parameter model: The loaded VRM model
     public func initializeForModel(_ model: VRMModel) {
+        let configuredMapper = mapper.configured(for: model)
+        self.effectiveMapper = configuredMapper
         let result = PerfectSyncCapability.detect(from: model)
         self.perfectSyncCapability = result.capability
 
@@ -170,7 +174,8 @@ public final class ARKitFaceDriver: @unchecked Sendable {
             perfectSyncMapper = PerfectSyncMapper(
                 capability: result.capability,
                 nameMapping: result.nameMapping,
-                fallbackMapper: mapper
+                fallbackMapper: configuredMapper,
+                sharedBindGroups: PerfectSyncMapper.sharedBindGroups(for: model)
             )
         }
 
@@ -247,7 +252,7 @@ public final class ARKitFaceDriver: @unchecked Sendable {
             applyPerfectSyncWeights(custom: smoothedCustom, preset: smoothedPreset, to: controller)
         } else {
             // Standard path: Map ARKit → VRM expressions
-            let rawWeights = mapper.evaluate(blendShapes)
+            let rawWeights = effectiveMapper.evaluate(blendShapes)
 
             // Apply smoothing
             var smoothedWeights: [String: Float] = [:]
