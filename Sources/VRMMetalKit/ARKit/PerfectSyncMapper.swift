@@ -199,19 +199,51 @@ public struct PerfectSyncMapper: Sendable {
         _ blendShapes: ARKitFaceBlendShapes,
         matched: Set<String>
     ) -> [String: Float] {
+        // Build a per-preset filtered mapper that retains full `blendShapes` context for
+        // gating/inhibitory channels (e.g. `jawOpen` gating `ee` or inhibiting `relaxed`)
+        // while zeroing out matched primary channels so matched deformations never duplicate.
         let unmatchedShapes = blendShapes.shapes.filter { !matched.contains($0.key) }
         let unmatchedInput = ARKitFaceBlendShapes(
             timestamp: blendShapes.timestamp,
             shapes: unmatchedShapes,
             headTransform: blendShapes.headTransform
         )
-        var presetWeights = fallbackMapper.evaluate(unmatchedInput)
 
-        // Preserve overall facial activation for `neutral` so matched custom channels
-        // still suppress `neutral` as expected.
-        if fallbackMapper.mappings["neutral"] != nil {
-            presetWeights["neutral"] = fallbackMapper.evaluate(blendShapes, expression: "neutral")
+        var partialMapper = fallbackMapper
+        for (presetKey, formula) in fallbackMapper.mappings {
+            if presetKey == "neutral" { continue }
+            if let primaryKeys = fallbackMapper.knownPrimaryKeys(for: presetKey, formula: formula) {
+                let unmatchedPrimary = primaryKeys.subtracting(matched)
+                if unmatchedPrimary.isEmpty {
+                    partialMapper.mappings[presetKey] = .custom { _ in 0.0 }
+                } else if unmatchedPrimary.count < primaryKeys.count {
+                    // Some primary drivers of this preset are matched (handled by custom expressions)
+                    // and some are unmatched. Zero only the matched primary drivers so contextual/gating
+                    // channels (not in `primaryKeys`) remain intact.
+                    let matchedPrimary = primaryKeys.intersection(matched)
+                    partialMapper.mappings[presetKey] = .custom { fullShapes in
+                        var filtered = fullShapes.shapes
+                        for key in matchedPrimary {
+                            filtered.removeValue(forKey: key)
+                        }
+                        let contextInput = ARKitFaceBlendShapes(
+                            timestamp: fullShapes.timestamp,
+                            shapes: filtered,
+                            headTransform: fullShapes.headTransform
+                        )
+                        return formula.evaluate(contextInput)
+                    }
+                }
+            } else {
+                // User-supplied `.custom` closure whose dependencies cannot be introspected:
+                // evaluate against unmatched input only so matched channels never duplicate.
+                partialMapper.mappings[presetKey] = .custom { _ in
+                    formula.evaluate(unmatchedInput)
+                }
+            }
         }
+
+        var presetWeights = partialMapper.evaluate(blendShapes)
 
         // Reserve mouth budget for matched direct jaw/mouth channels so unmatched
         // fallback mouth presets cannot stack on top of custom mouth deformation.
@@ -253,6 +285,8 @@ public struct PerfectSyncMapper: Sendable {
         preset: inout [String: Float]
     ) {
         guard !sharedBindGroups.isEmpty else { return }
+        // Compute per-key minimum scale across all groups first so results are order-independent.
+        var keyScale: [String: Float] = [:]
         for group in sharedBindGroups {
             var activeKeys: [String] = []
             var groupLoad: Float = 0
@@ -263,16 +297,18 @@ public struct PerfectSyncMapper: Sendable {
                     groupLoad += factor * w
                 }
             }
-            if activeKeys.count > 1 && groupLoad > 1.0 {
-                let scale = 1.0 / groupLoad
-                for key in activeKeys {
-                    if let cw = custom[key] {
-                        custom[key] = cw * scale
-                    }
-                    if let pw = preset[key] {
-                        preset[key] = pw * scale
-                    }
-                }
+            guard activeKeys.count > 1, groupLoad > 1.0 else { continue }
+            let scale = 1.0 / groupLoad
+            for key in activeKeys {
+                keyScale[key] = Swift.min(keyScale[key] ?? 1.0, scale)
+            }
+        }
+        for (key, scale) in keyScale {
+            if let cw = custom[key] {
+                custom[key] = cw * scale
+            }
+            if let pw = preset[key] {
+                preset[key] = pw * scale
             }
         }
     }
@@ -280,9 +316,14 @@ public struct PerfectSyncMapper: Sendable {
     /// Finds groups of custom and/or preset expressions on `model` that bind to the same `(meshIndex, morphIndex)`.
     public static func sharedBindGroups(for model: VRMModel) -> [[String: Float]] {
         guard let expressions = model.expressions else { return [] }
-        struct MorphBindKey: Hashable {
+        struct MorphBindKey: Hashable, Comparable {
             let meshIndex: Int
             let morphIndex: Int
+
+            static func < (lhs: MorphBindKey, rhs: MorphBindKey) -> Bool {
+                if lhs.meshIndex != rhs.meshIndex { return lhs.meshIndex < rhs.meshIndex }
+                return lhs.morphIndex < rhs.morphIndex
+            }
         }
         var byTarget: [MorphBindKey: [String: Float]] = [:]
         for (preset, expr) in expressions.preset {
@@ -300,8 +341,9 @@ public struct PerfectSyncMapper: Sendable {
             }
         }
         var groups: [[String: Float]] = []
-        for (_, contributors) in byTarget where contributors.count > 1 {
-            guard let maxBind = contributors.values.max(), maxBind > 1e-5 else { continue }
+        for targetKey in byTarget.keys.sorted() {
+            guard let contributors = byTarget[targetKey], contributors.count > 1,
+                  let maxBind = contributors.values.max(), maxBind > 1e-5 else { continue }
             var normalized: [String: Float] = [:]
             for (exprKey, weight) in contributors {
                 normalized[exprKey] = weight / maxBind

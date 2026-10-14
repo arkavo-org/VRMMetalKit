@@ -122,6 +122,27 @@ final class ARKitMouthDeformationTests: XCTestCase {
         XCTAssertEqual(weights["lookLeft"] ?? 0, 0.6, accuracy: 1e-5, "lookLeft must not be attenuated by mouth budget")
     }
 
+    func testUnconfiguredDefaultMapperPreservesBrowAndEyeSurprisedUnderOpenJaw() {
+        let mapper = ARKitToVRMMapper.default
+        let shapes = ARKitFaceBlendShapes(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            shapes: [
+                ARKitFaceBlendShapes.jawOpen: 1.0,
+                ARKitFaceBlendShapes.mouthSmileLeft: 1.0,
+                ARKitFaceBlendShapes.mouthSmileRight: 1.0,
+                ARKitFaceBlendShapes.browInnerUp: 1.0,
+                ARKitFaceBlendShapes.browOuterUpLeft: 1.0,
+                ARKitFaceBlendShapes.browOuterUpRight: 1.0,
+                ARKitFaceBlendShapes.eyeWideLeft: 1.0,
+                ARKitFaceBlendShapes.eyeWideRight: 1.0,
+            ]
+        )
+
+        let weights = mapper.evaluate(shapes)
+        XCTAssertEqual(weights["surprised"] ?? 0, 1.0, accuracy: 1e-5,
+                       "Unconfigured default surprised formula uses only brow/eye inputs and must not be weakened by jaw opening")
+    }
+
     // MARK: - 2. Partial & Full Perfect Sync Overlap Prevention
 
     func testPartialPerfectSyncDoesNotDuplicateMatchedMouthMotionInFallbackPresets() {
@@ -191,6 +212,40 @@ final class ARKitMouthDeformationTests: XCTestCase {
         XCTAssertGreaterThan(fallbackVisemeSum, 0.0, "Unmatched funnel/pucker should still contribute remaining budget")
         XCTAssertLessThanOrEqual(customJaw + fallbackVisemeSum, 1.0 + 1e-5,
                                  "Direct custom jawOpen + fallback visemes must not exceed 1.0 total mouth budget")
+    }
+
+    func testPartialPerfectSyncPreservesMatchedJawContextForUnmatchedSmileAndRelaxed() {
+        // jawOpen is matched (custom), while mouthSmileLeft/Right are missing (fallback)
+        let matched: Set<String> = [ARKitFaceBlendShapes.jawOpen]
+        let missing: Set<String> = [
+            ARKitFaceBlendShapes.mouthSmileLeft,
+            ARKitFaceBlendShapes.mouthSmileRight,
+        ]
+        let psMapper = PerfectSyncMapper(
+            capability: .partial(matched: matched, missing: missing)
+        )
+
+        let shapes = ARKitFaceBlendShapes(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            shapes: [
+                ARKitFaceBlendShapes.jawOpen: 0.6,
+                ARKitFaceBlendShapes.mouthSmileLeft: 1.0,
+                ARKitFaceBlendShapes.mouthSmileRight: 1.0,
+            ]
+        )
+
+        let (custom, preset) = psMapper.evaluate(shapes)
+
+        XCTAssertEqual(custom[ARKitFaceBlendShapes.jawOpen] ?? 0, 0.6, accuracy: 1e-5)
+        XCTAssertEqual(preset["aa"] ?? 0, 0.0, accuracy: 1e-5,
+                       "aa has only matched primary drivers (jawOpen) and must not duplicate in fallback")
+        XCTAssertGreaterThan(preset["ee"] ?? 0, 0.0,
+                             "Unmatched smile must still activate ee using matched jawOpen as gating context")
+        let fallbackMouthLoad = ARKitToVRMMapper.defaultMouthOverlapWeights.reduce(Float(0)) { sum, pair in
+            sum + pair.value * (preset[pair.key] ?? 0)
+        }
+        XCTAssertLessThanOrEqual(0.6 + fallbackMouthLoad, 1.0 + 1e-5,
+                                 "Direct jawOpen + fallback mouth presets must remain within 1.0 budget")
     }
 
     func testFullPerfectSyncPreservesIndependentChannelsAndBoundsSharedMorphBinds() throws {
@@ -353,6 +408,236 @@ final class ARKitMouthDeformationTests: XCTestCase {
                                     "Combined mouth vertex downward displacement must not exceed single-viseme -10mm envelope")
     }
 
+    func testMissingModelVisemesDoNotDiluteSupportedVisemeAndOverrideMouthBlockIsRespected() throws {
+        let gltf = try JSONDecoder().decode(
+            GLTFDocument.self,
+            from: Data(#"{"asset":{"version":"2.0"}}"#.utf8)
+        )
+        let model = VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: nil, gltf: gltf)
+
+        // Model only defines `aa` (no `oh` or `ou` presets) and `happy` with `overrideMouth = .block`.
+        let expressions = VRMExpressions()
+        var aaExpr = VRMExpression(name: "aa", preset: .aa)
+        aaExpr.morphTargetBinds = [VRMMorphTargetBind(node: 0, index: 0, weight: 1.0)]
+        expressions.preset[.aa] = aaExpr
+
+        var happyExpr = VRMExpression(name: "happy", preset: .happy)
+        happyExpr.overrideMouth = .block
+        happyExpr.morphTargetBinds = [VRMMorphTargetBind(node: 0, index: 1, weight: 1.0)]
+        expressions.preset[.happy] = happyExpr
+
+        model.expressions = expressions
+        let configuredMapper = ARKitToVRMMapper.default.configured(for: model)
+
+        // 1. Jaw + funnel input: since `oh` and `ou` are not supported on the model,
+        // they must not consume viseme budget or dilute `aa`.
+        let jawFunnel = ARKitFaceBlendShapes(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            shapes: [
+                ARKitFaceBlendShapes.jawOpen: 1.0,
+                ARKitFaceBlendShapes.mouthFunnel: 1.0,
+            ]
+        )
+        let jawFunnelWeights = configuredMapper.evaluate(jawFunnel)
+        let expectedAa = ARKitToVRMMapper.default.mappings["aa"]!.evaluateClamped(jawFunnel)
+        XCTAssertEqual(jawFunnelWeights["aa"] ?? 0, expectedAa, accuracy: 1e-5,
+                       "Unsupported oh/ou presets must not dilute supported aa preset")
+
+        // 2. Smiling + jawOpen when `happy` has `overrideMouth = .block`:
+        // `VRMExpressionController` will suppress `aa` to 0, so `happy` must not be attenuated by `aa`.
+        let smileOpen = ARKitFaceBlendShapes(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            shapes: [
+                ARKitFaceBlendShapes.jawOpen: 1.0,
+                ARKitFaceBlendShapes.mouthSmileLeft: 1.0,
+                ARKitFaceBlendShapes.mouthSmileRight: 1.0,
+                ARKitFaceBlendShapes.cheekSquintLeft: 1.0,
+                ARKitFaceBlendShapes.cheekSquintRight: 1.0,
+            ]
+        )
+        let smileOpenWeights = configuredMapper.evaluate(smileOpen)
+        XCTAssertEqual(smileOpenWeights["happy"] ?? 0, 1.0, accuracy: 1e-5,
+                       "Emotion with overrideMouth=.block must not be attenuated by blocked visemes")
+    }
+
+    func testMultiGroupSharedBindScalingIsOrderIndependent() {
+        // Key "b" participates in two shared-bind groups: (a, b) and (b, c).
+        let group1: [String: Float] = ["a": 1.0, "b": 1.0]
+        let group2: [String: Float] = ["b": 1.0, "c": 1.0]
+        let formulas: [String: BlendShapeFormula] = [
+            "a": .direct(ARKitFaceBlendShapes.eyeBlinkLeft),
+            "b": .direct(ARKitFaceBlendShapes.eyeBlinkRight),
+            "c": .direct(ARKitFaceBlendShapes.jawOpen),
+        ]
+
+        let mapperForward = ARKitToVRMMapper(
+            mappings: formulas,
+            mouthOverlapWeights: [:],
+            sharedBindGroups: [group1, group2]
+        )
+        let mapperReverse = ARKitToVRMMapper(
+            mappings: formulas,
+            mouthOverlapWeights: [:],
+            sharedBindGroups: [group2, group1]
+        )
+
+        let shapes = ARKitFaceBlendShapes(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            shapes: [
+                ARKitFaceBlendShapes.eyeBlinkLeft: 0.8,
+                ARKitFaceBlendShapes.eyeBlinkRight: 0.8,
+                ARKitFaceBlendShapes.jawOpen: 0.6,
+            ]
+        )
+
+        let forward = mapperForward.evaluate(shapes)
+        let reverse = mapperReverse.evaluate(shapes)
+
+        for key in ["a", "b", "c"] {
+            XCTAssertEqual(forward[key] ?? -1, reverse[key] ?? -2, accuracy: 1e-6,
+                           "Shared-bind scaling for '\(key)' must be deterministic regardless of group order")
+        }
+        // Group 1 load = 1.6 (scale 0.625), Group 2 load = 1.4 (scale 0.7142857); "b" gets min scale = 0.625 -> 0.5
+        XCTAssertEqual(forward["b"] ?? 0, 0.5, accuracy: 1e-5,
+                       "Shared key across multiple groups must receive minimum group scale once, not double attenuation")
+    }
+
+    func testBlendOverrideAndBinaryOverrideMaintainExactPostControllerBudget() {
+        // 1. `.blend` emotion (`happy` with alpha=2.0, overrideMouth=.blend) + `aa` (alpha=1.0):
+        // Scaling `happy` weakens its `.blend` suppression of `aa`, so the solved scale must keep
+        // post-override load `alpha_happy * happy + alpha_aa * aa * (1 - happy)` <= 1.0.
+        let blendMapper = ARKitToVRMMapper(
+            mappings: [
+                "aa": .direct(ARKitFaceBlendShapes.jawOpen),
+                "happy": .direct(ARKitFaceBlendShapes.mouthSmileLeft),
+            ],
+            mouthOverlapWeights: ["aa": 1.0, "happy": 2.0],
+            mouthOverrides: ["happy": .blend],
+            activeModelPresets: ["aa", "happy"]
+        )
+        let blendShapes = ARKitFaceBlendShapes(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            shapes: [
+                ARKitFaceBlendShapes.jawOpen: 0.8,
+                ARKitFaceBlendShapes.mouthSmileLeft: 0.6,
+            ]
+        )
+        let blendResult = blendMapper.evaluate(blendShapes)
+        let scaledHappy = blendResult["happy"] ?? 0
+        let scaledAa = blendResult["aa"] ?? 0
+        let postControllerMouthLoad = 2.0 * scaledHappy + 1.0 * scaledAa * (1.0 - scaledHappy)
+        XCTAssertEqual(postControllerMouthLoad, 1.0, accuracy: 1e-4,
+                       "Post-controller mouth load with overrideMouth=.blend must match visemeBudget (1.0)")
+
+        // 2. `isBinary = true` with `overrideMouth = .block` at raw weight 0.4 (< 0.5):
+        // `VRMExpressionController` quantizes 0.4 -> 0.0, so it does NOT block visemes;
+        // `aa` (0.8) + `sad` (0.8) must still be bounded to <= 1.0.
+        let binaryMapper = ARKitToVRMMapper(
+            mappings: [
+                "aa": .direct(ARKitFaceBlendShapes.jawOpen),
+                "sad": .direct(ARKitFaceBlendShapes.mouthFrownLeft),
+                "angry": .direct(ARKitFaceBlendShapes.browDownLeft),
+            ],
+            mouthOverlapWeights: ["aa": 1.0, "sad": 1.0, "angry": 0.0],
+            mouthOverrides: ["angry": .block],
+            binaryPresets: ["angry"],
+            activeModelPresets: ["aa", "sad", "angry"]
+        )
+        let binaryShapes = ARKitFaceBlendShapes(
+            timestamp: Date().timeIntervalSinceReferenceDate,
+            shapes: [
+                ARKitFaceBlendShapes.jawOpen: 0.8,
+                ARKitFaceBlendShapes.mouthFrownLeft: 0.8,
+                ARKitFaceBlendShapes.browDownLeft: 0.4, // below 0.5 binary threshold -> quantizes to 0
+            ]
+        )
+        let binaryResult = binaryMapper.evaluate(binaryShapes)
+        let binaryMouthSum = (binaryResult["aa"] ?? 0) + (binaryResult["sad"] ?? 0)
+        XCTAssertLessThanOrEqual(binaryMouthSum, 1.0 + 1e-5,
+                                 "Sub-threshold binary overrideMouth=.block must not disable mouth budgeting")
+
+        // 3. Customized fallback formula in `.partial` Perfect Sync:
+        // Customizing `happy` to `.direct(jawOpen)` when `jawOpen` is matched must not duplicate `jawOpen`.
+        let customFallback = ARKitToVRMMapper(
+            mappings: ["happy": .direct(ARKitFaceBlendShapes.jawOpen)],
+            mouthOverlapWeights: ["happy": 1.0]
+        )
+        let psMapper = PerfectSyncMapper(
+            capability: .partial(matched: [ARKitFaceBlendShapes.jawOpen], missing: [ARKitFaceBlendShapes.mouthSmileLeft]),
+            fallbackMapper: customFallback
+        )
+        let (_, preset) = psMapper.evaluate(
+            ARKitFaceBlendShapes(
+                timestamp: Date().timeIntervalSinceReferenceDate,
+                shapes: [ARKitFaceBlendShapes.jawOpen: 0.9]
+            )
+        )
+        XCTAssertEqual(preset["happy"] ?? 0, 0.0, accuracy: 1e-5,
+                       "Customized fallback formula referencing matched jawOpen must not duplicate in partial mode")
+
+        // 4. Full-weight `.blend` emotion (`happy=1.0`) + `sad=1.0` + `aa=0.8`:
+        // Even though `aa` is initially suppressed at `scale=1.0`, scaling `happy` down reactivates `aa`,
+        // so `aa` must also be scaled to keep post-controller mouth load <= 1.0.
+        let reactivatingBlendMapper = ARKitToVRMMapper(
+            mappings: [
+                "aa": .direct(ARKitFaceBlendShapes.jawOpen),
+                "happy": .direct(ARKitFaceBlendShapes.mouthSmileLeft),
+                "sad": .direct(ARKitFaceBlendShapes.mouthFrownLeft),
+            ],
+            mouthOverlapWeights: ["aa": 1.0, "happy": 1.0, "sad": 1.0],
+            mouthOverrides: ["happy": .blend],
+            activeModelPresets: ["aa", "happy", "sad"]
+        )
+        let reactivated = reactivatingBlendMapper.evaluate(
+            ARKitFaceBlendShapes(
+                timestamp: Date().timeIntervalSinceReferenceDate,
+                shapes: [
+                    ARKitFaceBlendShapes.jawOpen: 0.8,
+                    ARKitFaceBlendShapes.mouthSmileLeft: 1.0,
+                    ARKitFaceBlendShapes.mouthFrownLeft: 1.0,
+                ]
+            )
+        )
+        let rHappy = reactivated["happy"] ?? 0
+        let rSad = reactivated["sad"] ?? 0
+        let rAa = reactivated["aa"] ?? 0
+        let reactivatedLoad = rHappy + rSad + rAa * (1.0 - rHappy)
+        XCTAssertEqual(reactivatedLoad, 1.0, accuracy: 1e-4,
+                       "Reactivated visemes under scaled .blend emotion must stay within visemeBudget (1.0)")
+
+        // 5. Shared-bind attenuation of a `.blend` emotion (`happy` sharing a bind with `blink`)
+        // runs before mouth-budget solving so the weakened suppression cannot push mouth load over 1.0.
+        let sharedBlendMapper = ARKitToVRMMapper(
+            mappings: [
+                "aa": .direct(ARKitFaceBlendShapes.jawOpen),
+                "happy": .direct(ARKitFaceBlendShapes.mouthSmileLeft),
+                "sad": .direct(ARKitFaceBlendShapes.mouthFrownLeft),
+                "blink": .direct(ARKitFaceBlendShapes.eyeBlinkLeft),
+            ],
+            mouthOverlapWeights: ["aa": 1.0, "happy": 0.2, "sad": 1.0],
+            sharedBindGroups: [["happy": 1.0, "blink": 1.0]],
+            mouthOverrides: ["happy": .blend],
+            activeModelPresets: ["aa", "happy", "sad", "blink"]
+        )
+        let sharedBlend = sharedBlendMapper.evaluate(
+            ARKitFaceBlendShapes(
+                timestamp: Date().timeIntervalSinceReferenceDate,
+                shapes: [
+                    ARKitFaceBlendShapes.jawOpen: 0.8,
+                    ARKitFaceBlendShapes.mouthSmileLeft: 0.8,
+                    ARKitFaceBlendShapes.mouthFrownLeft: 0.65,
+                    ARKitFaceBlendShapes.eyeBlinkLeft: 1.0,
+                ]
+            )
+        )
+        let sbHappy = sharedBlend["happy"] ?? 0
+        let sbSad = sharedBlend["sad"] ?? 0
+        let sbAa = sharedBlend["aa"] ?? 0
+        let sharedBlendLoad = 0.2 * sbHappy + sbSad + sbAa * (1.0 - sbHappy)
+        XCTAssertLessThanOrEqual(sharedBlendLoad, 1.0 + 1e-4,
+                                 "Shared-bind attenuation of .blend emotion must not allow mouth load to exceed 1.0")
+    }
+
     // MARK: - 4. Geometry & GPU Render Verification on Real VRM Models
 
     @MainActor
@@ -361,19 +646,17 @@ final class ARKitMouthDeformationTests: XCTestCase {
             throw XCTSkip("Metal device not available")
         }
 
-        let projectRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .path
-
-        let candidatePaths = [
+        let projectRoot = getProjectRoot()
+        var candidatePaths = [
             "\(projectRoot)/AvatarSample_A_1.0.vrm.glb",
             "\(projectRoot)/vroid_default_F_1_0.vrm",
             "\(projectRoot)/AvatarSample_U_1.0.vrm.glb",
-            "/Users/arkavo/Projects/Muse/Resources/VRM/AliciaSolid.vrm",
-        ].filter { FileManager.default.fileExists(atPath: $0) }
+            "\(projectRoot)/AliciaSolid.vrm",
+        ]
+        if let museResources = ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"] {
+            candidatePaths.append("\(museResources)/VRM/AliciaSolid.vrm")
+        }
+        candidatePaths = candidatePaths.filter { FileManager.default.fileExists(atPath: $0) }
 
         guard !candidatePaths.isEmpty else {
             throw XCTSkip("No VRM test fixtures found on disk")

@@ -100,6 +100,20 @@ public enum BlendShapeFormula: Sendable {
         let value = evaluate(blendShapes)
         return Swift.min(1.0, Swift.max(0.0, value))
     }
+
+    /// Returns the explicit ARKit blend shape keys referenced by non-closure formulas, or `nil` for `.custom`.
+    var referencedKeys: Set<String>? {
+        switch self {
+        case .direct(let key):
+            return [key]
+        case .average(let keys), .max(let keys), .min(let keys):
+            return Set(keys)
+        case .weighted(let components):
+            return Set(components.map(\.0))
+        case .custom:
+            return nil
+        }
+    }
 }
 
 // MARK: - ARKit to VRM Mapper
@@ -144,7 +158,12 @@ public struct ARKitToVRMMapper: Sendable {
     public static let emotionPresets: [String] = ["happy", "angry", "sad", "relaxed", "surprised"]
 
     /// Mapping from VRM expression preset to blend shape formula
-    public var mappings: [String: BlendShapeFormula]
+    public var mappings: [String: BlendShapeFormula] {
+        didSet {
+            hasBuiltinDefaultCustomFormulas = false
+        }
+    }
+    var hasBuiltinDefaultCustomFormulas: Bool = false
 
     /// Swap every left/right expression pair (`lookLeft`/`lookRight`,
     /// `blinkLeft`/`blinkRight`) on evaluation.
@@ -168,6 +187,15 @@ public struct ARKitToVRMMapper: Sendable {
     /// on a configured model, mapped to their relative bind weights.
     public var sharedBindGroups: [[String: Float]] = []
 
+    /// Per-expression mouth-override behavior (`none`, `blend`, `block`) on a configured model.
+    public var mouthOverrides: [String: VRMExpressionOverrideType] = [:]
+
+    /// Set of preset expression keys configured with `isBinary = true` on a configured model.
+    public var binaryPresets: Set<String> = []
+
+    /// Optional whitelist of preset expression keys that actually have morph or material binds on the bound model.
+    public var activeModelPresets: Set<String>? = nil
+
     /// Creates a mapper with an explicit dictionary of VRM-expression-key to ``BlendShapeFormula``.
     /// The default value `[:]` is useful when assembling mappings post-init via ``mappings``.
     public init(
@@ -175,7 +203,10 @@ public struct ARKitToVRMMapper: Sendable {
         mirrorLateral: Bool = false,
         visemeBudget: Float = 1.0,
         mouthOverlapWeights: [String: Float]? = nil,
-        sharedBindGroups: [[String: Float]] = []
+        sharedBindGroups: [[String: Float]] = [],
+        mouthOverrides: [String: VRMExpressionOverrideType] = [:],
+        binaryPresets: Set<String> = [],
+        activeModelPresets: Set<String>? = nil
     ) {
         self.mappings = mappings
         self.mirrorLateral = mirrorLateral
@@ -190,6 +221,9 @@ public struct ARKitToVRMMapper: Sendable {
             self.mouthOverlapWeights = defaults
         }
         self.sharedBindGroups = sharedBindGroups
+        self.mouthOverrides = mouthOverrides
+        self.binaryPresets = binaryPresets
+        self.activeModelPresets = activeModelPresets
     }
 
     /// Returns a copy of this mapper tuned to `model`'s actual morph-target geometry and binds.
@@ -202,6 +236,9 @@ public struct ARKitToVRMMapper: Sendable {
         var copy = self
         copy.mouthOverlapWeights = Self.mouthOverlapWeights(for: model)
         copy.sharedBindGroups = Self.sharedPresetBindGroups(for: model)
+        copy.mouthOverrides = Self.mouthOverrides(forModel: model)
+        copy.binaryPresets = Self.binaryPresets(forModel: model)
+        copy.activeModelPresets = Self.activePresets(for: model)
         return copy
     }
 
@@ -229,47 +266,36 @@ public struct ARKitToVRMMapper: Sendable {
         return formula.evaluateClamped(blendShapes)
     }
 
+    private func isPresetActiveOnModel(_ key: String) -> Bool {
+        guard let activeModelPresets else { return true }
+        return activeModelPresets.contains(key)
+    }
+
     private func applyMouthAndSharedBindPolicy(_ result: inout [String: Float]) {
         guard visemeBudget > 0 else { return }
 
-        // 1. Bound the 5 competing vowel visemes (aa, ih, ou, ee, oh) to a convex combination.
+        // 1. Bound competing vowel visemes (aa, ih, ou, ee, oh) that are active on the model.
         var visemeSum: Float = 0
-        var activeVisemeCount = 0
-        for key in Self.visemePresets {
+        var activeVisemeKeys: [String] = []
+        for key in Self.visemePresets where isPresetActiveOnModel(key) {
             if let w = result[key], w > 1e-4 {
                 visemeSum += w
-                activeVisemeCount += 1
+                activeVisemeKeys.append(key)
             }
         }
-        if activeVisemeCount > 1 && visemeSum > visemeBudget {
+        if activeVisemeKeys.count > 1 && visemeSum > visemeBudget {
             let scale = visemeBudget / visemeSum
-            for key in Self.visemePresets {
-                if let w = result[key], w > 0 {
-                    result[key] = w * scale
-                }
-            }
-        }
-
-        // 2. Bound combined mouth displacement across active visemes and mouth-deforming emotions.
-        // Single active expressions keep their full weight; only overlapping combinations scale.
-        var activeMouthKeys: [String] = []
-        var mouthLoad: Float = 0
-        for (key, alpha) in mouthOverlapWeights where alpha > 1e-4 {
-            if let w = result[key], w > 1e-4 {
-                activeMouthKeys.append(key)
-                mouthLoad += alpha * w
-            }
-        }
-        if activeMouthKeys.count > 1 && mouthLoad > visemeBudget {
-            let scale = visemeBudget / mouthLoad
-            for key in activeMouthKeys {
+            for key in activeVisemeKeys {
                 if let w = result[key] {
                     result[key] = w * scale
                 }
             }
         }
 
-        // 3. Bound presets that share an identical (meshIndex, morphIndex) morph target bind.
+        // 2. Bound presets that share an identical (meshIndex, morphIndex) morph target bind first,
+        // computing per-key minimum scale across all groups so results are order-independent and any
+        // shared-bind attenuation of `.blend`/`.block` mouth overrides is visible to step 3.
+        var keyScale: [String: Float] = [:]
         for group in sharedBindGroups {
             var activeKeys: [String] = []
             var groupLoad: Float = 0
@@ -279,12 +305,104 @@ public struct ARKitToVRMMapper: Sendable {
                     groupLoad += factor * w
                 }
             }
-            if activeKeys.count > 1 && groupLoad > 1.0 {
-                let scale = 1.0 / groupLoad
-                for key in activeKeys {
-                    if let w = result[key] {
-                        result[key] = w * scale
+            guard activeKeys.count > 1, groupLoad > 1.0 else { continue }
+            let scale = 1.0 / groupLoad
+            for key in activeKeys {
+                keyScale[key] = Swift.min(keyScale[key] ?? 1.0, scale)
+            }
+        }
+        for (key, scale) in keyScale {
+            if let w = result[key] {
+                result[key] = w * scale
+            }
+        }
+
+        // 3. Compute VRM 1.0 overrideMouth suppression on the viseme group (accounting for isBinary
+        // quantization) and bound combined mouth displacement across active visemes and mouth-deforming
+        // emotions. Because scaling a `.blend` emotion weakens its viseme suppression in
+        // `VRMExpressionController`, solve for the uniform scale `s in (0, 1]` over all raw mouth
+        // participants where post-override mouth load equals `visemeBudget`.
+        let visemeSet = Set(Self.visemePresets)
+        let rawMouthParticipants: [String] = mouthOverlapWeights.compactMap { key, alpha in
+            guard alpha > 1e-4, isPresetActiveOnModel(key), let w = result[key], w > 1e-4 else { return nil }
+            return key
+        }
+        let participantSet = Set(rawMouthParticipants)
+
+        func quantizedWeight(_ key: String, _ raw: Float) -> Float {
+            if binaryPresets.contains(key) {
+                return raw < 0.5 ? 0.0 : 1.0
+            }
+            return raw
+        }
+
+        func computeMouthState(scale: Float) -> (effectiveCount: Int, load: Float) {
+            var blockMouth = false
+            var blendMouth: Float = 1.0
+            for (key, overrideType) in mouthOverrides where !visemeSet.contains(key) && isPresetActiveOnModel(key) {
+                guard let raw = result[key], raw > 1e-4 else { continue }
+                let scaledRaw = participantSet.contains(key) ? (raw * scale) : raw
+                let w = quantizedWeight(key, scaledRaw)
+                guard w > 1e-4 else { continue }
+                switch overrideType {
+                case .block:
+                    blockMouth = true
+                case .blend:
+                    blendMouth *= (1.0 - w)
+                case .none:
+                    break
+                }
+            }
+            let visemeSuppression: Float = blockMouth ? 0.0 : blendMouth
+
+            var effectiveCount = 0
+            var load: Float = 0
+            for key in rawMouthParticipants {
+                guard let raw = result[key], let alpha = mouthOverlapWeights[key] else { continue }
+                let w = quantizedWeight(key, raw * scale)
+                let effectiveWeight = visemeSet.contains(key) ? (w * visemeSuppression) : w
+                guard effectiveWeight > 1e-4 else { continue }
+                effectiveCount += 1
+                load += alpha * effectiveWeight
+            }
+            return (effectiveCount, load)
+        }
+
+        let initialMouth = computeMouthState(scale: 1.0)
+        if initialMouth.effectiveCount > 1 && initialMouth.load > visemeBudget {
+            let hasNonlinearOverride = mouthOverrides.contains { key, overrideType in
+                overrideType != .none && participantSet.contains(key)
+            } || rawMouthParticipants.contains { binaryPresets.contains($0) }
+
+            let finalScale: Float
+            if !hasNonlinearOverride {
+                finalScale = visemeBudget / initialMouth.load
+            } else {
+                var lo: Float = 0.0
+                var hi: Float = 1.0
+                for _ in 0..<20 {
+                    let mid = 0.5 * (lo + hi)
+                    if computeMouthState(scale: mid).load > visemeBudget {
+                        hi = mid
+                    } else {
+                        lo = mid
                     }
+                }
+                finalScale = lo
+            }
+
+            // If a `.block` emotion blocked visemes at scale=1.0, only non-viseme mouth
+            // participants contributed to the overload; otherwise scale all raw mouth participants.
+            let hasActiveBlockAtFinalScale = mouthOverrides.contains { key, overrideType in
+                guard overrideType == .block, !visemeSet.contains(key), isPresetActiveOnModel(key),
+                      let raw = result[key], raw > 1e-4 else { return false }
+                let scaledRaw = participantSet.contains(key) ? (raw * finalScale) : raw
+                return quantizedWeight(key, scaledRaw) > 1e-4
+            }
+            for key in rawMouthParticipants {
+                if hasActiveBlockAtFinalScale && visemeSet.contains(key) { continue }
+                if let w = result[key] {
+                    result[key] = w * finalScale
                 }
             }
         }
@@ -292,27 +410,65 @@ public struct ARKitToVRMMapper: Sendable {
 
     // MARK: - Model-Aware Overlap Analysis
 
-    private struct MorphBindKey: Hashable {
+    private struct MorphBindKey: Hashable, Comparable {
         let meshIndex: Int
         let morphIndex: Int
+
+        static func < (lhs: MorphBindKey, rhs: MorphBindKey) -> Bool {
+            if lhs.meshIndex != rhs.meshIndex { return lhs.meshIndex < rhs.meshIndex }
+            return lhs.morphIndex < rhs.morphIndex
+        }
+    }
+
+    /// Returns the set of preset expression keys that have non-empty morph or material binds on `model`.
+    public static func activePresets(for model: VRMModel) -> Set<String>? {
+        guard let expressions = model.expressions, !expressions.preset.isEmpty else { return nil }
+        var active = Set<String>()
+        for (preset, expr) in expressions.preset {
+            let hasMorphBinds = expr.morphTargetBinds.contains { abs($0.weight) > 1e-5 }
+            let hasColorBinds = !expr.materialColorBinds.isEmpty
+            let hasOverrides = expr.overrideBlink != .none || expr.overrideLookAt != .none || expr.overrideMouth != .none
+            if hasMorphBinds || hasColorBinds || hasOverrides {
+                active.insert(preset.rawValue)
+            }
+        }
+        return active.isEmpty ? nil : active
+    }
+
+    /// Returns per-preset `overrideMouth` settings from `model`.
+    public static func mouthOverrides(forModel model: VRMModel) -> [String: VRMExpressionOverrideType] {
+        guard let expressions = model.expressions else { return [:] }
+        var overrides: [String: VRMExpressionOverrideType] = [:]
+        for (preset, expr) in expressions.preset where expr.overrideMouth != .none {
+            overrides[preset.rawValue] = expr.overrideMouth
+        }
+        return overrides
+    }
+
+    /// Returns the set of preset expression keys with `isBinary = true` on `model`.
+    public static func binaryPresets(forModel model: VRMModel) -> Set<String> {
+        guard let expressions = model.expressions else { return [] }
+        var binaries = Set<String>()
+        for (preset, expr) in expressions.preset where expr.isBinary {
+            binaries.insert(preset.rawValue)
+        }
+        return binaries
     }
 
     /// Computes per-preset mouth-overlap participation factors from `model`'s morph targets and binds.
     public static func mouthOverlapWeights(for model: VRMModel) -> [String: Float] {
-        var overlap: [String: Float] = [:]
-        for key in visemePresets {
-            overlap[key] = 1.0
-        }
-
         guard let expressions = model.expressions else {
-            for key in emotionPresets {
-                overlap[key] = 1.0
-            }
-            return overlap
+            return defaultMouthOverlapWeights
         }
 
         let visemeEnums: [VRMExpressionPreset] = [.aa, .ih, .ou, .ee, .oh]
         let emotionEnums: [VRMExpressionPreset] = [.happy, .angry, .sad, .relaxed, .surprised]
+
+        var overlap: [String: Float] = [:]
+        for v in visemeEnums {
+            let hasBinds = expressions.preset[v]?.morphTargetBinds.contains(where: { abs($0.weight) > 1e-5 }) ?? false
+            overlap[v.rawValue] = (expressions.preset.isEmpty || hasBinds) ? 1.0 : 0.0
+        }
 
         var visemeBindMaxWeight: [MorphBindKey: Float] = [:]
         for v in visemeEnums {
@@ -440,8 +596,9 @@ public struct ARKitToVRMMapper: Sendable {
             }
         }
         var groups: [[String: Float]] = []
-        for (_, contributors) in byTarget where contributors.count > 1 {
-            guard let maxBind = contributors.values.max(), maxBind > 1e-5 else { continue }
+        for targetKey in byTarget.keys.sorted() {
+            guard let contributors = byTarget[targetKey], contributors.count > 1,
+                  let maxBind = contributors.values.max(), maxBind > 1e-5 else { continue }
             var normalized: [String: Float] = [:]
             for (exprKey, weight) in contributors {
                 normalized[exprKey] = weight / maxBind
@@ -466,105 +623,167 @@ public struct ARKitToVRMMapper: Sendable {
     // MARK: - Default Mappings
 
     /// Default per-expression mouth-overlap weights for standard VRM avatars before a model is inspected.
+    /// `surprised` is `0.0` in the unconfigured default because its default formula reads only brow and
+    /// eye-wide inputs; ``configured(for:)`` replaces this with the model's actual mouth displacement ratio.
     public static let defaultMouthOverlapWeights: [String: Float] = [
         "aa": 1.0, "ih": 1.0, "ou": 1.0, "ee": 1.0, "oh": 1.0,
-        "happy": 1.0, "angry": 1.0, "sad": 1.0, "relaxed": 1.0, "surprised": 1.0,
+        "happy": 1.0, "angry": 1.0, "sad": 1.0, "relaxed": 1.0, "surprised": 0.0,
     ]
+
+    // Built-in default `.custom` closures so `PerfectSyncMapper` can verify closure identity
+    // before applying the default primary/context channel split.
+    static let defaultSadClosure: @Sendable (ARKitFaceBlendShapes) -> Float = { shapes in
+        let browInner = shapes.weight(for: ARKitFaceBlendShapes.browInnerUp)
+        let eyeWide = (shapes.weight(for: ARKitFaceBlendShapes.eyeWideLeft) +
+                       shapes.weight(for: ARKitFaceBlendShapes.eyeWideRight)) * 0.5
+        let browDown = (shapes.weight(for: ARKitFaceBlendShapes.browDownLeft) +
+                        shapes.weight(for: ARKitFaceBlendShapes.browDownRight)) * 0.5
+        let frown = (shapes.weight(for: ARKitFaceBlendShapes.mouthFrownLeft) +
+                     shapes.weight(for: ARKitFaceBlendShapes.mouthFrownRight)) * 0.3
+        return Swift.min(1.0, browInner * 0.4 * (1.0 - eyeWide) + frown * (1.0 - browDown * 0.5))
+    }
+
+    static let defaultRelaxedClosure: @Sendable (ARKitFaceBlendShapes) -> Float = { shapes in
+        // Relaxed = neutral with slight smile
+        let smile = (shapes.weight(for: ARKitFaceBlendShapes.mouthSmileLeft) +
+                    shapes.weight(for: ARKitFaceBlendShapes.mouthSmileRight)) * 0.3
+        let open = shapes.weight(for: ARKitFaceBlendShapes.jawOpen)
+        return Swift.min(1.0, smile * (1.0 - open))
+    }
+
+    static let defaultAaClosure: @Sendable (ARKitFaceBlendShapes) -> Float = { shapes in
+        let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
+                                shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
+        let round = Swift.max(shapes.weight(for: ARKitFaceBlendShapes.mouthFunnel),
+                              shapes.weight(for: ARKitFaceBlendShapes.mouthPucker))
+        return Swift.min(1.0, open * 0.8 * (1.0 - round * 0.6))
+    }
+
+    static let defaultIhClosure: @Sendable (ARKitFaceBlendShapes) -> Float = { shapes in
+        let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
+                                shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
+        let smile = (shapes.weight(for: ARKitFaceBlendShapes.mouthSmileLeft) +
+                     shapes.weight(for: ARKitFaceBlendShapes.mouthSmileRight)) * 0.5
+        let stretch = (shapes.weight(for: ARKitFaceBlendShapes.mouthStretchLeft) +
+                       shapes.weight(for: ARKitFaceBlendShapes.mouthStretchRight)) * 0.5
+        return Swift.min(1.0, (stretch * 0.7 + smile * 0.35 * open) * (1.0 - open * 0.4))
+    }
+
+    static let defaultOuClosure: @Sendable (ARKitFaceBlendShapes) -> Float = { shapes in
+        let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
+                                shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
+        let funnel = shapes.weight(for: ARKitFaceBlendShapes.mouthFunnel)
+        let pucker = shapes.weight(for: ARKitFaceBlendShapes.mouthPucker)
+        return Swift.min(1.0, (pucker * 0.6 + funnel * 0.4) * (1.0 - open * 0.5))
+    }
+
+    static let defaultEeClosure: @Sendable (ARKitFaceBlendShapes) -> Float = { shapes in
+        let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
+                                shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
+        let smile = (shapes.weight(for: ARKitFaceBlendShapes.mouthSmileLeft) +
+                     shapes.weight(for: ARKitFaceBlendShapes.mouthSmileRight)) * 0.5
+        let stretch = (shapes.weight(for: ARKitFaceBlendShapes.mouthStretchLeft) +
+                       shapes.weight(for: ARKitFaceBlendShapes.mouthStretchRight)) * 0.5
+        return Swift.min(1.0, Swift.max(smile * 0.7, stretch * 0.8) * open)
+    }
+
+    static let defaultOhClosure: @Sendable (ARKitFaceBlendShapes) -> Float = { shapes in
+        let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
+                                shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
+        let funnel = shapes.weight(for: ARKitFaceBlendShapes.mouthFunnel)
+        return Swift.min(1.0, funnel * (0.4 + 0.6 * open))
+    }
+
+    /// Returns the primary driving ARKit blend shape keys for a formula when known, or `nil`
+    /// for user-supplied `.custom` closures whose dependencies cannot be introspected.
+    func knownPrimaryKeys(for presetKey: String, formula: BlendShapeFormula) -> Set<String>? {
+        if let explicitKeys = formula.referencedKeys {
+            return explicitKeys
+        }
+        guard hasBuiltinDefaultCustomFormulas else { return nil }
+        switch presetKey {
+        case "sad":
+            return [
+                ARKitFaceBlendShapes.browInnerUp,
+                ARKitFaceBlendShapes.mouthFrownLeft,
+                ARKitFaceBlendShapes.mouthFrownRight,
+            ]
+        case "relaxed":
+            return [
+                ARKitFaceBlendShapes.mouthSmileLeft,
+                ARKitFaceBlendShapes.mouthSmileRight,
+            ]
+        case "aa":
+            return [ARKitFaceBlendShapes.jawOpen]
+        case "ih":
+            return [
+                ARKitFaceBlendShapes.mouthStretchLeft,
+                ARKitFaceBlendShapes.mouthStretchRight,
+                ARKitFaceBlendShapes.mouthSmileLeft,
+                ARKitFaceBlendShapes.mouthSmileRight,
+            ]
+        case "ou":
+            return [
+                ARKitFaceBlendShapes.mouthFunnel,
+                ARKitFaceBlendShapes.mouthPucker,
+            ]
+        case "ee":
+            return [
+                ARKitFaceBlendShapes.mouthSmileLeft,
+                ARKitFaceBlendShapes.mouthSmileRight,
+                ARKitFaceBlendShapes.mouthStretchLeft,
+                ARKitFaceBlendShapes.mouthStretchRight,
+            ]
+        case "oh":
+            return [ARKitFaceBlendShapes.mouthFunnel]
+        default:
+            return nil
+        }
+    }
 
     /// Default ARKit → VRM expression mappings
     ///
     /// Carefully tuned to provide good results for most VRM avatars.
     /// Based on VRM specification and common usage patterns.
-    public static let `default` = ARKitToVRMMapper(
-        mappings: [
-            // Emotions
-            "happy": .weighted([
-                (ARKitFaceBlendShapes.mouthSmileLeft, Float(0.4)),
-                (ARKitFaceBlendShapes.mouthSmileRight, Float(0.4)),
-                (ARKitFaceBlendShapes.cheekSquintLeft, Float(0.1)),
-                (ARKitFaceBlendShapes.cheekSquintRight, Float(0.1))
-            ]),
+    public static let `default`: ARKitToVRMMapper = {
+        var mapper = ARKitToVRMMapper(
+            mappings: [
+                // Emotions
+                "happy": .weighted([
+                    (ARKitFaceBlendShapes.mouthSmileLeft, Float(0.4)),
+                    (ARKitFaceBlendShapes.mouthSmileRight, Float(0.4)),
+                    (ARKitFaceBlendShapes.cheekSquintLeft, Float(0.1)),
+                    (ARKitFaceBlendShapes.cheekSquintRight, Float(0.1))
+                ]),
 
-            "angry": .weighted([
-                (ARKitFaceBlendShapes.browDownLeft, Float(0.3)),
-                (ARKitFaceBlendShapes.browDownRight, Float(0.3)),
-                (ARKitFaceBlendShapes.mouthFrownLeft, Float(0.2)),
-                (ARKitFaceBlendShapes.mouthFrownRight, Float(0.2))
-            ]),
+                "angry": .weighted([
+                    (ARKitFaceBlendShapes.browDownLeft, Float(0.3)),
+                    (ARKitFaceBlendShapes.browDownRight, Float(0.3)),
+                    (ARKitFaceBlendShapes.mouthFrownLeft, Float(0.2)),
+                    (ARKitFaceBlendShapes.mouthFrownRight, Float(0.2))
+                ]),
 
-            "sad": .custom { shapes in
-                let browInner = shapes.weight(for: ARKitFaceBlendShapes.browInnerUp)
-                let eyeWide = (shapes.weight(for: ARKitFaceBlendShapes.eyeWideLeft) +
-                               shapes.weight(for: ARKitFaceBlendShapes.eyeWideRight)) * 0.5
-                let browDown = (shapes.weight(for: ARKitFaceBlendShapes.browDownLeft) +
-                                shapes.weight(for: ARKitFaceBlendShapes.browDownRight)) * 0.5
-                let frown = (shapes.weight(for: ARKitFaceBlendShapes.mouthFrownLeft) +
-                             shapes.weight(for: ARKitFaceBlendShapes.mouthFrownRight)) * 0.3
-                return Swift.min(1.0, browInner * 0.4 * (1.0 - eyeWide) + frown * (1.0 - browDown * 0.5))
-            },
+                "sad": .custom(defaultSadClosure),
 
-            "relaxed": .custom { shapes in
-                // Relaxed = neutral with slight smile
-                let smile = (shapes.weight(for: ARKitFaceBlendShapes.mouthSmileLeft) +
-                            shapes.weight(for: ARKitFaceBlendShapes.mouthSmileRight)) * 0.3
-                let open = shapes.weight(for: ARKitFaceBlendShapes.jawOpen)
-                return Swift.min(1.0, smile * (1.0 - open))
-            },
+                "relaxed": .custom(defaultRelaxedClosure),
 
-            "surprised": .weighted([
-                (ARKitFaceBlendShapes.browInnerUp, Float(0.3)),
-                (ARKitFaceBlendShapes.browOuterUpLeft, Float(0.15)),
-                (ARKitFaceBlendShapes.browOuterUpRight, Float(0.15)),
-                (ARKitFaceBlendShapes.eyeWideLeft, Float(0.2)),
-                (ARKitFaceBlendShapes.eyeWideRight, Float(0.2))
-            ]),
+                "surprised": .weighted([
+                    (ARKitFaceBlendShapes.browInnerUp, Float(0.3)),
+                    (ARKitFaceBlendShapes.browOuterUpLeft, Float(0.15)),
+                    (ARKitFaceBlendShapes.browOuterUpRight, Float(0.15)),
+                    (ARKitFaceBlendShapes.eyeWideLeft, Float(0.2)),
+                    (ARKitFaceBlendShapes.eyeWideRight, Float(0.2))
+                ]),
 
-            // Visemes (vowel shapes)
-            // Partitioned across jaw opening, lip rounding (funnel/pucker), and lip spread
-            // (smile/stretch) so isolated jaw opening drives `aa` without simultaneously
-            // activating `ih` and `oh`.
-            "aa": .custom { shapes in
-                let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
-                                        shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
-                let round = Swift.max(shapes.weight(for: ARKitFaceBlendShapes.mouthFunnel),
-                                      shapes.weight(for: ARKitFaceBlendShapes.mouthPucker))
-                return Swift.min(1.0, open * 0.8 * (1.0 - round * 0.6))
-            },
-
-            "ih": .custom { shapes in
-                let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
-                                        shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
-                let smile = (shapes.weight(for: ARKitFaceBlendShapes.mouthSmileLeft) +
-                             shapes.weight(for: ARKitFaceBlendShapes.mouthSmileRight)) * 0.5
-                let stretch = (shapes.weight(for: ARKitFaceBlendShapes.mouthStretchLeft) +
-                               shapes.weight(for: ARKitFaceBlendShapes.mouthStretchRight)) * 0.5
-                return Swift.min(1.0, (stretch * 0.7 + smile * 0.35 * open) * (1.0 - open * 0.4))
-            },
-
-            "ou": .custom { shapes in
-                let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
-                                        shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
-                let funnel = shapes.weight(for: ARKitFaceBlendShapes.mouthFunnel)
-                let pucker = shapes.weight(for: ARKitFaceBlendShapes.mouthPucker)
-                return Swift.min(1.0, (pucker * 0.6 + funnel * 0.4) * (1.0 - open * 0.5))
-            },
-
-            "ee": .custom { shapes in
-                let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
-                                        shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
-                let smile = (shapes.weight(for: ARKitFaceBlendShapes.mouthSmileLeft) +
-                             shapes.weight(for: ARKitFaceBlendShapes.mouthSmileRight)) * 0.5
-                let stretch = (shapes.weight(for: ARKitFaceBlendShapes.mouthStretchLeft) +
-                               shapes.weight(for: ARKitFaceBlendShapes.mouthStretchRight)) * 0.5
-                return Swift.min(1.0, Swift.max(smile * 0.7, stretch * 0.8) * open)
-            },
-
-            "oh": .custom { shapes in
-                let open = Swift.max(0, shapes.weight(for: ARKitFaceBlendShapes.jawOpen) -
-                                        shapes.weight(for: ARKitFaceBlendShapes.mouthClose) * 0.5)
-                let funnel = shapes.weight(for: ARKitFaceBlendShapes.mouthFunnel)
-                return Swift.min(1.0, funnel * (0.4 + 0.6 * open))
-            },
+                // Visemes (vowel shapes)
+                // Partitioned across jaw opening, lip rounding (funnel/pucker), and lip spread
+                // (smile/stretch) so isolated jaw opening drives `aa` without simultaneously
+                // activating `ih` and `oh`.
+                "aa": .custom(defaultAaClosure),
+                "ih": .custom(defaultIhClosure),
+                "ou": .custom(defaultOuClosure),
+                "ee": .custom(defaultEeClosure),
+                "oh": .custom(defaultOhClosure),
 
             // Blink
             "blink": .average([
@@ -609,7 +828,10 @@ public struct ARKitToVRMMapper: Sendable {
             }
         ],
         mouthOverlapWeights: defaultMouthOverlapWeights
-    )
+        )
+        mapper.hasBuiltinDefaultCustomFormulas = true
+        return mapper
+    }()
 
     /// Simplified mappings (fewer dependencies, faster evaluation)
     public static let simplified = ARKitToVRMMapper(mappings: [
