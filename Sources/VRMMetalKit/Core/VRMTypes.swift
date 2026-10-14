@@ -303,7 +303,7 @@ public struct VRMTextureTransformBind {
 }
 
 /// How an expression interacts with automatic blink, look-at, and mouth drivers. Mirrors VRM 1.0 `override*` fields.
-public enum VRMExpressionOverrideType: String {
+public enum VRMExpressionOverrideType: String, Sendable {
     /// No interaction — the auto-driver continues to apply.
     case none
     /// Suppress the auto-driver while this expression is active.
