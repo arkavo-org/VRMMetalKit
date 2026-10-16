@@ -147,8 +147,8 @@ public class VRMMesh: @unchecked Sendable {
 /// `VRMPrimitive` owns all of the per-draw-call GPU resources for a slice of
 /// a mesh — position-only vertices in ``vertexBuffer``, remaining attributes
 /// in ``attributeBuffer``, indices (when present) in ``indexBuffer``,
-/// morph-target deltas (both per-target AoS buffers and SoA flattened
-/// buffers used by the GPU compute path), and first-person per-vertex
+/// morph-target deltas (flattened GPU compute buffers and lazily allocated
+/// per-target compatibility buffers), and first-person per-vertex
 /// visibility flags. Attribute presence is exposed through the `has*`
 /// Booleans so the renderer can route to the correct pipeline (skinned vs
 /// non-skinned, with/without UVs).
@@ -195,12 +195,58 @@ public class VRMPrimitive: @unchecked Sendable {
 
     /// Morph-target CPU data parsed from glTF `primitive.targets`.
     public var morphTargets: [VRMMorphTarget] = []
-    /// Per-morph-target position-delta buffers (Array-of-Structures layout, one buffer per target).
-    public var morphPositionBuffers: [MTLBuffer] = []
-    /// Per-morph-target normal-delta buffers.
-    public var morphNormalBuffers: [MTLBuffer] = []
-    /// Per-morph-target tangent-delta buffers.
-    public var morphTangentBuffers: [MTLBuffer] = []
+    /// Compatibility buffers, allocated on first access. Rendering uses ``morphPositionsSoA``.
+    public var morphPositionBuffers: [MTLBuffer] {
+        get { legacyMorphBuffers(for: .position) }
+        set { legacyMorphLock.withLock { legacyMorphStorage[.position] = newValue } }
+    }
+    /// Compatibility buffers, allocated on first access. Rendering uses ``morphNormalsSoA``.
+    public var morphNormalBuffers: [MTLBuffer] {
+        get { legacyMorphBuffers(for: .normal) }
+        set { legacyMorphLock.withLock { legacyMorphStorage[.normal] = newValue } }
+    }
+    /// Compatibility tangent-delta buffers, allocated on first access.
+    public var morphTangentBuffers: [MTLBuffer] {
+        get { legacyMorphBuffers(for: .tangent) }
+        set { legacyMorphLock.withLock { legacyMorphStorage[.tangent] = newValue } }
+    }
+
+    private enum MorphAttribute { case position, normal, tangent }
+    private let legacyMorphLock = NSLock()
+    private var legacyMorphDevice: MTLDevice?
+    private var legacyMorphTargets: [VRMMorphTarget] = []
+    private var legacyMorphStorage: [MorphAttribute: [MTLBuffer]] = [:]
+
+    /// Allocated compatibility-buffer bytes. Reading this does not allocate buffers.
+    public var legacyMorphBufferBytes: Int {
+        legacyMorphLock.withLock {
+            legacyMorphStorage.values.reduce(0) { total, buffers in
+                total + buffers.reduce(0) { $0 + $1.length }
+            }
+        }
+    }
+
+    private func legacyMorphBuffers(for attribute: MorphAttribute) -> [MTLBuffer] {
+        legacyMorphLock.withLock {
+            if let buffers = legacyMorphStorage[attribute] { return buffers }
+            guard let device = legacyMorphDevice else { return [] }
+            let buffers = legacyMorphTargets.compactMap { target -> MTLBuffer? in
+                let deltas: [SIMD3<Float>]?
+                switch attribute {
+                case .position: deltas = target.positionDeltas
+                case .normal: deltas = target.normalDeltas
+                case .tangent: deltas = target.tangentDeltas
+                }
+                guard let deltas, !deltas.isEmpty else { return nil }
+                let buffer = device.makeBuffer(bytes: deltas,
+                    length: deltas.count * MemoryLayout<SIMD3<Float>>.stride, options: .storageModeShared)
+                buffer?.label = "Morph Compatibility Delta"
+                return buffer
+            }
+            legacyMorphStorage[attribute] = buffers
+            return buffers
+        }
+    }
 
     /// Structure-of-Arrays position deltas for the GPU compute morph pass.
     /// Layout: `[morph0[v0..vN], morph1[v0..vN], ...]`.
@@ -680,53 +726,18 @@ public class VRMPrimitive: @unchecked Sendable {
         return !hasErrors
     }
 
-    /// Allocates GPU buffers (AoS and SoA layouts) for every morph target in ``morphTargets``.
-    ///
-    /// Call after ``morphTargets`` has been populated and before the first
-    /// frame. The renderer requires both the per-target AoS buffers
-    /// (``morphPositionBuffers``, ``morphNormalBuffers``, ``morphTangentBuffers``)
-    /// and the flattened SoA buffers (``morphPositionsSoA``, ``morphNormalsSoA``)
-    /// used by the compute morph kernel.
+    /// Allocates the flattened GPU morph representation used by rendering.
+    /// Compatibility per-target buffers are materialized only on explicit access.
     public func createMorphTargetBuffers(device: MTLDevice) {
-        morphPositionBuffers.removeAll()
-        morphNormalBuffers.removeAll()
-        morphTangentBuffers.removeAll()
-
-        for target in morphTargets {
-            // Create position delta buffer
-            if let positionDeltas = target.positionDeltas {
-                let bufferSize = positionDeltas.count * MemoryLayout<SIMD3<Float>>.stride
-                if let buffer = device.makeBuffer(bytes: positionDeltas, length: bufferSize, options: .storageModeShared) {
-                    buffer.label = "Morph Position Delta [\(morphPositionBuffers.count)]"
-                    morphPositionBuffers.append(buffer)
-                }
-            }
-
-            // Create normal delta buffer
-            if let normalDeltas = target.normalDeltas {
-                let bufferSize = normalDeltas.count * MemoryLayout<SIMD3<Float>>.stride
-                if let buffer = device.makeBuffer(bytes: normalDeltas, length: bufferSize, options: .storageModeShared) {
-                    buffer.label = "Morph Normal Delta [\(morphNormalBuffers.count)]"
-                    morphNormalBuffers.append(buffer)
-                }
-            }
-
-            // Create tangent delta buffer
-            if let tangentDeltas = target.tangentDeltas {
-                let bufferSize = tangentDeltas.count * MemoryLayout<SIMD3<Float>>.stride
-                if let buffer = device.makeBuffer(bytes: tangentDeltas, length: bufferSize, options: .storageModeShared) {
-                    buffer.label = "Morph Tangent Delta [\(morphTangentBuffers.count)]"
-                    morphTangentBuffers.append(buffer)
-                }
-            }
+        legacyMorphLock.withLock {
+            legacyMorphDevice = device
+            legacyMorphTargets = morphTargets
+            legacyMorphStorage.removeAll()
         }
-
-        vrmLog("[VRMPrimitive] Created GPU buffers for \(morphTargets.count) morph targets")
-        vrmLog("  - Position buffers: \(morphPositionBuffers.count)")
-        vrmLog("  - Normal buffers: \(morphNormalBuffers.count)")
-        vrmLog("  - Tangent buffers: \(morphTangentBuffers.count)")
-
-        // Create SoA buffers for compute path if we have morph targets
+        basePositionsBuffer = nil
+        baseNormalsBuffer = nil
+        morphPositionsSoA = nil
+        morphNormalsSoA = nil
         createSoAMorphBuffers(device: device)
     }
 
@@ -1342,6 +1353,19 @@ public class VRMNode {
     /// no-animation settle pair because the cached `localMatrix` never
     /// picked up the displacement.
     public func updateWorldTransform() {
+        updateWorldTransformSelf()
+        for child in children {
+            child.updateWorldTransform()
+        }
+    }
+
+    /// Refreshes an ancestor path without visiting sibling or descendant subtrees.
+    func updateWorldTransformFromAncestors() {
+        parent?.updateWorldTransformFromAncestors()
+        updateWorldTransformSelf()
+    }
+
+    func updateWorldTransformSelf() {
         if localMatrixDirty {
             updateLocalMatrix()
         }
@@ -1371,9 +1395,6 @@ public class VRMNode {
             normalMatrix = AffineNormalMatrix.inverseTranspose(of: newWorld)
         }
 
-        for child in children {
-            child.updateWorldTransform()
-        }
     }
 }
 

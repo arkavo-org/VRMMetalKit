@@ -44,6 +44,68 @@ public struct BenchmarkReport: Codable, Equatable, Sendable {
     /// backward-compatible (the comparator gates the intersection), so it does
     /// not require a schema bump.
     public let stats: [String: FrameStatsSnapshot]
+    /// Present for independently animated crowd runs; absent in legacy reports.
+    public let crowd: Crowd?
+
+    public struct Crowd: Codable, Equatable, Sendable {
+        public struct Workload: Codable, Equatable, Sendable {
+            public let avatarCount: Int
+            public let spacing: Float
+            public let layout: String
+            public let policy: String
+            public let submission: String
+            public let framesInFlight: Int
+            public let fps: Double
+            public let springBoneEnabled: Bool
+            public let outlineWidth: Float
+            public let cameraOffsetY: Float
+            public let depthPrepass: Bool
+            public let wireframe: Bool
+            public let debugUVs: Int32
+
+            public init(avatarCount: Int, spacing: Float, layout: String, policy: String,
+                        submission: String, framesInFlight: Int, fps: Double,
+                        springBoneEnabled: Bool, outlineWidth: Float, cameraOffsetY: Float,
+                        depthPrepass: Bool, wireframe: Bool, debugUVs: Int32) {
+                self.avatarCount = avatarCount
+                self.spacing = spacing
+                self.layout = layout
+                self.policy = policy
+                self.submission = submission
+                self.framesInFlight = framesInFlight
+                self.fps = fps
+                self.springBoneEnabled = springBoneEnabled
+                self.outlineWidth = outlineWidth
+                self.cameraOffsetY = cameraOffsetY
+                self.depthPrepass = depthPrepass
+                self.wireframe = wireframe
+                self.debugUVs = debugUVs
+            }
+        }
+
+        public let workload: Workload
+        public let device: String
+        public let osVersion: String
+        public let metalAllocatedBytes: Int
+        public let legacyMorphBufferBytes: Int
+        public let loadMilliseconds: Double
+        public let wallMilliseconds: Double
+        /// Mean counters per scene frame, including avatars skipped by the scheduler.
+        public let counters: [String: Double]
+
+        public init(workload: Workload, device: String, osVersion: String,
+                    metalAllocatedBytes: Int, legacyMorphBufferBytes: Int,
+                    loadMilliseconds: Double, wallMilliseconds: Double, counters: [String: Double]) {
+            self.workload = workload
+            self.device = device
+            self.osVersion = osVersion
+            self.metalAllocatedBytes = metalAllocatedBytes
+            self.legacyMorphBufferBytes = legacyMorphBufferBytes
+            self.loadMilliseconds = loadMilliseconds
+            self.wallMilliseconds = wallMilliseconds
+            self.counters = counters
+        }
+    }
 
     public struct Input: Codable, Equatable, Sendable {
         public let vrm: String?
@@ -114,7 +176,7 @@ public struct BenchmarkReport: Codable, Equatable, Sendable {
     }
 
     public init(timestamp: Date, label: String, input: Input, config: Config,
-                system: System, stats: [String: FrameStatsSnapshot]) {
+                system: System, stats: [String: FrameStatsSnapshot], crowd: Crowd? = nil) {
         self.schemaVersion = Self.currentSchemaVersion
         self.timestamp = timestamp
         self.label = label
@@ -122,6 +184,7 @@ public struct BenchmarkReport: Codable, Equatable, Sendable {
         self.config = config
         self.system = system
         self.stats = stats
+        self.crowd = crowd
     }
 
     /// Encodes the report as pretty JSON with sorted keys and ISO-8601 timestamps.

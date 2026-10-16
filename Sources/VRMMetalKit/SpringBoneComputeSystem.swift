@@ -51,6 +51,9 @@ import simd
 final class SpringBoneComputeSystem: @unchecked Sendable {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
+    private let framePool: SpringBoneFramePool
+    private var encodingSharedFrame = false
+    private var pendingKinematicReset: [SIMD3<Float>]?
 
     private var kinematicPipeline: MTLComputePipelineState?
     private var predictPipeline: MTLComputePipelineState?
@@ -353,6 +356,18 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Per-chain max velocities from the last completed command buffer.
     private var completedChainVelocities: [Float] = []
     private var simulationFrameCounter: UInt64 = 0
+    private var readbackGeneration: UInt64 = 0
+    private struct ReadbackContext: Sendable {
+        let generation: UInt64
+        let inverseTimestep: Float
+        let ranges: [Range<Int>]
+    }
+
+    private func readbackContext() -> ReadbackContext {
+        ReadbackContext(generation: snapshotLock.withLock { readbackGeneration },
+                        inverseTimestep: max(1, Float(quality.substepRateHz)), ranges: chainRanges)
+    }
+
     private var latestCompletedFrame: UInt64 = 0
     private var lastAppliedFrame: UInt64 = 0
     private var skippedReadbacks: Int = 0
@@ -370,6 +385,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     init(device: MTLDevice) throws {
         self.device = device
+        self.framePool = SpringBoneFramePool(device: device)
         self.commandQueue = MetalQueueFactory.makeCommandQueue(device: device)!
 
         // Load compute shaders from pre-compiled .metallib
@@ -610,6 +626,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             waitForPendingFrame()
         }
 
+        let frameResources = commandBuffer.map { _ in framePool.acquire() }
+        encodingSharedFrame = commandBuffer != nil
+        defer { encodingSharedFrame = false }
+
         // Fixed timestep accumulation
         timeAccumulator += deltaTime
         let fixedDeltaTime = 1.0 / rateHz
@@ -638,10 +658,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // measured against last frame's animated target — independent of any
         // collision pushes that may have touched bonePosCurr (Bug #4).
         //
-        // PERFORMANCE NOTE: On unified memory architectures (.storageModeShared), this is
-        // a CPU-side memcpy of the final pose. To ensure no CPU-GPU data race against any
-        // in-flight GPU read of the previous frame's prev buffer, callers must synchronize
-        // at frame boundaries (i.e. wait for frame N to complete before encoding frame N+1).
+        // These buffers are host staging storage. Shared command buffers read
+        // immutable copies owned by that frame, including the previous-root mirror.
         if frameSubstepCount > 0,
            let curr = animatedRootPositionsBuffer,
            let prev = animatedRootPositionsPrevBuffer {
@@ -729,6 +747,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         writeForeignTail(buffers: buffers, foreign: clampedForeign, external: clampedExternal)
         performanceTracker?.endPhase(.springTargetCapture)
 
+        var didReset = false
+        if let positions = pendingKinematicReset,
+           let commandBuffer, let frameResources,
+           let current = buffers.bonePosCurr, let previous = buffers.bonePosPrev {
+            let byteCount = positions.count * MemoryLayout<SIMD3<Float>>.stride
+            if let upload = frameResources.allocate(length: byteCount),
+               let blit = commandBuffer.makeBlitCommandEncoder() {
+                positions.withUnsafeBytes { bytes in
+                    upload.buffer.contents().advanced(by: upload.offset)
+                        .copyMemory(from: bytes.baseAddress!, byteCount: byteCount)
+                }
+                blit.copy(from: upload.buffer, sourceOffset: upload.offset,
+                          to: current, destinationOffset: 0, size: byteCount)
+                blit.copy(from: upload.buffer, sourceOffset: upload.offset,
+                          to: previous, destinationOffset: 0, size: byteCount)
+                blit.endEncoding()
+                pendingKinematicReset = nil
+                didReset = true
+            }
+        }
         var stepsThisFrame = 0
 
         // Process fixed steps (clamped to avoid spiral-of-death).
@@ -797,7 +835,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let isLastSubstep = (timeAccumulator < fixedDeltaTime) || (stepsThisFrame >= maxSubsteps)
 
             // Execute XPBD pipeline
-            executeXPBDStep(buffers: buffers, globalParams: params, sharedCommandBuffer: commandBuffer, substepIndex: currentSubstepIdx, registerCompletedHandler: isLastSubstep)
+            executeXPBDStep(buffers: buffers, globalParams: params, sharedCommandBuffer: commandBuffer, substepIndex: currentSubstepIdx, registerCompletedHandler: isLastSubstep, frameResources: frameResources)
 
             // Debug: Log bone positions occasionally
             updateCounter += 1
@@ -878,14 +916,55 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             lastFrameSubstepCount = max(1, frameSubstepCount)
         }
 
+        if let commandBuffer, let frameResources {
+            finishSharedPhysicsFrame(commandBuffer: commandBuffer, resources: frameResources,
+                                     buffers: buffers, hasOutput: stepsThisFrame > 0 || didReset)
+        }
         lastUpdateTime = CACurrentMediaTime()
+    }
+
+    private func finishSharedPhysicsFrame(commandBuffer: MTLCommandBuffer,
+                                          resources: SpringBoneFrameResources,
+                                          buffers: SpringBoneBuffers, hasOutput: Bool) {
+        let byteCount = buffers.numBones * MemoryLayout<SIMD3<Float>>.stride
+        var currentCopy: SpringBoneFrameResources.Binding?
+        var previousCopy: SpringBoneFrameResources.Binding?
+        if hasOutput, let current = buffers.bonePosCurr, let previous = buffers.bonePosPrev,
+           let currentDestination = resources.allocate(length: byteCount),
+           let previousDestination = resources.allocate(length: byteCount),
+           let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.label = "SpringBone Completed Frame Snapshot"
+            blit.copy(from: current, sourceOffset: 0, to: currentDestination.buffer,
+                      destinationOffset: currentDestination.offset, size: byteCount)
+            blit.copy(from: previous, sourceOffset: 0, to: previousDestination.buffer,
+                      destinationOffset: previousDestination.offset, size: byteCount)
+            blit.endEncoding()
+            currentCopy = currentDestination
+            previousCopy = previousDestination
+        }
+        let capturedCurrent = currentCopy
+        let capturedPrevious = previousCopy
+        let numBones = buffers.numBones
+        let frameID = simulationFrameCounter
+        let pool = framePool
+        let context = readbackContext()
+        commandBuffer.addCompletedHandler { [weak self] buffer in
+            defer { pool.release(resources) }
+            guard buffer.status == .completed, let capturedCurrent, let capturedPrevious else { return }
+            self?.captureCompletedPositions(bonePosCurr: capturedCurrent.buffer,
+                                            bonePosPrev: capturedPrevious.buffer,
+                                            numBones: numBones, frameID: frameID, context: context,
+                                            currentOffset: capturedCurrent.offset,
+                                            previousOffset: capturedPrevious.offset)
+        }
     }
 
     private func executeXPBDStep(buffers: SpringBoneBuffers,
                                   globalParams: SpringBoneGlobalParams,
                                   sharedCommandBuffer: MTLCommandBuffer? = nil,
                                   substepIndex: Int = 0,
-                                  registerCompletedHandler: Bool = true) {
+                                  registerCompletedHandler: Bool = true,
+                                  frameResources: SpringBoneFrameResources? = nil) {
         guard let kinematicPipeline = kinematicPipeline,
               let predictPipeline = predictPipeline,
               let distancePipeline = distancePipeline,
@@ -913,6 +992,29 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         let numBones = buffers.numBones
+        var capturedInputs: [Int: SpringBoneFrameResources.Binding] = [:]
+        if let frameResources {
+            let rootBytes = rootBoneIndices.count * MemoryLayout<SIMD3<Float>>.stride
+            let centerBytes = centerSpringRecords.count * MemoryLayout<CenterDeltaRecordGPU>.stride
+            let inputs: [(Int, MTLBuffer?, Int, Int?)] = [
+                (17, chainSleepBuffer, 0, nil),
+                (2, buffers.boneParams, 0, nil),
+                (3, globalParamsBuffer, substepIndex * globalParamsStride, globalParamsStride),
+                (4, buffers.restLengths, 0, nil),
+                (5, buffers.sphereColliders, substepIndex * buffers.sphereColliderStride, buffers.sphereColliderStride),
+                (6, buffers.capsuleColliders, substepIndex * buffers.capsuleColliderStride, buffers.capsuleColliderStride),
+                (7, buffers.planeColliders, 0, nil),
+                (11, buffers.bindDirections, substepIndex * buffers.bindDirectionsStride, buffers.bindDirectionsStride),
+                (8, animatedRootPositionsBuffer, substepIndex * alignedStepLength, rootBytes),
+                (12, animatedRootPositionsPrevBuffer, 0, rootBytes),
+                (13, centerDeltaBuffer, substepIndex * centerBytes, centerBytes)
+            ]
+            for (index, source, offset, length) in inputs {
+                guard let source, length != 0 else { continue }
+                guard let copy = frameResources.snapshot(source, offset: offset, length: length) else { return }
+                capturedInputs[index] = copy
+            }
+        }
         let threadgroupSize = MTLSize(width: 256, height: 1, depth: 1)
         let gridSize = MTLSize(width: numBones, height: 1, depth: 1) // Exact thread count for Metal
 
@@ -921,30 +1023,37 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return
         }
         computeEncoder.label = "SpringBone Compute"
+        func bindInput(_ buffer: MTLBuffer?, offset: Int, index: Int) {
+            if let copy = capturedInputs[index] {
+                computeEncoder.setBuffer(copy.buffer, offset: copy.offset, index: index)
+            } else {
+                computeEncoder.setBuffer(buffer, offset: offset, index: index)
+            }
+        }
 
         // Set buffers
         computeEncoder.setBuffer(boneChainIndexBuffer, offset: 0, index: 16)
-        computeEncoder.setBuffer(chainSleepBuffer, offset: 0, index: 17)
+        bindInput(chainSleepBuffer, offset: 0, index: 17)
         computeEncoder.setBuffer(buffers.bonePosPrev, offset: 0, index: 0)
         computeEncoder.setBuffer(buffers.bonePosCurr, offset: 0, index: 1)
-        computeEncoder.setBuffer(buffers.boneParams, offset: 0, index: 2)
-        computeEncoder.setBuffer(globalParamsBuffer, offset: substepIndex * globalParamsStride, index: 3)
-        computeEncoder.setBuffer(buffers.restLengths, offset: 0, index: 4)
+        bindInput(buffers.boneParams, offset: 0, index: 2)
+        bindInput(globalParamsBuffer, offset: substepIndex * globalParamsStride, index: 3)
+        bindInput(buffers.restLengths, offset: 0, index: 4)
 
         // Colliders and bindDirections are rewritten per substep, so each
         // dispatch must read its own slot (VMK#396).
         if let sphereColliders = buffers.sphereColliders, globalParams.numSpheres > 0 {
-            computeEncoder.setBuffer(sphereColliders,
+            bindInput(sphereColliders,
                                      offset: substepIndex * buffers.sphereColliderStride, index: 5)
         }
 
         if let capsuleColliders = buffers.capsuleColliders, globalParams.numCapsules > 0 {
-            computeEncoder.setBuffer(capsuleColliders,
+            bindInput(capsuleColliders,
                                      offset: substepIndex * buffers.capsuleColliderStride, index: 6)
         }
 
         if let planeColliders = buffers.planeColliders, globalParams.numPlanes > 0 {
-            computeEncoder.setBuffer(planeColliders, offset: 0, index: 7)
+            bindInput(planeColliders, offset: 0, index: 7)
         }
 
         // Bind directions for stiffness spring force (return-to-bind-pose)
@@ -952,7 +1061,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // with world-space bind directions interpolated from parent bone rotations.
         // This prevents rotational snapping during fast character turns.
         if let bindDirections = buffers.bindDirections {
-            computeEncoder.setBuffer(bindDirections,
+            bindInput(bindDirections,
                                      offset: substepIndex * buffers.bindDirectionsStride, index: 11)
         }
 
@@ -971,10 +1080,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             assert(substepIndex < VRMConstants.Physics.maxSubstepsPerFrame, "substepIndex \(substepIndex) exceeds max allocated capacity")
             let byteOffset = substepIndex * alignedStepLength
 
-            computeEncoder.setBuffer(animatedRootPositionsBuffer, offset: byteOffset, index: 8)
+            bindInput(animatedRootPositionsBuffer, offset: byteOffset, index: 8)
             computeEncoder.setBuffer(rootBoneIndicesBuffer, offset: 0, index: 9)
             computeEncoder.setBuffer(numRootBonesBuffer, offset: 0, index: 10)
-            computeEncoder.setBuffer(animatedRootPositionsPrevBuffer, offset: 0, index: 12)
+            bindInput(animatedRootPositionsPrevBuffer, offset: 0, index: 12)
             let rootGridSize = MTLSize(width: rootBoneIndices.count, height: 1, depth: 1)
             computeEncoder.dispatchThreads(rootGridSize, threadsPerThreadgroup: threadgroupSize)
             computeEncoder.memoryBarrier(scope: .buffers)
@@ -994,7 +1103,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let recordStride = MemoryLayout<CenterDeltaRecordGPU>.stride
             let substepByteOffset = substepIndex * recordCount * recordStride
             computeEncoder.setComputePipelineState(centerDeltaPipeline)
-            computeEncoder.setBuffer(centerDeltaBuffer, offset: substepByteOffset, index: 13)
+            bindInput(centerDeltaBuffer, offset: substepByteOffset, index: 13)
             var numRecordsU32 = UInt32(recordCount)
             computeEncoder.setBytes(&numRecordsU32, length: MemoryLayout<UInt32>.size, index: 14)
             let recordGridSize = MTLSize(width: recordCount, height: 1, depth: 1)
@@ -1048,6 +1157,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         simulationFrameCounter &+= 1
         let frameID = simulationFrameCounter
 
+        if usingSharedBuffer { return }
+
         let capturedBonePosCurr = buffers.bonePosCurr
         let capturedBonePosPrev = buffers.bonePosPrev
         let capturedNumBones = buffers.numBones
@@ -1063,6 +1174,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
         
         if shouldRegister {
+            let context = readbackContext()
             commandBuffer.addCompletedHandler { [weak self] buffer in
                 defer { snapshotSemaphore?.signal() }
                 guard let self = self else { return }
@@ -1086,7 +1198,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 self.captureCompletedPositions(bonePosCurr: capturedBonePosCurr,
                                                bonePosPrev: capturedBonePosPrev,
                                                numBones: capturedNumBones,
-                                               frameID: frameID)
+                                               frameID: frameID, context: context)
             }
         }
 
@@ -2005,6 +2117,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         latestPositionsSnapshot.removeAll(keepingCapacity: true)
         latestPrevPositionsSnapshot.removeAll(keepingCapacity: true)
         completedChainVelocities.removeAll(keepingCapacity: true)
+        readbackGeneration &+= 1
         latestCompletedFrame = 0
         lastAppliedFrame = 0
         snapshotLock.unlock()
@@ -2202,14 +2315,19 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private func captureCompletedPositions(bonePosCurr: MTLBuffer?,
                                            bonePosPrev: MTLBuffer? = nil,
                                            numBones: Int,
-                                           frameID: UInt64) {
+                                           frameID: UInt64,
+                                           context: ReadbackContext,
+                                           currentOffset: Int = 0,
+                                           previousOffset: Int = 0) {
         guard let bonePosCurr = bonePosCurr, numBones > 0 else {
             return
         }
 
-        let sourcePointer = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+        let sourcePointer = bonePosCurr.contents().advanced(by: currentOffset).bindMemory(to: SIMD3<Float>.self, capacity: numBones)
 
         snapshotLock.lock()
+        defer { snapshotLock.unlock() }
+        guard context.generation == readbackGeneration, frameID >= latestCompletedFrame else { return }
         if latestPositionsSnapshot.count != numBones {
             latestPositionsSnapshot = Array(repeating: SIMD3<Float>(repeating: 0), count: numBones)
         }
@@ -2223,17 +2341,16 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             if latestPrevPositionsSnapshot.count != numBones {
                 latestPrevPositionsSnapshot = Array(repeating: SIMD3<Float>(repeating: 0), count: numBones)
             }
-            let prevPointer = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+            let prevPointer = bonePosPrev.contents().advanced(by: previousOffset).bindMemory(to: SIMD3<Float>.self, capacity: numBones)
             latestPrevPositionsSnapshot.withUnsafeMutableBufferPointer { destination in
                 guard let dst = destination.baseAddress else { return }
                 dst.update(from: prevPointer, count: numBones)
             }
-            let invDt = quality.substepRateHz > 0 ? Float(quality.substepRateHz) : 1
             completedChainVelocities = SpringBoneSleepGate.chainMaxVelocities(
                 curr: latestPositionsSnapshot,
                 prev: latestPrevPositionsSnapshot,
-                ranges: chainRanges,
-                invDt: invDt
+                ranges: context.ranges,
+                invDt: context.inverseTimestep
             )
         }
 
@@ -2254,7 +2371,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         latestCompletedFrame = frameID
-        snapshotLock.unlock()
     }
 
     /// Read back GPU-computed bone positions and update VRMNode transforms
@@ -2344,6 +2460,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 updateNodeTransformsForChain(nodePositions: chainNodePositions)
             }
         }
+        performanceTracker?.beginPhase(.transformUpdate)
+        model.updateNodeTransforms()
+        performanceTracker?.endPhase(.transformUpdate)
     }
 
     #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
@@ -2356,6 +2475,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let shouldLog = rotationDiagCounter <= 5 || rotationDiagCounter % 60 == 0
         #endif
 
+        // Consecutive joints reuse the parent just written; gaps refresh only the ancestor path.
+        var lastUpdatedNode: VRMNode?
         // Update bone rotations to point toward physics-simulated positions
         for i in 0..<nodePositions.count - 1 {
             let (currentNode, currentPos, globalIndex) = nodePositions[i]
@@ -2391,6 +2512,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
             // Get parent's world rotation (CURRENT, after earlier bones in chain were updated)
             guard let parent = currentNode.parent else { continue }
+            if parent !== lastUpdatedNode {
+                parent.updateWorldTransformFromAncestors()
+            }
             let parentRot = extractRotation(from: parent.worldMatrix)
 
             // NaN guard for parent rotation
@@ -2398,8 +2522,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                parentRot.imag.y.isNaN || parentRot.imag.z.isNaN {
                 vrmLogPhysics("[SpringBone] ⚠️ Parent rotation NaN, resetting node \(currentNode.name ?? "unnamed")")
                 currentNode.localRotation = currentNode.initialRotation
-                currentNode.updateLocalMatrix()
-                currentNode.updateWorldTransform()
+                currentNode.updateWorldTransformSelf()
+                lastUpdatedNode = currentNode
                 continue
             }
 
@@ -2482,14 +2606,14 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                newRotation.imag.z.isNaN || newRotation.imag.z.isInfinite {
                 vrmLogPhysics("[SpringBone] ⚠️ Calculated rotation NaN/Inf, resetting node \(currentNode.name ?? "unnamed")")
                 currentNode.localRotation = currentNode.initialRotation
-                currentNode.updateLocalMatrix()
-                currentNode.updateWorldTransform()
+                currentNode.updateWorldTransformSelf()
+                lastUpdatedNode = currentNode
                 continue
             }
 
             currentNode.localRotation = newRotation
-            currentNode.updateLocalMatrix()
-            currentNode.updateWorldTransform()
+            currentNode.updateWorldTransformSelf()
+            lastUpdatedNode = currentNode
         }
     }
 
@@ -3071,12 +3195,16 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Reset both previous and current positions to kinematic (eliminates velocity)
-        let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
-        let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
-        for i in 0..<buffers.numBones {
-            prevPtr[i] = kinematicPositions[i]
-            currPtr[i] = kinematicPositions[i]
+        // A shared frame resets GPU state in command order, after earlier frames.
+        if encodingSharedFrame {
+            pendingKinematicReset = kinematicPositions
+        } else {
+            let prevPtr = bonePosPrev.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+            let currPtr = bonePosCurr.contents().bindMemory(to: SIMD3<Float>.self, capacity: buffers.numBones)
+            for i in 0..<buffers.numBones {
+                prevPtr[i] = kinematicPositions[i]
+                currPtr[i] = kinematicPositions[i]
+            }
         }
 
         // Reset time accumulator to prevent multiple substeps after teleport
@@ -3091,6 +3219,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         latestPositionsSnapshot.removeAll(keepingCapacity: true)
         latestPrevPositionsSnapshot.removeAll(keepingCapacity: true)
         completedChainVelocities.removeAll(keepingCapacity: true)
+        readbackGeneration &+= 1
         latestCompletedFrame = 0
         lastAppliedFrame = 0
         snapshotLock.unlock()

@@ -276,4 +276,30 @@ final class PerformanceTrackerTests: XCTestCase {
         XCTAssertEqual(tracker.samples(for: .total).count, 2,
             "the frame total is still recorded for both frames")
     }
+    func testLatestFrameDoesNotReuseCountersOrPhasesForIdleFrames() throws {
+        let tracker = PerformanceTracker()
+        var clock: CFTimeInterval = 0
+        tracker.now = { clock }
+        tracker.beginFrame()
+        tracker.recordDrawCall(triangles: 4, vertices: 12)
+        tracker.recordMorphCompute()
+        tracker.beginPhase(.morphSetup)
+        clock += 0.002
+        tracker.endPhase(.morphSetup)
+        tracker.endFrame()
+        let first = try XCTUnwrap(tracker.latestFrame)
+        XCTAssertEqual(first.sequence, 1)
+        XCTAssertEqual(first.drawCalls, 1)
+        XCTAssertEqual(first.morphComputes, 1)
+        XCTAssertEqual(first.phases[.morphSetup] ?? 0, 2, accuracy: 1e-9)
+        tracker.beginFrame()
+        tracker.endFrame()
+        let idle = try XCTUnwrap(tracker.latestFrame)
+        XCTAssertEqual(idle.sequence, 2)
+        XCTAssertEqual(idle.drawCalls, 0)
+        XCTAssertTrue(idle.phases.isEmpty)
+        tracker.reset()
+        XCTAssertNil(tracker.latestFrame)
+    }
+
 }

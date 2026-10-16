@@ -251,7 +251,7 @@ public class PerformanceTracker {
     private var sortedCpuFrameTimes: [Double] = []
 
     // Sub-phase CPU timers
-    public enum Phase: CaseIterable {
+    public enum Phase: CaseIterable, Sendable {
         case morphSetup
         case morphActiveSet
         case springBone
@@ -266,6 +266,18 @@ public class PerformanceTracker {
         case commandEncode
         case total
     }
+    /// Last encoded frame, captured on the frame-producing thread. GPU timing is separate.
+    public struct FrameSample: Sendable {
+        public let sequence: Int
+        public let phases: [Phase: Double]
+        public let drawCalls: Int
+        public let culledDraws: Int
+        public let morphComputes: Int
+        public let triangles: Int
+        public let vertices: Int
+    }
+    public private(set) var latestFrame: FrameSample?
+
     private var phaseTimers: [Phase: CFTimeInterval] = [:]
     private var phaseAccumulators: [Phase: (totalMs: Double, count: Int)] = [:]
     // Elapsed time per phase within the open frame; a phase may be begun several
@@ -335,6 +347,10 @@ public class PerformanceTracker {
         for (phase, ms) in phaseFrameTotals {
             accumulatePhase(phase, ms: ms)
         }
+        latestFrame = FrameSample(sequence: frameCount + 1, phases: phaseFrameTotals,
+            drawCalls: currentFrameMetrics.drawCalls, culledDraws: currentFrameMetrics.culledDraws,
+            morphComputes: currentFrameMetrics.morphComputes, triangles: currentFrameMetrics.triangles,
+            vertices: currentFrameMetrics.vertices)
         phaseFrameTotals.removeAll(keepingCapacity: true)
         frameOpen = false
 
@@ -484,6 +500,7 @@ public class PerformanceTracker {
         lastFrameTime = 0
         frameStartTime = 0
         frameCount = 0
+        latestFrame = nil
         totalDrawCalls = 0
         totalCulledDraws = 0
         totalStateChanges = 0

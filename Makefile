@@ -212,6 +212,15 @@ BENCH_WARMUP   ?= 30
 BENCH_BASELINE ?= baselines/baseline.json
 BENCH_ARGS      = --mode render --frames $(BENCH_FRAMES) --warmup $(BENCH_WARMUP) --vrma $(BENCH_VRMA)
 
+BENCH_CROWD_COUNT  ?= 64
+BENCH_CROWD_POLICY ?= full
+BENCH_CROWD_OUT    ?= /tmp/vrm-crowd.json
+
+.PHONY: bench-crowd
+bench-crowd:
+	@swift build -c release --product VRMBenchmark
+	@.build/release/VRMBenchmark $(BENCH_VRM) --mode crowd --avatar-count $(BENCH_CROWD_COUNT) --vrma $(BENCH_VRMA) --spring-bone --fps 60 --frames $(BENCH_FRAMES) --warmup $(BENCH_WARMUP) --crowd-policy $(BENCH_CROWD_POLICY) --json $(BENCH_CROWD_OUT)
+
 bench-baseline:
 	@echo "📊  Recording performance baseline to $(BENCH_BASELINE) (this machine is the reference)..."
 	@swift build -c release --product VRMBenchmark

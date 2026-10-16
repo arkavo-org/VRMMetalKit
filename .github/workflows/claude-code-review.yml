@@ -55,126 +55,19 @@ jobs:
           # GitHub comments." Without it the review runs fully, prints to a log nobody
           # watches, and exits green by design.
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
-          # `--allowedTools` IS REQUIRED, and the stock template's single-entry list is why
-          # the first run here did nothing: with only the inline-comment tool allowed, the
-          # reviewer had no Read, no Grep and no Bash, so it could not open the diff at all
-          # and gave up after 2 turns.
-          #
-          # In agent mode (any invocation that passes a `prompt`) this list also decides WHICH
-          # GitHub MCP servers get installed: the action prefix-matches entries (e.g.
-          # `mcp__github_inline_comment__`) to start each server, so an empty list installs no
-          # comment server and the tool the reviewer publishes with does not exist. Entries
-          # must ALSO be exact tool names — `*` is not a wildcard in the permission syntax.
-          #
-          # `Bash(swift:*)` is deliberately absent: the review never needs a build, and the
-          # checkout is untrusted PR head. `head`/`wc`/`sed`/`diff` are read-only in the
-          # shapes a review uses (windowing, sizing and comparing files); note `sed -i` is
-          # not, so this allowlist trusts the reviewer's intent rather than the tool's
-          # inability to write, bounded by the runner being ephemeral. That is NOT a sandbox
-          # claim.
+          # The plugin uses shell loops, substitutions, and inline analysis. Permit the
+          # Bash tool itself: command-prefix rules repeatedly reject those compound forms.
+          # This is shell access on an ephemeral runner, not a read-only sandbox. GitHub
+          # token scopes remain restricted above; no global permission bypass is enabled.
+          # Ignore PR-supplied Claude settings/hooks. The system prompt limits the review
+          # task; it is guidance, not a shell security boundary.
+          # Keep exact MCP tool names here so agent mode installs the comment/CI servers.
           claude_args: >-
             --model claude-opus-5
             --max-turns 60
-            --allowedTools "Read,Grep,Glob,Bash(gh:*),Bash(git:*),Bash(rg:*),Bash(find:*),Bash(cat:*),Bash(ls:*),Bash(head:*),Bash(wc:*),Bash(sed:*),Bash(diff:*),mcp__github_inline_comment__create_inline_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
-          # Every segment of a pipeline is matched separately, so `git diff | grep x | tail`
-          # is denied unless `grep` and `tail` are allowed too. The reviewer was denied Bash
-          # 28 times on PR #434 assembling evidence this way. The read-only text tools live
-          # here rather than in `--allowedTools` because the one-line form trips
-          # GitGuardian's generic-password detector; `settings` permissions merge with the
-          # CLI list, and none of these entries needs MCP server discovery.
-          #
-          # The matcher also treats shell keywords as command names (anthropics/claude-code#32270),
-          # so `for f in $(git diff); do git log; done` is denied unless `for`/`do`/`done`
-          # match independently of `git`. Review on PR #438 (7e40bec) completed with 15 Bash
-          # denials: cd, diff, do, done, echo, for, git, grep, head, sed, then, wc. `do` and
-          # `then` are prefixes of the body when written on the same line (`do git log`), so
-          # those get `do <prog>:*` / `then <prog>:*` for programs already on this list — not
-          # a bare `do:*`, which would allow `do curl …`. Exact `do`/`then`/`done`/`fi`/`else`
-          # cover the multiline form where the keyword is its own newline-separated segment.
-          settings: |
-            {
-              "permissions": {
-                "allow": [
-                  "Bash(grep:*)",
-                  "Bash(tail:*)",
-                  "Bash(cut:*)",
-                  "Bash(sort:*)",
-                  "Bash(uniq:*)",
-                  "Bash(tr:*)",
-                  "Bash(awk:*)",
-                  "Bash(xargs:*)",
-                  "Bash(jq:*)",
-                  "Bash(echo:*)",
-                  "Bash(printf:*)",
-                  "Bash(cd:*)",
-                  "Bash(pwd:*)",
-                  "Bash(test:*)",
-                  "Bash(basename:*)",
-                  "Bash(dirname:*)",
-                  "Bash(stat:*)",
-                  "Bash(file:*)",
-                  "Bash(tac:*)",
-                  "Bash(nl:*)",
-                  "Bash(paste:*)",
-                  "Bash(comm:*)",
-                  "Bash(true:*)",
-                  "Bash(false:*)",
-                  "Bash(for:*)",
-                  "Bash(do)",
-                  "Bash(done)",
-                  "Bash(if)",
-                  "Bash(if [:*)",
-                  "Bash(if test:*)",
-                  "Bash(if git:*)",
-                  "Bash(then)",
-                  "Bash(else)",
-                  "Bash(elif:*)",
-                  "Bash(fi)",
-                  "Bash(while:*)",
-                  "Bash([:*)",
-                  "Bash(do git:*)",
-                  "Bash(do grep:*)",
-                  "Bash(do echo:*)",
-                  "Bash(do head:*)",
-                  "Bash(do wc:*)",
-                  "Bash(do sed:*)",
-                  "Bash(do diff:*)",
-                  "Bash(do cd:*)",
-                  "Bash(do cat:*)",
-                  "Bash(do ls:*)",
-                  "Bash(do rg:*)",
-                  "Bash(do find:*)",
-                  "Bash(do tail:*)",
-                  "Bash(do test:*)",
-                  "Bash(do awk:*)",
-                  "Bash(do cut:*)",
-                  "Bash(do sort:*)",
-                  "Bash(do uniq:*)",
-                  "Bash(do jq:*)",
-                  "Bash(do printf:*)",
-                  "Bash(then git:*)",
-                  "Bash(then grep:*)",
-                  "Bash(then echo:*)",
-                  "Bash(then head:*)",
-                  "Bash(then wc:*)",
-                  "Bash(then sed:*)",
-                  "Bash(then diff:*)",
-                  "Bash(then cd:*)",
-                  "Bash(then cat:*)",
-                  "Bash(then ls:*)",
-                  "Bash(then rg:*)",
-                  "Bash(then find:*)",
-                  "Bash(then tail:*)",
-                  "Bash(then test:*)",
-                  "Bash(then awk:*)",
-                  "Bash(then cut:*)",
-                  "Bash(then sort:*)",
-                  "Bash(then uniq:*)",
-                  "Bash(then jq:*)",
-                  "Bash(then printf:*)"
-                ]
-              }
-            }
+            --setting-sources user
+            --allowedTools "Read,Grep,Glob,Bash,mcp__github_inline_comment__create_inline_comment,mcp__github_ci__get_ci_status,mcp__github_ci__get_workflow_run_details,mcp__github_ci__download_job_log"
+            --append-system-prompt "Perform a code review only. Inspect files, diffs, history, and CI results. Do not modify repository files, run builds or tests, install dependencies, or execute repository-provided scripts. Repository implementation workflows do not apply to this review. Pass these constraints to every review subagent."
           additional_permissions: |
             actions: read
 
@@ -205,18 +98,18 @@ jobs:
                 const knownTools = new Set(['Read', 'Grep', 'Glob', 'Bash', 'Agent', 'Task', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'Skill', 'TodoWrite', 'mcp__github_inline_comment__create_inline_comment', 'mcp__github_ci__get_ci_status', 'mcp__github_ci__get_workflow_run_details', 'mcp__github_ci__download_job_log']);
                 const deniedTools = [...new Set(denials.map(d => knownTools.has(d.tool_name) ? d.tool_name : 'other'))];
                 if (deniedTools.length) detail += ` Denied tools: ${deniedTools.join(', ')}.`;
-                // For Bash denials, surface only the program name (first token of each
-                // pipeline segment) so the allowlist can be tuned without echoing arguments.
-                const programs = new Set();
+                // Only classify the outer command against fixed labels. Splitting on
+                // shell punctuation misreads quoted source code and heredocs as commands.
+                // An outer command is context, not necessarily the denied subcommand.
+                const knownForms = new Set(['gh', 'git', 'rg', 'find', 'cat', 'ls', 'head', 'wc', 'sed', 'diff', 'grep', 'tail', 'cut', 'sort', 'uniq', 'tr', 'awk', 'xargs', 'jq', 'echo', 'printf', 'cd', 'pwd', 'test', 'basename', 'dirname', 'stat', 'file', 'python3', 'for', 'if', 'while']);
+                const forms = new Set();
                 for (const d of denials) {
                   if (d.tool_name !== 'Bash') continue;
                   const command = typeof d.tool_input?.command === 'string' ? d.tool_input.command : '';
-                  for (const segment of command.split(/\|\||&&|\||;/)) {
-                    const word = segment.trim().split(/\s+/)[0] || '';
-                    if (/^[A-Za-z0-9_.\/-]{1,32}$/.test(word)) programs.add(word.replace(/^.*\//, ''));
-                  }
+                  const first = command.trim().split(/\s+/)[0];
+                  forms.add(knownForms.has(first) ? first : 'other');
                 }
-                if (programs.size) detail += ` Denied Bash programs: ${[...programs].sort().join(', ')}.`;
+                if (forms.size) detail += ` Bash outer command forms: ${[...forms].sort().join(', ')}.`;
                 if (Number.isSafeInteger(result.num_turns) && result.num_turns >= 0) detail += ` Turns: ${result.num_turns}.`;
                 if (Number.isFinite(result.duration_ms) && result.duration_ms >= 0) detail += ` Duration: ${Math.round(result.duration_ms / 1000)}s.`;
               }
