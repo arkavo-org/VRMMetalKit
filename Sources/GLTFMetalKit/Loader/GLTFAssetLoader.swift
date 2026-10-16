@@ -145,11 +145,36 @@ public struct GLTFAsset {
             }
         }
 
-        // 3. Recompute world matrices from the sampled TRS.
+        // 3+4. Recompute world matrices from the sampled TRS and rebuild draw calls.
+        return rebuildDrawCalls(
+            translations: translations,
+            rotations: rotations,
+            scales: scales,
+            meshWeights: meshWeights
+        ).drawCalls
+    }
+
+    /// Shared world-matrix + draw-call rebuild used by both baked-animation
+    /// playback (``drawCalls(animationIndex:time:)``) and runtime pose
+    /// overrides (``evaluate(poses:)``).
+    ///
+    /// - Parameters:
+    ///   - translations/rotations/scales: Effective local TRS per node (parallel to `_document.nodes`).
+    ///   - meshWeights: Per-mesh morph weight overrides, keyed by mesh index.
+    /// - Returns: The rebuilt draw list plus the world matrix of every node.
+    internal func rebuildDrawCalls(
+        translations: [SIMD3<Float>],
+        rotations: [simd_quatf],
+        scales: [SIMD3<Float>],
+        meshWeights: [Int: [Float]]
+    ) -> (drawCalls: [GLTFDrawCall], worldMatrices: [simd_float4x4]) {
+        let nodes = _document.nodes ?? []
+
+        // Recompute world matrices from the effective TRS.
         var nodeWorldMatrices = [simd_float4x4](repeating: matrix_identity_float4x4, count: nodes.count)
         let sceneIndex = _document.scene ?? 0
         let scenes = _document.scenes ?? []
-        guard sceneIndex < scenes.count else { return drawCalls }
+        guard sceneIndex < scenes.count else { return (drawCalls, nodeWorldMatrices) }
 
         func walk(_ nodeIndex: Int, parent: simd_float4x4) {
             guard nodeIndex < nodes.count else { return }
@@ -244,7 +269,7 @@ public struct GLTFAsset {
                 rebuilt.append(GLTFDrawCall(mesh: drawMesh, material: material, modelMatrix: model, skinPalette: skinPalette))
             }
         }
-        return rebuilt
+        return (rebuilt, nodeWorldMatrices)
     }
 }
 
