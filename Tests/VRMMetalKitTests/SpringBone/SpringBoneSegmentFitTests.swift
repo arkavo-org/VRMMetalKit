@@ -84,7 +84,21 @@ final class SpringBoneSegmentFitTests: XCTestCase {
         return paths
     }
 
+    /// Xcode Cloud runs the test host with cwd `/private/tmp` and does not
+    /// pass the checkout path through. `ci_post_clone.sh` copies the three
+    /// committed glbs into `TestData` so they arrive in this bundle.
+    private func bundledCorpusFile(_ name: String) -> URL? {
+        let ns = name as NSString
+        let base = ns.deletingPathExtension
+        let ext = ns.pathExtension
+        return Bundle.module.url(forResource: base, withExtension: ext, subdirectory: "TestData")
+            ?? Bundle.module.url(forResource: base, withExtension: ext)
+    }
+
     private func resolveCorpusFile(_ name: String) -> URL? {
+        if let bundled = bundledCorpusFile(name) {
+            return bundled
+        }
         for path in corpusCandidates(for: name) where FileManager.default.fileExists(atPath: path) {
             return URL(fileURLWithPath: path)
         }
