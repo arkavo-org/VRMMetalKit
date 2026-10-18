@@ -1209,6 +1209,11 @@ public class VRMModel: @unchecked Sendable {
             // upper chest (above the breast) and torso sides/back (behind it) that
             // the bone-derived midline torso capsule leaves inside the dress.
             synthetic.append(contentsOf: SpringBoneBreastCollider.computeTorsoCollider(model: self))
+            // #381: where the VRM already defines a collider, that radius is the
+            // size. A fraction of bone length must not override it. Capsule
+            // slots 0–9 stay put. Leg capsules keep the fraction: clamping U's
+            // thigh from 87 mm to the authored 78 mm holds the skirt in the leg.
+            SpringBoneSegmentFit.apply(to: &synthetic, model: self)
             expandedSpringBone.syntheticColliders = synthetic
         } else {
             expandedSpringBone.syntheticColliders = []

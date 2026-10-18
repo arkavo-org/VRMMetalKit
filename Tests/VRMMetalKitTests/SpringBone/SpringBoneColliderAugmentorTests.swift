@@ -60,8 +60,9 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         let breastCount = SpringBoneBreastCollider.computeBreastColliders(model: model).count
         let shoulderCount = SpringBoneBreastCollider.computeShoulderColliders(model: model).count
         let torsoCount = SpringBoneBreastCollider.computeTorsoCollider(model: model).count
+        let chainCount = SpringBoneSegmentFit.appendedSphereCount(model: model)
         let synthetic = model.springBone?.syntheticColliders ?? []
-        XCTAssertEqual(synthetic.count, 15 + twinCount + breastCount + shoulderCount + torsoCount)
+        XCTAssertEqual(synthetic.count, 15 + twinCount + breastCount + shoulderCount + torsoCount + chainCount)
         var capsuleCount = 0
         var sphereCount = 0
         for collider in synthetic {
@@ -78,8 +79,8 @@ final class SpringBoneColliderAugmentorTests: XCTestCase {
         }
         XCTAssertEqual(capsuleCount, 10 + breastCount + torsoCount,
                        "Expect 4 leg + 1 brow + 2 lower-arm→hand + 1 torso + 2 upper-arm + \(breastCount) breast + \(torsoCount) mesh-fit torso capsules")
-        XCTAssertEqual(sphereCount, 5 + twinCount + shoulderCount,
-                       "Expect 1 lateral skull + 2 palm + 2 shoulder spheres + \(twinCount) breast twins + \(shoulderCount) mesh-fit shoulder spheres")
+        XCTAssertEqual(sphereCount, 5 + twinCount + shoulderCount + chainCount,
+                       "Expect 1 lateral skull + 2 palm + 2 shoulder spheres + \(twinCount) breast twins + \(shoulderCount) mesh-fit shoulder spheres + \(chainCount) segment spheres")
     }
 
     /// #377: the augmentor emits a synthetic SWEPT twin sphere co-located with
