@@ -165,6 +165,16 @@ extension VRMRenderer {
             depthStencilStates["blend"] = state
         }
 
+        // Blend state for `VRMC_materials_mtoon.transparentWithZWrite`: the
+        // surface writes depth (three-vrm sets depthWrite for it), which also
+        // keeps the material's own outline hull behind it.
+        let blendZWriteDepthDescriptor = MTLDepthStencilDescriptor()
+        blendZWriteDepthDescriptor.depthCompareFunction = lessEqualish
+        blendZWriteDepthDescriptor.isDepthWriteEnabled = true
+        if let state = device.makeDepthStencilState(descriptor: blendZWriteDepthDescriptor) {
+            depthStencilStates["blendZWrite"] = state
+        }
+
         // Kill switch test state (always pass, no depth write)
         let alwaysDepthDescriptor = MTLDepthStencilDescriptor()
         alwaysDepthDescriptor.depthCompareFunction = .always  // Always pass depth test

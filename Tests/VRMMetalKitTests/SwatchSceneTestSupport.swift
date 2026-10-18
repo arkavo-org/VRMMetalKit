@@ -15,7 +15,6 @@ enum SwatchScene {
     enum Fixture: String {
         case rigid = "finish_swatches"
         case skinned = "finish_swatches_skinned"
-        case floor = "floor_plane"
     }
 
     struct Setup {

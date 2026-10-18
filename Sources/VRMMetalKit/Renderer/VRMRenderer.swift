@@ -3851,7 +3851,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     applyDepthBias(encoder, baseBias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
 
                 case "blend":
-                    if let blendDepthState = depthStencilStates["blend"] {
+                    let writesDepth = primitive.materialIndex.map {
+                        $0 < model.materials.count && model.materials[$0].transparentWithZWrite
+                    } ?? false
+                    if let blendDepthState = depthStencilStates[writesDepth ? "blendZWrite" : "blend"] {
                         encoderStateCache.setDepthStencilState(encoder,blendDepthState)
                     } else {
                         encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])

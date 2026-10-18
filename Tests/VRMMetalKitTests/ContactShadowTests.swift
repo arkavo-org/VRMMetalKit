@@ -65,12 +65,14 @@ final class ContactShadowTests: XCTestCase {
     }
 
     /// A host that draws its floor into the same depth buffer first must see
-    /// the shadow on it, whatever depth bias the model's own draws use.
+    /// the shadow on it, whatever depth bias the model's own draws use. Every
+    /// non-face draw carries a slope-scaled bias and outlines are off here, so
+    /// a shadow that inherited the last model draw's bias would sink under
+    /// the floor.
     func testContactShadowLandsOnAHostDrawnFloor() async throws {
-        let floor = try await SwatchScene.load(.floor, device: device)
         let model = try await SwatchScene.load(.rigid, device: device)
-        let off = try renderOverFloor(floor: floor, model: model, shadow: false)
-        let on = try renderOverFloor(floor: floor, model: model, shadow: true)
+        let off = try renderOverFloor(model: model, shadow: false)
+        let on = try renderOverFloor(model: model, shadow: true)
         let shadow = SwatchScene.stats(on, reference: off, size: 512)
         XCTAssertGreaterThan(shadow.changedPixels, 2000, "The contact shadow is hidden by the host floor")
         XCTAssertLessThan(shadow.lumaDelta, 0)
@@ -184,12 +186,35 @@ final class ContactShadowTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func renderOverFloor(floor: VRMModel, model: VRMModel, shadow: Bool) throws -> [UInt8] {
+    /// A host floor drawn the way an app would: its own pipeline, no depth
+    /// bias, depth written at y = -0.5 (the bottom of the swatch spheres).
+    private static let hostFloorSource = """
+    #include <metal_stdlib>
+    using namespace metal;
+    vertex float4 host_floor_vertex(uint vid [[vertex_id]],
+                                    constant float4x4& viewProjection [[buffer(0)]]) {
+        const float2 corners[4] = { float2(-4, -4), float2(4, -4), float2(-4, 4), float2(4, 4) };
+        return viewProjection * float4(corners[vid].x, -0.5, corners[vid].y, 1.0);
+    }
+    fragment float4 host_floor_fragment() { return float4(0.85, 0.85, 0.85, 1.0); }
+    """
+
+    private func renderOverFloor(model: VRMModel, shadow: Bool) throws -> [UInt8] {
         let size = 512
-        let floorRenderer = SwatchScene.makeRenderer(model: floor, device: device, setup: pitchedSetup(shadow: false))
-        let modelRenderer = SwatchScene.makeRenderer(model: model, device: device, setup: pitchedSetup(shadow: shadow) {
-            $0.outlineWidth = 40
-        })
+        let setup = pitchedSetup(shadow: shadow) { $0.outlineWidth = 0 }
+        let modelRenderer = SwatchScene.makeRenderer(model: model, device: device, setup: setup)
+
+        let library = try device.makeLibrary(source: Self.hostFloorSource, options: nil)
+        let floorDescriptor = MTLRenderPipelineDescriptor()
+        floorDescriptor.vertexFunction = library.makeFunction(name: "host_floor_vertex")
+        floorDescriptor.fragmentFunction = library.makeFunction(name: "host_floor_fragment")
+        floorDescriptor.colorAttachments[0].pixelFormat = .rgba8Unorm
+        floorDescriptor.depthAttachmentPixelFormat = .depth32Float
+        let floorPipeline = try device.makeRenderPipelineState(descriptor: floorDescriptor)
+        let floorDepthDescriptor = MTLDepthStencilDescriptor()
+        floorDepthDescriptor.depthCompareFunction = .less
+        floorDepthDescriptor.isDepthWriteEnabled = true
+        let floorDepth = try XCTUnwrap(device.makeDepthStencilState(descriptor: floorDepthDescriptor))
 
         let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: size, height: size, mipmapped: false)
@@ -213,7 +238,13 @@ final class ContactShadowTests: XCTestCase {
         floorPass.depthAttachment.loadAction = .clear
         floorPass.depthAttachment.clearDepth = 1
         floorPass.depthAttachment.storeAction = .store
-        floorRenderer.drawOffscreenHeadless(to: color, depth: depth, commandBuffer: commandBuffer, renderPassDescriptor: floorPass)
+        let floorEncoder = try XCTUnwrap(commandBuffer.makeRenderCommandEncoder(descriptor: floorPass))
+        var viewProjection = modelRenderer.projectionMatrix * modelRenderer.viewMatrix
+        floorEncoder.setRenderPipelineState(floorPipeline)
+        floorEncoder.setDepthStencilState(floorDepth)
+        floorEncoder.setVertexBytes(&viewProjection, length: MemoryLayout<simd_float4x4>.stride, index: 0)
+        floorEncoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        floorEncoder.endEncoding()
 
         let modelPass = MTLRenderPassDescriptor()
         modelPass.colorAttachments[0].texture = color

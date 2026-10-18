@@ -89,6 +89,12 @@ Two multipliers compose:
 The effective multiplier is `(outlineWidth / 0.02) * outlineScale`. Setting
 either multiplier to zero disables the pass.
 
+The hull is drawn after its surface and never writes depth, as in three-vrm and
+UniVRM. On a translucent material that means the surface's depth write decides
+what you see: with `VRMC_materials_mtoon.transparentWithZWrite` the surface
+writes depth and the outline shows only at the silhouette; without it the
+outline covers the surface.
+
 ### Units
 
 | Outline mode | Extrusion |
