@@ -47,13 +47,13 @@ final class MToonShaderGPUTests: XCTestCase {
 
     // MARK: - Metallib Hash Verification Tests
 
-    /// Known-good hash of MToonShader.metal source after linearstep fix.
-    /// Update this hash when intentionally changing the shader.
+    /// Known-good hash of the MToon shader sources: MToonShader.metal
+    /// followed by MToonShared.h, which holds the uniform/material layouts and
+    /// the outline extrusion it includes. Update this hash when intentionally
+    /// changing either file.
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
-    /// Re-baselined after the outline vertex shader gained morphed-position
-    /// inputs (the hull now extrudes from the morphed surface).
-    static let knownGoodShaderHash = "bcaf753721e0c4898b132980fc10b7ab5967c59a769719ea744c0f2877c4634d"
+    static let knownGoodShaderHash = "264d4b21f8de02b5a483fb75656e0c52f24f14728f57bdab9b2e4f9ccbba0d51"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.
@@ -63,7 +63,7 @@ final class MToonShaderGPUTests: XCTestCase {
             throw XCTSkip("MToonShader.metal source file not found")
         }
 
-        let sourceData = try Data(contentsOf: URL(fileURLWithPath: path))
+        let sourceData = try shaderSourceData(mainPath: path)
         let hash = SHA256.hash(data: sourceData)
         let hashString = hash.compactMap { String(format: "%02x", $0) }.joined()
 
@@ -90,7 +90,7 @@ final class MToonShaderGPUTests: XCTestCase {
             throw XCTSkip("MToonShader.metal source file not found")
         }
 
-        let sourceData = try Data(contentsOf: URL(fileURLWithPath: path))
+        let sourceData = try shaderSourceData(mainPath: path)
         let hash = SHA256.hash(data: sourceData)
         let hashString = hash.compactMap { String(format: "%02x", $0) }.joined()
 
@@ -392,6 +392,13 @@ final class MToonShaderGPUTests: XCTestCase {
     }
 
     // MARK: - Helper Functions
+
+    /// MToonShader.metal plus the shared header it includes.
+    private func shaderSourceData(mainPath: String) throws -> Data {
+        let main = URL(fileURLWithPath: mainPath)
+        let header = main.deletingLastPathComponent().appendingPathComponent("MToonShared.h")
+        return try Data(contentsOf: main) + Data(contentsOf: header)
+    }
 
     private func findShaderSourcePath() -> String? {
         // Try environment variable first

@@ -54,7 +54,7 @@ Add VRMMetalKit to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/arkavo-org/VRMMetalKit", from: "1.0.0")
+    .package(url: "https://github.com/arkavo-org/VRMMetalKit", from: "1.2.0")
 ]
 ```
 
@@ -230,7 +230,19 @@ See [NOTICE](NOTICE) for complete attribution information.
 
 See [GitHub Releases](https://github.com/arkavo-org/VRMMetalKit/releases) for detailed version history.
 
-### 1.0.0 (Current)
+### 1.2.0 (Current)
+
+Opt-in presentation features: a stylized glTF metallic/roughness finish, an
+explicit `outlineScale` plus an outline minimum width, a hair highlight, a
+contact shadow, and crease AO. All default off; the default output is
+byte-identical to 1.1.2. See [the 1.2.0 release note](docs/releases/1.2.0.md).
+
+### 1.1.0
+
+Vision Pro / visionOS rendering, CompositorServices stereo and foveation, and
+the VisionHost sample. See the GitHub releases for the full 1.1.x history.
+
+### 1.0.0
 
 VRM 1.0 + VRMA support, MToon shading, GPU SpringBone physics, performance metrics, StrictMode validation, and the full DocC catalog.
 

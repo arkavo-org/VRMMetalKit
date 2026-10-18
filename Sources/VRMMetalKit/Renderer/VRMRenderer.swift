@@ -246,9 +246,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
-    /// Global outline width scale factor.
-    /// Multiplies per-material outline widths. Default (0.02) preserves material values.
-    /// Set to 0 to disable all outlines.
+    /// Legacy global outline width multiplier.
+    ///
+    /// The renderer normalizes this value against `0.02`, so leaving it at the
+    /// default multiplies every material's authored ``VRMMToonMaterial/outlineWidthFactor``
+    /// by exactly `1.0`. The value is unitless; the material's
+    /// ``VRMOutlineWidthMode`` decides how the authored width is interpreted
+    /// (distance-scaled world units or screen pixels). Set to `0` to disable
+    /// all outlines.
+    ///
+    /// New code should prefer ``outlineScale``, which states the multiplier
+    /// directly. Both multiply: `effective = (outlineWidth / 0.02) * outlineScale`.
     public var outlineWidth: Float = 0.02 {
         didSet {
             if outlineWidth < 0 {
@@ -256,6 +264,49 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 outlineWidth = max(0, outlineWidth)
             }
         }
+    }
+
+    /// Explicit multiplier on the authored outline width, where `1.0` means
+    /// "use the material exactly as authored".
+    ///
+    /// Unlike ``outlineWidth`` (which is normalized against its historical
+    /// `0.02` default), this value needs no magic baseline. It composes with
+    /// ``outlineWidth``; the default of `1.0` leaves legacy output unchanged.
+    /// `0` is equivalent to disabling outlines.
+    public var outlineScale: Float = 1.0 {
+        didSet {
+            if outlineScale < 0 {
+                vrmLog("[VRMRenderer] Warning: outlineScale cannot be negative, clamping \(outlineScale) to 0")
+                outlineScale = max(0, outlineScale)
+            }
+        }
+    }
+
+    /// Minimum rendered outline width in device pixels.
+    ///
+    /// VRoid-typical world-mode widths project to a small fraction of a pixel
+    /// at any camera distance, so the hull disappears. When this is greater
+    /// than zero, every hull vertex whose authored width projects thinner than
+    /// this many pixels is extruded in screen space by this width instead. The
+    /// floor is scaled by the material's `outlineWidthMultiplyTexture`, and a
+    /// zero authored width never gains a line. Where the floor applies,
+    /// ``outlineScale`` has no visible effect.
+    ///
+    /// `0` (the default) draws the authored width only. A value of `1.0...2.0`
+    /// is a good starting point for 512–1024 px sheets.
+    public var outlineMinimumPixels: Float = 0.0 {
+        didSet {
+            if outlineMinimumPixels < 0 {
+                vrmLog("[VRMRenderer] Warning: outlineMinimumPixels cannot be negative, clamping \(outlineMinimumPixels) to 0")
+                outlineMinimumPixels = max(0, outlineMinimumPixels)
+            }
+        }
+    }
+
+    /// Combined authored-width multiplier applied to every MToon outline.
+    /// `1.0` at the default `outlineWidth` (0.02) and `outlineScale` (1.0).
+    var effectiveOutlineWidthScale: Float {
+        (outlineWidth / 0.02) * outlineScale
     }
 
     /// Global outline color override (RGB). When non-zero, overrides per-material outline colors.
@@ -498,6 +549,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     var spriteVertexBuffer: MTLBuffer?
     var spriteIndexBuffer: MTLBuffer?
     let spriteIndexCount: Int = 6
+
+    /// Lazily-built radial falloff texture for the opt-in contact shadow.
+    var contactShadowTexture: MTLTexture?
+    /// Contact-shadow mesh bounds for the most recently drawn model.
+    private var contactShadowMeshCache: (model: ObjectIdentifier, entries: [ContactShadowMeshEntry])?
+    /// Per-material hair-band opt-in for the current model and config.
+    private var hairHighlightMaterials: [Bool] = []
+    private var hairHighlightMaterialsKey: (model: ObjectIdentifier, config: HairHighlightConfig)?
 
     // Skinning
     private var skinningSystem: VRMSkinningSystem?
@@ -1203,6 +1262,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // PERFORMANCE: Invalidate cached render items when model changes
         cacheNeedsRebuild = true
         cachedRenderItems = nil
+        contactShadowMeshCache = nil
+        hairHighlightMaterialsKey = nil
         morphedBuffers.removeAll(keepingCapacity: true)
         lastMorphWeightsFingerprint = nil
 
@@ -2669,12 +2730,28 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             performanceTracker?.endPhase(.depthPrepass)
         }
 
+        // Optional contact shadow, drawn before any model geometry like part
+        // of the ground: opaque geometry overdraws it, and translucent
+        // surfaces and outline hulls (neither writes depth) composite over it
+        // instead of being darkened by it.
+        if config.enableContactShadows && !materializationUsesDiscard {
+            performanceTracker?.beginPhase(.contactShadowPass)
+            renderContactShadow(
+                encoder: encoder,
+                model: model,
+                viewMatrix: viewMatrix,
+                projectionMatrix: projectionMatrix,
+                viewportSize: uniforms.viewportSize)
+            performanceTracker?.endPhase(.contactShadowPass)
+        }
+
         // Baseline sampler for draws whose material binds no base color
         // texture; materials that do override it per draw below.
         if let cachedSampler = samplerStates["default"] {
             encoderStateCache.setFragmentSamplerState(encoder, cachedSampler, index: 0)
         }
 
+        refreshHairHighlightMaterials(model: model)
         for (index, item) in itemsToRender.enumerated() {
             let meshName = item.mesh.name ?? "unnamed"
             let materialName = item.materialName
@@ -3425,6 +3502,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         // vrmLog("  - Rim color: \(mtoon.parametricRimColorFactor)")
                     }
 
+                    applySurfaceExtensionUniforms(&mtoonUniforms, materialIndex: materialIndex, material: material)
+
                     // The MToon fragment function samples every slot through
                     // sampler(0), so one sampler serves the draw: the base
                     // color texture's, which is the material's primary map
@@ -3914,7 +3993,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     return model.materials[idx]
                 }()
                 let mergeOutline = MToonOutlineDraw.shouldMerge(
-                    globalOutlineWidth: outlineWidth,
+                    globalOutlineWidth: effectiveOutlineWidthScale,
                     mtoon: drawMaterial?.mtoon,
                     isDoubleSided: isDoubleSided)
                 bindOutlineWidthVertexTexture(
@@ -4393,6 +4472,179 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
     }
 
+    // MARK: - Contact Shadow
+
+    /// Draws a soft, radial ground shadow under the model's footprint (see
+    /// ``ContactShadowFootprint``). Reuses the sprite pipeline and its unit
+    /// quad; disabling it removes the draw entirely.
+    ///
+    /// Bypasses the encoder state cache, so it resets the cache afterwards the
+    /// same way the depth prepass does.
+    private func renderContactShadow(
+        encoder: MTLRenderCommandEncoder,
+        model: VRMModel,
+        viewMatrix: matrix_float4x4,
+        projectionMatrix: matrix_float4x4,
+        viewportSize: SIMD2<Float>
+    ) {
+        let opacity = config.contactShadowOpacity.isFinite ? max(0, min(config.contactShadowOpacity, 1)) : 0
+        guard opacity > 0,
+              let pipeline = spritePipelineState,
+              let vertexBuffer = spriteVertexBuffer,
+              let indexBuffer = spriteIndexBuffer,
+              let shadowTexture = contactShadowTexture ?? makeContactShadowTexture(),
+              let sampler = samplerStates["default"],
+              let footprint = contactShadowFootprint(model: model) else {
+            return
+        }
+        contactShadowTexture = shadowTexture
+
+        let scale = config.contactShadowScale.isFinite ? max(0.1, config.contactShadowScale) : 1.15
+        let radius = max(footprint.radius * scale, 0.01)
+        // A small lift keeps the quad in front of an authored ground plane at
+        // the model's base without visibly floating.
+        let centerY = footprint.center.y + 0.0015
+
+        // Local quad XY plane -> world XZ plane. Column 1 maps local +Y to
+        // world -Z; column 2 maps local +Z to world +Y.
+        var modelMatrix = matrix_identity_float4x4
+        modelMatrix.columns.0 = SIMD4<Float>(radius * 2, 0, 0, 0)
+        modelMatrix.columns.1 = SIMD4<Float>(0, 0, -radius * 2 * 0.72, 0)
+        modelMatrix.columns.2 = SIMD4<Float>(0, 1, 0, 0)
+        modelMatrix.columns.3 = SIMD4<Float>(footprint.center.x, centerY, footprint.center.z, 1)
+
+        var spriteUniforms = SpriteUniformsCPU(
+            viewProjectionMatrix: simd_mul(projectionMatrix, viewMatrix),
+            viewportSize: viewportSize)
+        var instance = SpriteInstanceCPU(
+            modelMatrix: modelMatrix,
+            tintColor: SIMD4<Float>(0, 0, 0, opacity))
+
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setDepthStencilState(depthStencilStates["blend"])
+        encoder.setCullMode(.none)
+        encoder.setDepthBias(0, slopeScale: 0, clamp: 0)
+        encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+        encoder.setVertexBytes(
+            &spriteUniforms,
+            length: MemoryLayout<SpriteUniformsCPU>.stride,
+            index: 1)
+        encoder.setVertexBytes(
+            &instance,
+            length: MemoryLayout<SpriteInstanceCPU>.stride,
+            index: 2)
+        encoder.setFragmentTexture(shadowTexture, index: 0)
+        encoder.setFragmentSamplerState(sampler, index: 0)
+        encoder.drawIndexedPrimitives(
+            type: .triangle,
+            indexCount: spriteIndexCount,
+            indexType: .uint16,
+            indexBuffer: indexBuffer,
+            indexBufferOffset: 0)
+        performanceTracker?.recordDrawCall(triangles: 2, vertices: 4)
+        encoderStateCache.reset()
+    }
+
+    /// Current contact-shadow footprint: the foot joints for a skinned
+    /// humanoid, the world bounds of every mesh node otherwise.
+    func contactShadowFootprint(model: VRMModel) -> ContactShadowFootprint? {
+        let entries = contactShadowMeshEntries(for: model)
+        let boxes = entries.map { entry in
+            ContactShadowFootprint.MeshBox(
+                localMin: entry.localMin,
+                localMax: entry.localMax,
+                transform: model.nodes[entry.transformNode].worldMatrix)
+        }
+        guard let bounds = ContactShadowFootprint.worldBounds(of: boxes) else { return nil }
+
+        if !model.skins.isEmpty, let humanoid = model.humanoid {
+            let footBones: [VRMHumanoidBone] = [.leftFoot, .rightFoot, .leftToes, .rightToes]
+            let feet: [SIMD3<Float>] = footBones.compactMap { bone in
+                guard let index = humanoid.getBoneNode(bone), index >= 0, index < model.nodes.count else { return nil }
+                return model.nodes[index].worldPosition
+            }
+            var legLength: Float = 0
+            if let hips = humanoid.getBoneNode(.hips), hips >= 0, hips < model.nodes.count {
+                legLength = model.nodes[hips].worldPosition.y - bounds.min.y
+            }
+            if let footprint = ContactShadowFootprint.fromFeet(feet, groundY: bounds.min.y, legLength: legLength) {
+                return footprint
+            }
+        }
+        return ContactShadowFootprint.fromMeshBounds(boxes)
+    }
+
+    /// Per-model mesh bounds for the contact shadow, cached by model identity.
+    /// A skinned mesh uses its scene root's transform (its own node transform
+    /// is ignored by glTF); a rigid mesh uses its own node.
+    private func contactShadowMeshEntries(for model: VRMModel) -> [ContactShadowMeshEntry] {
+        let key = ObjectIdentifier(model)
+        if let cached = contactShadowMeshCache, cached.model == key {
+            return cached.entries
+        }
+        var entries: [ContactShadowMeshEntry] = []
+        for node in model.nodes {
+            guard let meshIndex = node.mesh, meshIndex >= 0, meshIndex < model.meshes.count else { continue }
+            var lo = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+            var hi = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+            var found = false
+            for primitive in model.meshes[meshIndex].primitives where primitive.vertexCount > 0 {
+                lo = simd_min(lo, primitive.localMin)
+                hi = simd_max(hi, primitive.localMax)
+                found = true
+            }
+            guard found else { continue }
+            var transformNode = node
+            if node.skin != nil {
+                while let parent = transformNode.parent { transformNode = parent }
+            }
+            entries.append(ContactShadowMeshEntry(
+                transformNode: transformNode.index,
+                localMin: lo,
+                localMax: hi))
+        }
+        contactShadowMeshCache = (key, entries)
+        return entries
+    }
+
+    /// Builds the 64×64 radial alpha texture used by the contact-shadow quad.
+    private func makeContactShadowTexture() -> MTLTexture? {
+        let size = 64
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm,
+            width: size,
+            height: size,
+            mipmapped: false)
+        descriptor.usage = .shaderRead
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            return nil
+        }
+        var pixels = [UInt8](repeating: 0, count: size * size * 4)
+        for y in 0..<size {
+            for x in 0..<size {
+                let nx = (Float(x) + 0.5) / Float(size) * 2 - 1
+                let ny = (Float(y) + 0.5) / Float(size) * 2 - 1
+                // Slightly squashed ellipse reads as a grounded footprint
+                // rather than a perfect disc.
+                let r = sqrt(nx * nx + (ny * 1.15) * (ny * 1.15))
+                let alpha = pow(max(0, 1 - r), 1.7)
+                let index = (y * size + x) * 4
+                pixels[index] = 255
+                pixels[index + 1] = 255
+                pixels[index + 2] = 255
+                pixels[index + 3] = UInt8(max(0, min(alpha * 255, 255)))
+            }
+        }
+        pixels.withUnsafeBytes { raw in
+            texture.replace(
+                region: MTLRegionMake2D(0, 0, size, size),
+                mipmapLevel: 0,
+                withBytes: raw.baseAddress!,
+                bytesPerRow: size * 4)
+        }
+        return texture
+    }
+
     // MARK: - MToon Outline Rendering
 
     /// Opaque-only depth prepass (experimental, gated by ``RendererConfig/enableDepthPrepass``).
@@ -4576,7 +4828,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         guard let hullDepthState = depthStencilStates[MToonOutlineDraw.hullDepthStateKey] else { return }
 
         var hullUniforms = baseUniforms
-        hullUniforms.outlineWidthFactor *= outlineWidth / 0.02
+        hullUniforms.outlineWidthFactor *= effectiveOutlineWidthScale
+        hullUniforms.outlineMinPixels = outlineMinimumPixels
         let globalColor = outlineColor
         if globalColor.x > 0 || globalColor.y > 0 || globalColor.z > 0 {
             hullUniforms.outlineColorFactor = globalColor
@@ -4611,6 +4864,43 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         )
     }
 
+    /// Writes the opt-in surface-extension uniforms for one draw. With every
+    /// extension off the payload keeps the 1.1 values: metallic 0 (the shader
+    /// skips the finish), no hair band, no crease AO.
+    private func applySurfaceExtensionUniforms(
+        _ uniforms: inout MToonMaterialUniforms,
+        materialIndex: Int,
+        material: VRMMaterial
+    ) {
+        if config.enableMaterialFinish {
+            uniforms.metallicFactor = material.metallicFactor
+            uniforms.roughnessFactor = material.roughnessFactor
+        } else {
+            uniforms.metallicFactor = 0
+        }
+        let hair = config.hairHighlight
+        let hairOn = materialIndex < hairHighlightMaterials.count && hairHighlightMaterials[materialIndex]
+        uniforms.hairHighlightStrength = hairOn ? hair.resolvedStrength : 0
+        uniforms.hairHighlightSharpness = hair.resolvedSharpness
+        let crease = config.ssaoStrength.isFinite ? max(0, min(config.ssaoStrength, 2)) : 0
+        uniforms.ssaoStrength = config.enableSSAO ? crease : 0
+    }
+
+    /// Recomputes which materials receive the hair band when the model or
+    /// ``RendererConfig/hairHighlight`` changed, so the per-draw path does no
+    /// string matching.
+    private func refreshHairHighlightMaterials(model: VRMModel) {
+        let key = ObjectIdentifier(model)
+        let hair = config.hairHighlight
+        if hairHighlightMaterialsKey?.model == key,
+           hairHighlightMaterialsKey?.config == hair,
+           hairHighlightMaterials.count == model.materials.count {
+            return
+        }
+        hairHighlightMaterials = model.materials.map { hair.applies(toMaterialNamed: $0.name) }
+        hairHighlightMaterialsKey = (key, hair)
+    }
+
     private func baseMToonUniforms(materialIndex: Int, mtoon: VRMMToonMaterial) -> MToonMaterialUniforms {
         if let cached = baseMToonUniformsByMaterial[materialIndex] { return cached }
         let uniforms = MToonMaterialUniforms(from: mtoon)
@@ -4633,7 +4923,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         // Global outline width of 0 disables all outlines
-        guard self.outlineWidth > 0 else {
+        guard self.effectiveOutlineWidthScale > 0 else {
             return
         }
 
@@ -4677,7 +4967,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // the debug fragment, which has no outline branch — deliberately
             // encodes no hull at all. Either way this pass must not add one.
             if MToonOutlineDraw.shouldMerge(
-                globalOutlineWidth: outlineWidth,
+                globalOutlineWidth: effectiveOutlineWidthScale,
                 mtoon: mtoon,
                 isDoubleSided: item.effectiveDoubleSided) {
                 continue
@@ -4799,8 +5089,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
             mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
-            // Apply global outline width as a multiplier on per-material width
-            mtoonUniforms.outlineWidthFactor *= self.outlineWidth / 0.02
+            // Apply the explicit scale and the legacy outlineWidth baseline as
+            // multipliers on the per-material width.
+            mtoonUniforms.outlineWidthFactor *= self.effectiveOutlineWidthScale
+            mtoonUniforms.outlineMinPixels = self.outlineMinimumPixels
 
             // Apply global outline color override (non-black means user set it)
             let globalColor = self.outlineColor

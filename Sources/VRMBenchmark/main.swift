@@ -35,6 +35,12 @@ struct BenchmarkOptions {
     var label: String = "baseline"
     var loadingPreset: String = "default"
     var outlineWidth: Float = 0.02
+    var outlineScale: Float = 1.0
+    var outlineMinPixels: Float = 0
+    var hairHighlight: Bool = false
+    var ssao: Bool = false
+    var contactShadow: Bool = false
+    var materialFinish: Bool = false
     var enableSpringBone: Bool = false
     var wireframe: Bool = false
     var depthPrepass: Bool = false
@@ -53,6 +59,35 @@ struct BenchmarkOptions {
     var avatarSpacing: Float = 1.2            // --avatar-spacing M (meters between avatars)
     var visionOSSubmit: String = "preferred"  // preferred | host
     var visionOSViews: Int = 2
+}
+
+extension BenchmarkOptions {
+    /// Renderer-config switches for the opt-in surface features.
+    func applySurfaceFeatures(to config: inout RendererConfig) {
+        config.enableMaterialFinish = materialFinish
+        config.hairHighlight = HairHighlightConfig(isEnabled: hairHighlight)
+        config.enableSSAO = ssao
+        config.enableContactShadows = contactShadow
+    }
+
+    /// Outline settings that live on the renderer rather than its config.
+    func applyOutlineFeatures(to renderer: VRMRenderer) {
+        renderer.outlineScale = outlineScale
+        renderer.outlineMinimumPixels = outlineMinPixels
+    }
+
+    /// Non-default surface features, recorded in the JSON report so runs with
+    /// different feature sets are not compared as if they were the same.
+    var enabledFeatureLabels: [String] {
+        var labels: [String] = []
+        if materialFinish { labels.append("materialFinish") }
+        if hairHighlight { labels.append("hairHighlight") }
+        if ssao { labels.append("creaseAO") }
+        if contactShadow { labels.append("contactShadow") }
+        if outlineScale != 1 { labels.append("outlineScale=\(outlineScale)") }
+        if outlineMinPixels != 0 { labels.append("outlineMinPixels=\(outlineMinPixels)") }
+        return labels
+    }
 }
 
 func usage() {
@@ -82,6 +117,12 @@ func usage() {
       --height H       Render height (default 1024)
       --sample-count N MSAA sample count (default 1)
       --outline-width N Global MToon outline width (default 0.02, use 0 to disable)
+      --outline-scale N Explicit authored-width multiplier, 1.0 = authored
+      --outline-min-pixels N Minimum screen-space outline width in pixels
+      --hair-highlight  Enable the opt-in anisotropic hair band
+      --ssao            Enable the opt-in screen-space crease AO
+      --contact-shadow  Enable the opt-in soft contact shadow
+      --material-finish Enable the opt-in glTF metallic/roughness finish
       --spring-bone    Enable GPU spring-bone physics during render mode
       --spring-bone-quality NAME  off|low|medium|high|ultra (default ultra)
       --skip-pre-draw  Set renderer.skipPreDrawTransformUpdate=true (opts out of safety-net hierarchy walk)
@@ -157,6 +198,28 @@ func parseArguments() -> BenchmarkOptions? {
         case "--outline-width":
             guard let v = nextValue(for: a) else { return nil }
             opts.outlineWidth = Float(v) ?? opts.outlineWidth
+        case "--outline-scale":
+            guard let v = nextValue(for: a) else { return nil }
+            guard let scale = Float(v), scale.isFinite, scale >= 0 else {
+                print("ERROR: --outline-scale expects a non-negative number, got '\(v)'")
+                return nil
+            }
+            opts.outlineScale = scale
+        case "--outline-min-pixels":
+            guard let v = nextValue(for: a) else { return nil }
+            guard let pixels = Float(v), pixels.isFinite, pixels >= 0 else {
+                print("ERROR: --outline-min-pixels expects a non-negative number, got '\(v)'")
+                return nil
+            }
+            opts.outlineMinPixels = pixels
+        case "--hair-highlight":
+            opts.hairHighlight = true
+        case "--ssao":
+            opts.ssao = true
+        case "--contact-shadow":
+            opts.contactShadow = true
+        case "--material-finish":
+            opts.materialFinish = true
         case "--fixed-step":
             opts.fixedStep = true
         case "--spring-bone":
@@ -386,7 +449,8 @@ func makeReport(
             sampleCount: opts.sampleCount,
             loading: opts.loadingPreset,
             springBoneQuality: (opts.mode == "render" || opts.mode == "visionos") ? opts.springBoneQuality : nil,
-            lighting: (opts.mode == "render" || opts.mode == "visionos") ? opts.lighting : nil),
+            lighting: (opts.mode == "render" || opts.mode == "visionos") ? opts.lighting : nil,
+            features: opts.enabledFeatureLabels.isEmpty ? nil : opts.enabledFeatureLabels),
         system: systemDescriptor(),
         stats: stats)
 }
@@ -703,6 +767,7 @@ struct VRMBenchmarkCLI {
         config.sampleCount = opts.sampleCount
         config.strict = .off
         config.enableDepthPrepass = opts.depthPrepass
+        opts.applySurfaceFeatures(to: &config)
 
         let avatarCount = opts.avatarCount
         let spacing = opts.avatarSpacing
@@ -740,6 +805,7 @@ struct VRMBenchmarkCLI {
             if i == 0 { r.performanceTracker = PerformanceTracker() }
             r.loadModel(avatarModel)
             r.outlineWidth = opts.outlineWidth
+            opts.applyOutlineFeatures(to: r)
             r.enableSpringBone = opts.enableSpringBone
             if opts.fixedStep { r.simulationDeltaTime = 1.0 / opts.fps }
             r.skipPreDrawTransformUpdate = opts.skipPreDrawTransform
@@ -957,7 +1023,11 @@ struct VRMBenchmarkCLI {
         Animation      : \(opts.vrmaPath.map { "\(($0 as NSString).lastPathComponent) (\(String(format: "%.2f", animDurationSec))s @ \(opts.fps) fps)" } ?? "none (static pose)")
         Load time      : \(String(format: "%.1f ms", loadMs))
         Resolution     : \(opts.width)x\(opts.height) (MSAA \(opts.sampleCount)x)
-        Outline width  : \(String(format: "%.4f", opts.outlineWidth))
+        Outline width  : \(String(format: "%.4f", opts.outlineWidth)) (scale \(opts.outlineScale), min \(opts.outlineMinPixels) px)
+        Material finish: \(opts.materialFinish ? "on" : "off")
+        Hair highlight : \(opts.hairHighlight ? "on" : "off")
+        Crease AO      : \(opts.ssao ? "on" : "off")
+        Contact shadow : \(opts.contactShadow ? "on" : "off")
         Spring bone    : \(opts.enableSpringBone ? "enabled" : "disabled")
         Wireframe      : \(opts.wireframe ? "enabled" : "disabled")
         Lighting       : \(opts.lighting)
@@ -1012,6 +1082,7 @@ struct VRMBenchmarkCLI {
             .renderItemBuild: "renderItem",
             .depthPrepass: "depthPre",
             .outlinePass: "outline",
+            .contactShadowPass: "contact",
             .commandEncode: "cmdEncode",
         ]
         let subPhaseSamples: [(key: String, label: String, samples: [Double])] =

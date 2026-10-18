@@ -1508,9 +1508,13 @@ public class VRMMaterial: @unchecked Sendable {
     public var occlusionStrength: Float = 1.0
     /// Emissive (self-illuminating) texture.
     public var emissiveTexture: VRMTexture?
-    /// glTF metallic factor. Unused by the MToon path; retained for non-MToon fallback shading.
+    /// glTF metallic factor. Ignored by the MToon path unless
+    /// ``RendererConfig/enableMaterialFinish`` is on; then values below ~0.7
+    /// produce a broad sheen and values from ~0.7 a tight metal highlight.
+    /// See ``MToonSpecularMode``.
     public var metallicFactor: Float = 0.0
-    /// glTF roughness factor. Unused by the MToon path.
+    /// glTF roughness factor. Lobe width of the opt-in MToon finish (lower is
+    /// tighter); no effect while the finish is off or ``metallicFactor`` is 0.
     public var roughnessFactor: Float = 1.0
     /// Emissive tint multiplied into ``emissiveTexture``.
     public var emissiveFactor: SIMD3<Float> = [0, 0, 0]

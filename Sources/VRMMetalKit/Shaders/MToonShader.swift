@@ -77,9 +77,16 @@ public struct MToonMaterialUniforms {
 
     // Block 3: 16 bytes - PBR factors
 
-    /// Metallic factor (0…1). MToon ignores this for lighting but it is kept for glTF fallback.
+    /// glTF metallic factor (0…1) for the opt-in stylized finish.
+    ///
+    /// The renderer uploads the material's authored value only when
+    /// ``RendererConfig/enableMaterialFinish`` is on, and `0` otherwise. With a
+    /// non-zero value the finish adds a broad sheen below ~0.7 and a tight,
+    /// base-colour-tinted band from ~0.7 up. See ``MToonSpecularMode``.
     public var metallicFactor: Float = 0.0
-    /// Roughness factor (0…1). Kept for glTF fallback; MToon shading is non-PBR.
+    /// glTF roughness factor (0…1) for the opt-in stylized finish. Lower values
+    /// narrow the highlight, higher values widen it. It has no effect while
+    /// ``metallicFactor`` is `0`.
     public var roughnessFactor: Float = 1.0
     /// GI equalization factor (0…1) controlling how strongly indirect light is normalized.
     public var giEqualizationFactor: Float = 0.9
@@ -218,6 +225,29 @@ public struct MToonMaterialUniforms {
     /// Non-zero if an occlusion texture is bound for this material.
     public var hasOcclusionTexture: Int32 = 0
 
+    // Block 15: 16 bytes - Opt-in surface extensions
+
+    /// Additive strength of the hair band (`0...2`). `0` (the default) means
+    /// the material does not receive the band. The renderer sets it from
+    /// ``RendererConfig/hairHighlight`` for materials whose names match.
+    public var hairHighlightStrength: Float = 0.0
+    /// Hair band sharpness (`1...64`). Higher values narrow the band.
+    public var hairHighlightSharpness: Float = 8.0
+    /// Crease AO strength (`0...2`). `0` disables the term; the renderer sets
+    /// it from ``RendererConfig/enableSSAO`` and ``RendererConfig/ssaoStrength``.
+    public var ssaoStrength: Float = 0.0
+    var _extensionPad0: Float = 0.0
+
+    // Block 16: 16 bytes - Outline minimum-width guard band
+
+    /// Minimum outline width in device pixels. `0` (the default) draws the
+    /// authored width only; the renderer sets it from
+    /// ``VRMRenderer/outlineMinimumPixels``.
+    public var outlineMinPixels: Float = 0.0
+    var _extensionPad1: Float = 0.0
+    var _extensionPad2: Float = 0.0
+    var _extensionPad3: Float = 0.0
+
     /// Creates a default-initialized uniform payload.
     public init() {}
 
@@ -251,6 +281,21 @@ public struct MToonMaterialUniforms {
     public var outlineColorFactor: SIMD3<Float> {
         get { SIMD3<Float>(outlineColorR, outlineColorG, outlineColorB) }
         set { outlineColorR = newValue.x; outlineColorG = newValue.y; outlineColorB = newValue.z }
+    }
+
+    /// Whether any opt-in surface extension (finish, hair band, crease AO) is
+    /// active in this payload.
+    public var usesSurfaceExtensions: Bool {
+        metallicFactor > MToonSpecularMode.metallicEpsilon
+            || hairHighlightStrength > 0
+            || ssaoStrength > 0
+    }
+
+    /// The finish the shader will use for this material's metallic/roughness pair.
+    public var specularMode: MToonSpecularMode {
+        MToonSpecularMode(
+            metallicFactor: metallicFactor,
+            roughnessFactor: roughnessFactor)
     }
 
     /// Builds a uniform payload from a ``VRMMToonMaterial`` plus the current animation time.
@@ -370,13 +415,59 @@ public struct MToonMaterialUniforms {
     public var debugDescription: String {
         return """
         MToon Material Debug:
-        - Outline Mode: \(outlineMode) (0=none, 1=world, 2=screen)
+        - Metallic: \(metallicFactor), Roughness: \(roughnessFactor), Specular: \(specularMode.rawValue)
+        - Outline Mode: \(outlineMode) (0=none, 1=world, 2=screen), Width: \(outlineWidthFactor), MinPixels: \(outlineMinPixels)
         - MatCap Factor: \(matcapFactor)
         - Rim Color: \(parametricRimColorFactor), Power: \(parametricRimFresnelPowerFactor), Lift: \(parametricRimLiftFactor)
-        - Outline Width: \(outlineWidthFactor), Color: \(outlineColorFactor)
+        - Hair Highlight Strength: \(hairHighlightStrength), Sharpness: \(hairHighlightSharpness)
+        - Crease AO Strength: \(ssaoStrength)
+        - Outline Color: \(outlineColorFactor)
         - UV Animation: scroll(\(uvAnimationScrollXSpeedFactor), \(uvAnimationScrollYSpeedFactor)), rot(\(uvAnimationRotationSpeedFactor))
         - Textures: base(\(hasBaseColorTexture)), matcap(\(hasMatcapTexture)), rim(\(hasRimMultiplyTexture))
         """
+    }
+}
+
+/// The stylized finish selected by a material's glTF metallic/roughness pair
+/// when ``RendererConfig/enableMaterialFinish`` is on.
+///
+/// The MToon shader does not run a PBR BRDF. It blends two toon lobes by
+/// metallic factor: a broad sheen weight and a metal weight that ramps over
+/// `0.6...0.8`. The mode names the dominant lobe:
+///
+/// - ``off``: `metallicFactor` is at or below ``metallicEpsilon``. The finish
+///   is skipped.
+/// - ``sheen``: below ``metalThreshold``, where the sheen lobe dominates —
+///   leather, scuffed metal, painted props.
+/// - ``metal``: at or above ``metalThreshold``, where the tight,
+///   base-colour-tinted band dominates.
+///
+/// `roughnessFactor` sets the lobe width for both modes and does not change
+/// the mode.
+public enum MToonSpecularMode: String, Codable, Sendable, CaseIterable {
+    /// No stylized finish.
+    case off
+    /// Broad, soft sheen for low-metallic leather/patina materials.
+    case sheen
+    /// Tight, view-dependent metal highlight.
+    case metal
+
+    /// Metallic factors at or below this value skip the finish
+    /// (`mtoonFinishActive` in MToonShader.metal).
+    public static let metallicEpsilon: Float = 0.0001
+    /// Midpoint of the shader's `smoothstep(0.6, 0.8, metallic)` metal weight
+    /// (`mtoonFinishMetalMask` in MToonShader.metal).
+    public static let metalThreshold: Float = 0.7
+
+    /// Classifies a glTF metallic/roughness pair with the shader's thresholds.
+    public init(metallicFactor: Float, roughnessFactor: Float) {
+        if metallicFactor <= Self.metallicEpsilon {
+            self = .off
+        } else if metallicFactor >= Self.metalThreshold {
+            self = .metal
+        } else {
+            self = .sheen
+        }
     }
 }
 
@@ -452,6 +543,13 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
     /// Renderers with `RendererConfig.enableMaterialization` compile it in.
     public var enableMaterialization: Bool
 
+    /// When `false` (the default), the opt-in surface extensions (stylized
+    /// metallic/roughness finish, hair band, crease AO) are dead-stripped from
+    /// the fragment. A per-material key turns it on only for materials whose
+    /// uniforms use an extension; the fallback key turns it on when the
+    /// renderer enables any of them.
+    public var enableSurfaceExtensions: Bool
+
     public init(
         useMaterialFlags: Bool = false,
         hasBaseColorTexture: Bool = false,
@@ -467,7 +565,8 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         alphaMode: UInt8 = 0,
         lightCount: UInt8 = MToonLightSpecialization.maxLights,
         debugVisualization: Bool = false,
-        enableMaterialization: Bool = false
+        enableMaterialization: Bool = false,
+        enableSurfaceExtensions: Bool = false
     ) {
         self.useMaterialFlags = useMaterialFlags
         self.hasBaseColorTexture = hasBaseColorTexture
@@ -484,6 +583,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.lightCount = lightCount
         self.debugVisualization = debugVisualization
         self.enableMaterialization = enableMaterialization
+        self.enableSurfaceExtensions = enableSurfaceExtensions
     }
 
     /// The dynamic fallback key that preserves pre-specialization behavior.
@@ -507,6 +607,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.lightCount = MToonLightSpecialization.maxLights
         self.debugVisualization = false
         self.enableMaterialization = false
+        self.enableSurfaceExtensions = material.usesSurfaceExtensions
     }
 
     /// Builds the Metal function-constant payload for this key.
@@ -558,6 +659,9 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         var enableMaterialization = self.enableMaterialization
         values.setConstantValue(&enableMaterialization, type: .bool, index: 14)
 
+        var enableSurfaceExtensions = self.enableSurfaceExtensions
+        values.setConstantValue(&enableSurfaceExtensions, type: .bool, index: 15)
+
         return values
     }
 
@@ -567,7 +671,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
     /// shared cache uses for identity, so a field dropped here lets two
     /// distinct variants collide on one compiled pipeline.
     ///
-    /// Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4][lights:2][debug:1][mat:1]
+    /// Bit layout: [skinned:1][umf:1][bc:1][sm:1][ss:1][nm:1][mc:1][rm:1][em:1][oc:1][uv:1][rim:1][alpha:4][lights:2][debug:1][mat:1][ext:1]
     func sharedCacheKeyBits(isSkinned: Bool) -> UInt32 {
         var bits: UInt32 = isSkinned ? 1 : 0
         bits = (bits << 1) | (useMaterialFlags ? 1 : 0)
@@ -591,6 +695,7 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         bits = (bits << 2) | (clampedLightCount & 0x3)
         bits = (bits << 1) | (debugVisualization ? 1 : 0)
         bits = (bits << 1) | (enableMaterialization ? 1 : 0)
+        bits = (bits << 1) | (enableSurfaceExtensions ? 1 : 0)
         return bits
     }
 

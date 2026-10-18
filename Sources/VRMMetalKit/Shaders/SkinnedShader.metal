@@ -18,6 +18,8 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#include "MToonShared.h"
+
 constant float WEIGHT_THRESHOLD = 0.001;
 // Last-resort OOB guard. Must be >= the largest legal palette index we
 // accept (VRMConstants.Animation.maxJointCount - 1). Do not use 255:
@@ -95,129 +97,6 @@ static inline void dqsSkin(float4x4 m0, float4x4 m1, float4x4 m2, float4x4 m3,
     nrm = dqsQuatRotate(qr, nrm);
 }
 
-struct Uniforms {
- float4x4 modelMatrix;
- float4x4 viewMatrix;
- float4x4 projectionMatrix;
- float4x4 normalMatrix;
- // Light 0 (key light) - using float4 for Swift SIMD4 alignment
- float4 lightDirection;        // xyz = direction, w = unused
- float4 lightColor;            // xyz = color, w = pre-calculated intensity
- float4 ambientColor;          // xyz = color, w = unused
- // Light 1 (fill light)
- float4 light1Direction;       // xyz = direction, w = unused
- float4 light1Color;           // xyz = color, w = pre-calculated intensity
- // Light 2 (rim/back light)
- float4 light2Direction;       // xyz = direction, w = unused
- float4 light2Color;           // xyz = color, w = pre-calculated intensity
- // Other fields - packed into float4 for alignment
- float4 viewportSize;          // xy = size, zw = padding
- float4 nearFarPlane;          // x = near, y = far, zw = padding
- int debugUVs;
- float lightNormalizationFactor;
- float _padding2;
- float useDualQuaternionSkinning;  // #197: >0.5 = DQS, else LBS
- int toonBands;
- float additiveDirectionalRimEnabled;
- float additiveDirectionalRimPower;
- uint cameraMode;
- // Materialization spawn effect (VMK#materialize)
- float4 materializeParams;    // x = progress (>=1 off), y = style, z = min Y, w = max Y (world)
- float4 materializeColor;     // xyz = accent color, w = per-avatar seed
- float4 materializeOrigin;    // xyz = world focus point (radial styles), w = reserved
-};
-
-// Use packed floats to match Swift struct layout (192 bytes total)
-// Note: Metal's float3 has 16-byte alignment which causes padding
-struct MToonMaterial {
- // Block 0: 16 bytes - Base material properties
- float4 baseColorFactor;                    // 16 bytes
-
- // Block 1: 16 bytes - Shade and basic factors (packed float3 + float)
- float shadeColorR;                         // 4 bytes
- float shadeColorG;                         // 4 bytes
- float shadeColorB;                         // 4 bytes
- float shadingToonyFactor;                  // 4 bytes
-
- // Block 2: 16 bytes - Material factors (float + packed float3)
- float shadingShiftFactor;                  // 4 bytes
- float emissiveR;                           // 4 bytes
- float emissiveG;                           // 4 bytes
- float emissiveB;                           // 4 bytes
-
- // Block 3: 16 bytes - PBR factors
- float metallicFactor;                      // 4 bytes
- float roughnessFactor;                     // 4 bytes
- float giEqualizationFactor;                   // 4 bytes
- float shadingShiftTextureScale;            // 4 bytes
-
- // Block 4: 16 bytes - MatCap properties (packed float3 + int)
- float matcapR;                             // 4 bytes
- float matcapG;                             // 4 bytes
- float matcapB;                             // 4 bytes
- int hasMatcapTexture;                      // 4 bytes
-
- // Block 5: 16 bytes - Rim lighting part 1 (packed float3 + float)
- float parametricRimColorR;                 // 4 bytes
- float parametricRimColorG;                 // 4 bytes
- float parametricRimColorB;                 // 4 bytes
- float parametricRimFresnelPowerFactor;     // 4 bytes
-
- // Block 6: 16 bytes - Rim lighting part 2
- float parametricRimLiftFactor;             // 4 bytes
- float rimLightingMixFactor;                // 4 bytes
- int hasRimMultiplyTexture;                 // 4 bytes
- float mergedOutline;                       // 4 bytes: >0.5 = instanced hull in this draw
-
- // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
- float outlineWidthFactor;                  // 4 bytes
- float outlineColorR;                       // 4 bytes
- float outlineColorG;                       // 4 bytes
- float outlineColorB;                       // 4 bytes
-
- // Block 8: 16 bytes - Outline properties part 2
- float outlineLightingMixFactor;            // 4 bytes
- float outlineMode;                         // 4 bytes (0: None, 1: World, 2: Screen)
- int hasOutlineWidthMultiplyTexture;        // 4 bytes
- float _padding2;                           // 4 bytes padding
-
- // Block 9: 16 bytes - UV Animation
- float uvAnimationScrollXSpeedFactor;       // 4 bytes
- float uvAnimationScrollYSpeedFactor;       // 4 bytes
- float uvAnimationRotationSpeedFactor;      // 4 bytes
- float time;                                // 4 bytes
-
- // Block 10: 16 bytes - Texture flags
- int hasUvAnimationMaskTexture;             // 4 bytes
- int hasBaseColorTexture;                   // 4 bytes
- int hasShadeMultiplyTexture;               // 4 bytes
- int hasShadingShiftTexture;                // 4 bytes
-
- // Block 11: 16 bytes - More texture flags and alpha
- int hasNormalTexture;                      // 4 bytes
- int hasEmissiveTexture;                    // 4 bytes
- uint32_t alphaMode;                        // 4 bytes
- float alphaCutoff;                         // 4 bytes
-
- // Block 12: 16 bytes - Version flag and UV offset
- uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
- float uvOffsetX;                           // 4 bytes
- float uvOffsetY;                           // 4 bytes
- float uvScale;                             // 4 bytes
-
- // Block 13: 16 bytes - KHR_texture_transform (offset, rotation, scale X)
- float textureTransformOffsetX;             // 4 bytes
- float textureTransformOffsetY;             // 4 bytes
- float textureTransformRotation;            // 4 bytes
- float textureTransformScaleX;             // 4 bytes
-
- // Block 14: 16 bytes - KHR_texture_transform scale Y + padding
- float textureTransformScaleY;             // 4 bytes
- float _ttPad0;                             // 4 bytes padding
- float _ttPad1;                             // 4 bytes padding
- float _ttPad2;                             // 4 bytes padding
-};
-
 struct VertexIn {
  float3 position [[attribute(0)]];
  float3 normal [[attribute(1)]];
@@ -226,66 +105,6 @@ struct VertexIn {
  uint4 joints [[attribute(4)]];  // Changed to uint4 to match VRMVertex.joints (SIMD4<UInt32>)
  float4 weights [[attribute(5)]];
 };
-
-// Must match MToonShader's VertexOut exactly for fragment shader compatibility
-struct VertexOut {
- float4 position [[position]];
- float3 worldPosition;
- float3 worldNormal;
- float2 texCoord;
- float2 animatedTexCoord;
- float4 color;
- float3 viewDirection;
- float3 viewNormal; // For MatCap sampling
- uint instanceId;
-};
-
-static inline bool hasParametricRim(constant MToonMaterial& material) {
- return material.parametricRimColorR > 0.0 ||
-        material.parametricRimColorG > 0.0 ||
-        material.parametricRimColorB > 0.0;
-}
-
-static inline bool needsViewNormal(constant MToonMaterial& material, constant Uniforms& uniforms) {
- return material.hasMatcapTexture > 0 || hasParametricRim(material) ||
-        uniforms.debugUVs == 32;
-}
-
-static inline bool needsViewDirection(constant MToonMaterial& material, constant Uniforms& uniforms) {
- return hasParametricRim(material) || uniforms.debugUVs == 10
-     || (uniforms.materializeParams.y > 0.5 && uniforms.materializeParams.x < 1.0);
-}
-
-static inline void applyMToonOutlineExtrusion(
-    thread float3& worldPos,
-    thread float4& clipPos,
-    float3 worldNormal,
-    float2 texCoord,
-    constant Uniforms& uniforms,
-    constant MToonMaterial& material,
-    texture2d<float> outlineWidthMultiplyTexture,
-    sampler textureSampler,
-    bool hasMultiplyTexture
-) {
- float outlineWidth = material.outlineWidthFactor;
- if (hasMultiplyTexture) {
- outlineWidth *= outlineWidthMultiplyTexture.sample(textureSampler, texCoord).g;
- }
- float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
-                                   uniforms.viewMatrix[1].xyz,
-                                   uniforms.viewMatrix[2].xyz);
- float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
- if (material.outlineMode == 1.0) {
- float distanceScale = length(worldPos - cameraPos) * 0.01;
- worldPos += normalize(worldNormal) * outlineWidth * distanceScale;
- clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * float4(worldPos, 1.0);
- } else if (material.outlineMode == 2.0) {
- float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
- float2 screenNormal = normalize(viewNormal.xy);
- float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
- clipPos.xy += screenNormal * outlineWidth * pixelsToNDC * clipPos.w;
- }
-}
 
 // Shared skinning: morph fetch + weight normalisation/gating + LBS/DQS blend +
 // NaN/extreme fallback. The SINGLE source of truth for skinned object-space

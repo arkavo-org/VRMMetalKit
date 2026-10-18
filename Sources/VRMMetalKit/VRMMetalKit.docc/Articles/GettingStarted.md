@@ -27,12 +27,12 @@ Dedicated `xros` and `xrsimulator` shader slices ship in the package. The in-rep
 
 ## Add the package
 
-In Xcode, choose **File ▸ Add Package Dependencies…** and enter `https://github.com/arkavo-org/VRMMetalKit`. Pin to version **1.1.0** or later for visionOS; **1.0.0** remains the macOS/iOS floor.
+In Xcode, choose **File ▸ Add Package Dependencies…** and enter `https://github.com/arkavo-org/VRMMetalKit`. Pin to version **1.2.0** or later for the material-finish and presentation features; **1.1.0** remains the visionOS floor and **1.0.0** the macOS/iOS floor.
 
 For a `Package.swift`-based project, add the dependency directly:
 
 ```swift
-.package(url: "https://github.com/arkavo-org/VRMMetalKit", from: "1.1.0")
+.package(url: "https://github.com/arkavo-org/VRMMetalKit", from: "1.2.0")
 ```
 
 Then add `"VRMMetalKit"` to the `dependencies` of any target that needs it.

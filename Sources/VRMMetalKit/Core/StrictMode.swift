@@ -49,6 +49,57 @@ public enum RenderFilter: Sendable {
     case primitive(Int)
 }
 
+/// Opt-in anisotropic hair highlight configuration.
+///
+/// The highlight is a stylized strand band, not a physical hair BSDF. The
+/// strand direction follows the material's UV `v` axis (how VRoid-style hair
+/// UVs run), falling back to a view-based tangent where the UVs do not vary.
+/// It is off by default so existing models render unchanged. The renderer only
+/// applies it to materials whose name contains ``materialNameContains``
+/// (case-insensitive); pass `nil` to apply it to every material.
+public struct HairHighlightConfig: Equatable, Sendable {
+    /// Enables the band. Default `false`.
+    public var isEnabled: Bool
+    /// Additive band strength, clamped to `0...2` when used. Default `0.6`.
+    public var strength: Float
+    /// Band sharpness, clamped to `1...64` when used. Higher values narrow the
+    /// band; `6...12` reads as a broad painted sweep. Default `8`.
+    public var sharpness: Float
+    /// Case-insensitive substring used to select hair materials. `nil` applies
+    /// the band to every material (useful for props and fur). Default `"hair"`.
+    public var materialNameContains: String?
+
+    /// A disabled configuration.
+    public static let disabled = HairHighlightConfig()
+
+    /// Creates a hair-highlight configuration.
+    public init(
+        isEnabled: Bool = false,
+        strength: Float = 0.6,
+        sharpness: Float = 8.0,
+        materialNameContains: String? = "hair"
+    ) {
+        self.isEnabled = isEnabled
+        self.strength = strength
+        self.sharpness = sharpness
+        self.materialNameContains = materialNameContains
+    }
+
+    /// Whether the config opts the named material into the band.
+    public func applies(toMaterialNamed name: String?) -> Bool {
+        guard isEnabled else { return false }
+        guard let needle = materialNameContains, !needle.isEmpty else {
+            return true
+        }
+        return (name ?? "").range(of: needle, options: .caseInsensitive) != nil
+    }
+
+    /// Strength actually uploaded to the shader.
+    var resolvedStrength: Float { strength.isFinite ? max(0, min(strength, 2)) : 0 }
+    /// Sharpness actually uploaded to the shader.
+    var resolvedSharpness: Float { sharpness.isFinite ? max(1, min(sharpness, 64)) : 8 }
+}
+
 /// Configuration for ``VRMRenderer`` covering pixel format, validation level, MSAA, depth bias, and debug filters.
 public struct RendererConfig {
     /// Strict-mode validation level applied to every draw call.
@@ -166,8 +217,79 @@ public struct RendererConfig {
     /// init-time constant.
     public var enableMaterialization: Bool = false
 
+    /// Opt-in stylized finish driven by each material's glTF
+    /// `pbrMetallicRoughness` factors. Default `false`.
+    ///
+    /// MToon ignores the glTF metallic/roughness pair (as do UniVRM and
+    /// three-vrm), and VRoid/UniVRM exports routinely write the glTF default
+    /// `metallicFactor = 1.0` on every material, skin and eyes included.
+    /// Enabling the finish on such an avatar puts a metal highlight on its
+    /// face, so enable it only for assets whose metallic/roughness values were
+    /// authored for this finish (props, armour, leather, or avatars built by a
+    /// pipeline that writes them deliberately).
+    ///
+    /// Set it, like ``hairHighlight`` and ``enableSSAO``, on the configuration
+    /// passed to ``VRMRenderer/init(device:config:)``. As with
+    /// ``enableMaterialization``, changing it on a live renderer reaches only
+    /// the function-constant-specialized pipelines; the fallback pipelines
+    /// keep the init-time choice.
+    public var enableMaterialFinish: Bool = false
+
+    /// Opt-in anisotropic hair highlight. Off by default (existing models are
+    /// unchanged). Stylized pipelines opt in with
+    /// `HairHighlightConfig(isEnabled: true, ...)`.
+    public var hairHighlight: HairHighlightConfig = .disabled
+
+    /// Opt-in soft contact shadow under the model's footprint. Default `false`
+    /// so model sheets keep a clean background.
+    public var enableContactShadows: Bool = false
+
+    /// Opacity of the contact shadow, clamped to `0...1` when drawn. Default `0.45`.
+    public var contactShadowOpacity: Float = 0.45
+
+    /// Radius multiplier applied to the shadow footprint (the feet for a
+    /// humanoid, the mesh bounds otherwise), clamped to at least `0.1`.
+    /// Default `1.15`.
+    public var contactShadowScale: Float = 1.15
+
+    /// Opt-in screen-space crease AO for clothing and hair creases. Default
+    /// `false`. This is a derivative-based approximation (no depth prepass or
+    /// ray marching), confined to the indirect/ambient term like a glTF
+    /// occlusion map.
+    public var enableSSAO: Bool = false
+
+    /// Crease AO strength, clamped to `0...2` when used. Default `0.6`;
+    /// ignored when ``enableSSAO`` is `false`.
+    public var ssaoStrength: Float = 0.6
+
+    /// Whether any opt-in surface extension is enabled, which compiles the
+    /// extension code into this renderer's MToon pipelines.
+    var surfaceExtensionsEnabled: Bool {
+        enableMaterialFinish || hairHighlight.isEnabled || enableSSAO
+    }
+
     /// Creates a renderer configuration. Defaults match the production baseline.
-    public init(strict: StrictLevel = .off, colorPixelFormat: MTLPixelFormat = .bgra8Unorm, renderFilter: RenderFilter? = nil, drawUntil: Int? = nil, drawOnlyIndex: Int? = nil, testIdentityPalette: Int? = nil, sampleCount: Int = 1, depthBiasScale: Float = 1.0, alphaToCoverageForMASK: Bool = false, synchronousSpringBone: Bool = false, dualQuaternionSkinning: Bool = false, enableMToonFunctionConstants: Bool = true) {
+    public init(
+        strict: StrictLevel = .off,
+        colorPixelFormat: MTLPixelFormat = .bgra8Unorm,
+        renderFilter: RenderFilter? = nil,
+        drawUntil: Int? = nil,
+        drawOnlyIndex: Int? = nil,
+        testIdentityPalette: Int? = nil,
+        sampleCount: Int = 1,
+        depthBiasScale: Float = 1.0,
+        alphaToCoverageForMASK: Bool = false,
+        synchronousSpringBone: Bool = false,
+        dualQuaternionSkinning: Bool = false,
+        enableMToonFunctionConstants: Bool = true,
+        enableMaterialFinish: Bool = false,
+        hairHighlight: HairHighlightConfig = .disabled,
+        enableContactShadows: Bool = false,
+        contactShadowOpacity: Float = 0.45,
+        contactShadowScale: Float = 1.15,
+        enableSSAO: Bool = false,
+        ssaoStrength: Float = 0.6
+    ) {
         self.strict = strict
         self.colorPixelFormat = colorPixelFormat
         self.renderFilter = renderFilter
@@ -180,6 +302,13 @@ public struct RendererConfig {
         self.synchronousSpringBone = synchronousSpringBone
         self.dualQuaternionSkinning = dualQuaternionSkinning
         self.enableMToonFunctionConstants = enableMToonFunctionConstants
+        self.enableMaterialFinish = enableMaterialFinish
+        self.hairHighlight = hairHighlight
+        self.enableContactShadows = enableContactShadows
+        self.contactShadowOpacity = contactShadowOpacity
+        self.contactShadowScale = contactShadowScale
+        self.enableSSAO = enableSSAO
+        self.ssaoStrength = ssaoStrength
     }
 }
 
@@ -587,8 +716,10 @@ public struct MetalSizeConstants {
     /// Validated at runtime by the strict-mode `uniformLayoutMismatch` check.
     public static let uniformsSize = 480
 
-    /// Byte size of the Metal `MToonMaterial` struct (15 blocks × 16 bytes).
-    public static let mtoonMaterialSize = 240
+    /// Byte size of the Metal `MToonMaterial` struct (17 blocks × 16 bytes).
+    /// Blocks 15 and 16 carry the opt-in hair band / crease AO and the
+    /// outline minimum-width parameters.
+    public static let mtoonMaterialSize = 272
 
     /// Byte size of the Metal `Vertex` struct.
     public static let vertexSize = 44

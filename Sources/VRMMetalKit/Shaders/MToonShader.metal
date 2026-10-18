@@ -18,6 +18,8 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#include "MToonShared.h"
+
 #ifndef MTOON_USE_HALF_PRECISION
 #define MTOON_USE_HALF_PRECISION 0
 #endif
@@ -41,146 +43,11 @@ typedef float4 mtoon_float4;
 // stylistic additive terms (not Lambert BRDFs) and intentionally skip it.
 constant float BRDF_LAMBERT_NORM = 1.0 / M_PI_F;
 
-struct Uniforms {
- float4x4 modelMatrix;
- float4x4 viewMatrix;
- float4x4 projectionMatrix;
- float4x4 normalMatrix;
- // Light 0 (key light) - using float4 for Swift SIMD4 alignment
- float4 lightDirection;        // xyz = direction, w = unused
- float4 lightColor;            // xyz = color, w = pre-calculated intensity
- float4 ambientColor;          // xyz = color, w = unused
- // Light 1 (fill light)
- float4 light1Direction;       // xyz = direction, w = unused
- float4 light1Color;           // xyz = color, w = pre-calculated intensity
- // Light 2 (rim/back light)
- float4 light2Direction;       // xyz = direction, w = unused
- float4 light2Color;           // xyz = color, w = pre-calculated intensity
- // Other fields - packed into float4 for alignment
- float4 viewportSize;          // xy = size, zw = padding
- float4 nearFarPlane;          // x = near, y = far, zw = padding
- int debugUVs;                 // Debug flag: 1 = show UVs as colors, 0 = normal rendering
- float lightNormalizationFactor;  // Multi-light normalization factor
- int vrmVersion;              // 0 = VRM 0.x (Half-Lambert), 1 = VRM 1.0 (raw dot)
- float useDualQuaternionSkinning;  // #197: >0.5 = DQS, else LBS
- int toonBands;                // Number of cel-shading bands
- float additiveDirectionalRimEnabled;  // 0 = off (legacy), >0.5 = enable additive directional rim
- float additiveDirectionalRimPower;    // Fresnel exponent for the additive rim (typical 4..12)
- uint cameraMode;             // 0 = third-person, 1 = first-person
- // Materialization spawn effect (VMK#materialize)
- float4 materializeParams;    // x = progress (>=1 off), y = style, z = min Y, w = max Y (world)
- float4 materializeColor;     // xyz = accent color, w = per-avatar seed
- float4 materializeOrigin;    // xyz = world focus point (radial styles), w = reserved
-};
-
-// Use packed_float3 to match Swift's Float component layout (no 16-byte alignment)
-// This ensures Metal struct size (192 bytes) matches Swift struct stride exactly
-struct MToonMaterial {
- // Block 0: 16 bytes - Base material properties
- float4 baseColorFactor;                    // 16 bytes
-
- // Block 1: 16 bytes - Shade and basic factors (packed float3 + float)
- float shadeColorR;                         // 4 bytes
- float shadeColorG;                         // 4 bytes
- float shadeColorB;                         // 4 bytes
- float shadingToonyFactor;                  // 4 bytes
-
- // Block 2: 16 bytes - Material factors (float + packed float3)
- float shadingShiftFactor;                  // 4 bytes
- float emissiveR;                           // 4 bytes
- float emissiveG;                           // 4 bytes
- float emissiveB;                           // 4 bytes
-
- // Block 3: 16 bytes - PBR factors
- float metallicFactor;                      // 4 bytes
- float roughnessFactor;                     // 4 bytes
- float giEqualizationFactor;                   // 4 bytes
- float shadingShiftTextureScale;            // 4 bytes
-
- // Block 4: 16 bytes - MatCap properties (packed float3 + int)
- float matcapR;                             // 4 bytes
- float matcapG;                             // 4 bytes
- float matcapB;                             // 4 bytes
- int hasMatcapTexture;                      // 4 bytes
-
- // Block 5: 16 bytes - Rim lighting part 1 (packed float3 + float)
- float parametricRimColorR;                 // 4 bytes
- float parametricRimColorG;                 // 4 bytes
- float parametricRimColorB;                 // 4 bytes
- float parametricRimFresnelPowerFactor;     // 4 bytes
-
- // Block 6: 16 bytes - Rim lighting part 2
- float parametricRimLiftFactor;             // 4 bytes
- float rimLightingMixFactor;                // 4 bytes
- int hasRimMultiplyTexture;                 // 4 bytes
- float mergedOutline;                       // 4 bytes: >0.5 = instanced hull in this draw
-
- // Block 7: 16 bytes - Outline properties part 1 (float + packed float3)
- float outlineWidthFactor;                  // 4 bytes
- float outlineColorR;                       // 4 bytes
- float outlineColorG;                       // 4 bytes
- float outlineColorB;                       // 4 bytes
-
- // Block 8: 16 bytes - Outline properties part 2
- float outlineLightingMixFactor;            // 4 bytes
- float outlineMode;                         // 4 bytes (0: None, 1: World, 2: Screen)
- int hasOutlineWidthMultiplyTexture;        // 4 bytes
- int shadeUsesBaseColor;                    // 4 bytes (non-zero = reuse baseColor sample for shade)
-
- // Block 9: 16 bytes - UV Animation
- float uvAnimationScrollXSpeedFactor;       // 4 bytes
- float uvAnimationScrollYSpeedFactor;       // 4 bytes
- float uvAnimationRotationSpeedFactor;      // 4 bytes
- float time;                                // 4 bytes
-
- // Block 10: 16 bytes - Texture flags
- int hasUvAnimationMaskTexture;             // 4 bytes
- int hasBaseColorTexture;                   // 4 bytes
- int hasShadeMultiplyTexture;               // 4 bytes
- int hasShadingShiftTexture;                // 4 bytes
-
- // Block 11: 16 bytes - More texture flags and alpha
- int hasNormalTexture;                      // 4 bytes
- int hasEmissiveTexture;                    // 4 bytes
- uint32_t alphaMode;                        // 4 bytes (0: OPAQUE, 1: MASK, 2: BLEND)
- float alphaCutoff;                         // 4 bytes
-
- // Block 12: 16 bytes - Version flag and UV offset
- uint32_t vrmVersion;                       // 4 bytes (0 = VRM 0.0, 1 = VRM 1.0)
- float uvOffsetX;                           // 4 bytes - UV offset for texture remapping
- float uvOffsetY;                           // 4 bytes - UV offset for texture remapping
- float uvScale;                             // 4 bytes - UV scale for texture remapping
-
- // Block 13: 16 bytes - KHR_texture_transform (offset, rotation, scale X)
- float textureTransformOffsetX;             // 4 bytes
- float textureTransformOffsetY;             // 4 bytes
- float textureTransformRotation;            // 4 bytes
- float textureTransformScaleX;             // 4 bytes
-
- // Block 14: 16 bytes - KHR_texture_transform scale Y + normalScale + occlusion (VMK#293)
- float textureTransformScaleY;             // 4 bytes
- float normalScale;                         // 4 bytes — glTF-core normalTextureInfo.scale (VMK#290)
- float occlusionStrength;                   // 4 bytes — glTF-core occlusionTextureInfo.strength (VMK#293)
- int hasOcclusionTexture;                  // 4 bytes — occlusion texture binding flag (VMK#293)
-};
-
 struct VertexIn {
  float3 position [[attribute(0)]];
  float3 normal [[attribute(1)]];
  float2 texCoord [[attribute(2)]];
  float4 color [[attribute(3)]];
-};
-
-struct VertexOut {
- float4 position [[position]];
- float3 worldPosition;
- float3 worldNormal;
- float2 texCoord;
- float2 animatedTexCoord;
- float4 color;
- float3 viewDirection;
- float3 viewNormal; // For MatCap sampling
- uint instanceId;   // 0 = shaded surface, 1 = inverted-hull outline
 };
 
 // MARK: - Function constants for per-material MToon specialization
@@ -223,6 +90,14 @@ constant uint fc_lightCount [[function_constant(13)]];
 constant bool fc_materializationEnabled [[function_constant(14)]];
 constant bool fc_hasMaterialization = is_function_constant_defined(fc_materializationEnabled)
     ? fc_materializationEnabled : true;
+
+// Opt-in surface extensions (stylized metallic/roughness finish, hair band,
+// crease AO). When false the extension blocks dead-strip and the fragment is
+// the plain MToon fragment. Defaults to true when the constant is not
+// provided, like fc_materializationEnabled.
+constant bool fc_surfaceExtensionsEnabled [[function_constant(15)]];
+constant bool fc_hasSurfaceExtensions = is_function_constant_defined(fc_surfaceExtensionsEnabled)
+    ? fc_surfaceExtensionsEnabled : true;
 
 static inline uint mtoonEffectiveLightCount() {
     return fc_useMaterialFlags ? 3u : max(1u, min(fc_lightCount, 3u));
@@ -276,56 +151,172 @@ float2 calculateMatCapUV(float3 viewNormal) {
  return float2(viewNormal.x, -viewNormal.y) * 0.5 + 0.5;
 }
 
-static inline bool hasParametricRim(constant MToonMaterial& material) {
- return material.parametricRimColorR > 0.0 ||
-        material.parametricRimColorG > 0.0 ||
-        material.parametricRimColorB > 0.0;
+// MARK: - Opt-in surface extensions
+//
+// Everything in this section runs only in pipelines compiled with
+// fc_hasSurfaceExtensions (RendererConfig.enableMaterialFinish, hairHighlight
+// or enableSSAO). Each term is additive light or an indirect-only occlusion
+// factor, so a disabled term leaves the MToon result untouched.
+
+// Stylized finish thresholds. MToonSpecularMode in MToonShader.swift mirrors
+// these values; change both together.
+static inline bool mtoonFinishActive(float metallic) {
+    return metallic > 0.0001;
 }
 
-static inline bool needsViewNormal(constant MToonMaterial& material, constant Uniforms& uniforms) {
- // Parametric rim no longer needs view-space normal (#226 — moved the
- // fresnel into world space to avoid the compound-matrix w-leak). MatCap
- // still samples in view space.
- return material.hasMatcapTexture > 0 || uniforms.debugUVs == 32;
+static inline float mtoonFinishMetalMask(float metallic) {
+    return smoothstep(0.6, 0.8, metallic);
 }
 
-static inline bool needsViewDirection(constant MToonMaterial& material, constant Uniforms& uniforms) {
- // Spawn styles that fresnel against V; dummy interpolator is (0,0,1).
- return hasParametricRim(material) || uniforms.debugUVs == 10
-     || (uniforms.materializeParams.y > 0.5 && uniforms.materializeParams.x < 1.0);
-}
-
-// Inverted-hull extrusion used by the dedicated outline vertex and by
-// instance_id == 1 of the merged color+outline draw.
-static inline void applyMToonOutlineExtrusion(
-    thread float3& worldPos,
-    thread float4& clipPos,
-    float3 worldNormal,
-    float2 texCoord,
+// glTF metallic/roughness as two stylized lobes instead of a microfacet BRDF:
+// a tight, base-colour-tinted band for metal and a broad near-white sheen for
+// leather-like low metallic values. Lower roughness narrows both lobes over
+// the whole [0, 1] range. Light scaling follows the rim convention (light
+// colour times the normalization factor, no Lambert 1/pi), so the band is
+// linear in light intensity like the diffuse term.
+static inline float3 mtoonStylizedSpecular(
+    float3 N,
+    float3 V,
     constant Uniforms& uniforms,
     constant MToonMaterial& material,
-    texture2d<float> outlineWidthMultiplyTexture,
-    sampler textureSampler,
-    bool hasMultiplyTexture
+    float3 baseColor,
+    float intensity0,
+    float intensity1,
+    float intensity2,
+    float totalIntensity,
+    uint nLights
 ) {
- float outlineWidth = material.outlineWidthFactor;
- if (hasMultiplyTexture) {
- outlineWidth *= outlineWidthMultiplyTexture.sample(textureSampler, texCoord).g;
- }
- float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
-                                   uniforms.viewMatrix[1].xyz,
-                                   uniforms.viewMatrix[2].xyz);
- float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
- if (material.outlineMode == 1.0) {
- float distanceScale = length(worldPos - cameraPos) * 0.01;
- worldPos += normalize(worldNormal) * outlineWidth * distanceScale;
- clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * float4(worldPos, 1.0);
- } else if (material.outlineMode == 2.0) {
- float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
- float2 screenNormal = normalize(viewNormal.xy);
- float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
- clipPos.xy += screenNormal * outlineWidth * pixelsToNDC * clipPos.w;
- }
+    float metallic = saturate(material.metallicFactor);
+    float roughness = saturate(material.roughnessFactor);
+    float metalMask = mtoonFinishMetalMask(metallic);
+    float sheenMask = saturate(metallic * 3.0) * (1.0 - metalMask);
+    float metalExponent = exp2(mix(8.0, 4.0, roughness));
+    float sheenExponent = exp2(mix(4.0, 1.0, roughness));
+    float3 tint = mix(float3(1.0), baseColor, metalMask);
+
+    // Fade near the silhouette so the band cannot sparkle at grazing angles
+    // and does not read as a second parametric rim.
+    float grazing = smoothstep(0.0, 0.20, saturate(dot(N, V)));
+
+    float3 result = float3(0.0);
+    for (uint lightIndex = 0u; lightIndex < 3u; ++lightIndex) {
+        if (lightIndex >= nLights) { break; }
+        float intensity = lightIndex == 0u ? intensity0 : (lightIndex == 1u ? intensity1 : intensity2);
+        if (intensity <= 0.0) { continue; }
+        float3 L;
+        float3 lightColor;
+        if (lightIndex == 0u) {
+            L = normalize(-uniforms.lightDirection.xyz);
+            lightColor = uniforms.lightColor.xyz;
+        } else if (lightIndex == 1u) {
+            L = normalize(-uniforms.light1Direction.xyz);
+            lightColor = uniforms.light1Color.xyz;
+        } else {
+            L = normalize(-uniforms.light2Direction.xyz);
+            lightColor = uniforms.light2Color.xyz;
+        }
+        float NdotL = saturate(dot(N, L));
+        if (NdotL <= 0.0) { continue; }
+        float3 halfSum = L + V;
+        float halfLength = length(halfSum);
+        if (halfLength < 1e-4) { continue; }
+        float NdotH = saturate(dot(N, halfSum / halfLength));
+        float lobes = 0.0;
+        if (metalMask > 0.0) {
+            lobes += smoothstep(0.30, 0.50, pow(NdotH, metalExponent)) * metalMask;
+        }
+        if (sheenMask > 0.0) {
+            lobes += pow(NdotH, sheenExponent) * sheenMask * 0.55;
+        }
+        float weight = intensity / totalIntensity;
+        result += lobes * NdotL * weight * clamp(lightColor, 0.0f, 65500.0f);
+    }
+    return result * tint * grazing * uniforms.lightNormalizationFactor;
+}
+
+// Direction of increasing v across the surface, from screen-space derivatives
+// (the bitangent of the cotangent frame). Hair strands are laid out along v on
+// VRoid-style hair UVs. Returns zero where the UVs do not vary.
+static inline float3 mtoonStrandDirection(float3 N, float3 worldPos, float2 uv) {
+    float3 dp1 = dfdx(worldPos);
+    float3 dp2 = dfdy(worldPos);
+    float2 duv1 = dfdx(uv);
+    float2 duv2 = dfdy(uv);
+    float3 B = cross(dp2, N) * duv1.y + cross(N, dp1) * duv2.y;
+    float3 projected = B - N * dot(N, B);
+    float len = length(projected);
+    return len > 1e-8 ? projected / len : float3(0.0);
+}
+
+// Kajiya-Kay style band around the strand direction. Falls back to the
+// N x V tangent where the UVs give no strand direction. Scaled like the finish.
+static inline float3 mtoonHairHighlight(
+    float3 N,
+    float3 V,
+    float3 strand,
+    constant Uniforms& uniforms,
+    constant MToonMaterial& material,
+    float3 baseColor,
+    float weight0
+) {
+    float strength = clamp(material.hairHighlightStrength, 0.0, 2.0);
+    float sharpness = clamp(material.hairHighlightSharpness, 1.0, 64.0);
+    float NdotV = saturate(dot(N, V));
+    if (NdotV <= 0.0 || weight0 <= 0.0) { return float3(0.0); }
+
+    float3 T = strand;
+    if (dot(T, T) < 0.5) {
+        T = cross(N, V);
+        float tangentLength = length(T);
+        if (tangentLength < 1e-4) { return float3(0.0); }
+        T /= tangentLength;
+    }
+
+    float3 L = normalize(-uniforms.lightDirection.xyz);
+    float NdotL = saturate(dot(N, L));
+    if (NdotL <= 0.0) { return float3(0.0); }
+    float3 halfSum = L + V;
+    float halfLength = length(halfSum);
+    if (halfLength < 1e-4) { return float3(0.0); }
+    float TdotH = dot(T, halfSum / halfLength);
+    float sinTH = sqrt(saturate(1.0 - TdotH * TdotH));
+
+    // The smoothstep lifts the low end into a broad painted sweep; pow alone
+    // reads as a wet-plastic spot at the sharpness values hair usually wants.
+    float band = smoothstep(0.15, 0.85, pow(sinTH, sharpness));
+    float grazing = smoothstep(0.0, 0.25, NdotV);
+    float3 tint = mix(float3(1.0), baseColor, 0.35);
+    float3 lightColor = clamp(uniforms.lightColor.xyz, 0.0f, 65500.0f);
+    return tint * (band * NdotL * grazing * strength * weight0)
+        * lightColor * uniforms.lightNormalizationFactor;
+}
+
+// Depth-free crease occlusion: clothing and hair creases change the geometric
+// normal quickly between neighbouring fragments, so the screen-space normal
+// gradient is a cheap occlusion proxy. Applied to the indirect term only, like
+// a glTF occlusion map.
+static inline float mtoonCreaseAO(float3 geometricNormal, float strength) {
+    float curvature = length(dfdx(geometricNormal)) + length(dfdy(geometricNormal));
+    curvature = min(curvature, 1.5);
+    return saturate(1.0 - curvature * clamp(strength, 0.0, 2.0) * 0.5);
+}
+
+// Tangent-space normal map with Christian Schüler's screen-space-derivative
+// TBN (2010), which needs no TANGENT vertex attribute.
+static inline float3 mtoonApplyNormalMap(float3 N, float3 nMap, float3 worldPos, float2 uv) {
+    float3 dp1 = dfdx(worldPos);
+    float3 dp2 = dfdy(worldPos);
+    float2 duv1 = dfdx(uv);
+    float2 duv2 = dfdy(uv);
+
+    float3 dp2perp = cross(dp2, N);
+    float3 dp1perp = cross(N, dp1);
+    float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
+
+    float invmax = rsqrt(max(dot(T, T), dot(B, B)));
+    float3x3 TBN = float3x3(T * invmax, B * invmax, N);
+    return normalize(TBN * nMap);
 }
 
 // VRM 1.0 MToon spec uses linearstep for toon shading
@@ -1098,20 +1089,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      nMap.xy *= mtoon_float(material.normalScale);
      nMap = mtoon_float3(normalize(float3(nMap)));
 
-     float3 dp1 = dfdx(in.worldPosition);
-     float3 dp2 = dfdy(in.worldPosition);
-     float2 duv1 = dfdx(uv);
-     float2 duv2 = dfdy(uv);
-
-     float3 dp2perp = cross(dp2, float3(normal));
-     float3 dp1perp = cross(float3(normal), dp1);
-     float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
-     float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
-
-     float invmax = rsqrt(max(dot(T, T), dot(B, B)));
-     float3x3 TBN = float3x3(T * invmax, B * invmax, float3(normal));
-
-     normal = mtoon_float3(normalize(TBN * float3(nMap)));
+     normal = mtoon_float3(mtoonApplyNormalMap(float3(normal), float3(nMap), in.worldPosition, uv));
  }
 
  // Debug 11: magenta where the normal was flipped for a back face, normal
@@ -1183,6 +1161,37 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // the rim path (rim is a stylistic edge highlight, not a diffuse BRDF).
  mtoon_float3 directLight = lightingAcc * mtoon_float(uniforms.lightNormalizationFactor);
 
+ // Opt-in stylized finish and hair band. Both read a float-precision shading
+ // normal (the half-precision `normal` quantizes NdotH more coarsely than the
+ // tight metal band) and a world-space V from the camera position, which is
+ // valid on every vertex path regardless of needsViewDirection.
+ if (fc_hasSurfaceExtensions) {
+     bool finishOn = mtoonFinishActive(material.metallicFactor);
+     bool hairOn = material.hairHighlightStrength > 0.0;
+     if (finishOn || hairOn) {
+         float3 extNormal = normalize(in.worldNormal);
+         if (!isFrontFace) { extNormal = -extNormal; }
+         if (effectiveHasNormalTexture) {
+             float3 nMapF = float3(normalTexture.sample(textureSampler, uv).xyz) * 2.0 - 1.0;
+             nMapF.xy *= material.normalScale;
+             extNormal = mtoonApplyNormalMap(extNormal, normalize(nMapF), in.worldPosition, uv);
+         }
+         float3 extView = mat_viewDir(uniforms, in.worldPosition);
+         if (finishOn) {
+             litColor += mtoon_float3(mtoonStylizedSpecular(
+                 extNormal, extView, uniforms, material, float3(baseColor.rgb),
+                 float(intensity0), float(intensity1), float(intensity2),
+                 float(totalIntensity), nLights));
+         }
+         if (hairOn) {
+             float3 strand = mtoonStrandDirection(extNormal, in.worldPosition, uv);
+             litColor += mtoon_float3(mtoonHairHighlight(
+                 extNormal, extView, strand, uniforms, material, float3(baseColor.rgb),
+                 float(intensity0 / totalIntensity)));
+         }
+     }
+ }
+
  // Indirect diffuse — KNOWN DEVIATION FROM MToon 1.0 SPEC.
  //
  // The spec defines giEqualizationFactor as a lerp between rawGi(normal)
@@ -1215,6 +1224,12 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  if (effectiveHasOcclusionTexture) {
      mtoon_float ao = mtoon_float(occlusionTexture.sample(textureSampler, uv).r);
      occlusionFactor = mtoon_float(1.0) + mtoon_float(material.occlusionStrength) * (ao - mtoon_float(1.0));
+ }
+ // Opt-in crease AO. Like an authored occlusion map, it only attenuates the
+ // indirect/ambient term. The geometric normal (pre-normal-map) keeps texture
+ // detail from turning into per-pixel noise.
+ if (fc_hasSurfaceExtensions && material.ssaoStrength > 0.0) {
+     occlusionFactor *= mtoon_float(mtoonCreaseAO(normalize(in.worldNormal), material.ssaoStrength));
  }
 
  mtoon_float3 giAlbedo = mix(shadeColor, baseColor.rgb, mtoon_float(material.giEqualizationFactor));
@@ -1385,11 +1400,11 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  // component of the texture is referred to." Sampling .r here would
  // pull the wrong channel and produce per-vertex modulation that
  // doesn't match the spec / three-vrm / UniVRM. VMK#289.
- float outlineWidth = material.outlineWidthFactor;
+ float widthMask = 1.0;
  if (effectiveHasOutlineWidthMultiplyTexture) {
- float widthMultiplier = outlineWidthMultiplyTexture.sample(textureSampler, in.texCoord).g;
- outlineWidth *= widthMultiplier;
+ widthMask = outlineWidthMultiplyTexture.sample(textureSampler, in.texCoord).g;
  }
+ float outlineWidth = material.outlineWidthFactor * widthMask;
 
  // Pre-calculate world normal and camera position for edge attenuation
  float3 worldNormal = normalize((uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
@@ -1402,8 +1417,22 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  // Calculate view direction
  float3 viewDir = normalize(cameraPos - worldPos);
 
+ // Minimum-width guard band, shared with the other hull paths. It only
+ // engages when RendererConfig/VRMRenderer.outlineMinimumPixels is set.
+ float4 guardClip = float4(0.0);
+ bool guarded = material.outlineMinPixels > 0.0;
+ if (guarded) {
+ guardClip = uniforms.projectionMatrix * uniforms.viewMatrix * float4(worldPos, 1.0);
+ guarded = applyMToonOutlineGuardBand(guardClip, worldPos, worldNormal,
+                                      material.outlineWidthFactor, widthMask,
+                                      uniforms, material);
+ }
+
  // Calculate final position with outline extrusion
- if (material.outlineMode == 1.0) {
+ if (guarded) {
+ out.worldPosition = worldPos;
+ out.position = guardClip;
+ } else if (material.outlineMode == 1.0) {
  // World coordinates mode - extrude in world space
  float distanceScale = length(worldPos - cameraPos) * 0.01;
 

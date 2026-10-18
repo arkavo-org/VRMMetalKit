@@ -465,7 +465,15 @@ final class LightingTestRenderer {
     let indexBuffer: MTLBuffer
     let indexCount: Int
 
-    init(device: MTLDevice, width: Int, height: Int) throws {
+    /// GPU time of the most recent `renderInternal` call, in milliseconds.
+    /// Populated from the command buffer's Metal timestamps; used by the
+    /// env-gated per-fragment finish benchmark.
+    private(set) var lastGPUTimeMs: Double = 0
+
+    /// - Parameter surfaceExtensions: compiles the opt-in surface extensions
+    ///   (stylized finish, hair band, crease AO) into the fragment, as
+    ///   `RendererConfig.enableMaterialFinish` and friends do in the renderer.
+    init(device: MTLDevice, width: Int, height: Int, surfaceExtensions: Bool = false) throws {
         self.device = device
         self.width = width
         self.height = height
@@ -512,9 +520,11 @@ final class LightingTestRenderer {
         }
         // mtoon_fragment_v2 carries [[function_constant]] flags (#193), so it must
         // be specialized with constant values before it can build a pipeline.
+        var fragmentKey = MToonFunctionConstantKey.fallback
+        fragmentKey.enableSurfaceExtensions = surfaceExtensions
         let fragmentFunc = try library.makeFunction(
             name: "mtoon_fragment_v2",
-            constantValues: MToonFunctionConstantKey.fallback.makeFunctionConstantValues())
+            constantValues: fragmentKey.makeFunctionConstantValues())
 
         let pipelineDesc = MTLRenderPipelineDescriptor()
         pipelineDesc.vertexFunction = vertexFunc
@@ -710,6 +720,9 @@ final class LightingTestRenderer {
             throw LightingTestError.samplerCreationFailed
         }
         encoder.setFragmentSamplerState(sampler, index: 0)
+        // mtoon_vertex declares the outline-width sampler; bind it so the
+        // Metal validation layer accepts the draw.
+        encoder.setVertexSamplerState(sampler, index: 0)
 
         encoder.drawIndexedPrimitives(
             type: .triangle,
@@ -722,6 +735,7 @@ final class LightingTestRenderer {
         encoder.endEncoding()
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+        lastGPUTimeMs = (commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) * 1000
 
         // Read back pixels
         let bytesPerRow = width * 4
