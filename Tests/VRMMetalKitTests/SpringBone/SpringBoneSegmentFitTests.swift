@@ -38,6 +38,59 @@ final class SpringBoneSegmentFitTests: XCTestCase {
                                         options: VRMLoadingOptions(augmentSpringBoneColliders: true))
     }
 
+    /// Directory that contains `Package.swift`, walked from this source file.
+    /// `getProjectRoot()` is not that directory when `VRM_TEST_MODELS_PATH`
+    /// is set: it returns the env path even if the file is not there, so the
+    /// copies next to the package never get considered.
+    private func sourcePackageRoot(filePath: String = #filePath) -> String? {
+        var url = URL(fileURLWithPath: filePath)
+        let fm = FileManager.default
+        for _ in 0..<10 {
+            url.deleteLastPathComponent()
+            if fm.fileExists(atPath: url.appendingPathComponent("Package.swift").path) {
+                return url.path
+            }
+        }
+        return nil
+    }
+
+    /// Places a corpus file might live. The source tree comes first so an
+    /// env models directory cannot hide the three glbs committed at the repo root.
+    private func corpusCandidates(for name: String) -> [String] {
+        var paths: [String] = []
+        func add(_ directory: String) {
+            let path = URL(fileURLWithPath: directory).appendingPathComponent(name).standardizedFileURL.path
+            if !paths.contains(path) {
+                paths.append(path)
+            }
+        }
+        if let root = sourcePackageRoot() {
+            add(root)
+        }
+        let env = ProcessInfo.processInfo.environment
+        for key in ["CI_PRIMARY_REPOSITORY_PATH", "PROJECT_ROOT", "SRCROOT",
+                    "VRM_TEST_MODELS_PATH", "VRM_MODELS_PATH", "MUSE_RESOURCES_PATH"] {
+            if let value = env[key], !value.isEmpty {
+                add(value)
+            }
+        }
+        var cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        for _ in 0..<4 {
+            add(cwd.path)
+            let parent = cwd.deletingLastPathComponent()
+            if parent.path == cwd.path { break }
+            cwd = parent
+        }
+        return paths
+    }
+
+    private func resolveCorpusFile(_ name: String) -> URL? {
+        for path in corpusCandidates(for: name) where FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        return nil
+    }
+
     /// Avatars that are not the VRoid sample template. Resolved from
     /// `MUSE_RESOURCES_PATH` or a sibling `Muse` checkout. Missing files are
     /// skipped so CI without that checkout still runs the shipped set.
@@ -46,10 +99,13 @@ final class SpringBoneSegmentFitTests: XCTestCase {
         if let muse = ProcessInfo.processInfo.environment["MUSE_RESOURCES_PATH"], !muse.isEmpty {
             dirs.append(muse)
         }
-        let project = URL(fileURLWithPath: getProjectRoot())
-        dirs.append(project.path)
-        dirs.append(project.appendingPathComponent("../Muse/Resources/VRM").standardized.path)
-        dirs.append(project.appendingPathComponent("../Muse").standardized.path)
+        let roots = [sourcePackageRoot(), getProjectRoot()].compactMap { $0 }
+        for root in roots {
+            let project = URL(fileURLWithPath: root)
+            dirs.append(project.path)
+            dirs.append(project.appendingPathComponent("../Muse/Resources/VRM").standardized.path)
+            dirs.append(project.appendingPathComponent("../Muse").standardized.path)
+        }
         let names = [
             "AliciaSolid.vrm",
             "AvatarSample_C.vrm.glb",
@@ -223,33 +279,44 @@ final class SpringBoneSegmentFitTests: XCTestCase {
     }
 
     /// The authored-radius clamp is a property of the file, not of AvatarSample_A.
-    /// The shipped VRoid samples share one collider template, so the corpus also
-    /// loads AliciaSolid, AvatarSample_C, and any other body avatars in the
-    /// sibling Muse checkout. Those are a different author and a different rig.
+    /// Git ships three fixtures (A 0.x, A 1.0, U). H, K, O, and the VRoid
+    /// template are gitignored, and Xcode Cloud has no sibling Muse checkout,
+    /// so a count of six fails there even when the shipped files load. U stays
+    /// required: it is the thigh that must keep the fraction radius.
     @MainActor func testCorpus_authoredRadiusWinsOnEveryAvatar() async throws {
-        let files = [
+        let required = [
             "AvatarSample_A_1.0.vrm.glb",
             "AvatarSample_A_0.0.vrm.glb",
+            "AvatarSample_U_1.0.vrm.glb",
+        ]
+        let optional = [
             "AvatarSample_H_1.0.vrm",
             "AvatarSample_K_1.0.vrm",
             "AvatarSample_K_0.0.vrm",
             "AvatarSample_O_1.0.vrm",
-            "AvatarSample_U_1.0.vrm.glb",
             "vroid_default_F_1_0.vrm",
         ]
-        var checked = 0
-        for file in files {
-            let path = getTestModelPath(file)
-            guard FileManager.default.fileExists(atPath: path) else {
+        var missing: [String] = []
+        for file in required {
+            guard let url = resolveCorpusFile(file) else {
+                missing.append(file)
+                continue
+            }
+            let model = try await load(url: url)
+            assertCorpusModel(model, file)
+        }
+        let looked = corpusCandidates(for: required[0]).joined(separator: ", ")
+        XCTAssertTrue(missing.isEmpty,
+                      "committed fixtures missing (\(missing.joined(separator: ", "))). looked in \(looked)")
+
+        for file in optional {
+            guard let url = resolveCorpusFile(file) else {
                 print("[corpus] missing \(file)")
                 continue
             }
-            let model = try await load(file)
-            checked += 1
+            let model = try await load(url: url)
             assertCorpusModel(model, file)
         }
-        XCTAssertGreaterThanOrEqual(checked, 6,
-                                    "the corpus must cover more than AvatarSample_A (checked \(checked))")
 
         let extras = extraCorpusURLs()
         var extraChecked = 0
@@ -258,7 +325,8 @@ final class SpringBoneSegmentFitTests: XCTestCase {
             extraChecked += 1
             assertCorpusModel(model, url.lastPathComponent)
         }
-        let muse = URL(fileURLWithPath: getProjectRoot())
+        let root = sourcePackageRoot() ?? getProjectRoot()
+        let muse = URL(fileURLWithPath: root)
             .appendingPathComponent("../Muse/Resources/VRM/AliciaSolid.vrm").standardized.path
         if FileManager.default.fileExists(atPath: muse) {
             XCTAssertGreaterThanOrEqual(extraChecked, 2,
