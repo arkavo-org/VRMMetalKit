@@ -376,33 +376,35 @@ float3 collideWithPlaneFiltered(float3 position, float boneRadius, uint boneMask
     return result;
 }
 
-// POST-COLLISION VELOCITY CORRECTION (#313, PBD-without-CCD tunneling).
+// POST-COLLISION VELOCITY CORRECTION (#313 tunneling, #382 coast-off).
 //
 // Verlet velocity is implicit: v = bonePosCurr - bonePosPrev. The collision
-// kernels push bonePosCurr OUT of a collider but never touch bonePosPrev, so a
-// joint that drove fast INTO a collider keeps its full inward velocity after the
-// push and tunnels straight back in on the next substep — the corrective impulse
-// then overshoots. (`bonePosPrev[id]` was frozen earlier this substep by predict:
-// `bonePosPrev[id] = oldCurr`, so v already encodes this substep's motion.)
+// kernels push bonePosCurr out of a collider. `bonePosPrev[id]` was frozen
+// earlier this substep by predict (`bonePosPrev[id] = oldCurr`), so v already
+// encodes this substep's pre-collision motion.
 //
-// Fix: after a push moves curr→curr+correction (outward normal n =
-// normalize(correction)), remove ONLY the INWARD normal component of the implicit
-// velocity by translating prev along n. We want dot(curr - prevNew, n) >= 0:
-//   prevNew = prev + n * min(0, dot(curr - prev, n))
-// Tangential (sliding) velocity is preserved, so settled chains keep sliding
-// along the collider and do not gain energy — this only bleeds the momentum that
-// caused the tunnel. No-op when there was no push (correction ≈ 0) and when the
-// joint is already moving outward, so resting/contained cloth is untouched.
+// Two corrections, both along the push n = normalize(newPos - oldPos):
+//
+// 1. The push itself is a position projection, not motion. Leaving prev behind
+//    adds the whole correction to v, so a joint that was resting or moving
+//    inward leaves contact with outward speed and coasts off the surface for
+//    several frames (#382). Carry prev by the same correction first; v is then
+//    exactly the pre-push velocity.
+// 2. Cancel any remaining INWARD component (vn < 0). Otherwise a joint that
+//    drove into the collider tunnels straight back in on the next substep and
+//    the corrective impulse overshoots (#313).
+//
+// Tangential velocity is unchanged, and outward pre-push velocity is kept but
+// not increased by the push. No-op when there was no push (correction ≈ 0).
 static void applyVelocityCorrection(thread float3& prevPos,
                                     float3 newPos, float3 oldPos) {
     float3 correction = newPos - oldPos;
     float corrLen = length(correction);
     if (corrLen < 1e-7) return;
     float3 n = correction / corrLen;
+    prevPos += correction;
     float vn = dot(newPos - prevPos, n);
     if (vn < 0.0) {
-        // Inward residual velocity along the push normal — cancel it so the
-        // joint does not carry momentum back into the collider next substep.
         prevPos += n * vn;
     }
 }

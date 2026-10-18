@@ -54,16 +54,21 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         self.collideCapsulesPipeline = try device.makeComputePipelineState(function: capsuleFn)
     }
 
+    private struct SphereCollisionResult {
+        var curr: [SIMD3<Float>]
+        var prev: [SIMD3<Float>]
+    }
+
     /// Dispatch the sphere-collision kernel once over `prev`/`curr` and return the
-    /// resolved current positions. Bone 0 is a kinematic root (skipped by the
-    /// kernel); the bone under test is index 1 with parent 0.
+    /// resolved current and previous positions. Bone 0 is a kinematic root
+    /// (skipped by the kernel); the bone under test is index 1 with parent 0.
     private func runSphereCollision(
         prev: [SIMD3<Float>],
         curr: [SIMD3<Float>],
         boneRadius: Float,
         sphere: SphereCollider,
         sweptGroupMask: UInt32? = nil
-    ) throws -> [SIMD3<Float>] {
+    ) throws -> SphereCollisionResult {
         let numBones = prev.count
         precondition(curr.count == numBones)
 
@@ -111,6 +116,14 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         // (#313). Default the test's swept group mask to the sphere's own mask so
         // the swept path engages; callers override to exercise the scoping guard.
         var sweptGroup = sweptGroupMask ?? sphere.groupMask
+        var chainIndex = [UInt32](repeating: 0, count: numBones)
+        var chainSleep = [UInt32](repeating: 0, count: 1)
+        let chainIndexBuf = device.makeBuffer(bytes: &chainIndex,
+                                              length: MemoryLayout<UInt32>.stride * numBones,
+                                              options: .storageModeShared)!
+        let chainSleepBuf = device.makeBuffer(bytes: &chainSleep,
+                                              length: MemoryLayout<UInt32>.stride,
+                                              options: .storageModeShared)!
 
         guard let cb = commandQueue.makeCommandBuffer(),
               let enc = cb.makeComputeCommandEncoder() else {
@@ -123,14 +136,19 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         enc.setBuffer(globalParamsBuf, offset: 0, index: 3)
         enc.setBuffer(sphereBuf, offset: 0, index: 5)
         enc.setBytes(&sweptGroup, length: MemoryLayout<UInt32>.size, index: 15)
+        enc.setBuffer(chainIndexBuf, offset: 0, index: 16)
+        enc.setBuffer(chainSleepBuf, offset: 0, index: 17)
         enc.dispatchThreads(MTLSize(width: numBones, height: 1, depth: 1),
                             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
         enc.endEncoding()
         cb.commit()
         cb.waitUntilCompleted()
 
-        let ptr = currBuf.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
-        return Array(UnsafeBufferPointer(start: ptr, count: numBones))
+        let currPtr = currBuf.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+        let prevPtr = prevBuf.contents().bindMemory(to: SIMD3<Float>.self, capacity: numBones)
+        return SphereCollisionResult(
+            curr: Array(UnsafeBufferPointer(start: currPtr, count: numBones)),
+            prev: Array(UnsafeBufferPointer(start: prevPtr, count: numBones)))
     }
 
     /// Dispatch the capsule-collision kernel once over `prev`/`curr` and return
@@ -336,7 +354,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         let result = try runSphereCollision(prev: prev, curr: curr,
                                             boneRadius: boneRadius, sphere: sphere)
 
-        let bone = result[1]
+        let bone = result.curr[1]
         // Tunneling guard: the bone must NOT end up on the far (+x) side. The
         // entry surface is at x = -(radius + boneRadius) = -0.22.
         XCTAssertLessThan(bone.x, 0.0,
@@ -362,7 +380,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         let result = try runSphereCollision(prev: prev, curr: curr,
                                             boneRadius: boneRadius, sphere: sphere)
 
-        let bone = result[1]
+        let bone = result.curr[1]
         let dist = simd_length(bone - sphere.center)
         XCTAssertEqual(dist, sphere.radius + boneRadius, accuracy: 0.01,
             "Shallow penetration should be pushed out to the sphere surface (x≈+0.22).")
@@ -386,7 +404,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
                                             boneRadius: boneRadius, sphere: sphere,
                                             sweptGroupMask: 1 << 7)  // no mask overlap → discrete only
 
-        let bone = result[1]
+        let bone = result.curr[1]
         XCTAssertEqual(bone.x, 0.5, accuracy: 1e-5,
             "Non-synthetic group must use discrete collision; the tunneling joint passes through (x stays +0.5).")
     }
@@ -403,8 +421,66 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         let result = try runSphereCollision(prev: prev, curr: curr,
                                             boneRadius: boneRadius, sphere: sphere)
 
-        let bone = result[1]
+        let bone = result.curr[1]
         XCTAssertEqual(bone.x, 0.5, accuracy: 1e-5, "Non-colliding segment must be untouched (x).")
         XCTAssertEqual(bone.y, 1.0, accuracy: 1e-5, "Non-colliding segment must be untouched (y).")
+    }
+
+    /// A collision push is a position projection, not motion. Verlet velocity is
+    /// `curr - prev`; leaving `prev` behind turns the push into outward speed and
+    /// the joint coasts off the surface (#382).
+    ///
+    /// The joint here is inside a sphere and still moving inward. The push to the
+    /// surface is larger than that inward speed, so the unfixed kernel leaves a
+    /// positive outward velocity. After the fix the normal velocity is zero and
+    /// the tangential component is unchanged.
+    func testPushOutDoesNotManufactureOutwardVelocity() throws {
+        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2, groupMask: 1)
+        // Inside, moving toward the centre (−x) and sliding in +y.
+        let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0.15, 0.00, 0)]
+        let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0.10, 0.05, 0)]
+
+        let result = try runSphereCollision(prev: prev, curr: curr,
+                                            boneRadius: 0, sphere: sphere)
+        let newPos = result.curr[1]
+        let newPrev = result.prev[1]
+        let velocity = newPos - newPrev
+
+        let surfaceDistance = simd_length(newPos - sphere.center)
+        XCTAssertEqual(surfaceDistance, sphere.radius, accuracy: 1e-4,
+            "Endpoint inside the sphere must be pushed to the surface.")
+
+        let outward = simd_normalize(newPos - sphere.center)
+        let normalSpeed = simd_dot(velocity, outward)
+        XCTAssertEqual(normalSpeed, 0, accuracy: 1e-4,
+            "Push-out must not leave outward velocity (got \(normalSpeed) m/substep). " +
+            "The pre-push motion was inward, so the normal component should be cancelled, not reversed into a coast.")
+
+        // Pre-push velocity is (−0.05, +0.05, 0). Its component perpendicular to
+        // the contact normal must survive.
+        let prePush = curr[1] - prev[1]
+        let preTangential = prePush - outward * simd_dot(prePush, outward)
+        let tangential = velocity - outward * normalSpeed
+        XCTAssertEqual(tangential.x, preTangential.x, accuracy: 1e-4)
+        XCTAssertEqual(tangential.y, preTangential.y, accuracy: 1e-4)
+        XCTAssertEqual(tangential.z, preTangential.z, accuracy: 1e-4)
+    }
+
+    /// A joint already leaving the collider must keep that outward speed. The
+    /// push may not add the correction on top of it.
+    func testPushOutPreservesExistingOutwardVelocity() throws {
+        let sphere = SphereCollider(center: SIMD3<Float>(0, 0, 0), radius: 0.2, groupMask: 1)
+        // Both samples inside, moving outward along +x at 0.05 m/substep.
+        let prev = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0.05, 0, 0)]
+        let curr = [SIMD3<Float>(0, 1, 0), SIMD3<Float>(0.10, 0, 0)]
+
+        let result = try runSphereCollision(prev: prev, curr: curr,
+                                            boneRadius: 0, sphere: sphere)
+        let velocity = result.curr[1] - result.prev[1]
+        XCTAssertEqual(velocity.x, 0.05, accuracy: 1e-4,
+            "Existing outward speed must be kept and not increased by the push. " +
+            "Got vx=\(velocity.x); the unfixed kernel reports 0.15 (pre-push 0.05 plus the 0.10 push).")
+        XCTAssertEqual(velocity.y, 0, accuracy: 1e-4)
+        XCTAssertEqual(velocity.z, 0, accuracy: 1e-4)
     }
 }
