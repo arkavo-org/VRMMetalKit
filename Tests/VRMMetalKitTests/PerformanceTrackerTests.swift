@@ -170,7 +170,8 @@ final class PerformanceTrackerTests: XCTestCase {
         let expected: Set<String> = [
             "morphSetup", "morphActiveSet", "springBone", "springTargetCapture",
             "springSubsteps", "springReadback", "skinPalette", "transformUpdate",
-            "renderItemBuild", "depthPrepass", "outlinePass", "commandEncode", "total",
+            "renderItemBuild", "depthPrepass", "outlinePass", "contactShadowPass",
+            "commandEncode", "total",
         ]
         let names = Set(PerformanceTracker.Phase.allCases.map { "\($0)" })
         XCTAssertEqual(names, expected)
@@ -189,6 +190,7 @@ final class PerformanceTrackerTests: XCTestCase {
         metrics.transformUpdateMs = 0.66
         metrics.depthPrepassMs = 0.77
         metrics.outlinePassMs = 0.88
+        metrics.contactShadowMs = 0.99
 
         let data = try JSONEncoder().encode(metrics)
         let decoded = try JSONDecoder().decode(PerformanceMetrics.self, from: data)
@@ -201,6 +203,7 @@ final class PerformanceTrackerTests: XCTestCase {
         XCTAssertEqual(decoded.transformUpdateMs, 0.66, accuracy: 1e-9)
         XCTAssertEqual(decoded.depthPrepassMs, 0.77, accuracy: 1e-9)
         XCTAssertEqual(decoded.outlinePassMs, 0.88, accuracy: 1e-9)
+        XCTAssertEqual(decoded.contactShadowMs, 0.99, accuracy: 1e-9)
     }
 
     /// A phase begun several times inside one frame (the renderer walks

@@ -36,11 +36,11 @@ extension VRMRenderer {
     /// expected, because the cache returned a `.bgra8Unorm` pipeline for a
     /// `.rgba8Unorm_srgb` render target).
     func pipelineKey(_ name: String) -> String {
-        // enableMaterialization changes the compiled fragment (function
-        // constant 14) — without it in the key, a flag-on pipeline compiled
-        // by one renderer would be served from the shared cache to a flag-off
-        // renderer and vice versa.
-        return "\(name)|fmt=\(config.colorPixelFormat.rawValue)|samples=\(config.sampleCount)|mat=\(config.enableMaterialization ? 1 : 0)"
+        // enableMaterialization and the surface extensions change the
+        // compiled fragment (function constants 14 and 15) — without them in
+        // the key, a flag-on pipeline compiled by one renderer would be served
+        // from the shared cache to a flag-off renderer and vice versa.
+        return "\(name)|fmt=\(config.colorPixelFormat.rawValue)|samples=\(config.sampleCount)|mat=\(config.enableMaterialization ? 1 : 0)|ext=\(config.surfaceExtensionsEnabled ? 1 : 0)"
     }
 
     /// Enables the process-wide pipeline binary archive when
@@ -114,11 +114,12 @@ extension VRMRenderer {
     }
 
     /// The dynamic-fallback function-constant key, with renderer-config
-    /// options (materialization support) folded in so fallback pipelines
+    /// options (materialization, surface extensions) folded in so fallback pipelines
     /// specialize consistently with the per-material path.
     func fallbackConstantKey() -> MToonFunctionConstantKey {
         var key = MToonFunctionConstantKey.fallback
         key.enableMaterialization = config.enableMaterialization
+        key.enableSurfaceExtensions = config.surfaceExtensionsEnabled
         return key
     }
 
@@ -162,6 +163,16 @@ extension VRMRenderer {
         blendDepthDescriptor.isDepthWriteEnabled = false
         if let state = device.makeDepthStencilState(descriptor: blendDepthDescriptor) {
             depthStencilStates["blend"] = state
+        }
+
+        // Blend state for `VRMC_materials_mtoon.transparentWithZWrite`: the
+        // surface writes depth (three-vrm sets depthWrite for it), which also
+        // keeps the material's own outline hull behind it.
+        let blendZWriteDepthDescriptor = MTLDepthStencilDescriptor()
+        blendZWriteDepthDescriptor.depthCompareFunction = lessEqualish
+        blendZWriteDepthDescriptor.isDepthWriteEnabled = true
+        if let state = device.makeDepthStencilState(descriptor: blendZWriteDepthDescriptor) {
+            depthStencilStates["blendZWrite"] = state
         }
 
         // Kill switch test state (always pass, no depth write)
@@ -831,8 +842,10 @@ extension VRMRenderer {
             pipelineDescriptor.vertexDescriptor = vertexDescriptor
             pipelineDescriptor.rasterSampleCount = config.sampleCount
 
-            // Color attachment (BGRA8)
-            pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+            // Match the renderer's configured color format; defaults to BGRA8
+            // for CAMetalLayer compatibility. Tests and offline renderers that
+            // target RGBA8 must get a matching sprite/contact-shadow pipeline.
+            pipelineDescriptor.colorAttachments[0].pixelFormat = config.colorPixelFormat
             pipelineDescriptor.colorAttachments[0].isBlendingEnabled = true
             pipelineDescriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
             pipelineDescriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
