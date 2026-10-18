@@ -305,9 +305,17 @@ final class SpringBoneSegmentFitTests: XCTestCase {
             let model = try await load(url: url)
             assertCorpusModel(model, file)
         }
-        let looked = corpusCandidates(for: required[0]).joined(separator: ", ")
-        XCTAssertTrue(missing.isEmpty,
-                      "committed fixtures missing (\(missing.joined(separator: ", "))). looked in \(looked)")
+        if !missing.isEmpty {
+            let looked = corpusCandidates(for: required[0]).joined(separator: ", ")
+            let detail = "committed fixtures missing (\(missing.joined(separator: ", "))). looked in \(looked)"
+            // macOS CI can read the checkout. The iOS simulator cannot, and
+            // every other model test skips in that case.
+            #if os(macOS)
+            XCTFail(detail)
+            #else
+            throw XCTSkip(detail)
+            #endif
+        }
 
         for file in optional {
             guard let url = resolveCorpusFile(file) else {
