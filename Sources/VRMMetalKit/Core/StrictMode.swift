@@ -54,6 +54,8 @@ public enum RenderFilter: Sendable {
 /// The highlight is a stylized strand band, not a physical hair BSDF. The
 /// strand direction follows the material's UV `v` axis (how VRoid-style hair
 /// UVs run), falling back to a view-based tangent where the UVs do not vary.
+/// The band's tint follows the base colour more closely as the hair darkens,
+/// so dark hair is brightened in its own hue rather than streaked grey.
 /// It is off by default so existing models render unchanged. The renderer only
 /// applies it to materials whose name contains ``materialNameContains``
 /// (case-insensitive); pass `nil` to apply it to every material.

@@ -57,7 +57,7 @@ puts a metal highlight on its face.
 | `metallicFactor` | ``MToonSpecularMode`` | Shader behavior |
 |---|---|---|
 | `<= 0.0001` | `off` | The finish is skipped. |
-| above `0.0001`, below `0.7` | `sheen` | A broad, near-white half-vector lobe dominates: leather, patina, painted props. |
+| above `0.0001`, below `0.7` | `sheen` | A broad half-vector lobe at dielectric strength (at most 10% of the incident light) in the base colour's hue dominates: leather, patina, painted props. |
 | `>= 0.7` | `metal` | A tight, base-colour-tinted band dominates. |
 
 The two lobes blend: the metal weight ramps from `0.6` to `0.8`, and the mode
@@ -140,7 +140,10 @@ axis (how VRoid-style hair UVs are laid out), and falls back to a view-based
 tangent where the UVs do not vary. It follows the key light and the camera and
 fades at grazing angles. `strength` (`0...2`) controls intensity and
 `sharpness` (`1...64`) width; values outside those ranges are clamped. Like the
-finish, the band is linear in light intensity.
+finish, the band is linear in light intensity. Its tint follows the base colour
+more closely as the hair darkens: light hair gets a pale band, and dark hair
+(linear luminance up to `0.05`) is brightened in its own hue rather than
+streaked grey.
 
 ## Contact shadow and crease AO
 

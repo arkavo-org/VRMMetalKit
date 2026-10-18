@@ -45,6 +45,36 @@ final class MToonFinishTests: XCTestCase {
                        file: file, line: line)
     }
 
+    /// A unit white key light with normalization off, so frame values are the
+    /// linear light a term adds as a fraction of the incident light.
+    private func unitLightSetup() -> SwatchScene.Setup {
+        finishSetup {
+            $0.lightIntensity = 1
+            $0.normalization = .disabled
+        }
+    }
+
+    /// Light added over `columns`: the brightest single channel, the summed
+    /// RGB, and the pixels whose summed RGB rose by more than 3.
+    private func addedLight(_ on: [UInt8], over off: [UInt8], columns: Range<Int>)
+        -> (peak: Int, sum: SIMD3<Double>, pixels: Int) {
+        var peak = 0
+        var sum = SIMD3<Double>(0, 0, 0)
+        var pixels = 0
+        for y in 0..<512 {
+            for x in columns {
+                let i = (y * 512 + x) * 4
+                let added = SIMD3<Int>(Int(on[i]) - Int(off[i]),
+                                       Int(on[i + 1]) - Int(off[i + 1]),
+                                       Int(on[i + 2]) - Int(off[i + 2]))
+                peak = max(peak, added.max())
+                sum += SIMD3<Double>(Double(added.x), Double(added.y), Double(added.z))
+                if added.wrappedSum() > 3 { pixels += 1 }
+            }
+        }
+        return (peak, sum, pixels)
+    }
+
     // MARK: - Thresholds and config (no GPU)
 
     func testSpecularModeClassificationMatchesShaderThresholds() {
@@ -147,6 +177,32 @@ final class MToonFinishTests: XCTestCase {
         XCTAssertLessThan(metal.changedPixels, leather.changedPixels / 3,
             "Metal highlight should be tight relative to the leather sheen")
         XCTAssertGreaterThan(metal.maxLuma, 0.85, "Metal highlight should reach a bright peak")
+    }
+
+    /// The sheen is a dielectric reflection in the base colour's hue: at most
+    /// about 10% of the incident light, coloured like the leather, never a
+    /// near-white lobe that reads as polished silver.
+    func testLeatherSheenIsDielectricAndFollowsTheBaseColour() async throws {
+        let model = try await SwatchScene.load(.rigid, device: device)
+        // From metallic 1/3 up to the metal ramp the sheen runs at full weight,
+        // so the peak below is the sheen's own reflectance.
+        model.materials[1].metallicFactor = 0.4
+        var finished = unitLightSetup()
+        finished.config.enableMaterialFinish = true
+        let off = try SwatchScene.render(model, device: device, setup: unitLightSetup())
+        let on = try SwatchScene.render(model, device: device, setup: finished)
+        let sheen = addedLight(on, over: off, columns: SwatchScene.third(1, size: 512))
+
+        XCTAssertGreaterThan(sheen.peak, 8, "Test setup: the leather sheen should be visible")
+        XCTAssertLessThanOrEqual(sheen.peak, 27,
+            "Leather sheen peaked at \(sheen.peak)/255 of a unit light; a dielectric reflects about 4-10%")
+
+        let base = model.materials[1].baseColorFactor
+        let hue = sheen.sum / sheen.sum.x
+        XCTAssertEqual(hue.y, Double(base.y / base.x), accuracy: 0.1,
+            "Sheen green/red \(hue.y) should follow the leather's base colour")
+        XCTAssertEqual(hue.z, Double(base.z / base.x), accuracy: 0.1,
+            "Sheen blue/red \(hue.z) should follow the leather's base colour")
     }
 
     /// Lower roughness must narrow both lobes, across the whole range.
@@ -279,6 +335,38 @@ final class MToonFinishTests: XCTestCase {
         let a = try XCTUnwrap(SwatchScene.changeCentroid(on, reference: off, size: 512, columns: matte))
         let b = try XCTUnwrap(SwatchScene.changeCentroid(movedOn, reference: movedOff, size: 512, columns: matte))
         XCTAssertGreaterThan(simd_length(a - b), 2.0, "The hair band should move with the key light (\(a) -> \(b))")
+    }
+
+    /// On dark hair the band brightens the hair in its own hue instead of
+    /// laying a grey streak over it, and stays clearly visible.
+    func testHairBandOnDarkHairFollowsTheBaseColour() async throws {
+        let model = try await SwatchScene.load(.rigid, device: device)
+        let darkBrown = SIMD3<Float>(0.06, 0.035, 0.02)
+        model.materials[0].baseColorFactor = SIMD4<Float>(darkBrown, 1)
+        model.materials[0].mtoon?.shadeColorFactor = darkBrown * 0.5
+        var banded = unitLightSetup()
+        banded.config.hairHighlight = HairHighlightConfig(
+            isEnabled: true, strength: 1.2, sharpness: 16, materialNameContains: "Matte")
+        let off = try SwatchScene.render(model, device: device, setup: unitLightSetup())
+        let on = try SwatchScene.render(model, device: device, setup: banded)
+        let columns = SwatchScene.third(0, size: 512)
+        let band = addedLight(on, over: off, columns: columns)
+
+        var surfacePeak = 0
+        for y in 0..<512 {
+            for x in columns where off[(y * 512 + x) * 4 + 3] > 0 && off[(y * 512 + x) * 4] < 250 {
+                surfacePeak = max(surfacePeak, Int(off[(y * 512 + x) * 4]))
+            }
+        }
+        XCTAssertGreaterThan(band.pixels, 100, "The band should stay visible on dark hair")
+        XCTAssertGreaterThan(band.peak, surfacePeak,
+            "The band (+\(band.peak)) should at least double the lit dark hair (\(surfacePeak))")
+
+        let hue = band.sum / band.sum.x
+        XCTAssertEqual(hue.y, Double(darkBrown.y / darkBrown.x), accuracy: 0.1,
+            "Band green/red \(hue.y) should follow the dark base colour, not a grey streak")
+        XCTAssertEqual(hue.z, Double(darkBrown.z / darkBrown.x), accuracy: 0.1,
+            "Band blue/red \(hue.z) should follow the dark base colour, not a grey streak")
     }
 
     // MARK: - Light scaling

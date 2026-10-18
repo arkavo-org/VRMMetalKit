@@ -168,12 +168,25 @@ static inline float mtoonFinishMetalMask(float metallic) {
     return smoothstep(0.6, 0.8, metallic);
 }
 
+// Peak reflectance of the sheen lobe. Dielectrics reflect roughly 4-10% of the
+// incident light at normal incidence; a brighter sheen reads as polished metal.
+constant float kMToonSheenReflectance = 0.10;
+
+// The base colour's hue at full value: each channel divided by the largest, so
+// the sheen keeps the material's colour without inheriting its darkness.
+// Neutral and black base colours give white.
+static inline float3 mtoonSheenHue(float3 baseColor) {
+    float3 c = max(baseColor, float3(0.0)) + 1e-3;
+    return c / max(max(c.r, c.g), c.b);
+}
+
 // glTF metallic/roughness as two stylized lobes instead of a microfacet BRDF:
-// a tight, base-colour-tinted band for metal and a broad near-white sheen for
-// leather-like low metallic values. Lower roughness narrows both lobes over
-// the whole [0, 1] range. Light scaling follows the rim convention (light
-// colour times the normalization factor, no Lambert 1/pi), so the band is
-// linear in light intensity like the diffuse term.
+// a tight, base-colour-tinted band for metal and, for leather-like low
+// metallic values, a broad dielectric-strength sheen in the base colour's hue.
+// Lower roughness narrows both lobes over the whole [0, 1] range. Light
+// scaling follows the rim convention (light colour times the normalization
+// factor, no Lambert 1/pi), so the band is linear in light intensity like the
+// diffuse term.
 static inline float3 mtoonStylizedSpecular(
     float3 N,
     float3 V,
@@ -192,7 +205,8 @@ static inline float3 mtoonStylizedSpecular(
     float sheenMask = saturate(metallic * 3.0) * (1.0 - metalMask);
     float metalExponent = exp2(mix(8.0, 4.0, roughness));
     float sheenExponent = exp2(mix(4.0, 1.0, roughness));
-    float3 tint = mix(float3(1.0), baseColor, metalMask);
+    float3 metalTint = mix(float3(1.0), baseColor, metalMask);
+    float3 sheenTint = mtoonSheenHue(baseColor) * kMToonSheenReflectance;
 
     // Fade near the silhouette so the band cannot sparkle at grazing angles
     // and does not read as a second parametric rim.
@@ -221,17 +235,17 @@ static inline float3 mtoonStylizedSpecular(
         float halfLength = length(halfSum);
         if (halfLength < 1e-4) { continue; }
         float NdotH = saturate(dot(N, halfSum / halfLength));
-        float lobes = 0.0;
+        float3 lobes = float3(0.0);
         if (metalMask > 0.0) {
-            lobes += smoothstep(0.30, 0.50, pow(NdotH, metalExponent)) * metalMask;
+            lobes += smoothstep(0.30, 0.50, pow(NdotH, metalExponent)) * metalMask * metalTint;
         }
         if (sheenMask > 0.0) {
-            lobes += pow(NdotH, sheenExponent) * sheenMask * 0.55;
+            lobes += pow(NdotH, sheenExponent) * sheenMask * sheenTint;
         }
         float weight = intensity / totalIntensity;
         result += lobes * NdotL * weight * clamp(lightColor, 0.0f, 65500.0f);
     }
-    return result * tint * grazing * uniforms.lightNormalizationFactor;
+    return result * grazing * uniforms.lightNormalizationFactor;
 }
 
 // Direction of increasing v across the surface, from screen-space derivatives
@@ -250,6 +264,9 @@ static inline float3 mtoonStrandDirection(float3 N, float3 worldPos, float2 uv) 
 
 // Kajiya-Kay style band around the strand direction. Falls back to the
 // N x V tangent where the UVs give no strand direction. Scaled like the finish.
+// The tint follows the base colour more closely as the hair darkens: light
+// hair keeps a pale band, while dark hair is brightened in its own hue
+// instead of getting a grey streak.
 static inline float3 mtoonHairHighlight(
     float3 N,
     float3 V,
@@ -285,7 +302,9 @@ static inline float3 mtoonHairHighlight(
     // reads as a wet-plastic spot at the sharpness values hair usually wants.
     float band = smoothstep(0.15, 0.85, pow(sinTH, sharpness));
     float grazing = smoothstep(0.0, 0.25, NdotV);
-    float3 tint = mix(float3(1.0), baseColor, 0.35);
+    float luma = dot(max(baseColor, float3(0.0)), float3(0.2126, 0.7152, 0.0722));
+    float follow = mix(1.0, 0.35, smoothstep(0.05, 0.5, luma));
+    float3 tint = mix(float3(1.0), baseColor, follow);
     float3 lightColor = clamp(uniforms.lightColor.xyz, 0.0f, 65500.0f);
     return tint * (band * NdotL * grazing * strength * weight0)
         * lightColor * uniforms.lightNormalizationFactor;

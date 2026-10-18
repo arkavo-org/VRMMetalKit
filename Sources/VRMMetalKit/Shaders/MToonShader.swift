@@ -438,7 +438,8 @@ public struct MToonMaterialUniforms {
 /// - ``off``: `metallicFactor` is at or below ``metallicEpsilon``. The finish
 ///   is skipped.
 /// - ``sheen``: below ``metalThreshold``, where the sheen lobe dominates —
-///   leather, scuffed metal, painted props.
+///   leather, scuffed metal, painted props. It reflects at most 10% of the
+///   incident light, like a dielectric, in the base colour's hue.
 /// - ``metal``: at or above ``metalThreshold``, where the tight,
 ///   base-colour-tinted band dominates.
 ///
