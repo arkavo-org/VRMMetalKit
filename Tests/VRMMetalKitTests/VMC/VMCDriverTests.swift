@@ -382,7 +382,10 @@ final class VMCHostileInputTests: XCTestCase {
         guard receiver!.waitUntilReady(timeout: 3), let port = receiver!.boundPort else { throw XCTSkip("listener not ready") }
         weak var weakReceiver = receiver
         receiver = nil
-        XCTAssertNil(weakReceiver)
+        // The listener queue can still be inside its weak-self handler, so
+        // dealloc is not synchronous. The port probe below is the real check.
+        let released = expectation(for: NSPredicate { _, _ in weakReceiver == nil }, evaluatedWith: nil)
+        wait(for: [released], timeout: 2)
 
         // A plain listener without endpoint reuse only binds if the orphaned one is gone.
         let ready = expectation(description: "port rebinds")
