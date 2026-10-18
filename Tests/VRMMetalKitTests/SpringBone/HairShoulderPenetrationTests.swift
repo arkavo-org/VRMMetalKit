@@ -60,6 +60,7 @@ final class HairShoulderPenetrationTests: XCTestCase {
         var breastColliderCount = 0 // #377 mesh-fitted breast capsules (fixture-derived)
         var shoulderColliderCount = 0 // #377 mesh-fitted shoulder spheres (fixture-derived)
         var torsoColliderCount = 0    // #377 mesh-fitted upper-torso capsule (fixture-derived)
+        var segmentSphereCount = 0    // #381 spheres the segment fit appends (none; radii are clamped in place)
         var hairJoints = 0
         var rate: Float { totalSamples > 0 ? Float(penetrations) / Float(totalSamples) : 0 }
         var nearRate: Float { totalSamples > 0 ? Float(nearSamples) / Float(totalSamples) : 0 }
@@ -148,6 +149,7 @@ final class HairShoulderPenetrationTests: XCTestCase {
         m.breastColliderCount = SpringBoneBreastCollider.computeBreastColliders(model: model).count
         m.shoulderColliderCount = SpringBoneBreastCollider.computeShoulderColliders(model: model).count
         m.torsoColliderCount = SpringBoneBreastCollider.computeTorsoCollider(model: model).count
+        m.segmentSphereCount = SpringBoneSegmentFit.appendedSphereCount(model: model)
         m.hairJoints = hairJointNodeIndices.count
 
         let fps: Float = 30
@@ -221,8 +223,8 @@ final class HairShoulderPenetrationTests: XCTestCase {
         print("[HairShoulder \(modelFile) ON] samples=\(m.totalSamples) joints=\(m.hairJoints) synth=\(m.syntheticCount) "
             + "rate=\(String(format: "%.2f%%", m.rate * 100)) raw=\(m.rawPenetrations) "
             + "near=\(String(format: "%.1f%%", m.nearRate * 100)) worst=\(String(format: "%.1f mm", m.worstDepth * 1000))")
-        XCTAssertEqual(m.syntheticCount, 15 + m.breastTwinCount + m.breastColliderCount + m.shoulderColliderCount + m.torsoColliderCount,
-            "augmentation must include the two shoulder spheres + \(m.breastTwinCount) breast twins + \(m.breastColliderCount) breast capsules (#377)")
+        XCTAssertEqual(m.syntheticCount, 15 + m.breastTwinCount + m.breastColliderCount + m.shoulderColliderCount + m.torsoColliderCount + m.segmentSphereCount,
+            "augmentation must include the two shoulder spheres + \(m.breastTwinCount) breast twins + \(m.breastColliderCount) breast capsules (#377) + \(m.segmentSphereCount) segment spheres (#381)")
         assertNonVacuous(m, modelFile)
         XCTAssertLessThan(m.rate, 0.01,
             "\(modelFile): hair penetrates a shoulder sphere >5mm on \(String(format: "%.1f%%", m.rate * 100)) of samples (expected < 1%). Worst: \(String(format: "%.1f mm", m.worstDepth * 1000))")
@@ -257,8 +259,8 @@ final class HairShoulderPenetrationTests: XCTestCase {
             + "on=\(String(format: "%.2f%%", on.rate * 100)) (\(on.penetrations)/\(on.totalSamples), worst \(String(format: "%.1f mm", on.worstDepth * 1000)))")
 
         XCTAssertEqual(off.syntheticCount, 0, "augment-off run must have no synthetic colliders")
-        XCTAssertEqual(on.syntheticCount, 15 + on.breastTwinCount + on.breastColliderCount + on.shoulderColliderCount + on.torsoColliderCount,
-                       "augment-on run must carry 15 synthetic colliders + \(on.breastTwinCount) breast twins + \(on.breastColliderCount) breast capsules (#377)")
+        XCTAssertEqual(on.syntheticCount, 15 + on.breastTwinCount + on.breastColliderCount + on.shoulderColliderCount + on.torsoColliderCount + on.segmentSphereCount,
+                       "augment-on run must carry 15 synthetic colliders + \(on.breastTwinCount) breast twins + \(on.breastColliderCount) breast capsules (#377) + \(on.segmentSphereCount) segment spheres (#381)")
         assertNonVacuous(off, "A off")
         assertNonVacuous(on, "A on")
 
