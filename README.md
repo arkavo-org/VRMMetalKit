@@ -234,8 +234,8 @@ See [GitHub Releases](https://github.com/arkavo-org/VRMMetalKit/releases) for de
 
 Opt-in presentation features: a stylized glTF metallic/roughness finish, an
 explicit `outlineScale` plus an outline minimum width, a hair highlight, a
-contact shadow, and crease AO. All default off; the default output is
-byte-identical to 1.1.2. See [the 1.2.0 release note](docs/releases/1.2.0.md).
+contact shadow, and crease AO. All default off, and with them off the
+renderer's output is unchanged. See [the 1.2.0 release note](docs/releases/1.2.0.md).
 
 ### 1.1.0
 

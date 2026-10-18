@@ -110,7 +110,7 @@ renderer.outlineMinimumPixels = 1.5   // readable at 512–1024 px
 
 The floor is absolute: where it applies, ``VRMRenderer/outlineScale`` has no
 visible effect, so raise `outlineMinimumPixels` for a thicker sheet line. `0`
-(the default) draws the authored width only, byte-identical to 1.1. The floor
+(the default) draws the authored width only, exactly as before. The floor
 applies on every hull path: single- and double-sided, rigid and skinned.
 
 ## Hair highlight
@@ -172,7 +172,7 @@ phase of their own; compare GPU frame times with the feature on and off.
 ### Pipeline cost
 
 The finish, hair band, and crease AO are function-constant specializations.
-With all three off the default output is byte-identical to 1.1. With
+With all three off the output is exactly what it was before they existed. With
 ``RendererConfig/enableMToonFunctionConstants`` on (the default), each material
 compiles in only the extensions it uses, so materials an extension does not
 touch render exactly as before and pay nothing for it. Without function

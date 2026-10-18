@@ -4865,7 +4865,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     /// Writes the opt-in surface-extension uniforms for one draw. With every
-    /// extension off the payload keeps the 1.1 values: metallic 0 (the shader
+    /// extension off the payload keeps its extension-free values: metallic 0 (the shader
     /// skips the finish), no hair band, no crease AO.
     private func applySurfaceExtensionUniforms(
         _ uniforms: inout MToonMaterialUniforms,

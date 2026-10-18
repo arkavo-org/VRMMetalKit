@@ -8,12 +8,14 @@ import simd
 
 /// Byte-exact goldens for the default (feature-off) renderer output on the
 /// rigid and skinned swatch fixtures, captured through `VRMRenderer` at
-/// VRMMetalKit 1.1.2. They guard every opt-in shading and outline feature:
-/// with the defaults left alone the production pipelines must reproduce the
-/// 1.1.2 frame exactly, including both outline hull paths (merged for
-/// single-sided materials, dedicated for double-sided ones).
+/// commit 18d6050, the last commit before the opt-in finish, outline
+/// minimum width, hair band, contact shadow and crease AO. They guard all of
+/// those features: with the defaults left alone the production pipelines must
+/// reproduce the baseline frame exactly, including both outline hull paths
+/// (merged for single-sided materials, dedicated for double-sided ones).
 ///
-/// Regenerate only on a 1.1.2 checkout, never from the current tree:
+/// Regenerate only on a checkout of the baseline commit with this file and the
+/// TestData/MToon fixtures copied in, never from the current tree:
 /// `VMK_WRITE_MTOON_GOLDENS=<dir> swift test --filter MToonLegacyGoldenTests`.
 @MainActor
 final class MToonLegacyGoldenTests: XCTestCase {
@@ -30,12 +32,12 @@ final class MToonLegacyGoldenTests: XCTestCase {
 
     static let size = 256
 
-    func testRigidDefaultsMatch112() async throws { try await assertGolden(.rigid, .defaults) }
-    func testRigidMergedHullMatches112() async throws { try await assertGolden(.rigid, .outlinedSingleSided) }
-    func testRigidDedicatedHullMatches112() async throws { try await assertGolden(.rigid, .outlinedDoubleSided) }
-    func testSkinnedDefaultsMatch112() async throws { try await assertGolden(.skinned, .defaults) }
-    func testSkinnedMergedHullMatches112() async throws { try await assertGolden(.skinned, .outlinedSingleSided) }
-    func testSkinnedDedicatedHullMatches112() async throws { try await assertGolden(.skinned, .outlinedDoubleSided) }
+    func testRigidDefaultsMatchBaseline() async throws { try await assertGolden(.rigid, .defaults) }
+    func testRigidMergedHullMatchesBaseline() async throws { try await assertGolden(.rigid, .outlinedSingleSided) }
+    func testRigidDedicatedHullMatchesBaseline() async throws { try await assertGolden(.rigid, .outlinedDoubleSided) }
+    func testSkinnedDefaultsMatchBaseline() async throws { try await assertGolden(.skinned, .defaults) }
+    func testSkinnedMergedHullMatchesBaseline() async throws { try await assertGolden(.skinned, .outlinedSingleSided) }
+    func testSkinnedDedicatedHullMatchesBaseline() async throws { try await assertGolden(.skinned, .outlinedDoubleSided) }
 
     private func assertGolden(_ fixture: Fixture, _ scene: Scene) async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
@@ -71,7 +73,7 @@ final class MToonLegacyGoldenTests: XCTestCase {
             }
         }
         XCTAssertEqual(changed, 0,
-            "\(fixture.rawValue)/\(scene.rawValue): \(changed) bytes differ from the 1.1.2 frame (max delta \(maxDelta)). Default renderer output must be byte-identical to 1.1.2.")
+            "\(fixture.rawValue)/\(scene.rawValue): \(changed) bytes differ from the baseline frame (max delta \(maxDelta)). Default renderer output must be byte-identical to the baseline.")
         if changed > 0 {
             let diffURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(name)_actual.rgba")
             try? Data(rendered).write(to: diffURL)

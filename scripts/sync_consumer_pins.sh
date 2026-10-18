@@ -30,7 +30,8 @@
 # Every check runs before any file is edited: the VRMMetalKit tag must exist
 # on origin, every pin must be found, and in stage 2 the MuseCore tag must
 # exist on its origin and pin this VRMMetalKit version. --dry-run stops after
-# the checks and prints the planned edits.
+# the checks and prints the planned edits; it still fetches the MuseCore tag
+# (stage 2), because the check reads that tag's Package.swift.
 #
 # Usage:
 #   scripts/sync_consumer_pins.sh <version> [--musecore <version>]
