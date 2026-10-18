@@ -54,7 +54,21 @@ jobs:
           # reads: "If `--comment` argument was NOT provided, stop here. Do not post any
           # GitHub comments." Without it the review runs fully, prints to a log nobody
           # watches, and exits green by design.
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
+          #
+          # The trailing paragraphs are a shell constraint, not part of the slash command.
+          # On PR #445 (6532d0b, run 39092629955) the review was denied one Bash call whose
+          # segments were `cd` and `gh`. `Bash(cd:*)` and `Bash(gh:*)` were already granted.
+          # Claude Code still asks — and in this headless job, denies — any compound that
+          # pairs `cd` with `git` or `gh`, because a cd into another directory can execute
+          # that directory's git hooks. The same check fired on PR #444's review (six
+          # denials: cd, gh, git, head, ls, tail, wc), where the extra names were only the
+          # rest of the pipeline. No allow rule matches that shape; the docs say the prompt
+          # happens even when every segment is read-only. The constraint below is what
+          # stops the reviewer from emitting it.
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
+
+            The working directory is already this repository. Never put `cd` in the same Bash call as `git` or `gh`, and never combine `cd` with a redirect or a pipe. That compound is denied even when every program is allow-listed, because a `cd` into another directory can run that directory's git hooks. Run `gh` and `git` as their own commands. To target a subdirectory, pass `git -C <dir>`.
           # `--allowedTools` IS REQUIRED, and the stock template's single-entry list is why
           # the first run here did nothing: with only the inline-comment tool allowed, the
           # reviewer had no Read, no Grep and no Bash, so it could not open the diff at all
