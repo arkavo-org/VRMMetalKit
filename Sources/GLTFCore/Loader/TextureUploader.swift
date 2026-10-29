@@ -16,6 +16,7 @@
 
 import Accelerate
 import CoreGraphics
+import ImageIO
 import Metal
 
 /// Decodes a `CGImage` into a Metal texture holding straight
@@ -38,6 +39,20 @@ import Metal
 /// to 8 bits, and unpremultiplying afterwards only approximates the inverse:
 /// error grows as 1/alpha, and texels at alpha 0 lose their color outright.
 enum TextureUploader {
+
+    /// Decodes the first image in `data`, eagerly.
+    ///
+    /// Without `kCGImageSourceShouldCacheImmediately`, ImageIO returns a lazy
+    /// image and defers the decode to its first use — inside
+    /// `vImageBuffer_InitWithCGImage` — where the loading thread blocks on an
+    /// ImageIO worker with no QoS class (a priority inversion the Thread
+    /// Performance Checker flags). Decoding here keeps the work on the
+    /// caller's thread at the caller's QoS.
+    static func decodeImage(from data: Data) -> CGImage? {
+        guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options = [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+        return CGImageSourceCreateImageAtIndex(imageSource, 0, options)
+    }
 
     /// Decodes `cgImage` and uploads it as a straight-alpha texture.
     ///
