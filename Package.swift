@@ -65,7 +65,8 @@ let package = Package(
                 "Shaders/DebugShaders.metal",
                 "Shaders/MToonShader.metal",
                 "Shaders/SkinnedShader.metal",
-                "Shaders/SpriteShader.metal"
+                "Shaders/SpriteShader.metal",
+                "Shaders/MToonShared.h"
             ],
             resources: [
                 .copy("Resources/VRMMetalKitShaders.metallib"),

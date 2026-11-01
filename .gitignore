@@ -51,6 +51,8 @@ tmp/
 # CC0-1.0 licensed per the generator manifest. See
 # https://github.com/arkavo-org/vrm-conformance for sources.
 !Tests/VRMMetalKitTests/TestData/Conformance/*.vrm
+# In-tree MToon finish/outline swatch fixtures (skinned variant: scripts/make_mtoon_swatch_variants.py).
+!Tests/VRMMetalKitTests/TestData/MToon/*.vrm
 
 # Test model symlinks (use ENV VAR instead)
 /Seed-san.vrm
