@@ -97,17 +97,29 @@ final class MToonOutlineScaleTests: XCTestCase {
 
     func testOutlineWidthMaskUsesTransformedUVsOnEveryRigidHullPath() async throws {
         for doubleSided in [false, true] {
-            let plain = try await transformedMaskFrame(doubleSided: doubleSided, transformed: false)
-            let transformed = try await transformedMaskFrame(doubleSided: doubleSided, transformed: true)
+            let plain = try await transformedMaskFrame(doubleSided: doubleSided, transform: .none)
+            let transformed = try await transformedMaskFrame(doubleSided: doubleSided, transform: .outlineWidthMask)
             XCTAssertGreaterThan(
                 SwatchScene.differingBytes(plain, transformed), 0,
                 "\(doubleSided ? "Dedicated" : "Merged") hull ignored KHR_texture_transform on the outline width mask")
         }
     }
 
+    func testBaseColorTransformLeavesOutlineWidthMaskInPlace() async throws {
+        for doubleSided in [false, true] {
+            let plain = try await transformedMaskFrame(doubleSided: doubleSided, transform: .none)
+            let baseShifted = try await transformedMaskFrame(doubleSided: doubleSided, transform: .baseColor)
+            XCTAssertEqual(
+                SwatchScene.differingBytes(plain, baseShifted), 0,
+                "\(doubleSided ? "Dedicated" : "Merged") hull moved the outline width mask by the baseColorTexture transform")
+        }
+    }
+
     // MARK: - Helpers
 
-    private func transformedMaskFrame(doubleSided: Bool, transformed: Bool) async throws -> [UInt8] {
+    private enum MaskTransform { case none, baseColor, outlineWidthMask }
+
+    private func transformedMaskFrame(doubleSided: Bool, transform: MaskTransform) async throws -> [UInt8] {
         let model = try await SwatchScene.load(.rigid, device: device)
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: 2, height: 1, mipmapped: false)
@@ -120,8 +132,13 @@ final class MToonOutlineScaleTests: XCTestCase {
         for material in model.materials {
             material.doubleSided = doubleSided
             material.mtoon?.outlineWidthMultiplyTexture = maskIndex
-            if transformed {
+            switch transform {
+            case .none:
+                break
+            case .baseColor:
                 material.mtoon?.textureTransform = GLTFKHRTextureTransform(offset: [0.5, 0])
+            case .outlineWidthMask:
+                material.mtoon?.outlineWidthMultiplyTextureTransform = GLTFKHRTextureTransform(offset: [0.5, 0])
             }
         }
         var setup = SwatchScene.Setup()

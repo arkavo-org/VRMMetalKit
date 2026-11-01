@@ -85,8 +85,6 @@ extension VRMRenderer {
         let swiftStride = MemoryLayout<MToonMaterialUniforms>.stride
 
         // Expected Metal struct size — sourced from the canonical constant in StrictMode.
-        // Blocks 0-11 are the original MToon material fields; blocks 12-14 cover
-        // the time uniform and the KHR_texture_transform offset/rotation/scale.
         let expectedMetalSize = MetalSizeConstants.mtoonMaterialSize
 
         if config.strict != .off {

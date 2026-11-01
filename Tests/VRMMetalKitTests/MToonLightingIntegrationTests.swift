@@ -225,14 +225,17 @@ final class MToonLightingIntegrationTests: XCTestCase {
         let size = MemoryLayout<MToonMaterialUniforms>.size
         let stride = MemoryLayout<MToonMaterialUniforms>.stride
 
-        // Should be 272 bytes (17 blocks of 16 bytes each)
+        // Should be 560 bytes (35 blocks of 16 bytes each)
         // Block 0-11: Standard material properties (192 bytes)
         // Block 12: Version flag + UV offset fields (16 bytes)
-        // Block 13: KHR_texture_transform offset + rotation + scaleX (16 bytes)
-        // Block 14: KHR_texture_transform scaleY + padding (16 bytes)
+        // Block 13: baseColorTexture KHR_texture_transform offset + rotation + scaleX (16 bytes)
+        // Block 14: baseColorTexture KHR_texture_transform scaleY + padding (16 bytes)
         // Block 15: hair highlight + crease AO
         // Block 16: outline minimum-pixel guard band
-        XCTAssertEqual(stride, 272, "MToonMaterialUniforms should be 272 bytes for Metal alignment (17 blocks)")
+        // Blocks 17-34: per-texture KHR_texture_transform rows (9 textures x 2 rows)
+        XCTAssertEqual(stride, 560, "MToonMaterialUniforms should be 560 bytes for Metal alignment (35 blocks)")
+        XCTAssertEqual(stride, MetalSizeConstants.mtoonMaterialSize,
+                       "StrictMode's MToonMaterial size must match the Swift stride, or strict mode rejects every renderer")
         XCTAssertLessThanOrEqual(size, stride)
     }
 }

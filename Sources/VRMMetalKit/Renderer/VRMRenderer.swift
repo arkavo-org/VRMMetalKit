@@ -3565,6 +3565,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtlTexture = material.normalTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 3)
                         mtoonUniforms.hasNormalTexture = 1
+                        mtoonUniforms.setTextureTransform(material.normalTextureTransform,
+                                                          row0: \.normalUvRow0, row1: \.normalUvRow1)
                         textureCount += 1
                     }
 
@@ -3572,6 +3574,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtlTexture = material.emissiveTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 4)
                         mtoonUniforms.hasEmissiveTexture = 1
+                        mtoonUniforms.setTextureTransform(material.emissiveTextureTransform,
+                                                          row0: \.emissiveUvRow0, row1: \.emissiveUvRow1)
                         textureCount += 1
                     }
 
@@ -3613,6 +3617,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtlTexture = material.occlusionTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 8)
                         mtoonUniforms.hasOcclusionTexture = 1
+                        mtoonUniforms.setTextureTransform(material.occlusionTextureTransform,
+                                                          row0: \.occlusionUvRow0, row1: \.occlusionUvRow1)
                         textureCount += 1
                     }
 
