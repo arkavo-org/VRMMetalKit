@@ -116,13 +116,14 @@ static inline float2 applyTextureTransform(float2 uv, constant MToonMaterial& ma
  return rotated + float2(material.textureTransformOffsetX, material.textureTransformOffsetY);
 }
 
-// UV Animation utility function (rotation first, then scroll)
-static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
+// MToon UV animation after `time` seconds: rotate by
+// `uvAnimationRotationSpeedFactor * time` radians about (0.5, 0.5), then scroll
+// by `uvAnimationScroll*SpeedFactor * time` UV units (three-vrm order).
+static inline float2 animateUV(float2 uv, constant MToonMaterial& material, float time) {
  float2 result = uv;
 
- // UV rotation animation around center (0.5, 0.5) - FIRST
  if (material.uvAnimationRotationSpeedFactor != 0.0) {
- float angle = material.uvAnimationRotationSpeedFactor * material.time;
+ float angle = material.uvAnimationRotationSpeedFactor * time;
  float2 center = float2(0.5, 0.5);
  float2 translated = result - center;
 
@@ -136,9 +137,8 @@ static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
  result = rotationMatrix * translated + center;
  }
 
- // UV scroll animation - SECOND
- result.x += material.uvAnimationScrollXSpeedFactor * material.time;
- result.y += material.uvAnimationScrollYSpeedFactor * material.time;
+ result.x += material.uvAnimationScrollXSpeedFactor * time;
+ result.y += material.uvAnimationScrollYSpeedFactor * time;
 
  return result;
 }
@@ -419,7 +419,6 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  // KHR_texture_transform when it is sampled (glTF 2.0, three-vrm), after UV
  // animation.
  out.texCoord = in.texCoord;
- out.animatedTexCoord = animateUV(out.texCoord, material);
  out.color = in.color;
 
  if (needsViewNormal(material, uniforms)) {
@@ -1034,14 +1033,18 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      uv = uv * material.uvScale + float2(material.uvOffsetX, material.uvOffsetY);
  }
  
+ // UV animation runs here rather than in the vertex stage so rigid and
+ // skinned meshes share it. The mask's B channel scales time
+ // (VRMC_materials_mtoon-1.0 uvAnimationMaskTexture).
+ if (material.uvAnimationScrollXSpeedFactor != 0.0 ||
+     material.uvAnimationScrollYSpeedFactor != 0.0 ||
+     material.uvAnimationRotationSpeedFactor != 0.0) {
+ float animationTime = material.time;
  if (effectiveHasUvAnimationMaskTexture) {
- float2 maskUV = applyUvRows(in.texCoord, material.uvAnimationMaskUvRow0, material.uvAnimationMaskUvRow1);
- float animationMask = uvAnimationMaskTexture.sample(textureSampler, maskUV).r;
- uv = mix(in.texCoord, in.animatedTexCoord, animationMask);
- } else if (material.uvAnimationScrollXSpeedFactor != 0.0 ||
-        material.uvAnimationScrollYSpeedFactor != 0.0 ||
-        material.uvAnimationRotationSpeedFactor != 0.0) {
- uv = in.animatedTexCoord;
+     float2 maskUV = applyUvRows(in.texCoord, material.uvAnimationMaskUvRow0, material.uvAnimationMaskUvRow1);
+     animationTime *= uvAnimationMaskTexture.sample(textureSampler, maskUV).b;
+ }
+ uv = animateUV(uv, material, animationTime);
  }
 
  // Glitch materialization: horizontal slice tearing on all texture reads.
@@ -1495,7 +1498,6 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.worldNormal = worldNormal;
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
  out.texCoord = in.texCoord;
- out.animatedTexCoord = animateUV(out.texCoord, material);
  out.color = in.color;
 
  // View direction already calculated above for edge attenuation

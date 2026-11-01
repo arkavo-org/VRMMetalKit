@@ -629,6 +629,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// this `nil` so physics tracks actual elapsed time.
     public var simulationDeltaTime: TimeInterval?
 
+    /// Seconds of MToon UV animation (`uvAnimationScrollXSpeedFactor`,
+    /// `uvAnimationScrollYSpeedFactor`, `uvAnimationRotationSpeedFactor`).
+    /// Each simulated draw renders at the current value, then advances it by
+    /// that frame's simulation step (``simulationDeltaTime`` when set). Set it
+    /// to capture a specific moment.
+    public var uvAnimationTime: TimeInterval = 0
+    /// The ``uvAnimationTime`` the current draw renders at.
+    private var drawUVAnimationTime: Float = 0
+
     /// Character root velocity in world space, used by the spring-bone predict
     /// kernel to apply inertial force opposite to character motion. Set this
     /// each frame from the host application's locomotion code (e.g., the
@@ -1837,6 +1846,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         let simulate = !compositorSkipSimulation
+        drawUVAnimationTime = Float(uvAnimationTime)
         if simulate {
             // Wait for a free uniform buffer (triple buffering sync)
             _ = inflightSemaphore.wait(timeout: .distantFuture)
@@ -2005,6 +2015,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
         }
         frameDeltaTime = clampedDeltaTime
+        uvAnimationTime += TimeInterval(clampedDeltaTime)
 
         // Update SpringBone GPU physics BEFORE the render encoder is created.
         // Spring-bone now shares the renderer's command buffer (audit's #2 bottleneck
@@ -3424,6 +3435,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // If material has MToon extension, use those properties
                     if let mtoon = material.mtoon {
                         mtoonUniforms = baseMToonUniforms(materialIndex: materialIndex, mtoon: mtoon)
+                        mtoonUniforms.time = drawUVAnimationTime
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
                         // glTF-core normalTextureInfo.scale lives on
                         // VRMMaterial (the glTF base layer), not on the

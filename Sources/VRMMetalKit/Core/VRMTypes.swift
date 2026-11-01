@@ -670,13 +670,13 @@ public struct VRMMToonMaterial {
     public var outlineColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
     /// Mix factor between flat outline color and scene-lit outline color.
     public var outlineLightingMixFactor: Float = 1.0
-    /// Optional linear R8 mask texture gating UV animation per-pixel.
+    /// Optional mask texture whose B channel scales UV animation time per pixel.
     public var uvAnimationMaskTexture: Int?
     /// UV scroll speed along the X axis.
     public var uvAnimationScrollXSpeedFactor: Float = 0.0
     /// UV scroll speed along the Y axis.
     public var uvAnimationScrollYSpeedFactor: Float = 0.0
-    /// UV rotation speed in revolutions per second.
+    /// UV rotation speed in radians per second about (0.5, 0.5).
     public var uvAnimationRotationSpeedFactor: Float = 0.0
     /// `KHR_texture_transform` on `baseColorTexture`. It moves the base colour
     /// texture only; every other texture follows its own transform.

@@ -191,7 +191,6 @@ struct VertexOut {
  float3 worldPosition;
  float3 worldNormal;
  float2 texCoord;
- float2 animatedTexCoord;
  float4 color;
  float3 viewDirection;
  float3 viewNormal; // For MatCap sampling
