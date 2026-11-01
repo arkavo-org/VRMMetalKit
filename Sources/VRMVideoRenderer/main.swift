@@ -487,7 +487,11 @@ func makeVideoPipeline(options: RenderOptions, device: MTLDevice, sampleCount: I
         mipmapped: false
     )
     resolveDescriptor.usage = [.renderTarget, .shaderRead]
+    #if os(macOS)
     resolveDescriptor.storageMode = .managed
+    #else
+    resolveDescriptor.storageMode = .shared
+    #endif
 
     guard let resolveTexture = device.makeTexture(descriptor: resolveDescriptor) else {
         throw VideoRenderError.failedToCreateTexture

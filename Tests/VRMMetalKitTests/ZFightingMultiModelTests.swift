@@ -272,7 +272,7 @@ final class ZFightingMultiModelTests: XCTestCase {
         XCTAssertEqual(renderer.selectCullMode(faceCategory: "unknownCat", alphaMode: "opaque", isDoubleSided: false), .back)
     }
 
-    func testOverlayAndBlendCategoriesNeverCullEvenWhenSingleSided() {
+    func testOverlayCategoriesNeverCullEvenWhenSingleSided() {
         let renderer = VRMRenderer(device: device)
         // These categories render as two-sided overlays at draw time regardless
         // of the authored doubleSided flag (eyes/eyebrows/eyelines/highlights and
@@ -283,8 +283,13 @@ final class ZFightingMultiModelTests: XCTestCase {
                 .none,
                 "face category \(category) must render two-sided even when single-sided")
         }
-        // Non-face BLEND also never culls.
-        XCTAssertEqual(renderer.selectCullMode(faceCategory: nil, alphaMode: "blend", isDoubleSided: false), .none)
+    }
+
+    /// #451: glTF 2.0 culls back faces of single-sided materials whatever their
+    /// alpha mode, as three-vrm does for BLEND (`side: FrontSide`).
+    func testSingleSidedBlendCullsBack() {
+        let renderer = VRMRenderer(device: device)
+        XCTAssertEqual(renderer.selectCullMode(faceCategory: nil, alphaMode: "blend", isDoubleSided: false), .back)
     }
 
     // MARK: - Helper Methods

@@ -5405,31 +5405,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// (e.g. hair vanishing when viewed from behind) is caught at the logic
     /// level rather than only visually.
     ///
-    /// - Single-sided solid surfaces (face `skin`/`body`/`clothing` and
-    ///   non-face `opaque`/`mask`) cull back faces; marking them `doubleSided`
-    ///   disables culling.
+    /// - Single-sided surfaces (face `skin`/`body`/`clothing` and every
+    ///   non-face alpha mode, `blend` included) cull back faces, as glTF 2.0
+    ///   requires; marking them `doubleSided` disables culling.
     /// - Overlay/feature face categories (`eye`, `eyebrow`, `eyeline`,
-    ///   `highlight`, `faceOverlay`, `transparentZWrite`) and non-face `blend`
-    ///   always render two-sided — back-face culling would drop alpha strokes
-    ///   and thin overlays regardless of the authored `doubleSided` flag.
+    ///   `highlight`, `faceOverlay`, `transparentZWrite`) always render
+    ///   two-sided — back-face culling would drop alpha strokes and thin
+    ///   overlays regardless of the authored `doubleSided` flag.
     public func selectCullMode(
         faceCategory: String?,
         alphaMode: String,
         isDoubleSided: Bool
     ) -> MTLCullMode {
         let solidCull: MTLCullMode = isDoubleSided ? .none : .back
-        if let faceCategory {
-            switch faceCategory {
-            case "eye", "eyebrow", "eyeline", "highlight", "faceOverlay", "transparentZWrite":
-                return .none
-            default:  // "body", "clothing", "skin", and any unknown category
-                return solidCull
-            }
-        }
-        switch alphaMode {
-        case "blend":
+        switch faceCategory {
+        case "eye", "eyebrow", "eyeline", "highlight", "faceOverlay", "transparentZWrite":
             return .none
-        default:  // "opaque", "mask", and any unknown alpha mode
+        default:
             return solidCull
         }
     }
