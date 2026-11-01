@@ -4,6 +4,7 @@
 import XCTest
 import Metal
 import simd
+import GLTFCore
 @testable import VRMMetalKit
 
 /// The explicit outline multiplier and the minimum-width guard band, on every
@@ -94,7 +95,40 @@ final class MToonOutlineScaleTests: XCTestCase {
         XCTAssertGreaterThan(guardedCounts[2048] ?? 0, guardedCounts[512] ?? 0)
     }
 
+    func testOutlineWidthMaskUsesTransformedUVsOnEveryRigidHullPath() async throws {
+        for doubleSided in [false, true] {
+            let plain = try await transformedMaskFrame(doubleSided: doubleSided, transformed: false)
+            let transformed = try await transformedMaskFrame(doubleSided: doubleSided, transformed: true)
+            XCTAssertGreaterThan(
+                SwatchScene.differingBytes(plain, transformed), 0,
+                "\(doubleSided ? "Dedicated" : "Merged") hull ignored KHR_texture_transform on the outline width mask")
+        }
+    }
+
     // MARK: - Helpers
+
+    private func transformedMaskFrame(doubleSided: Bool, transformed: Bool) async throws -> [UInt8] {
+        let model = try await SwatchScene.load(.rigid, device: device)
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: 2, height: 1, mipmapped: false)
+        descriptor.usage = .shaderRead
+        let texture = try XCTUnwrap(device.makeTexture(descriptor: descriptor))
+        var pixels: [UInt8] = [0, 0, 0, 255, 255, 255, 255, 255]
+        texture.replace(region: MTLRegionMake2D(0, 0, 2, 1), mipmapLevel: 0, withBytes: &pixels, bytesPerRow: 8)
+        model.textures.append(VRMTexture(name: "outlineMask", mtlTexture: texture))
+        let maskIndex = model.textures.count - 1
+        for material in model.materials {
+            material.doubleSided = doubleSided
+            material.mtoon?.outlineWidthMultiplyTexture = maskIndex
+            if transformed {
+                material.mtoon?.textureTransform = GLTFKHRTextureTransform(offset: [0.5, 0])
+            }
+        }
+        var setup = SwatchScene.Setup()
+        setup.outlineWidth = 40
+        setup.outlineMinimumPixels = 3
+        return try SwatchScene.render(model, device: device, setup: setup)
+    }
 
     private func outlineFrame(
         _ fixture: SwatchScene.Fixture,
