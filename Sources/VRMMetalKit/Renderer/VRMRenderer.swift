@@ -2541,7 +2541,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else if item.materialNameLower.contains("lace") || item.materialNameLower.contains("collar") ||
                               item.materialNameLower.contains("ribbon") || item.materialNameLower.contains("frill") ||
                               item.materialNameLower.contains("ruffle") {
-                        // TransparentWithZWrite - semi-transparent overlays that need depth writing
                         item.faceCategory = "transparentZWrite"
                         item.renderOrder = 8  // After opaque, before regular blend
                         vrmLog("  → Assigned to: transparentZWrite queue (order=8)")
@@ -3804,21 +3803,26 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                 case "transparentZWrite":
-                    // TransparentWithZWrite: blend with depth write ON
-                    // Uses face state (.lessEqual + depth write) to occlude what's behind
-                    // Key for lace, collar, and semi-transparent overlays
-                    if let faceState = depthStencilStates["face"] {
-                        encoderStateCache.setDepthStencilState(encoder,faceState)
+                    // Lace, collar, ribbon, frill and ruffle accessories. The name
+                    // match sets draw order and depth bias only; a translucent
+                    // accessory writes depth only when it authors
+                    // `transparentWithZWrite`, and culling follows `doubleSided`.
+                    let depthStateKey: String
+                    if materialAlphaMode == "blend" {
+                        let writesDepth = primitive.materialIndex.map {
+                            $0 < model.materials.count && model.materials[$0].transparentWithZWrite
+                        } ?? false
+                        depthStateKey = writesDepth ? "blendZWrite" : "blend"
                     } else {
-                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
+                        depthStateKey = "face"
                     }
-                    encoderStateCache.setCullMode(encoder,selectedCullMode)  // Often double-sided for overlays
+                    encoderStateCache.setDepthStencilState(encoder, depthStencilStates[depthStateKey] ?? depthStencilStates["opaque"])
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
-                    // Apply depth bias for transparent overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     applyDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=transparentZWrite  pso=face(.lessEqual+depthWrite)  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=transparentZWrite  depth=\(depthStateKey)  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 default:
@@ -5405,13 +5409,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// (e.g. hair vanishing when viewed from behind) is caught at the logic
     /// level rather than only visually.
     ///
-    /// - Single-sided surfaces (face `skin`/`body`/`clothing` and every
-    ///   non-face alpha mode, `blend` included) cull back faces, as glTF 2.0
-    ///   requires; marking them `doubleSided` disables culling.
+    /// - Single-sided surfaces (face `skin`/`body`/`clothing`, the
+    ///   lace/collar/ribbon/frill/ruffle `transparentZWrite` accessories, and
+    ///   every non-face alpha mode, `blend` included) cull back faces, as
+    ///   glTF 2.0 requires; marking them `doubleSided` disables culling.
     /// - Overlay/feature face categories (`eye`, `eyebrow`, `eyeline`,
-    ///   `highlight`, `faceOverlay`, `transparentZWrite`) always render
-    ///   two-sided — back-face culling would drop alpha strokes and thin
-    ///   overlays regardless of the authored `doubleSided` flag.
+    ///   `highlight`, `faceOverlay`) always render two-sided — back-face
+    ///   culling would drop alpha strokes regardless of the authored
+    ///   `doubleSided` flag.
     public func selectCullMode(
         faceCategory: String?,
         alphaMode: String,
@@ -5419,7 +5424,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ) -> MTLCullMode {
         let solidCull: MTLCullMode = isDoubleSided ? .none : .back
         switch faceCategory {
-        case "eye", "eyebrow", "eyeline", "highlight", "faceOverlay", "transparentZWrite":
+        case "eye", "eyebrow", "eyeline", "highlight", "faceOverlay":
             return .none
         default:
             return solidCull
