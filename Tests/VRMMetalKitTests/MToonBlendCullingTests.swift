@@ -41,7 +41,29 @@ final class MToonBlendCullingTests: XCTestCase {
             "A single-sided BLEND sphere rendered like a double-sided one; its back faces were not culled")
     }
 
+    /// When BLEND draws come first in the encoder, no opaque draw has set the
+    /// winding. A full-alpha single-sided BLEND sphere must still show its
+    /// front faces, like its opaque twin, not its inside.
+    func testFirstDrawSingleSidedBlendShowsFrontFaces() async throws {
+        let blend = try await allSpheresFrame(alphaMode: "BLEND")
+        let opaque = try await allSpheresFrame(alphaMode: "OPAQUE")
+        let stats = SwatchScene.stats(blend, reference: opaque, size: 512, threshold: 6)
+        XCTAssertLessThan(stats.changedPixels, 200,
+            "Full-alpha single-sided BLEND spheres differ from opaque in \(stats.changedPixels) px (max Δ \(stats.maxDelta)); back faces may be drawn instead of front faces")
+    }
+
     // MARK: - Helpers
+
+    private func allSpheresFrame(alphaMode: String) async throws -> [UInt8] {
+        let model = try await SwatchScene.load(.rigid, device: device)
+        for material in model.materials {
+            material.alphaMode = alphaMode
+            material.baseColorFactor.w = 1
+            material.doubleSided = false
+            material.mtoon?.outlineWidthMode = .none
+        }
+        return try SwatchScene.render(model, device: device)
+    }
 
     private func blendSphereFrame(zWrite: Bool, doubleSided: Bool) async throws -> [UInt8] {
         let model = try await SwatchScene.load(.rigid, device: device)
