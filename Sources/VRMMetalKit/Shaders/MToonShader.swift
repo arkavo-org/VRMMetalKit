@@ -250,7 +250,7 @@ public struct MToonMaterialUniforms {
 
     // Blocks 17-34: KHR_texture_transform of every texture except baseColor,
     // as affine rows: uv' = (dot(row0.xyz, (u, v, 1)), dot(row1.xyz, (u, v, 1))).
-    // Set them with ``setTextureTransform(_:row0:row1:)``.
+    // Compute them with ``textureTransformRows(_:)``.
 
     /// First affine row of the `KHR_texture_transform` on `shadeMultiplyTexture`.
     public var shadeMultiplyUvRow0: SIMD4<Float> = [1, 0, 0, 0]
@@ -300,22 +300,18 @@ public struct MToonMaterialUniforms {
     /// Creates a default-initialized uniform payload.
     public init() {}
 
-    /// Stores a `KHR_texture_transform` as the two affine rows the shader
-    /// applies, `uv' = R(rotation) * (scale * uv) + offset`; `nil` is identity.
-    public mutating func setTextureTransform(
-        _ transform: GLTFKHRTextureTransform?,
-        row0: WritableKeyPath<MToonMaterialUniforms, SIMD4<Float>>,
-        row1: WritableKeyPath<MToonMaterialUniforms, SIMD4<Float>>
-    ) {
+    /// The two affine rows the shader applies for a `KHR_texture_transform`,
+    /// `uv' = R(rotation) * (scale * uv) + offset`; `nil` is identity.
+    public static func textureTransformRows(
+        _ transform: GLTFKHRTextureTransform?
+    ) -> (row0: SIMD4<Float>, row1: SIMD4<Float>) {
         guard let transform else {
-            self[keyPath: row0] = [1, 0, 0, 0]
-            self[keyPath: row1] = [0, 1, 0, 0]
-            return
+            return ([1, 0, 0, 0], [0, 1, 0, 0])
         }
         let c = cos(transform.rotation)
         let s = sin(transform.rotation)
-        self[keyPath: row0] = [c * transform.scale.x, s * transform.scale.y, transform.offset.x, 0]
-        self[keyPath: row1] = [-s * transform.scale.x, c * transform.scale.y, transform.offset.y, 0]
+        return ([c * transform.scale.x, s * transform.scale.y, transform.offset.x, 0],
+                [-s * transform.scale.x, c * transform.scale.y, transform.offset.y, 0])
     }
 
     // Computed properties for convenient SIMD3 access
@@ -411,14 +407,13 @@ public struct MToonMaterialUniforms {
             self.textureTransformScaleX = transform.scale.x
             self.textureTransformScaleY = transform.scale.y
         }
-        setTextureTransform(mtoon.shadeMultiplyTextureTransform, row0: \.shadeMultiplyUvRow0, row1: \.shadeMultiplyUvRow1)
-        setTextureTransform(mtoon.shadingShiftTextureTransform, row0: \.shadingShiftUvRow0, row1: \.shadingShiftUvRow1)
-        setTextureTransform(mtoon.matcapTextureTransform, row0: \.matcapUvRow0, row1: \.matcapUvRow1)
-        setTextureTransform(mtoon.rimMultiplyTextureTransform, row0: \.rimMultiplyUvRow0, row1: \.rimMultiplyUvRow1)
-        setTextureTransform(mtoon.outlineWidthMultiplyTextureTransform,
-                            row0: \.outlineWidthMultiplyUvRow0, row1: \.outlineWidthMultiplyUvRow1)
-        setTextureTransform(mtoon.uvAnimationMaskTextureTransform,
-                            row0: \.uvAnimationMaskUvRow0, row1: \.uvAnimationMaskUvRow1)
+        (shadeMultiplyUvRow0, shadeMultiplyUvRow1) = Self.textureTransformRows(mtoon.shadeMultiplyTextureTransform)
+        (shadingShiftUvRow0, shadingShiftUvRow1) = Self.textureTransformRows(mtoon.shadingShiftTextureTransform)
+        (matcapUvRow0, matcapUvRow1) = Self.textureTransformRows(mtoon.matcapTextureTransform)
+        (rimMultiplyUvRow0, rimMultiplyUvRow1) = Self.textureTransformRows(mtoon.rimMultiplyTextureTransform)
+        (outlineWidthMultiplyUvRow0, outlineWidthMultiplyUvRow1) =
+            Self.textureTransformRows(mtoon.outlineWidthMultiplyTextureTransform)
+        (uvAnimationMaskUvRow0, uvAnimationMaskUvRow1) = Self.textureTransformRows(mtoon.uvAnimationMaskTextureTransform)
     }
 
     /// Validates packed uniform values against MToon parameter ranges.

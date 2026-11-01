@@ -74,24 +74,21 @@ final class MToonPerTextureTransformTests: XCTestCase {
     /// `(c*u + s*v, -s*u + c*v)`, then offset.
     func testTextureTransformRowsMatchBaseColorFormula() {
         let transform = GLTFKHRTextureTransform(offset: [0.25, -0.5], rotation: 0.7, scale: [2, 0.5])
-        var uniforms = MToonMaterialUniforms()
-        uniforms.setTextureTransform(transform, row0: \.emissiveUvRow0, row1: \.emissiveUvRow1)
+        let (row0, row1) = MToonMaterialUniforms.textureTransformRows(transform)
         let c = cos(transform.rotation)
         let s = sin(transform.rotation)
         for uv in [SIMD2<Float>(0, 0), [1, 0], [0, 1], [0.3, 0.8]] {
             let scaled = uv * transform.scale
             let expected = SIMD2<Float>(c * scaled.x + s * scaled.y, -s * scaled.x + c * scaled.y) + transform.offset
             let h = SIMD3<Float>(uv.x, uv.y, 1)
-            let row0 = uniforms.emissiveUvRow0
-            let row1 = uniforms.emissiveUvRow1
             let actual = SIMD2<Float>(simd_dot(SIMD3(row0.x, row0.y, row0.z), h),
                                       simd_dot(SIMD3(row1.x, row1.y, row1.z), h))
             XCTAssertEqual(actual.x, expected.x, accuracy: 1e-6, "u at \(uv)")
             XCTAssertEqual(actual.y, expected.y, accuracy: 1e-6, "v at \(uv)")
         }
-        uniforms.setTextureTransform(nil, row0: \.emissiveUvRow0, row1: \.emissiveUvRow1)
-        XCTAssertEqual(uniforms.emissiveUvRow0, [1, 0, 0, 0])
-        XCTAssertEqual(uniforms.emissiveUvRow1, [0, 1, 0, 0])
+        let identity = MToonMaterialUniforms.textureTransformRows(nil)
+        XCTAssertEqual(identity.row0, [1, 0, 0, 0])
+        XCTAssertEqual(identity.row1, [0, 1, 0, 0])
     }
 
     // MARK: - Rendering
