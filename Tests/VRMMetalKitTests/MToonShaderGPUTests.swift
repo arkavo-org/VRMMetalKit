@@ -143,6 +143,7 @@ final class MToonShaderGPUTests: XCTestCase {
             "skinned_vertex",
             // SpringBone compute shaders
             "springBoneKinematic",
+            "springBoneCopyParentPositions",
             "springBonePredict",
             "springBoneDistance",
             "springBoneCollideSpheres",

@@ -52,6 +52,7 @@ kernel void springBoneDistance(
     constant float3* bindDirections [[buffer(11)]],
     constant uint* boneChainIndex [[buffer(16)]],
     constant uint* chainSleep [[buffer(17)]],
+    device const float3* parentPosCurr [[buffer(19)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones) return;
@@ -60,7 +61,10 @@ kernel void springBoneDistance(
     uint parentIndex = boneParams[id].parentIndex;
     if (parentIndex == 0xFFFFFFFF) return; // Skip root bones
 
-    float3 delta = bonePosCurr[id] - bonePosCurr[parentIndex];
+    // The parent's thread moves its own joint in this same dispatch, so read
+    // the copy taken before it (#452).
+    float3 parentPos = parentPosCurr[parentIndex];
+    float3 delta = bonePosCurr[id] - parentPos;
     float currentLength = length(delta);
     float restLength = restLengths[id];
 
@@ -70,7 +74,7 @@ kernel void springBoneDistance(
         // Matches three-vrm behavior - no tolerance band that allows compression/stretch
         // This prevents the "tightening" issue where clothes compress to 95% and stick
         float3 direction = delta / currentLength;
-        bonePosCurr[id] = bonePosCurr[parentIndex] + direction * restLength;
+        bonePosCurr[id] = parentPos + direction * restLength;
     } else if (restLength > epsilon && currentLength < epsilon) {
         // If bone fully collapsed to parent position, push out along the
         // parent→child direction stored at the parent's slot. bindDirections[N]
@@ -80,6 +84,6 @@ kernel void springBoneDistance(
         float3 bindDir = bindDirections[parentIndex];
         float bindLen = length(bindDir);
         float3 pushDir = (bindLen > 0.001) ? (bindDir / bindLen) : float3(0, -1, 0);
-        bonePosCurr[id] = bonePosCurr[parentIndex] + pushDir * restLength;
+        bonePosCurr[id] = parentPos + pushDir * restLength;
     }
 }
