@@ -1421,7 +1421,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  // doesn't match the spec / three-vrm / UniVRM. VMK#289.
  float widthMask = 1.0;
  if (effectiveHasOutlineWidthMultiplyTexture) {
- widthMask = outlineWidthMultiplyTexture.sample(textureSampler, in.texCoord).g;
+ widthMask = outlineWidthMultiplyTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)).g;
  }
  float outlineWidth = material.outlineWidthFactor * widthMask;
 
