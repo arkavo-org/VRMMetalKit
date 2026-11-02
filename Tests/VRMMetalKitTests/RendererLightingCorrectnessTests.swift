@@ -125,102 +125,61 @@ final class RendererLightingCorrectnessTests: XCTestCase {
         XCTAssertLessThan(centerRGB.z, 0.05, "Zero emissive should be nearly black")
     }
 
-    // MARK: - #145: GI equalization factor (MToon 1.0 spec)
+    // MARK: - GI (MToon 1.0 §GI Equalization)
 
-    /// giEqualizationFactor=0 → indirect diffuse fully follows shadeColor.
-    /// With white base + black shade, indirect collapses to 0.
-    func testGIEqualizationFactorZeroFollowsShade() async throws {
+    /// The spec's indirect term is `gi(n) * litColor` with
+    /// `gi(n) = lerp(rawGi(n), uniformedGi, giEqualizationFactor)`. VMK's only
+    /// global illumination is a uniform ambient colour, so `rawGi(n)` equals
+    /// `uniformedGi` and the indirect term is `ambient * baseColor` whatever the
+    /// factor is.
+    func testIndirectFollowsBaseColorWithZeroEqualization() async throws {
         let renderer = try LightingTestRenderer(device: device, width: 128, height: 128)
-
-        var material = MToonMaterialUniforms()
-        material.baseColorFactor = SIMD4<Float>(1, 1, 1, 1) // White base
-        material.giEqualizationFactor = 0.0                     // Disabled GI
-        material.shadeColorFactor = SIMD3<Float>(0, 0, 0)
-        material.shadingToonyFactor = 0.9
-        material.vrmVersion = 1
-
-        let frameData = try renderer.render(
-            material: material,
-            lightDir: SIMD3<Float>(0, 0, 1),
-            lightColor: SIMD3<Float>(0, 0, 0),
-            ambientColor: SIMD3<Float>(0.5, 0.5, 0.5)
-        )
-        let centerRGB = sampleRGB(frameData, x: 64, y: 64, width: 128)
-
-        // With giEqualizationFactor=0, ambient should NOT contribute
-        XCTAssertLessThan(
-            centerRGB.x, 0.1,
-            "giEqualizationFactor=0 should disable indirect diffuse (#145). Got \(centerRGB)"
-        )
+        let center = try renderAmbientOnly(renderer, base: [1, 1, 1], shade: [0, 0, 0],
+                                           giEqualization: 0.0, ambient: [0.5, 0.5, 0.5])
+        XCTAssertGreaterThan(center.x, 0.2,
+            "Under uniform ambient, giEqualizationFactor 0 must still light the base colour. Got \(center)")
     }
 
-    /// giEqualizationFactor=1.0 → indirect diffuse fully follows baseColor.
-    func testGIEqualizationFactorOneFollowsBase() async throws {
+    func testGIEqualizationFactorHasNoEffectUnderUniformAmbient() async throws {
         let renderer = try LightingTestRenderer(device: device, width: 128, height: 128)
-
-        var material = MToonMaterialUniforms()
-        material.baseColorFactor = SIMD4<Float>(1, 1, 1, 1) // White base
-        material.giEqualizationFactor = 1.0                     // Full GI
-        material.shadeColorFactor = SIMD3<Float>(0, 0, 0)
-        material.shadingToonyFactor = 0.9
-        material.vrmVersion = 1
-
-        let frameData = try renderer.render(
-            material: material,
-            lightDir: SIMD3<Float>(0, 0, 1),
-            lightColor: SIMD3<Float>(0, 0, 0),
-            ambientColor: SIMD3<Float>(0.5, 0.5, 0.5)
-        )
-        let centerRGB = sampleRGB(frameData, x: 64, y: 64, width: 128)
-
-        // With giEqualizationFactor=1.0, ambient should contribute fully
-        XCTAssertGreaterThan(
-            centerRGB.x, 0.2,
-            "giEqualizationFactor=1.0 should enable full indirect diffuse (#145). Got \(centerRGB)"
-        )
+        let zero = try renderAmbientOnly(renderer, base: [1, 1, 1], shade: [0, 0, 0],
+                                         giEqualization: 0.0, ambient: [0.5, 0.5, 0.5])
+        let one = try renderAmbientOnly(renderer, base: [1, 1, 1], shade: [0, 0, 0],
+                                        giEqualization: 1.0, ambient: [0.5, 0.5, 0.5])
+        XCTAssertEqual(zero.x, one.x, accuracy: 1.0 / 255.0,
+            "Under uniform ambient, giEqualizationFactor must not change the indirect term. 0.0=\(zero), 1.0=\(one)")
     }
 
-    /// giEqualizationFactor should mix linearly between shade-side and lit-side.
-    func testGIEqualizationFactorScalesLinearly() async throws {
+    /// Cyan base, red shade: the indirect term carries the base colour only.
+    func testIndirectCarriesNoShadeColor() async throws {
         let renderer = try LightingTestRenderer(device: device, width: 128, height: 128)
+        let center = try renderAmbientOnly(renderer, base: [0, 1, 1], shade: [1, 0, 0],
+                                           giEqualization: 0.5, ambient: [1, 1, 1])
+        XCTAssertLessThan(center.x, 0.05, "Shade colour leaked into the indirect term. Got \(center)")
+        XCTAssertGreaterThan(center.y, 0.3, "Base colour missing from the indirect term. Got \(center)")
+        XCTAssertGreaterThan(center.z, 0.3, "Base colour missing from the indirect term. Got \(center)")
+    }
 
-        let ambient = SIMD3<Float>(0.5, 0.5, 0.5)
-
-        var material0 = MToonMaterialUniforms()
-        material0.baseColorFactor = SIMD4<Float>(1, 1, 1, 1)
-        material0.giEqualizationFactor = 0.0
-        material0.shadeColorFactor = SIMD3<Float>(0, 0, 0)
-        material0.shadingToonyFactor = 0.9
-        material0.vrmVersion = 1
-
-        var material1 = MToonMaterialUniforms()
-        material1.baseColorFactor = SIMD4<Float>(1, 1, 1, 1)
-        material1.giEqualizationFactor = 1.0
-        material1.shadeColorFactor = SIMD3<Float>(0, 0, 0)
-        material1.shadingToonyFactor = 0.9
-        material1.vrmVersion = 1
-
-        let frame0 = try renderer.render(
-            material: material0,
+    private func renderAmbientOnly(
+        _ renderer: LightingTestRenderer,
+        base: SIMD3<Float>,
+        shade: SIMD3<Float>,
+        giEqualization: Float,
+        ambient: SIMD3<Float>
+    ) throws -> SIMD3<Float> {
+        var material = MToonMaterialUniforms()
+        material.baseColorFactor = SIMD4<Float>(base, 1)
+        material.shadeColorFactor = shade
+        material.giEqualizationFactor = giEqualization
+        material.shadingToonyFactor = 0.9
+        material.vrmVersion = 1
+        let frame = try renderer.render(
+            material: material,
             lightDir: SIMD3<Float>(0, 0, 1),
             lightColor: SIMD3<Float>(0, 0, 0),
             ambientColor: ambient
         )
-        let center0 = sampleRGB(frame0, x: 64, y: 64, width: 128)
-
-        let frame1 = try renderer.render(
-            material: material1,
-            lightDir: SIMD3<Float>(0, 0, 1),
-            lightColor: SIMD3<Float>(0, 0, 0),
-            ambientColor: ambient
-        )
-        let center1 = sampleRGB(frame1, x: 64, y: 64, width: 128)
-
-        // center1 should be significantly brighter than center0
-        XCTAssertGreaterThan(
-            center1.x, center0.x + 0.15,
-            "giEqualizationFactor=1.0 should be brighter than 0.0 (#145). 0.0=\(center0), 1.0=\(center1)"
-        )
+        return sampleRGB(frame, x: 64, y: 64, width: 128)
     }
 
     // MARK: - Defaults & override stacking
@@ -228,35 +187,6 @@ final class RendererLightingCorrectnessTests: XCTestCase {
     /// MToon 1.0 spec: default `giEqualizationFactor` is 0.9 (matches three-vrm).
     func testDefaultGIEqualizationFactorMatchesSpec() {
         XCTAssertEqual(MToonMaterialUniforms().giEqualizationFactor, 0.9, accuracy: 0.0001)
-    }
-
-    /// With non-trivial shade and base, mid-range giEqualizationFactor must
-    /// produce a true mix (not just brightness scale). Cyan base + red shade
-    /// at factor 0.5 should land between the two channels.
-    func testGIEqualizationFactorMixesShadeAndBase() async throws {
-        let renderer = try LightingTestRenderer(device: device, width: 128, height: 128)
-
-        var material = MToonMaterialUniforms()
-        material.baseColorFactor = SIMD4<Float>(0, 1, 1, 1)   // Cyan base
-        material.shadeColorFactor = SIMD3<Float>(1, 0, 0)     // Red shade
-        material.giEqualizationFactor = 0.5
-        material.shadingToonyFactor = 0.9
-        material.vrmVersion = 1
-
-        let frameData = try renderer.render(
-            material: material,
-            lightDir: SIMD3<Float>(0, 0, 1),
-            lightColor: SIMD3<Float>(0, 0, 0),
-            ambientColor: SIMD3<Float>(1, 1, 1)
-        )
-        let centerRGB = sampleRGB(frameData, x: 64, y: 64, width: 128)
-
-        // mix(red, cyan, 0.5) = (0.5, 0.5, 0.5). With ambientColor=(1,1,1),
-        // indirect ≈ (0.5, 0.5, 0.5). Both R (from shade) and G/B (from base)
-        // should land in the mid-band — not red-dominant, not cyan-dominant.
-        XCTAssertGreaterThan(centerRGB.x, 0.3, "Red channel from shade should bleed in. Got \(centerRGB)")
-        XCTAssertGreaterThan(centerRGB.y, 0.3, "Green channel from base should bleed in. Got \(centerRGB)")
-        XCTAssertGreaterThan(centerRGB.z, 0.3, "Blue channel from base should bleed in. Got \(centerRGB)")
     }
 
     /// `setLight(0, …)` after init overrides only the key light. The auto-configured

@@ -1221,26 +1221,14 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      }
  }
 
- // Indirect diffuse — KNOWN DEVIATION FROM MToon 1.0 SPEC.
- //
- // The spec defines giEqualizationFactor as a lerp between rawGi(normal)
- // and uniformedGi (the directional vs uniform indirect-illumination mix);
- // see docs/MTOON_GI_SPEC.md for the verbatim spec excerpt. A spec-correct
- // implementation requires IBL/SH infrastructure that this renderer does
- // not yet have.
- //
- // Without IBL, the spec lerp degenerates to a no-op (rawGi(n) ≡ uniformedGi
- // ≡ ambient). Rather than ship the no-op, we reinterpret the factor as a
- // lit-side / shade-side mix on the indirect *albedo*: at 1.0 indirect uses
- // baseColor, at 0.0 it uses shadeColor. This gives authors a visually
- // meaningful artistic knob today. When IBL lands, replace this block with
- // the spec lerp and remove this comment.
- // Indirect / emissive / matcap / rim are NOT scaled by BRDF_LAMBERT_NORM.
- // The /π normalization above applies only to the direct Lambert BRDF term;
- // these are additive stylistic contributions in MToon (and in the reference
- // three-vrm + UniVRM paths). Note: post-#205, indirect (≈ambient*giAlbedo)
- // is now comparable in magnitude to direct (≈albedo/π) on the lit side —
- // see docs/MTOON_GI_SPEC.md for the rationale.
+ // Indirect diffuse (MToon 1.0 §GI Equalization): `gi(n) * litColor`, with
+ // `gi(n) = lerp(rawGi(n), uniformedGi, giEqualizationFactor)`. VMK's only
+ // global illumination is the uniform ambient colour, so rawGi(n) equals
+ // uniformedGi and gi is the ambient colour whatever the factor is. The factor
+ // takes effect once directional GI exists (see docs/MTOON_GI_SPEC.md).
+ // Indirect / emissive / matcap / rim are NOT scaled by BRDF_LAMBERT_NORM;
+ // the /π applies only to the direct Lambert term, and the spec's indirect
+ // term has none.
  // glTF 2.0 occlusion (VMK#310, was VMK#293): the AO map attenuates only
  // the INDIRECT / ambient (GI) term — never the direct toon-shaded term.
  // UniVRM, three-vrm and godot all confine occlusion to the indirect
@@ -1262,15 +1250,13 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      occlusionFactor *= mtoon_float(mtoonCreaseAO(normalize(in.worldNormal), material.ssaoStrength));
  }
 
- mtoon_float3 giAlbedo = mix(shadeColor, baseColor.rgb, mtoon_float(material.giEqualizationFactor));
  float3 safeAmbientColor = clamp(uniforms.ambientColor.xyz, 0.0f, 65500.0f);
- mtoon_float3 indirectDiffuse = mtoon_float3(safeAmbientColor) * giAlbedo * occlusionFactor;
+ mtoon_float3 indirectDiffuse = mtoon_float3(safeAmbientColor) * baseColor.rgb * occlusionFactor;
  litColor += indirectDiffuse;
 
- // Indirect radiance for the rim modulator: raw ambient (no `giAlbedo`).
- // Rim is not subject to the body's giEqualization mix; it just sees the
- // scene's indirect radiance, mirroring UniVRM's `indirectLightingFactor` —
- // which is itself occlusion-attenuated, so apply the same factor here.
+ // Indirect radiance for the rim modulator: the ambient colour without the
+ // base colour. It mirrors UniVRM's `indirectLightingFactor`, which is itself
+ // occlusion-attenuated, so apply the same factor here.
  mtoon_float3 indirectLight = mtoon_float3(safeAmbientColor) * occlusionFactor;
 
  // Emissive

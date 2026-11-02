@@ -14,9 +14,13 @@ import simd
 /// reproduce the baseline frame exactly, including both outline hull paths
 /// (merged for single-sided materials, dedicated for double-sided ones).
 ///
-/// Regenerate only on a checkout of the baseline commit with this file and the
-/// TestData/MToon fixtures copied in, never from the current tree:
-/// `VMK_WRITE_MTOON_GOLDENS=<dir> swift test --filter MToonLegacyGoldenTests`.
+/// Later deliberate changes to default shading are applied to the baseline
+/// before capture, so the goldens keep isolating the opt-in features:
+/// - #465: the indirect term is `ambient * baseColor`.
+///
+/// Regenerate only on a checkout of the baseline commit with those changes,
+/// this file and the TestData/MToon fixtures applied, never from the current
+/// tree: `VMK_WRITE_MTOON_GOLDENS=<dir> swift test --filter MToonLegacyGoldenTests`.
 @MainActor
 final class MToonLegacyGoldenTests: XCTestCase {
     enum Fixture: String, CaseIterable {
