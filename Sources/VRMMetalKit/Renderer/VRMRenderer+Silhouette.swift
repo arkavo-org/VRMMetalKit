@@ -120,6 +120,7 @@ extension VRMRenderer {
     /// - `disableAutoMaterialOverrides = true`
     /// - `additiveDirectionalRimEnabled = true`
     /// - `additiveDirectionalRimPower = config.rimFresnelPower`
+    /// - `config.hairHighlight` disabled (its band would light the crushed body)
     /// - Light 0 disabled; Light 1 set to the rim; Light 2 disabled
     /// - Ambient zeroed
     ///
@@ -135,12 +136,15 @@ extension VRMRenderer {
     ///       `emissiveFactor` = 0, `matcapFactor` = 0, `giEqualizationFactor` = 0
     ///     - MToon's parametric rim disabled (the additive directional rim
     ///       takes over via the shader path).
+    /// - `metallicFactor` zeroed on every material, so the opt-in stylized
+    ///   finish adds no highlight.
     public func applySilhouetteMode(model: VRMModel,
                                     config: SilhouetteRenderConfig = SilhouetteRenderConfig()) {
         // Renderer flags
         self.disableAutoMaterialOverrides = true
         self.additiveDirectionalRimEnabled = true
         self.additiveDirectionalRimPower = config.rimFresnelPower
+        self.config.hairHighlight.isEnabled = false
 
         // Lighting: single warm directional rim, nothing else.
         self.disableLight(0)
@@ -163,6 +167,8 @@ extension VRMRenderer {
                 mtoon.outlineLightingMixFactor = 0
                 material.mtoon = mtoon
             }
+
+            material.metallicFactor = 0
 
             if config.isEyeMaterial(material.name) {
                 applyEyeOverride(to: material, config: config)

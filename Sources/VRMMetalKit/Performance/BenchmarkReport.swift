@@ -67,9 +67,13 @@ public struct BenchmarkReport: Codable, Equatable, Sendable {
         public let loading: String
         public let springBoneQuality: String?
         public let lighting: String?
+        /// Opt-in renderer features enabled for the run (for example
+        /// `"materialFinish"`, `"outlineMinPixels=1.5"`). `nil` when none are.
+        public let features: [String]?
 
         public init(mode: String, width: Int, height: Int, sampleCount: Int,
-                    loading: String, springBoneQuality: String?, lighting: String?) {
+                    loading: String, springBoneQuality: String?, lighting: String?,
+                    features: [String]? = nil) {
             self.mode = mode
             self.width = width
             self.height = height
@@ -77,6 +81,7 @@ public struct BenchmarkReport: Codable, Equatable, Sendable {
             self.loading = loading
             self.springBoneQuality = springBoneQuality
             self.lighting = lighting
+            self.features = features
         }
     }
 

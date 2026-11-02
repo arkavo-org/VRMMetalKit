@@ -48,6 +48,19 @@ public struct MaterialReport: Codable {
         public let doubleSided: Bool
         /// MToon shade color as `[r, g, b]`, when MToon is configured.
         public let mtoonShadeColor: [Float]?
+        /// Authored glTF `pbrMetallicRoughness.metallicFactor`.
+        public let metallicFactor: Float
+        /// Authored glTF `pbrMetallicRoughness.roughnessFactor`.
+        public let roughnessFactor: Float
+        /// Stylized finish this renderer draws for the material: `"off"`,
+        /// `"sheen"`, or `"metal"` (see ``MToonSpecularMode``). Always `"off"`
+        /// unless ``RendererConfig/enableMaterialFinish`` is on.
+        public let specularMode: String
+        /// MToon outline width mode: `"none"`, `"worldCoordinates"`, or
+        /// `"screenCoordinates"`.
+        public let outlineMode: String
+        /// Authored MToon outline width factor (units depend on ``outlineMode``).
+        public let outlineWidthFactor: Float
         /// Heuristic: `true` when alpha looks suspicious (alpha near 0, or OPAQUE with alpha < 1).
         public let hasAlphaIssue: Bool
     }
@@ -113,15 +126,24 @@ extension VRMRenderer {
                 textureSize = [mtlTexture.width, mtlTexture.height]
             }
 
-            // Get MToon shade color if available
+            // Get MToon shade color and outline metadata if available
             var mtoonShadeColor: [Float]? = nil
+            var outlineMode = "none"
+            var outlineWidthFactor: Float = 0
             if let mtoon = material.mtoon {
                 mtoonShadeColor = [
                     mtoon.shadeColorFactor.x,
                     mtoon.shadeColorFactor.y,
                     mtoon.shadeColorFactor.z
                 ]
+                outlineMode = mtoon.outlineWidthMode.rawValue
+                outlineWidthFactor = mtoon.outlineWidthFactor
             }
+            let specularMode: MToonSpecularMode = config.enableMaterialFinish
+                ? MToonSpecularMode(
+                    metallicFactor: material.metallicFactor,
+                    roughnessFactor: material.roughnessFactor)
+                : .off
 
             let info = MaterialReport.MaterialInfo(
                 index: index,
@@ -138,6 +160,11 @@ extension VRMRenderer {
                 textureSize: textureSize,
                 doubleSided: material.doubleSided,
                 mtoonShadeColor: mtoonShadeColor,
+                metallicFactor: material.metallicFactor,
+                roughnessFactor: material.roughnessFactor,
+                specularMode: specularMode.rawValue,
+                outlineMode: outlineMode,
+                outlineWidthFactor: outlineWidthFactor,
                 hasAlphaIssue: hasAlphaIssue
             )
 

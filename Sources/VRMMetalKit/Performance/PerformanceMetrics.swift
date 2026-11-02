@@ -62,6 +62,7 @@ public struct PerformanceMetrics: Codable {
         case renderItemBuildMs
         case depthPrepassMs
         case outlinePassMs
+        case contactShadowMs
         case commandEncodeMs
         case cpuFrameMs
         case allocatedMemoryMB
@@ -107,6 +108,7 @@ public struct PerformanceMetrics: Codable {
         try container.encode(renderItemBuildMs.isFinite ? renderItemBuildMs : 0, forKey: .renderItemBuildMs)
         try container.encode(depthPrepassMs.isFinite ? depthPrepassMs : 0, forKey: .depthPrepassMs)
         try container.encode(outlinePassMs.isFinite ? outlinePassMs : 0, forKey: .outlinePassMs)
+        try container.encode(contactShadowMs.isFinite ? contactShadowMs : 0, forKey: .contactShadowMs)
         try container.encode(commandEncodeMs.isFinite ? commandEncodeMs : 0, forKey: .commandEncodeMs)
         try container.encode(cpuFrameMs.isFinite ? cpuFrameMs : 0, forKey: .cpuFrameMs)
         try container.encode(allocatedMemoryMB.isFinite ? allocatedMemoryMB : 0, forKey: .allocatedMemoryMB)
@@ -148,6 +150,7 @@ public struct PerformanceMetrics: Codable {
         renderItemBuildMs = (try? container.decode(Double.self, forKey: .renderItemBuildMs)) ?? 0
         depthPrepassMs = (try? container.decode(Double.self, forKey: .depthPrepassMs)) ?? 0
         outlinePassMs = (try? container.decode(Double.self, forKey: .outlinePassMs)) ?? 0
+        contactShadowMs = (try? container.decode(Double.self, forKey: .contactShadowMs)) ?? 0
         commandEncodeMs = (try? container.decode(Double.self, forKey: .commandEncodeMs)) ?? 0
         cpuFrameMs = (try? container.decode(Double.self, forKey: .cpuFrameMs)) ?? 0
         allocatedMemoryMB = try container.decode(Double.self, forKey: .allocatedMemoryMB)
@@ -222,6 +225,8 @@ public struct PerformanceMetrics: Codable {
     public var depthPrepassMs: Double = 0
     /// Average MToon outline-pass CPU time in milliseconds.
     public var outlinePassMs: Double = 0
+    /// Average contact-shadow CPU encode time in milliseconds (0 when disabled).
+    public var contactShadowMs: Double = 0
     /// Average command-encode CPU time in milliseconds.
     public var commandEncodeMs: Double = 0
     /// Average total per-frame CPU time in milliseconds.
@@ -263,6 +268,7 @@ public class PerformanceTracker {
         case renderItemBuild
         case depthPrepass
         case outlinePass
+        case contactShadowPass
         case commandEncode
         case total
     }
@@ -445,6 +451,7 @@ public class PerformanceTracker {
         metrics.renderItemBuildMs = averagePhase(.renderItemBuild)
         metrics.depthPrepassMs = averagePhase(.depthPrepass)
         metrics.outlinePassMs = averagePhase(.outlinePass)
+        metrics.contactShadowMs = averagePhase(.contactShadowPass)
         metrics.commandEncodeMs = averagePhase(.commandEncode)
         metrics.cpuFrameMs = averagePhase(.total)
 

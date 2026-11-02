@@ -272,19 +272,32 @@ final class ZFightingMultiModelTests: XCTestCase {
         XCTAssertEqual(renderer.selectCullMode(faceCategory: "unknownCat", alphaMode: "opaque", isDoubleSided: false), .back)
     }
 
-    func testOverlayAndBlendCategoriesNeverCullEvenWhenSingleSided() {
+    func testOverlayCategoriesNeverCullEvenWhenSingleSided() {
         let renderer = VRMRenderer(device: device)
         // These categories render as two-sided overlays at draw time regardless
-        // of the authored doubleSided flag (eyes/eyebrows/eyelines/highlights and
-        // transparent overlays would drop strokes if back faces were culled).
-        for category in ["eye", "eyebrow", "eyeline", "highlight", "faceOverlay", "transparentZWrite"] {
+        // of the authored doubleSided flag (eyes/eyebrows/eyelines/highlights
+        // would drop strokes if back faces were culled).
+        for category in ["eye", "eyebrow", "eyeline", "highlight", "faceOverlay"] {
             XCTAssertEqual(
                 renderer.selectCullMode(faceCategory: category, alphaMode: "opaque", isDoubleSided: false),
                 .none,
                 "face category \(category) must render two-sided even when single-sided")
         }
-        // Non-face BLEND also never culls.
-        XCTAssertEqual(renderer.selectCullMode(faceCategory: nil, alphaMode: "blend", isDoubleSided: false), .none)
+    }
+
+    /// #456: lace/collar/ribbon/frill/ruffle materials are matched by name only
+    /// for draw order; their authored `doubleSided` decides culling.
+    func testNameMatchedAccessoryCategoryHonoursDoubleSided() {
+        let renderer = VRMRenderer(device: device)
+        XCTAssertEqual(renderer.selectCullMode(faceCategory: "transparentZWrite", alphaMode: "blend", isDoubleSided: false), .back)
+        XCTAssertEqual(renderer.selectCullMode(faceCategory: "transparentZWrite", alphaMode: "blend", isDoubleSided: true), .none)
+    }
+
+    /// #451: glTF 2.0 culls back faces of single-sided materials whatever their
+    /// alpha mode, as three-vrm does for BLEND (`side: FrontSide`).
+    func testSingleSidedBlendCullsBack() {
+        let renderer = VRMRenderer(device: device)
+        XCTAssertEqual(renderer.selectCullMode(faceCategory: nil, alphaMode: "blend", isDoubleSided: false), .back)
     }
 
     // MARK: - Helper Methods

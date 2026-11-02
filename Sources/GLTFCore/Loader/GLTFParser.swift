@@ -432,7 +432,8 @@ public struct GLTFKHRTextureTransform {
         self.scale = scale
     }
 
-    static func parse(from dict: [String: Any]) -> GLTFKHRTextureTransform {
+    /// Parses a `KHR_texture_transform` JSON object, using identity defaults for omitted fields.
+    public static func parse(from dict: [String: Any]) -> GLTFKHRTextureTransform {
         var transform = GLTFKHRTextureTransform()
         if let off = dict["offset"] as? [Any], off.count >= 2 {
             transform.offset = SIMD2<Float>(toFloat(off[0]), toFloat(off[1]))
@@ -444,6 +445,17 @@ public struct GLTFKHRTextureTransform {
             transform.scale = SIMD2<Float>(toFloat(sc[0], default: 1.0), toFloat(sc[1], default: 1.0))
         }
         return transform
+    }
+
+    static func decodeExtension<Key: CodingKey>(
+        from container: KeyedDecodingContainer<Key>, key: Key
+    ) -> GLTFKHRTextureTransform? {
+        guard container.contains(key),
+              let extensions = try? container.decode([String: AnyCodable].self, forKey: key),
+              let dict = extensions["KHR_texture_transform"]?.value as? [String: Any] else {
+            return nil
+        }
+        return parse(from: dict)
     }
 
     private static func toFloat(_ value: Any, default defaultValue: Float = 0.0) -> Float {
@@ -472,13 +484,7 @@ public struct GLTFTextureInfo: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         index = try container.decode(Int.self, forKey: .index)
         texCoord = try container.decodeIfPresent(Int.self, forKey: .texCoord)
-        if container.contains(.extensions),
-           let extWrapper = try? container.decode([String: AnyCodable].self, forKey: .extensions),
-           let khrDict = extWrapper["KHR_texture_transform"]?.value as? [String: Any] {
-            khrTextureTransform = GLTFKHRTextureTransform.parse(from: khrDict)
-        } else {
-            khrTextureTransform = nil
-        }
+        khrTextureTransform = GLTFKHRTextureTransform.decodeExtension(from: container, key: .extensions)
     }
 
     /// Encodes the texture reference. The `KHR_texture_transform` payload is not re-emitted.
@@ -497,6 +503,29 @@ public struct GLTFNormalTextureInfo: Codable {
     public let texCoord: Int?
     /// Tangent-space normal scale; sampled XY are multiplied by this factor.
     public let scale: Float?
+    /// Parsed `KHR_texture_transform` payload, if present on this slot.
+    public let khrTextureTransform: GLTFKHRTextureTransform?
+
+    enum CodingKeys: String, CodingKey {
+        case index, texCoord, scale, extensions
+    }
+
+    /// Decodes the texture reference and, if present, the `KHR_texture_transform` extension.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        index = try container.decode(Int.self, forKey: .index)
+        texCoord = try container.decodeIfPresent(Int.self, forKey: .texCoord)
+        scale = try container.decodeIfPresent(Float.self, forKey: .scale)
+        khrTextureTransform = GLTFKHRTextureTransform.decodeExtension(from: container, key: .extensions)
+    }
+
+    /// Encodes the texture reference. The `KHR_texture_transform` payload is not re-emitted.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(index, forKey: .index)
+        try container.encodeIfPresent(texCoord, forKey: .texCoord)
+        try container.encodeIfPresent(scale, forKey: .scale)
+    }
 }
 
 /// Occlusion (AO) texture reference with the per-spec `strength` parameter.
@@ -507,6 +536,29 @@ public struct GLTFOcclusionTextureInfo: Codable {
     public let texCoord: Int?
     /// Linearly interpolates between full occlusion (0) and no occlusion (1).
     public let strength: Float?
+    /// Parsed `KHR_texture_transform` payload, if present on this slot.
+    public let khrTextureTransform: GLTFKHRTextureTransform?
+
+    enum CodingKeys: String, CodingKey {
+        case index, texCoord, strength, extensions
+    }
+
+    /// Decodes the texture reference and, if present, the `KHR_texture_transform` extension.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        index = try container.decode(Int.self, forKey: .index)
+        texCoord = try container.decodeIfPresent(Int.self, forKey: .texCoord)
+        strength = try container.decodeIfPresent(Float.self, forKey: .strength)
+        khrTextureTransform = GLTFKHRTextureTransform.decodeExtension(from: container, key: .extensions)
+    }
+
+    /// Encodes the texture reference. The `KHR_texture_transform` payload is not re-emitted.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(index, forKey: .index)
+        try container.encodeIfPresent(texCoord, forKey: .texCoord)
+        try container.encodeIfPresent(strength, forKey: .strength)
+    }
 }
 
 /// A glTF 2.0 [texture](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#textures): a pairing of a sampler with an image source.

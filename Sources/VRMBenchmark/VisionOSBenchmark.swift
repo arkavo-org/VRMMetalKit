@@ -51,12 +51,14 @@ func runVisionOSBenchmark(
     config.strict = .off
     config.enableDepthPrepass = opts.depthPrepass
     config.colorPixelFormat = .bgra8Unorm_srgb
+    opts.applySurfaceFeatures(to: &config)
 
     let renderer = VRMRenderer(device: device, config: config)
     renderer.performanceTracker = PerformanceTracker()
     renderer.useReverseZ = true
     renderer.loadModel(model)
     renderer.outlineWidth = opts.outlineWidth
+    opts.applyOutlineFeatures(to: renderer)
     renderer.enableSpringBone = opts.enableSpringBone
     renderer.skipPreDrawTransformUpdate = opts.skipPreDrawTransform
     switch opts.springBoneQuality {

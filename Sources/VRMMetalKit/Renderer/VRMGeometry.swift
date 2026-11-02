@@ -1508,9 +1508,13 @@ public class VRMMaterial: @unchecked Sendable {
     public var occlusionStrength: Float = 1.0
     /// Emissive (self-illuminating) texture.
     public var emissiveTexture: VRMTexture?
-    /// glTF metallic factor. Unused by the MToon path; retained for non-MToon fallback shading.
+    /// glTF metallic factor. Ignored by the MToon path unless
+    /// ``RendererConfig/enableMaterialFinish`` is on; then values below ~0.7
+    /// produce a broad sheen and values from ~0.7 a tight metal highlight.
+    /// See ``MToonSpecularMode``.
     public var metallicFactor: Float = 0.0
-    /// glTF roughness factor. Unused by the MToon path.
+    /// glTF roughness factor. Lobe width of the opt-in MToon finish (lower is
+    /// tighter); no effect while the finish is off or ``metallicFactor`` is 0.
     public var roughnessFactor: Float = 1.0
     /// Emissive tint multiplied into ``emissiveTexture``.
     public var emissiveFactor: SIMD3<Float> = [0, 0, 0]
@@ -1549,6 +1553,12 @@ public class VRMMaterial: @unchecked Sendable {
 
     /// `KHR_texture_transform` UV transform parsed from ``baseColorTexture``'s `textureInfo` extensions.
     public var khrTextureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``normalTexture``'s `textureInfo`.
+    public var normalTextureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``occlusionTexture``'s `textureInfo`.
+    public var occlusionTextureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``emissiveTexture``'s `textureInfo`.
+    public var emissiveTextureTransform: GLTFKHRTextureTransform?
 
     /// `true` when this material is transparent and writes to depth (combination of VRM 1.0 flag and VRM 0.x heuristics).
     /// Used by the render-item sorter to place these materials between OPAQUE and BLEND queues.
@@ -1648,6 +1658,7 @@ public class VRMMaterial: @unchecked Sendable {
             // tangent-space normal's XY before renormalisation. Default 1.0
             // per spec. VMK#290.
             normalScale = normalTextureInfo.scale ?? 1.0
+            normalTextureTransform = normalTextureInfo.khrTextureTransform
         }
 
         // Load occlusion texture (per-fragment ambient occlusion, R
@@ -1659,12 +1670,14 @@ public class VRMMaterial: @unchecked Sendable {
            occlusionTextureInfo.index < textures.count {
             occlusionTexture = textures[occlusionTextureInfo.index]
             occlusionStrength = occlusionTextureInfo.strength ?? 1.0
+            occlusionTextureTransform = occlusionTextureInfo.khrTextureTransform
         }
 
         // Load emissive texture (for glow effects)
         if let emissiveTextureInfo = gltfMaterial.emissiveTexture,
            emissiveTextureInfo.index < textures.count {
             emissiveTexture = textures[emissiveTextureInfo.index]
+            emissiveTextureTransform = emissiveTextureInfo.khrTextureTransform
         }
 
         if let emissive = gltfMaterial.emissiveFactor, emissive.count == 3 {
@@ -1906,6 +1919,7 @@ public class VRMMaterial: @unchecked Sendable {
         if let shadeMultiplyTexture = mtoonExt["shadeMultiplyTexture"] as? [String: Any],
            let index = shadeMultiplyTexture["index"] as? Int {
             mtoon.shadeMultiplyTexture = index
+            mtoon.shadeMultiplyTextureTransform = Self.textureTransform(in: shadeMultiplyTexture)
         }
 
         // Shading shift texture with scale support
@@ -1918,33 +1932,47 @@ public class VRMMaterial: @unchecked Sendable {
                 texCoord: texCoord,
                 scale: scale
             )
+            mtoon.shadingShiftTextureTransform = Self.textureTransform(in: shadingShiftTexture)
         }
 
         // MatCap texture
         if let matcapTexture = mtoonExt["matcapTexture"] as? [String: Any],
            let index = matcapTexture["index"] as? Int {
             mtoon.matcapTexture = index
+            mtoon.matcapTextureTransform = Self.textureTransform(in: matcapTexture)
         }
 
         // Rim multiply texture
         if let rimMultiplyTexture = mtoonExt["rimMultiplyTexture"] as? [String: Any],
            let index = rimMultiplyTexture["index"] as? Int {
             mtoon.rimMultiplyTexture = index
+            mtoon.rimMultiplyTextureTransform = Self.textureTransform(in: rimMultiplyTexture)
         }
 
         // Outline width multiply texture
         if let outlineWidthMultiplyTexture = mtoonExt["outlineWidthMultiplyTexture"] as? [String: Any],
            let index = outlineWidthMultiplyTexture["index"] as? Int {
             mtoon.outlineWidthMultiplyTexture = index
+            mtoon.outlineWidthMultiplyTextureTransform = Self.textureTransform(in: outlineWidthMultiplyTexture)
         }
 
         // UV animation mask texture
         if let uvAnimationMaskTexture = mtoonExt["uvAnimationMaskTexture"] as? [String: Any],
            let index = uvAnimationMaskTexture["index"] as? Int {
             mtoon.uvAnimationMaskTexture = index
+            mtoon.uvAnimationMaskTextureTransform = Self.textureTransform(in: uvAnimationMaskTexture)
         }
 
         return mtoon
+    }
+
+    /// The `KHR_texture_transform` declared on an MToon extension `textureInfo` object.
+    private static func textureTransform(in textureInfo: [String: Any]) -> GLTFKHRTextureTransform? {
+        guard let extensions = textureInfo["extensions"] as? [String: Any],
+              let transform = extensions["KHR_texture_transform"] as? [String: Any] else {
+            return nil
+        }
+        return GLTFKHRTextureTransform.parse(from: transform)
     }
 }
 

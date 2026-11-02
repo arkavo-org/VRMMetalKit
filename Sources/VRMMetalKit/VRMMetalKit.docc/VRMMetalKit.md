@@ -80,6 +80,7 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMRenderer/LightNormalizationMode``
 - ``VRMRenderer/DetailLevel``
 - ``RendererConfig``
+- ``HairHighlightConfig``
 - ``VRMPipelineCache``
 - ``PipelineCacheError``
 - ``VRMMesh``
@@ -102,6 +103,7 @@ Use VRMMetalKit when you need a self-contained, Metal-native avatar runtime on m
 - ``VRMMaterial/PipelineCategory``
 - ``VRMMToonMaterial``
 - ``VRMOutlineWidthMode``
+- ``MToonSpecularMode``
 - ``VRMShadingShiftTexture``
 - ``VRMMaterialColorBind``
 - ``VRMMaterialColorType``
