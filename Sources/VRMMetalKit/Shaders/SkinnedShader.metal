@@ -275,7 +275,6 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
 
  // Pass through texture coordinates and vertex color
  out.texCoord = in.texCoord;
- out.animatedTexCoord = in.texCoord;  // Will be animated in fragment shader if needed
  out.color = in.color;
 
  if (instanceId == 1u) {
@@ -335,7 +334,6 @@ vertex VertexOut skinned_vertex(VertexIn in [[stage_in]],
 
  // Pass through texture coordinates and vertex color
  out.texCoord = in.texCoord;
- out.animatedTexCoord = in.texCoord;
  out.color = in.color;
 
  return out;
@@ -389,7 +387,6 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.worldNormal = worldNormal;
  out.position = uniforms.projectionMatrix * (uniforms.viewMatrix * worldPos);
  out.texCoord = in.texCoord;
- out.animatedTexCoord = in.texCoord;
  out.color = in.color;
 
  // Shared with the merged hull in `skinned_mtoon_vertex`, so both hull paths

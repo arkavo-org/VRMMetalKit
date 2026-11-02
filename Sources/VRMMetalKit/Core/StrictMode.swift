@@ -718,10 +718,11 @@ public struct MetalSizeConstants {
     /// Validated at runtime by the strict-mode `uniformLayoutMismatch` check.
     public static let uniformsSize = 480
 
-    /// Byte size of the Metal `MToonMaterial` struct (17 blocks × 16 bytes).
+    /// Byte size of the Metal `MToonMaterial` struct (35 blocks × 16 bytes).
     /// Blocks 15 and 16 carry the opt-in hair band / crease AO and the
-    /// outline minimum-width parameters.
-    public static let mtoonMaterialSize = 272
+    /// outline minimum-width parameters; blocks 17-34 carry the per-texture
+    /// `KHR_texture_transform` rows.
+    public static let mtoonMaterialSize = 560
 
     /// Byte size of the Metal `Vertex` struct.
     public static let vertexSize = 44

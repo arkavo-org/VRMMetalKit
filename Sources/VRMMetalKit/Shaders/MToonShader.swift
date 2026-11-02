@@ -197,7 +197,7 @@ public struct MToonMaterialUniforms {
     /// UV scale for texture remapping.
     public var uvScale: Float = 1.0
 
-    // Block 13: 16 bytes - KHR_texture_transform (offset, rotation, scale)
+    // Block 13: 16 bytes - KHR_texture_transform of baseColorTexture (offset, rotation, scale)
 
     /// `KHR_texture_transform` offset, X component.
     public var textureTransformOffsetX: Float = 0.0
@@ -248,8 +248,71 @@ public struct MToonMaterialUniforms {
     var _extensionPad2: Float = 0.0
     var _extensionPad3: Float = 0.0
 
+    // Blocks 17-34: KHR_texture_transform of every texture except baseColor,
+    // as affine rows: uv' = (dot(row0.xyz, (u, v, 1)), dot(row1.xyz, (u, v, 1))).
+    // Compute them with ``textureTransformRows(_:)``.
+
+    /// First affine row of the `KHR_texture_transform` on `shadeMultiplyTexture`.
+    public var shadeMultiplyUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `shadeMultiplyTexture`.
+    public var shadeMultiplyUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+
+    /// First affine row of the `KHR_texture_transform` on `shadingShiftTexture`.
+    public var shadingShiftUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `shadingShiftTexture`.
+    public var shadingShiftUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+
+    /// First affine row of the `KHR_texture_transform` on `normalTexture`.
+    public var normalUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `normalTexture`.
+    public var normalUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+
+    /// First affine row of the `KHR_texture_transform` on `emissiveTexture`.
+    public var emissiveUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `emissiveTexture`.
+    public var emissiveUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+
+    /// First affine row of the `KHR_texture_transform` on `occlusionTexture`.
+    public var occlusionUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `occlusionTexture`.
+    public var occlusionUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+
+    /// First affine row of the `KHR_texture_transform` on `rimMultiplyTexture`.
+    public var rimMultiplyUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `rimMultiplyTexture`.
+    public var rimMultiplyUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+
+    /// First affine row of the `KHR_texture_transform` on `matcapTexture`.
+    public var matcapUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `matcapTexture`.
+    public var matcapUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+
+    /// First affine row of the `KHR_texture_transform` on `uvAnimationMaskTexture`.
+    public var uvAnimationMaskUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `uvAnimationMaskTexture`.
+    public var uvAnimationMaskUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+
+    /// First affine row of the `KHR_texture_transform` on `outlineWidthMultiplyTexture`.
+    public var outlineWidthMultiplyUvRow0: SIMD4<Float> = [1, 0, 0, 0]
+    /// Second affine row of the `KHR_texture_transform` on `outlineWidthMultiplyTexture`.
+    public var outlineWidthMultiplyUvRow1: SIMD4<Float> = [0, 1, 0, 0]
+
     /// Creates a default-initialized uniform payload.
     public init() {}
+
+    /// The two affine rows the shader applies for a `KHR_texture_transform`,
+    /// `uv' = R(rotation) * (scale * uv) + offset`; `nil` is identity.
+    public static func textureTransformRows(
+        _ transform: GLTFKHRTextureTransform?
+    ) -> (row0: SIMD4<Float>, row1: SIMD4<Float>) {
+        guard let transform else {
+            return ([1, 0, 0, 0], [0, 1, 0, 0])
+        }
+        let c = cos(transform.rotation)
+        let s = sin(transform.rotation)
+        return ([c * transform.scale.x, s * transform.scale.y, transform.offset.x, 0],
+                [-s * transform.scale.x, c * transform.scale.y, transform.offset.y, 0])
+    }
 
     // Computed properties for convenient SIMD3 access
 
@@ -344,6 +407,13 @@ public struct MToonMaterialUniforms {
             self.textureTransformScaleX = transform.scale.x
             self.textureTransformScaleY = transform.scale.y
         }
+        (shadeMultiplyUvRow0, shadeMultiplyUvRow1) = Self.textureTransformRows(mtoon.shadeMultiplyTextureTransform)
+        (shadingShiftUvRow0, shadingShiftUvRow1) = Self.textureTransformRows(mtoon.shadingShiftTextureTransform)
+        (matcapUvRow0, matcapUvRow1) = Self.textureTransformRows(mtoon.matcapTextureTransform)
+        (rimMultiplyUvRow0, rimMultiplyUvRow1) = Self.textureTransformRows(mtoon.rimMultiplyTextureTransform)
+        (outlineWidthMultiplyUvRow0, outlineWidthMultiplyUvRow1) =
+            Self.textureTransformRows(mtoon.outlineWidthMultiplyTextureTransform)
+        (uvAnimationMaskUvRow0, uvAnimationMaskUvRow1) = Self.textureTransformRows(mtoon.uvAnimationMaskTextureTransform)
     }
 
     /// Validates packed uniform values against MToon parameter ranges.

@@ -47,6 +47,25 @@ struct BoneParams {
     float angleLimit;         // Max swing angle from bind dir (radians); 0 = no limit
 };
 
+// Copies every joint's position into the parent-read buffers. Per-bone
+// kernels rewrite their own joint while their children read it as a parent,
+// and the GPU may run a dispatch's SIMD groups in any order, so a child could
+// see its parent's value from before or after the update (#452). Reading the
+// parent from this copy, taken just before the dispatch, always gives the
+// value from before it, which is what lanes in one SIMD group see.
+kernel void springBoneCopyParentPositions(
+    device const float3* bonePosPrev [[buffer(0)]],
+    device const float3* bonePosCurr [[buffer(1)]],
+    constant SpringBoneParams& globalParams [[buffer(3)]],
+    device float3* parentPosPrev [[buffer(18)]],
+    device float3* parentPosCurr [[buffer(19)]],
+    uint id [[thread_position_in_grid]]
+) {
+    if (id >= globalParams.numBones) return;
+    parentPosPrev[id] = bonePosPrev[id];
+    parentPosCurr[id] = bonePosCurr[id];
+}
+
 kernel void springBonePredict(
     device float3* bonePosPrev [[buffer(0)]],
     device float3* bonePosCurr [[buffer(1)]],
@@ -56,6 +75,8 @@ kernel void springBonePredict(
     constant float3* bindDirections [[buffer(11)]],
     constant uint* boneChainIndex [[buffer(16)]],
     constant uint* chainSleep [[buffer(17)]],
+    device const float3* parentPosPrev [[buffer(18)]],
+    device const float3* parentPosCurr [[buffer(19)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones) return;
@@ -77,7 +98,7 @@ kernel void springBonePredict(
     if (isnan(currPos.x) || isnan(currPos.y) || isnan(currPos.z) ||
         isinf(currPos.x) || isinf(currPos.y) || isinf(currPos.z)) {
         // Current position is corrupted - reset to hanging position below parent
-        float3 parentPos = bonePosCurr[parentIndex];
+        float3 parentPos = parentPosCurr[parentIndex];
         float safeRestLen = max(restLength, 0.01);
         float3 resetPos = parentPos + float3(0.0, -safeRestLen, 0.0);
         bonePosCurr[id] = resetPos;
@@ -133,10 +154,10 @@ kernel void springBonePredict(
     // - Large movements (jumps): full compensation, hair trails behind with inertia
     //
     // Re-enabled by Bug #6 fix. Bug #4 (kinematic prev-position contamination) is fixed
-    // separately so `bonePosPrev[parentIndex]` here now reflects the parent's previous
+    // separately so `parentPosPrev[parentIndex]` here now reflects the parent's previous
     // animated frame, not whatever value bonePosCurr happened to be carrying.
     if (globalParams.settlingFrames == 0) {
-        float3 parentDelta = bonePosCurr[parentIndex] - bonePosPrev[parentIndex];
+        float3 parentDelta = parentPosCurr[parentIndex] - parentPosPrev[parentIndex];
 
         // Only compensate for upward Y movement - no lateral compensation
         // Lateral compensation can push bangs into the face during head tilts
@@ -184,7 +205,7 @@ kernel void springBonePredict(
     // - K is tuned so stiffness=1.0 gives strong snap, stiffness=0.1 gives gentle return
     // - Applied AFTER Verlet integration but BEFORE distance constraint
     //
-    float3 parentPos = bonePosCurr[parentIndex];
+    float3 parentPos = parentPosCurr[parentIndex];
     // FIX: Use bindDirections[parentIndex], not bindDirections[id]
     // bindDirections[N] = direction from Node N to Node N+1 (current→child)
     // When simulating Node id, we need direction from parent (id-1) toward us
@@ -282,7 +303,7 @@ kernel void springBonePredict(
     // (the spec's "no limit" sentinel) or when bind data is missing.
     float angleLimit = boneParams[id].angleLimit;
     if (angleLimit > 0.0001 && stiffnessValid) {
-        float3 parentPosForLimit = bonePosCurr[parentIndex];
+        float3 parentPosForLimit = parentPosCurr[parentIndex];
         float3 toBone = newPos - parentPosForLimit;
         float toBoneLen = length(toBone);
         if (toBoneLen > 1e-6) {
@@ -317,19 +338,19 @@ kernel void springBonePredict(
 
     // POSITION BOUNDS CHECK: Detect if bone has drifted impossibly far
     // If more than 10m from parent, something is wrong - reset to stable position
-    float3 toParent = newPos - bonePosCurr[parentIndex];
+    float3 toParent = newPos - parentPosCurr[parentIndex];
     float distFromParent = length(toParent);
     if (distFromParent > 10.0) {
         // Reset to rest position below parent
         float safeRestLen = max(restLength, 0.01);
-        newPos = bonePosCurr[parentIndex] + float3(0.0, -safeRestLen, 0.0);
+        newPos = parentPosCurr[parentIndex] + float3(0.0, -safeRestLen, 0.0);
     }
 
     // Final NaN safety check - if result is NaN, reset to stable position
     if (isnan(newPos.x) || isnan(newPos.y) || isnan(newPos.z) ||
         isinf(newPos.x) || isinf(newPos.y) || isinf(newPos.z)) {
         // Reset to rest position hanging below parent
-        float3 parentPos = bonePosCurr[parentIndex];
+        float3 parentPos = parentPosCurr[parentIndex];
         if (isnan(parentPos.x) || isnan(parentPos.y) || isnan(parentPos.z)) {
             // Parent is also bad - use previous position as last resort
             newPos = bonePosPrev[id];

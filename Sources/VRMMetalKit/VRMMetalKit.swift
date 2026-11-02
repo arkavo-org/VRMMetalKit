@@ -42,7 +42,7 @@ import Metal
 /// - ``AnimationPlayer`` — plays loaded animation clips against a model.
 public struct VRMMetalKit {
     /// Package version string (semver).
-    public static let version = "1.2.0"
+    public static let version = "1.2.1"
     /// Build date stamp for the bundled shader library and runtime.
     public static let buildDate = "2026-10-18"
     /// Pre-compiled shader library version tag, baked into the `.metallib` resource.

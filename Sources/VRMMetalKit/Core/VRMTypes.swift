@@ -670,16 +670,29 @@ public struct VRMMToonMaterial {
     public var outlineColorFactor: SIMD3<Float> = [0.0, 0.0, 0.0]
     /// Mix factor between flat outline color and scene-lit outline color.
     public var outlineLightingMixFactor: Float = 1.0
-    /// Optional linear R8 mask texture gating UV animation per-pixel.
+    /// Optional mask texture whose B channel scales UV animation time per pixel.
     public var uvAnimationMaskTexture: Int?
     /// UV scroll speed along the X axis.
     public var uvAnimationScrollXSpeedFactor: Float = 0.0
     /// UV scroll speed along the Y axis.
     public var uvAnimationScrollYSpeedFactor: Float = 0.0
-    /// UV rotation speed in revolutions per second.
+    /// UV rotation speed in radians per second about (0.5, 0.5).
     public var uvAnimationRotationSpeedFactor: Float = 0.0
-    /// Optional `KHR_texture_transform` applied to all texture lookups.
+    /// `KHR_texture_transform` on `baseColorTexture`. It moves the base colour
+    /// texture only; every other texture follows its own transform.
     public var textureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``shadeMultiplyTexture``.
+    public var shadeMultiplyTextureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``shadingShiftTexture``.
+    public var shadingShiftTextureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``matcapTexture``, applied to the matcap's view-space UV.
+    public var matcapTextureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``rimMultiplyTexture``.
+    public var rimMultiplyTextureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``outlineWidthMultiplyTexture``.
+    public var outlineWidthMultiplyTextureTransform: GLTFKHRTextureTransform?
+    /// `KHR_texture_transform` on ``uvAnimationMaskTexture``.
+    public var uvAnimationMaskTextureTransform: GLTFKHRTextureTransform?
 
     /// Creates an MToon material with spec-default values.
     public init() {}

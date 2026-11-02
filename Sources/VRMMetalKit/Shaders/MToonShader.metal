@@ -116,13 +116,14 @@ static inline float2 applyTextureTransform(float2 uv, constant MToonMaterial& ma
  return rotated + float2(material.textureTransformOffsetX, material.textureTransformOffsetY);
 }
 
-// UV Animation utility function (rotation first, then scroll)
-static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
+// MToon UV animation after `time` seconds: rotate by
+// `uvAnimationRotationSpeedFactor * time` radians about (0.5, 0.5), then scroll
+// by `uvAnimationScroll*SpeedFactor * time` UV units (three-vrm order).
+static inline float2 animateUV(float2 uv, constant MToonMaterial& material, float time) {
  float2 result = uv;
 
- // UV rotation animation around center (0.5, 0.5) - FIRST
  if (material.uvAnimationRotationSpeedFactor != 0.0) {
- float angle = material.uvAnimationRotationSpeedFactor * material.time;
+ float angle = material.uvAnimationRotationSpeedFactor * time;
  float2 center = float2(0.5, 0.5);
  float2 translated = result - center;
 
@@ -136,9 +137,8 @@ static inline float2 animateUV(float2 uv, constant MToonMaterial& material) {
  result = rotationMatrix * translated + center;
  }
 
- // UV scroll animation - SECOND
- result.x += material.uvAnimationScrollXSpeedFactor * material.time;
- result.y += material.uvAnimationScrollYSpeedFactor * material.time;
+ result.x += material.uvAnimationScrollXSpeedFactor * time;
+ result.y += material.uvAnimationScrollYSpeedFactor * time;
 
  return result;
 }
@@ -415,15 +415,10 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  // Transform normal to world space
  out.worldNormal = normalize((uniforms.normalMatrix * float4(morphedNormal, 0.0)).xyz);
 
- // KHR_texture_transform is a static affine on UVs (offset / rotation / scale).
- // The transform must apply to *every* texture lookup — base color, shading
- // shift, outline width multiplier, MToon's matcap and shade textures, etc. —
- // so we bake it into `texCoord` here in the vertex shader. Default uniforms
- // (offset=0, rotation=0, scale=1) make `applyTextureTransform` identity, so
- // assets without the extension are unaffected. UV animation composes on top
- // via `animatedTexCoord`. VMK#288.
- out.texCoord = applyTextureTransform(in.texCoord, material);
- out.animatedTexCoord = animateUV(out.texCoord, material);
+ // `texCoord` carries the mesh UV. Each texture applies its own
+ // KHR_texture_transform when it is sampled (glTF 2.0, three-vrm), after UV
+ // animation.
+ out.texCoord = in.texCoord;
  out.color = in.color;
 
  if (needsViewNormal(material, uniforms)) {
@@ -480,7 +475,7 @@ static float4 mtoon_debug_visualize(
     } else if (uniforms.debugUVs == 3) {
         return material.baseColorFactor;
     } else if (uniforms.debugUVs == 4) {
-        float4 texColor = float4(baseColorTexture.sample(textureSampler, in.texCoord));
+        float4 texColor = float4(baseColorTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)));
         return float4(texColor.rgb, 1.0);
     } else if (uniforms.debugUVs == 5) {
         return float4(normalize(in.worldNormal) * 0.5 + 0.5, 1.0);
@@ -500,7 +495,7 @@ static float4 mtoon_debug_visualize(
     } else if (uniforms.debugUVs == 12) {
         float4 debugBaseColor = material.baseColorFactor;
         if (material.hasBaseColorTexture > 0) {
-            debugBaseColor *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+            debugBaseColor *= float4(baseColorTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)));
         }
         return float4(debugBaseColor.rgb, 1.0);
     } else if (uniforms.debugUVs == 13) {
@@ -529,7 +524,7 @@ static float4 mtoon_debug_visualize(
     } else if (uniforms.debugUVs == 25) {
         float4 texSample(1.0);
         if (material.hasBaseColorTexture > 0) {
-            texSample = float4(baseColorTexture.sample(textureSampler, in.texCoord));
+            texSample = float4(baseColorTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)));
         }
         float4 dbgBase25 = material.baseColorFactor * texSample;
         if (material.alphaMode == 1 && dbgBase25.a < material.alphaCutoff) {
@@ -539,7 +534,7 @@ static float4 mtoon_debug_visualize(
     } else if (uniforms.debugUVs == 26) {
         float4 dbgBase26 = material.baseColorFactor;
         if (material.hasBaseColorTexture > 0) {
-            dbgBase26 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+            dbgBase26 *= float4(baseColorTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)));
         }
         if (material.alphaMode == 1 && dbgBase26.a < material.alphaCutoff) {
             discard_fragment();
@@ -548,7 +543,7 @@ static float4 mtoon_debug_visualize(
     } else if (uniforms.debugUVs == 27) {
         float4 dbgBase27 = material.baseColorFactor;
         if (material.hasBaseColorTexture > 0) {
-            dbgBase27 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+            dbgBase27 *= float4(baseColorTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)));
         }
         if (material.alphaMode == 1 && dbgBase27.a < material.alphaCutoff) {
             discard_fragment();
@@ -557,7 +552,7 @@ static float4 mtoon_debug_visualize(
     } else if (uniforms.debugUVs == 28) {
         float4 dbgBase28 = material.baseColorFactor;
         if (material.hasBaseColorTexture > 0) {
-            dbgBase28 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+            dbgBase28 *= float4(baseColorTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)));
         }
         if (material.alphaMode == 1 && dbgBase28.a < material.alphaCutoff) {
             discard_fragment();
@@ -568,7 +563,7 @@ static float4 mtoon_debug_visualize(
     } else if (uniforms.debugUVs == 30) {
         float4 dbgBase30 = material.baseColorFactor;
         if (material.hasBaseColorTexture > 0) {
-            dbgBase30 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+            dbgBase30 *= float4(baseColorTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)));
         }
         if (material.alphaMode == 1 && dbgBase30.a < material.alphaCutoff) {
             discard_fragment();
@@ -577,19 +572,19 @@ static float4 mtoon_debug_visualize(
     } else if (uniforms.debugUVs == 31) {
         float4 dbgBase31 = material.baseColorFactor;
         if (material.hasBaseColorTexture > 0) {
-            dbgBase31 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+            dbgBase31 *= float4(baseColorTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)));
         }
         if (material.alphaMode == 1 && dbgBase31.a < material.alphaCutoff) {
             discard_fragment();
         }
         if (material.hasShadeMultiplyTexture > 0) {
-            return float4(float3(shadeMultiplyTexture.sample(textureSampler, in.texCoord).rgb), 1.0);
+            return float4(float3(shadeMultiplyTexture.sample(textureSampler, applyUvRows(in.texCoord, material.shadeMultiplyUvRow0, material.shadeMultiplyUvRow1)).rgb), 1.0);
         }
         return float4(0.5, 0.5, 0.5, 1.0);
     } else if (uniforms.debugUVs == 32) {
         float4 dbgBase32 = material.baseColorFactor;
         if (material.hasBaseColorTexture > 0) {
-            dbgBase32 *= float4(baseColorTexture.sample(textureSampler, in.texCoord));
+            dbgBase32 *= float4(baseColorTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)));
         }
         if (material.alphaMode == 1 && dbgBase32.a < material.alphaCutoff) {
             discard_fragment();
@@ -988,7 +983,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      shellUV += mat.uvShift;
      float shellAlpha = float(material.baseColorFactor.w);
      if (shellHasBaseColor) {
-         shellAlpha *= float(baseColorTexture.sample(textureSampler, shellUV).a);
+         shellAlpha *= float(baseColorTexture.sample(textureSampler, applyTextureTransform(shellUV, material)).a);
      }
      if (shellAlphaMode == 0) {
          return float4(mat.shellColor, 1.0);
@@ -1038,13 +1033,18 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      uv = uv * material.uvScale + float2(material.uvOffsetX, material.uvOffsetY);
  }
  
+ // UV animation runs here rather than in the vertex stage so rigid and
+ // skinned meshes share it. The mask's B channel scales time
+ // (VRMC_materials_mtoon-1.0 uvAnimationMaskTexture).
+ if (material.uvAnimationScrollXSpeedFactor != 0.0 ||
+     material.uvAnimationScrollYSpeedFactor != 0.0 ||
+     material.uvAnimationRotationSpeedFactor != 0.0) {
+ float animationTime = material.time;
  if (effectiveHasUvAnimationMaskTexture) {
- float animationMask = uvAnimationMaskTexture.sample(textureSampler, in.texCoord).r;
- uv = mix(in.texCoord, in.animatedTexCoord, animationMask);
- } else if (material.uvAnimationScrollXSpeedFactor != 0.0 ||
-        material.uvAnimationScrollYSpeedFactor != 0.0 ||
-        material.uvAnimationRotationSpeedFactor != 0.0) {
- uv = in.animatedTexCoord;
+     float2 maskUV = applyUvRows(in.texCoord, material.uvAnimationMaskUvRow0, material.uvAnimationMaskUvRow1);
+     animationTime *= uvAnimationMaskTexture.sample(textureSampler, maskUV).b;
+ }
+ uv = animateUV(uv, material, animationTime);
  }
 
  // Glitch materialization: horizontal slice tearing on all texture reads.
@@ -1054,7 +1054,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  mtoon_float4 baseColor = mtoon_float4(material.baseColorFactor);
  mtoon_float4 texColor(1.0, 1.0, 1.0, 1.0);
  if (effectiveHasBaseColorTexture) {
-     texColor = mtoon_float4(baseColorTexture.sample(textureSampler, uv));
+     texColor = mtoon_float4(baseColorTexture.sample(textureSampler, applyTextureTransform(uv, material)));
 
  #if 0  // DEBUG: Output raw texture value (before material factor multiplication) - DISABLED
  return float4(texColor.rgb, 1.0);
@@ -1083,7 +1083,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      // sample already in registers instead of fetching tex[1] again.
      shadeColor *= mtoon_float3(texColor.rgb);
  } else if (effectiveHasShadeMultiplyTexture) {
-     mtoon_float3 shadeTexColor = mtoon_float3(shadeMultiplyTexture.sample(textureSampler, uv).rgb);
+     float2 shadeUV = applyUvRows(uv, material.shadeMultiplyUvRow0, material.shadeMultiplyUvRow1);
+     mtoon_float3 shadeTexColor = mtoon_float3(shadeMultiplyTexture.sample(textureSampler, shadeUV).rgb);
      shadeColor *= shadeTexColor;
  }
 
@@ -1101,14 +1102,15 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      // MESH_PRIMITIVE_GENERATED_TANGENT_SPACE) require synthesizing a TBN basis.
      // Christian Schüler's screen-space-derivative TBN (2010) builds the basis
      // per-fragment from worldPos and uv derivatives — no per-vertex tangents.
-     mtoon_float3 nMap = mtoon_float3(float3(normalTexture.sample(textureSampler, uv).xyz) * 2.0 - 1.0);
+     float2 normalUV = applyUvRows(uv, material.normalUvRow0, material.normalUvRow1);
+     mtoon_float3 nMap = mtoon_float3(float3(normalTexture.sample(textureSampler, normalUV).xyz) * 2.0 - 1.0);
      // glTF 2.0 normalTextureInfo.scale — `scaledNormal = normalize((sample
      // * 2.0 - 1.0) * vec3(scale, scale, 1.0))`. Defaults to 1.0 so existing
      // assets without an authored `scale` field are unaffected. VMK#290.
      nMap.xy *= mtoon_float(material.normalScale);
      nMap = mtoon_float3(normalize(float3(nMap)));
 
-     normal = mtoon_float3(mtoonApplyNormalMap(float3(normal), float3(nMap), in.worldPosition, uv));
+     normal = mtoon_float3(mtoonApplyNormalMap(float3(normal), float3(nMap), in.worldPosition, normalUV));
  }
 
  // Debug 11: magenta where the normal was flipped for a back face, normal
@@ -1122,7 +1124,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Shading shift calculation
  mtoon_float shadingShift = mtoon_float(material.shadingShiftFactor);
  if (effectiveHasShadingShiftTexture) {
-     mtoon_float shiftTexValue = mtoon_float(shadingShiftTexture.sample(textureSampler, uv).r);
+     float2 shiftUV = applyUvRows(uv, material.shadingShiftUvRow0, material.shadingShiftUvRow1);
+     mtoon_float shiftTexValue = mtoon_float(shadingShiftTexture.sample(textureSampler, shiftUV).r);
      shadingShift += (shiftTexValue - 0.5) * mtoon_float(material.shadingShiftTextureScale);
  }
 
@@ -1191,9 +1194,10 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
          float3 extNormal = normalize(in.worldNormal);
          if (!isFrontFace) { extNormal = -extNormal; }
          if (effectiveHasNormalTexture) {
-             float3 nMapF = float3(normalTexture.sample(textureSampler, uv).xyz) * 2.0 - 1.0;
+             float2 extNormalUV = applyUvRows(uv, material.normalUvRow0, material.normalUvRow1);
+             float3 nMapF = float3(normalTexture.sample(textureSampler, extNormalUV).xyz) * 2.0 - 1.0;
              nMapF.xy *= material.normalScale;
-             extNormal = mtoonApplyNormalMap(extNormal, normalize(nMapF), in.worldPosition, uv);
+             extNormal = mtoonApplyNormalMap(extNormal, normalize(nMapF), in.worldPosition, extNormalUV);
          }
          float3 extView = mat_viewDir(uniforms, in.worldPosition);
          if (finishOn) {
@@ -1241,7 +1245,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // it as `1 + strength * (sample - 1)`.
  mtoon_float occlusionFactor = mtoon_float(1.0);
  if (effectiveHasOcclusionTexture) {
-     mtoon_float ao = mtoon_float(occlusionTexture.sample(textureSampler, uv).r);
+     float2 occlusionUV = applyUvRows(uv, material.occlusionUvRow0, material.occlusionUvRow1);
+     mtoon_float ao = mtoon_float(occlusionTexture.sample(textureSampler, occlusionUV).r);
      occlusionFactor = mtoon_float(1.0) + mtoon_float(material.occlusionStrength) * (ao - mtoon_float(1.0));
  }
  // Opt-in crease AO. Like an authored occlusion map, it only attenuates the
@@ -1265,7 +1270,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Emissive
  mtoon_float3 emissive = mtoon_float3(material.emissiveR, material.emissiveG, material.emissiveB);
  if (effectiveHasEmissiveTexture) {
-     mtoon_float3 emissiveTexColor = mtoon_float3(emissiveTexture.sample(textureSampler, uv).rgb);
+     float2 emissiveUV = applyUvRows(uv, material.emissiveUvRow0, material.emissiveUvRow1);
+     mtoon_float3 emissiveTexColor = mtoon_float3(emissiveTexture.sample(textureSampler, emissiveUV).rgb);
      emissive *= emissiveTexColor;
  }
  litColor += emissive;
@@ -1273,7 +1279,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // MatCap (use flipped viewNormal for back faces)
  if (effectiveHasMatcapTexture) {
      mtoon_float2 matcapUV = mtoon_float2(calculateMatCapUV(float3(viewNormal)));
-     mtoon_float3 matcapColor = mtoon_float3(matcapTexture.sample(textureSampler, float2(matcapUV)).rgb);
+     float2 matcapSampleUV = applyUvRows(float2(matcapUV), material.matcapUvRow0, material.matcapUvRow1);
+     mtoon_float3 matcapColor = mtoon_float3(matcapTexture.sample(textureSampler, matcapSampleUV).rgb);
      litColor += matcapColor * mtoon_float3(material.matcapR, material.matcapG, material.matcapB);
  }
 
@@ -1308,7 +1315,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
      // Apply rim multiply texture for masking
      if (effectiveHasRimMultiplyTexture) {
-         mtoon_float rimMask = saturate(mtoon_float(rimMultiplyTexture.sample(textureSampler, uv).r));
+         float2 rimUV = applyUvRows(uv, material.rimMultiplyUvRow0, material.rimMultiplyUvRow1);
+         mtoon_float rimMask = saturate(mtoon_float(rimMultiplyTexture.sample(textureSampler, rimUV).r));
          rimColor *= rimMask;
      }
  }
@@ -1421,7 +1429,8 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  // doesn't match the spec / three-vrm / UniVRM. VMK#289.
  float widthMask = 1.0;
  if (effectiveHasOutlineWidthMultiplyTexture) {
- widthMask = outlineWidthMultiplyTexture.sample(textureSampler, applyTextureTransform(in.texCoord, material)).g;
+ float2 maskUV = applyUvRows(in.texCoord, material.outlineWidthMultiplyUvRow0, material.outlineWidthMultiplyUvRow1);
+ widthMask = outlineWidthMultiplyTexture.sample(textureSampler, maskUV).g;
  }
  float outlineWidth = material.outlineWidthFactor * widthMask;
 
@@ -1488,10 +1497,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
 
  out.worldNormal = worldNormal;
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
- // Same KHR_texture_transform fix as the main vertex shader. See comment
- // at the equivalent site above. VMK#288.
- out.texCoord = applyTextureTransform(in.texCoord, material);
- out.animatedTexCoord = animateUV(out.texCoord, material);
+ out.texCoord = in.texCoord;
  out.color = in.color;
 
  // View direction already calculated above for edge attenuation
@@ -1539,7 +1545,7 @@ fragment float4 mtoon_debug_ramp(VertexOut in [[stage_in]],
 
  float shadingShift = material.shadingShiftFactor;
  if (material.hasShadingShiftTexture > 0) {
- float shiftTexValue = shadingShiftTexture.sample(textureSampler, in.texCoord).r;
+ float shiftTexValue = shadingShiftTexture.sample(textureSampler, applyUvRows(in.texCoord, material.shadingShiftUvRow0, material.shadingShiftUvRow1)).r;
  shadingShift += (shiftTexValue - 0.5) * material.shadingShiftTextureScale;
  }
 

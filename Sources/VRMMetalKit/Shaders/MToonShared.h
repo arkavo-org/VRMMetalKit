@@ -57,8 +57,8 @@ struct Uniforms {
  float4 materializeOrigin;    // xyz = world focus point (radial styles), w = reserved
 };
 
-// Scalar fields only (no float3) so the Metal layout matches Swift's
-// `MToonMaterialUniforms` stride exactly: 17 blocks x 16 bytes = 272 bytes.
+// Scalar and float4 fields only (no float3) so the Metal layout matches
+// Swift's `MToonMaterialUniforms` stride exactly: 35 blocks x 16 bytes = 560 bytes.
 struct MToonMaterial {
  // Block 0: 16 bytes - Base material properties
  float4 baseColorFactor;                    // 16 bytes
@@ -135,7 +135,7 @@ struct MToonMaterial {
  float uvOffsetY;                           // 4 bytes - UV offset for texture remapping
  float uvScale;                             // 4 bytes - UV scale for texture remapping
 
- // Block 13: 16 bytes - KHR_texture_transform (offset, rotation, scale X)
+ // Block 13: 16 bytes - KHR_texture_transform of baseColorTexture (offset, rotation, scale X)
  float textureTransformOffsetX;             // 4 bytes
  float textureTransformOffsetY;             // 4 bytes
  float textureTransformRotation;            // 4 bytes
@@ -158,14 +158,39 @@ struct MToonMaterial {
  float _extensionPad1;                      // 4 bytes padding
  float _extensionPad2;                      // 4 bytes padding
  float _extensionPad3;                      // 4 bytes padding
+ // Blocks 17-34: KHR_texture_transform of every texture except baseColor
+ // (blocks 13-14), as two affine rows applied by `applyUvRows`:
+ // uv' = (dot(row0.xyz, (u, v, 1)), dot(row1.xyz, (u, v, 1))). w is unused.
+ float4 shadeMultiplyUvRow0;
+ float4 shadeMultiplyUvRow1;
+ float4 shadingShiftUvRow0;
+ float4 shadingShiftUvRow1;
+ float4 normalUvRow0;
+ float4 normalUvRow1;
+ float4 emissiveUvRow0;
+ float4 emissiveUvRow1;
+ float4 occlusionUvRow0;
+ float4 occlusionUvRow1;
+ float4 rimMultiplyUvRow0;
+ float4 rimMultiplyUvRow1;
+ float4 matcapUvRow0;
+ float4 matcapUvRow1;
+ float4 uvAnimationMaskUvRow0;
+ float4 uvAnimationMaskUvRow1;
+ float4 outlineWidthMultiplyUvRow0;
+ float4 outlineWidthMultiplyUvRow1;
 };
+
+static inline float2 applyUvRows(float2 uv, float4 row0, float4 row1) {
+ float3 h = float3(uv, 1.0);
+ return float2(dot(row0.xyz, h), dot(row1.xyz, h));
+}
 
 struct VertexOut {
  float4 position [[position]];
  float3 worldPosition;
  float3 worldNormal;
  float2 texCoord;
- float2 animatedTexCoord;
  float4 color;
  float3 viewDirection;
  float3 viewNormal; // For MatCap sampling
@@ -261,7 +286,8 @@ static inline void applyMToonOutlineExtrusion(
  // VRMC_materials_mtoon-1.0 §outlineWidthMultiplyTexture: G channel.
  float widthMask = 1.0;
  if (hasMultiplyTexture) {
- widthMask = outlineWidthMultiplyTexture.sample(textureSampler, texCoord).g;
+ float2 maskUV = applyUvRows(texCoord, material.outlineWidthMultiplyUvRow0, material.outlineWidthMultiplyUvRow1);
+ widthMask = outlineWidthMultiplyTexture.sample(textureSampler, maskUV).g;
  }
  if (applyMToonOutlineGuardBand(clipPos, worldPos, worldNormal,
                                 material.outlineWidthFactor, widthMask,

@@ -629,6 +629,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// this `nil` so physics tracks actual elapsed time.
     public var simulationDeltaTime: TimeInterval?
 
+    /// Seconds of MToon UV animation (`uvAnimationScrollXSpeedFactor`,
+    /// `uvAnimationScrollYSpeedFactor`, `uvAnimationRotationSpeedFactor`).
+    /// Each simulated draw renders at the current value, then advances it by
+    /// that frame's simulation step (``simulationDeltaTime`` when set). Set it
+    /// to capture a specific moment.
+    public var uvAnimationTime: TimeInterval = 0
+    /// The ``uvAnimationTime`` the current draw renders at.
+    private var drawUVAnimationTime: Float = 0
+
     /// Character root velocity in world space, used by the spring-bone predict
     /// kernel to apply inertial force opposite to character motion. Set this
     /// each frame from the host application's locomotion code (e.g., the
@@ -1837,6 +1846,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
 
         let simulate = !compositorSkipSimulation
+        drawUVAnimationTime = Float(uvAnimationTime)
         if simulate {
             // Wait for a free uniform buffer (triple buffering sync)
             _ = inflightSemaphore.wait(timeout: .distantFuture)
@@ -2005,6 +2015,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             clampedDeltaTime = min(deltaTime, 1.0 / 30.0)  // Max 30ms per frame
         }
         frameDeltaTime = clampedDeltaTime
+        uvAnimationTime += TimeInterval(clampedDeltaTime)
 
         // Update SpringBone GPU physics BEFORE the render encoder is created.
         // Spring-bone now shares the renderer's command buffer (audit's #2 bottleneck
@@ -2541,7 +2552,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     } else if item.materialNameLower.contains("lace") || item.materialNameLower.contains("collar") ||
                               item.materialNameLower.contains("ribbon") || item.materialNameLower.contains("frill") ||
                               item.materialNameLower.contains("ruffle") {
-                        // TransparentWithZWrite - semi-transparent overlays that need depth writing
                         item.faceCategory = "transparentZWrite"
                         item.renderOrder = 8  // After opaque, before regular blend
                         vrmLog("  → Assigned to: transparentZWrite queue (order=8)")
@@ -3425,6 +3435,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     // If material has MToon extension, use those properties
                     if let mtoon = material.mtoon {
                         mtoonUniforms = baseMToonUniforms(materialIndex: materialIndex, mtoon: mtoon)
+                        mtoonUniforms.time = drawUVAnimationTime
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
                         // glTF-core normalTextureInfo.scale lives on
                         // VRMMaterial (the glTF base layer), not on the
@@ -3525,14 +3536,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // Index 1: Shade multiply texture (from MToon)
-                    // When shadeMultiply is the same texture as baseColor, set shadeUsesBaseColor
-                    // so the shader reuses the already-sampled baseColor (zero extra fetch)
-                    // instead of binding tex[1] and sampling it separately.
+                    // When shadeMultiply is the same texture as baseColor with the same
+                    // transform, set shadeUsesBaseColor so the shader reuses the
+                    // already-sampled baseColor (zero extra fetch) instead of binding
+                    // tex[1] and sampling it separately.
                     if let mtoon = material.mtoon {
                         if let textureIndex = mtoon.shadeMultiplyTexture {
                             if textureIndex < model.textures.count,
                                let mtlTexture = model.textures[textureIndex].mtlTexture {
                                 let isSameAsBaseColor = material.baseColorTexture?.mtlTexture === mtlTexture
+                                    && MToonMaterialUniforms.textureTransformRows(mtoon.textureTransform)
+                                        == MToonMaterialUniforms.textureTransformRows(mtoon.shadeMultiplyTextureTransform)
                                 if isSameAsBaseColor {
                                     encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
                                     mtoonUniforms.hasShadeMultiplyTexture = 0
@@ -3566,6 +3580,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtlTexture = material.normalTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 3)
                         mtoonUniforms.hasNormalTexture = 1
+                        (mtoonUniforms.normalUvRow0, mtoonUniforms.normalUvRow1) =
+                            MToonMaterialUniforms.textureTransformRows(material.normalTextureTransform)
                         textureCount += 1
                     }
 
@@ -3573,6 +3589,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtlTexture = material.emissiveTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 4)
                         mtoonUniforms.hasEmissiveTexture = 1
+                        (mtoonUniforms.emissiveUvRow0, mtoonUniforms.emissiveUvRow1) =
+                            MToonMaterialUniforms.textureTransformRows(material.emissiveTextureTransform)
                         textureCount += 1
                     }
 
@@ -3614,6 +3632,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     if let mtlTexture = material.occlusionTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 8)
                         mtoonUniforms.hasOcclusionTexture = 1
+                        (mtoonUniforms.occlusionUvRow0, mtoonUniforms.occlusionUvRow1) =
+                            MToonMaterialUniforms.textureTransformRows(material.occlusionTextureTransform)
                         textureCount += 1
                     }
 
@@ -3804,21 +3824,26 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                 case "transparentZWrite":
-                    // TransparentWithZWrite: blend with depth write ON
-                    // Uses face state (.lessEqual + depth write) to occlude what's behind
-                    // Key for lace, collar, and semi-transparent overlays
-                    if let faceState = depthStencilStates["face"] {
-                        encoderStateCache.setDepthStencilState(encoder,faceState)
+                    // Lace, collar, ribbon, frill and ruffle accessories. The name
+                    // match sets draw order and depth bias only; a translucent
+                    // accessory writes depth only when it authors
+                    // `transparentWithZWrite`, and culling follows `doubleSided`.
+                    let depthStateKey: String
+                    if materialAlphaMode == "blend" {
+                        let writesDepth = primitive.materialIndex.map {
+                            $0 < model.materials.count && model.materials[$0].transparentWithZWrite
+                        } ?? false
+                        depthStateKey = writesDepth ? "blendZWrite" : "blend"
                     } else {
-                        encoderStateCache.setDepthStencilState(encoder,depthStencilStates["opaque"])
+                        depthStateKey = "face"
                     }
-                    encoderStateCache.setCullMode(encoder,selectedCullMode)  // Often double-sided for overlays
+                    encoderStateCache.setDepthStencilState(encoder, depthStencilStates[depthStateKey] ?? depthStencilStates["opaque"])
+                    encoderStateCache.setCullMode(encoder,selectedCullMode)
                     encoderStateCache.setFrontFacing(encoder,.counterClockwise)
-                    // Apply depth bias for transparent overlays
                     let bias = depthBiasCalculator.depthBias(for: item.materialName, isOverlay: true)
                     applyDepthBias(encoder, bias, slopeScale: depthBiasCalculator.slopeScale, clamp: depthBiasCalculator.clamp)
                     if frameCounter % 60 == 0 {
-                        vrmLog("[FACE] order=transparentZWrite  pso=face(.lessEqual+depthWrite)  z=\(viewZ)  mat=\(item.materialName)")
+                        vrmLog("[FACE] order=transparentZWrite  depth=\(depthStateKey)  z=\(viewZ)  mat=\(item.materialName)")
                     }
 
                 default:
@@ -5405,13 +5430,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// (e.g. hair vanishing when viewed from behind) is caught at the logic
     /// level rather than only visually.
     ///
-    /// - Single-sided surfaces (face `skin`/`body`/`clothing` and every
-    ///   non-face alpha mode, `blend` included) cull back faces, as glTF 2.0
-    ///   requires; marking them `doubleSided` disables culling.
+    /// - Single-sided surfaces (face `skin`/`body`/`clothing`, the
+    ///   lace/collar/ribbon/frill/ruffle `transparentZWrite` accessories, and
+    ///   every non-face alpha mode, `blend` included) cull back faces, as
+    ///   glTF 2.0 requires; marking them `doubleSided` disables culling.
     /// - Overlay/feature face categories (`eye`, `eyebrow`, `eyeline`,
-    ///   `highlight`, `faceOverlay`, `transparentZWrite`) always render
-    ///   two-sided — back-face culling would drop alpha strokes and thin
-    ///   overlays regardless of the authored `doubleSided` flag.
+    ///   `highlight`, `faceOverlay`) always render two-sided — back-face
+    ///   culling would drop alpha strokes regardless of the authored
+    ///   `doubleSided` flag.
     public func selectCullMode(
         faceCategory: String?,
         alphaMode: String,
@@ -5419,7 +5445,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ) -> MTLCullMode {
         let solidCull: MTLCullMode = isDoubleSided ? .none : .back
         switch faceCategory {
-        case "eye", "eyebrow", "eyeline", "highlight", "faceOverlay", "transparentZWrite":
+        case "eye", "eyebrow", "eyeline", "highlight", "faceOverlay":
             return .none
         default:
             return solidCull

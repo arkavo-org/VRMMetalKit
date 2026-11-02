@@ -47,6 +47,11 @@ public final class SpringBoneBuffers: @unchecked Sendable {
     // SoA buffers for SpringBone data (GPU-owned after allocation)
     var bonePosPrev: MTLBuffer?
     var bonePosCurr: MTLBuffer?
+    /// Copies of `bonePosPrev`/`bonePosCurr` taken before each predict and
+    /// distance dispatch. Those kernels read a joint's parent from here, never
+    /// from the live buffers the parent's own thread is rewriting (#452).
+    var parentPosPrev: MTLBuffer?
+    var parentPosCurr: MTLBuffer?
     var boneParams: MTLBuffer?
     var restLengths: MTLBuffer?
     var bindDirections: MTLBuffer?  // Bind pose directions for stiffness spring force
@@ -115,6 +120,10 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         bonePosPrev?.label = "SpringBone BonePos Prev"
         bonePosCurr = device.makeBuffer(length: bonePosSize, options: [.storageModeShared])
         bonePosCurr?.label = "SpringBone BonePos Curr"
+        parentPosPrev = device.makeBuffer(length: max(bonePosSize, 1), options: [.storageModePrivate])
+        parentPosPrev?.label = "SpringBone ParentPos Prev"
+        parentPosCurr = device.makeBuffer(length: max(bonePosSize, 1), options: [.storageModePrivate])
+        parentPosCurr?.label = "SpringBone ParentPos Curr"
         boneParams = device.makeBuffer(length: boneParamsSize, options: [.storageModeShared])
         boneParams?.label = "SpringBone BoneParams"
         restLengths = device.makeBuffer(length: restLengthSize, options: [.storageModeShared])

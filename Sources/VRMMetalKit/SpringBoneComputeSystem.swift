@@ -53,6 +53,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     let commandQueue: MTLCommandQueue
 
     private var kinematicPipeline: MTLComputePipelineState?
+    private var copyParentPositionsPipeline: MTLComputePipelineState?
     private var predictPipeline: MTLComputePipelineState?
     private var distancePipeline: MTLComputePipelineState?
     private var centerDeltaPipeline: MTLComputePipelineState?
@@ -197,6 +198,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     public var sleepingBoneCount: Int { sleepGate.sleepingBoneCount }
     /// Test hook: per-chain asleep flags.
     var testChainAsleep: [Bool] { sleepGate.asleep }
+    /// Test hook: runs every per-bone kernel as one dispatch per bone, in bone
+    /// order, with only that bone awake. Each parent then finishes before its
+    /// children start, which is an ordering a contended GPU can produce
+    /// between SIMD groups of a single dispatch. Results must match the
+    /// default single-dispatch path bit for bit.
+    var testSerializeBoneDispatches = false
     /// Test hook: per-chain collider-group masks, same indexing as `testChainAsleep`.
     var testChainColliderMasks: [UInt32] { chainColliderMasks }
     /// Root/collider displacement from its wake anchor above which a sleeping
@@ -382,8 +389,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let hasPredict = lib.makeFunction(name: "springBonePredict") != nil
             let hasDistance = lib.makeFunction(name: "springBoneDistance") != nil
             let hasCollide = lib.makeFunction(name: "springBoneCollideSpheres") != nil
+            let hasCopyParents = lib.makeFunction(name: "springBoneCopyParentPositions") != nil
 
-            if hasKinematic && hasPredict && hasDistance && hasCollide {
+            if hasKinematic && hasPredict && hasDistance && hasCollide && hasCopyParents {
                 vrmLog("[SpringBone] ✅ Loaded from default library")
             } else {
                 library = nil  // Missing functions, try .metallib
@@ -407,6 +415,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         guard let kinematicFunction = library.makeFunction(name: "springBoneKinematic"),
+              let copyParentPositionsFunction = library.makeFunction(name: "springBoneCopyParentPositions"),
               let predictFunction = library.makeFunction(name: "springBonePredict"),
               let distanceFunction = library.makeFunction(name: "springBoneDistance"),
               let collideSpheresFunction = library.makeFunction(name: "springBoneCollideSpheres"),
@@ -425,6 +434,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return try device.makeComputePipelineState(descriptor: desc, options: [], reflection: nil)
         }
         kinematicPipeline = try makePipeline(kinematicFunction)
+        copyParentPositionsPipeline = try makePipeline(copyParentPositionsFunction)
         predictPipeline = try makePipeline(predictFunction)
         distancePipeline = try makePipeline(distanceFunction)
         collideSpheresPipeline = try makePipeline(collideSpheresFunction)
@@ -433,6 +443,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         centerDeltaPipeline = try makePipeline(centerDeltaFunction)
         #else
         kinematicPipeline = try device.makeComputePipelineState(function: kinematicFunction)
+        copyParentPositionsPipeline = try device.makeComputePipelineState(function: copyParentPositionsFunction)
         predictPipeline = try device.makeComputePipelineState(function: predictFunction)
         distancePipeline = try device.makeComputePipelineState(function: distanceFunction)
         collideSpheresPipeline = try device.makeComputePipelineState(function: collideSpheresFunction)
@@ -887,6 +898,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                                   substepIndex: Int = 0,
                                   registerCompletedHandler: Bool = true) {
         guard let kinematicPipeline = kinematicPipeline,
+              let copyParentPositionsPipeline = copyParentPositionsPipeline,
               let predictPipeline = predictPipeline,
               let distancePipeline = distancePipeline,
               let collideSpheresPipeline = collideSpheresPipeline,
@@ -930,6 +942,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         computeEncoder.setBuffer(buffers.boneParams, offset: 0, index: 2)
         computeEncoder.setBuffer(globalParamsBuffer, offset: substepIndex * globalParamsStride, index: 3)
         computeEncoder.setBuffer(buffers.restLengths, offset: 0, index: 4)
+        computeEncoder.setBuffer(buffers.parentPosPrev, offset: 0, index: 18)
+        computeEncoder.setBuffer(buffers.parentPosCurr, offset: 0, index: 19)
 
         // Colliders and bindDirections are rewritten per substep, so each
         // dispatch must read its own slot (VMK#396).
@@ -1002,18 +1016,47 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             computeEncoder.memoryBarrier(scope: .buffers)
         }
 
+        let serializeBones = testSerializeBoneDispatches
+        let dispatchBones = { [boneChainIndexBuffer, chainSleepBuffer] in
+            guard serializeBones else {
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+                computeEncoder.memoryBarrier(scope: .buffers)
+                return
+            }
+            var boneAsOwnChain = (0..<numBones).map { UInt32($0) }
+            computeEncoder.setBytes(&boneAsOwnChain, length: numBones * MemoryLayout<UInt32>.stride, index: 16)
+            for bone in 0..<numBones {
+                var asleep = [UInt32](repeating: 1, count: numBones)
+                asleep[bone] = 0
+                computeEncoder.setBytes(&asleep, length: numBones * MemoryLayout<UInt32>.stride, index: 17)
+                computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+                computeEncoder.memoryBarrier(scope: .buffers)
+            }
+            computeEncoder.setBuffer(boneChainIndexBuffer, offset: 0, index: 16)
+            computeEncoder.setBuffer(chainSleepBuffer, offset: 0, index: 17)
+        }
+
+        // Predict and distance read each joint's parent, which the parent's
+        // own thread rewrites in the same dispatch. Freeze the parents first so
+        // the result cannot depend on the order the GPU runs SIMD groups (#452).
+        let copyParentPositions = {
+            computeEncoder.setComputePipelineState(copyParentPositionsPipeline)
+            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
+            computeEncoder.memoryBarrier(scope: .buffers)
+        }
+
         // Execute predict kernel (step 1: predict new tip position)
+        copyParentPositions()
         computeEncoder.setComputePipelineState(predictPipeline)
-        computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-        computeEncoder.memoryBarrier(scope: .buffers)
+        dispatchBones()
 
         // Distance constraint iterations (step 2: enforce bone length)
         // VRM spec: run distance constraint BEFORE collision, do not run it after
         let iterations = quality.constraintIterations
         for _ in 0..<iterations {
+            copyParentPositions()
             computeEncoder.setComputePipelineState(distancePipeline)
-            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-            computeEncoder.memoryBarrier(scope: .buffers)
+            dispatchBones()
         }
 
         // Collision resolution (step 3: push tips out of colliders)
@@ -1024,8 +1067,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Scope swept (continuous) collision to the synthetic group (#313).
             var sweptGroup = sweptColliderGroupMask
             computeEncoder.setBytes(&sweptGroup, length: MemoryLayout<UInt32>.size, index: 15)
-            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-            computeEncoder.memoryBarrier(scope: .buffers)
+            dispatchBones()
         }
 
         if globalParams.numCapsules > 0 {
@@ -1033,14 +1075,12 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Scope swept (continuous) collision to the synthetic group (#313).
             var sweptGroupCaps = sweptColliderGroupMask
             computeEncoder.setBytes(&sweptGroupCaps, length: MemoryLayout<UInt32>.size, index: 15)
-            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-            computeEncoder.memoryBarrier(scope: .buffers)
+            dispatchBones()
         }
 
         if globalParams.numPlanes > 0 {
             computeEncoder.setComputePipelineState(collidePlanesPipeline)
-            computeEncoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadgroupSize)
-            computeEncoder.memoryBarrier(scope: .buffers)
+            dispatchBones()
         }
 
         computeEncoder.endEncoding()
