@@ -3536,14 +3536,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // Index 1: Shade multiply texture (from MToon)
-                    // When shadeMultiply is the same texture as baseColor, set shadeUsesBaseColor
-                    // so the shader reuses the already-sampled baseColor (zero extra fetch)
-                    // instead of binding tex[1] and sampling it separately.
+                    // When shadeMultiply is the same texture as baseColor with the same
+                    // transform, set shadeUsesBaseColor so the shader reuses the
+                    // already-sampled baseColor (zero extra fetch) instead of binding
+                    // tex[1] and sampling it separately.
                     if let mtoon = material.mtoon {
                         if let textureIndex = mtoon.shadeMultiplyTexture {
                             if textureIndex < model.textures.count,
                                let mtlTexture = model.textures[textureIndex].mtlTexture {
                                 let isSameAsBaseColor = material.baseColorTexture?.mtlTexture === mtlTexture
+                                    && MToonMaterialUniforms.textureTransformRows(mtoon.textureTransform)
+                                        == MToonMaterialUniforms.textureTransformRows(mtoon.shadeMultiplyTextureTransform)
                                 if isSameAsBaseColor {
                                     encoderStateCache.setFragmentTexture(encoder, nil, index: 1)
                                     mtoonUniforms.hasShadeMultiplyTexture = 0

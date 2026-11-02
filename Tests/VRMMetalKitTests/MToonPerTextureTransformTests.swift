@@ -121,6 +121,15 @@ final class MToonPerTextureTransformTests: XCTestCase {
             "The MToon shadeMultiplyTexture ignored its own KHR_texture_transform")
     }
 
+    func testShadeTransformAppliesWhenShadeTextureIsTheBaseColorImage() async throws {
+        let plain = try await sharedShadeFrame(shadeTransform: nil)
+        let shifted = try await sharedShadeFrame(shadeTransform: GLTFKHRTextureTransform(offset: [0.5, 0.5]))
+        let stats = SwatchScene.stats(shifted, reference: plain, size: 512,
+                                      columns: SwatchScene.third(1, size: 512))
+        XCTAssertGreaterThan(stats.changedPixels, 200,
+            "A shadeMultiplyTexture that is the baseColorTexture image ignored its own KHR_texture_transform")
+    }
+
     func testSkinnedMeshAppliesBaseColorTransform() async throws {
         let plain = try await baseColorFrame(.skinned, transform: nil)
         let shifted = try await baseColorFrame(.skinned, transform: GLTFKHRTextureTransform(offset: [0.5, 0.5]))
@@ -198,6 +207,19 @@ final class MToonPerTextureTransformTests: XCTestCase {
         let sphere = model.materials[1]
         sphere.mtoon?.shadeColorFactor = [1, 1, 1]
         sphere.mtoon?.shadeMultiplyTexture = shadeIndex
+        sphere.mtoon?.shadeMultiplyTextureTransform = shadeTransform
+        sphere.mtoon?.outlineWidthMode = .none
+        return try SwatchScene.render(model, device: device)
+    }
+
+    private func sharedShadeFrame(shadeTransform: GLTFKHRTextureTransform?) async throws -> [UInt8] {
+        let model = try await SwatchScene.load(.rigid, device: device)
+        let shared = try quadrantTexture(name: "shared")
+        model.textures.append(shared)
+        let sphere = model.materials[1]
+        sphere.baseColorTexture = shared
+        sphere.mtoon?.shadeColorFactor = [1, 1, 1]
+        sphere.mtoon?.shadeMultiplyTexture = model.textures.count - 1
         sphere.mtoon?.shadeMultiplyTextureTransform = shadeTransform
         sphere.mtoon?.outlineWidthMode = .none
         return try SwatchScene.render(model, device: device)
