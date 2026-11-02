@@ -60,10 +60,19 @@ jobs:
           # they can select git hooks, and shell keywords are parsed as command names
           # (anthropics/claude-code#32270). Keep the reviewer on simple commands instead of
           # expanding the allowlist with shell syntax and arbitrary keyword prefixes.
+          #
+          # Claude Code's command-injection checks also deny some shapes outright, whatever the
+          # allowlist says: a quoted argument in which a newline is followed by `#`, `$(...)`,
+          # and `{` followed by a quote. An inline multi-line `--body` takes the first shape as
+          # soon as a Markdown heading or `#123` starts a later line, as the plugin's own
+          # `---` / `## Code review` summary template does, so comment bodies go through
+          # `--body-file -` with a quoted heredoc, which those checks accept for Markdown and
+          # code (the brace check still scans the body, so a literal `{"` there is denied).
+          # The plugin's subagents never see this prompt, so the reviewer must hand the rules on.
           prompt: |
             /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
 
-            The working directory is already this repository. Use one simple command per Bash call: no `cd`, pipelines, redirects, `&&`, `||`, semicolons, loops, conditionals, or command substitution. Use Read, Grep, and Glob instead of shell text-processing pipelines. Run `gh` and `git` as standalone commands and pass `git -C <dir>` to target a subdirectory. If a command would need compound shell syntax, split it into separate tool calls.
+            The working directory is already this repository. Use one simple command per Bash call: no `cd`, pipelines, redirects, `&&`, `||`, semicolons, loops, conditionals, or command substitution. Use Read, Grep, and Glob instead of shell text-processing pipelines. Run `gh` and `git` as standalone commands and pass `git -C <dir>` to target a subdirectory. If a command would need compound shell syntax, split it into separate tool calls. Never put a newline inside a quoted argument: post every comment body with `gh pr comment <number> --body-file - <<'EOF'`, the body on the following lines and `EOF` alone on the last line. That quoted heredoc is the only permitted redirect. Include these shell rules in the prompt of every subagent you launch.
           # `--allowedTools` IS REQUIRED, and the stock template's single-entry list is why
           # the first run here did nothing: with only the inline-comment tool allowed, the
           # reviewer had no Read, no Grep and no Bash, so it could not open the diff at all
@@ -138,7 +147,8 @@ jobs:
             let detail = 'No readable completion record; review coverage is unverified.';
             try {
               const records = JSON.parse(fs.readFileSync(file, 'utf8'));
-              const result = (Array.isArray(records) ? records : [records]).findLast(r => r.type === 'result');
+              const messages = Array.isArray(records) ? records : [records];
+              const result = messages.findLast(r => r.type === 'result');
               if (result) {
                 const denials = Array.isArray(result.permission_denials) ? result.permission_denials : [];
                 const count = Math.max(denials.length, Number.isSafeInteger(result.permission_denials_count) ? result.permission_denials_count : 0);
@@ -150,20 +160,71 @@ jobs:
                 const knownTools = new Set(['Read', 'Grep', 'Glob', 'Bash', 'Agent', 'Task', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'Skill', 'TodoWrite', 'mcp__github_inline_comment__create_inline_comment', 'mcp__github_ci__get_ci_status', 'mcp__github_ci__get_workflow_run_details', 'mcp__github_ci__download_job_log']);
                 const deniedTools = [...new Set(denials.map(d => knownTools.has(d.tool_name) ? d.tool_name : 'other'))];
                 if (deniedTools.length) detail += ` Denied tools: ${deniedTools.join(', ')}.`;
-                // Surface only program names, never arguments. Remove quoted text before
-                // splitting so prose such as `echo "NEW; formerly ..."` is not misreported
-                // as a set of executables.
+                // The SDK's best-effort `permission_denied` frames name the deciding check and
+                // the subagent; join them to the authoritative result list by tool_use_id.
+                // Tool calls in assistant turns that carry a parent_tool_use_id are subagent
+                // calls, which still identifies them when a frame is missing.
+                const frames = new Map();
+                const subagentCalls = new Set();
+                for (const m of messages) {
+                  if (m?.type === 'system' && m.subtype === 'permission_denied' && typeof m.tool_use_id === 'string') frames.set(m.tool_use_id, m);
+                  if (m?.type === 'assistant' && m.parent_tool_use_id && Array.isArray(m.message?.content)) {
+                    for (const block of m.message.content) if (block?.type === 'tool_use' && typeof block.id === 'string') subagentCalls.add(block.id);
+                  }
+                }
+                // The check's message is mapped to a fixed label and never published itself.
+                const reasonLabels = [
+                  [/newline followed by #/i, 'quoted-newline-hash'],
+                  [/quoted text/i, 'quoted-substitution'],
+                  [/nested command/i, 'nested-command'],
+                  [/brace with quote/i, 'brace-quote'],
+                ];
+                // Surface only program names and fixed shape labels, never arguments. Heredoc
+                // bodies and quoted text are removed before splitting so prose such as
+                // `echo "NEW; formerly ..."` or a comment body is not misreported as executables.
+                const heredoc = /<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1([^\n]*)\n[\s\S]*?\n[ \t]*\2(?=\n|$)/g;
+                const quotedText = /'[^']*'|"(?:\\[\s\S]|[^"\\])*"|`(?:\\[\s\S]|[^`\\])*`/g;
                 const programs = new Set();
+                const shapes = new Set();
+                const reasons = new Set();
+                let inSubagents = 0;
                 for (const d of denials) {
+                  const frame = frames.get(d.tool_use_id);
+                  if (frame?.agent_id || subagentCalls.has(d.tool_use_id)) inSubagents++;
+                  if (frame) {
+                    const why = typeof frame.decision_reason === 'string' ? frame.decision_reason : '';
+                    const type = typeof frame.decision_reason_type === 'string' && /^[A-Za-z]{1,24}$/.test(frame.decision_reason_type) ? frame.decision_reason_type : 'other';
+                    reasons.add(reasonLabels.find(([pattern]) => pattern.test(why))?.[1] ?? type);
+                  }
                   if (d.tool_name !== 'Bash') continue;
                   const command = typeof d.tool_input?.command === 'string' ? d.tool_input.command : '';
-                  const unquoted = command.replace(/'[^']*'|"(?:\\[\s\S]|[^"\\])*"|`(?:\\[\s\S]|[^`\\])*`/g, '');
+                  const found = new Set();
+                  const bodiless = command.replace(heredoc, (_, quote, tag, rest) => {
+                    found.add('heredoc');
+                    return `<<${tag}${rest}`;
+                  });
+                  const quoted = bodiless.match(quotedText) || [];
+                  if (quoted.some(q => /\n[ \t]*#/.test(q))) found.add('quoted-newline-hash');
+                  else if (quoted.some(q => q.includes('\n'))) found.add('quoted-newline');
+                  if (/\$\(|`/.test(bodiless.replace(/'[^']*'/g, ''))) found.add('substitution');
+                  if (/\{\s*["']/.test(command)) found.add('brace-quote');
+                  const unquoted = bodiless.replace(quotedText, '');
+                  if (/&&|\|\|/.test(unquoted)) found.add('and-or');
+                  if (/(^|[^|])\|(?!\|)/.test(unquoted)) found.add('pipe');
+                  if (unquoted.includes(';')) found.add('semicolon');
+                  if (/[<>]/.test(unquoted.replace(/<<(?=[A-Za-z_])/g, ''))) found.add('redirect');
+                  if (unquoted.trim().includes('\n')) found.add('multiline');
+                  if (!found.size) found.add('simple');
+                  for (const shape of found) shapes.add(shape);
                   for (const segment of unquoted.split(/\|\||&&|\||;|\n/)) {
                     const word = segment.trim().split(/\s+/)[0] || '';
                     if (/^[A-Za-z0-9_.\/-]{1,32}$/.test(word)) programs.add(word.replace(/^.*\//, ''));
                   }
                 }
                 if (programs.size) detail += ` Denied Bash programs: ${[...programs].sort().join(', ')}.`;
+                if (shapes.size) detail += ` Denied Bash shapes: ${[...shapes].sort().join(', ')}.`;
+                if (reasons.size) detail += ` Denial reasons: ${[...reasons].sort().join(', ')}.`;
+                if (inSubagents) detail += ` Denials inside subagents: ${inSubagents}.`;
                 if (Number.isSafeInteger(result.num_turns) && result.num_turns >= 0) detail += ` Turns: ${result.num_turns}.`;
                 if (Number.isFinite(result.duration_ms) && result.duration_ms >= 0) detail += ` Duration: ${Math.round(result.duration_ms / 1000)}s.`;
               }
