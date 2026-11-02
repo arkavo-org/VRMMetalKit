@@ -233,11 +233,10 @@ static inline float2 outlineScreenNormal(float3 worldNormal, constant Uniforms& 
 // scaled by the width mask, so texels masked to zero stay outline-free, and a
 // zero authored width never gains a line.
 //
-// World mode is distance-compensated (`factor * distance * 0.01`), so its
-// projected width does not depend on camera distance.
+// `widthFactor` is in metres in world mode and a ratio to the screen height in
+// screen mode (MToon 1.0).
 static inline bool applyMToonOutlineGuardBand(
     thread float4& clipPos,
-    float3 worldPos,
     float3 worldNormal,
     float widthFactor,
     float widthMask,
@@ -248,17 +247,13 @@ static inline bool applyMToonOutlineGuardBand(
  if (minPixels <= 0.0 || widthFactor <= 0.0) { return false; }
  float authoredPixels;
  if (material.outlineMode == 1.0) {
-     float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
-                                      uniforms.viewMatrix[1].xyz,
-                                      uniforms.viewMatrix[2].xyz);
-     float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
-     float worldWidth = widthFactor * length(worldPos - cameraPos) * 0.01;
+     float worldWidth = widthFactor;
      // projectionMatrix[1][1] is cot(fovy/2) for a perspective camera and
      // 2/height for an orthographic one; clip.w is the view depth or 1.
      authoredPixels = worldWidth * abs(uniforms.projectionMatrix[1][1])
          * uniforms.viewportSize.y * 0.5 / max(abs(clipPos.w), 1e-4);
  } else if (material.outlineMode == 2.0) {
-     authoredPixels = widthFactor;
+     authoredPixels = widthFactor * uniforms.viewportSize.y;
  } else {
      return false;
  }
@@ -289,25 +284,22 @@ static inline void applyMToonOutlineExtrusion(
  float2 maskUV = applyUvRows(texCoord, material.outlineWidthMultiplyUvRow0, material.outlineWidthMultiplyUvRow1);
  widthMask = outlineWidthMultiplyTexture.sample(textureSampler, maskUV).g;
  }
- if (applyMToonOutlineGuardBand(clipPos, worldPos, worldNormal,
+ if (applyMToonOutlineGuardBand(clipPos, worldNormal,
                                 material.outlineWidthFactor, widthMask,
                                 uniforms, material)) {
  return;
  }
  float outlineWidth = material.outlineWidthFactor * widthMask;
- float3x3 viewRotation = float3x3(uniforms.viewMatrix[0].xyz,
-                                   uniforms.viewMatrix[1].xyz,
-                                   uniforms.viewMatrix[2].xyz);
- float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
  if (material.outlineMode == 1.0) {
- float distanceScale = length(worldPos - cameraPos) * 0.01;
- worldPos += normalize(worldNormal) * outlineWidth * distanceScale;
+ // outlineWidthFactor is in metres.
+ worldPos += normalize(worldNormal) * outlineWidth;
  clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * float4(worldPos, 1.0);
  } else if (material.outlineMode == 2.0) {
  float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
  float2 screenNormal = normalize(viewNormal.xy);
+ // outlineWidthFactor is a ratio to the screen height.
  float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
- clipPos.xy += screenNormal * outlineWidth * pixelsToNDC * clipPos.w;
+ clipPos.xy += screenNormal * (outlineWidth * uniforms.viewportSize.y) * pixelsToNDC * clipPos.w;
  }
 }
 
