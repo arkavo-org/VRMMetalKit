@@ -182,7 +182,7 @@ jobs:
                 // Surface only program names and fixed shape labels, never arguments. Heredoc
                 // bodies and quoted text are removed before splitting so prose such as
                 // `echo "NEW; formerly ..."` or a comment body is not misreported as executables.
-                const heredoc = /<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1([^\n]*)\n[\s\S]*?\n[ \t]*\2(?=\n|$)/g;
+                const heredoc = /<<-?[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1([^\n]*)\n(?:[\s\S]*?\n[ \t]*\2[ \t\r]*(?=\n|$)|[\s\S]*$)/g;
                 const quotedText = /'[^']*'|"(?:\\[\s\S]|[^"\\])*"|`(?:\\[\s\S]|[^`\\])*`/g;
                 const programs = new Set();
                 const shapes = new Set();
