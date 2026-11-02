@@ -206,10 +206,9 @@ final class MergedOutlineHullDepthTests: XCTestCase {
         material.doubleSided = false
         var mtoon = VRMMToonMaterial()
         mtoon.outlineWidthMode = .worldCoordinates
-        // World-mode extrusion is scaled by |worldPos - cameraPos| * 0.01; with
-        // the camera at the origin and the shell ~0.6 away that is 0.006, so a
-        // ~0.24 NDC band needs a factor of 40.
-        mtoon.outlineWidthFactor = 40.0
+        // World-mode width is in metres; 0.24 gives a ~0.24 NDC band with the
+        // shell ~0.6 from the camera at the origin.
+        mtoon.outlineWidthFactor = 0.24
         mtoon.outlineColorFactor = SIMD3<Float>(1, 0, 0)
         mtoon.outlineLightingMixFactor = 1.0
         material.mtoon = mtoon

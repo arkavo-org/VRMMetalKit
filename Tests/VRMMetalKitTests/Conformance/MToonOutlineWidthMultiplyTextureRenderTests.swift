@@ -54,17 +54,13 @@ final class MToonOutlineWidthMultiplyTextureRenderTests: XCTestCase {
     /// mode) must independently affect the rendered output. Pre-fix all
     /// four texture-present variants collapsed to the same hash.
     func testOutlineMultiplyTexturePathHonoursAllThreeAxes() async throws {
-        // Larger outline factors than the conformance sweep so the
-        // pixel-level effect of varying factor is super-resolved at the
-        // 256×256 render size used here (the conformance suite renders
-        // at 1024×1024). 0.20 and 0.50 are well within the spec's
-        // [0, 1] guideline; the shader's distanceScale further attenuates
-        // the world-space extrusion to a few pixels.
+        // World widths are metres and the screen width is a ratio to the
+        // screen height, so at 256×256 these give rings a few pixels wide.
         try await assertDistinctHashes(variants: [
-            ("baseline_no_texture",       false, .world,  0.20),
-            ("texture_world_factor_20",   true,  .world,  0.20),
-            ("texture_screen_factor_20",  true,  .screen, 0.20),
-            ("texture_world_factor_50",   true,  .world,  0.50),
+            ("baseline_no_texture",       false, .world,  0.01),
+            ("texture_world_factor_10mm", true,  .world,  0.01),
+            ("texture_screen_factor_2pc", true,  .screen, 0.02),
+            ("texture_world_factor_25mm", true,  .world,  0.025),
         ])
     }
 
@@ -232,14 +228,14 @@ final class MToonOutlineWidthMultiplyTextureRenderTests: XCTestCase {
             // -Y face (bottom)
             -0.5, -0.5, -0.5,   0.5, -0.5, -0.5,   0.5, -0.5,  0.5,  -0.5, -0.5,  0.5,
         ]
-        let normals: [Float] = [
-            0, 0, 1,  0, 0, 1,  0, 0, 1,  0, 0, 1,    // +Z
-            0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1,   // -Z
-            1, 0, 0,  1, 0, 0,  1, 0, 0,  1, 0, 0,    // +X
-            -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0,   // -X
-            0, 1, 0,  0, 1, 0,  0, 1, 0,  0, 1, 0,    // +Y
-            0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0,   // -Y
-        ]
+        // Radial normals, so the inverted hull grows the cube uniformly and
+        // its back faces show as a ring at the silhouette. With per-face
+        // normals each face's hull moves along its own normal and stays hidden
+        // behind the cube.
+        let normals: [Float] = stride(from: 0, to: positions.count, by: 3).flatMap { i -> [Float] in
+            let n = simd_normalize(SIMD3<Float>(positions[i], positions[i + 1], positions[i + 2]))
+            return [n.x, n.y, n.z]
+        }
         // Each face maps the full UV square [0,1]×[0,1] — the
         // checkerboard's four quadrants land on every face so the
         // G-channel sample varies across each face.

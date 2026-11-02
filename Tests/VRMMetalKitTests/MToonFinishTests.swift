@@ -282,6 +282,10 @@ final class MToonFinishTests: XCTestCase {
             $0.config.enableSSAO = true
             $0.eye = SIMD3<Float>(1.6, 1.3, 4.4)
             $0.lightDirection = SIMD3<Float>(-0.5, -0.3, -0.8)
+            // The swatches' outline is a fraction of a pixel wide here, so a
+            // rounding difference between the two hull paths can flip a single
+            // pixel's coverage. This test is about the shading extensions.
+            $0.outlineScale = 0
         }
         let rigidFrame = try SwatchScene.render(rigid, device: device, setup: setup)
         let skinnedFrame = try SwatchScene.render(skinned, device: device, setup: setup)

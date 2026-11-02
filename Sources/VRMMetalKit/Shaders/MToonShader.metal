@@ -1443,7 +1443,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  bool guarded = material.outlineMinPixels > 0.0;
  if (guarded) {
  guardClip = uniforms.projectionMatrix * uniforms.viewMatrix * float4(worldPos, 1.0);
- guarded = applyMToonOutlineGuardBand(guardClip, worldPos, worldNormal,
+ guarded = applyMToonOutlineGuardBand(guardClip, worldNormal,
                                       material.outlineWidthFactor, widthMask,
                                       uniforms, material);
  }
@@ -1453,10 +1453,8 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.worldPosition = worldPos;
  out.position = guardClip;
  } else if (material.outlineMode == 1.0) {
- // World coordinates mode - extrude in world space
- float distanceScale = length(worldPos - cameraPos) * 0.01;
-
- worldPos += worldNormal * outlineWidth * distanceScale;
+ // World coordinates mode: outlineWidthFactor is in metres.
+ worldPos += worldNormal * outlineWidth;
  out.worldPosition = worldPos;
  out.position = uniforms.projectionMatrix * uniforms.viewMatrix * float4(worldPos, 1.0);
 
@@ -1472,9 +1470,10 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  float3 viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
  float2 screenNormal = normalize(viewNormal.xy);
 
- // Convert outline width from pixels to NDC
+ // Screen coordinates mode: outlineWidthFactor is a ratio to the
+ // screen height, converted to pixels and then to NDC.
  float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
- float2 offsetNDC = screenNormal * outlineWidth * pixelsToNDC;
+ float2 offsetNDC = screenNormal * (outlineWidth * uniforms.viewportSize.y) * pixelsToNDC;
 
  // Apply screen-space offset, scaled by clip.w for perspective-correct width
  clipPos.xy += offsetNDC * clipPos.w;

@@ -284,8 +284,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
     /// Minimum rendered outline width in device pixels.
     ///
-    /// VRoid-typical world-mode widths project to a small fraction of a pixel
-    /// at any camera distance, so the hull disappears. When this is greater
+    /// VRoid-typical world-mode widths are a fraction of a millimetre, so at
+    /// full-body distances they project to under a pixel. When this is greater
     /// than zero, every hull vertex whose authored width projects thinner than
     /// this many pixels is extruded in screen space by this width instead. The
     /// floor is scaled by the material's `outlineWidthMultiplyTexture`, and a

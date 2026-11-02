@@ -99,8 +99,12 @@ outline covers the surface.
 
 | Outline mode | Extrusion |
 |---|---|
-| `.worldCoordinates` | `outlineWidthFactor × camera distance × 0.01` world units along the normal. The distance term keeps the line's on-screen width constant as the camera moves, so a VRoid-typical `0.0005` is a small fraction of a pixel at any distance. |
-| `.screenCoordinates` | `outlineWidthFactor` device pixels. |
+| `.worldCoordinates` | `outlineWidthFactor` metres along the normal, as in the MToon 1.0 spec. The line thins with distance: a VRoid-typical `0.0005` is about 0.6 px on a full-body 1024 px frame and wider in close-ups. |
+| `.screenCoordinates` | `outlineWidthFactor` as a ratio to the screen height, as in the MToon 1.0 spec: `0.01` on a 1024 px tall target is about 10 px. The width stays constant as the camera moves. |
+
+Before 1.2.1, VMK multiplied world widths by `camera distance × 0.01` and read
+screen widths as device pixels, so outlines rendered far thinner than in UniVRM
+and three-vrm (#467).
 
 ### Minimum width
 

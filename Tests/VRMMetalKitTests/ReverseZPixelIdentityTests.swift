@@ -66,12 +66,32 @@ final class ReverseZPixelIdentityTests: XCTestCase {
                        "Standard-Z rendering is nondeterministic across fresh model loads (\(mismatched) bytes differ) — the reverse-Z identity test is not attributable until this is fixed")
     }
 
+    /// With outlines on, reverse-Z may only differ from standard-Z at depth
+    /// ties. A wrong compare direction or bias polarity in the outline pass
+    /// would differ at thousands of pixels.
+    func testReverseZOutlinePassStaysWithinTheTieBudget() async throws {
+        let standard = try render(model: try await loadAvatarSampleA(), reverseZ: false, clearDepth: 1.0).color
+        let reversed = try render(model: try await loadAvatarSampleA(), reverseZ: true, clearDepth: 0.0).color
+        let pixelCount = standard.count / 4
+        var mismatchedPixels = 0
+        for p in 0..<pixelCount where standard[p * 4..<p * 4 + 4] != reversed[p * 4..<p * 4 + 4] {
+            mismatchedPixels += 1
+        }
+        XCTAssertLessThanOrEqual(mismatchedPixels, pixelCount / 2000,
+                                 "Reverse-Z render with outlines differs from standard-Z at \(mismatchedPixels)/\(pixelCount) pixels")
+    }
+
     /// Reverse-Z and standard-Z renders of AvatarSample_A are pixel-identical
     /// up to depth-test ties at z-fight-marginal pixels (see the type doc for
     /// why exact byte-identity is unachievable and how the budget is set).
+    ///
+    /// Outlines are off here: a hull line can tie in depth with the surface
+    /// behind it at a pixel, and that tie resolves to black outline on one
+    /// side and lit surface on the other. The outline pass is covered by
+    /// `testReverseZOutlinePassStaysWithinTheTieBudget`.
     func testReverseZRendersPixelIdenticalToStandardZ() async throws {
-        let standard = try render(model: try await loadAvatarSampleA(), reverseZ: false, clearDepth: 1.0).color
-        let reversed = try render(model: try await loadAvatarSampleA(), reverseZ: true, clearDepth: 0.0).color
+        let standard = try render(model: try await loadAvatarSampleA(), reverseZ: false, clearDepth: 1.0, outlines: false).color
+        let reversed = try render(model: try await loadAvatarSampleA(), reverseZ: true, clearDepth: 0.0, outlines: false).color
 
         // Guard against a trivially-passing empty render (asset missing from
         // the frame, camera wrong): a real render covers far more pixels.

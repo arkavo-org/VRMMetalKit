@@ -142,7 +142,7 @@ final class MToonOutlineScaleTests: XCTestCase {
             }
         }
         var setup = SwatchScene.Setup()
-        setup.outlineWidth = 40
+        setup.outlineWidth = 2
         setup.outlineMinimumPixels = 3
         return try SwatchScene.render(model, device: device, setup: setup)
     }

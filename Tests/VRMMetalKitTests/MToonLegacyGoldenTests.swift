@@ -17,6 +17,8 @@ import simd
 /// Later deliberate changes to default shading are applied to the baseline
 /// before capture, so the goldens keep isolating the opt-in features:
 /// - #465: the indirect term is `ambient * baseColor`.
+/// - #467: outline widths are metres (world mode) or a ratio to the screen
+///   height (screen mode), with no camera-distance term.
 ///
 /// Regenerate only on a checkout of the baseline commit with those changes,
 /// this file and the TestData/MToon fixtures applied, never from the current

@@ -54,6 +54,10 @@ final class ZFightingRegressionTests: XCTestCase {
             throw XCTSkip("Metal device not available")
         }
         helper = try ZFightingTestHelper(device: device, width: 512, height: 512)
+        // These tests measure depth fighting between meshes. MToon outlines
+        // are lines a pixel or two wide whose edges alias under the sub-pixel
+        // camera perturbation, which would count as flicker.
+        helper.renderer.outlineWidth = 0
     }
 
     // MARK: - Path Helpers
