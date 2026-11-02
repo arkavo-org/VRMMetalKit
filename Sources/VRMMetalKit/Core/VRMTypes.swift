@@ -662,7 +662,9 @@ public struct VRMMToonMaterial {
     public var rimLightingMixFactor: Float = 1.0
     /// Outline width interpretation (world or screen space). See ``VRMOutlineWidthMode``.
     public var outlineWidthMode: VRMOutlineWidthMode = .none
-    /// Outline width in normalized units (mode-dependent).
+    /// Outline width: metres in ``VRMOutlineWidthMode/worldCoordinates`` mode,
+    /// a ratio to the screen height in ``VRMOutlineWidthMode/screenCoordinates``
+    /// mode (MToon 1.0).
     public var outlineWidthFactor: Float = 0.0
     /// Optional linear R8 mask texture modulating outline width per-pixel.
     public var outlineWidthMultiplyTexture: Int?
@@ -719,9 +721,12 @@ public struct VRMShadingShiftTexture {
 public enum VRMOutlineWidthMode: String {
     /// Outline rendering disabled.
     case none
-    /// Outline width is measured in world-space units (meters).
+    /// ``VRMMToonMaterial/outlineWidthFactor`` is in metres along the surface
+    /// normal, so the line thins with camera distance.
     case worldCoordinates
-    /// Outline width is measured in screen-space units (pixels), scaled by ``VRMMToonMaterial/outlineWidthFactor``.
+    /// ``VRMMToonMaterial/outlineWidthFactor`` is a ratio to the screen height
+    /// (`0.01` is 1% of the render target's height), so the line keeps its
+    /// on-screen width at any camera distance.
     case screenCoordinates
 }
 
