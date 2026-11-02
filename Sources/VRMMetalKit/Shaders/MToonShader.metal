@@ -322,6 +322,12 @@ static inline float mtoonCreaseAO(float3 geometricNormal, float strength) {
 
 // Tangent-space normal map with Christian Schüler's screen-space-derivative
 // TBN (2010), which needs no TANGENT vertex attribute.
+//
+// The frame is unnormalised by the UV Jacobian's determinant, so its sign
+// follows the screen's y direction. Metal's dfdy points down the screen, which
+// makes T and B come out as -dP/du and -dP/dv. glTF maps +X to dP/du and +Y to
+// -dP/dv (UVs start at the top left and green points up), so T is negated and
+// B is used as is.
 static inline float3 mtoonApplyNormalMap(float3 N, float3 nMap, float3 worldPos, float2 uv) {
     float3 dp1 = dfdx(worldPos);
     float3 dp2 = dfdy(worldPos);
@@ -330,7 +336,7 @@ static inline float3 mtoonApplyNormalMap(float3 N, float3 nMap, float3 worldPos,
 
     float3 dp2perp = cross(dp2, N);
     float3 dp1perp = cross(N, dp1);
-    float3 T = dp2perp * duv1.x + dp1perp * duv2.x;
+    float3 T = -(dp2perp * duv1.x + dp1perp * duv2.x);
     float3 B = dp2perp * duv1.y + dp1perp * duv2.y;
 
     float invmax = rsqrt(max(dot(T, T), dot(B, B)));
