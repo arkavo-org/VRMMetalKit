@@ -321,11 +321,7 @@ public class TextureLoader {
     }
 
     private func createCGImage(from data: Data) -> CGImage? {
-        guard let imageSource = CGImageSourceCreateWithData(data as CFData, nil),
-              let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
-            return nil
-        }
-        return cgImage
+        TextureUploader.decodeImage(from: data)
     }
 
     private func createTexture(from cgImage: CGImage, textureIndex: Int, sRGB: Bool, mipmapped: Bool, alphaIsCoverage: Bool) throws -> MTLTexture? {

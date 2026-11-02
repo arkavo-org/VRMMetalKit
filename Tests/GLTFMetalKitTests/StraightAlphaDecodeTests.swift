@@ -102,8 +102,7 @@ final class StraightAlphaDecodeTests: XCTestCase {
     }
 
     private func decodePNG(_ data: Data) throws -> CGImage {
-        let source = try XCTUnwrap(CGImageSourceCreateWithData(data as CFData, nil))
-        return try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        try XCTUnwrap(TextureUploader.decodeImage(from: data), "decodeImage returned nil")
     }
 
     private func readBack(_ texture: MTLTexture) -> [UInt8] {

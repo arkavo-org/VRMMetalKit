@@ -268,8 +268,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
     }
     
     private func createTexture(from imageData: Data, textureIndex: Int, sRGB: Bool, mipmapped: Bool, alphaIsCoverage: Bool) async throws -> MTLTexture? {
-        guard let imageSource = CGImageSourceCreateWithData(imageData as CFData, nil),
-              let cgImage = CGImageSourceCreateImageAtIndex(imageSource, 0, nil) else {
+        guard let cgImage = TextureUploader.decodeImage(from: imageData) else {
             throw GLTFError.invalidImageData(
                 textureIndex: textureIndex,
                 reason: "Failed to decode image data",
