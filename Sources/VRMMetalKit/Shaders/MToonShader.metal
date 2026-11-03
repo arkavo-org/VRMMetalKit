@@ -116,33 +116,6 @@ static inline float2 applyTextureTransform(float2 uv, constant MToonMaterial& ma
  return rotated + float2(material.textureTransformOffsetX, material.textureTransformOffsetY);
 }
 
-// MToon UV animation after `time` seconds: rotate by
-// `uvAnimationRotationSpeedFactor * time` radians about (0.5, 0.5), then scroll
-// by `uvAnimationScroll*SpeedFactor * time` UV units (three-vrm order).
-static inline float2 animateUV(float2 uv, constant MToonMaterial& material, float time) {
- float2 result = uv;
-
- if (material.uvAnimationRotationSpeedFactor != 0.0) {
- float angle = material.uvAnimationRotationSpeedFactor * time;
- float2 center = float2(0.5, 0.5);
- float2 translated = result - center;
-
- float cosAngle = cos(angle);
- float sinAngle = sin(angle);
- float2x2 rotationMatrix = float2x2(
-     float2(cosAngle, -sinAngle),
-     float2(sinAngle, cosAngle)
- );
-
- result = rotationMatrix * translated + center;
- }
-
- result.x += material.uvAnimationScrollXSpeedFactor * time;
- result.y += material.uvAnimationScrollYSpeedFactor * time;
-
- return result;
-}
-
 // MatCap coordinate calculation
 float2 calculateMatCapUV(float3 viewNormal) {
  // Textures are uploaded with row 0 = image top (v = 0), so an upward view
@@ -392,6 +365,7 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
                        device const float3* morphedPositions [[buffer(20)]],
                        constant uint& hasMorphed [[buffer(22)]],
                        texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
+                       texture2d<float> uvAnimationMaskTexture [[texture(1)]],
                        sampler outlineWidthSampler [[sampler(0)]],
                        uint vertexID [[vertex_id]],
                        uint instanceId [[instance_id]]) {
@@ -450,7 +424,7 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  if (instanceId == 1u) {
  applyMToonOutlineExtrusion(out.worldPosition, out.position, out.worldNormal,
                             out.texCoord, uniforms, material,
-                            outlineWidthMultiplyTexture, outlineWidthSampler,
+                            outlineWidthMultiplyTexture, uvAnimationMaskTexture, outlineWidthSampler,
                             material.hasOutlineWidthMultiplyTexture > 0);
  }
 
@@ -1222,10 +1196,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
 
  // Indirect diffuse (MToon 1.0 §GI Equalization): `gi(n) * litColor`, with
- // `gi(n) = lerp(rawGi(n), uniformedGi, giEqualizationFactor)`. VMK's only
- // global illumination is the uniform ambient colour, so rawGi(n) equals
- // uniformedGi and gi is the ambient colour whatever the factor is. The factor
- // takes effect once directional GI exists (see docs/MTOON_GI_SPEC.md).
+ // `gi(n) = lerp(rawGi(n), uniformedGi, giEqualizationFactor)` and
+ // `uniformedGi = (rawGi(up) + rawGi(down)) / 2`. rawGi is the hemisphere
+ // ambient: ambientColor facing world +Y, groundAmbientColor facing -Y,
+ // blended by the normal's Y (three.js HemisphereLight). With a uniform
+ // ambient the two colours are equal and gi is that colour for any factor.
  // Indirect / emissive / matcap / rim are NOT scaled by BRDF_LAMBERT_NORM;
  // the /π applies only to the direct Lambert term, and the spec's indirect
  // term has none.
@@ -1250,14 +1225,24 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      occlusionFactor *= mtoon_float(mtoonCreaseAO(normalize(in.worldNormal), material.ssaoStrength));
  }
 
- float3 safeAmbientColor = clamp(uniforms.ambientColor.xyz, 0.0f, 65500.0f);
- mtoon_float3 indirectDiffuse = mtoon_float3(safeAmbientColor) * baseColor.rgb * occlusionFactor;
+ float3 skyAmbient = clamp(uniforms.ambientColor.xyz, 0.0f, 65500.0f);
+ float3 groundAmbient = clamp(uniforms.groundAmbientColor.xyz, 0.0f, 65500.0f);
+ float3 rawGi = skyAmbient;
+ float3 gi = skyAmbient;
+ // A uniform ambient skips the blend so its result is exact.
+ if (any(skyAmbient != groundAmbient)) {
+     rawGi = mix(groundAmbient, skyAmbient, saturate(0.5f * float(normal.y) + 0.5f));
+     float3 uniformedGi = 0.5f * (skyAmbient + groundAmbient);
+     gi = mix(rawGi, uniformedGi, material.giEqualizationFactor);
+ }
+ mtoon_float3 indirectDiffuse = mtoon_float3(gi) * baseColor.rgb * occlusionFactor;
  litColor += indirectDiffuse;
 
- // Indirect radiance for the rim modulator: the ambient colour without the
- // base colour. It mirrors UniVRM's `indirectLightingFactor`, which is itself
- // occlusion-attenuated, so apply the same factor here.
- mtoon_float3 indirectLight = mtoon_float3(safeAmbientColor) * occlusionFactor;
+ // Indirect radiance for the rim modulator: rawGi(n) without the base colour
+ // or equalization. It mirrors UniVRM's `indirectLightingFactor` (the
+ // unequalized SH sample), which is itself occlusion-attenuated, so apply the
+ // same factor here.
+ mtoon_float3 indirectLight = mtoon_float3(rawGi) * occlusionFactor;
 
  // Emissive
  mtoon_float3 emissive = mtoon_float3(material.emissiveR, material.emissiveG, material.emissiveB);
@@ -1399,6 +1384,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
                                device const float3* morphedPositions [[buffer(20)]],
                                constant uint& hasMorphed [[buffer(22)]],
                                texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
+                               texture2d<float> uvAnimationMaskTexture [[texture(1)]],
                                sampler textureSampler [[sampler(0)]],
                                uint vertexID [[vertex_id]]) {
  VertexOut out;
@@ -1421,7 +1407,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  // doesn't match the spec / three-vrm / UniVRM. VMK#289.
  float widthMask = 1.0;
  if (effectiveHasOutlineWidthMultiplyTexture) {
- float2 maskUV = applyUvRows(in.texCoord, material.outlineWidthMultiplyUvRow0, material.outlineWidthMultiplyUvRow1);
+ float2 maskUV = mtoonOutlineMaskUV(in.texCoord, material, uvAnimationMaskTexture, textureSampler);
  widthMask = outlineWidthMultiplyTexture.sample(textureSampler, maskUV).g;
  }
  float outlineWidth = material.outlineWidthFactor * widthMask;

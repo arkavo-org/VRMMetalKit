@@ -19,9 +19,9 @@ final class MaterializationTests: XCTestCase {
     /// `Uniforms` grew by one 48-byte materialization tail (3 × float4):
     /// 432 → 480 bytes. Metal-side struct and StrictMode constant must match.
     func testUniformsStructSize_includesMaterializationBlock() {
-        XCTAssertEqual(MemoryLayout<Uniforms>.stride, 480,
-                       "Uniforms should be 480 bytes (30 x 16-byte blocks) after the materialization tail")
-        XCTAssertEqual(MetalSizeConstants.uniformsSize, 480,
+        XCTAssertEqual(MemoryLayout<Uniforms>.stride, 496,
+                       "Uniforms should be 496 bytes (31 x 16-byte blocks) after the materialization tail and ground ambient")
+        XCTAssertEqual(MetalSizeConstants.uniformsSize, 496,
                        "StrictMode uniforms size constant must track the Swift struct")
     }
 

@@ -716,7 +716,7 @@ public struct MetalSizeConstants {
     /// `struct Uniforms` definitions in `Shaders/MToonShader.metal` and
     /// `Shaders/SkinnedShader.metal`.
     /// Validated at runtime by the strict-mode `uniformLayoutMismatch` check.
-    public static let uniformsSize = 480
+    public static let uniformsSize = 496
 
     /// Byte size of the Metal `MToonMaterial` struct (35 blocks × 16 bytes).
     /// Blocks 15 and 16 carry the opt-in hair band / crease AO and the

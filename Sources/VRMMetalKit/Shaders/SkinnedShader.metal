@@ -219,6 +219,7 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
                                constant uint& hasMorphed [[buffer(22)]],
                                device const uint8_t* firstPersonHiddenFlags [[buffer(26)]],
                                texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
+                               texture2d<float> uvAnimationMaskTexture [[texture(1)]],
                                sampler outlineWidthSampler [[sampler(0)]],
                                uint vertexID [[vertex_id]],
                                uint instanceId [[instance_id]]) {
@@ -280,7 +281,7 @@ vertex VertexOut skinned_mtoon_vertex(VertexIn in [[stage_in]],
  if (instanceId == 1u) {
  applyMToonOutlineExtrusion(out.worldPosition, out.position, out.worldNormal,
                             out.texCoord, uniforms, material,
-                            outlineWidthMultiplyTexture, outlineWidthSampler,
+                            outlineWidthMultiplyTexture, uvAnimationMaskTexture, outlineWidthSampler,
                             material.hasOutlineWidthMultiplyTexture > 0);
  }
 
@@ -356,6 +357,7 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
                                               constant uint& hasMorphed [[buffer(22)]],
                                               device const uint8_t* firstPersonHiddenFlags [[buffer(26)]],
                                               texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
+                                              texture2d<float> uvAnimationMaskTexture [[texture(1)]],
                                               sampler outlineWidthSampler [[sampler(0)]],
                                               uint vertexID [[vertex_id]]) {
  VertexOut out;
@@ -393,7 +395,7 @@ vertex VertexOut skinned_mtoon_outline_vertex(VertexIn in [[stage_in]],
  // extrude identically and both honour outlineWidthMultiplyTexture (VMK#289).
  applyMToonOutlineExtrusion(out.worldPosition, out.position, out.worldNormal,
                             out.texCoord, uniforms, material,
-                            outlineWidthMultiplyTexture, outlineWidthSampler,
+                            outlineWidthMultiplyTexture, uvAnimationMaskTexture, outlineWidthSampler,
                             material.hasOutlineWidthMultiplyTexture > 0);
 
  out.viewDirection = normalize(cameraWorldPos - out.worldPosition);

@@ -45,34 +45,39 @@ environment cubemap probes. With those, `rawGi(up)`, `rawGi(down)` and
 
 ## What `VRMMetalKit` does
 
-`Sources/VRMMetalKit/Shaders/MToonShader.metal` (indirect-diffuse
-section) computes:
+`Sources/VRMMetalKit/Shaders/MToonShader.metal` (indirect-diffuse section)
+implements the spec with a hemisphere ambient as `rawGi(n)`:
 
 ```metal
-float3 indirectDiffuse = uniforms.ambientColor.xyz * baseColor.rgb * occlusionFactor;
+rawGi       = mix(groundAmbient, skyAmbient, saturate(0.5 * normal.y + 0.5));
+uniformedGi = 0.5 * (skyAmbient + groundAmbient);   // (rawGi(up) + rawGi(down)) / 2
+gi          = mix(rawGi, uniformedGi, giEqualizationFactor);
+indirect    = gi * baseColor * occlusion;
 ```
 
-VMK's only global illumination is a uniform ambient colour, so `rawGi(n)`
-is the same in every direction: `rawGi(normal)`, `rawGi(up)` and
-`rawGi(down)` all equal the ambient colour, `uniformedGi` equals it too, and
-`gi = lerp(ambient, ambient, factor) = ambient` for any factor. The indirect
-term is therefore `ambient * litColor`, exactly as the spec defines it for
-this lighting, and `giEqualizationFactor` has no visible effect until VMK
-gains directional GI.
+`VRMRenderer.setHemisphereAmbient(sky:ground:)` sets the two colours: `sky`
+lights surfaces facing world +Y and `ground` surfaces facing -Y, blended by the
+normal's Y as in three.js `HemisphereLight`. `setAmbientColor(_:)` sets both to
+one colour, so `rawGi(n)`, `uniformedGi` and `gi` are all that colour and
+`giEqualizationFactor` has no effect. The shader skips the blend in that case,
+so `gi` is exactly the ambient colour (shader recompilation still rounds
+textured materials differently, by at most 2/255).
+
+The rim modulator receives the unequalized `rawGi(n)`, as UniVRM's
+`indirectLightingFactor` receives the raw SH sample.
 
 Before 1.2.1 VMK used `ambient * mix(shadeColor, baseColor, giEqualizationFactor)`,
-an artistic reinterpretation of the factor. With the default factor of 0.9
-that put a tenth of the shade colour into the indirect term and lowered the
-base colour's share, which made shaded areas differ from the spec (#465).
+an artistic reinterpretation of the factor (#465).
 
 ### What this means for spec-authored content
 
-- Content renders as the spec defines it under uniform ambient light.
-- `giEqualizationFactor` is parsed and kept on the material, ready for
-  directional GI; it does not change the image today.
-- three-vrm declares the uniform but doesn't use it either; its indirect
-  term is `irradiance * BRDF_Lambert(diffuseColor)`, which adds a `1/π` the
-  spec doesn't have.
+- Content renders as the spec defines it, for uniform and hemisphere ambient.
+- `giEqualizationFactor` takes effect under a hemisphere ambient. At the
+  default `0.9` the ambient is mostly the up/down average; at `0` it follows the
+  surface direction fully.
+- three-vrm declares the uniform but doesn't use it; its indirect term is
+  `irradiance * BRDF_Lambert(diffuseColor)`, which adds a `1/π` the spec
+  doesn't have.
 
 ### Direct-vs-indirect magnitude ratio (post-#205)
 
@@ -105,20 +110,18 @@ Practical implication for authors:
 
 ## Testing
 
-`Tests/VRMMetalKitTests/RendererLightingCorrectnessTests.swift` checks the
-spec behaviour under uniform ambient light: `giEqualizationFactor` 0 and 1
-render identically, the indirect term carries the base colour, and no shade
-colour leaks into it.
+- `Tests/VRMMetalKitTests/RendererLightingCorrectnessTests.swift`: under uniform
+  ambient, `giEqualizationFactor` 0 and 1 render identically, the indirect term
+  carries the base colour, and no shade colour leaks into it.
+- `Tests/VRMMetalKitTests/MToonHemisphereAmbientTests.swift`: with a red sky and
+  blue ground, factor 0 lights upward and downward surfaces with their own
+  colours, and factor 1 lights both with the average.
 
 ## Open work
 
-Directional GI (#328) would let VMK:
-
-1. Implement `rawGi(n)` from a cubemap or SH probe.
-2. Compute `uniformedGi` as the spec describes (or with SH low-order
-   approximation).
-3. Apply the spec lerp, at which point `giEqualizationFactor` takes effect.
-4. Extend the tests to cases where `rawGi(n)` varies with the normal.
+Image-based lighting or spherical-harmonics probes would give a richer
+`rawGi(n)` than two colours. The equalization code takes any `rawGi(n)`, so
+only the sampling would change.
 
 ## Direct lighting brightness conventions
 
