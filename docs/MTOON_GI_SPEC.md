@@ -60,7 +60,8 @@ lights surfaces facing world +Y and `ground` surfaces facing -Y, blended by the
 normal's Y as in three.js `HemisphereLight`. `setAmbientColor(_:)` sets both to
 one colour, so `rawGi(n)`, `uniformedGi` and `gi` are all that colour and
 `giEqualizationFactor` has no effect. The shader skips the blend in that case,
-so uniform ambient renders exactly as before.
+so `gi` is exactly the ambient colour (shader recompilation still rounds
+textured materials differently, by at most 2/255).
 
 The rim modulator receives the unequalized `rawGi(n)`, as UniVRM's
 `indirectLightingFactor` receives the raw SH sample.
