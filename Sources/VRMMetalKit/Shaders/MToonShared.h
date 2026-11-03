@@ -264,6 +264,55 @@ static inline bool applyMToonOutlineGuardBand(
  return true;
 }
 
+// MToon UV animation after `time` seconds: rotate by
+// `uvAnimationRotationSpeedFactor * time` radians about (0.5, 0.5), then scroll
+// by `uvAnimationScroll*SpeedFactor * time` UV units (three-vrm order).
+static inline float2 animateUV(float2 uv, constant MToonMaterial& material, float time) {
+ float2 result = uv;
+
+ if (material.uvAnimationRotationSpeedFactor != 0.0) {
+ float angle = material.uvAnimationRotationSpeedFactor * time;
+ float2 center = float2(0.5, 0.5);
+ float2 translated = result - center;
+
+ float cosAngle = cos(angle);
+ float sinAngle = sin(angle);
+ float2x2 rotationMatrix = float2x2(
+     float2(cosAngle, -sinAngle),
+     float2(sinAngle, cosAngle)
+ );
+
+ result = rotationMatrix * translated + center;
+ }
+
+ result.x += material.uvAnimationScrollXSpeedFactor * time;
+ result.y += material.uvAnimationScrollYSpeedFactor * time;
+
+ return result;
+}
+
+// UV for the outline width mask (MToon 1.0): UV animation, scaled by the
+// animation mask's B channel, then the mask's own KHR_texture_transform.
+static inline float2 mtoonOutlineMaskUV(
+    float2 texCoord,
+    constant MToonMaterial& material,
+    texture2d<float> uvAnimationMaskTexture,
+    sampler textureSampler
+) {
+ float2 uv = texCoord;
+ if (material.uvAnimationScrollXSpeedFactor != 0.0 ||
+     material.uvAnimationScrollYSpeedFactor != 0.0 ||
+     material.uvAnimationRotationSpeedFactor != 0.0) {
+     float time = material.time;
+     if (material.hasUvAnimationMaskTexture > 0) {
+         float2 animationMaskUV = applyUvRows(texCoord, material.uvAnimationMaskUvRow0, material.uvAnimationMaskUvRow1);
+         time *= uvAnimationMaskTexture.sample(textureSampler, animationMaskUV).b;
+     }
+     uv = animateUV(uv, material, time);
+ }
+ return applyUvRows(uv, material.outlineWidthMultiplyUvRow0, material.outlineWidthMultiplyUvRow1);
+}
+
 // Inverted-hull extrusion used by the merged color+outline draw
 // (instance_id == 1) on both the rigid and skinned paths, and by the skinned
 // dedicated outline pass.
@@ -275,13 +324,14 @@ static inline void applyMToonOutlineExtrusion(
     constant Uniforms& uniforms,
     constant MToonMaterial& material,
     texture2d<float> outlineWidthMultiplyTexture,
+    texture2d<float> uvAnimationMaskTexture,
     sampler textureSampler,
     bool hasMultiplyTexture
 ) {
  // VRMC_materials_mtoon-1.0 §outlineWidthMultiplyTexture: G channel.
  float widthMask = 1.0;
  if (hasMultiplyTexture) {
- float2 maskUV = applyUvRows(texCoord, material.outlineWidthMultiplyUvRow0, material.outlineWidthMultiplyUvRow1);
+ float2 maskUV = mtoonOutlineMaskUV(texCoord, material, uvAnimationMaskTexture, textureSampler);
  widthMask = outlineWidthMultiplyTexture.sample(textureSampler, maskUV).g;
  }
  if (applyMToonOutlineGuardBand(clipPos, worldNormal,

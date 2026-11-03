@@ -116,33 +116,6 @@ static inline float2 applyTextureTransform(float2 uv, constant MToonMaterial& ma
  return rotated + float2(material.textureTransformOffsetX, material.textureTransformOffsetY);
 }
 
-// MToon UV animation after `time` seconds: rotate by
-// `uvAnimationRotationSpeedFactor * time` radians about (0.5, 0.5), then scroll
-// by `uvAnimationScroll*SpeedFactor * time` UV units (three-vrm order).
-static inline float2 animateUV(float2 uv, constant MToonMaterial& material, float time) {
- float2 result = uv;
-
- if (material.uvAnimationRotationSpeedFactor != 0.0) {
- float angle = material.uvAnimationRotationSpeedFactor * time;
- float2 center = float2(0.5, 0.5);
- float2 translated = result - center;
-
- float cosAngle = cos(angle);
- float sinAngle = sin(angle);
- float2x2 rotationMatrix = float2x2(
-     float2(cosAngle, -sinAngle),
-     float2(sinAngle, cosAngle)
- );
-
- result = rotationMatrix * translated + center;
- }
-
- result.x += material.uvAnimationScrollXSpeedFactor * time;
- result.y += material.uvAnimationScrollYSpeedFactor * time;
-
- return result;
-}
-
 // MatCap coordinate calculation
 float2 calculateMatCapUV(float3 viewNormal) {
  // Textures are uploaded with row 0 = image top (v = 0), so an upward view
@@ -392,6 +365,7 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
                        device const float3* morphedPositions [[buffer(20)]],
                        constant uint& hasMorphed [[buffer(22)]],
                        texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
+                       texture2d<float> uvAnimationMaskTexture [[texture(1)]],
                        sampler outlineWidthSampler [[sampler(0)]],
                        uint vertexID [[vertex_id]],
                        uint instanceId [[instance_id]]) {
@@ -450,7 +424,7 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  if (instanceId == 1u) {
  applyMToonOutlineExtrusion(out.worldPosition, out.position, out.worldNormal,
                             out.texCoord, uniforms, material,
-                            outlineWidthMultiplyTexture, outlineWidthSampler,
+                            outlineWidthMultiplyTexture, uvAnimationMaskTexture, outlineWidthSampler,
                             material.hasOutlineWidthMultiplyTexture > 0);
  }
 
@@ -1399,6 +1373,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
                                device const float3* morphedPositions [[buffer(20)]],
                                constant uint& hasMorphed [[buffer(22)]],
                                texture2d<float> outlineWidthMultiplyTexture [[texture(0)]],
+                               texture2d<float> uvAnimationMaskTexture [[texture(1)]],
                                sampler textureSampler [[sampler(0)]],
                                uint vertexID [[vertex_id]]) {
  VertexOut out;
@@ -1421,7 +1396,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  // doesn't match the spec / three-vrm / UniVRM. VMK#289.
  float widthMask = 1.0;
  if (effectiveHasOutlineWidthMultiplyTexture) {
- float2 maskUV = applyUvRows(in.texCoord, material.outlineWidthMultiplyUvRow0, material.outlineWidthMultiplyUvRow1);
+ float2 maskUV = mtoonOutlineMaskUV(in.texCoord, material, uvAnimationMaskTexture, textureSampler);
  widthMask = outlineWidthMultiplyTexture.sample(textureSampler, maskUV).g;
  }
  float outlineWidth = material.outlineWidthFactor * widthMask;

@@ -53,7 +53,7 @@ final class MToonShaderGPUTests: XCTestCase {
     /// changing either file.
     ///
     /// To get the current hash, run: `swift test --filter testPrintCurrentShaderHash`
-    static let knownGoodShaderHash = "269c9e918a9947b59a15db6f45b32a93e3b9035ad27ea2b614a4b30057760c02"
+    static let knownGoodShaderHash = "9d2d06a752c12b437c82d5e81fffddb7b8310794d8222e650891cbe7800bcb51"
 
     /// Test that the MToonShader.metal source file hash matches expected.
     /// This catches accidental shader modifications.

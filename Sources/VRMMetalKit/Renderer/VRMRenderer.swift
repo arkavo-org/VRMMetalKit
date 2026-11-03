@@ -4820,6 +4820,15 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
         encoder.setVertexTexture(texture, index: 0)
         encoderStateCache.setVertexSamplerState(encoder, sampler, index: 0)
+
+        // The hull animates the width mask's UVs, scaled by the UV animation
+        // mask, so the vertex stage needs that texture too.
+        var animationMask: MTLTexture?
+        if let textureIndex = mtoon?.uvAnimationMaskTexture,
+           textureIndex < model.textures.count {
+            animationMask = model.textures[textureIndex].mtlTexture
+        }
+        encoder.setVertexTexture(animationMask ?? outlineWidthFallbackTexture ?? makeOutlineWidthFallbackTexture(), index: 1)
     }
 
     private func makeOutlineWidthFallbackTexture() -> MTLTexture? {
@@ -5121,6 +5130,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // multipliers on the per-material width.
             mtoonUniforms.outlineWidthFactor *= self.effectiveOutlineWidthScale
             mtoonUniforms.outlineMinPixels = self.outlineMinimumPixels
+            mtoonUniforms.time = drawUVAnimationTime
 
             // Apply global outline color override (non-black means user set it)
             let globalColor = self.outlineColor
