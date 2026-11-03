@@ -1196,10 +1196,11 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  }
 
  // Indirect diffuse (MToon 1.0 §GI Equalization): `gi(n) * litColor`, with
- // `gi(n) = lerp(rawGi(n), uniformedGi, giEqualizationFactor)`. VMK's only
- // global illumination is the uniform ambient colour, so rawGi(n) equals
- // uniformedGi and gi is the ambient colour whatever the factor is. The factor
- // takes effect once directional GI exists (see docs/MTOON_GI_SPEC.md).
+ // `gi(n) = lerp(rawGi(n), uniformedGi, giEqualizationFactor)` and
+ // `uniformedGi = (rawGi(up) + rawGi(down)) / 2`. rawGi is the hemisphere
+ // ambient: ambientColor facing world +Y, groundAmbientColor facing -Y,
+ // blended by the normal's Y (three.js HemisphereLight). With a uniform
+ // ambient the two colours are equal and gi is that colour for any factor.
  // Indirect / emissive / matcap / rim are NOT scaled by BRDF_LAMBERT_NORM;
  // the /π applies only to the direct Lambert term, and the spec's indirect
  // term has none.
@@ -1224,14 +1225,24 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      occlusionFactor *= mtoon_float(mtoonCreaseAO(normalize(in.worldNormal), material.ssaoStrength));
  }
 
- float3 safeAmbientColor = clamp(uniforms.ambientColor.xyz, 0.0f, 65500.0f);
- mtoon_float3 indirectDiffuse = mtoon_float3(safeAmbientColor) * baseColor.rgb * occlusionFactor;
+ float3 skyAmbient = clamp(uniforms.ambientColor.xyz, 0.0f, 65500.0f);
+ float3 groundAmbient = clamp(uniforms.groundAmbientColor.xyz, 0.0f, 65500.0f);
+ float3 rawGi = skyAmbient;
+ float3 gi = skyAmbient;
+ // A uniform ambient skips the blend so its result is exact.
+ if (any(skyAmbient != groundAmbient)) {
+     rawGi = mix(groundAmbient, skyAmbient, saturate(0.5f * float(normal.y) + 0.5f));
+     float3 uniformedGi = 0.5f * (skyAmbient + groundAmbient);
+     gi = mix(rawGi, uniformedGi, material.giEqualizationFactor);
+ }
+ mtoon_float3 indirectDiffuse = mtoon_float3(gi) * baseColor.rgb * occlusionFactor;
  litColor += indirectDiffuse;
 
- // Indirect radiance for the rim modulator: the ambient colour without the
- // base colour. It mirrors UniVRM's `indirectLightingFactor`, which is itself
- // occlusion-attenuated, so apply the same factor here.
- mtoon_float3 indirectLight = mtoon_float3(safeAmbientColor) * occlusionFactor;
+ // Indirect radiance for the rim modulator: rawGi(n) without the base colour
+ // or equalization. It mirrors UniVRM's `indirectLightingFactor` (the
+ // unequalized SH sample), which is itself occlusion-attenuated, so apply the
+ // same factor here.
+ mtoon_float3 indirectLight = mtoon_float3(rawGi) * occlusionFactor;
 
  // Emissive
  mtoon_float3 emissive = mtoon_float3(material.emissiveR, material.emissiveG, material.emissiveB);

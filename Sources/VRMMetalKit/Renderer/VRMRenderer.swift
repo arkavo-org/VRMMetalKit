@@ -491,9 +491,31 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     }
 
     /// Set ambient light color
+    ///
+    /// The ambient is the same from every direction; this replaces any
+    /// ``setHemisphereAmbient(sky:ground:)``.
     /// - Parameter color: Ambient light color (RGB, will be clamped to 0-1 range)
     public func setAmbientColor(_ color: SIMD3<Float>) {
         uniforms.ambientColor = simd_clamp(color, SIMD3<Float>(repeating: 0.0), SIMD3<Float>(repeating: 1.0))
+    }
+
+    /// Set a hemisphere ambient light, the MToon `rawGi(n)` source.
+    ///
+    /// Surfaces facing world +Y receive `sky`, surfaces facing -Y receive
+    /// `ground`, and others blend between them by the normal's Y component
+    /// (as three.js `HemisphereLight` does). Each MToon material's
+    /// ``VRMMToonMaterial/giEqualizationFactor`` then mixes that toward the
+    /// up/down average, `(sky + ground) / 2`, as MToon 1.0 §GI Equalization
+    /// defines; at the default `0.9` the ambient is mostly uniform.
+    /// ``setAmbientColor(_:)`` sets both to one colour.
+    /// - Parameters:
+    ///   - sky: Ambient colour from above (RGB, clamped to 0-1).
+    ///   - ground: Ambient colour from below (RGB, clamped to 0-1).
+    public func setHemisphereAmbient(sky: SIMD3<Float>, ground: SIMD3<Float>) {
+        let zero = SIMD3<Float>(repeating: 0.0)
+        let one = SIMD3<Float>(repeating: 1.0)
+        uniforms.ambientColor = simd_clamp(sky, zero, one)
+        uniforms.groundAmbientColor = simd_clamp(ground, zero, one)
     }
 
     /// Set light normalization mode for multi-light setups

@@ -70,7 +70,11 @@ struct Uniforms {
     /// xyz = world-space focus point for radial styles (chrome / hex / frost),
     /// w = reserved.
     var materializeOrigin_packed = SIMD4<Float>(0.0, 0.85, 0.0, 0.0) // 16 bytes, offset 464
-    // Total: 480 bytes (30 x 16-byte blocks)
+    /// Hemisphere ambient: `ambientColor` lights surfaces facing world +Y,
+    /// this colour surfaces facing -Y. Equal to `ambientColor` for a uniform
+    /// ambient.
+    var groundAmbientColor_packed = SIMD4<Float>(0.05, 0.05, 0.05, 0.0) // 16 bytes, offset 480
+    // Total: 496 bytes (31 x 16-byte blocks)
 
     // Computed properties for easy access
     var lightDirection: SIMD3<Float> {
@@ -83,9 +87,19 @@ struct Uniforms {
         set { lightColor_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, simd_length(newValue)) }
     }
 
+    /// Uniform ambient colour. Setting it also sets ``groundAmbientColor``,
+    /// so the ambient is the same from every direction.
     var ambientColor: SIMD3<Float> {
         get { SIMD3<Float>(ambientColor_packed.x, ambientColor_packed.y, ambientColor_packed.z) }
-        set { ambientColor_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
+        set {
+            ambientColor_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0)
+            groundAmbientColor_packed = ambientColor_packed
+        }
+    }
+
+    var groundAmbientColor: SIMD3<Float> {
+        get { SIMD3<Float>(groundAmbientColor_packed.x, groundAmbientColor_packed.y, groundAmbientColor_packed.z) }
+        set { groundAmbientColor_packed = SIMD4<Float>(newValue.x, newValue.y, newValue.z, 0.0) }
     }
 
     var light1Direction: SIMD3<Float> {
