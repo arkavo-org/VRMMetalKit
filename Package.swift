@@ -32,6 +32,10 @@ let package = Package(
         .library(
             name: "GLTFMetalKit",
             targets: ["GLTFMetalKit"]
+        ),
+        .library(
+            name: "QuadrupedGait",
+            targets: ["QuadrupedGait"]
         )
     ],
     dependencies: [
@@ -40,6 +44,10 @@ let package = Package(
     targets: [
         .target(
             name: "GLTFCore"
+        ),
+        .target(
+            name: "QuadrupedGait",
+            dependencies: ["GLTFMetalKit"]
         ),
         .target(
             name: "GLTFMetalKit",
@@ -113,6 +121,14 @@ let package = Package(
             name: "GLTFRender",
             dependencies: ["GLTFMetalKit"]
         ),
+        .executableTarget(
+            name: "AKIRAHoundGen",
+            dependencies: ["VRMAProcessKit", "GLTFCore"]
+        ),
+        .executableTarget(
+            name: "AKIRAHoundDemo",
+            dependencies: ["GLTFMetalKit", "QuadrupedGait", "VRMMetalKit"]
+        ),
         .testTarget(
             name: "VRMMetalKitTests",
             dependencies: ["VRMMetalKit", "VRMAProcessKit"],
@@ -126,6 +142,10 @@ let package = Package(
             resources: [
                 .copy("TestData")
             ]
+        ),
+        .testTarget(
+            name: "QuadrupedGaitTests",
+            dependencies: ["QuadrupedGait"]
         ),
     ]
 )
