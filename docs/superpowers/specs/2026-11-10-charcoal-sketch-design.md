@@ -73,7 +73,9 @@ The hold point 0.6 is a shader constant, exposed in Swift as `VRMMaterialization
 
 ### Paper
 
-The paper is not drawn by VRMMetalKit. The host clears its colour attachment to `VRMMaterialization.charcoalPaperColor`, linear (0.86, 0.83, 0.77). Bare paper on the avatar is exactly that colour with no grain, so the avatar's undrawn surface is seamless against the background. Paper tooth only shows where charcoal is deposited.
+The paper is not drawn by VRMMetalKit. The host clears its colour attachment to `VRMMaterialization.charcoalPaperColor`, (0.86, 0.83, 0.77).
+
+Colour values in this document are the values the fragment writes. The MToon fragment does no output encoding: on a plain target such as `.bgra8Unorm` (the `RendererConfig` default, and what Creator captures into) they are stored as-is, and on an `_srgb` target the hardware encodes them. The look is tuned on `.bgra8Unorm`. The 2026-11-10 stills were rendered to an sRGB target, so their paper is lighter and their ink greyer than the clip will be. Bare paper on the avatar is exactly that colour with no grain, so the avatar's undrawn surface is seamless against the background. Paper tooth only shows where charcoal is deposited.
 
 ### Charcoal deposit model
 
@@ -87,7 +89,7 @@ deposit(pressure, tooth) = mix(smoothstep(0, 0.42, pressure - (1 - tooth)),
 
 Light pressure only catches the tooth peaks; heavy pressure fills to solid.
 
-Ink colour is linear (0.030, 0.028, 0.026).
+Ink colour is (0.030, 0.028, 0.026).
 
 ### Surface fragment (opaque and cutout materials)
 
@@ -99,7 +101,7 @@ Ink colour is linear (0.030, 0.028, 0.026).
 6. **Fill and smudge.** A grainy fill in the darks, capped so stroke direction stays visible, over a grain-free grey smudge (about 20% in form shadows on pale surfaces, about 50% under the darks).
 7. **Lit skin stays clean.** Pale, lit surfaces receive no hatching.
 8. **Colour arrival.** `mix(sketch, lit, smoothstep(0.05, 0.25, sCol))`. Contour lines linger at about half strength over the arriving colour and settle out by `sCol = 0.7`.
-9. **Ember.** A band centred on `sCol = 0.13`, half-width 0.10, tinted by `VRMMaterialization.color` (default linear (1.0, 0.42, 0.10)), with a darkened char rim just ahead of it around `sCol = 0.03`. Because `sCol` is 0 everywhere at the hold frame, a held sketch never glows. The char rim is part of the ember: a zero ember colour removes both.
+9. **Ember.** A band centred on `sCol = 0.13`, half-width 0.10, tinted by `VRMMaterialization.color` (default (1.0, 0.42, 0.10)), with a darkened char rim just ahead of it around `sCol = 0.03`. Because `sCol` is 0 everywhere at the hold frame, a held sketch never glows. The char rim is part of the ember: a zero ember colour removes both.
 
 ### Blended materials
 
@@ -136,12 +138,12 @@ public struct VRMMaterialization {
     // existing fields
     public var boilPhase: UInt32 = 0        // charcoal only; uploaded in materializeOrigin.w
 
-    public static let charcoalPaperColor: SIMD3<Float>   // linear (0.86, 0.83, 0.77)
+    public static let charcoalPaperColor: SIMD3<Float>   // (0.86, 0.83, 0.77)
     public static let charcoalHoldProgress: Float        // 0.6
 }
 ```
 
-- `defaultColor(for: .charcoal)` is the ember colour, linear (1.0, 0.42, 0.10). Passing a zero colour turns the ember off (monochrome reveal).
+- `defaultColor(for: .charcoal)` is the ember colour, (1.0, 0.42, 0.10). Passing a zero colour turns the ember off (monochrome reveal).
 - `boilPhase` is an added initialiser parameter with a default, so existing call sites compile unchanged.
 - The `Uniforms` struct size and field offsets do not change.
 - `usesDiscard` stays true for charcoal (the hull discards), so the depth prepass and contact shadow are skipped while it is active. This is my call, chosen as the conservative option.
@@ -161,10 +163,10 @@ Automated, on the bundled VRM 1.0 fixture (`AvatarSample_A_1.0.vrm.glb`), render
 - **Inert at 1:** `progress = 1` is byte-identical to a render with no materialization.
 - **Stripped when disabled:** with `enableMaterialization = false`, a charcoal materialization at any progress is byte-identical to the plain render.
 - **Invisible by default:** with the effect compiled in but not set, output is byte-identical to the pre-change baseline commit, for both a rigid and a skinned material.
-- **No colour in the sketch:** at `progress` 0, 0.3 and 0.6, every pixel lies on the line between paper colour and ink colour, within a small tolerance. Readback bytes are converted from sRGB to linear before measuring, because the paper-ink mix is only a straight line in linear space.
+- **No colour in the sketch:** at `progress` 0, 0.3 and 0.6, every pixel lies on the line between paper colour and ink colour, within a small tolerance. On an `_srgb` target the readback bytes are decoded first, because the paper-ink mix is only a straight line in the space the fragment wrote.
 - **Blank start:** at `progress = 0`, mean ink coverage over the frame is under a small bound (construction dashes only).
 - **Hold frame is drawn:** at `progress = 0.6`, ink coverage inside the avatar's silhouette is well above the `progress = 0` value.
-- **Monotonic colour:** as `progress` rises from 0.6 to 1, the count of pixels equal to the plain render never decreases. Only pixels that are chromatic in the plain render are counted (off the paper-ink line by more than about 0.04 in linear RGB), so grey or black pixels that happen to match at the hold frame and are then crossed by the ember do not cause a false dip.
+- **Monotonic colour:** as `progress` rises from 0.6 to 1, the count of pixels equal to the plain render never decreases. Only pixels that are chromatic in the plain render are counted (off the paper-ink line by more than about 0.04), so grey or black pixels that happen to match at the hold frame and are then crossed by the ember do not cause a false dip.
 - **Deterministic:** two renders with the same inputs are byte-identical.
 - **Boil:** a different `boilPhase` changes the frame at `progress = 0.6`; the same `boilPhase` does not.
 - **Ember off:** a zero `color` produces no ember tint and no char rim at `progress = 0.8`.
@@ -176,7 +178,7 @@ By eye (Paul): the hold frame reads as charcoal, and the avatar is recognisable 
 
 The approved reference is the spike stills from 2026-11-10, body and bust framings, at `progress` 0.30, 0.60 and 0.80. They are in `_visuals_charcoal/` at the repo root (untracked), with the spike's source patch and render test. They were made with `AvatarSample_A_1.0.vrm.glb`, seed 3, `heightRange 0...1.62`, 1080 x 1080, `sampleCount = 1`, an sRGB target, authored outlines, and `setupBrightToonLighting()`.
 
-That lighting is the wrong target for the clip. Its key light travels upward, so the stills are lit from below; Creator replaces it with its own portrait rig (`AvatarLightRig`: key (-0.62, -0.52, -0.59) at 1.1, fill (0.25, -0.12, -0.96) at 0.55, back (0.51, -0.41, 0.76) at 0.55, ambient (0.20, 0.20, 0.22), radiometric). The first step of the build is to re-render the reference frames under that rig and get Paul's eye on them again. Tuning and the automated tests use that rig from then on.
+Both the lighting and the target format are the wrong target for the clip. Its key light travels upward, so the stills are lit from below; Creator replaces it with its own portrait rig (`AvatarLightRig`: key (-0.62, -0.52, -0.59) at 1.1, fill (0.25, -0.12, -0.96) at 0.55, back (0.51, -0.41, 0.76) at 0.55, ambient (0.20, 0.20, 0.22), radiometric). The first step of the build is to re-render the reference frames under that rig, on a `.bgra8Unorm` target, and get Paul's eye on them again. Tuning and the automated tests use that rig and format from then on.
 
 The look also depends on the avatar: the blended-overlay split, the texture-edge threshold and the albedo value curve were tuned on one VRoid-style avatar, and the contour weight needs authored outlines. Tuning therefore checks more than one `AvatarSample*` fixture, including a VRM 0.x one.
 

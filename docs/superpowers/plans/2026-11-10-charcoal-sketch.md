@@ -15,7 +15,8 @@
 ## Global Constraints
 
 - Style raw value is 13. The hold point is `progress = 0.6`. Draw band 0.35, colour band 0.25, field noise amplitude 0.06.
-- Paper is linear (0.86, 0.83, 0.77); ink is linear (0.030, 0.028, 0.026); default ember is linear (1.0, 0.42, 0.10).
+- Paper is (0.86, 0.83, 0.77); ink is (0.030, 0.028, 0.026); default ember is (1.0, 0.42, 0.10). These are the values the fragment writes. The MToon fragment does no output encoding, so on Creator's and the default target (`.bgra8Unorm`) they are the stored bytes, and on an `_srgb` target the hardware encodes them.
+- The reference frames, the harness and all tuning use `.bgra8Unorm`, because that is what Creator captures into and what `RendererConfig` defaults to. One test covers `.rgba8Unorm_srgb`.
 - All pixel distances are relative to a 1080-pixel-high output: `px = in.position.xy / max(uniforms.viewportSize.y / 1080.0, 0.25)`.
 - The `Uniforms` struct size (496) and field offsets do not change.
 - `mat_resolve` and the hull widening both return before any charcoal arithmetic when `progress >= 1` or the style is not 13.
@@ -65,16 +66,22 @@ renderer.setAmbientColor(SIMD3<Float>(0.20, 0.20, 0.22))
 renderer.setLightNormalizationMode(.radiometric)
 ```
 
+Also switch the test to Creator's target format: `config.colorPixelFormat = .bgra8Unorm`, `pixelFormat: .bgra8Unorm` in the `renderFrame` call, and swap B and R when writing the PNG.
+
 - [ ] **Step 3: Render and collect**
 
 Run: `VRM_TEST_VRM1_PATH=<repo>/AvatarSample_A_1.0.vrm.glb CHARCOAL_SPIKE_OUT=<repo>/_visuals_charcoal/relit swift test --filter CharcoalSpikeTests --disable-sandbox`
 Expected: 18 PNGs (`body_*`, `bust_*` at nine progress values). Repeat with `AvatarSample_U_1.0.vrm.glb` into `_visuals_charcoal/relit-U/`.
 
-- [ ] **Step 4: Paul reviews `bust_t060.png` and `body_t030/060/080.png`**
+- [ ] **Step 4: Measure the statistics the later tests assert on**
 
-Record his notes in the PR description draft. These frames replace the 2026-11-10 stills as the tuning target.
+Add a temporary second test in the scratch worktree that prints, for `AvatarSample_A_1.0` at size 512 in body and bust framings: mean ink inside the plain silhouette at progress 0, 0.25 and 0.6; mean ink over the whole frame at progress 0; mean ink over dark (plain luma < 0.05) and pale (plain luma > 0.5) silhouette pixels at 0.6; the count of ink pixels outside the plain silhouette at 0.6; the largest off-line distance at 0.6. Record the numbers in the "Measured baselines" table at the end of this plan and commit the plan. Where a provisional bound in Tasks 3 to 7 is not at least a factor of two inside the measured value, replace it with half the measured value (lower bounds) or double it (upper bounds).
 
-- [ ] **Step 5: Remove the worktree**
+- [ ] **Step 5: Paul reviews `bust_t060.png` and `body_t030/060/080.png`**
+
+The non-sRGB target makes the paper more toned and the ink closer to black than in the 2026-11-10 stills. Record his notes in the PR description draft. These frames replace those stills as the tuning target.
+
+- [ ] **Step 6: Remove the worktree**
 
 Run: `git worktree remove --force <scratch>/charcoal-ref`
 
@@ -106,13 +113,17 @@ Deliverable: `.charcoal` exists and sweeps from flat paper to the lit render wit
     enum Framing { case body, bust }
     init(device: MTLDevice, modelPath: String = getTestVRM10ModelPath(), size: Int = 512,
          sampleCount: Int = 1, framing: Framing = .body, orthographic: Bool = false,
-         enableMaterialization: Bool = true) async throws
-    func render(_ materialization: VRMMaterialization?) throws -> [UInt8]   // RGBA8, sRGB-encoded
+         pixelFormat: MTLPixelFormat = .bgra8Unorm, enableMaterialization: Bool = true,
+         camera: (eye: SIMD3<Float>, target: SIMD3<Float>)? = nil,
+         configure: ((VRMModel, VRMRenderer) -> Void)? = nil) async throws
+    let pixelFormat: MTLPixelFormat
+    func render(_ materialization: VRMMaterialization?) throws -> [UInt8]   // bytes in R, G, B, A order
     func charcoal(_ progress: Float, color: SIMD3<Float>? = nil, boilPhase: UInt32 = 0,
                   heightRange: ClosedRange<Float> = 0.0...1.62) -> VRMMaterialization   // seed 3
 }
 enum CharcoalMeasure {
-    static func linearRGB(_ rgba: [UInt8]) -> [SIMD3<Float>]
+    static func colours(_ rgba: [UInt8], format: MTLPixelFormat) -> [SIMD3<Float>]
+        // the values the fragment wrote: bytes / 255, sRGB-decoded only when `format` is an _srgb format
     static func offLineDistance(_ c: SIMD3<Float>) -> Float   // distance to the segment ink...paper
     static func ink(_ c: SIMD3<Float>) -> Float               // 0 at paper, 1 at ink
     static func silhouette(plain: [UInt8]) -> [Bool]          // pixels that differ from the paper clear
@@ -120,7 +131,7 @@ enum CharcoalMeasure {
 }
 ```
 
-  The harness loads the model once, uses `.rgba8Unorm_srgb`, clears to `charcoalPaperColor`, applies the Creator rig values from Task 1 Step 2, and frames body as eye (0, 0.85, 2.6) / target (0, 0.82, 0) and bust as eye (0.15, 1.38, 0.75) / target (0, 1.33, 0), 40° vertical FOV. `sampleCount > 1` goes through `RenderTestSupport.renderFrameMSAA`.
+  The harness loads the model once, clears to `charcoalPaperColor`, runs `configure` after `loadModel` (for outline flags on the swatch fixtures), uses `camera` in place of the framing when given, applies the Creator rig values from Task 1 Step 2, and frames body as eye (0, 0.85, 2.6) / target (0, 0.82, 0) and bust as eye (0.15, 1.38, 0.75) / target (0, 1.33, 0), 40° vertical FOV. `sampleCount > 1` goes through `RenderTestSupport.renderFrameMSAA`.
 
 - [ ] **Step 1: Write the failing tests** in `CharcoalSketchTests.swift`
 
@@ -136,7 +147,10 @@ func testColourArrivalIsMonotonic()         // for t in 0.6, 0.65 ... 1.0: count
                                             // 0 matches at 0.6, all match at 1.0
 func testDeterministic()                    // two render(charcoal(0.45)) calls are byte-identical
 func testMismatchedHeightRangeStillEndsClean()  // heightRange 0.0...0.5: progress 1 == plain; progress 0.6 offLine < 0.03
+func testHoldFrameHasNoColourOnSRGBTarget()     // pixelFormat .rgba8Unorm_srgb: progress 0.6 offLine < 0.03; progress 1 == plain
 ```
+
+"Plain luma" and every colour comparison below use `CharcoalMeasure.colours` with the harness's format.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -146,6 +160,8 @@ Expected: compile failure (`.charcoal` undefined).
 - [ ] **Step 3: Implement the Swift API and upload**
 
 Add the case, property, constants and `defaultColor` entry (1.0, 0.42, 0.10). In the renderer, write `mat.encodedBoilPhase` into `materializeOrigin_packed.w`. `usesDiscard` stays true for charcoal.
+
+Also make the upload itself conditional on `config.enableMaterialization`: when the flag is off, upload the inert sentinel `(1, 0, 0, 1)` whatever `materialization` holds. Today the uniforms are uploaded regardless, which is harmless only because the fragment is compiled out; Task 6 adds a vertex-stage reader with no function constant, and it must see the sentinel.
 
 - [ ] **Step 4: Implement the timeline and a paper-only composite in the shader**
 
@@ -199,8 +215,9 @@ Deliverable: contours and facial detail draw on with the drawing front; undrawn 
 ```swift
 func testContoursDrawByHoldFrame()        // meanInk(render(charcoal(0.6)), within: silhouette) > 0.02
 func testConstructionDashesAreFaint()     // progress 0: meanInk over the whole frame < 0.01 and > 0
-func testFaceDetailIsDrawn()              // bust framing, progress 0.6: among pixels inside the silhouette whose
-                                          // plain linear luma < 0.05, at least 40% have ink > 0.5
+func testFaceDetailIsDrawn()              // bust framing, progress 0.6, opaque materials only at this stage:
+                                          // among silhouette pixels where the plain render's luma differs from a
+                                          // 4-neighbour by > 0.25 (texture and shape edges), at least 30% have ink > 0.4
 func testOrthographicContourDoesNotFlood() // orthographic body framing, progress 0.6:
                                           // meanInk within silhouette < 0.5
 ```
@@ -339,8 +356,8 @@ func testHullWidensBeyondSilhouette()
 func testHullRunsUnderMSAA()
 // sampleCount 4: render(charcoal(0.6)) succeeds, offLine < 0.03, and the outside-silhouette ink count is > 0.
 func testRigidOutlinedFixtureInks()
-// TestData/MToon/finish_swatches.vrm with the outlined double-sided scene settings used by
-// MToonLegacyGoldenTests (dedicated hull): progress 0.6 has ink > 0.5 outside the plain silhouette;
+// TestData/MToon/finish_swatches.vrm through CharcoalHarness, passing the camera and a `configure` closure
+// that reproduce MToonLegacyGoldenTests' outlined double-sided scene (dedicated hull): progress 0.6 has ink > 0.5 outside the plain silhouette;
 // progress 1.0 is byte-identical to plain. Repeat with the single-sided scene (merged hull) and
 // finish_swatches_skinned.vrm (skinned hull).
 ```
@@ -384,16 +401,17 @@ Deliverable: the full effect.
 
 - [ ] **Step 1: Write the failing tests**
 
-"Warmth gain" of a pixel is `(R - B)` of the frame minus `(R - B)` of the plain render, both linear.
-
 ```swift
-func testEmberGlowsAtColourFront()   // progress 0.8, default colour: > 100 pixels with warmth gain > 0.25
-func testEmberOffIsMonochrome()      // progress 0.8, color .zero: 0 pixels with warmth gain > 0.10
-func testHeldSketchDoesNotGlow()     // progress 0.6, default colour: 0 pixels with warmth gain > 0.10
+func testEmberGlowsAtColourFront()   // progress 0.8: the default-colour frame differs from the color .zero frame
+                                     // at > 100 pixels, and at those pixels its mean (R - B) is higher by > 0.2
+func testEmberOffIsMonochrome()      // progress 0.8, color .zero: no pixel has (R - B) more than 0.05 above
+                                     // both the paper's (R - B) and the plain render's (R - B) at that pixel
+func testHeldSketchDoesNotGlow()     // progress 0.6: the default-colour frame is byte-identical to the
+                                     // color .zero frame
 func testBoilPhaseChangesStrokes()   // progress 0.6: render(boilPhase 1) != render(boilPhase 0);
                                      // two renders at boilPhase 1 are byte-identical
-func testBoilLeavesFieldAlone()      // progress 0.8: silhouette pixels equal to plain are the same set at
-                                     // boilPhase 0 and boilPhase 5
+func testBoilStaysStableAtHighPhase() // progress 0.6: meanInk within silhouette at boilPhase 200 is within 10%
+                                     // of the value at boilPhase 0
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -412,7 +430,7 @@ Every stop is 0 at `sColour = 0` and at `sColour = 1`, so the hold frame and the
 
 - [ ] **Step 4: Implement boil**
 
-`mat_sketchStrokeSeed` returns `materializeColor.w + float(uint(materializeOrigin.w + 0.5)) * 17.0`. Confirm the tooth, blotch and field noise do not use it.
+`mat_sketchStrokeSeed` returns `materializeColor.w + float(uint(materializeOrigin.w + 0.5) & 63u) * 1.37`. The phase is wrapped to 64 steps so the value fed to `mat_hash21` stays small enough to keep its fractional bits; strokes therefore repeat every 64 steps (6.4 s at 10 steps a second). Confirm the tooth, blotch and field noise do not use it.
 
 - [ ] **Step 5: Rebuild shaders, update the hash, run the whole suite**
 
@@ -470,3 +488,20 @@ git add Sources Tests AvatarSample_U.png && git commit -m "feat(materialize): tu
 ```
 
 Show Paul `_visuals_charcoal/final/` (`bust_t060`, `body_t030/060/080`). Push and open the PR ("Closes #471" on its own line) only when he asks.
+
+---
+
+## Measured baselines
+
+Filled in by Task 1 Step 4 from the relit spike frames (`AvatarSample_A_1.0`, size 512, `.bgra8Unorm`).
+
+| Statistic | Body | Bust |
+| --- | --- | --- |
+| Mean ink in silhouette, progress 0 | | |
+| Mean ink in silhouette, progress 0.25 | | |
+| Mean ink in silhouette, progress 0.6 | | |
+| Mean ink over frame, progress 0 | | |
+| Mean ink, dark plain pixels, progress 0.6 | | |
+| Mean ink, pale plain pixels, progress 0.6 | | |
+| Ink pixels outside silhouette, progress 0.6 | | |
+| Largest off-line distance, progress 0.6 | | |
