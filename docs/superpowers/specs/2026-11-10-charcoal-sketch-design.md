@@ -96,10 +96,10 @@ Ink colour is (0.030, 0.028, 0.026).
 1. **Contour.** A grazing-angle band on `abs(N·V)` with a low-frequency wobbling threshold and a soft inner feather, plus a curvature crease term from `fwidth(N)`. Broken by a dropout noise of about 19 px wavelength and scaled by a 70 px pressure noise.
 2. **Stroke order.** A contour is "drawn" where `s` has passed a 46 px patch noise scaled to 0..0.24. Ahead of that, contours show as coherent grain-free grey dashes at 30% ink.
 3. **Texture edges.** Ink where base-colour luminance changes sharply (`fwidth` of luminance), so eyes, lace and printed detail are drawn. This departs from the original spec's "shade by light, not colour" and is what makes the face readable.
-4. **Tone.** `light = mix(halfLambert(key light), MToon shade ramp, 0.35)`, shaded on undersides by a sky term on `N.y`, then multiplied down by a perceptual albedo value (`smoothstep(0.15, 0.75, sqrt(luma))`, weight 0.8).
+4. **Tone.** `light = mix(halfLambert(key light), MToon shade ramp, 0.8)`, so the tone follows every light, the ambient and the authored shading shift, not the key light alone; shaded on undersides by a sky term on `N.y`, then multiplied down by a perceptual albedo value (`smoothstep(0.15, 0.75, sqrt(luma))`, weight 0.8).
 5. **Hatching.** Three screen-space layers at 35°, -55° and 80°, 7 px spacing, appearing at tone below 0.62, 0.50 and 0.25. Strokes are broad, soft-edged, domain-warped, of finite length, with per-stroke strength. Layers arrive in order as `s` passes 0.30, 0.38 and 0.46.
 6. **Fill and smudge.** A grainy fill in the darks, capped so stroke direction stays visible, over a grain-free grey smudge (about 20% in form shadows on pale surfaces, about 50% under the darks).
-7. **Lit skin stays clean.** Pale, lit surfaces receive no hatching.
+7. **Pale surfaces stay light.** Pale skin and fabric take at most the first hatch layer and the smudge. Facial shadow is a soft tone along the jaw and cheek; strokes do not cross the nose and mouth.
 8. **Colour arrival.** `mix(sketch, lit, smoothstep(0.05, 0.25, sCol))`. Contour lines linger at about half strength over the arriving colour and settle out by `sCol = 0.7`.
 9. **Ember.** A band centred on `sCol = 0.13`, half-width 0.10, tinted by `VRMMaterialization.color` (default (1.0, 0.42, 0.10)), with a darkened char rim just ahead of it around `sCol = 0.03`. Because `sCol` is 0 everywhere at the hold frame, a held sketch never glows. The char rim is part of the ember: a zero ember colour removes both.
 
@@ -118,7 +118,7 @@ All three cross to their normal colour and alpha with the colour-arrival factor.
 The inverted-hull outline carries the contour weight:
 
 - **Vertex:** while charcoal is active, the hull is widened in screen space by 2 to 6.5 px (at 1080p) with per-vertex pressure variation. The extra width grows in as the drawing front arrives and eases back to the authored width behind the colour front. It applies only where the material already has an outline, and respects the outline width mask.
-- **Fragment:** tinted to the ink colour, returning to the authored outline colour as lines settle. Ahead of the drawing front the hull shows only as coherent dashes; once drawn it breaks up on the paper tooth where pressure is light.
+- **Fragment:** tinted to the ink colour, returning to the authored outline colour as lines settle. Ahead of the drawing front the hull shows only as coherent dashes in 20% grey, matching the surface construction lines; once drawn it is ink and breaks up on the paper tooth where pressure is light.
 
 This must cover all three hull paths: the merged colour-plus-outline draw on the rigid and skinned vertex shaders, and the dedicated outline pass (`mtoon_outline_vertex`, which has its own extrusion code).
 
@@ -186,7 +186,9 @@ The look also depends on the avatar: the blended-overlay split, the texture-edge
 
 Known tuning work, to be done against those stills and not blocking the structure:
 
-- **Pale-fabric smudge.** The form-shadow smudge on the cream cardigan is too subtle. Re-evaluate after the relight, which moves shadow to the sleeve undersides, neck and lower torso; about 24 to 26% with coarse blotch modulation near the shadow edge is the expected ceiling.
+- **Face shadow.** Under Creator's rig the spike cross-hatches the shadow side of the face. The target is a soft 10 to 15% jaw and cheek tone with the nose and mouth clear.
+- **Pale fabric.** Settled by the relight: the cardigan's smudge and light hatching are at the right weight and should not go darker.
+- **Dark tights.** They plug nearly solid on `.bgra8Unorm`; keep stroke direction legible.
 - **Ember.** It is a soft peach patch. Without HDR, replace the single wide orange band with a tight three-stop ramp warped by noise: a dark char rim at `sCol` 0.02 to 0.06 (towards (0.02, 0.015, 0.01)), a narrow hot core at 0.06 to 0.10 (towards yellow-gold (1.0, 0.80, 0.30)), and a coal tail at 0.10 to 0.18 falling through red-orange (0.95, 0.25, 0.04) into the lit colour. The ramp is derived from `VRMMaterialization.color`; the values given are for the default.
 - **Construction dashes.** They look like dark stencil ticks. Drop them to about 18 to 20% ink with a softer edge feather.
 

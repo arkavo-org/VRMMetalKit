@@ -287,6 +287,8 @@ func testDarkSurfacesDrawDarker()    // progress 0.6: mean ink over silhouette p
 func testHoldFrameOnVRM0Avatar()     // modelPath getTestVRM00ModelPath(): progress 1 == plain;
                                      // progress 0.6 offLine < 0.03 and meanInk within silhouette > 0.20
 func testThumbnailSize()             // size 256: progress 0.6 offLine < 0.03 and meanInk within silhouette > 0.15
+func testPaleSurfacesStayLight()     // bust framing, progress 0.6: mean ink over silhouette pixels whose plain
+                                     // luma > 0.5 is < 0.25
 ```
 
 - [ ] **Step 2: Run to verify failure**
@@ -296,7 +298,10 @@ Expected: the new tests fail on the ink bounds.
 
 - [ ] **Step 3: Implement**
 
-Take `mat_sketchHatch` and, from the patch's `mat_sketchSurface`, the tone, `h1/h2/h3`, `w1/w2/w3`, hatch, smudge and fill lines exactly as the patch ends (spacing 7.0; thresholds 0.62, 0.50, 0.25; `albedoValue = smoothstep(0.15, 0.75, sqrt(albedoLuma))` at weight 0.8; fill `smoothstep(0.40, 1.0, dark) * 0.74`). `inkPressure = max(max(lineInk, texEdge * drawn * 1.15), max(hatch, fill)) * 1.15`. The smudge joins the grain-free layer: `mix(kSketchPaper, kSketchInk, max(smudge, gesture))`.
+Take `mat_sketchHatch` and, from the patch's `mat_sketchSurface`, the tone, `h1/h2/h3`, `w1/w2/w3`, hatch, smudge and fill lines exactly as the patch ends (spacing 7.0; thresholds 0.62, 0.50, 0.25; `albedoValue = smoothstep(0.15, 0.75, sqrt(albedoLuma))` at weight 0.8; fill `smoothstep(0.40, 1.0, dark) * 0.74`), with three changes that come from the relit reference:
+- `light = mix(halfLambert(key), toonStep, 0.8)` (patch: 0.35). The MToon ramp carries every light, the ambient and the authored face shading shift; the key light alone slashes a cross-hatched shadow across the face under Creator's rig.
+- Hatch layers 2 and 3 are multiplied by `1.0 - smoothstep(0.65, 0.80, albedoValue)`, so pale skin and fabric take at most the first layer and the smudge.
+- The fill factor is 0.62 (patch: 0.74), so stroke direction stays legible inside dark tights on a `.bgra8Unorm` target. `inkPressure = max(max(lineInk, texEdge * drawn * 1.15), max(hatch, fill)) * 1.15`. The smudge joins the grain-free layer: `mix(kSketchPaper, kSketchInk, max(smudge, gesture))`.
 
 - [ ] **Step 4: Rebuild shaders, update the hash, run tests**
 
@@ -361,7 +366,7 @@ Deliverable: contours carry charcoal weight; nothing changes for other styles or
 - Modify: `Tests/VRMMetalKitTests/CharcoalSketchTests.swift`
 
 **Interfaces:**
-- Produces (shader): `static inline void mtoonSketchHullBoost(thread float4& clipPos, float3 worldPos, float3 worldNormal, float widthMask, constant Uniforms& uniforms)` in `MToonShared.h`; `mat_sketchOutlineColor(MatState, float3 outlineColor)` in `MToonShader.metal`.
+- Produces (shader): `MatState.sketchHullDrawn` (0 ahead of the drawing front, 1 once the contour is drawn; set in the hull branch of `mat_resolve`); `static inline void mtoonSketchHullBoost(thread float4& clipPos, float3 worldPos, float3 worldNormal, float widthMask, constant Uniforms& uniforms)` in `MToonShared.h`; `mat_sketchOutlineColor(MatState, float3 outlineColor)` in `MToonShader.metal`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -369,6 +374,8 @@ Deliverable: contours carry charcoal weight; nothing changes for other styles or
 func testHullWidensBeyondSilhouette()
 // progress 0.6: count of pixels outside silhouette(plain) with ink > 0.5 is > 200 at size 512;
 // progress 1.0: that count is 0.
+func testUndrawnHullIsFaint()
+// progress 0: 0 pixels outside silhouette(plain) have ink > 0.5, and more than 20 have ink between 0.1 and 0.3.
 func testHullRunsUnderMSAA()
 // sampleCount 4: render(charcoal(0.6)) succeeds, offLine < 0.03, and the outside-silhouette ink count is > 0.
 func testRigidOutlinedFixtureInks()
@@ -389,7 +396,7 @@ Take `mtoonSketchHullBoost` from the patch (2.0 to 6.5 px extra, growing in with
 
 - [ ] **Step 4: Implement the fragment side**
 
-Replace Task 2's hull discard with the patch's hull branch of `mat_resolve` (coherent dashes ahead of the front via `mat_sketchBlotch`, tooth breakup once drawn, dropout fading with `sketchRevealSlow`), and return `mat_sketchOutlineColor(mat, outlineColor)` at both outline colour sites.
+Replace Task 2's hull discard with the patch's hull branch of `mat_resolve` (coherent dashes ahead of the front via `mat_sketchBlotch`, tooth breakup once drawn, dropout fading with `sketchRevealSlow`), and return `mat_sketchOutlineColor(mat, outlineColor)` at both outline colour sites. `mat_sketchOutlineColor` returns `mix(kSketchPaper, kSketchInk, 0.20)` ahead of the drawing front, ramps to `kSketchInk` with `mat.sketchHullDrawn`, then to the authored outline colour with `mat.sketchRevealSlow`. The hull owns the silhouette, so without this the construction dashes along the limbs are solid black chunks while the surface dashes are faint.
 
 - [ ] **Step 5: Rebuild shaders, update the hash, run tests**
 
@@ -482,7 +489,9 @@ func testWriteReferenceFrames()
 - [ ] **Step 2: Tune three items against `_visuals_charcoal/relit/`**
 
 Run: `CHARCOAL_REFERENCE_OUT=_visuals_charcoal/final swift test --filter testWriteReferenceFrames --disable-sandbox`, compare, adjust, repeat.
-- Pale-fabric form-shadow smudge: target 24 to 26% with blotch modulation near the shadow edge; lit skin stays free of hatching.
+- Face shadow: a soft 10 to 15% tone along the jaw and cheek, with the nose and mouth clear, at both bust and full-body scale. Raise the first hatch layer's threshold on pale surfaces if strokes still cross the face.
+- Pale fabric: the cardigan's smudge and light hatching are already at the right weight in the relit reference. Do not push them darker.
+- Dark tights and shoes: stroke direction stays legible from knee to shoe.
 - Ember: a crisp edge with a readable char rim, not a soft patch.
 - Construction dashes: read as light layout lines.
 
