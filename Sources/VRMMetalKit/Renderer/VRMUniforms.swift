@@ -68,7 +68,7 @@ struct Uniforms {
     /// xyz = accent colour for edge glow / shell / glyphs, w = per-avatar seed.
     var materializeColor_packed = SIMD4<Float>(0.0, 1.0, 1.0, 0.0) // 16 bytes, offset 448
     /// xyz = world-space focus point for radial styles (chrome / hex / frost),
-    /// w = reserved.
+    /// w = boil phase (low 16 bits of VRMMaterialization.boilPhase).
     var materializeOrigin_packed = SIMD4<Float>(0.0, 0.85, 0.0, 0.0) // 16 bytes, offset 464
     /// Hemisphere ambient: `ambientColor` lights surfaces facing world +Y,
     /// this colour surfaces facing -Y. Equal to `ambientColor` for a uniform
