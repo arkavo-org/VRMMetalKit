@@ -143,6 +143,8 @@ public struct VRMMaterialization {
 }
 ```
 
+- `VRMMaterializationStyle.requiresHostBackground` is true only for charcoal. Hosts that pick a style from `allCases` (Game of Mods' Construct picks one at random) use it to skip styles that need a specific clear colour.
+- The twelve existing styles are unchanged. Goldens of all twelve are captured before any shader edit and checked after every change.
 - `defaultColor(for: .charcoal)` is the ember colour, (1.0, 0.42, 0.10). Passing a zero colour turns the ember off (monochrome reveal).
 - `boilPhase` is an added initialiser parameter with a default, so existing call sites compile unchanged.
 - The `Uniforms` struct size and field offsets do not change.
@@ -191,7 +193,7 @@ Known tuning work, to be done against those stills and not blocking the structur
 ## Follow-on work (outside this repo or this design)
 
 - **Creator:** opt in with `RendererConfig.enableMaterialization`, move its pin (currently one commit past 1.1.2) to a commit or release containing style 13, clear to the paper colour, keep any backdrop behind the avatar hidden until colour has fully arrived, drive `progress` and `boilPhase`, and add a fixed-timestep recording path, which it does not have today. Tracked as arkavo-org/Creator#141.
-- **Game of Mods and Muse:** only need the pin and a style choice for avatars; props are out of scope.
+- **Game of Mods and Muse:** only need the pin and a style choice for avatars; props are out of scope. When Game of Mods moves its pin, `ConstructPasses.swift` must filter its random pick with `requiresHostBackground`, or one spawn in thirteen becomes a paper-coloured body on the Construct stage.
 - **Screen-space path:** revisit only if the in-fragment look proves insufficient. Notes for that work: derivatives are unavailable in compute kernels; an integer object-ID target cannot be resolved under MSAA; the hull must be suppressed where a screen-space edge pass owns the linework.
 
 ## Left to the builder

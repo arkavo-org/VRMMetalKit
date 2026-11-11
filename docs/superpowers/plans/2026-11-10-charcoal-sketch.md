@@ -21,6 +21,7 @@
 - The `Uniforms` struct size (496) and field offsets do not change.
 - `mat_resolve` and the hull widening both return before any charcoal arithmetic when `progress >= 1` or the style is not 13.
 - Renderers with `enableMaterialization == false`, or with no active materialization, render exactly as on `main`. `MToonLegacyGoldenTests` must pass unmodified after every task.
+- The twelve existing styles render as on `main` (within 1 per channel). `MaterializationStyleGoldenTests`, captured in Task 2 Step 0, must pass unmodified after every later task.
 - Every shader edit: `make shaders` (all five metallibs), update `knownGoodShaderHash` in `Tests/VRMMetalKitTests/MToonShaderGPUTests.swift` to the value printed by `swift test --filter testShaderSourceHashMatchesKnownGood --disable-sandbox`, and commit the metallibs with the source.
 - Shaders compile with `-Wall -Wextra -Werror`. New files carry the Apache 2.0 header. No temporary or contextual comments in code.
 - Test commands always pass `--disable-sandbox`. Commit after each task; do not push.
@@ -98,12 +99,14 @@ Deliverable: `.charcoal` exists and sweeps from flat paper to the lit render wit
 - Modify: `Tests/VRMMetalKitTests/MaterializationTests.swift` (rename `testAllTwelveStylesEnumerated` to `testAllThirteenStylesEnumerated`, expect 13 and `Set(1...13)`)
 - Create: `Tests/VRMMetalKitTests/CharcoalTestSupport.swift`
 - Create: `Tests/VRMMetalKitTests/CharcoalSketchTests.swift`
+- Create: `Tests/VRMMetalKitTests/MaterializationStyleGoldenTests.swift` and `Tests/VRMMetalKitTests/TestData/Materialize/golden_style_<raw>.rgba.zlib` (twelve files)
 
 **Interfaces:**
 - Produces (Swift):
   - `VRMMaterializationStyle.charcoal = 13`
   - `VRMMaterialization.boilPhase: UInt32` (new stored property, new trailing `init` parameter `boilPhase: UInt32 = 0`)
   - `VRMMaterialization.charcoalPaperColor: SIMD3<Float>` = (0.86, 0.83, 0.77), `charcoalInkColor: SIMD3<Float>` = (0.030, 0.028, 0.026), `charcoalHoldProgress: Float` = 0.6 (all `public static let`)
+  - `VRMMaterializationStyle.requiresHostBackground: Bool` (public; true only for `.charcoal`), so hosts that pick a style from `allCases` can skip styles that need the host to clear to a specific colour
   - `VRMMaterialization.encodedBoilPhase: Float` (internal) = `Float(boilPhase & 0xFFFF)`; the renderer writes it to `materializeOrigin_packed.w`
 - Produces (shader): `MatState` fields `float sketch` (1 for style 13), `sketchS` (0..0.6), `sketchReveal`, `sketchRevealSlow`, `sketchFront` (the colour front's local progress `sColour`), `sketchEmberOn` (1 when `materializeColor.xyz` is non-zero); constants `kSketchPaper`, `kSketchInk`; `static float4 mat_sketchSurface(constant Uniforms&, VertexOut, MatState, float3 N, float3 albedo, float alpha, float3 lit, float toonStep, bool isBlend)`, called just before `if (mat.active)` when `mat.sketch > 0.5`.
 - Produces (tests):
@@ -133,10 +136,21 @@ enum CharcoalMeasure {
 
   The harness loads the model once, clears to `charcoalPaperColor`, runs `configure` after `loadModel` (for outline flags on the swatch fixtures), uses `camera` in place of the framing when given, applies the Creator rig values from Task 1 Step 2, and frames body as eye (0, 0.85, 2.6) / target (0, 0.82, 0) and bust as eye (0.15, 1.38, 0.75) / target (0, 1.33, 0), 40° vertical FOV. `sampleCount > 1` goes through `RenderTestSupport.renderFrameMSAA`.
 
+- [ ] **Step 0: Capture goldens of the twelve existing styles before touching any shader**
+
+Write `MaterializationStyleGoldenTests` on the pattern of `MToonLegacyGoldenTests`: for each style with raw value 1 to 12, render `TestData/MToon/finish_swatches_skinned.vrm` (outlined single-sided scene, `enableMaterialization = true`, progress 0.45, seed 3, default colour, `heightRange` spanning the swatches' world Y extent) and compare with `golden_style_<raw>.rgba.zlib`, allowing a per-channel difference of at most 1. With `VMK_WRITE_MATERIALIZE_GOLDENS=<dir>` set it writes the files instead. Capture them now, on the untouched branch, and commit test and goldens together. This test must pass unmodified after every later task.
+
+```bash
+VMK_WRITE_MATERIALIZE_GOLDENS=Tests/VRMMetalKitTests/TestData/Materialize swift test --filter MaterializationStyleGoldenTests --disable-sandbox
+swift test --filter MaterializationStyleGoldenTests --disable-sandbox   # expected: 12 pass
+git add Tests && git commit -m "test(materialize): goldens for the twelve existing styles (#471)"
+```
+
 - [ ] **Step 1: Write the failing tests** in `CharcoalSketchTests.swift`
 
 ```swift
-func testCharcoalConstants()                // style raw 13; hold 0.6; paper/ink/default colour values above
+func testCharcoalConstants()                // style raw 13; hold 0.6; paper/ink/default colour values above;
+                                            // requiresHostBackground true for charcoal, false for the other twelve
 func testBoilPhaseEncodesAsOrdinaryFloat()  // boilPhase 1 -> 1.0, 65535 -> 65535.0, 65536 -> 0.0
 func testInertAtFullProgress()              // render(charcoal(1.0)) == render(nil), byte for byte
 func testStrippedWhenDisabled()             // enableMaterialization false: render(charcoal(0.3)) == render(nil)
@@ -187,7 +201,7 @@ Take `mat_vnoise` from the patch. `mat_sketchSurface` for this task returns `flo
 
 - [ ] **Step 5: Rebuild shaders, update the hash, run tests**
 
-Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MToonLegacyGoldenTests|MToonShaderGPUTests" --disable-sandbox`
+Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MaterializationStyleGoldenTests|MToonLegacyGoldenTests|MToonShaderGPUTests" --disable-sandbox`
 Expected: all pass. `testEveryStyleAtMidProgressChangesFrame` passes for charcoal because the body is paper at 0.45.
 
 - [ ] **Step 6: Commit**
@@ -238,7 +252,7 @@ Take from the patch, unchanged unless noted: `mat_sketchBlotch`, `mat_sketchToot
 
 - [ ] **Step 4: Rebuild shaders, update the hash, run tests**
 
-Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MToonLegacyGoldenTests|MToonShaderGPUTests" --disable-sandbox`
+Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MaterializationStyleGoldenTests|MToonLegacyGoldenTests|MToonShaderGPUTests" --disable-sandbox`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -284,7 +298,7 @@ Take `mat_sketchHatch` and, from the patch's `mat_sketchSurface`, the tone, `h1/
 
 - [ ] **Step 4: Rebuild shaders, update the hash, run tests**
 
-Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MToonLegacyGoldenTests|MToonShaderGPUTests" --disable-sandbox`
+Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MaterializationStyleGoldenTests|MToonLegacyGoldenTests|MToonShaderGPUTests" --disable-sandbox`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -324,7 +338,7 @@ As in the patch: `highlight = albedoLuma > 0.75 && chroma < 0.12`; dark ink `smo
 
 - [ ] **Step 4: Rebuild shaders, update the hash, run tests**
 
-Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MToonLegacyGoldenTests|MToonShaderGPUTests" --disable-sandbox`
+Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MaterializationStyleGoldenTests|MToonLegacyGoldenTests|MToonShaderGPUTests" --disable-sandbox`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -377,7 +391,7 @@ Replace Task 2's hull discard with the patch's hull branch of `mat_resolve` (coh
 
 - [ ] **Step 5: Rebuild shaders, update the hash, run tests**
 
-Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MToonLegacyGoldenTests|MToonShaderGPUTests|MToonMaterialLayoutReflectionTests" --disable-sandbox`
+Run: `make shaders && swift test --filter "CharcoalSketchTests|MaterializationTests|MaterializationStyleGoldenTests|MToonLegacyGoldenTests|MToonShaderGPUTests|MToonMaterialLayoutReflectionTests" --disable-sandbox`
 Expected: all pass, including the six unmodified legacy goldens.
 
 - [ ] **Step 6: Commit**
