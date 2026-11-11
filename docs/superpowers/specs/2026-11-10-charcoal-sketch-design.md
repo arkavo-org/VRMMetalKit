@@ -196,6 +196,7 @@ Known tuning work, to be done against those stills and not blocking the structur
 
 - **Creator:** opt in with `RendererConfig.enableMaterialization`, move its pin (currently one commit past 1.1.2) to a commit or release containing style 13, clear to the paper colour, keep any backdrop behind the avatar hidden until colour has fully arrived, drive `progress` and `boilPhase`, and add a fixed-timestep recording path, which it does not have today. Tracked as arkavo-org/Creator#141.
 - **Game of Mods and Muse:** only need the pin and a style choice for avatars; props are out of scope. When Game of Mods moves its pin, `ConstructPasses.swift` must filter its random pick with `requiresHostBackground`, or one spawn in thirteen becomes a paper-coloured body on the Construct stage.
+- **Smudge filter (downstream):** charcoal is messy and smudgy, and a single pass cannot smear ink across edges or put haze outside the silhouette. That is a post-process over the finished frame, so it belongs to the host that owns the frame, starting in Creator (arkavo-org/Creator#141, section 8). VRMMetalKit provides only the constants it needs to line up with: paper colour, ink colour and the hold progress. It moves to a shared package only when a second app needs it.
 - **Screen-space path:** revisit only if the in-fragment look proves insufficient. Notes for that work: derivatives are unavailable in compute kernels; an integer object-ID target cannot be resolved under MSAA; the hull must be suppressed where a screen-space edge pass owns the linework.
 
 ## Left to the builder
