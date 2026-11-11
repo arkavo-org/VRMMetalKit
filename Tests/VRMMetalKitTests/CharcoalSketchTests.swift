@@ -83,7 +83,8 @@ final class CharcoalSketchTests: XCTestCase {
         let plain = try harness.render(nil)
         let chromatic = CharcoalMeasure.colours(plain, format: harness.pixelFormat)
             .map { CharcoalMeasure.offLineDistance($0) > 0.04 }
-        XCTAssertGreaterThan(chromatic.filter { $0 }.count, 1000, "fixture should contain coloured pixels")
+        let total = chromatic.filter { $0 }.count
+        XCTAssertGreaterThan(total, 1000, "fixture should contain coloured pixels")
 
         var previous: Int?
         for step in 0...8 {
@@ -102,11 +103,46 @@ final class CharcoalSketchTests: XCTestCase {
                     "matching pixels dropped from \(previous) to \(matches) at progress \(progress)")
             }
             if step == 0 { XCTAssertEqual(matches, 0, "progress 0.6 must show no colour") }
+            if step == 4 {
+                XCTAssertGreaterThan(matches, 0, "progress 0.8 must have colour arrived somewhere")
+                XCTAssertLessThan(matches, total, "progress 0.8 must not be complete")
+            }
+            if step == 7 {
+                XCTAssertGreaterThan(Double(matches), 0.8 * Double(total), "progress 0.95 must be nearly complete")
+            }
             if step == 8 {
-                XCTAssertEqual(matches, chromatic.filter { $0 }.count, "progress 1.0 must be the plain render")
+                XCTAssertEqual(matches, total, "progress 1.0 must be the plain render")
             }
             previous = matches
         }
+    }
+
+    func testColourFrontSettlesExactly() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let plain = try harness.render(nil)
+        let frame = try harness.render(harness.charcoal(0.9))
+        let colours = CharcoalMeasure.colours(plain, format: harness.pixelFormat)
+        let silhouette = CharcoalMeasure.silhouette(plain: plain)
+        let rows = (0..<harness.size).filter { y in
+            (0..<harness.size).contains { silhouette[y * harness.size + $0] }
+        }
+        let first = try XCTUnwrap(rows.first)
+        let last = try XCTUnwrap(rows.last)
+        let limit = first + Int(0.1 * Float(last - first))
+
+        var counted = 0
+        var mismatched = 0
+        for y in first...limit {
+            for x in 0..<harness.size {
+                let pixel = y * harness.size + x
+                guard CharcoalMeasure.offLineDistance(colours[pixel]) > 0.04 else { continue }
+                counted += 1
+                let i = pixel * 4
+                if Array(frame[i..<i + 4]) != Array(plain[i..<i + 4]) { mismatched += 1 }
+            }
+        }
+        XCTAssertGreaterThan(counted, 100, "the top of the silhouette should contain coloured pixels")
+        XCTAssertEqual(mismatched, 0, "the colour front has settled over the head at progress 0.9")
     }
 
     func testDeterministic() async throws {
@@ -127,8 +163,12 @@ final class CharcoalSketchTests: XCTestCase {
 
     func testHoldFrameHasNoColourOnSRGBTarget() async throws {
         let harness = try await CharcoalHarness(device: device(), pixelFormat: .rgba8Unorm_srgb)
+        let plain = try harness.render(nil)
+        let chromatic = CharcoalMeasure.colours(plain, format: harness.pixelFormat)
+            .filter { CharcoalMeasure.offLineDistance($0) > 0.04 }.count
+        XCTAssertGreaterThan(chromatic, 1000, "fixture should contain coloured pixels")
         let hold = try harness.render(harness.charcoal(0.6))
         XCTAssertLessThan(maxOffLine(hold, format: harness.pixelFormat), 0.03)
-        XCTAssertEqual(try harness.render(harness.charcoal(1.0)), try harness.render(nil))
+        XCTAssertEqual(try harness.render(harness.charcoal(1.0)), plain)
     }
 }
