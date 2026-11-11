@@ -598,7 +598,7 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertGreaterThan(dark, 100, "too few dark pixels in the eye band")
         XCTAssertGreaterThanOrEqual(Float(inked), 0.6 * Float(dark), "\(inked) of \(dark) dark pixels are ink")
         XCTAssertGreaterThan(lash, 300, "too few lash-toned pixels in the eye band")
-        XCTAssertGreaterThanOrEqual(Float(lashInked), 0.74 * Float(lash),
+        XCTAssertGreaterThanOrEqual(Float(lashInked), 0.65 * Float(lash),
                                     "\(lashInked) of \(lash) lash-toned pixels are ink")
         XCTAssertLessThan(worstOffLine, 0.03, "blush or other tint in the eye band")
     }

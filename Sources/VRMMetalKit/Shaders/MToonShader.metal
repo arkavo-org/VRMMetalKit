@@ -1144,7 +1144,7 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float smudge = smoothstep(0.10, 0.50, dark) * 0.20 + smoothstep(0.45, 0.90, dark) * 0.42;
     float smear = smoothstep(0.50, 0.85, mat_vnoise(float2(dot(px, float2(0.34, 0.94)) / 240.0,
                                                            dot(px, float2(-0.94, 0.34)) / 52.0) + seed + 51.0)) * 0.12;
-    smudge = saturate(max(max(smudge, smear), max(hatchHaze * 0.34, edgeHaze)) * rubbed) * h1;
+    smudge = min(max(max(smudge, smear), max(hatchHaze * 0.34, edgeHaze)) * rubbed, 0.58) * h1;
     float scrub = 0.78 + 0.50 * mat_vnoise(px / 55.0 + seed + 41.0);
     float fill = smoothstep(0.40, 1.0, dark) * 0.50 * h1;
 
