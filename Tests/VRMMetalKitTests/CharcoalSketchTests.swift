@@ -386,6 +386,27 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertEqual(try harness.render(harness.charcoal(0.6, boilPhase: 1)), boiled)
     }
 
+    func testBoilLeavesRubbedToneStill() async throws {
+        let harness = try await CharcoalHarness(device: device(), framing: .bust)
+        let plainBytes = try harness.render(nil)
+        let silhouette = CharcoalMeasure.silhouette(plain: plainBytes)
+        let plain = CharcoalMeasure.colours(plainBytes, format: harness.pixelFormat)
+        let first = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6, boilPhase: 0)),
+                                            format: harness.pixelFormat).map(CharcoalMeasure.ink)
+        let second = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6, boilPhase: 1)),
+                                             format: harness.pixelFormat).map(CharcoalMeasure.ink)
+        var tone = 0
+        var moved = 0
+        for i in plain.indices where silhouette[i] && Self.plainLuma(plain[i]) > 0.5
+            && first[i] < 0.35 && second[i] < 0.35 {
+            tone += 1
+            if abs(first[i] - second[i]) > 0.05 { moved += 1 }
+        }
+        XCTAssertGreaterThan(tone, 20_000, "too few pale pixels free of strokes")
+        XCTAssertLessThan(Float(moved), 0.02 * Float(tone),
+                          "\(moved) of \(tone) rubbed-tone pixels moved with the boil phase")
+    }
+
     func testBoilStaysStableAtHighPhase() async throws {
         let harness = try await CharcoalHarness(device: device())
         let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
@@ -407,10 +428,12 @@ final class CharcoalSketchTests: XCTestCase {
     func testFaceShadowIsToneNotStrokes() async throws {
         let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)
         let size = harness.size
-        let plain = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
+        let plainBytes = try harness.render(nil)
+        let silhouette = CharcoalMeasure.silhouette(plain: plainBytes)
+        let plain = CharcoalMeasure.colours(plainBytes, format: harness.pixelFormat)
         let hold = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
                                            format: harness.pixelFormat)
-        let skin = plain.map { Self.plainLuma($0) > 0.5 }
+        let skin = plain.indices.map { silhouette[$0] && Self.plainLuma(plain[$0]) > 0.5 }
 
         var counted = 0
         var strokes = 0
@@ -430,7 +453,7 @@ final class CharcoalSketchTests: XCTestCase {
         let mean = sum / Float(max(counted, 1))
         XCTAssertGreaterThan(counted, 800, "too few skin pixels clear of the jaw line and mouth")
         XCTAssertGreaterThan(mean, 0.05, "the shade side of the face should carry a soft tone")
-        XCTAssertLessThan(mean, 0.30, "the shade side of the face should stay a light tone")
+        XCTAssertLessThan(mean, 0.23, "the shade side of the face should stay a light tone")
         XCTAssertLessThan(strokes, 15, "\(strokes) of \(counted) skin pixels carry a stroke")
     }
 
@@ -569,16 +592,39 @@ final class CharcoalSketchTests: XCTestCase {
         simd_dot(colour, SIMD3<Float>(0.2126, 0.7152, 0.0722))
     }
 
+    /// The 512-pixel bust harness with every blended overlay made fully
+    /// transparent. A pixel that is darker in the ordinary plain render than in
+    /// this one is covered by an overlay.
+    private func bustWithoutOverlays() async throws -> CharcoalHarness {
+        try await CharcoalHarness(device: device(), size: 512, framing: .bust, configure: { model, _ in
+            for material in model.materials where material.alphaMode.uppercased() == "BLEND" {
+                material.baseColorFactor.w = 0
+            }
+        })
+    }
+
     func testBlendedDarkOverlaysDrawAsInk() async throws {
         let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)
         let plain = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
         let hold = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
                                            format: harness.pixelFormat)
 
+        let under = CharcoalMeasure.colours(try await bustWithoutOverlays().render(nil),
+                                            format: harness.pixelFormat)
+
+        var overlay = 0
+        var overlayInked = 0
+        for i in plain.indices where Self.plainLuma(plain[i]) < 0.10
+            && Self.plainLuma(under[i]) - Self.plainLuma(plain[i]) > 0.15 {
+            overlay += 1
+            if CharcoalMeasure.ink(hold[i]) > 0.75 { overlayInked += 1 }
+        }
+        XCTAssertGreaterThan(overlay, 60, "too few dark overlay pixels found")
+        XCTAssertGreaterThanOrEqual(Float(overlayInked), 0.8 * Float(overlay),
+                                    "\(overlayInked) of \(overlay) dark overlay pixels are solid ink")
+
         var dark = 0
         var inked = 0
-        var lash = 0
-        var lashInked = 0
         var worstOffLine: Float = 0
         for y in Self.eyeBand.y {
             for x in Self.eyeBand.x {
@@ -588,23 +634,17 @@ final class CharcoalSketchTests: XCTestCase {
                     dark += 1
                     if CharcoalMeasure.ink(hold[i]) > 0.6 { inked += 1 }
                 }
-                if luma >= 0.05 && luma < 0.15 {
-                    lash += 1
-                    if CharcoalMeasure.ink(hold[i]) > 0.6 { lashInked += 1 }
-                }
                 worstOffLine = max(worstOffLine, CharcoalMeasure.offLineDistance(hold[i]))
             }
         }
         XCTAssertGreaterThan(dark, 100, "too few dark pixels in the eye band")
         XCTAssertGreaterThanOrEqual(Float(inked), 0.6 * Float(dark), "\(inked) of \(dark) dark pixels are ink")
-        XCTAssertGreaterThan(lash, 300, "too few lash-toned pixels in the eye band")
-        XCTAssertGreaterThanOrEqual(Float(lashInked), 0.65 * Float(lash),
-                                    "\(lashInked) of \(lash) lash-toned pixels are ink")
         XCTAssertLessThan(worstOffLine, 0.03, "blush or other tint in the eye band")
     }
 
     /// Pixel rows of both brows in the 512-pixel bust frame, above `eyeBand`.
     private static let browRows = 140..<168
+
 
     func testBlendedOverlaysLeaveSkinClean() async throws {
         let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)

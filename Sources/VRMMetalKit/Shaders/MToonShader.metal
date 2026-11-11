@@ -716,6 +716,9 @@ struct MatState {
 
 constant float3 kSketchPaper = float3(0.86, 0.83, 0.77);
 constant float3 kSketchInk = float3(0.030, 0.028, 0.026);
+constant float kSketchDrawBand = 0.35;
+constant float kSketchColourBand = 0.25;
+constant float kSketchFieldNoise = 0.06;
 
 // Bilinear value noise in 0..1.
 static inline float mat_vnoise(float2 p) {
@@ -775,9 +778,11 @@ static inline float mat_sketchLuma(float3 c) {
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
 
-// Seed for every stroke noise; the paper tooth, the blotch and the field noise
-// take none. The boil phase wraps to 64 steps so the value fed to
-// mat_hash21 keeps its fractional bits.
+// Seed for the marks (contours, construction dashes, hatch strokes, dropout),
+// which re-seed on every boil step. Rubbed-in tone takes the materialization
+// seed alone and holds still; the paper tooth, the blotch and the field noise
+// take none. The boil phase wraps to 64 steps so the value fed to mat_hash21
+// keeps its fractional bits.
 static inline float mat_sketchStrokeSeed(constant Uniforms& uniforms) {
     return uniforms.materializeColor.w + float(uint(max(uniforms.materializeOrigin.w, 0.0) + 0.5) & 63u) * 1.37;
 }
@@ -1031,15 +1036,13 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
     } else if (style == 13) {
         // Two head-down fronts with ragged edges: the drawing front finishes
         // the whole sketch by t = 0.6, the colour front sweeps after it.
-        const float drawBand = 0.35;
-        const float colourBand = 0.25;
-        const float fieldNoise = 0.06;
-        float n = (mat_vnoise(in.worldPosition.xz * 9.0 + in.worldPosition.yy * 6.0 + seed) * 2.0 - 1.0) * fieldNoise;
-        float f = mix(fieldNoise, 1.0 - fieldNoise, 1.0 - hNorm) + n;
+        float n = (mat_vnoise(in.worldPosition.xz * 9.0 + in.worldPosition.yy * 6.0 + seed) * 2.0 - 1.0)
+            * kSketchFieldNoise;
+        float f = mix(kSketchFieldNoise, 1.0 - kSketchFieldNoise, 1.0 - hNorm) + n;
         float tDraw = saturate(t / 0.6);
         float tColour = saturate((t - 0.6) / 0.4);
-        float sDraw = saturate((tDraw * (1.0 + drawBand) - f) / drawBand);
-        float sColour = saturate((tColour * (1.0 + colourBand) - f) / colourBand);
+        float sDraw = saturate((tDraw * (1.0 + kSketchDrawBand) - f) / kSketchDrawBand);
+        float sColour = saturate((tColour * (1.0 + kSketchColourBand) - f) / kSketchColourBand);
         st.sketch = 1.0;
         st.sketchS = 0.6 * sDraw;
         st.sketchReveal = smoothstep(0.05, 0.25, sColour);
@@ -1071,13 +1074,15 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
 // texture-edge ink, tonal hatching over a smudge, then the lit colour once
 // the colour front arrives.
 // `toonStep` is the visible MToon shading: the ramped direct light as a
-// fraction of the unshaded base colour, so a ramp whose shade colour equals
-// the base colour reads as fully lit.
+// fraction of the base colour, clamped to 1. It scales with the lights'
+// intensity-weighted luminance (about 0.77 fully lit under Creator's rig), and
+// a ramp whose shade colour equals the base colour holds that value everywhere.
 static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatState mat,
                                 float3 N, float3 albedo, float alpha, float3 lit,
                                 float toonStep, bool isBlend) {
     float s = mat.sketchS;
     float seed = mat_sketchStrokeSeed(uniforms);
+    float toneSeed = uniforms.materializeColor.w;
     float pxScale = max(uniforms.viewportSize.y / 1080.0, 0.25);
     float2 px = in.position.xy / pxScale;
     float tooth = mat_sketchTooth(px);
@@ -1121,9 +1126,9 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float tone = light * mix(1.0, albedoValue, 0.8);
     float dark = 1.0 - tone;
 
-    float h1 = smoothstep(0.30, 0.38, s + (mat_vnoise(px / 80.0 + seed + 21.0) - 0.5) * 0.08);
-    float h2 = smoothstep(0.38, 0.48, s + (mat_vnoise(px / 80.0 + seed + 22.0) - 0.5) * 0.08);
-    float h3 = smoothstep(0.46, 0.58, s + (mat_vnoise(px / 80.0 + seed + 23.0) - 0.5) * 0.08);
+    float h1 = smoothstep(0.30, 0.38, s + (mat_vnoise(px / 80.0 + toneSeed + 21.0) - 0.5) * 0.08);
+    float h2 = smoothstep(0.38, 0.48, s + (mat_vnoise(px / 80.0 + toneSeed + 22.0) - 0.5) * 0.08);
+    float h3 = smoothstep(0.46, 0.58, s + (mat_vnoise(px / 80.0 + toneSeed + 23.0) - 0.5) * 0.08);
     float paleGate = 1.0 - smoothstep(0.65, 0.80, albedoValue);
     float w1 = 1.0 - smoothstep(mix(0.18, 0.30, paleGate), mix(0.48, 0.62, paleGate), tone);
     float w2 = 1.0 - smoothstep(0.15, 0.50, tone);
@@ -1138,14 +1143,16 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     // Rubbed-in tone: streaked along the first hatch direction and blotchy, with
     // a haze under the hatching and inside the contours.
     const float2 rubAxis = float2(0.82, 0.57);
-    float rub = mat_vnoise(float2(dot(px, rubAxis) / 150.0, dot(px, float2(-rubAxis.y, rubAxis.x)) / 36.0) + seed);
-    float rubbed = 0.55 + 0.70 * rub + 0.45 * mat_vnoise(px / 90.0 + seed + 31.0);
-    float edgeHaze = (1.0 - smoothstep(thr * 0.7, thr * 1.9 + 0.1, NdotV)) * 0.20 * drawn;
+    float rub = mat_vnoise(float2(dot(px, rubAxis) / 150.0, dot(px, float2(-rubAxis.y, rubAxis.x)) / 36.0)
+                           + toneSeed);
+    float rubbed = 0.55 + 0.70 * rub + 0.45 * mat_vnoise(px / 90.0 + toneSeed + 31.0);
+    float hazeThr = 0.50 * (0.40 + 0.60 * mat_vnoise(px / 70.0 + toneSeed + 11.0));
+    float edgeHaze = (1.0 - smoothstep(hazeThr * 0.7, hazeThr * 1.9 + 0.1, NdotV)) * 0.20;
     float smudge = smoothstep(0.10, 0.50, dark) * 0.20 + smoothstep(0.45, 0.90, dark) * 0.42;
     float smear = smoothstep(0.50, 0.85, mat_vnoise(float2(dot(px, float2(0.34, 0.94)) / 240.0,
-                                                           dot(px, float2(-0.94, 0.34)) / 52.0) + seed + 51.0)) * 0.12;
+                                                           dot(px, float2(-0.94, 0.34)) / 52.0) + toneSeed + 51.0)) * 0.12;
     smudge = min(max(max(smudge, smear), max(hatchHaze * 0.34, edgeHaze)) * rubbed, 0.58) * h1;
-    float scrub = 0.78 + 0.50 * mat_vnoise(px / 55.0 + seed + 41.0);
+    float scrub = 0.78 + 0.50 * mat_vnoise(px / 55.0 + toneSeed + 41.0);
     float fill = smoothstep(0.40, 1.0, dark) * 0.50 * h1;
 
     float inkPressure = max(max(lineInk, texEdge * drawn * scrub), max(hatch, fill) * scrub) * 1.15;
@@ -1169,7 +1176,7 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
         float3 charColor = float3(0.02, 0.015, 0.01);
         float3 hotColor = mix(emberColor, float3(1.0, 1.0, 0.41), 0.65);
         float3 coalColor = emberColor * float3(0.95, 0.595, 0.40);
-        const float uprightSlope = (1.0 - 2.0 * 0.06) / 0.25;
+        const float uprightSlope = (1.0 - 2.0 * kSketchFieldNoise) / kSketchColourBand;
         float nominalSlope = uprightSlope / max(uniforms.materializeParams.w - uniforms.materializeParams.z, 1e-4);
         float stretch = clamp(nominalSlope / max(frontSlope, 1e-4), 1.0, 6.0);
         float e = 0.02 + (sColour - 0.02) * stretch + (mat_vnoise(px / 14.0) - 0.5) * 0.03;
