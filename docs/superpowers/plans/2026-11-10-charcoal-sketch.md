@@ -134,7 +134,7 @@ enum CharcoalMeasure {
 }
 ```
 
-  The harness loads the model once, clears to `charcoalPaperColor`, runs `configure` after `loadModel` (for outline flags on the swatch fixtures), uses `camera` in place of the framing when given, applies the Creator rig values from Task 1 Step 2, and frames body as eye (0, 0.85, 2.6) / target (0, 0.82, 0) and bust as eye (0.15, 1.38, 0.75) / target (0, 1.33, 0), 40° vertical FOV. `sampleCount > 1` goes through `RenderTestSupport.renderFrameMSAA`.
+  The harness loads the model once, clears to `charcoalPaperColor`, swaps B and R on readback when the format is a `bgra` one so `render` always returns R, G, B, A order, runs `configure` after `loadModel` (for outline flags on the swatch fixtures), uses `camera` in place of the framing when given, applies the Creator rig values from Task 1 Step 2, and frames body as eye (0, 0.85, 2.6) / target (0, 0.82, 0) and bust as eye (0.15, 1.38, 0.75) / target (0, 1.33, 0), 40° vertical FOV. `sampleCount > 1` goes through `RenderTestSupport.renderFrameMSAA`.
 
 - [ ] **Step 0: Capture goldens of the twelve existing styles before touching any shader**
 
@@ -157,8 +157,9 @@ func testStrippedWhenDisabled()             // enableMaterialization false: rend
 func testBlankStartIsPaper()                // progress 0: max offLineDistance < 0.03 over every pixel
 func testHoldFrameHasNoColour()             // progress 0.3 and 0.6: max offLineDistance < 0.03
 func testColourArrivalIsMonotonic()         // for t in 0.6, 0.65 ... 1.0: count of pixels equal to plain,
-                                            // restricted to pixels whose plain offLineDistance > 0.04, never decreases;
-                                            // 0 matches at 0.6, all match at 1.0
+                                            // restricted to pixels whose plain offLineDistance > 0.04, never drops by
+                                            // more than 16 pixels between steps (hull rasterisation slack at size 512);
+                                            // exactly 0 matches at 0.6, exactly all match at 1.0
 func testDeterministic()                    // two render(charcoal(0.45)) calls are byte-identical
 func testMismatchedHeightRangeStillEndsClean()  // heightRange 0.0...0.5: progress 1 == plain; progress 0.6 offLine < 0.03
 func testHoldFrameHasNoColourOnSRGBTarget()     // pixelFormat .rgba8Unorm_srgb: progress 0.6 offLine < 0.03; progress 1 == plain
@@ -173,7 +174,7 @@ Expected: compile failure (`.charcoal` undefined).
 
 - [ ] **Step 3: Implement the Swift API and upload**
 
-Add the case, property, constants and `defaultColor` entry (1.0, 0.42, 0.10). In the renderer, write `mat.encodedBoilPhase` into `materializeOrigin_packed.w`. `usesDiscard` stays true for charcoal.
+Add the case, property, constants and `defaultColor` entry (1.0, 0.42, 0.10). The doc comment on `charcoalPaperColor` says hosts pass its components straight to `MTLClearColor` with no colour-space conversion. In the renderer, write `mat.encodedBoilPhase` into `materializeOrigin_packed.w`. `usesDiscard` stays true for charcoal.
 
 Also make the upload itself conditional on `config.enableMaterialization`: when the flag is off, upload the inert sentinel `(1, 0, 0, 1)` whatever `materialization` holds. Today the uniforms are uploaded regardless, which is harmless only because the fragment is compiled out; Task 6 adds a vertex-stage reader with no function constant, and it must see the sentinel.
 
@@ -248,6 +249,7 @@ Expected: the four new tests fail (ink is 0 everywhere).
 Take from the patch, unchanged unless noted: `mat_sketchBlotch`, `mat_sketchTooth`, `mat_sketchDeposit`, `mat_sketchLuma`, `mat_sketchContourGate`, and from `mat_sketchSurface` the contour, crease, `lineDropout`, `lineInk`, `gesture`, `texEdge` and `coverage` lines. Changes:
 - Construction dashes are 0.19 ink (patch: 0.30).
 - Under an orthographic projection (`uniforms.projectionMatrix[3][3] == 1.0`) `V` is the constant direction towards the camera, `normalize(float3(viewMatrix[0].z, viewMatrix[1].z, viewMatrix[2].z))`, not `mat_viewDir`.
+- The grazing term is `abs(dot(N, V))`, never `saturate(dot(N, V))`, so the sign of `V` cannot zero it.
 - `sketchColor = mix(kSketchPaper, kSketchInk, gesture)`, then `mix(…, kSketchInk, coverage)`, where `coverage = mat_sketchDeposit(max(lineInk, texEdge * drawn * 1.15) * 1.15, tooth)`.
 
 - [ ] **Step 4: Rebuild shaders, update the hash, run tests**
@@ -334,7 +336,7 @@ Expected: FAIL on the 60% bound (Task 2 left blended overlays transparent).
 
 - [ ] **Step 3: Implement the `isBlend` branch**
 
-As in the patch: `highlight = albedoLuma > 0.75 && chroma < 0.12`; dark ink `smoothstep(0.30, 0.10, albedoLuma) * drawn`; highlight colour is paper at `alpha * drawn`; dark colour is ink at `alpha * mix(mat_sketchDeposit(darkInk, tooth), darkInk, 0.8)`; anything else has sketch alpha 0. Colour and alpha cross to `lit` and `alpha` with `mat.sketchReveal`.
+As in the patch: `highlight = albedoLuma > 0.75 && chroma < 0.12`; dark ink `smoothstep(0.30, 0.10, albedoLuma) * drawn`; highlight colour is paper at `alpha * drawn`; dark colour is ink at `alpha * mix(mat_sketchDeposit(darkInk, tooth), darkInk, 0.8)`; anything else has sketch alpha 0 and sketch colour `lit`, so only its alpha ramps and a tinted overlay never passes through grey or paper on the way in. Colour and alpha cross to `lit` and `alpha` with `mat.sketchReveal`.
 
 - [ ] **Step 4: Rebuild shaders, update the hash, run tests**
 
@@ -383,7 +385,7 @@ Expected: the three tests fail (Task 2 discards the hull during the sketch).
 
 - [ ] **Step 3: Implement the vertex widening**
 
-Take `mtoonSketchHullBoost` from the patch (2.0 to 6.5 px extra, growing in with `smoothstep(0.0, 0.3, sD)`, easing out with `1 - smoothstep(0.1, 0.7, sC)`), with these changes: recompute `f` with the same `mix(0.06, 0.94, 1 - hNorm)` form as Task 2 (no noise term); return first when the style is not 13 or `progress >= 1`. Call it from both exits of `applyMToonOutlineExtrusion` (only when `outlineWidthFactor > 0`) and from `mtoon_outline_vertex` on its final clip position with that function's own `widthMask`.
+Take `mtoonSketchHullBoost` from the patch (2.0 to 6.5 px extra, growing in with `smoothstep(0.0, 0.3, sD)`, easing out with `1 - smoothstep(0.1, 0.7, sC)`), with these changes: compute `hNorm` with an explicit `saturate`; recompute `f` with the same `mix(0.06, 0.94, 1 - hNorm)` form as Task 2 (no noise term); retract the extra width earlier, with `1 - smoothstep(0.05, 0.45, sC)`, so the widened hull has left a surface before that surface settles to colour; return first when the style is not 13 or `progress >= 1`. Call it from both exits of `applyMToonOutlineExtrusion` (only when `outlineWidthFactor > 0`) and from `mtoon_outline_vertex` on its final clip position with that function's own `widthMask`.
 
 - [ ] **Step 4: Implement the fragment side**
 
@@ -435,7 +437,7 @@ Expected: ember and boil tests fail.
 
 - [ ] **Step 3: Implement the ember ramp and settling lines**
 
-In `mat_sketchSurface`, with `sColour = mat.sketchFront`, after `mix(sketchColor, lit, reveal)`. The char rim, hot core and coal tail are all multiplied by `mat.sketchEmberOn`:
+In `mat_sketchSurface`, with `sColour = mat.sketchFront`, after `mix(sketchColor, lit, reveal)`. The char rim, hot core and coal tail sit inside `if (mat.sketchEmberOn > 0.5 && sColour > 0.0)`, so the noise warp on the band edges cannot fire the char rim at the hold frame, where `sColour` is exactly 0:
 - lines linger: `mix(c, kSketchInk, mat_sketchDeposit(lineInk, tooth) * 0.55 * reveal * (1 - settle))`;
 - char rim over `sColour` 0.02 to 0.06 darkens towards (0.02, 0.015, 0.01);
 - hot core over `sColour` 0.06 to 0.10 is `emberColor` pushed towards yellow-gold (default result (1.0, 0.80, 0.30)), coal tail over 0.10 to 0.18 is `emberColor` pulled to red-orange (default result (0.95, 0.25, 0.04)) fading into `lit`; band edges are warped by `mat_vnoise(px / 14.0)`.
