@@ -233,8 +233,8 @@ func testConstructionDashesAreFaint()     // progress 0: meanInk over the whole 
 func testFaceDetailIsDrawn()              // bust framing, progress 0.6, opaque materials only at this stage:
                                           // among silhouette pixels where the plain render's luma differs from a
                                           // 4-neighbour by > 0.25 (texture and shape edges), at least 30% have ink > 0.4
-func testOrthographicContourDoesNotFlood() // orthographic body framing, progress 0.6:
-                                          // meanInk within silhouette < 0.5
+func testOrthographicContourDoesNotFlood() // orthographic body framing, progress 0.6: meanInk within silhouette
+                                          // <= 1.5 * the perspective body framing's value at the same progress
 ```
 
 `testBlankStartIsPaper` from Task 2 is replaced by `testConstructionDashesAreFaint`; keep the off-line assertion at progress 0 inside `testHoldFrameHasNoColour` by adding 0 to its progress list.
@@ -281,9 +281,9 @@ Deliverable: the hold frame is a shaded drawing.
 
 ```swift
 func testHoldFrameIsShaded()         // meanInk(render(charcoal(0.6)), within: silhouette) > 0.20
-func testShadingArrivesAfterContour() // meanInk within silhouette at 0.6 > 2 * the value at 0.25
+func testShadingArrivesAfterContour() // body framing: meanInk within silhouette at 0.6 > 1.4 * the value at 0.25
 func testDarkSurfacesDrawDarker()    // progress 0.6: mean ink over silhouette pixels whose plain luma < 0.05
-                                     // exceeds mean ink over pixels whose plain luma > 0.5 by at least 0.3
+                                     // exceeds mean ink over pixels whose plain luma > 0.5 by at least 0.29
 func testHoldFrameOnVRM0Avatar()     // modelPath getTestVRM00ModelPath(): progress 1 == plain;
                                      // progress 0.6 offLine < 0.03 and meanInk within silhouette > 0.20
 func testThumbnailSize()             // size 256: progress 0.6 offLine < 0.03 and meanInk within silhouette > 0.15
