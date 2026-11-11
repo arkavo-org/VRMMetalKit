@@ -703,7 +703,30 @@ struct MatState {
     float brightness;    // scanline/flicker multiplier
     float overlayMix;    // 0..1 blend of overlayColor over the lit result
     float3 overlayColor; // chrome mirror / frost ice replacement surface
+    float sketch;        // 1 when the charcoal style owns the composite
+    float sketchS;       // charcoal drawing progress, 0..0.6
+    float sketchReveal;      // charcoal colour arrival across the ember band (0..1)
+    float sketchRevealSlow;  // slower settle of the colour arrival (0..1)
+    float sketchFront;       // local progress of the colour front (0..1)
+    float sketchEmberOn;     // 1 when the accent colour is non-zero
 };
+
+// MARK: Charcoal sketch (style 13)
+
+constant float3 kSketchPaper = float3(0.86, 0.83, 0.77);
+[[maybe_unused]] constant float3 kSketchInk = float3(0.030, 0.028, 0.026);
+
+// Bilinear value noise in 0..1.
+static inline float mat_vnoise(float2 p) {
+    float2 i = floor(p);
+    float2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = mat_hash21(i);
+    float b = mat_hash21(i + float2(1.0, 0.0));
+    float c = mat_hash21(i + float2(0.0, 1.0));
+    float d = mat_hash21(i + float2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
 
 // World-space V from the view matrix — independent of the vertex interpolator,
 // which is dummy (0,0,1) unless needsViewDirection is true.
@@ -730,6 +753,12 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
     st.brightness = 1.0;
     st.overlayMix = 0.0;
     st.overlayColor = float3(0.0);
+    st.sketch = 0.0;
+    st.sketchS = 0.6;
+    st.sketchReveal = 1.0;
+    st.sketchRevealSlow = 1.0;
+    st.sketchFront = 1.0;
+    st.sketchEmberOn = 0.0;
     // Compile-time gate: pipelines specialized without materialization
     // dead-strip everything below (and, through constant propagation, the
     // shell/composite consumers in the fragment).
@@ -920,8 +949,41 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
         float landing = 1.0 - saturate((fillPhase * 1.05 - fillOrder) / 0.1);
         float edgeLine = 1.0 - saturate((F2 - F1) / 0.05);
         st.edge = landing * 0.7 + edgeLine * 0.5 * (1.0 - fillPhase);
+    } else if (style == 13) {
+        // Two head-down fronts with ragged edges: the drawing front finishes
+        // the whole sketch by t = 0.6, the colour front sweeps after it.
+        const float drawBand = 0.35;
+        const float colourBand = 0.25;
+        const float fieldNoise = 0.06;
+        float n = (mat_vnoise(in.worldPosition.xz * 9.0 + in.worldPosition.yy * 6.0 + seed) * 2.0 - 1.0) * fieldNoise;
+        float f = mix(fieldNoise, 1.0 - fieldNoise, 1.0 - hNorm) + n;
+        float tDraw = saturate(t / 0.6);
+        float tColour = saturate((t - 0.6) / 0.4);
+        float sDraw = saturate((tDraw * (1.0 + drawBand) - f) / drawBand);
+        float sColour = saturate((tColour * (1.0 + colourBand) - f) / colourBand);
+        st.sketch = 1.0;
+        st.sketchS = 0.6 * sDraw;
+        st.sketchReveal = smoothstep(0.05, 0.25, sColour);
+        st.sketchRevealSlow = smoothstep(0.10, 0.70, sColour);
+        st.sketchFront = sColour;
+        st.sketchEmberOn = any(uniforms.materializeColor.xyz > 0.0) ? 1.0 : 0.0;
+        if (isOutlineInstance && st.sketchReveal < 1.0) { st.killed = true; return st; }
     }
     return st;
+}
+
+// Charcoal composite for a shaded surface fragment: paper until the colour
+// front arrives, then the lit colour. `toonStep` is the MToon shade ramp
+// (0 = shade, 1 = lit).
+static float4 mat_sketchSurface([[maybe_unused]] constant Uniforms& uniforms,
+                                [[maybe_unused]] VertexOut in, MatState mat,
+                                [[maybe_unused]] float3 N, [[maybe_unused]] float3 albedo,
+                                float alpha, float3 lit,
+                                [[maybe_unused]] float toonStep, bool isBlend) {
+    if (isBlend) {
+        return float4(lit, alpha * mat.sketchReveal);
+    }
+    return float4(mix(kSketchPaper, lit, mat.sketchReveal), alpha);
 }
 
 
@@ -1361,6 +1423,15 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  // Show joint indices and weights to verify skinning data
  return float4(float(in.joints[0]) / 255.0, in.weights[0], 0.0, 1.0);
  #endif
+
+ if (mat.sketch > 0.5) {
+     float3 sketchNormal = normalize(in.worldNormal);
+     if (!isFrontFace) { sketchNormal = -sketchNormal; }
+     return mat_sketchSurface(uniforms, in, mat, sketchNormal, float3(baseColor.rgb),
+                              float(baseColor.a), float3(litColor),
+                              saturate(dot(float3(lightingAcc), float3(0.2126, 0.7152, 0.0722))),
+                              effectiveAlphaMode == 2);
+ }
 
  // Materialization composite: overlay surface (chrome mirror / frost ice),
  // scanline/flicker attenuation, then the additive band at the front.

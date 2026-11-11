@@ -33,10 +33,10 @@ final class MaterializationTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<Uniforms>.offset(of: \Uniforms.materializeOrigin_packed), 464)
     }
 
-    func testAllTwelveStylesEnumerated() {
-        XCTAssertEqual(VRMMaterializationStyle.allCases.count, 12)
+    func testAllThirteenStylesEnumerated() {
+        XCTAssertEqual(VRMMaterializationStyle.allCases.count, 13)
         XCTAssertEqual(Set(VRMMaterializationStyle.allCases.map(\.rawValue)),
-                       Set(1...12))
+                       Set(1...13))
     }
 
     // MARK: - API defaults

@@ -54,7 +54,7 @@ struct Uniforms {
  // Materialization spawn effect (VMK#materialize)
  float4 materializeParams;    // x = progress (>=1 off), y = style, z = min Y, w = max Y (world)
  float4 materializeColor;     // xyz = accent color, w = per-avatar seed
- float4 materializeOrigin;    // xyz = world focus point (radial styles), w = reserved
+ float4 materializeOrigin;    // xyz = world focus point (radial styles), w = boil phase
  // Hemisphere ambient: ambientColor lights surfaces facing world +Y, this
  // colour surfaces facing -Y. Equal to ambientColor for a uniform ambient.
  float4 groundAmbientColor;   // xyz = color, w = unused

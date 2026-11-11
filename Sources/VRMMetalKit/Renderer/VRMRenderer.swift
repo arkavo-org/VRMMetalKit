@@ -2317,9 +2317,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // Camera mode for first-person vertex culling (0 = third-person, 1 = first-person).
         uniforms.cameraMode = cameraMode == .firstPerson ? 1 : 0
 
-        // Materialization spawn effect (VMK#materialize). progress >= 1 or a
-        // nil struct uploads the inert sentinel (x = 1, style = 0).
-        if let mat = materialization, mat.clampedProgress < 1.0 {
+        // Materialization spawn effect (VMK#materialize). A disabled config,
+        // progress >= 1 or a nil struct uploads the inert sentinel (x = 1,
+        // style = 0).
+        if config.enableMaterialization, let mat = materialization, mat.clampedProgress < 1.0 {
             uniforms.materializeParams = SIMD4<Float>(
                 mat.clampedProgress,
                 Float(mat.style.rawValue),
@@ -2329,7 +2330,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 mat.color.x, mat.color.y, mat.color.z, mat.seed)
             let origin = mat.resolvedOrigin
             uniforms.materializeOrigin_packed = SIMD4<Float>(
-                origin.x, origin.y, origin.z, 0)
+                origin.x, origin.y, origin.z, mat.encodedBoilPhase)
         } else {
             uniforms.materializeParams = SIMD4<Float>(1.0, 0.0, 0.0, 1.0)
         }
