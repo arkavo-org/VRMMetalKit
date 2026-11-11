@@ -1074,9 +1074,9 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float h1 = smoothstep(0.30, 0.38, s + (mat_vnoise(px / 80.0 + seed + 21.0) - 0.5) * 0.08);
     float h2 = smoothstep(0.38, 0.48, s + (mat_vnoise(px / 80.0 + seed + 22.0) - 0.5) * 0.08);
     float h3 = smoothstep(0.46, 0.58, s + (mat_vnoise(px / 80.0 + seed + 23.0) - 0.5) * 0.08);
-    float w1 = smoothstep(0.62, 0.30, tone);
-    float w2 = smoothstep(0.50, 0.15, tone);
-    float w3 = smoothstep(0.25, 0.03, tone);
+    float w1 = 1.0 - smoothstep(0.30, 0.62, tone);
+    float w2 = 1.0 - smoothstep(0.15, 0.50, tone);
+    float w3 = 1.0 - smoothstep(0.03, 0.25, tone);
     float paleGate = 1.0 - smoothstep(0.65, 0.80, albedoValue);
     const float spacing = 7.0;
     float hatch = mat_sketchHatch(px, 35.0, spacing, w1, seed) * step(0.001, w1) * h1;
