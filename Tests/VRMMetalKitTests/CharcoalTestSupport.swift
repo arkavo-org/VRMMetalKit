@@ -250,7 +250,7 @@ enum CharcoalMeasure {
 
     /// Mean of `ink` over the pixels in `mask` (every pixel when nil).
     static func meanInk(_ rgba: [UInt8], within mask: [Bool]?,
-                        format: MTLPixelFormat = .rgba8Unorm) -> Float {
+                        format: MTLPixelFormat) -> Float {
         let values = colours(rgba, format: format)
         var sum: Float = 0
         var count = 0

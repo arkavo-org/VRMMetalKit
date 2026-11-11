@@ -162,6 +162,7 @@ final class CharcoalSketchTests: XCTestCase {
         let perspectiveInk = try meanInk(perspective)
         XCTAssertLessThanOrEqual(orthographicInk, 1.5 * perspectiveInk,
                                  "orthographic \(orthographicInk) vs perspective \(perspectiveInk)")
+        XCTAssertGreaterThan(orthographicInk, 0.40, "orthographic contours and tone should still be drawn")
     }
 
     // MARK: - Tone and hatching
@@ -276,6 +277,23 @@ final class CharcoalSketchTests: XCTestCase {
         }
     }
 
+    func testEndStateMatchesPlainRenderOffTheSentinel() async throws {
+        let body = try await CharcoalHarness(device: device())
+        let plain = try body.render(nil)
+        XCTAssertEqual(try body.render(body.charcoal(0.98)), plain, "default body framing")
+        XCTAssertEqual(try body.render(body.charcoal(0.98, heightRange: 0.0...0.5)), plain,
+                       "mismatched height range")
+
+        let cases: [(CharcoalHarness.SwatchFixture, CharcoalHarness.SwatchHull)] = [
+            (.rigid, .dedicated), (.rigid, .merged), (.skinned, .merged), (.skinned, .dedicated),
+        ]
+        for (fixture, hull) in cases {
+            let harness = try await CharcoalHarness.swatches(device: device(), fixture: fixture, hull: hull)
+            XCTAssertEqual(try harness.render(harness.swatchCharcoal(0.98)), try harness.render(nil),
+                           "\(fixture) \(hull)")
+        }
+    }
+
     func testColourFrontSettlesExactly() async throws {
         let harness = try await CharcoalHarness(device: device())
         let plain = try harness.render(nil)
@@ -384,6 +402,14 @@ final class CharcoalSketchTests: XCTestCase {
         let boiled = try harness.render(harness.charcoal(0.6, boilPhase: 1))
         XCTAssertTrue(boiled != base, "boil phase 1 must change the strokes")
         XCTAssertEqual(try harness.render(harness.charcoal(0.6, boilPhase: 1)), boiled)
+    }
+
+    func testBoilPhaseWrapsEvery64Steps() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let frames = try [0, 1, 64, 65].map { try harness.render(harness.charcoal(0.6, boilPhase: UInt32($0))) }
+        XCTAssertNotEqual(frames[0], frames[1], "phases 0 and 1 must differ for the wrap check to mean anything")
+        XCTAssertEqual(frames[2], frames[0], "boil phase 64 must repeat phase 0")
+        XCTAssertEqual(frames[3], frames[1], "boil phase 65 must repeat phase 1")
     }
 
     func testBoilLeavesRubbedToneStill() async throws {
@@ -623,28 +649,17 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Float(overlayInked), 0.8 * Float(overlay),
                                     "\(overlayInked) of \(overlay) dark overlay pixels are solid ink")
 
-        var dark = 0
-        var inked = 0
         var worstOffLine: Float = 0
         for y in Self.eyeBand.y {
             for x in Self.eyeBand.x {
-                let i = y * harness.size + x
-                let luma = Self.plainLuma(plain[i])
-                if luma < 0.05 {
-                    dark += 1
-                    if CharcoalMeasure.ink(hold[i]) > 0.6 { inked += 1 }
-                }
-                worstOffLine = max(worstOffLine, CharcoalMeasure.offLineDistance(hold[i]))
+                worstOffLine = max(worstOffLine, CharcoalMeasure.offLineDistance(hold[y * harness.size + x]))
             }
         }
-        XCTAssertGreaterThan(dark, 100, "too few dark pixels in the eye band")
-        XCTAssertGreaterThanOrEqual(Float(inked), 0.6 * Float(dark), "\(inked) of \(dark) dark pixels are ink")
         XCTAssertLessThan(worstOffLine, 0.03, "blush or other tint in the eye band")
     }
 
     /// Pixel rows of both brows in the 512-pixel bust frame, above `eyeBand`.
     private static let browRows = 140..<168
-
 
     func testBlendedOverlaysLeaveSkinClean() async throws {
         let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)

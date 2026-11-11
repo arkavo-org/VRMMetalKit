@@ -45,14 +45,27 @@ final class MToonLegacyGoldenTests: XCTestCase {
     func testSkinnedMergedHullMatchesBaseline() async throws { try await assertGolden(.skinned, .outlinedSingleSided) }
     func testSkinnedDedicatedHullMatchesBaseline() async throws { try await assertGolden(.skinned, .outlinedDoubleSided) }
 
-    private func assertGolden(_ fixture: Fixture, _ scene: Scene) async throws {
+    /// A renderer built with materialization enabled and no effect set must
+    /// reproduce the same goldens as one built without it.
+    func testMaterializationEnabledButUnsetMatchesBaseline() async throws {
+        for fixture in Fixture.allCases {
+            for scene in Scene.allCases {
+                try await assertGolden(fixture, scene, enableMaterialization: true)
+            }
+        }
+    }
+
+    private func assertGolden(_ fixture: Fixture, _ scene: Scene,
+                              enableMaterialization: Bool = false) async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal not available")
         }
-        let rendered = try await Self.render(fixture: fixture, scene: scene, device: device)
+        let rendered = try await Self.render(fixture: fixture, scene: scene, device: device,
+                                             enableMaterialization: enableMaterialization)
         let name = "golden_\(fixture.rawValue)_\(scene.rawValue)"
 
-        if let outputDirectory = ProcessInfo.processInfo.environment["VMK_WRITE_MTOON_GOLDENS"] {
+        if !enableMaterialization,
+           let outputDirectory = ProcessInfo.processInfo.environment["VMK_WRITE_MTOON_GOLDENS"] {
             let compressed = try (Data(rendered) as NSData).compressed(using: .zlib) as Data
             let url = URL(fileURLWithPath: outputDirectory).appendingPathComponent("\(name).rgba.zlib")
             try compressed.write(to: url)
@@ -79,14 +92,15 @@ final class MToonLegacyGoldenTests: XCTestCase {
             }
         }
         XCTAssertEqual(changed, 0,
-            "\(fixture.rawValue)/\(scene.rawValue): \(changed) bytes differ from the baseline frame (max delta \(maxDelta)). Default renderer output must be byte-identical to the baseline.")
+            "\(fixture.rawValue)/\(scene.rawValue) materialization \(enableMaterialization ? "enabled" : "default"): \(changed) bytes differ from the baseline frame (max delta \(maxDelta)). Default renderer output must be byte-identical to the baseline.")
         if changed > 0 {
             let diffURL = FileManager.default.temporaryDirectory.appendingPathComponent("\(name)_actual.rgba")
             try? Data(rendered).write(to: diffURL)
         }
     }
 
-    static func render(fixture: Fixture, scene: Scene, device: MTLDevice) async throws -> [UInt8] {
+    static func render(fixture: Fixture, scene: Scene, device: MTLDevice,
+                       enableMaterialization: Bool = false) async throws -> [UInt8] {
         guard let url = Bundle.module.url(
             forResource: fixture.rawValue,
             withExtension: "vrm",
@@ -101,6 +115,7 @@ final class MToonLegacyGoldenTests: XCTestCase {
         var config = RendererConfig()
         config.colorPixelFormat = .rgba8Unorm
         config.sampleCount = 1
+        config.enableMaterialization = enableMaterialization
         let renderer = VRMRenderer(device: device, config: config)
         renderer.loadModel(model)
         renderer.disableLegacyAnimation = true
