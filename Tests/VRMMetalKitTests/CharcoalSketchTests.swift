@@ -361,7 +361,7 @@ final class CharcoalSketchTests: XCTestCase {
         let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
         let base = CharcoalMeasure.meanInk(try harness.render(harness.charcoal(0.6, boilPhase: 0)),
                                            within: silhouette, format: harness.pixelFormat)
-        let late = CharcoalMeasure.meanInk(try harness.render(harness.charcoal(0.6, boilPhase: 200)),
+        let late = CharcoalMeasure.meanInk(try harness.render(harness.charcoal(0.6, boilPhase: 60000)),
                                            within: silhouette, format: harness.pixelFormat)
         XCTAssertGreaterThan(base, 0.05)
         XCTAssertEqual(late, base, accuracy: base * 0.10)
