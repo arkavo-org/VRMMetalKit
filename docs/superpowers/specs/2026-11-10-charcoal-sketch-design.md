@@ -124,7 +124,7 @@ This must cover all three hull paths: the merged colour-plus-outline draw on the
 
 ### Line boil
 
-`boilPhase` is an integer the host advances (the original spec's default is 10 steps a second). It is uploaded as an ordinary float, `Float(boilPhase & 0xFFFF)`, and decoded with `uint(w + 0.5)`. It must not be bit-cast: small integers are subnormal as float bit patterns and can be flushed to zero on the GPU. It is added to the seed of the stroke noises (contour wobble, dropout, pressure, hatch wobble and stroke breaks), so lines re-seed on each step. The paper tooth and the field `f` do not boil. `boilPhase = 0` with a still camera gives identical consecutive frames.
+`boilPhase` is an integer the host advances (the original spec's default is 10 steps a second). It is uploaded as an ordinary float, `Float(boilPhase & 0xFFFF)`, and decoded with `uint(w + 0.5)`. It must not be bit-cast: small integers are subnormal as float bit patterns and can be flushed to zero on the GPU. It is added to the seed of the stroke noises (contour wobble, dropout, pressure, hatch wobble and stroke breaks), so lines re-seed on each step. The paper tooth, the field `f` and the rubbed-in smudge tone do not boil: only the marks (contours, dashes, hatch strokes) re-seed. Broad tone that jumped ten times a second would read as flicker. `boilPhase = 0` with a still camera gives identical consecutive frames.
 
 ## API
 
