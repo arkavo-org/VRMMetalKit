@@ -748,6 +748,23 @@ static inline float mat_sketchDeposit(float pressure, float tooth) {
     return mix(grain, 1.0, smoothstep(0.78, 1.05, pressure));
 }
 
+// One hatch layer: broad, soft-edged wobbling strokes of finite length whose
+// width follows `weight` (0..1). Returns stroke pressure, not coverage.
+static inline float mat_sketchHatch(float2 px, float angleDeg, float spacing, float weight, float seed) {
+    float a = angleDeg * 0.017453292;
+    float2 dir = float2(cos(a), sin(a));
+    float wobble = (mat_vnoise(px / (spacing * 6.0) + seed) - 0.5) * 1.5
+                 + (mat_vnoise(px / (spacing * 19.0) + seed + 4.0) - 0.5) * 1.2;
+    float u = dot(px, float2(-dir.y, dir.x)) / spacing + wobble;
+    float v = dot(px, dir) / (spacing * 7.0);
+    float id = floor(u);
+    float stroke = mat_vnoise(float2(v + mat_hash21(float2(id, seed)) * 37.0, id * 0.37 + seed));
+    float d = abs(fract(u) - 0.5);
+    float halfWidth = mix(0.18, 0.48, saturate(weight)) * smoothstep(0.18, 0.42, stroke);
+    float strength = 0.65 + 0.35 * mat_hash21(float2(id, seed + 3.0));
+    return (1.0 - smoothstep(halfWidth * 0.45, halfWidth * 1.1 + 1e-3, d)) * strength;
+}
+
 static inline float mat_sketchLuma(float3 c) {
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
@@ -1008,11 +1025,12 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
 }
 
 // Charcoal composite for a shaded surface fragment: paper, contour and
-// texture-edge ink, then the lit colour once the colour front arrives.
+// texture-edge ink, tonal hatching over a smudge, then the lit colour once
+// the colour front arrives.
 // `toonStep` is the MToon shade ramp (0 = shade, 1 = lit).
 static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatState mat,
                                 float3 N, float3 albedo, float alpha, float3 lit,
-                                [[maybe_unused]] float toonStep, bool isBlend) {
+                                float toonStep, bool isBlend) {
     if (isBlend) {
         return float4(lit, alpha * mat.sketchReveal);
     }
@@ -1043,10 +1061,37 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float dash = smoothstep(0.42, 0.58, mat_vnoise(px / 30.0 + seed + 9.0));
     float gesture = lineRaw * (1.0 - drawn) * dash * 0.19;
 
-    float texEdge = smoothstep(0.03, 0.10, fwidth(mat_sketchLuma(albedo))) * lineDropout * (0.6 + 0.5 * pressure);
-    float coverage = mat_sketchDeposit(max(lineInk, texEdge * drawn * 1.15) * 1.15, tooth);
+    float albedoLuma = mat_sketchLuma(albedo);
+    float texEdge = smoothstep(0.03, 0.10, fwidth(albedoLuma)) * lineDropout * (0.6 + 0.5 * pressure);
 
-    float3 sketchColor = mix(kSketchPaper, kSketchInk, gesture);
+    float3 L = normalize(-uniforms.lightDirection.xyz);
+    float light = mix(dot(N, L) * 0.5 + 0.5, toonStep, 0.8);
+    light *= mix(0.70, 1.0, saturate(N.y * 0.5 + 0.75));
+    float albedoValue = smoothstep(0.15, 0.75, sqrt(albedoLuma));
+    float tone = light * mix(1.0, albedoValue, 0.8);
+    float dark = 1.0 - tone;
+
+    float h1 = smoothstep(0.30, 0.38, s + (mat_vnoise(px / 80.0 + seed + 21.0) - 0.5) * 0.08);
+    float h2 = smoothstep(0.38, 0.48, s + (mat_vnoise(px / 80.0 + seed + 22.0) - 0.5) * 0.08);
+    float h3 = smoothstep(0.46, 0.58, s + (mat_vnoise(px / 80.0 + seed + 23.0) - 0.5) * 0.08);
+    float w1 = smoothstep(0.62, 0.30, tone);
+    float w2 = smoothstep(0.50, 0.15, tone);
+    float w3 = smoothstep(0.25, 0.03, tone);
+    float paleGate = 1.0 - smoothstep(0.65, 0.80, albedoValue);
+    const float spacing = 7.0;
+    float hatch = mat_sketchHatch(px, 35.0, spacing, w1, seed) * step(0.001, w1) * h1;
+    hatch = max(hatch, mat_sketchHatch(px, -55.0, spacing, w2, seed + 7.0) * step(0.001, w2) * h2 * paleGate);
+    hatch = max(hatch, mat_sketchHatch(px, 80.0, spacing * 0.9, w3, seed + 13.0) * step(0.001, w3) * h3 * paleGate);
+    hatch *= mix(0.62, 1.0, w2);
+
+    float smudge = (smoothstep(0.18, 0.50, dark) * 0.20 + smoothstep(0.50, 0.90, dark) * 0.33)
+        * h1 * (0.85 + 0.3 * mat_vnoise(px / 40.0 + seed));
+    float fill = smoothstep(0.40, 1.0, dark) * 0.62 * h1;
+
+    float inkPressure = max(max(lineInk, texEdge * drawn * 1.15), max(hatch, fill)) * 1.15;
+    float coverage = mat_sketchDeposit(inkPressure, tooth);
+
+    float3 sketchColor = mix(kSketchPaper, kSketchInk, max(smudge, gesture));
     sketchColor = mix(sketchColor, kSketchInk, coverage);
     return float4(mix(sketchColor, lit, mat.sketchReveal), alpha);
 }
@@ -1494,7 +1539,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      if (!isFrontFace) { sketchNormal = -sketchNormal; }
      return mat_sketchSurface(uniforms, in, mat, sketchNormal, float3(baseColor.rgb),
                               float(baseColor.a), float3(litColor),
-                              saturate(dot(float3(lightingAcc), float3(0.2126, 0.7152, 0.0722))),
+                              saturate(mat_sketchLuma(float3(lightingAcc))),
                               effectiveAlphaMode == 2);
  }
 

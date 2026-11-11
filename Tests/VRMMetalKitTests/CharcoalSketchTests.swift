@@ -129,6 +129,77 @@ final class CharcoalSketchTests: XCTestCase {
                                  "orthographic \(orthographicInk) vs perspective \(perspectiveInk)")
     }
 
+    // MARK: - Tone and hatching
+
+    private func silhouetteInk(_ harness: CharcoalHarness, progress: Float) throws -> Float {
+        let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
+        let frame = try harness.render(harness.charcoal(progress))
+        return CharcoalMeasure.meanInk(frame, within: silhouette, format: harness.pixelFormat)
+    }
+
+    private func meanInk(_ harness: CharcoalHarness, progress: Float,
+                         plainLuma matches: (Float) -> Bool) throws -> Float {
+        let plain = try harness.render(nil)
+        let silhouette = CharcoalMeasure.silhouette(plain: plain)
+        let luma = CharcoalMeasure.colours(plain, format: harness.pixelFormat)
+            .map { simd_dot($0, SIMD3<Float>(0.2126, 0.7152, 0.0722)) }
+        let ink = CharcoalMeasure.colours(try harness.render(harness.charcoal(progress)),
+                                          format: harness.pixelFormat).map(CharcoalMeasure.ink)
+        var sum: Float = 0
+        var count = 0
+        for i in ink.indices where silhouette[i] && matches(luma[i]) {
+            sum += ink[i]
+            count += 1
+        }
+        XCTAssertGreaterThan(count, 200, "too few pixels to measure")
+        return count > 0 ? sum / Float(count) : 0
+    }
+
+    func testHoldFrameIsShaded() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let mean = try silhouetteInk(harness, progress: 0.6)
+        XCTAssertGreaterThan(mean, 0.20)
+    }
+
+    func testShadingArrivesAfterContour() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let early = try silhouetteInk(harness, progress: 0.25)
+        let hold = try silhouetteInk(harness, progress: 0.6)
+        XCTAssertGreaterThan(hold, 1.4 * early, "hold \(hold) vs early \(early)")
+    }
+
+    func testDarkSurfacesDrawDarker() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let dark = try meanInk(harness, progress: 0.6) { $0 < 0.05 }
+        let pale = try meanInk(harness, progress: 0.6) { $0 > 0.5 }
+        XCTAssertGreaterThanOrEqual(dark - pale, 0.29, "dark \(dark) vs pale \(pale)")
+    }
+
+    func testHoldFrameOnVRM0Avatar() async throws {
+        let harness = try await CharcoalHarness(device: device(), modelPath: getTestVRM00ModelPath())
+        XCTAssertEqual(try harness.render(harness.charcoal(1.0)), try harness.render(nil))
+        let hold = try harness.render(harness.charcoal(0.6))
+        XCTAssertLessThan(maxOffLine(hold), 0.03)
+        let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
+        let mean = CharcoalMeasure.meanInk(hold, within: silhouette, format: harness.pixelFormat)
+        XCTAssertGreaterThan(mean, 0.20)
+    }
+
+    func testThumbnailSize() async throws {
+        let harness = try await CharcoalHarness(device: device(), size: 256)
+        let hold = try harness.render(harness.charcoal(0.6))
+        XCTAssertLessThan(maxOffLine(hold), 0.03)
+        let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
+        let mean = CharcoalMeasure.meanInk(hold, within: silhouette, format: harness.pixelFormat)
+        XCTAssertGreaterThan(mean, 0.15)
+    }
+
+    func testPaleSurfacesStayLight() async throws {
+        let harness = try await CharcoalHarness(device: device(), framing: .bust)
+        let pale = try meanInk(harness, progress: 0.6) { $0 > 0.5 }
+        XCTAssertLessThan(pale, 0.25)
+    }
+
     func testHoldFrameHasNoColour() async throws {
         let harness = try await CharcoalHarness(device: device())
         for progress: Float in [0.0, 0.3, 0.6] {
