@@ -94,14 +94,14 @@ Ink colour is (0.030, 0.028, 0.026).
 ### Surface fragment (opaque and cutout materials)
 
 1. **Contour.** A grazing-angle band on `abs(N·V)` with a low-frequency wobbling threshold and a soft inner feather, plus a curvature crease term from `fwidth(N)`. Broken by a dropout noise of about 19 px wavelength and scaled by a 70 px pressure noise.
-2. **Stroke order.** A contour is "drawn" where `s` has passed a 46 px patch noise scaled to 0..0.24. Ahead of that, contours show as coherent grain-free grey dashes at 30% ink.
+2. **Stroke order.** A contour is "drawn" where `s` has passed a 46 px patch noise scaled to 0..0.24. Ahead of that, contours show as coherent grain-free grey dashes at 19% ink.
 3. **Texture edges.** Ink where base-colour luminance changes sharply (`fwidth` of luminance), so eyes, lace and printed detail are drawn. This departs from the original spec's "shade by light, not colour" and is what makes the face readable.
 4. **Tone.** `light = mix(halfLambert(key light), visible shading, 0.8)`, where visible shading is the lit result's luminance relative to the base colour's (how much darker the material actually renders in shade), not the raw toon ramp. A material whose shade colour equals its base colour shows no shading in the plain render, so the sketch does not hatch a ramp nobody can see; shaded on undersides by a sky term on `N.y`, then multiplied down by a perceptual albedo value (`smoothstep(0.15, 0.75, sqrt(luma))`, weight 0.8).
-5. **Hatching.** Three screen-space layers at 35°, -55° and 80°, 7 px spacing, appearing at tone below 0.62, 0.50 and 0.25. Strokes are broad, soft-edged, domain-warped, of finite length, with per-stroke strength. Layers arrive in order as `s` passes 0.30, 0.38 and 0.46.
+5. **Hatching.** Three screen-space layers at 35°, -55° and 80°, 7 px spacing, appearing at tone below 0.62, 0.50 and 0.20. On pale surfaces the first layer's tone range tightens (from 0.30–0.62 down to 0.18–0.48 at the palest) and the second and third layers are gated off, so skin and pale cloth shade by smudge, not strokes. Strokes are broad, soft-edged, domain-warped, of finite length, with per-stroke strength. Layers arrive in order as `s` passes 0.30, 0.38 and 0.46.
 6. **Fill and smudge.** A grainy fill in the darks, capped so stroke direction stays visible, over a grain-free grey smudge (about 20% in form shadows on pale surfaces, about 50% under the darks).
 7. **Pale surfaces stay light.** Pale skin and fabric take at most the first hatch layer and the smudge. Facial shadow is a soft tone along the jaw and cheek; strokes do not cross the nose and mouth.
 8. **Colour arrival.** `mix(sketch, lit, smoothstep(0.05, 0.25, sCol))`. Contour lines linger at about half strength over the arriving colour and settle out by `sCol = 0.7`.
-9. **Ember.** A band centred on `sCol = 0.13`, half-width 0.10, tinted by `VRMMaterialization.color` (default (1.0, 0.42, 0.10)), with a darkened char rim just ahead of it around `sCol = 0.03`. Because `sCol` is 0 everywhere at the hold frame, a held sketch never glows. The char rim is part of the ember: a zero ember colour removes both.
+9. **Ember.** A three-stop ramp along the colour front, derived from `VRMMaterialization.color` (default (1.0, 0.42, 0.10)): a dark char rim at `sCol` 0.02 to 0.06, a narrow hot core at 0.05 to 0.11 (the ember colour pushed towards yellow-gold), and a coal tail from 0.085 falling off by 0.18 (the ember colour pulled to red-orange). The stops overlap slightly so there is no gap between them, their edges are warped by noise, and the ramp is compressed where the front crosses a surface obliquely so the band keeps a similar width on screen. The ember applies to opaque and cutout surfaces only, not to blended overlays or the hull. Because `sCol` is 0 everywhere at the hold frame, a held sketch never glows. The char rim is part of the ember: a zero ember colour removes both.
 
 ### Blended materials
 
@@ -124,7 +124,7 @@ This must cover all three hull paths: the merged colour-plus-outline draw on the
 
 ### Line boil
 
-`boilPhase` is an integer the host advances (the original spec's default is 10 steps a second). It is uploaded as an ordinary float, `Float(boilPhase & 0xFFFF)`, and decoded with `uint(w + 0.5)`. It must not be bit-cast: small integers are subnormal as float bit patterns and can be flushed to zero on the GPU. It is added to the seed of the stroke noises (contour wobble, dropout, pressure, hatch wobble and stroke breaks), so lines re-seed on each step. The paper tooth, the field `f` and the rubbed-in smudge tone do not boil: only the marks (contours, dashes, hatch strokes) re-seed. Broad tone that jumped ten times a second would read as flicker. `boilPhase = 0` with a still camera gives identical consecutive frames.
+`boilPhase` is an integer the host advances (the original spec's default is 10 steps a second). It is uploaded as an ordinary float, `Float(boilPhase & 0xFFFF)`, and decoded with `uint(w + 0.5)`. It must not be bit-cast: small integers are subnormal as float bit patterns and can be flushed to zero on the GPU. The shader wraps the phase to 64 steps so the value fed to the hashes stays small, which means the stroke pattern repeats every 64 steps (6.4 s at 10 steps a second). It is added to the seed of the stroke noises (contour wobble, dropout, pressure, hatch wobble and stroke breaks), so lines re-seed on each step. The paper tooth, the field `f` and the rubbed-in smudge tone do not boil: only the marks (contours, dashes, hatch strokes) re-seed. Broad tone that jumped ten times a second would read as flicker. `boilPhase = 0` with a still camera gives identical consecutive frames.
 
 ## API
 
@@ -139,6 +139,7 @@ public struct VRMMaterialization {
     public var boilPhase: UInt32 = 0        // charcoal only; uploaded in materializeOrigin.w
 
     public static let charcoalPaperColor: SIMD3<Float>   // (0.86, 0.83, 0.77)
+    public static let charcoalInkColor: SIMD3<Float>     // (0.030, 0.028, 0.026)
     public static let charcoalHoldProgress: Float        // 0.6
 }
 ```
@@ -178,7 +179,7 @@ Also run once, not as permanent tests: the VRM 0.x fixture, a 4x MSAA render, an
 
 By eye (Paul): the hold frame reads as charcoal, and the avatar is recognisable in it. The look is judged and tuned on the `AvatarSample*` fixtures at the repo root; no other avatar is required.
 
-The approved reference is the spike stills from 2026-11-10, body and bust framings, at `progress` 0.30, 0.60 and 0.80. They are in `_visuals_charcoal/` at the repo root (untracked), with the spike's source patch and render test. They were made with `AvatarSample_A_1.0.vrm.glb`, seed 3, `heightRange 0...1.62`, 1080 x 1080, `sampleCount = 1`, an sRGB target, authored outlines, and `setupBrightToonLighting()`.
+The approved reference is the spike stills from 2026-11-10, body and bust framings, at `progress` 0.30, 0.60 and 0.80. They are in `_visuals_charcoal/` at the repo root (a local, git-ignored folder; none of it ships), with the spike's source patch and render test. They were made with `AvatarSample_A_1.0.vrm.glb`, seed 3, `heightRange 0...1.62`, 1080 x 1080, `sampleCount = 1`, an sRGB target, authored outlines, and `setupBrightToonLighting()`.
 
 Both the lighting and the target format are the wrong target for the clip. Its key light travels upward, so the stills are lit from below; Creator replaces it with its own portrait rig (`AvatarLightRig`: key (-0.62, -0.52, -0.59) at 1.1, fill (0.25, -0.12, -0.96) at 0.55, back (0.51, -0.41, 0.76) at 0.55, ambient (0.20, 0.20, 0.22), radiometric). The first step of the build is to re-render the reference frames under that rig, on a `.bgra8Unorm` target, and get Paul's eye on them again. Tuning and the automated tests use that rig and format from then on.
 
@@ -191,6 +192,17 @@ Known tuning work, to be done against those stills and not blocking the structur
 - **Dark tights.** They plug nearly solid on `.bgra8Unorm`; keep stroke direction legible.
 - **Ember.** It is a soft peach patch. Without HDR, replace the single wide orange band with a tight three-stop ramp warped by noise: a dark char rim at `sCol` 0.02 to 0.06 (towards (0.02, 0.015, 0.01)), a narrow hot core at 0.06 to 0.10 (towards yellow-gold (1.0, 0.80, 0.30)), and a coal tail at 0.10 to 0.18 falling through red-orange (0.95, 0.25, 0.04) into the lit colour. The ramp is derived from `VRMMaterialization.color`; the values given are for the default.
 - **Construction dashes.** They look like dark stencil ticks. Drop them to about 18 to 20% ink with a softer edge feather.
+
+## Known limitations
+
+- **Tone follows the absolute light level.** The tone input is the lit result relative to the base colour, so it depends on how bright the host's directional lights are. It is tuned for Creator's portrait rig, where a fully lit surface reads about 0.77. Game of Mods' stage and Muse use a similar key and land in the tuned range. A much dimmer rig darkens the whole drawing and brings hatching back across the face; with no directional light the drawing goes nearly solid.
+- **Ink density varies with output size.** Mean ink at the hold frame falls from about 0.56 at 128 pixels high to about 0.41 at 2160 on the bust. Below about 256 pixels a full-body figure fills in; at 2160 the paper tooth becomes visible blocks along soft edges. The look is tuned for 1080.
+- **Large seeds degrade the drawing.** Seeds up to about 3000 are stable; by 100 000 the hashes lose precision and most of the ink disappears. Hosts should keep `seed` small.
+- **Mid-tone blended materials are hidden during the sketch.** That is right for blush; it also hides sheer fabric, tinted lenses or any garment authored as a blended material until colour arrives.
+- **The undrawn body paints opaque paper.** Anything behind the avatar is covered until colour arrives, which is why `requiresHostBackground` exists.
+- **Contact shadow and depth prepass switch on at the end.** Both are skipped while the style is active and resume at progress 1, so a host that enables either will see the ground shadow appear at that moment.
+- **Moving avatars shimmer.** Hull pressure and the front's ragged edge are anchored in world space, as in the other twelve styles, so line weight shifts as an avatar walks.
+- **Two copies of the front maths.** The vertex-stage hull widening repeats the fragment's two-front calculation with its own constants. The hull finishes retracting just before the surface settles (a margin of 0.01 in front progress); if the two drift apart the result is a briefly over-wide outline mid-transition, never a residue at the end. They should share one helper the next time the shaders are rebuilt.
 
 ## Follow-on work (outside this repo or this design)
 
