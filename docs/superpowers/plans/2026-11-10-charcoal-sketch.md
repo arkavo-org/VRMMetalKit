@@ -24,6 +24,7 @@
 - The twelve existing styles render as on `main` (within 1 per channel). `MaterializationStyleGoldenTests`, captured in Task 2 Step 0, must pass unmodified after every later task.
 - Every shader edit: `make shaders` (all five metallibs), update `knownGoodShaderHash` in `Tests/VRMMetalKitTests/MToonShaderGPUTests.swift` to the value printed by `swift test --filter testShaderSourceHashMatchesKnownGood --disable-sandbox`, and commit the metallibs with the source.
 - Shaders compile with `-Wall -Wextra -Werror`. New files carry the Apache 2.0 header. No temporary or contextual comments in code.
+- Never call `smoothstep` with its first edge above its second: Metal leaves that undefined. A falling ramp is written `1.0 - smoothstep(lo, hi, x)`. Where this plan or the reference patch shows a reversed call such as `smoothstep(0.30, 0.10, x)`, write `1.0 - smoothstep(0.10, 0.30, x)`.
 - Test commands always pass `--disable-sandbox`. Commit after each task; do not push.
 - Every "byte-identical" assertion compares two frames from one `CharcoalHarness` (one loaded model, one renderer).
 
