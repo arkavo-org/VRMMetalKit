@@ -301,4 +301,74 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertLessThan(maxOffLine(hold, format: harness.pixelFormat), 0.03)
         XCTAssertEqual(try harness.render(harness.charcoal(1.0)), plain)
     }
+
+    // MARK: - Blended overlays
+
+    /// Pixel rectangle of both eyes in the 512-pixel bust frame of
+    /// `AvatarSample_A_1.0.vrm.glb`. Bangs overlap the brows and hang between
+    /// the eyes, so the rectangle is the tightest one around the eyes and lashes
+    /// and still holds a few hair pixels.
+    private static let eyeBand = (x: 182..<305, y: 168..<201)
+
+    private static func plainLuma(_ colour: SIMD3<Float>) -> Float {
+        simd_dot(colour, SIMD3<Float>(0.2126, 0.7152, 0.0722))
+    }
+
+    func testBlendedDarkOverlaysDrawAsInk() async throws {
+        let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)
+        let plain = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
+        let hold = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
+                                           format: harness.pixelFormat)
+
+        var dark = 0
+        var inked = 0
+        var lash = 0
+        var lashInked = 0
+        var worstOffLine: Float = 0
+        for y in Self.eyeBand.y {
+            for x in Self.eyeBand.x {
+                let i = y * harness.size + x
+                let luma = Self.plainLuma(plain[i])
+                if luma < 0.05 {
+                    dark += 1
+                    if CharcoalMeasure.ink(hold[i]) > 0.6 { inked += 1 }
+                }
+                if luma >= 0.05 && luma < 0.15 {
+                    lash += 1
+                    if CharcoalMeasure.ink(hold[i]) > 0.6 { lashInked += 1 }
+                }
+                worstOffLine = max(worstOffLine, CharcoalMeasure.offLineDistance(hold[i]))
+            }
+        }
+        XCTAssertGreaterThan(dark, 100, "too few dark pixels in the eye band")
+        XCTAssertGreaterThanOrEqual(Float(inked), 0.6 * Float(dark), "\(inked) of \(dark) dark pixels are ink")
+        XCTAssertGreaterThan(lash, 300, "too few lash-toned pixels in the eye band")
+        XCTAssertGreaterThanOrEqual(Float(lashInked), 0.88 * Float(lash),
+                                    "\(lashInked) of \(lash) lash-toned pixels are ink")
+        XCTAssertLessThan(worstOffLine, 0.03, "blush or other tint in the eye band")
+    }
+
+    func testBlendedHighlightsCutToPaper() async throws {
+        let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)
+        let plain = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
+        let hold = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
+                                           format: harness.pixelFormat)
+
+        var highlights: [Int] = []
+        for y in Self.eyeBand.y {
+            for x in Self.eyeBand.x where Self.plainLuma(plain[y * harness.size + x]) > 0.9 {
+                var darkNeighbours = 0
+                for dy in -7...7 {
+                    for dx in -7...7 where Self.plainLuma(plain[(y + dy) * harness.size + x + dx]) < 0.1 {
+                        darkNeighbours += 1
+                    }
+                }
+                if darkNeighbours > 90 { highlights.append(y * harness.size + x) }
+            }
+        }
+        let paper = highlights.filter { CharcoalMeasure.ink(hold[$0]) < 0.2 }.count
+        XCTAssertGreaterThan(highlights.count, 10, "too few highlight pixels found")
+        XCTAssertGreaterThanOrEqual(Float(paper), 0.7 * Float(highlights.count),
+                                    "\(paper) of \(highlights.count) highlight pixels are paper")
+    }
 }

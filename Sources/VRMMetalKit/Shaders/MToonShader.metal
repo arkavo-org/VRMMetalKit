@@ -1031,22 +1031,32 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
 static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatState mat,
                                 float3 N, float3 albedo, float alpha, float3 lit,
                                 float toonStep, bool isBlend) {
-    if (isBlend) {
-        return float4(lit, alpha * mat.sketchReveal);
-    }
     float s = mat.sketchS;
     float seed = mat_sketchStrokeSeed(uniforms);
     float pxScale = max(uniforms.viewportSize.y / 1080.0, 0.25);
     float2 px = in.position.xy / pxScale;
+    float tooth = mat_sketchTooth(px);
+    float drawn = mat_sketchContourGate(px, s, seed);
+    float albedoLuma = mat_sketchLuma(albedo);
+
+    if (isBlend) {
+        float chroma = max(albedo.r, max(albedo.g, albedo.b)) - min(albedo.r, min(albedo.g, albedo.b));
+        bool highlight = albedoLuma > 0.75 && chroma < 0.12;
+        bool darkOverlay = !highlight && albedoLuma < 0.30;
+        float darkInk = (1.0 - smoothstep(0.10, 0.30, albedoLuma)) * drawn;
+        float3 sketchColor = highlight ? kSketchPaper : (darkOverlay ? kSketchInk : lit);
+        float sketchAlpha = highlight
+            ? alpha * drawn
+            : (darkOverlay ? alpha * mix(mat_sketchDeposit(darkInk, tooth), darkInk, 0.8) : 0.0);
+        return float4(mix(sketchColor, lit, mat.sketchReveal), mix(sketchAlpha, alpha, mat.sketchReveal));
+    }
     float3 V = mat_viewDir(uniforms, in.worldPosition);
     if (uniforms.projectionMatrix[3][3] == 1.0) {
         V = normalize(float3(uniforms.viewMatrix[0].z, uniforms.viewMatrix[1].z, uniforms.viewMatrix[2].z));
     }
     float NdotV = abs(dot(N, V));
 
-    float tooth = mat_sketchTooth(px);
     float pressure = 0.55 + 0.45 * mat_vnoise(px / 70.0 + seed + 11.0);
-    float drawn = mat_sketchContourGate(px, s, seed);
 
     float wobble = (mat_vnoise(px / 30.0 + seed) - 0.5) * 0.14;
     float thr = 0.50 * pressure + wobble;
@@ -1061,7 +1071,6 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float dash = smoothstep(0.42, 0.58, mat_vnoise(px / 30.0 + seed + 9.0));
     float gesture = lineRaw * (1.0 - drawn) * dash * 0.19;
 
-    float albedoLuma = mat_sketchLuma(albedo);
     float texEdge = smoothstep(0.03, 0.10, fwidth(albedoLuma)) * lineDropout * (0.6 + 0.5 * pressure);
 
     float3 L = normalize(-uniforms.lightDirection.xyz);
