@@ -181,9 +181,10 @@ public final class BufferPreloader: @unchecked Sendable {
         let fileURL = uri.hasPrefix("/") ? URL(fileURLWithPath: uri) : baseURL.appendingPathComponent(uri)
         
         // Security check
-        let basePath = baseURL.standardized.path
-        let filePath = fileURL.standardized.path
-        guard filePath.hasPrefix(basePath) else {
+        let basePath = baseURL.standardized.resolvingSymlinksInPath().path
+        let filePath = fileURL.standardized.resolvingSymlinksInPath().path
+        let directoryPrefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+        guard filePath.hasPrefix(directoryPrefix) else {
             throw GLTFError.invalidPath(
                 path: uri,
                 reason: "Path resolves outside base directory",

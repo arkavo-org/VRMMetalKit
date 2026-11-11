@@ -179,7 +179,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         // weights it is the material's.
         let sampler = gltfTexture.sampler.flatMap { document.samplers?[safe: $0] }
         let mipmapped = TextureLoader.samplerRequestsMipmaps(sampler)
-        let alphaIsCoverage = TextureLoader.textureAlphaIsCoverage(index, in: document)
+        let alphaIsCoverage = sRGB && TextureLoader.textureAlphaIsCoverage(index, in: document)
 
         return try await createTexture(from: imageData, textureIndex: index, sRGB: sRGB,
                                        mipmapped: mipmapped, alphaIsCoverage: alphaIsCoverage)
@@ -245,9 +245,10 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         
         let fileURL = uri.hasPrefix("/") ? URL(fileURLWithPath: uri) : baseURL.appendingPathComponent(uri)
         
-        let basePath = baseURL.standardized.path
-        let filePath = fileURL.standardized.path
-        guard filePath.hasPrefix(basePath) else {
+        let basePath = baseURL.standardized.resolvingSymlinksInPath().path
+        let filePath = fileURL.standardized.resolvingSymlinksInPath().path
+        let directoryPrefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+        guard filePath.hasPrefix(directoryPrefix) else {
             throw GLTFError.invalidPath(
                 path: uri,
                 reason: "Path resolves outside base directory",

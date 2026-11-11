@@ -147,6 +147,39 @@ final class LoaderSecurityTests: XCTestCase {
 
     // MARK: - 3. Path traversal via symlink
 
+    func testBufferLoadersRejectSiblingPrefixesAndExternalSymlinks() async throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("BufferPathTest-\(UUID().uuidString)")
+        let base = root.appendingPathComponent("base")
+        try fm.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+
+        for directory in ["outside", "base-other"] {
+            let outside = root.appendingPathComponent(directory)
+            try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+            let target = outside.appendingPathComponent("buffer.bin")
+            try Data([1, 2, 3, 4]).write(to: target)
+            let link = "\(directory).bin"
+            try fm.createSymbolicLink(at: base.appendingPathComponent(link), withDestinationURL: target)
+            for uri in ["../\(directory)/buffer.bin", link] {
+                let json: [String: Any] = [
+                    "asset": ["version": "2.0"],
+                    "buffers": [["byteLength": 4, "uri": uri]],
+                ]
+                let document = try JSONDecoder().decode(GLTFDocument.self, from: JSONSerialization.data(withJSONObject: json))
+                let loader = BufferLoader(document: document, binaryData: nil, baseURL: base)
+                XCTAssertThrowsError(try loader.getBufferData(bufferIndex: 0), uri) { error in
+                    guard case GLTFError.invalidPath = error else {
+                        return XCTFail("Expected invalidPath, got \(error)")
+                    }
+                }
+                let preloaded = await BufferPreloader(document: document, baseURL: base)
+                    .preloadAllBuffers(binaryData: nil)
+                XCTAssertNil(preloaded[0], "Preloading must not bypass path validation: \(uri)")
+            }
+        }
+    }
+
     func testLoadExternalBufferRejectsSymlinkPointingOutsideBaseDir() throws {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent("VRMSecTest-\(UUID().uuidString)", isDirectory: true)

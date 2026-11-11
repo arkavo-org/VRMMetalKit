@@ -594,16 +594,35 @@ public class VRMModel: @unchecked Sendable {
 
         // Identify which textures need linear format (not sRGB):
         // - Normal maps (geometrical data, not color)
+        // - Occlusion maps (linear ambient-light attenuation)
         // - outlineWidthMultiplyTexture (linear R8 per MToon spec)
         // - uvAnimationMaskTexture (linear R8 per MToon spec)
         var normalMapTextureIndices = Set<Int>()
+        var occlusionTextureIndices = Set<Int>()
+        var colorTextureIndices = Set<Int>()
         var outlineWidthMaskTextureIndicesLocal = Set<Int>()
         var uvAnimationMaskTextureIndicesLocal = Set<Int>()
+        for material in vrm0MaterialProperties {
+            for key in ["_MainTex", "_ShadeTexture", "_SphereAdd", "_RimTexture"] {
+                if let index = material.textureProperties[key], index >= 0 {
+                    colorTextureIndices.insert(index)
+                }
+            }
+        }
         if !skipLogging {
             vrmLog("[VRMModel] 🔍 Scanning \(gltf.materials?.count ?? 0) materials for linear textures...")
         }
         for (matIdx, material) in (gltf.materials ?? []).enumerated() {
             let matName = material.name ?? "material_\(matIdx)"
+            if let occlusionTexture = material.occlusionTexture {
+                occlusionTextureIndices.insert(occlusionTexture.index)
+            }
+            if let baseColorTexture = material.pbrMetallicRoughness?.baseColorTexture {
+                colorTextureIndices.insert(baseColorTexture.index)
+            }
+            if let emissiveTexture = material.emissiveTexture {
+                colorTextureIndices.insert(emissiveTexture.index)
+            }
             if let normalTexture = material.normalTexture {
                 normalMapTextureIndices.insert(normalTexture.index)
                 if !skipLogging {
@@ -617,6 +636,11 @@ public class VRMModel: @unchecked Sendable {
             }
             if let extensions = material.extensions,
                let mtoonExt = extensions["VRMC_materials_mtoon"] as? [String: Any] {
+                for key in ["shadeMultiplyTexture", "matcapTexture", "rimMultiplyTexture"] {
+                    if let texture = mtoonExt[key] as? [String: Any], let index = texture["index"] as? Int {
+                        colorTextureIndices.insert(index)
+                    }
+                }
                 if let outlineTex = mtoonExt["outlineWidthMultiplyTexture"] as? [String: Any],
                    let idx = outlineTex["index"] as? Int {
                     outlineWidthMaskTextureIndicesLocal.insert(idx)
@@ -630,7 +654,9 @@ public class VRMModel: @unchecked Sendable {
         if !skipLogging {
             vrmLog("[VRMModel] 📊 Normal map texture indices: \(normalMapTextureIndices.sorted())")
         }
+        let sharedOcclusionTextureIndices = occlusionTextureIndices.intersection(colorTextureIndices)
         let allLinearTextureIndices = normalMapTextureIndices
+            .union(occlusionTextureIndices.subtracting(sharedOcclusionTextureIndices))
             .union(outlineWidthMaskTextureIndicesLocal)
             .union(uvAnimationMaskTextureIndicesLocal)
 
@@ -789,6 +815,26 @@ public class VRMModel: @unchecked Sendable {
                     let vrm0Prop = materialIndex < vrm0MaterialProperties.count ? vrm0MaterialProperties[materialIndex] : nil
                     let material = VRMMaterial(from: gltfMaterial, textures: textures, vrm0MaterialProperty: vrm0Prop, vrmVersion: specVersion)
                     materials.append(material)
+                }
+            }
+        }
+
+        // Shared color/data images need separate mip chains: color averages
+        // in linear light and may weight alpha; occlusion averages raw R.
+        if let device, !sharedOcclusionTextureIndices.isEmpty {
+            let loader = TextureLoader(device: device, bufferLoader: bufferLoader, document: gltf, baseURL: baseURL)
+            var linearOcclusionTextures: [Int: VRMTexture] = [:]
+            for index in sharedOcclusionTextureIndices.sorted() {
+                try await context?.checkCancellation()
+                let texture = VRMTexture(name: textures[safe: index]?.name,
+                                         mtlTexture: try await loader.loadTexture(at: index, sRGB: false))
+                texture.sampler = textures[safe: index]?.sampler
+                linearOcclusionTextures[index] = texture
+            }
+            for (index, material) in (gltf.materials ?? []).enumerated() {
+                if let textureIndex = material.occlusionTexture?.index,
+                   let texture = linearOcclusionTextures[textureIndex] {
+                    materials[safe: index]?.occlusionTexture = texture
                 }
             }
         }

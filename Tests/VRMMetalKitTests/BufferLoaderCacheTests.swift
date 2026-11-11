@@ -59,6 +59,12 @@ final class BufferLoaderCacheTests: XCTestCase {
         XCTAssertEqual(first, second, "cached repeat decode must return identical values")
     }
 
+    func testAccessorDecodingUsesPreloadedBufferData() throws {
+        let (document, bin) = makeFloatDocument()
+        let loader = BufferLoader(document: document, binaryData: nil, preloadedData: [0: bin])
+        XCTAssertEqual(try loader.loadAccessorAsFloat(0), [0.5, 1.5, 2.5, 3.5])
+    }
+
     /// The cache is read/written from concurrent mesh-decode tasks; 16
     /// parallel decodes of the same accessor must all return the same values.
     func testConcurrentRepeatDecodesAreConsistent() async throws {
