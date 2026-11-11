@@ -158,7 +158,7 @@ final class CharcoalSketchTests: XCTestCase {
     func testHoldFrameIsShaded() async throws {
         let harness = try await CharcoalHarness(device: device())
         let mean = try silhouetteInk(harness, progress: 0.6)
-        XCTAssertGreaterThan(mean, 0.20)
+        XCTAssertGreaterThan(mean, 0.40)
     }
 
     func testShadingArrivesAfterContour() async throws {
@@ -182,7 +182,7 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertLessThan(maxOffLine(hold), 0.03)
         let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
         let mean = CharcoalMeasure.meanInk(hold, within: silhouette, format: harness.pixelFormat)
-        XCTAssertGreaterThan(mean, 0.20)
+        XCTAssertGreaterThan(mean, 0.40)
     }
 
     func testThumbnailSize() async throws {
@@ -191,7 +191,7 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertLessThan(maxOffLine(hold), 0.03)
         let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
         let mean = CharcoalMeasure.meanInk(hold, within: silhouette, format: harness.pixelFormat)
-        XCTAssertGreaterThan(mean, 0.15)
+        XCTAssertGreaterThan(mean, 0.40)
     }
 
     func testPaleSurfacesStayLight() async throws {
