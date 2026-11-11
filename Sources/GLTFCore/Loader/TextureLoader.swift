@@ -116,7 +116,7 @@ public class TextureLoader {
         // Create texture from image data
         return try await createTexture(from: imageData, mimeType: image.mimeType, textureIndex: index,
                                        sRGB: sRGB, mipmapped: mipmapped,
-                                       alphaIsCoverage: Self.textureAlphaIsCoverage(index, in: document))
+                                       alphaIsCoverage: sRGB && Self.textureAlphaIsCoverage(index, in: document))
     }
 
     /// Whether a texture's alpha channel is coverage — i.e. whether the mip
@@ -249,7 +249,8 @@ public class TextureLoader {
         // directory cannot redirect reads to an arbitrary file outside it.
         let basePath = baseURL.standardized.resolvingSymlinksInPath().path
         let filePath = fileURL.standardized.resolvingSymlinksInPath().path
-        guard filePath.hasPrefix(basePath) else {
+        let directoryPrefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+        guard filePath.hasPrefix(directoryPrefix) else {
             vrmLog("[TextureLoader] Security: Refusing to load file outside base directory: \(uri)")
             throw GLTFError.invalidPath(
                 path: uri,

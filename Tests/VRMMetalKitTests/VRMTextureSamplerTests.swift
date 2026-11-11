@@ -93,10 +93,58 @@ final class VRMTextureSamplerTests: XCTestCase {
 
     // MARK: - Fixture
 
+    func testOcclusionUsesLinearTextureAndBaseColorUsesSRGB() async throws {
+        let device = try metalDevice()
+        for optimizations: VRMLoadingOptimization in [[], [.parallelTextureLoading]] {
+            let model = try await loadSyntheticVRM(
+                samplers: [["minFilter": 9729]],
+                textures: [["sampler": 0, "source": 0], ["sampler": 0, "source": 0]],
+                device: device,
+                options: VRMLoadingOptions(optimizations: optimizations),
+                materials: [["occlusionTexture": ["index": 0],
+                             "pbrMetallicRoughness": ["baseColorTexture": ["index": 1]]]])
+            let occlusion = try XCTUnwrap(model.materials.first?.occlusionTexture?.mtlTexture)
+            XCTAssertEqual(occlusion.pixelFormat, .rgba8Unorm,
+                           "AO values must be sampled without sRGB decoding")
+            XCTAssertEqual(model.textures[1].mtlTexture?.pixelFormat, .rgba8Unorm_srgb)
+        }
+    }
+
+    func testTextureSharedByOcclusionAndBaseColorKeepsBothColorSpaces() async throws {
+        let device = try metalDevice()
+        let model = try await loadSyntheticVRM(
+            samplers: [["minFilter": 9987]], textures: [["sampler": 0, "source": 0]], device: device,
+            materials: [["occlusionTexture": ["index": 0],
+                         "pbrMetallicRoughness": ["baseColorTexture": ["index": 0]]]])
+        let material = try XCTUnwrap(model.materials.first)
+        let color = try XCTUnwrap(material.baseColorTexture?.mtlTexture)
+        let occlusion = try XCTUnwrap(material.occlusionTexture?.mtlTexture)
+        XCTAssertEqual(color.pixelFormat, .rgba8Unorm_srgb)
+        XCTAssertEqual(occlusion.pixelFormat, .rgba8Unorm)
+        XCTAssertGreaterThan(color.mipmapLevelCount, 1)
+        XCTAssertEqual(occlusion.mipmapLevelCount, color.mipmapLevelCount)
+        XCTAssertTrue(material.occlusionTexture?.sampler === material.baseColorTexture?.sampler)
+    }
+
+    func testVRM0ColorSlotsSharedWithOcclusionRemainSRGB() async throws {
+        let device = try metalDevice()
+        for key in ["_ShadeTexture", "_SphereAdd", "_RimTexture"] {
+            let model = try await loadSyntheticVRM(
+                samplers: [["minFilter": 9729]], textures: [["sampler": 0, "source": 0]], device: device,
+                materials: [["occlusionTexture": ["index": 0]]],
+                vrm0MaterialProperties: [["shader": "VRM/MToon", "textureProperties": [key: 0]]])
+            XCTAssertEqual(model.specVersion, .v0_0)
+            XCTAssertEqual(model.textures[0].mtlTexture?.pixelFormat, .rgba8Unorm_srgb, key)
+            XCTAssertEqual(model.materials[0].occlusionTexture?.mtlTexture?.pixelFormat, .rgba8Unorm, key)
+        }
+    }
+
     private func loadSyntheticVRM(samplers: [[String: Any]],
                                   textures: [[String: Any]],
                                   device: MTLDevice,
-                                  options: VRMLoadingOptions? = nil) async throws -> VRMModel {
+                                  options: VRMLoadingOptions? = nil,
+                                  materials: [[String: Any]] = [],
+                                  vrm0MaterialProperties: [[String: Any]]? = nil) async throws -> VRMModel {
         let boneNames = ["hips", "spine", "head",
                          "leftUpperArm", "leftLowerArm", "leftHand",
                          "rightUpperArm", "rightLowerArm", "rightHand",
@@ -109,7 +157,7 @@ final class VRMTextureSamplerTests: XCTestCase {
             nodes.append(["name": bone])
         }
 
-        let root: [String: Any] = [
+        var root: [String: Any] = [
             "asset": ["version": "2.0"],
             "extensions": [
                 "VRMC_vrm": [
@@ -124,7 +172,14 @@ final class VRMTextureSamplerTests: XCTestCase {
             "images": [["uri": "data:image/png;base64,\(try makePNGBase64())"]],
             "samplers": samplers,
             "textures": textures,
+            "materials": materials,
         ]
+        if let vrm0MaterialProperties {
+            root["extensions"] = ["VRM": [
+                "specVersion": "0.0", "meta": ["title": "SamplerFixture", "author": "Tests"],
+                "humanoid": ["humanBones": humanBones], "materialProperties": vrm0MaterialProperties,
+            ]]
+        }
 
         var jsonData = try JSONSerialization.data(withJSONObject: root, options: [])
         jsonData.append(contentsOf: Array(repeating: UInt8(0x20), count: (4 - jsonData.count % 4) % 4))

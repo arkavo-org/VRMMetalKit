@@ -123,6 +123,11 @@ public class BufferLoader: @unchecked Sendable {
         if let bufferViewIndex = accessor.bufferView {
             let (data, bufferView) = try loadBufferView(bufferViewIndex)
 
+            try validateRange(offset: accessor.byteOffset ?? 0, count: accessor.count,
+                              stride: bufferView.byteStride ?? components * componentSize,
+                              elementSize: components * componentSize, byteLength: bufferView.byteLength,
+                              accessorIndex: accessorIndex, context: "accessor bufferView[\(bufferViewIndex)]")
+
             // CRITICAL FIX: Apply BOTH the bufferView offset AND accessor offset
             let bufferViewOffset = bufferView.byteOffset ?? 0
             let accessorOffset = accessor.byteOffset ?? 0
@@ -155,9 +160,9 @@ public class BufferLoader: @unchecked Sendable {
         return result
     }
 
-    /// Decodes a glTF accessor into a flat `Float` array, normalising integer component types per the spec.
+    /// Decodes a glTF accessor into a flat `Float` array, applying integer normalization when requested.
     ///
-    /// `UNSIGNED_BYTE` is mapped to `[0, 1]`, `BYTE` to `[-1, 1]`,
+    /// When `accessor.normalized` is true, `UNSIGNED_BYTE` is mapped to `[0, 1]`, `BYTE` to `[-1, 1]`,
     /// `UNSIGNED_SHORT` to `[0, 1]`, `SHORT` to `[-1, 1]`, and `FLOAT` is
     /// passed through unchanged. This matches the
     /// [glTF accessor normalization](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#accessor-data-types)
@@ -189,6 +194,11 @@ public class BufferLoader: @unchecked Sendable {
 
         if let bufferViewIndex = accessor.bufferView {
             let (data, bufferView) = try loadBufferView(bufferViewIndex)
+
+            try validateRange(offset: accessor.byteOffset ?? 0, count: accessor.count,
+                              stride: bufferView.byteStride ?? components * componentSize,
+                              elementSize: components * componentSize, byteLength: bufferView.byteLength,
+                              accessorIndex: accessorIndex, context: "accessor bufferView[\(bufferViewIndex)]")
 
             // CRITICAL FIX: Apply BOTH the bufferView offset AND accessor offset
             let bufferViewOffset = bufferView.byteOffset ?? 0
@@ -222,7 +232,7 @@ public class BufferLoader: @unchecked Sendable {
                     let elementOffset = combinedOffset + (i * stride)
                     for j in 0..<components {
                         let componentOffset = elementOffset + (j * componentSize)
-                        let value = extractFloatComponent(from: data, at: componentOffset, componentType: accessor.componentType)
+                        let value = extractFloatComponent(from: data, at: componentOffset, componentType: accessor.componentType, normalized: accessor.normalized ?? false)
                         result.append(value)
                     }
                 }
@@ -233,7 +243,7 @@ public class BufferLoader: @unchecked Sendable {
 
         if let sparse = accessor.sparse {
             try applySparseOverrides(sparse: sparse, into: &result, componentType: accessor.componentType, components: components, componentSize: componentSize) { data, offset, ct in
-                self.extractFloatComponent(from: data, at: offset, componentType: ct)
+                self.extractFloatComponent(from: data, at: offset, componentType: ct, normalized: accessor.normalized ?? false)
             }
         }
 
@@ -274,6 +284,11 @@ public class BufferLoader: @unchecked Sendable {
 
         if let bufferViewIndex = accessor.bufferView {
             let (data, bufferView) = try loadBufferView(bufferViewIndex)
+
+            try validateRange(offset: accessor.byteOffset ?? 0, count: accessor.count,
+                              stride: bufferView.byteStride ?? components * componentSize,
+                              elementSize: components * componentSize, byteLength: bufferView.byteLength,
+                              accessorIndex: accessorIndex, context: "accessor bufferView[\(bufferViewIndex)]")
 
             // CRITICAL FIX: Apply BOTH the bufferView offset AND accessor offset
             let bufferViewOffset = bufferView.byteOffset ?? 0
@@ -402,18 +417,31 @@ public class BufferLoader: @unchecked Sendable {
         componentSize: Int,
         extractor: (Data, Int, Int) -> T
     ) throws {
+        guard sparse.count >= 0, sparse.count <= result.count / components,
+              [5121, 5123, 5125].contains(sparse.indices.componentType) else {
+            throw GLTFError.invalidAccessor(
+                accessorIndex: sparse.indices.bufferView,
+                reason: "Sparse count exceeds the accessor or sparse indices use an invalid component type",
+                context: "sparse accessor", filePath: filePath)
+        }
         // Read sparse indices
         let (indicesData, indicesBV) = try loadBufferView(sparse.indices.bufferView)
         let indicesBVOffset = indicesBV.byteOffset ?? 0
-        let indicesByteOffset = (sparse.indices.byteOffset ?? 0) + indicesBVOffset
         let indicesComponentType = sparse.indices.componentType
         let indexSize = bytesPerComponent(indicesComponentType)
+        try validateRange(offset: sparse.indices.byteOffset ?? 0, count: sparse.count,
+                          stride: indexSize, elementSize: indexSize, byteLength: indicesBV.byteLength,
+                          accessorIndex: sparse.indices.bufferView, context: "sparse indices")
+        let indicesByteOffset = (sparse.indices.byteOffset ?? 0) + indicesBVOffset
 
         // Read sparse values
         let (valuesData, valuesBV) = try loadBufferView(sparse.values.bufferView)
         let valuesBVOffset = valuesBV.byteOffset ?? 0
-        let valuesByteOffset = (sparse.values.byteOffset ?? 0) + valuesBVOffset
         let elementSize = componentSize * components
+        try validateRange(offset: sparse.values.byteOffset ?? 0, count: sparse.count,
+                          stride: elementSize, elementSize: elementSize, byteLength: valuesBV.byteLength,
+                          accessorIndex: sparse.values.bufferView, context: "sparse values")
+        let valuesByteOffset = (sparse.values.byteOffset ?? 0) + valuesBVOffset
 
         for i in 0..<sparse.count {
             // Read the destination index
@@ -435,8 +463,13 @@ public class BufferLoader: @unchecked Sendable {
 
             // Write the override value into the base buffer
             let valueByteOffset = valuesByteOffset + i * elementSize
+            guard destIndex < result.count / components else {
+                throw GLTFError.invalidAccessor(
+                    accessorIndex: sparse.indices.bufferView,
+                    reason: "Sparse destination index \(destIndex) exceeds the accessor count",
+                    context: "sparse indices", filePath: filePath)
+            }
             let resultBase = destIndex * components
-            guard resultBase + components <= result.count else { continue }
             for j in 0..<components {
                 let componentByteOffset = valueByteOffset + j * componentSize
                 result[resultBase + j] = extractor(valuesData, componentByteOffset, componentType)
@@ -541,27 +574,16 @@ public class BufferLoader: @unchecked Sendable {
             )
         }
 
-        let data: Data
+        let data = try getBufferData(bufferIndex: bufferView.buffer)
 
-        if bufferView.buffer == 0, let binaryData = self.binaryData {
-            // First buffer is typically the binary chunk in GLB
-            data = binaryData
-        } else if let uri = buffer.uri {
-            // External buffer or data URI
-            if uri.hasPrefix("data:") {
-                // Data URI
-                data = try loadDataURI(uri)
-            } else {
-                // External file
-                data = try loadExternalBuffer(uri)
-            }
-        } else {
-            throw GLTFError.missingBuffer(
-                bufferIndex: bufferView.buffer,
-                requiredBy: "loadBufferView \(bufferViewIndex)",
-                expectedSize: buffer.byteLength,
-                filePath: filePath
-            )
+        let offset = bufferView.byteOffset ?? 0
+        guard buffer.byteLength >= 0, buffer.byteLength <= data.count,
+              offset >= 0, offset <= buffer.byteLength,
+              bufferView.byteLength >= 0, bufferView.byteLength <= buffer.byteLength - offset else {
+            throw GLTFError.invalidAccessor(
+                accessorIndex: bufferViewIndex,
+                reason: "Buffer view range exceeds buffer[\(bufferView.buffer)] or contains a negative offset/length",
+                context: "loadBufferView", filePath: filePath)
         }
 
         // Return the entire buffer data and the bufferView
@@ -615,7 +637,8 @@ public class BufferLoader: @unchecked Sendable {
         // directory cannot redirect reads to an arbitrary file outside it.
         let basePath = baseURL.standardized.resolvingSymlinksInPath().path
         let resolvedFilePath = fileURL.standardized.resolvingSymlinksInPath().path
-        guard resolvedFilePath.hasPrefix(basePath) else {
+        let directoryPrefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+        guard resolvedFilePath.hasPrefix(directoryPrefix) else {
             vrmLog("[BufferLoader] Security: Refusing to load file outside base directory: \(uri)")
             throw GLTFError.invalidPath(
                 path: uri,
@@ -686,25 +709,25 @@ public class BufferLoader: @unchecked Sendable {
         }
     }
 
-    private func extractFloatComponent(from data: Data, at offset: Int, componentType: Int) -> Float {
+    private func extractFloatComponent(from data: Data, at offset: Int, componentType: Int, normalized: Bool) -> Float {
         // CRITICAL: Check bounds AND use safe loadUnaligned to avoid alignment crashes
         switch componentType {
         case 5120: // BYTE (1 byte)
             guard offset + MemoryLayout<Int8>.size <= data.count else { return 0 }
             let value = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: Int8.self) }
-            return Float(value) / 127.0 // Normalize
+            return normalized ? max(Float(value) / 127.0, -1) : Float(value)
         case 5121: // UNSIGNED_BYTE (1 byte)
             guard offset + MemoryLayout<UInt8>.size <= data.count else { return 0 }
             let value = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt8.self) }
-            return Float(value) / 255.0 // Normalize
+            return normalized ? Float(value) / 255.0 : Float(value)
         case 5122: // SHORT (2 bytes)
             guard offset + MemoryLayout<Int16>.size <= data.count else { return 0 }
             let value = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: Int16.self) }
-            return Float(value) / 32767.0 // Normalize
+            return normalized ? max(Float(value) / 32767.0, -1) : Float(value)
         case 5123: // UNSIGNED_SHORT (2 bytes)
             guard offset + MemoryLayout<UInt16>.size <= data.count else { return 0 }
             let value = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt16.self) }
-            return Float(value) / 65535.0 // Normalize
+            return normalized ? Float(value) / 65535.0 : Float(value)
         case 5125: // UNSIGNED_INT (4 bytes)
             guard offset + MemoryLayout<UInt32>.size <= data.count else { return 0 }
             let value = data.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: offset, as: UInt32.self) }
@@ -742,6 +765,24 @@ public class BufferLoader: @unchecked Sendable {
 
     // MARK: - Helper Functions
 
+    /// Checks the final element without overflowing offset + count * stride.
+    private func validateRange(offset: Int, count: Int, stride: Int, elementSize: Int,
+                               byteLength: Int, accessorIndex: Int, context: String) throws {
+        guard offset >= 0, offset <= byteLength, count >= 0, stride >= elementSize else {
+            throw GLTFError.invalidAccessor(
+                accessorIndex: accessorIndex, reason: "Invalid accessor offset, count, or byteStride",
+                context: context, filePath: filePath)
+        }
+        if count > 0 {
+            let available = byteLength - offset
+            guard elementSize <= available, count - 1 <= (available - elementSize) / stride else {
+                throw GLTFError.invalidAccessor(
+                    accessorIndex: accessorIndex, reason: "Accessor elements exceed their buffer view",
+                    context: context, filePath: filePath)
+            }
+        }
+    }
+
     private func componentCount(for type: String) -> Int {
         switch type {
         case "SCALAR": return 1
@@ -773,6 +814,12 @@ public class BufferLoader: @unchecked Sendable {
     /// (which previously caused either zeroed garbage data or a forced-cast crash in
     /// `extractComponent` when `T` was not `Float`).
     private func validateAccessor(_ accessor: GLTFAccessor, accessorIndex: Int, context: String) throws {
+        guard accessor.count >= 0,
+              accessor.count <= Int.max / componentCount(for: accessor.type) / MemoryLayout<UInt64>.stride else {
+            throw GLTFError.invalidAccessor(
+                accessorIndex: accessorIndex, reason: "Accessor count is negative or overflows the decoded allocation size",
+                context: context, filePath: filePath)
+        }
         switch accessor.componentType {
         case 5120, 5121, 5122, 5123, 5125, 5126:
             break
