@@ -709,6 +709,7 @@ struct MatState {
     float sketchRevealSlow;  // slower settle of the colour arrival (0..1)
     float sketchFront;       // local progress of the colour front (0..1)
     float sketchEmberOn;     // 1 when the accent colour is non-zero
+    float sketchHullDrawn;   // hull contour: 0 ahead of the drawing front, 1 once drawn
 };
 
 // MARK: Charcoal sketch (style 13)
@@ -790,6 +791,15 @@ static inline float3 mat_viewDir(constant Uniforms& uniforms, float3 worldPos) {
     return normalize(cameraPos - worldPos);
 }
 
+// Hull colour under the charcoal style: faint grey construction ahead of the
+// drawing front, ink once the contour is drawn, the authored outline colour
+// once the colour settles.
+static inline float3 mat_sketchOutlineColor(MatState mat, float3 outlineColor) {
+    if (mat.sketch < 0.5) { return outlineColor; }
+    float3 drawn = mix(mix(kSketchPaper, kSketchInk, 0.20), kSketchInk, mat.sketchHullDrawn);
+    return mix(drawn, outlineColor, mat.sketchRevealSlow);
+}
+
 // Computes discard + state for all styles. `progress` doubles as the time
 // base: it advances linearly over the spawn (the renderer does not tick
 // `material.time`), so pulses are expressed in progress-space.
@@ -811,6 +821,7 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
     st.sketchRevealSlow = 1.0;
     st.sketchFront = 1.0;
     st.sketchEmberOn = 0.0;
+    st.sketchHullDrawn = 1.0;
     // Compile-time gate: pipelines specialized without materialization
     // dead-strip everything below (and, through constant propagation, the
     // shell/composite consumers in the fragment).
@@ -1019,7 +1030,21 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
         st.sketchRevealSlow = smoothstep(0.10, 0.70, sColour);
         st.sketchFront = sColour;
         st.sketchEmberOn = any(uniforms.materializeColor.xyz > 0.0) ? 1.0 : 0.0;
-        if (isOutlineInstance && st.sketchReveal < 1.0) { st.killed = true; return st; }
+        if (isOutlineInstance) {
+            float pxScale = max(uniforms.viewportSize.y / 1080.0, 0.25);
+            float2 px = in.position.xy / pxScale;
+            float strokeSeed = mat_sketchStrokeSeed(uniforms);
+            float settle = st.sketchRevealSlow;
+            float drawn = mat_sketchContourGate(px, st.sketchS, strokeSeed);
+            st.sketchHullDrawn = drawn;
+            float pressure = 0.55 + 0.45 * mat_vnoise(px / 70.0 + strokeSeed + 11.0);
+            float dash = smoothstep(0.42, 0.58, mat_vnoise(px / 30.0 + strokeSeed + 9.0));
+            float hullPressure = mix(dash * 0.9, 0.85 + 0.4 * pressure, drawn);
+            float grainField = mix(mat_sketchBlotch(px), mat_sketchTooth(px), drawn);
+            float dropout = mat_vnoise(px / 17.0 + strokeSeed + 5.0);
+            if (dropout < 0.12 * (1.0 - settle)) { st.killed = true; return st; }
+            if (mat_sketchDeposit(mix(hullPressure, 2.5, settle), grainField) < 0.4) { st.killed = true; return st; }
+        }
     }
     return st;
 }
@@ -1163,7 +1188,7 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
          float3 lightInfluence = uniforms.lightColor.xyz * uniforms.ambientColor.xyz;
          outlineColor = mix(outlineColor * lightInfluence, outlineColor, material.outlineLightingMixFactor);
      }
-     return float4(outlineColor, 1.0);
+     return float4(mat_sketchOutlineColor(mat, outlineColor), 1.0);
  }
  if (material.mergedOutline > 0.5 && !isFrontFace) {
      discard_fragment();
@@ -1662,6 +1687,10 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  out.position = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos4;
  }
 
+ if (material.outlineWidthFactor > 0.0) {
+ mtoonSketchHullBoost(out.position, out.worldPosition, worldNormal, widthMask, uniforms);
+ }
+
  out.worldNormal = worldNormal;
  out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
  out.texCoord = in.texCoord;
@@ -1690,7 +1719,7 @@ fragment float4 mtoon_outline_fragment([[maybe_unused]] VertexOut in [[stage_in]
  outlineColor = mix(outlineColor * lightInfluence, outlineColor, material.outlineLightingMixFactor);
  }
 
- return float4(outlineColor, 1.0);
+ return float4(mat_sketchOutlineColor(mat, outlineColor), 1.0);
 }
 
 // Debug fragment shaders for visualizing individual MToon components

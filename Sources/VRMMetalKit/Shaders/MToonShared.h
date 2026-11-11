@@ -316,6 +316,35 @@ static inline float2 mtoonOutlineMaskUV(
  return applyUvRows(uv, material.outlineWidthMultiplyUvRow0, material.outlineWidthMultiplyUvRow1);
 }
 
+// Charcoal sketch (materialization style 13): widens the hull in screen space
+// with per-vertex pressure so contours carry charcoal weight, and retracts it
+// before the surface it outlines settles to colour. The fronts repeat the
+// fragment stage's without its noise term. Returns before any arithmetic
+// unless the style is 13 and the effect is still running.
+static inline void mtoonSketchHullBoost(
+    thread float4& clipPos,
+    float3 worldPos,
+    float3 worldNormal,
+    float widthMask,
+    constant Uniforms& uniforms
+) {
+ float4 mp = uniforms.materializeParams;
+ if (int(mp.y + 0.5) != 13 || mp.x >= 1.0) { return; }
+ float t = clamp(mp.x, 0.0, 1.0);
+ float hNorm = saturate((worldPos.y - mp.z) / max(mp.w - mp.z, 1e-4));
+ float f = mix(0.06, 0.94, 1.0 - hNorm);
+ float tDraw = saturate(t / 0.6);
+ float tColour = saturate((t - 0.6) / 0.4);
+ float sD = saturate((tDraw * 1.35 - f) / 0.35);
+ float sC = saturate((tColour * 1.25 - f) / 0.25);
+ float pressure = 0.5 + 0.5 * sin(dot(worldPos, float3(31.0, 17.0, 23.0)) + uniforms.materializeColor.w);
+ float pxScale = max(uniforms.viewportSize.y / 1080.0, 0.25);
+ float extraPx = mix(2.0, 6.5, pressure) * smoothstep(0.0, 0.3, sD)
+     * (1.0 - smoothstep(0.05, 0.45, sC)) * pxScale;
+ float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
+ clipPos.xy += outlineScreenNormal(worldNormal, uniforms) * (extraPx * widthMask) * pixelsToNDC * clipPos.w;
+}
+
 // Inverted-hull extrusion used by the merged color+outline draw
 // (instance_id == 1) on both the rigid and skinned paths, and by the skinned
 // dedicated outline pass.
@@ -340,6 +369,7 @@ static inline void applyMToonOutlineExtrusion(
  if (applyMToonOutlineGuardBand(clipPos, worldNormal,
                                 material.outlineWidthFactor, widthMask,
                                 uniforms, material)) {
+ mtoonSketchHullBoost(clipPos, worldPos, worldNormal, widthMask, uniforms);
  return;
  }
  float outlineWidth = material.outlineWidthFactor * widthMask;
@@ -353,6 +383,9 @@ static inline void applyMToonOutlineExtrusion(
  // outlineWidthFactor is a ratio to the screen height.
  float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
  clipPos.xy += screenNormal * (outlineWidth * uniforms.viewportSize.y) * pixelsToNDC * clipPos.w;
+ }
+ if (material.outlineWidthFactor > 0.0) {
+ mtoonSketchHullBoost(clipPos, worldPos, worldNormal, widthMask, uniforms);
  }
 }
 

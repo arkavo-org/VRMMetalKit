@@ -302,6 +302,80 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertEqual(try harness.render(harness.charcoal(1.0)), plain)
     }
 
+    // MARK: - Outline hull
+
+    private func outsideSilhouetteCount(_ frame: [UInt8], silhouette: [Bool], format: MTLPixelFormat,
+                                        inkRange: ClosedRange<Float>) -> Int {
+        let ink = CharcoalMeasure.colours(frame, format: format).map(CharcoalMeasure.ink)
+        return ink.indices.filter { !silhouette[$0] && inkRange.contains(ink[$0]) }.count
+    }
+
+    func testHullWidensBeyondSilhouette() async throws {
+        let harness = try await CharcoalHarness(device: device(), size: 512)
+        let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
+        let hold = outsideSilhouetteCount(try harness.render(harness.charcoal(0.6)), silhouette: silhouette,
+                                          format: harness.pixelFormat, inkRange: 0.5...1.0)
+        XCTAssertGreaterThan(hold, 200, "the hull should stroke outside the silhouette")
+        let done = outsideSilhouetteCount(try harness.render(harness.charcoal(1.0)), silhouette: silhouette,
+                                          format: harness.pixelFormat, inkRange: 0.5...1.0)
+        XCTAssertEqual(done, 0)
+    }
+
+    func testUndrawnHullIsFaint() async throws {
+        let harness = try await CharcoalHarness(device: device(), size: 512)
+        let size = harness.size
+        let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
+        let frame = try harness.render(harness.charcoal(0.0))
+        XCTAssertEqual(outsideSilhouetteCount(frame, silhouette: silhouette, format: harness.pixelFormat,
+                                              inkRange: 0.5...1.0), 0)
+
+        let ink = CharcoalMeasure.colours(frame, format: harness.pixelFormat).map(CharcoalMeasure.ink)
+        var rim = 0
+        for y in 0..<size {
+            for x in 0..<size where silhouette[y * size + x] && (0.1...0.3).contains(ink[y * size + x]) {
+                let nearOutside = (-3...3).contains { dy in
+                    (-3...3).contains { dx in
+                        let yy = y + dy
+                        let xx = x + dx
+                        return yy < 0 || xx < 0 || yy >= size || xx >= size || !silhouette[yy * size + xx]
+                    }
+                }
+                if nearOutside { rim += 1 }
+            }
+        }
+        XCTAssertGreaterThan(rim, 1000, "the undrawn hull should read as faint grey dashes along the rim")
+    }
+
+    func testHullRunsUnderMSAA() async throws {
+        let harness = try await CharcoalHarness(device: device(), size: 512, sampleCount: 4)
+        let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
+        let hold = try harness.render(harness.charcoal(0.6))
+        XCTAssertLessThan(maxOffLine(hold), 0.03)
+        XCTAssertGreaterThan(outsideSilhouetteCount(hold, silhouette: silhouette, format: harness.pixelFormat,
+                                                    inkRange: 0.5...1.0), 0)
+    }
+
+    func testOutlinedFixturesInkTheirHull() async throws {
+        let cases: [(CharcoalHarness.SwatchFixture, CharcoalHarness.SwatchHull)] = [
+            (.rigid, .dedicated), (.rigid, .merged), (.skinned, .merged), (.skinned, .dedicated),
+        ]
+        for guardBand in [false, true] {
+            for (fixture, hull) in cases {
+                let harness = try await CharcoalHarness.swatches(
+                    device: device(), fixture: fixture, hull: hull,
+                    minimumOutlinePixels: guardBand ? 3 : nil)
+                let plain = try harness.render(nil)
+                let silhouette = CharcoalMeasure.silhouette(plain: plain)
+                let hold = outsideSilhouetteCount(try harness.render(harness.swatchCharcoal(0.6)),
+                                                  silhouette: silhouette, format: harness.pixelFormat,
+                                                  inkRange: 0.5...1.0)
+                let label = "\(fixture) \(hull) guardBand=\(guardBand)"
+                XCTAssertGreaterThan(hold, 100, "\(label): hull ink outside the silhouette at the hold frame")
+                XCTAssertEqual(try harness.render(harness.swatchCharcoal(1.0)), plain, label)
+            }
+        }
+    }
+
     // MARK: - Blended overlays
 
     /// Pixel rectangle of both eyes in the 512-pixel bust frame of

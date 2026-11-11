@@ -131,6 +131,55 @@ final class CharcoalHarness {
     }
 }
 
+extension CharcoalHarness {
+    enum SwatchFixture: String {
+        case rigid = "finish_swatches"
+        case skinned = "finish_swatches_skinned"
+    }
+
+    /// Which outline hull the swatch scene draws: `merged` rides on the colour
+    /// draw of single-sided materials, `dedicated` is the separate pass of
+    /// double-sided ones.
+    enum SwatchHull { case merged, dedicated }
+
+    /// The outlined swatch scene of `MToonLegacyGoldenTests`, under the charcoal
+    /// harness's lighting and paper clear colour. `minimumOutlinePixels` swaps
+    /// the authored width for a hair-thin one the minimum-width guard band
+    /// replaces.
+    static func swatches(device: MTLDevice,
+                         fixture: SwatchFixture,
+                         hull: SwatchHull,
+                         minimumOutlinePixels: Float? = nil,
+                         size: Int = 256) async throws -> CharcoalHarness {
+        guard let url = Bundle.module.url(forResource: fixture.rawValue,
+                                          withExtension: "vrm",
+                                          subdirectory: "TestData/MToon") else {
+            throw XCTSkip("\(fixture.rawValue).vrm fixture missing")
+        }
+        return try await CharcoalHarness(
+            device: device,
+            modelPath: url.path,
+            size: size,
+            camera: (eye: SIMD3<Float>(0.4, 0.5, 5), target: SIMD3<Float>(0, 0, 0)),
+            configure: { model, renderer in
+                if hull == .dedicated {
+                    for material in model.materials { material.doubleSided = true }
+                }
+                renderer.disableLegacyAnimation = true
+                renderer.outlineWidth = 40
+                if let minimumOutlinePixels {
+                    renderer.outlineWidth = 0.001
+                    renderer.outlineMinimumPixels = minimumOutlinePixels
+                }
+            })
+    }
+
+    /// Charcoal on the swatch scene's height range.
+    func swatchCharcoal(_ progress: Float) -> VRMMaterialization {
+        charcoal(progress, heightRange: -0.5...0.5)
+    }
+}
+
 enum CharcoalMeasure {
     /// The values the fragment wrote: bytes / 255, sRGB-decoded only when
     /// `format` is an `_srgb` format. `rgba` is in R, G, B, A order.
