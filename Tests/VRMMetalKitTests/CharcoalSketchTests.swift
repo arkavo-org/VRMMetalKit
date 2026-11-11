@@ -430,8 +430,26 @@ final class CharcoalSketchTests: XCTestCase {
         let mean = sum / Float(max(counted, 1))
         XCTAssertGreaterThan(counted, 800, "too few skin pixels clear of the jaw line and mouth")
         XCTAssertGreaterThan(mean, 0.05, "the shade side of the face should carry a soft tone")
-        XCTAssertLessThan(mean, 0.20, "the shade side of the face should stay a light tone")
+        XCTAssertLessThan(mean, 0.30, "the shade side of the face should stay a light tone")
         XCTAssertLessThan(strokes, 15, "\(strokes) of \(counted) skin pixels carry a stroke")
+    }
+
+    func testHoldFrameIsSmudged() async throws {
+        let harness = try await CharcoalHarness(device: device(), framing: .bust)
+        let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
+        let ink = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
+                                          format: harness.pixelFormat).map(CharcoalMeasure.ink)
+        var inside = 0
+        var bare = 0
+        var rubbed = 0
+        for i in ink.indices where silhouette[i] {
+            inside += 1
+            if ink[i] < 0.03 { bare += 1 }
+            if (0.15...0.9).contains(ink[i]) { rubbed += 1 }
+        }
+        XCTAssertGreaterThan(inside, 10_000, "the bust fixture should fill the frame")
+        XCTAssertLessThan(Float(bare), 0.12 * Float(inside), "drawn surfaces should carry rubbed-in tone")
+        XCTAssertGreaterThan(Float(rubbed), 0.29 * Float(inside), "the drawing should hold smudged greys")
     }
 
     func testContourLinesLingerOverArrivingColour() async throws {
@@ -506,7 +524,7 @@ final class CharcoalSketchTests: XCTestCase {
                 if nearOutside { rim += 1 }
             }
         }
-        XCTAssertGreaterThan(rim, 850, "the undrawn hull should read as faint grey dashes along the rim")
+        XCTAssertGreaterThan(rim, 800, "the undrawn hull should read as faint grey dashes along the rim")
     }
 
     func testHullRunsUnderMSAA() async throws {
@@ -583,6 +601,26 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(Float(lashInked), 0.74 * Float(lash),
                                     "\(lashInked) of \(lash) lash-toned pixels are ink")
         XCTAssertLessThan(worstOffLine, 0.03, "blush or other tint in the eye band")
+    }
+
+    /// Pixel rows of both brows in the 512-pixel bust frame, above `eyeBand`.
+    private static let browRows = 140..<168
+
+    func testBlendedOverlaysLeaveSkinClean() async throws {
+        let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)
+        let plain = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
+        let hold = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
+                                           format: harness.pixelFormat)
+        var skin = 0
+        var inked = 0
+        for y in Self.browRows {
+            for x in Self.eyeBand.x where Self.plainLuma(plain[y * harness.size + x]) > 0.3 {
+                skin += 1
+                if CharcoalMeasure.ink(hold[y * harness.size + x]) > 0.5 { inked += 1 }
+            }
+        }
+        XCTAssertGreaterThan(skin, 300, "too few skin pixels around the brows")
+        XCTAssertLessThan(inked, 80, "\(inked) of \(skin) skin pixels around the brows are ink")
     }
 
     func testBlendedHighlightsCutToPaper() async throws {

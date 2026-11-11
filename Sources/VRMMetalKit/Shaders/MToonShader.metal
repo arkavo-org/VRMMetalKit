@@ -749,21 +749,26 @@ static inline float mat_sketchDeposit(float pressure, float tooth) {
     return mix(grain, 1.0, smoothstep(0.78, 1.05, pressure));
 }
 
-// One hatch layer: broad, soft-edged wobbling strokes of finite length whose
-// width follows `weight` (0..1). Returns stroke pressure, not coverage.
-static inline float mat_sketchHatch(float2 px, float angleDeg, float spacing, float weight, float seed) {
+// One hatch layer: loose, soft-edged strokes that wobble, wander and vary in
+// length and weight, whose width follows `weight` (0..1). Returns the stroke
+// pressure in x and the rubbed-in haze around the stroke in y, not coverage.
+static inline float2 mat_sketchHatch(float2 px, float angleDeg, float spacing, float weight, float seed) {
     float a = angleDeg * 0.017453292;
     float2 dir = float2(cos(a), sin(a));
-    float wobble = (mat_vnoise(px / (spacing * 6.0) + seed) - 0.5) * 1.5
-                 + (mat_vnoise(px / (spacing * 19.0) + seed + 4.0) - 0.5) * 1.2;
+    float wobble = (mat_vnoise(px / (spacing * 6.0) + seed) - 0.5) * 2.0
+                 + (mat_vnoise(px / (spacing * 19.0) + seed + 4.0) - 0.5) * 1.6;
     float u = dot(px, float2(-dir.y, dir.x)) / spacing + wobble;
-    float v = dot(px, dir) / (spacing * 7.0);
     float id = floor(u);
+    float v = dot(px, dir) / (spacing * mix(4.0, 11.0, mat_hash21(float2(id, seed + 5.0))));
     float stroke = mat_vnoise(float2(v + mat_hash21(float2(id, seed)) * 37.0, id * 0.37 + seed));
-    float d = abs(fract(u) - 0.5);
+    float wander = (mat_vnoise(float2(v * 0.6 + id * 1.7, seed + 2.0)) - 0.5) * 0.2;
+    float d = abs(fract(u) - 0.5 - wander);
     float halfWidth = mix(0.18, 0.45, saturate(weight)) * smoothstep(0.18, 0.42, stroke);
-    float strength = 0.65 + 0.35 * mat_hash21(float2(id, seed + 3.0));
-    return (1.0 - smoothstep(halfWidth * 0.45, halfWidth * 1.1 + 1e-3, d)) * strength;
+    float strength = 0.45 + 0.55 * mat_hash21(float2(id, seed + 3.0));
+    float pressure = (1.0 - smoothstep(halfWidth * 0.20, halfWidth * 1.30 + 1e-3, d)) * strength;
+    float haze = (1.0 - smoothstep(halfWidth * 0.5, halfWidth * 0.5 + 0.45, d))
+        * smoothstep(0.10, 0.35, stroke) * strength;
+    return float2(pressure, haze);
 }
 
 static inline float mat_sketchLuma(float3 c) {
@@ -1048,11 +1053,11 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
             float settle = st.sketchRevealSlow;
             float drawn = mat_sketchContourGate(px, st.sketchS, strokeSeed);
             st.sketchHullDrawn = drawn;
-            float pressure = 0.55 + 0.45 * mat_vnoise(px / 70.0 + strokeSeed + 11.0);
+            float pressure = 0.40 + 0.60 * mat_vnoise(px / 70.0 + strokeSeed + 11.0);
             float dash = smoothstep(0.42, 0.58, mat_vnoise(px / 30.0 + strokeSeed + 9.0));
             float facing = abs(dot(normalize(in.worldNormal), mat_sketchViewDir(uniforms, in.worldPosition)));
             float rim = 1.0 - smoothstep(0.25, 0.50, facing);
-            float hullPressure = mix(dash * 0.9 * rim, 0.85 + 0.4 * pressure, drawn);
+            float hullPressure = mix(dash * 0.9 * rim, 0.62 + 0.6 * pressure, drawn);
             float grainField = mix(mat_sketchBlotch(px), mat_sketchTooth(px), drawn);
             float dropout = mat_vnoise(px / 17.0 + strokeSeed + 5.0);
             if (dropout < 0.12 * (1.0 - settle)) { st.killed = true; return st; }
@@ -1092,12 +1097,12 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     }
     float NdotV = abs(dot(N, mat_sketchViewDir(uniforms, in.worldPosition)));
 
-    float pressure = 0.55 + 0.45 * mat_vnoise(px / 70.0 + seed + 11.0);
+    float pressure = 0.40 + 0.60 * mat_vnoise(px / 70.0 + seed + 11.0);
 
     float wobble = (mat_vnoise(px / 30.0 + seed) - 0.5) * 0.14;
     float thr = 0.50 * pressure + wobble;
     float core = 1.0 - smoothstep(thr * 0.50, thr * 0.70, NdotV);
-    float feather = (1.0 - smoothstep(thr * 0.55, thr, NdotV)) * 0.6;
+    float feather = (1.0 - smoothstep(thr * 0.55, thr * 1.25, NdotV)) * 0.6;
     float contour = max(core, feather);
     float curvature = length(fwidth(N));
     float crease = smoothstep(0.30, 0.55, curvature) * 0.8;
@@ -1124,16 +1129,26 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float w2 = 1.0 - smoothstep(0.15, 0.50, tone);
     float w3 = 1.0 - smoothstep(0.03, 0.20, tone);
     const float spacing = 7.0;
-    float hatch = mat_sketchHatch(px, 35.0, spacing, w1, seed) * step(0.001, w1) * h1;
-    hatch = max(hatch, mat_sketchHatch(px, -55.0, spacing, w2, seed + 7.0) * step(0.001, w2) * h2 * paleGate);
-    hatch = max(hatch, mat_sketchHatch(px, 80.0, spacing * 0.9, w3, seed + 13.0) * step(0.001, w3) * h3 * paleGate);
-    hatch *= mix(0.62, 1.0, w2);
+    float2 layer1 = mat_sketchHatch(px, 35.0, spacing, w1, seed) * step(0.001, w1) * h1;
+    float2 layer2 = mat_sketchHatch(px, -55.0, spacing, w2, seed + 7.0) * step(0.001, w2) * h2 * paleGate;
+    float2 layer3 = mat_sketchHatch(px, 80.0, spacing * 0.9, w3, seed + 13.0) * step(0.001, w3) * h3 * paleGate;
+    float hatch = max(layer1.x, max(layer2.x, layer3.x)) * mix(0.62, 1.0, w2);
+    float hatchHaze = max(layer1.y, max(layer2.y, layer3.y));
 
-    float smudge = (smoothstep(0.18, 0.50, dark) * 0.20 + smoothstep(0.50, 0.90, dark) * 0.33)
-        * h1 * (0.85 + 0.3 * mat_vnoise(px / 40.0 + seed));
+    // Rubbed-in tone: streaked along the first hatch direction and blotchy, with
+    // a haze under the hatching and inside the contours.
+    const float2 rubAxis = float2(0.82, 0.57);
+    float rub = mat_vnoise(float2(dot(px, rubAxis) / 150.0, dot(px, float2(-rubAxis.y, rubAxis.x)) / 36.0) + seed);
+    float rubbed = 0.55 + 0.70 * rub + 0.45 * mat_vnoise(px / 90.0 + seed + 31.0);
+    float edgeHaze = (1.0 - smoothstep(thr * 0.7, thr * 1.9 + 0.1, NdotV)) * 0.20 * drawn;
+    float smudge = smoothstep(0.10, 0.50, dark) * 0.20 + smoothstep(0.45, 0.90, dark) * 0.42;
+    float smear = smoothstep(0.50, 0.85, mat_vnoise(float2(dot(px, float2(0.34, 0.94)) / 240.0,
+                                                           dot(px, float2(-0.94, 0.34)) / 52.0) + seed + 51.0)) * 0.12;
+    smudge = saturate(max(max(smudge, smear), max(hatchHaze * 0.34, edgeHaze)) * rubbed) * h1;
+    float scrub = 0.78 + 0.50 * mat_vnoise(px / 55.0 + seed + 41.0);
     float fill = smoothstep(0.40, 1.0, dark) * 0.50 * h1;
 
-    float inkPressure = max(max(lineInk, texEdge * drawn * 1.15), max(hatch, fill)) * 1.15;
+    float inkPressure = max(max(lineInk, texEdge * drawn * scrub), max(hatch, fill) * scrub) * 1.15;
     float coverage = mat_sketchDeposit(inkPressure, tooth);
 
     float3 sketchColor = mix(kSketchPaper, kSketchInk, max(smudge, gesture));
