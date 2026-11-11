@@ -339,7 +339,7 @@ static inline void mtoonSketchHullBoost(
  float sC = saturate((tColour * 1.25 - f) / 0.25);
  float pressure = 0.5 + 0.5 * sin(dot(worldPos, float3(31.0, 17.0, 23.0)) + uniforms.materializeColor.w);
  float pxScale = max(uniforms.viewportSize.y / 1080.0, 0.25);
- float extraPx = mix(2.0, 6.5, pressure) * smoothstep(0.0, 0.3, sD)
+ float extraPx = mix(2.0, 4.5, pressure) * smoothstep(0.0, 0.3, sD)
      * (1.0 - smoothstep(0.05, 0.45, sC)) * pxScale;
  float2 pixelsToNDC = 2.0 / uniforms.viewportSize.xy;
  clipPos.xy += outlineScreenNormal(worldNormal, uniforms) * (extraPx * widthMask) * pixelsToNDC * clipPos.w;

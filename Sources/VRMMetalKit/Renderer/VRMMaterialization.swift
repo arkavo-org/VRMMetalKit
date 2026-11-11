@@ -69,8 +69,8 @@ public enum VRMMaterializationStyle: Int32, CaseIterable, Sendable {
     /// behind an ember edge until the lit render stands in place of the
     /// sketch. The host must clear to ``VRMMaterialization/charcoalPaperColor``:
     /// the undrawn body paints opaque paper over anything behind it (hence
-    /// ``requiresHostBackground``). Mid-tone alpha-blended materials (sheer
-    /// fabric, tinted lenses) stay hidden until colour arrives. The tone is
+    /// ``requiresHostBackground``). Sheer alpha-blended fragments stay hidden
+    /// until colour arrives; opaque coloured features retain charcoal tone. The tone is
     /// tuned for a key light near full intensity, so a much dimmer light rig
     /// darkens the whole drawing.
     case charcoal = 13

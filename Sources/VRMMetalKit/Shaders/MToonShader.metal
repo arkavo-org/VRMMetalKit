@@ -756,7 +756,8 @@ static inline float mat_sketchDeposit(float pressure, float tooth) {
 // length and weight, whose width follows `weight` (0..1). Returns the stroke
 // pressure in x and the rubbed-in haze around the stroke in y, not coverage.
 static inline float2 mat_sketchHatch(float2 px, float angleDeg, float spacing, float weight, float seed) {
-    float a = angleDeg * 0.017453292;
+    float a = (angleDeg + (mat_hash21(float2(seed, 2.7)) - 0.5) * 6.0) * 0.017453292;
+    px += spacing * (float2(mat_hash21(float2(seed, 4.1)), mat_hash21(float2(seed, 9.3))) - 0.5);
     float2 dir = float2(cos(a), sin(a));
     float wobble = (mat_vnoise(px / (spacing * 6.0) + seed) - 0.5) * 2.0
                  + (mat_vnoise(px / (spacing * 19.0) + seed + 4.0) - 0.5) * 1.6;
@@ -1091,13 +1092,14 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
 
     if (isBlend) {
         float chroma = max(albedo.r, max(albedo.g, albedo.b)) - min(albedo.r, min(albedo.g, albedo.b));
-        bool highlight = albedoLuma > 0.75 && chroma < 0.12;
-        bool darkOverlay = !highlight && albedoLuma < 0.30;
-        float darkInk = (1.0 - smoothstep(0.10, 0.30, albedoLuma)) * drawn;
-        float3 sketchColor = highlight ? kSketchPaper : (darkOverlay ? kSketchInk : lit);
-        float sketchAlpha = highlight
-            ? alpha * drawn
-            : (darkOverlay ? alpha * mix(mat_sketchDeposit(darkInk, tooth), darkInk, 0.8) : 0.0);
+        bool highlight = albedoLuma > 0.78 && chroma < 0.12;
+        bool solidFeature = alpha >= float(mtoon_float(0.55));
+        float tonalInk = mix(0.35, 0.95, 1.0 - sqrt(saturate(albedoLuma)));
+        float detailInk = smoothstep(0.03, 0.10, fwidth(albedoLuma)) * 0.35;
+        float darkInk = 1.0 - smoothstep(0.10, 0.30, albedoLuma);
+        float3 sketchColor = highlight ? kSketchPaper
+            : mix(kSketchPaper, kSketchInk, max(darkInk, saturate(tonalInk + detailInk)));
+        float sketchAlpha = (highlight || solidFeature) ? alpha * drawn : 0.0;
         return float4(mix(sketchColor, lit, mat.sketchReveal), mix(sketchAlpha, alpha, mat.sketchReveal));
     }
     float NdotV = abs(dot(N, mat_sketchViewDir(uniforms, in.worldPosition)));
@@ -1137,7 +1139,7 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float2 layer1 = mat_sketchHatch(px, 35.0, spacing, w1, seed) * step(0.001, w1) * h1;
     float2 layer2 = mat_sketchHatch(px, -55.0, spacing, w2, seed + 7.0) * step(0.001, w2) * h2 * paleGate;
     float2 layer3 = mat_sketchHatch(px, 80.0, spacing * 0.9, w3, seed + 13.0) * step(0.001, w3) * h3 * paleGate;
-    float hatch = max(layer1.x, max(layer2.x, layer3.x)) * mix(0.62, 1.0, w2);
+    float hatch = max(layer1.x, max(layer2.x, layer3.x)) * mix(0.62, 0.90, w2);
     float hatchHaze = max(layer1.y, max(layer2.y, layer3.y));
 
     // Rubbed-in tone: streaked along the first hatch direction and blotchy, with
@@ -1151,7 +1153,8 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float smudge = smoothstep(0.10, 0.50, dark) * 0.20 + smoothstep(0.45, 0.90, dark) * 0.42;
     float smear = smoothstep(0.50, 0.85, mat_vnoise(float2(dot(px, float2(0.34, 0.94)) / 240.0,
                                                            dot(px, float2(-0.94, 0.34)) / 52.0) + toneSeed + 51.0)) * 0.12;
-    smudge = min(max(max(smudge, smear), max(hatchHaze * 0.34, edgeHaze)) * rubbed, 0.58) * h1;
+    float smudgeCeiling = mix(0.58, mix(0.58, 0.42, NdotV), 1.0 - albedoValue);
+    smudge = min(max(max(smudge, smear), max(hatchHaze * 0.34, edgeHaze)) * rubbed, smudgeCeiling) * h1;
     float scrub = 0.78 + 0.50 * mat_vnoise(px / 55.0 + toneSeed + 41.0);
     float fill = smoothstep(0.40, 1.0, dark) * 0.50 * h1;
 

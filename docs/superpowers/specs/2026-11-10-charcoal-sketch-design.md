@@ -98,18 +98,18 @@ Ink colour is (0.030, 0.028, 0.026).
 3. **Texture edges.** Ink where base-colour luminance changes sharply (`fwidth` of luminance), so eyes, lace and printed detail are drawn. This departs from the original spec's "shade by light, not colour" and is what makes the face readable.
 4. **Tone.** `light = mix(halfLambert(key light), visible shading, 0.8)`, where visible shading is the lit result's luminance relative to the base colour's (how much darker the material actually renders in shade), not the raw toon ramp. A material whose shade colour equals its base colour shows no shading in the plain render, so the sketch does not hatch a ramp nobody can see; shaded on undersides by a sky term on `N.y`, then multiplied down by a perceptual albedo value (`smoothstep(0.15, 0.75, sqrt(luma))`, weight 0.8).
 5. **Hatching.** Three screen-space layers at 35°, -55° and 80°, 7 px spacing, appearing at tone below 0.62, 0.50 and 0.20. On pale surfaces the first layer's tone range tightens (from 0.30–0.62 down to 0.18–0.48 at the palest) and the second and third layers are gated off, so skin and pale cloth shade by smudge, not strokes. Strokes are broad, soft-edged, domain-warped, of finite length, with per-stroke strength. Layers arrive in order as `s` passes 0.30, 0.38 and 0.46.
-6. **Fill and smudge.** A grainy fill in the darks, capped so stroke direction stays visible, over a grain-free grey smudge (about 20% in form shadows on pale surfaces, about 50% under the darks).
+6. **Fill and smudge.** A grainy fill in the darks, capped so stroke direction stays visible, over a grain-free grey smudge (about 20% in form shadows on pale surfaces). On dark surfaces the smudge ceiling varies from 42% on front-facing folds to 58% at grazing angles, so folds remain visible. Hatch pressure is softened in the darks to reduce contrast against the rubbed tone.
 7. **Pale surfaces stay light.** Pale skin and fabric take at most the first hatch layer and the smudge. Facial shadow is a soft tone along the jaw and cheek; strokes do not cross the nose and mouth.
 8. **Colour arrival.** `mix(sketch, lit, smoothstep(0.05, 0.25, sCol))`. Contour lines linger at about half strength over the arriving colour and settle out by `sCol = 0.7`.
 9. **Ember.** A three-stop ramp along the colour front, derived from `VRMMaterialization.color` (default (1.0, 0.42, 0.10)): a dark char rim at `sCol` 0.02 to 0.06, a narrow hot core at 0.05 to 0.11 (the ember colour pushed towards yellow-gold), and a coal tail from 0.085 falling off by 0.18 (the ember colour pulled to red-orange). The stops overlap slightly so there is no gap between them, their edges are warped by noise, and the ramp is compressed where the front crosses a surface obliquely so the band keeps a similar width on screen. The ember applies to opaque and cutout surfaces only, not to blended overlays or the hull. Because `sCol` is 0 everywhere at the hold frame, a held sketch never glows. The char rim is part of the ember: a zero ember colour removes both.
 
 ### Blended materials
 
-VRoid lashes, brows, blush and eye highlights are separate blended meshes. During the sketch:
+VRoid irises, lashes, brows, blush and eye highlights are separate blended meshes. During the sketch:
 
-- Dark overlays (luminance under about 0.3) draw as near-solid ink.
-- Near-white, unsaturated overlays (eye highlights) draw as paper colour, cutting the highlight back out of the ink.
-- Everything else (blush, tinted overlays) is fully transparent.
+- Near-white, unsaturated fragments (luminance above 0.78, chroma below 0.12) draw as paper colour, cutting highlights back out of the ink at their source alpha.
+- Other fragments with source alpha at least 0.55 draw as tonal charcoal, including coloured irises and opaque accessories. Tone follows `mix(0.35, 0.95, 1 - sqrt(luminance))`, with texture-edge emphasis and the existing dark-ink floor for pupils and lashes.
+- Other fragments below that opacity threshold (sheer blush/tints) are fully transparent.
 
 All three cross to their normal colour and alpha with the colour-arrival factor.
 
@@ -117,14 +117,14 @@ All three cross to their normal colour and alpha with the colour-arrival factor.
 
 The inverted-hull outline carries the contour weight:
 
-- **Vertex:** while charcoal is active, the hull is widened in screen space by 2 to 6.5 px (at 1080p) with per-vertex pressure variation. The extra width grows in as the drawing front arrives and eases back to the authored width behind the colour front. It applies only where the material already has an outline, and respects the outline width mask.
+- **Vertex:** while charcoal is active, the hull is widened in screen space by 2 to 4.5 px (at 1080p) with per-vertex pressure variation. The extra width grows in as the drawing front arrives and eases back to the authored width behind the colour front. It applies only where the material already has an outline, and respects the outline width mask.
 - **Fragment:** tinted to the ink colour, returning to the authored outline colour as lines settle. Ahead of the drawing front the hull shows only as coherent dashes in 20% grey, matching the surface construction lines; once drawn it is ink and breaks up on the paper tooth where pressure is light.
 
 This must cover all three hull paths: the merged colour-plus-outline draw on the rigid and skinned vertex shaders, and the dedicated outline pass (`mtoon_outline_vertex`, which has its own extrusion code).
 
 ### Line boil
 
-`boilPhase` is an integer the host advances (the original spec's default is 10 steps a second). It is uploaded as an ordinary float, `Float(boilPhase & 0xFFFF)`, and decoded with `uint(w + 0.5)`. It must not be bit-cast: small integers are subnormal as float bit patterns and can be flushed to zero on the GPU. The shader wraps the phase to 64 steps so the value fed to the hashes stays small, which means the stroke pattern repeats every 64 steps (6.4 s at 10 steps a second). It is added to the seed of the stroke noises (contour wobble, dropout, pressure, hatch wobble and stroke breaks), so lines re-seed on each step. The paper tooth, the field `f` and the rubbed-in smudge tone do not boil: only the marks (contours, dashes, hatch strokes) re-seed. Broad tone that jumped ten times a second would read as flicker. `boilPhase = 0` with a still camera gives identical consecutive frames.
+`boilPhase` is an integer the host advances (the original spec's default is 10 steps a second). It is uploaded as an ordinary float, `Float(boilPhase & 0xFFFF)`, and decoded with `uint(w + 0.5)`. It must not be bit-cast: small integers are subnormal as float bit patterns and can be flushed to zero on the GPU. The shader wraps the phase to 64 steps so the value fed to the hashes stays small, which means the stroke pattern repeats every 64 steps (6.4 s at 10 steps a second). It is added to the seed of the stroke noises (contour wobble, dropout, pressure, hatch wobble and stroke breaks), so lines re-seed on each step. Each hatch layer also shifts its screen-space placement and varies its angle within ±3 degrees of its nominal angle, breaking the fixed crosshatch grid. The paper tooth, the field `f` and the rubbed-in smudge tone do not boil: only the marks (contours, dashes, hatch strokes) re-seed. Broad tone that jumped ten times a second would read as flicker. `boilPhase = 0` with a still camera gives identical consecutive frames.
 
 ## API
 
@@ -199,7 +199,7 @@ Known tuning work, to be done against those stills and not blocking the structur
 - **sRGB targets render lighter.** The constants are tuned as raw values on `.bgra8Unorm`. On an `_srgb` target (Game of Mods and Muse) the hardware encodes them, so the paper comes out ivory and the darkest ink a mid-dark grey: the drawing still reads, but closer to pencil than charcoal. Those apps need either a retune for their format or to accept the lighter look.
 - **Ink density varies with output size.** Mean ink at the hold frame falls from about 0.56 at 128 pixels high to about 0.41 at 2160 on the bust. Below about 256 pixels a full-body figure fills in; at 2160 the paper tooth becomes visible blocks along soft edges. The look is tuned for 1080.
 - **Large seeds degrade the drawing.** Seeds up to about 3000 are stable; by 100 000 the hashes lose precision and most of the ink disappears. Hosts should keep `seed` small.
-- **Mid-tone blended materials are hidden during the sketch.** That is right for blush; it also hides sheer fabric, tinted lenses or any garment authored as a blended material until colour arrives.
+- **Sheer blended fragments are hidden during the sketch.** Below source alpha 0.55, non-highlight fragments of blush, sheer fabric or tinted lenses wait until colour arrives. The opacity threshold is a heuristic, so sufficiently opaque blush can still take charcoal tone.
 - **The undrawn body paints opaque paper.** Anything behind the avatar is covered until colour arrives, which is why `requiresHostBackground` exists.
 - **Contact shadow and depth prepass switch on at the end.** Both are skipped while the style is active and resume at progress 1, so a host that enables either will see the ground shadow appear at that moment.
 - **Moving avatars shimmer.** Hull pressure and the front's ragged edge are anchored in world space, as in the other twelve styles, so line weight shifts as an avatar walks.

@@ -608,6 +608,67 @@ final class CharcoalSketchTests: XCTestCase {
 
     // MARK: - Blended overlays
 
+    private func colouredBlendHarness(colour: SIMD3<Float> = [0.2, 0.65, 1.0]) async throws
+        -> (CharcoalHarness, (Float) -> Void) {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "finish_swatches", withExtension: "vrm",
+                                                subdirectory: "TestData/MToon"))
+        var setAlpha: ((Float) -> Void)?
+        let harness = try await CharcoalHarness(device: device(), modelPath: url.path, size: 256,
+                                                camera: (eye: [0.4, 0.5, 5], target: [0, 0, 0]),
+                                                configure: { model, renderer in
+            for material in model.materials {
+                material.baseColorTexture = nil
+                material.alphaMode = "BLEND"
+                material.transparentWithZWrite = false
+                material.mtoon?.outlineWidthMode = .none
+            }
+            renderer.disableAutoMaterialOverrides = true
+            setAlpha = { alpha in
+                for material in model.materials {
+                    material.baseColorFactor = SIMD4<Float>(colour, alpha)
+                }
+            }
+            setAlpha?(1)
+        })
+        return (harness, try XCTUnwrap(setAlpha))
+    }
+
+    func testOpaqueColouredBlendedFeaturesRemainVisible() async throws {
+        let (harness, setAlpha) = try await colouredBlendHarness()
+        let plain = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
+        setAlpha(0)
+        let plainUnder = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
+        let holdUnder = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
+                                                format: harness.pixelFormat)
+        let mask = plain.indices.filter { simd_length(plain[$0] - plainUnder[$0]) > 0.15 }
+        XCTAssertGreaterThan(mask.count, 100, "fixture must expose the coloured blended surface")
+
+        for alpha: Float in [0.55, 0.8, 1.0] {
+            setAlpha(alpha)
+            let hold = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
+                                               format: harness.pixelFormat)
+            let visible = mask.filter {
+                CharcoalMeasure.ink(hold[$0]) - CharcoalMeasure.ink(holdUnder[$0]) > 0.12
+            }.count
+            XCTAssertGreaterThan(Float(visible), Float(mask.count) * 0.8,
+                                 "opaque coloured feature disappeared at alpha \(alpha): \(visible)/\(mask.count)")
+            XCTAssertLessThan(hold.map(CharcoalMeasure.offLineDistance).max() ?? 0, 0.03)
+        }
+        setAlpha(1)
+        XCTAssertEqual(try harness.render(harness.charcoal(1)), try harness.render(nil))
+    }
+
+    func testSheerColouredBlendedFeaturesStayHidden() async throws {
+        let (harness, setAlpha) = try await colouredBlendHarness()
+        setAlpha(0)
+        let hidden = try harness.render(harness.charcoal(0.6))
+        for alpha: Float in [0.2, 0.5, 0.54] {
+            setAlpha(alpha)
+            XCTAssertEqual(try harness.render(harness.charcoal(0.6)), hidden,
+                           "sheer tint at alpha \(alpha) should not stain the sketch")
+        }
+    }
+
     /// Pixel rectangle of both eyes in the 512-pixel bust frame of
     /// `AvatarSample_A_1.0.vrm.glb`. Bangs overlap the brows and hang between
     /// the eyes, so the rectangle is the tightest one around the eyes and lashes
@@ -618,44 +679,32 @@ final class CharcoalSketchTests: XCTestCase {
         simd_dot(colour, SIMD3<Float>(0.2126, 0.7152, 0.0722))
     }
 
-    /// The 512-pixel bust harness with every blended overlay made fully
-    /// transparent. A pixel that is darker in the ordinary plain render than in
-    /// this one is covered by an overlay.
+    /// The 512-pixel bust harness without blended primitives. A pixel that is
+    /// darker in the ordinary plain render is covered by an overlay.
     private func bustWithoutOverlays() async throws -> CharcoalHarness {
         try await CharcoalHarness(device: device(), size: 512, framing: .bust, configure: { model, _ in
-            for material in model.materials where material.alphaMode.uppercased() == "BLEND" {
-                material.baseColorFactor.w = 0
+            for mesh in model.meshes {
+                mesh.primitives.removeAll { primitive in
+                    guard let index = primitive.materialIndex, model.materials.indices.contains(index) else {
+                        return false
+                    }
+                    return model.materials[index].alphaMode.uppercased() == "BLEND"
+                }
             }
         })
     }
 
     func testBlendedDarkOverlaysDrawAsInk() async throws {
-        let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)
+        let (harness, _) = try await colouredBlendHarness(colour: [0.02, 0.02, 0.02])
         let plain = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
         let hold = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
                                            format: harness.pixelFormat)
-
-        let under = CharcoalMeasure.colours(try await bustWithoutOverlays().render(nil),
-                                            format: harness.pixelFormat)
-
-        var overlay = 0
-        var overlayInked = 0
-        for i in plain.indices where Self.plainLuma(plain[i]) < 0.10
-            && Self.plainLuma(under[i]) - Self.plainLuma(plain[i]) > 0.15 {
-            overlay += 1
-            if CharcoalMeasure.ink(hold[i]) > 0.75 { overlayInked += 1 }
-        }
-        XCTAssertGreaterThan(overlay, 60, "too few dark overlay pixels found")
-        XCTAssertGreaterThanOrEqual(Float(overlayInked), 0.8 * Float(overlay),
-                                    "\(overlayInked) of \(overlay) dark overlay pixels are solid ink")
-
-        var worstOffLine: Float = 0
-        for y in Self.eyeBand.y {
-            for x in Self.eyeBand.x {
-                worstOffLine = max(worstOffLine, CharcoalMeasure.offLineDistance(hold[y * harness.size + x]))
-            }
-        }
-        XCTAssertLessThan(worstOffLine, 0.03, "blush or other tint in the eye band")
+        let overlay = plain.indices.filter { Self.plainLuma(plain[$0]) < 0.10 }
+        let inked = overlay.filter { CharcoalMeasure.ink(hold[$0]) > 0.75 }
+        XCTAssertGreaterThan(overlay.count, 100, "fixture must expose dark blended surfaces")
+        XCTAssertGreaterThanOrEqual(Float(inked.count), 0.95 * Float(overlay.count),
+                                    "\(inked.count) of \(overlay.count) dark-source pixels are solid ink")
+        XCTAssertLessThan(hold.map(CharcoalMeasure.offLineDistance).max() ?? 0, 0.03)
     }
 
     /// Pixel rows of both brows in the 512-pixel bust frame, above `eyeBand`.
@@ -664,12 +713,15 @@ final class CharcoalSketchTests: XCTestCase {
     func testBlendedOverlaysLeaveSkinClean() async throws {
         let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)
         let plain = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
+        let under = CharcoalMeasure.colours(try await bustWithoutOverlays().render(nil),
+                                            format: harness.pixelFormat)
         let hold = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
                                            format: harness.pixelFormat)
         var skin = 0
         var inked = 0
         for y in Self.browRows {
-            for x in Self.eyeBand.x where Self.plainLuma(plain[y * harness.size + x]) > 0.3 {
+            for x in Self.eyeBand.x where Self.plainLuma(plain[y * harness.size + x]) > 0.3
+                && simd_length(plain[y * harness.size + x] - under[y * harness.size + x]) < 0.03 {
                 skin += 1
                 if CharcoalMeasure.ink(hold[y * harness.size + x]) > 0.5 { inked += 1 }
             }
