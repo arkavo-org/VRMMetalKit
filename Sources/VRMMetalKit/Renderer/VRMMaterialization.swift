@@ -18,10 +18,11 @@ import simd
 /// Visual style of a materialization (spawn) effect. VMK#materialize.
 ///
 /// Every style is one materialization field `m(pos, uv, view)` evaluated in
-/// the MToon fragment ahead of shading: fragments discard where `m > t`
-/// (progress), an emissive band lights where `t − m < ε`, and some styles add
-/// a ghost shell where `m − t < δ` (unlit preview of the not-yet-landed
-/// surface). Shell styles (tron, rain, blueprint, constellation) honour MASK
+/// the MToon fragment ahead of shading. Most styles discard fragments where
+/// `m > t` (progress); glitch never discards and charcoal discards only its
+/// outline hull, painting every surface fragment instead. An emissive band
+/// lights where `t − m < ε`, and some styles add a ghost shell where
+/// `m − t < δ` (unlit preview of the not-yet-landed surface). Shell styles (tron, rain, blueprint, constellation) honour MASK
 /// cutoff and BLEND / alpha-to-coverage; they do not force opaque coverage.
 public enum VRMMaterializationStyle: Int32, CaseIterable, Sendable {
     /// Noise-threshold dissolve sweeping bottom-to-top with a glowing edge
@@ -66,7 +67,12 @@ public enum VRMMaterializationStyle: Int32, CaseIterable, Sendable {
     /// Charcoal drawing on toned paper: a drawing front sweeps down the body
     /// leaving contours and tonal hatching, then a colour front follows
     /// behind an ember edge until the lit render stands in place of the
-    /// sketch. The host must clear to ``VRMMaterialization/charcoalPaperColor``.
+    /// sketch. The host must clear to ``VRMMaterialization/charcoalPaperColor``:
+    /// the undrawn body paints opaque paper over anything behind it (hence
+    /// ``requiresHostBackground``). Mid-tone alpha-blended materials (sheer
+    /// fabric, tinted lenses) stay hidden until colour arrives. The tone is
+    /// tuned for a key light near full intensity, so a much dimmer light rig
+    /// darkens the whole drawing.
     case charcoal = 13
 
     /// Styles that discard fragments. When one of these is active the opaque
@@ -92,15 +98,20 @@ public struct VRMMaterialization: Sendable, Equatable {
     public var color: SIMD3<Float>
     /// World-space vertical extent of the body, used to normalise the sweep.
     public var heightRange: ClosedRange<Float>
-    /// Per-avatar seed so simultaneous spawns don't share noise patterns.
+    /// Per-avatar seed so simultaneous spawns don't share noise patterns. For
+    /// the charcoal style keep it small: values up to a few thousand draw
+    /// stably, very large values lose hash precision and thin the drawing.
     public var seed: Float
     /// World-space focus point for radial styles (chrome flood, hex plating,
     /// frost seeds). nil centres it vertically inside `heightRange` at
     /// x = z = 0 — callers placing avatars away from the world origin should
     /// pass the body's own sternum instead.
     public var origin: SIMD3<Float>?
-    /// Frame counter for styles that redraw their strokes over time. Only the
-    /// low 16 bits are used, so any running counter can be passed unmasked.
+    /// Step counter for styles that redraw their strokes over time. The host
+    /// advances it about ten times a second (for example
+    /// `frameIndex * 10 / fps`), not once per frame. 0 holds the strokes
+    /// still, the stroke pattern repeats every 64 steps, and only the low 16
+    /// bits are read.
     public var boilPhase: UInt32
 
     /// Paper tone of the charcoal style. Hosts pass these components straight
