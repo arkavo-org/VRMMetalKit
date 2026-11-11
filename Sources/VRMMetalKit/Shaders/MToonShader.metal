@@ -770,9 +770,11 @@ static inline float mat_sketchLuma(float3 c) {
     return dot(c, float3(0.2126, 0.7152, 0.0722));
 }
 
-// Seed for every stroke noise; the paper tooth takes none.
+// Seed for every stroke noise; the paper tooth, the blotch and the field noise
+// take none. The boil phase wraps to 64 steps so the value fed to
+// mat_hash21 keeps its fractional bits.
 static inline float mat_sketchStrokeSeed(constant Uniforms& uniforms) {
-    return uniforms.materializeColor.w;
+    return uniforms.materializeColor.w + float(uint(uniforms.materializeOrigin.w + 0.5) & 63u) * 1.37;
 }
 
 // Stroke-order noise: contours land in patches as s crosses 0..0.3.
@@ -1127,7 +1129,26 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
 
     float3 sketchColor = mix(kSketchPaper, kSketchInk, max(smudge, gesture));
     sketchColor = mix(sketchColor, kSketchInk, coverage);
-    return float4(mix(sketchColor, lit, mat.sketchReveal), alpha);
+    float3 c = mix(sketchColor, lit, mat.sketchReveal);
+
+    float settle = mat.sketchRevealSlow;
+    c = mix(c, kSketchInk, mat_sketchDeposit(lineInk, tooth) * 0.55 * mat.sketchReveal * (1.0 - settle));
+
+    float sColour = mat.sketchFront;
+    if (mat.sketchEmberOn > 0.5 && sColour > 0.0) {
+        float3 emberColor = uniforms.materializeColor.xyz;
+        float3 charColor = float3(0.02, 0.015, 0.01);
+        float3 hotColor = mix(emberColor, float3(1.0, 1.0, 0.41), 0.65);
+        float3 coalColor = emberColor * float3(0.95, 0.595, 0.40);
+        float e = sColour + (mat_vnoise(px / 14.0) - 0.5) * 0.03;
+        float charW = smoothstep(0.02, 0.035, e) * (1.0 - smoothstep(0.05, 0.06, e));
+        float hotW = smoothstep(0.05, 0.07, e) * (1.0 - smoothstep(0.09, 0.10, e));
+        float coalW = smoothstep(0.09, 0.115, e) * (1.0 - smoothstep(0.12, 0.18, e));
+        c = mix(c, charColor, charW * 0.9);
+        c = mix(c, hotColor, hotW);
+        c = mix(c, coalColor, coalW);
+    }
+    return float4(saturate(c), alpha);
 }
 
 

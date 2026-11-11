@@ -302,6 +302,71 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertEqual(try harness.render(harness.charcoal(1.0)), plain)
     }
 
+    // MARK: - Ember and boil
+
+    private func redMinusBlue(_ frame: [UInt8], format: MTLPixelFormat) -> [Float] {
+        CharcoalMeasure.colours(frame, format: format).map { $0.x - $0.z }
+    }
+
+    func testEmberGlowsAtColourFront() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let glowing = try harness.render(harness.charcoal(0.8))
+        let monochrome = try harness.render(harness.charcoal(0.8, color: .zero))
+        let glowRB = redMinusBlue(glowing, format: harness.pixelFormat)
+        let monoRB = redMinusBlue(monochrome, format: harness.pixelFormat)
+        var differing = 0
+        var gain: Float = 0
+        for pixel in glowRB.indices {
+            let i = pixel * 4
+            guard Array(glowing[i..<i + 4]) != Array(monochrome[i..<i + 4]) else { continue }
+            differing += 1
+            gain += glowRB[pixel] - monoRB[pixel]
+        }
+        XCTAssertGreaterThan(differing, 100)
+        XCTAssertGreaterThan(gain / Float(max(differing, 1)), 0.2)
+    }
+
+    func testEmberOffIsMonochrome() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let plain = try harness.render(nil)
+        let frame = try harness.render(harness.charcoal(0.8, color: .zero))
+        let paper = VRMMaterialization.charcoalPaperColor
+        let paperRB = paper.x - paper.z
+        let plainRB = redMinusBlue(plain, format: harness.pixelFormat)
+        let frameRB = redMinusBlue(frame, format: harness.pixelFormat)
+        var offenders = 0
+        for pixel in frameRB.indices
+        where frameRB[pixel] > paperRB + 0.05 && frameRB[pixel] > plainRB[pixel] + 0.05 {
+            offenders += 1
+        }
+        XCTAssertEqual(offenders, 0)
+    }
+
+    func testHeldSketchDoesNotGlow() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        XCTAssertEqual(try harness.render(harness.charcoal(0.6)),
+                       try harness.render(harness.charcoal(0.6, color: .zero)))
+    }
+
+    func testBoilPhaseChangesStrokes() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let base = try harness.render(harness.charcoal(0.6, boilPhase: 0))
+        let boiled = try harness.render(harness.charcoal(0.6, boilPhase: 1))
+        XCTAssertTrue(boiled != base, "boil phase 1 must change the strokes")
+        XCTAssertEqual(try harness.render(harness.charcoal(0.6, boilPhase: 1)), boiled)
+    }
+
+    func testBoilStaysStableAtHighPhase() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
+        let base = CharcoalMeasure.meanInk(try harness.render(harness.charcoal(0.6, boilPhase: 0)),
+                                           within: silhouette, format: harness.pixelFormat)
+        let late = CharcoalMeasure.meanInk(try harness.render(harness.charcoal(0.6, boilPhase: 200)),
+                                           within: silhouette, format: harness.pixelFormat)
+        XCTAssertGreaterThan(base, 0.05)
+        XCTAssertEqual(late, base, accuracy: base * 0.10)
+    }
+
     // MARK: - Outline hull
 
     private func outsideSilhouetteCount(_ frame: [UInt8], silhouette: [Bool], format: MTLPixelFormat,
