@@ -761,7 +761,7 @@ static inline float mat_sketchHatch(float2 px, float angleDeg, float spacing, fl
     float id = floor(u);
     float stroke = mat_vnoise(float2(v + mat_hash21(float2(id, seed)) * 37.0, id * 0.37 + seed));
     float d = abs(fract(u) - 0.5);
-    float halfWidth = mix(0.18, 0.48, saturate(weight)) * smoothstep(0.18, 0.42, stroke);
+    float halfWidth = mix(0.18, 0.45, saturate(weight)) * smoothstep(0.18, 0.42, stroke);
     float strength = 0.65 + 0.35 * mat_hash21(float2(id, seed + 3.0));
     return (1.0 - smoothstep(halfWidth * 0.45, halfWidth * 1.1 + 1e-3, d)) * strength;
 }
@@ -774,7 +774,7 @@ static inline float mat_sketchLuma(float3 c) {
 // take none. The boil phase wraps to 64 steps so the value fed to
 // mat_hash21 keeps its fractional bits.
 static inline float mat_sketchStrokeSeed(constant Uniforms& uniforms) {
-    return uniforms.materializeColor.w + float(uint(uniforms.materializeOrigin.w + 0.5) & 63u) * 1.37;
+    return uniforms.materializeColor.w + float(uint(max(uniforms.materializeOrigin.w, 0.0) + 0.5) & 63u) * 1.37;
 }
 
 // Stroke-order noise: contours land in patches as s crosses 0..0.3.
@@ -791,6 +791,15 @@ static inline float3 mat_viewDir(constant Uniforms& uniforms, float3 worldPos) {
                                      uniforms.viewMatrix[2].xyz);
     float3 cameraPos = -(transpose(viewRotation) * uniforms.viewMatrix[3].xyz);
     return normalize(cameraPos - worldPos);
+}
+
+// View direction for the charcoal contour terms: per-fragment under a
+// perspective projection, the camera's forward axis under an orthographic one.
+static inline float3 mat_sketchViewDir(constant Uniforms& uniforms, float3 worldPos) {
+    if (uniforms.projectionMatrix[3][3] == 1.0) {
+        return normalize(float3(uniforms.viewMatrix[0].z, uniforms.viewMatrix[1].z, uniforms.viewMatrix[2].z));
+    }
+    return mat_viewDir(uniforms, worldPos);
 }
 
 // Hull colour under the charcoal style: faint grey construction ahead of the
@@ -1041,7 +1050,9 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
             st.sketchHullDrawn = drawn;
             float pressure = 0.55 + 0.45 * mat_vnoise(px / 70.0 + strokeSeed + 11.0);
             float dash = smoothstep(0.42, 0.58, mat_vnoise(px / 30.0 + strokeSeed + 9.0));
-            float hullPressure = mix(dash * 0.9, 0.85 + 0.4 * pressure, drawn);
+            float facing = abs(dot(normalize(in.worldNormal), mat_sketchViewDir(uniforms, in.worldPosition)));
+            float rim = 1.0 - smoothstep(0.25, 0.50, facing);
+            float hullPressure = mix(dash * 0.9 * rim, 0.85 + 0.4 * pressure, drawn);
             float grainField = mix(mat_sketchBlotch(px), mat_sketchTooth(px), drawn);
             float dropout = mat_vnoise(px / 17.0 + strokeSeed + 5.0);
             if (dropout < 0.12 * (1.0 - settle)) { st.killed = true; return st; }
@@ -1054,7 +1065,9 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
 // Charcoal composite for a shaded surface fragment: paper, contour and
 // texture-edge ink, tonal hatching over a smudge, then the lit colour once
 // the colour front arrives.
-// `toonStep` is the MToon shade ramp (0 = shade, 1 = lit).
+// `toonStep` is the visible MToon shading: the ramped direct light as a
+// fraction of the unshaded base colour, so a ramp whose shade colour equals
+// the base colour reads as fully lit.
 static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatState mat,
                                 float3 N, float3 albedo, float alpha, float3 lit,
                                 float toonStep, bool isBlend) {
@@ -1077,11 +1090,7 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
             : (darkOverlay ? alpha * mix(mat_sketchDeposit(darkInk, tooth), darkInk, 0.8) : 0.0);
         return float4(mix(sketchColor, lit, mat.sketchReveal), mix(sketchAlpha, alpha, mat.sketchReveal));
     }
-    float3 V = mat_viewDir(uniforms, in.worldPosition);
-    if (uniforms.projectionMatrix[3][3] == 1.0) {
-        V = normalize(float3(uniforms.viewMatrix[0].z, uniforms.viewMatrix[1].z, uniforms.viewMatrix[2].z));
-    }
-    float NdotV = abs(dot(N, V));
+    float NdotV = abs(dot(N, mat_sketchViewDir(uniforms, in.worldPosition)));
 
     float pressure = 0.55 + 0.45 * mat_vnoise(px / 70.0 + seed + 11.0);
 
@@ -1110,10 +1119,10 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float h1 = smoothstep(0.30, 0.38, s + (mat_vnoise(px / 80.0 + seed + 21.0) - 0.5) * 0.08);
     float h2 = smoothstep(0.38, 0.48, s + (mat_vnoise(px / 80.0 + seed + 22.0) - 0.5) * 0.08);
     float h3 = smoothstep(0.46, 0.58, s + (mat_vnoise(px / 80.0 + seed + 23.0) - 0.5) * 0.08);
-    float w1 = 1.0 - smoothstep(0.30, 0.62, tone);
-    float w2 = 1.0 - smoothstep(0.15, 0.50, tone);
-    float w3 = 1.0 - smoothstep(0.03, 0.25, tone);
     float paleGate = 1.0 - smoothstep(0.65, 0.80, albedoValue);
+    float w1 = 1.0 - smoothstep(mix(0.18, 0.30, paleGate), mix(0.48, 0.62, paleGate), tone);
+    float w2 = 1.0 - smoothstep(0.15, 0.50, tone);
+    float w3 = 1.0 - smoothstep(0.03, 0.20, tone);
     const float spacing = 7.0;
     float hatch = mat_sketchHatch(px, 35.0, spacing, w1, seed) * step(0.001, w1) * h1;
     hatch = max(hatch, mat_sketchHatch(px, -55.0, spacing, w2, seed + 7.0) * step(0.001, w2) * h2 * paleGate);
@@ -1122,7 +1131,7 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
 
     float smudge = (smoothstep(0.18, 0.50, dark) * 0.20 + smoothstep(0.50, 0.90, dark) * 0.33)
         * h1 * (0.85 + 0.3 * mat_vnoise(px / 40.0 + seed));
-    float fill = smoothstep(0.40, 1.0, dark) * 0.62 * h1;
+    float fill = smoothstep(0.40, 1.0, dark) * 0.50 * h1;
 
     float inkPressure = max(max(lineInk, texEdge * drawn * 1.15), max(hatch, fill)) * 1.15;
     float coverage = mat_sketchDeposit(inkPressure, tooth);
@@ -1134,19 +1143,28 @@ static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatSt
     float settle = mat.sketchRevealSlow;
     c = mix(c, kSketchInk, mat_sketchDeposit(lineInk, tooth) * 0.55 * mat.sketchReveal * (1.0 - settle));
 
+    // The ember ramp is laid out along the colour front. Where the front runs
+    // flatter than on an upright surface (field noise, or a surface lying along
+    // it) the ramp is compressed so it stays an edge and does not pool.
     float sColour = mat.sketchFront;
+    float frontSlope = length(float2(dfdx(sColour), dfdy(sColour)))
+        / max(max(length(dfdx(in.worldPosition)), length(dfdy(in.worldPosition))), 1e-6);
     if (mat.sketchEmberOn > 0.5 && sColour > 0.0) {
         float3 emberColor = uniforms.materializeColor.xyz;
         float3 charColor = float3(0.02, 0.015, 0.01);
         float3 hotColor = mix(emberColor, float3(1.0, 1.0, 0.41), 0.65);
         float3 coalColor = emberColor * float3(0.95, 0.595, 0.40);
-        float e = sColour + (mat_vnoise(px / 14.0) - 0.5) * 0.03;
+        const float uprightSlope = (1.0 - 2.0 * 0.06) / 0.25;
+        float nominalSlope = uprightSlope / max(uniforms.materializeParams.w - uniforms.materializeParams.z, 1e-4);
+        float stretch = clamp(nominalSlope / max(frontSlope, 1e-4), 1.0, 6.0);
+        float e = 0.02 + (sColour - 0.02) * stretch + (mat_vnoise(px / 14.0) - 0.5) * 0.03;
         float charW = smoothstep(0.02, 0.035, e) * (1.0 - smoothstep(0.05, 0.06, e));
-        float hotW = smoothstep(0.05, 0.07, e) * (1.0 - smoothstep(0.09, 0.10, e));
-        float coalW = smoothstep(0.09, 0.115, e) * (1.0 - smoothstep(0.12, 0.18, e));
+        float hotW = smoothstep(0.05, 0.065, e) * (1.0 - smoothstep(0.085, 0.11, e));
+        float coalFall = 1.0 - smoothstep(0.09, 0.18, e);
+        float coalW = smoothstep(0.085, 0.11, e) * coalFall * coalFall;
         c = mix(c, charColor, charW * 0.9);
-        c = mix(c, hotColor, hotW);
         c = mix(c, coalColor, coalW);
+        c = mix(c, hotColor, hotW);
     }
     return float4(saturate(c), alpha);
 }
@@ -1594,7 +1612,8 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
      if (!isFrontFace) { sketchNormal = -sketchNormal; }
      return mat_sketchSurface(uniforms, in, mat, sketchNormal, float3(baseColor.rgb),
                               float(baseColor.a), float3(litColor),
-                              saturate(mat_sketchLuma(float3(lightingAcc))),
+                              saturate((mat_sketchLuma(float3(litAcc)) + 0.02 * mat_sketchLuma(float3(lightingAcc)))
+                                       / (mat_sketchLuma(float3(baseColor.rgb)) + 0.02)),
                               effectiveAlphaMode == 2);
  }
 

@@ -3,6 +3,9 @@
 
 import XCTest
 import Metal
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 import simd
 @testable import VRMMetalKit
 
@@ -117,6 +120,23 @@ final class CharcoalHarness {
 
     static func isBGRA(_ format: MTLPixelFormat) -> Bool {
         format == .bgra8Unorm || format == .bgra8Unorm_srgb
+    }
+
+    /// Writes one frame from `render` as an opaque PNG.
+    func writePNG(_ rgba: [UInt8], to url: URL) throws {
+        guard let provider = CGDataProvider(data: Data(rgba) as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let image = CGImage(width: size, height: size, bitsPerComponent: 8, bitsPerPixel: 32,
+                                  bytesPerRow: size * 4, space: space,
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                                  provider: provider, decode: nil, shouldInterpolate: false,
+                                  intent: .defaultIntent),
+              let destination = CGImageDestinationCreateWithURL(
+                url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
     }
 
     private static func makeOrthographic(halfHeight: Float, aspect: Float,

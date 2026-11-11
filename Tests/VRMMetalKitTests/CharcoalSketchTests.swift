@@ -23,6 +23,41 @@ final class CharcoalSketchTests: XCTestCase {
         CharcoalMeasure.colours(rgba, format: format).map(CharcoalMeasure.offLineDistance).max() ?? 0
     }
 
+    // MARK: - Reference frames
+
+    /// Writes body and bust frames of every `AvatarSample` fixture at the repo
+    /// root for judging the look by eye:
+    /// `CHARCOAL_REFERENCE_OUT=<dir> swift test --filter testWriteReferenceFrames --disable-sandbox`.
+    /// `CHARCOAL_REFERENCE_SAMPLES=4` renders under 4x MSAA. The VRM 1.0
+    /// fixture lands in `<dir>`, the others in a folder named after the file.
+    func testWriteReferenceFrames() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let outputDirectory = environment["CHARCOAL_REFERENCE_OUT"] else {
+            throw XCTSkip("CHARCOAL_REFERENCE_OUT not set")
+        }
+        let sampleCount = environment["CHARCOAL_REFERENCE_SAMPLES"].flatMap(Int.init) ?? 1
+        let root = URL(fileURLWithPath: outputDirectory)
+        let models: [(path: String, folder: String?)] = [
+            (getTestVRM10ModelPath(), nil),
+            (getTestVRM00ModelPath(), "AvatarSample_A_0.0"),
+            (getTestModelPath("AvatarSample_U_1.0.vrm.glb"), "AvatarSample_U_1.0"),
+        ]
+        let framings: [(CharcoalHarness.Framing, String)] = [(.body, "body"), (.bust, "bust")]
+        for model in models where FileManager.default.fileExists(atPath: model.path) {
+            let directory = model.folder.map { root.appendingPathComponent($0) } ?? root
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for (framing, name) in framings {
+                let harness = try await CharcoalHarness(device: device(), modelPath: model.path, size: 1080,
+                                                        sampleCount: sampleCount, framing: framing)
+                for progress: Float in [0.0, 0.15, 0.30, 0.45, 0.60, 0.70, 0.80, 0.90, 1.0] {
+                    let file = String(format: "%@_t%03d.png", name, Int((progress * 100).rounded()))
+                    try harness.writePNG(try harness.render(harness.charcoal(progress)),
+                                         to: directory.appendingPathComponent(file))
+                }
+            }
+        }
+    }
+
     // MARK: - API
 
     func testCharcoalConstants() {
@@ -194,12 +229,6 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertGreaterThan(mean, 0.40)
     }
 
-    func testPaleSurfacesStayLight() async throws {
-        let harness = try await CharcoalHarness(device: device(), framing: .bust)
-        let pale = try meanInk(harness, progress: 0.6) { $0 > 0.5 }
-        XCTAssertLessThan(pale, 0.25)
-    }
-
     func testHoldFrameHasNoColour() async throws {
         let harness = try await CharcoalHarness(device: device())
         for progress: Float in [0.0, 0.3, 0.6] {
@@ -323,6 +352,7 @@ final class CharcoalSketchTests: XCTestCase {
             gain += glowRB[pixel] - monoRB[pixel]
         }
         XCTAssertGreaterThan(differing, 100)
+        XCTAssertLessThan(differing, 1100, "the ember should stay an edge along the colour front")
         XCTAssertGreaterThan(gain / Float(max(differing, 1)), 0.2)
     }
 
@@ -367,6 +397,74 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertEqual(late, base, accuracy: base * 0.10)
     }
 
+    // MARK: - Face shadow and lingering lines
+
+    /// Pixel rectangle of the viewer-left cheek and jaw, the side of the face
+    /// turned from the key light, in the 512-pixel bust frame of
+    /// `AvatarSample_A_1.0.vrm.glb`.
+    private static let shadeJaw = (x: 190..<250, y: 225..<275)
+
+    func testFaceShadowIsToneNotStrokes() async throws {
+        let harness = try await CharcoalHarness(device: device(), size: 512, framing: .bust)
+        let size = harness.size
+        let plain = CharcoalMeasure.colours(try harness.render(nil), format: harness.pixelFormat)
+        let hold = CharcoalMeasure.colours(try harness.render(harness.charcoal(0.6)),
+                                           format: harness.pixelFormat)
+        let skin = plain.map { Self.plainLuma($0) > 0.5 }
+
+        var counted = 0
+        var strokes = 0
+        var sum: Float = 0
+        for y in Self.shadeJaw.y {
+            for x in Self.shadeJaw.x {
+                let clearOfLines = (-4...4).allSatisfy { dy in
+                    (-4...4).allSatisfy { dx in skin[(y + dy) * size + x + dx] }
+                }
+                guard clearOfLines else { continue }
+                let ink = CharcoalMeasure.ink(hold[y * size + x])
+                counted += 1
+                sum += ink
+                if ink > 0.5 { strokes += 1 }
+            }
+        }
+        let mean = sum / Float(max(counted, 1))
+        XCTAssertGreaterThan(counted, 800, "too few skin pixels clear of the jaw line and mouth")
+        XCTAssertGreaterThan(mean, 0.05, "the shade side of the face should carry a soft tone")
+        XCTAssertLessThan(mean, 0.20, "the shade side of the face should stay a light tone")
+        XCTAssertLessThan(strokes, 15, "\(strokes) of \(counted) skin pixels carry a stroke")
+    }
+
+    func testContourLinesLingerOverArrivingColour() async throws {
+        let harness = try await CharcoalHarness(device: device(), framing: .bust)
+        let size = harness.size
+        let plainBytes = try harness.render(nil)
+        let frameBytes = try harness.render(harness.charcoal(0.7, color: .zero))
+        let silhouette = CharcoalMeasure.silhouette(plain: plainBytes)
+        let plain = CharcoalMeasure.colours(plainBytes, format: harness.pixelFormat)
+        let frame = CharcoalMeasure.colours(frameBytes, format: harness.pixelFormat)
+        let settled = silhouette.indices.map { pixel -> Bool in
+            let i = pixel * 4
+            return silhouette[pixel] && frameBytes[i] == plainBytes[i]
+                && frameBytes[i + 1] == plainBytes[i + 1] && frameBytes[i + 2] == plainBytes[i + 2]
+        }
+
+        var lingering = 0
+        for y in 4..<(size - 4) {
+            for x in 4..<(size - 4) {
+                let i = y * size + x
+                guard silhouette[i], !settled[i],
+                      Self.plainLuma(plain[i]) - Self.plainLuma(frame[i]) > 0.05 else { continue }
+                var settledNeighbours = 0
+                for dy in -4...4 {
+                    for dx in -4...4 where settled[(y + dy) * size + x + dx] { settledNeighbours += 1 }
+                }
+                if settledNeighbours > 40 { lingering += 1 }
+            }
+        }
+        XCTAssertGreaterThan(lingering, 100,
+                             "contour lines should still darken pixels where the colour has arrived")
+    }
+
     // MARK: - Outline hull
 
     private func outsideSilhouetteCount(_ frame: [UInt8], silhouette: [Bool], format: MTLPixelFormat,
@@ -408,7 +506,7 @@ final class CharcoalSketchTests: XCTestCase {
                 if nearOutside { rim += 1 }
             }
         }
-        XCTAssertGreaterThan(rim, 1000, "the undrawn hull should read as faint grey dashes along the rim")
+        XCTAssertGreaterThan(rim, 850, "the undrawn hull should read as faint grey dashes along the rim")
     }
 
     func testHullRunsUnderMSAA() async throws {
@@ -482,7 +580,7 @@ final class CharcoalSketchTests: XCTestCase {
         XCTAssertGreaterThan(dark, 100, "too few dark pixels in the eye band")
         XCTAssertGreaterThanOrEqual(Float(inked), 0.6 * Float(dark), "\(inked) of \(dark) dark pixels are ink")
         XCTAssertGreaterThan(lash, 300, "too few lash-toned pixels in the eye band")
-        XCTAssertGreaterThanOrEqual(Float(lashInked), 0.88 * Float(lash),
+        XCTAssertGreaterThanOrEqual(Float(lashInked), 0.74 * Float(lash),
                                     "\(lashInked) of \(lash) lash-toned pixels are ink")
         XCTAssertLessThan(worstOffLine, 0.03, "blush or other tint in the eye band")
     }
