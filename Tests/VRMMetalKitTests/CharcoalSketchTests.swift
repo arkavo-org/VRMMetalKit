@@ -75,10 +75,16 @@ final class CharcoalSketchTests: XCTestCase {
 
     func testConstructionDashesAreFaint() async throws {
         let harness = try await CharcoalHarness(device: device())
+        let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
         let frame = try harness.render(harness.charcoal(0.0))
         let mean = CharcoalMeasure.meanInk(frame, within: nil, format: harness.pixelFormat)
         XCTAssertGreaterThan(mean, 0)
         XCTAssertLessThan(mean, 0.01)
+
+        let ink = CharcoalMeasure.colours(frame, format: harness.pixelFormat).map(CharcoalMeasure.ink)
+        let dashes = ink.indices.filter { silhouette[$0] && (0.08...0.30).contains(ink[$0]) }.count
+        XCTAssertGreaterThan(dashes, 50, "construction dashes should be drawn as faint grey")
+        XCTAssertLessThanOrEqual(ink.max() ?? 0, 0.5, "no drawn ink before the front arrives")
     }
 
     func testFaceDetailIsDrawn() async throws {
