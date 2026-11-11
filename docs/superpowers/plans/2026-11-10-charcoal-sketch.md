@@ -513,11 +513,11 @@ Filled in by Task 1 Step 4 from the relit spike frames (`AvatarSample_A_1.0`, si
 
 | Statistic | Body | Bust |
 | --- | --- | --- |
-| Mean ink in silhouette, progress 0 | | |
-| Mean ink in silhouette, progress 0.25 | | |
-| Mean ink in silhouette, progress 0.6 | | |
-| Mean ink over frame, progress 0 | | |
-| Mean ink, dark plain pixels, progress 0.6 | | |
-| Mean ink, pale plain pixels, progress 0.6 | | |
-| Ink pixels outside silhouette, progress 0.6 | | |
-| Largest off-line distance, progress 0.6 | | |
+| Mean ink in silhouette, progress 0 | 0.0383 | 0.0092 |
+| Mean ink in silhouette, progress 0.25 | 0.3067 | 0.4793 |
+| Mean ink in silhouette, progress 0.6 | 0.6390 | 0.4899 |
+| Mean ink over frame, progress 0 | 0.00484 | 0.00486 |
+| Mean ink, dark plain pixels, progress 0.6 | 0.9351 | 0.9255 |
+| Mean ink, pale plain pixels, progress 0.6 | 0.3470 | 0.2118 |
+| Ink pixels outside silhouette, progress 0.6 | 3452 | 1644 |
+| Largest off-line distance, progress 0.6 | 0.0037 | 0.0040 |
