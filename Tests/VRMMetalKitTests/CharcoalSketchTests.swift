@@ -64,15 +64,68 @@ final class CharcoalSketchTests: XCTestCase {
 
     // MARK: - Timeline
 
-    func testBlankStartIsPaper() async throws {
+    func testContoursDrawByHoldFrame() async throws {
+        let harness = try await CharcoalHarness(device: device())
+        let plain = try harness.render(nil)
+        let silhouette = CharcoalMeasure.silhouette(plain: plain)
+        let frame = try harness.render(harness.charcoal(0.6))
+        let mean = CharcoalMeasure.meanInk(frame, within: silhouette, format: harness.pixelFormat)
+        XCTAssertGreaterThan(mean, 0.02)
+    }
+
+    func testConstructionDashesAreFaint() async throws {
         let harness = try await CharcoalHarness(device: device())
         let frame = try harness.render(harness.charcoal(0.0))
-        XCTAssertLessThan(maxOffLine(frame), 0.03)
+        let mean = CharcoalMeasure.meanInk(frame, within: nil, format: harness.pixelFormat)
+        XCTAssertGreaterThan(mean, 0)
+        XCTAssertLessThan(mean, 0.01)
+    }
+
+    func testFaceDetailIsDrawn() async throws {
+        let harness = try await CharcoalHarness(device: device(), framing: .bust)
+        let plain = try harness.render(nil)
+        let frame = try harness.render(harness.charcoal(0.6))
+        let silhouette = CharcoalMeasure.silhouette(plain: plain)
+        let plainColours = CharcoalMeasure.colours(plain, format: harness.pixelFormat)
+        let charcoalColours = CharcoalMeasure.colours(frame, format: harness.pixelFormat)
+        let luma = plainColours.map { simd_dot($0, SIMD3<Float>(0.2126, 0.7152, 0.0722)) }
+        let size = harness.size
+
+        var edges = 0
+        var inked = 0
+        for y in 1..<(size - 1) {
+            for x in 1..<(size - 1) {
+                let i = y * size + x
+                guard silhouette[i] else { continue }
+                let neighbours = [i - 1, i + 1, i - size, i + size]
+                guard neighbours.contains(where: { abs(luma[i] - luma[$0]) > 0.25 }) else { continue }
+                edges += 1
+                if CharcoalMeasure.ink(charcoalColours[i]) > 0.4 { inked += 1 }
+            }
+        }
+        XCTAssertGreaterThan(edges, 200, "the bust fixture should contain texture and shape edges")
+        XCTAssertGreaterThanOrEqual(Double(inked), 0.3 * Double(edges),
+                                    "\(inked) of \(edges) edge pixels carry ink")
+    }
+
+    func testOrthographicContourDoesNotFlood() async throws {
+        let ortho = try await CharcoalHarness(device: device(), orthographic: true)
+        let perspective = try await CharcoalHarness(device: device())
+
+        func meanInk(_ harness: CharcoalHarness) throws -> Float {
+            let silhouette = CharcoalMeasure.silhouette(plain: try harness.render(nil))
+            let frame = try harness.render(harness.charcoal(0.6))
+            return CharcoalMeasure.meanInk(frame, within: silhouette, format: harness.pixelFormat)
+        }
+        let orthographicInk = try meanInk(ortho)
+        let perspectiveInk = try meanInk(perspective)
+        XCTAssertLessThanOrEqual(orthographicInk, 1.5 * perspectiveInk,
+                                 "orthographic \(orthographicInk) vs perspective \(perspectiveInk)")
     }
 
     func testHoldFrameHasNoColour() async throws {
         let harness = try await CharcoalHarness(device: device())
-        for progress: Float in [0.3, 0.6] {
+        for progress: Float in [0.0, 0.3, 0.6] {
             let frame = try harness.render(harness.charcoal(progress))
             XCTAssertLessThan(maxOffLine(frame), 0.03, "progress \(progress)")
         }

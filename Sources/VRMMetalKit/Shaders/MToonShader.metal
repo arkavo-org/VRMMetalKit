@@ -714,7 +714,7 @@ struct MatState {
 // MARK: Charcoal sketch (style 13)
 
 constant float3 kSketchPaper = float3(0.86, 0.83, 0.77);
-[[maybe_unused]] constant float3 kSketchInk = float3(0.030, 0.028, 0.026);
+constant float3 kSketchInk = float3(0.030, 0.028, 0.026);
 
 // Bilinear value noise in 0..1.
 static inline float mat_vnoise(float2 p) {
@@ -726,6 +726,41 @@ static inline float mat_vnoise(float2 p) {
     float c = mat_hash21(i + float2(0.0, 1.0));
     float d = mat_hash21(i + float2(1.0, 1.0));
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+// Coarse rubbed-in blotch, 0..1: the low-frequency half of the tooth.
+static inline float mat_sketchBlotch(float2 px) {
+    return 0.6 * mat_vnoise(px / 11.0) + 0.4 * mat_vnoise(px / 30.0);
+}
+
+// Paper tooth: 0 = valley (catches no charcoal), 1 = peak.
+static inline float mat_sketchTooth(float2 px) {
+    return 0.32 * mat_hash21(floor(px * 0.42))
+         + 0.23 * mat_vnoise(px * 0.13)
+         + 0.45 * mat_sketchBlotch(px);
+}
+
+// Charcoal deposits where stroke pressure exceeds the depth of the paper
+// valley: light pressure only catches the peaks, heavy pressure fills the
+// tooth to a solid black.
+static inline float mat_sketchDeposit(float pressure, float tooth) {
+    float grain = smoothstep(0.0, 0.42, pressure - (1.0 - tooth));
+    return mix(grain, 1.0, smoothstep(0.78, 1.05, pressure));
+}
+
+static inline float mat_sketchLuma(float3 c) {
+    return dot(c, float3(0.2126, 0.7152, 0.0722));
+}
+
+// Seed for every stroke noise; the paper tooth takes none.
+static inline float mat_sketchStrokeSeed(constant Uniforms& uniforms) {
+    return uniforms.materializeColor.w;
+}
+
+// Stroke-order noise: contours land in patches as s crosses 0..0.3.
+static inline float mat_sketchContourGate(float2 px, float s, float seed) {
+    float n = mat_vnoise(px / 46.0 + seed * 1.7);
+    return smoothstep(n * 0.24, n * 0.24 + 0.05, s);
 }
 
 // World-space V from the view matrix — independent of the vertex interpolator,
@@ -972,18 +1007,48 @@ static MatState mat_resolve(constant Uniforms& uniforms, VertexOut in, bool isOu
     return st;
 }
 
-// Charcoal composite for a shaded surface fragment: paper until the colour
-// front arrives, then the lit colour. `toonStep` is the MToon shade ramp
-// (0 = shade, 1 = lit).
-static float4 mat_sketchSurface([[maybe_unused]] constant Uniforms& uniforms,
-                                [[maybe_unused]] VertexOut in, MatState mat,
-                                [[maybe_unused]] float3 N, [[maybe_unused]] float3 albedo,
-                                float alpha, float3 lit,
+// Charcoal composite for a shaded surface fragment: paper, contour and
+// texture-edge ink, then the lit colour once the colour front arrives.
+// `toonStep` is the MToon shade ramp (0 = shade, 1 = lit).
+static float4 mat_sketchSurface(constant Uniforms& uniforms, VertexOut in, MatState mat,
+                                float3 N, float3 albedo, float alpha, float3 lit,
                                 [[maybe_unused]] float toonStep, bool isBlend) {
     if (isBlend) {
         return float4(lit, alpha * mat.sketchReveal);
     }
-    return float4(mix(kSketchPaper, lit, mat.sketchReveal), alpha);
+    float s = mat.sketchS;
+    float seed = mat_sketchStrokeSeed(uniforms);
+    float pxScale = max(uniforms.viewportSize.y / 1080.0, 0.25);
+    float2 px = in.position.xy / pxScale;
+    float3 V = mat_viewDir(uniforms, in.worldPosition);
+    if (uniforms.projectionMatrix[3][3] == 1.0) {
+        V = normalize(float3(uniforms.viewMatrix[0].z, uniforms.viewMatrix[1].z, uniforms.viewMatrix[2].z));
+    }
+    float NdotV = abs(dot(N, V));
+
+    float tooth = mat_sketchTooth(px);
+    float pressure = 0.55 + 0.45 * mat_vnoise(px / 70.0 + seed + 11.0);
+    float drawn = mat_sketchContourGate(px, s, seed);
+
+    float wobble = (mat_vnoise(px / 30.0 + seed) - 0.5) * 0.14;
+    float thr = 0.50 * pressure + wobble;
+    float core = 1.0 - smoothstep(thr * 0.50, thr * 0.70, NdotV);
+    float feather = (1.0 - smoothstep(thr * 0.55, thr, NdotV)) * 0.6;
+    float contour = max(core, feather);
+    float curvature = length(fwidth(N));
+    float crease = smoothstep(0.30, 0.55, curvature) * 0.8;
+    float lineDropout = smoothstep(0.10, 0.28, mat_vnoise(px / 19.0 + seed + 3.0));
+    float lineRaw = max(contour, crease) * lineDropout * (0.6 + 0.5 * pressure);
+    float lineInk = lineRaw * drawn;
+    float dash = smoothstep(0.42, 0.58, mat_vnoise(px / 30.0 + seed + 9.0));
+    float gesture = lineRaw * (1.0 - drawn) * dash * 0.19;
+
+    float texEdge = smoothstep(0.03, 0.10, fwidth(mat_sketchLuma(albedo))) * lineDropout * (0.6 + 0.5 * pressure);
+    float coverage = mat_sketchDeposit(max(lineInk, texEdge * drawn * 1.15) * 1.15, tooth);
+
+    float3 sketchColor = mix(kSketchPaper, kSketchInk, gesture);
+    sketchColor = mix(sketchColor, kSketchInk, coverage);
+    return float4(mix(sketchColor, lit, mat.sketchReveal), alpha);
 }
 
 
