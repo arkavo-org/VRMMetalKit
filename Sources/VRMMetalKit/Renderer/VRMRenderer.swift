@@ -746,7 +746,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///
     /// Defaults to `false` to preserve the historical guarantee that `draw` produces
     /// correct results even if the caller mutated `node.localMatrix` without telling
-    /// anyone.
+    /// anyone. Note: SpringBone writeback propagates only mutated spring chains, so
+    /// hosts enabling this flag must update world transforms for any non-spring
+    /// node edits before calling `draw`.
     public var skipPreDrawTransformUpdate: Bool = false
 
     private var lastUpdateTime: CFTimeInterval = 0
@@ -906,8 +908,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// flag back on).
     public var isAnimationActive: Bool = true
 
-    // Triple-buffered uniforms for avoiding CPU-GPU sync
+    // Triple-buffered uniforms for avoiding CPU-GPU sync.
+    // Each frame buffer holds one 256-byte-aligned slice per compositor view so
+    // stereo / multi-view frames encoded into a single command buffer never
+    // overwrite earlier eyes' view/projection matrices.
     static let maxBufferedFrames = VRMConstants.Rendering.maxBufferedFrames
+    static let uniformViewSliceStride = (MemoryLayout<Uniforms>.stride + 255) & ~255
+    static let defaultUniformViewCapacity = 2
     var uniformsBuffers: [MTLBuffer] = []
     private var currentUniformBufferIndex = 0
     var uniforms = Uniforms()
@@ -920,6 +927,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// the inflight completion handler; ``finishDeferredCompositorFrame`` does.
     private var compositorDeferCompletion = false
     private var compositorHeldSlot = false
+    private var compositorViewIndex = 0
+    private var compositorViewCount = 1
     private var compositorMorphedBuffers: [MorphKey: MTLBuffer] = [:]
 
     // MARK: - Camera
@@ -1820,12 +1829,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         guard !views.isEmpty else { return }
         compositorDeferCompletion = true
         compositorHeldSlot = false
+        compositorViewCount = views.count
         defer {
             compositorDeferCompletion = false
             compositorSkipSimulation = false
+            compositorViewIndex = 0
+            compositorViewCount = 1
         }
         for (index, view) in views.enumerated() {
             compositorSkipSimulation = index > 0
+            compositorViewIndex = index
             viewMatrix = view.viewMatrix
             projectionMatrix = view.projectionMatrix
             drawOffscreen(
@@ -1934,6 +1947,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             // Get the next uniform buffer in the ring
             currentUniformBufferIndex = (currentUniformBufferIndex + 1) % Self.maxBufferedFrames
+            // Grow the ring slot if a multi-view compositor frame exceeds its capacity.
+            let requiredUniformBytes = max(Self.defaultUniformViewCapacity, compositorViewCount) * Self.uniformViewSliceStride
+            if currentUniformBufferIndex < uniformsBuffers.count,
+               uniformsBuffers[currentUniformBufferIndex].length < requiredUniformBytes,
+               let grown = device.makeBuffer(length: requiredUniformBytes, options: .storageModeShared) {
+                grown.label = "Uniform Buffer \(currentUniformBufferIndex)"
+                uniformsBuffers[currentUniformBufferIndex] = grown
+            }
         }
         guard currentUniformBufferIndex < uniformsBuffers.count else {
             vrmLog("[VRMRenderer] No uniform buffer available at index \(currentUniformBufferIndex)")
@@ -1944,12 +1965,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             return
         }
         let uniformsBuffer = uniformsBuffers[currentUniformBufferIndex]
+        let uniformOffset = compositorViewIndex * Self.uniformViewSliceStride
+        guard uniformOffset + MemoryLayout<Uniforms>.size <= uniformsBuffer.length else {
+            vrmLog("[VRMRenderer] Uniform buffer too small for view \(compositorViewIndex)")
+            if simulate {
+                inflightSemaphore.signal()
+                compositorHeldSlot = false
+            }
+            return
+        }
 
         // Validate pipeline states in strict mode
         if config.strict != .off {
             do {
                 try strictValidator?.validatePipelineState(opaquePipelineState, name: "opaque_pipeline")
-                try strictValidator?.validateUniformBuffer(uniformsBuffer, requiredSize: MemoryLayout<Uniforms>.size)
+                try strictValidator?.validateUniformBuffer(uniformsBuffer, requiredSize: uniformOffset + MemoryLayout<Uniforms>.size)
                 if morphTargetSystem?.morphAccumulatePipelineState == nil {
                     throw StrictModeError.missingComputeFunction(name: "morph_accumulate")
                 }
@@ -2361,8 +2391,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         uniforms.modelMatrix = matrix_identity_float4x4
         uniforms.normalMatrix = matrix_identity_float4x4
 
-        // Copy uniforms to the current buffer
-        uniformsBuffer.contents().copyMemory(from: &uniforms, byteCount: MemoryLayout<Uniforms>.size)
+        // Copy uniforms to the current view's slice in the ring buffer
+        uniformsBuffer.contents()
+            .advanced(by: uniformOffset)
+            .copyMemory(from: &uniforms, byteCount: MemoryLayout<Uniforms>.size)
 
         // ALPHA MODE QUEUING: Collect all primitives and sort by alpha mode
         // PERFORMANCE OPTIMIZATION: Use cached render items if available
@@ -2810,7 +2842,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         // instead of issuing setVertexBytes on every draw call.
         var initialVertexOffset: UInt32 = 0
         encoder.setVertexBytes(&initialVertexOffset, length: MemoryLayout<UInt32>.size, index: ResourceIndices.vertexOffsetBuffer)
-        encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: 0, index: 1)
+        encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: uniformOffset, index: 1)
 
         // Frame-constant specialization inputs hoisted out of the draw loop.
         let frameLightCount = MToonLightSpecialization.count(
@@ -3258,7 +3290,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // EncoderStateCache instead of copying 496 bytes via setVertexBytes per draw.
             // Rigid draws keep setVertexBytes with per-node modelMatrix/normalMatrix.
             if isSkinned {
-                encoderStateCache.setVertexBuffer(encoder, uniformsBuffer, offset: 0, index: ResourceIndices.uniformsBuffer)
+                encoderStateCache.setVertexBuffer(encoder, uniformsBuffer, offset: uniformOffset, index: ResourceIndices.uniformsBuffer)
                 if frameCounter % 60 == 0 {
                     vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=true, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation applied")
                 }
@@ -3990,7 +4022,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                        index: 8)
 
                 // Also pass main uniforms to fragment shader for lighting
-                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: 0, index: 1)
+                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: uniformOffset, index: 1)
 
                 // CRITICAL DEBUG: Test if we're reaching draw code
                 if frameCounter < 2 {
@@ -4317,7 +4349,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                        index: 8)
 
                 // Also pass main uniforms to fragment shader for lighting
-                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: 0, index: 1)
+                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: uniformOffset, index: 1)
 
                 encoder.drawPrimitives(
                     type: primitive.primitiveType,
@@ -5161,6 +5193,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if let opaqueState = depthStencilStates["opaque"] {
             encoderStateCache.setDepthStencilState(encoder,opaqueState)
         }
+
+        // The outline pass bypassed EncoderStateCache for raw vertex buffer/bytes
+        // binds (slots 0, 1, 20, 22); reset so any subsequent pass on the same
+        // encoder rebinds from a clean state.
+        encoderStateCache.reset()
     }
 
     private func bindAttributeStream(_ encoder: MTLRenderCommandEncoder, primitive: VRMPrimitive) {

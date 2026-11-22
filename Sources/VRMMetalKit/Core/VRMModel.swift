@@ -105,7 +105,14 @@ public class VRMModel: @unchecked Sendable {
     ///
     /// Defines physics chains, stiffness, gravity, and colliders. Physics simulation
     /// is performed on the GPU via `SpringBoneComputeSystem`.
-    public var springBone: VRMSpringBone?
+    public var springBone: VRMSpringBone? {
+        didSet { springBoneRevision &+= 1 }
+    }
+
+    /// Monotonically incremented whenever `springBone` or `nodes` is mutated so
+    /// `SpringBoneComputeSystem` can validate pre-resolved caches in O(1) while
+    /// immediately invalidating on any same-count runtime edit.
+    internal var springBoneRevision: UInt64 = 0
 
     /// VRM 0.x MToon material properties stored at document level.
     public var vrm0MaterialProperties: [VRM0MaterialProperty] = []
@@ -134,7 +141,9 @@ public class VRMModel: @unchecked Sendable {
     ///
     /// Nodes form a tree structure via `parent` and `children` properties.
     /// Each node has local and world transforms that can be animated.
-    public var nodes: [VRMNode] = []
+    public var nodes: [VRMNode] = [] {
+        didSet { springBoneRevision &+= 1 }
+    }
 
     /// Skin data for skeletal animation (joint matrices, inverse bind matrices).
     public var skins: [VRMSkin] = []
@@ -524,7 +533,7 @@ public class VRMModel: @unchecked Sendable {
         }
         
         let parser = GLTFParser()
-        let (document, binaryData) = try parser.parse(data: data, filePath: filePath)
+        let (document, binaryData) = try parser.parseZeroCopy(data: data, filePath: filePath)
         try await context?.checkCancellation()
         
         if !skipLogging {

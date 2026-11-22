@@ -766,6 +766,17 @@ public class GLTFParser {
     ///   - ``GLTFError/unsupportedVersion(version:supported:filePath:)`` if the GLB container version is not `2`.
     ///   - ``GLTFError/invalidJSON(context:underlyingError:filePath:)`` if the JSON chunk is missing or fails to decode against ``GLTFDocument``.
     public func parse(data: Data, filePath: String? = nil) throws -> (document: GLTFDocument, binaryData: Data?) {
+        return try parseImpl(data: data, filePath: filePath, zeroCopyBinaryChunk: false)
+    }
+
+    /// Package-internal zero-copy variant that returns the `BIN` chunk as a `Data`
+    /// slice into `data` (preserving `data.startIndex + chunkStart`) for callers
+    /// that read via `startIndex`-relative indexing or `withUnsafeBytes`.
+    package func parseZeroCopy(data: Data, filePath: String? = nil) throws -> (document: GLTFDocument, binaryData: Data?) {
+        return try parseImpl(data: data, filePath: filePath, zeroCopyBinaryChunk: true)
+    }
+
+    private func parseImpl(data: Data, filePath: String? = nil, zeroCopyBinaryChunk: Bool) throws -> (document: GLTFDocument, binaryData: Data?) {
         // GLB Header - ensure we have at least 12 bytes for header
         guard data.count >= 12 else {
             throw GLTFError.invalidGLBFormat(
@@ -822,7 +833,7 @@ public class GLTFParser {
             if chunkType == 0x4E4F534A { // "JSON"
                 jsonChunk = chunkData
             } else if chunkType == 0x004E4942 { // "BIN\0"
-                parsedBinaryChunk = chunkData
+                parsedBinaryChunk = zeroCopyBinaryChunk ? chunkData : Data(chunkData)
             }
 
             offset += 8 + Int(chunkLength)

@@ -18,6 +18,7 @@
 import Foundation
 import Metal
 import simd
+import Synchronization
 
 // MARK: - VRM Mesh
 
@@ -1173,8 +1174,15 @@ public class VRMNode {
     public let index: Int
     /// Source node name (often the humanoid bone name like `J_Bip_C_Head`).
     public let name: String?
+    /// Monotonically incremented whenever any `VRMNode.parent` link is mutated so
+    /// caches that pre-resolve strong parent pointers can validate in O(1) without
+    /// per-frame `weak` reference loads.
+    internal static let parentHierarchyRevision = Atomic<UInt64>(0)
+
     /// Parent node (weak to avoid retain cycles in the scene graph).
-    public weak var parent: VRMNode?
+    public weak var parent: VRMNode? {
+        didSet { VRMNode.parentHierarchyRevision.wrappingAdd(1, ordering: .relaxed) }
+    }
     /// Child nodes; rendering walks this hierarchy.
     public var children: [VRMNode] = []
 
@@ -1211,7 +1219,8 @@ public class VRMNode {
 
     /// Inverse-transpose of the world linear part, computed lazily on read so
     /// skeleton joint nodes that are never drawn non-skinned skip the 3×3
-    /// matrix inversion during hierarchy walks.
+    /// matrix inversion during hierarchy walks. Reading mutates the internal
+    /// cache and assumes synchronized access (e.g. under `VRMModel.lock`).
     public var normalMatrix: float4x4 {
         get {
             if normalMatrixDirty {

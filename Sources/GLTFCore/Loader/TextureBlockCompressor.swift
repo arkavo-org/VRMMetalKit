@@ -73,7 +73,6 @@ enum TextureBlockCompressor {
         for level in 0..<source.mipmapLevelCount {
             let width = max(1, source.width >> level)
             let height = max(1, source.height >> level)
-            let levelBytes = width * height * 4
             rgba.withUnsafeMutableBytes { raw in
                 source.getBytes(
                     raw.baseAddress!,
@@ -90,7 +89,6 @@ enum TextureBlockCompressor {
                     bytesPerRow: width * 4
                 )
             }
-            _ = levelBytes
             let bytesPerRow = ((width + blockSize - 1) / blockSize) * blockBytes
             encoded.withUnsafeBytes { buf in
                 dest.replace(
@@ -107,8 +105,8 @@ enum TextureBlockCompressor {
     private struct SendablePointer<T>: @unchecked Sendable {
         let ptr: UnsafePointer<T>
     }
-    private struct SendableMutablePointer<T>: @unchecked Sendable {
-        let ptr: UnsafeMutablePointer<T>
+    private struct SendableMutableRawPointer: @unchecked Sendable {
+        let ptr: UnsafeMutableRawPointer
     }
 
     /// Encodes tightly-or-strided RGBA8 bytes as a BC7 Mode 6 image.
@@ -125,7 +123,7 @@ enum TextureBlockCompressor {
         out.withUnsafeMutableBytes { raw in
             guard let baseAddr = raw.baseAddress else { return }
             let srcWrap = SendablePointer(ptr: rgba)
-            let dstWrap = SendableMutablePointer(ptr: baseAddr.assumingMemoryBound(to: UInt64.self))
+            let dstWrap = SendableMutableRawPointer(ptr: baseAddr)
 
             if totalBlocks >= 1024 && blocksY >= 4 {
                 let bands = min(blocksY, max(1, ProcessInfo.processInfo.activeProcessorCount))
@@ -163,7 +161,7 @@ enum TextureBlockCompressor {
 
     private static func encodeBC7RowRange(
         rgba: UnsafePointer<UInt8>,
-        destBase: UnsafeMutablePointer<UInt64>,
+        destBase: UnsafeMutableRawPointer,
         width: Int,
         height: Int,
         bytesPerRow: Int,
@@ -178,7 +176,7 @@ enum TextureBlockCompressor {
                 let trialIndices = idxBuf.baseAddress! + 16
                 for by in startRow..<endRow {
                     let y0 = by * blockSize
-                    let rowDest = destBase + by * blocksX * 2
+                    let rowByteOffset = by * blocksX * blockBytes
                     let fullBlockY = (y0 + 3) < height
                     let r0 = rgba + min(y0 + 0, height - 1) * bytesPerRow
                     let r1 = rgba + min(y0 + 1, height - 1) * bytesPerRow
@@ -208,8 +206,9 @@ enum TextureBlockCompressor {
                             bestIndices: bestIndices,
                             trialIndices: trialIndices
                         )
-                        rowDest[bx * 2 + 0] = lo.littleEndian
-                        rowDest[bx * 2 + 1] = hi.littleEndian
+                        let blockByteOffset = rowByteOffset + bx * blockBytes
+                        destBase.storeBytes(of: lo.littleEndian, toByteOffset: blockByteOffset, as: UInt64.self)
+                        destBase.storeBytes(of: hi.littleEndian, toByteOffset: blockByteOffset + 8, as: UInt64.self)
                     }
                 }
             }

@@ -73,7 +73,7 @@ key for the code you touched is the signal, not the total.
 
 | Phase key | What it times |
 |-----------|----------------|
-| `transformUpdate` | Node world-transform propagation (pre-draw and post-physics walks). |
+| `transformUpdate` | Pre-draw node world-transform propagation (SpringBone chains propagate directly during `springReadback`). |
 | `skinPalette` | Per-skin dirty check and joint-palette rebuild. |
 | `morphSetup` | Whole morph compute pass; `morphActiveSet` isolates per-primitive active-set build. |
 | `springBone` | Whole spring step; `springTargetCapture` (per-frame target/collider capture), `springSubsteps` (XPBD loop), `springReadback` (GPU positions → node writeback) isolate its stages. |
@@ -81,8 +81,8 @@ key for the code you touched is the signal, not the total.
 | `depthPrepass` / `outlinePass` | The optional depth prepass and the inverted-hull outline pass. |
 
 Each phase is one sample per frame: a phase the renderer begins several times
-in a frame (`transformUpdate` walks twice with spring bone on, `morphActiveSet`
-runs once per primitive) is summed, so the percentiles compare frames, not calls.
+in a frame (`morphActiveSet` runs once per primitive) is summed, so the
+percentiles compare frames, not calls.
 
 `make bench-hotspots` amplifies each stage by combining animation with ultra
 spring physics on a single avatar (the tracker is attached to one renderer, so
@@ -198,22 +198,25 @@ macOS 27.2.1, Swift 6.4.2). **A** is `main` (`1130e8c`); **B** adds:
   non-recursive `updateWorldTransformShallow()` for $O(L)$ SpringBone chain
   writeback (eliminating double `updateLocalMatrix()`, $O(L^2)$ subtree walks,
   and the redundant post-spring full-skeleton `model.updateNodeTransforms()`).
-- Pre-resolved flat SpringBone capture caches (`cachedRootNodes`,
-  `cachedBindDirEntries`, `cachedColliderGroupMasks`, `cachedColliderNodes`,
-  `cachedSyntheticColliderNodes`, and precomputed static `boneInitialAxes`,
-  reading live `collider.shape` per frame) and zero-allocation sleep/wake
-  tracking with bitmask-OR collider matching (`SpringBoneSleepGate`).
+- Pre-resolved flat SpringBone capture caches keyed by `VRMModel.springBoneRevision`
+  and atomic `VRMNode.parentHierarchyRevision` (`cachedRootNodes`,
+  `cachedBindDirEntries`, `cachedSphere/Capsule/PlaneColliders`, and precomputed
+  static `boneInitialAxes` guarded by live `initialRotation` checks) plus
+  zero-allocation sleep/wake tracking with bitmask-OR collider matching
+  (`SpringBoneSleepGate`).
 - `VRMRenderer` `commandEncode` cleanup: `EncoderStateCache` vertex-texture
-  dedup, shared `uniformsBuffer` binding for skinned draws (avoiding per-draw
-  496-byte `setVertexBytes`), hoisted frame constants (`vertexOffset`,
-  `lightCount`, `usesDebugFragment`), `hasMorphedPositionsFlag` dedup,
-  precomputed `RenderItem` flags/cull mode, and single-pass `MToonMaterialUniforms`
-  initialization.
+  dedup, per-view 256-byte-aligned `uniformsBuffer` slices in the triple-buffered
+  ring (shared by skinned draws and fragment shaders across mono and stereo
+  compositor frames, avoiding per-draw 496-byte `setVertexBytes`), hoisted frame
+  constants (`vertexOffset`, `lightCount`, `usesDebugFragment`),
+  `hasMorphedPositionsFlag` dedup, precomputed `RenderItem` flags/cull mode,
+  single-pass `MToonMaterialUniforms` initialization, and outline-pass cache reset.
 - Zero-copy top-8 `VRMMorphTargetSystem.buildActiveSet` (eliminates
   `Array(ArraySlice)` copy and $O(m \log m)$ sort).
-- Zero-allocation parallel `TextureBlockCompressor` (BC7 Mode 6), specialized
-  parallel even-2×2 `TextureMipUploader`, memory-mapped GLB reads, and zero-copy
-  chunk/bufferView slices.
+- Zero-allocation parallel `TextureBlockCompressor` (BC7 Mode 6, `storeBytes`),
+  specialized parallel even-2×2 `TextureMipUploader`, memory-mapped GLB reads,
+  and package-internal zero-copy GLB chunk/bufferView slices (preserving zero-based
+  `Data` on public `GLTFParser.parse`).
 
 ### Render CPU hotspots (1000 frames, animated + ultra spring + `--fixed-step`)
 

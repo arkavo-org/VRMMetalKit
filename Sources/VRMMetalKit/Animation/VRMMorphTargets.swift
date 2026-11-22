@@ -106,7 +106,6 @@ public class VRMMorphTargetSystem {
     private var activeSet: [ActiveMorph] = []
     private var activeSetBuffer: MTLBuffer?
     private var lastActiveSetWeights: [Float]?
-    private var candidatesBuffer: [ActiveMorph] = []
 
     // Morphed output buffers (per primitive)
     private var morphedPositionBuffers: [Int: MTLBuffer] = [:] // primitiveID -> buffer

@@ -19,6 +19,7 @@ import Foundation
 @preconcurrency import Metal
 import QuartzCore  // For CACurrentMediaTime
 import simd
+import Synchronization
 
 /// GPU-accelerated SpringBone physics system using XPBD (Extended Position-Based Dynamics)
 ///
@@ -170,30 +171,52 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var cachedColliderGroupCount: Int = -1
     private var cachedColliderCount: Int = -1
 
-    // Pre-resolved flat caches populated from model + springBone to avoid per-frame
-    // dictionary probes and safe-index bounds checks while still reading live
-    // collider shapes so runtime shape edits remain immediately visible.
+    // Pre-resolved flat caches keyed by `VRMModel.springBoneRevision` and
+    // `VRMNode.parentHierarchyRevision`. Because `VRMSpringBone` and all of its
+    // nested collections/elements are value types, any mutation (including
+    // same-count node reattachments, collider shape edits, or group membership
+    // changes) bumps `model.springBoneRevision`; reparenting any `VRMNode` bumps
+    // `VRMNode.parentHierarchyRevision`. `node.initialRotation` is checked live.
     private struct CachedBindDirEntry {
         let parent: VRMNode?
         let localBindDir: SIMD3<Float>
     }
+    private struct CachedSphereEntry {
+        let node: VRMNode
+        let offset: SIMD3<Float>
+        let radius: Float
+        let groupMask: UInt32
+        let inside: Bool
+    }
+    private struct CachedCapsuleEntry {
+        let node: VRMNode
+        let offset: SIMD3<Float>
+        let tail: SIMD3<Float>
+        let radius: Float
+        let groupMask: UInt32
+        let inside: Bool
+    }
+    private struct CachedPlaneEntry {
+        let node: VRMNode
+        let offset: SIMD3<Float>
+        let normal: SIMD3<Float>
+        let groupMask: UInt32
+    }
     private struct CachedBoneInitialAxis {
+        let initialRotation: simd_quatf
         let initialRotInv: simd_quatf
         let initialAxis: SIMD3<Float>
         let initialAxisNorm: SIMD3<Float>
         let isValid: Bool
     }
     private var cachedCacheModelID: ObjectIdentifier?
-    private var cachedCacheSpringCount: Int = -1
-    private var cachedCacheColliderCount: Int = -1
-    private var cachedCacheGroupCount: Int = -1
-    private var cachedCacheSyntheticCount: Int = -1
+    private var cachedSpringBoneRevision: UInt64 = .max
+    private var cachedParentHierarchyRevision: UInt64 = .max
     private var cachedRootNodes: [VRMNode] = []
     private var cachedBindDirEntries: [CachedBindDirEntry] = []
-    private var cachedColliderGroupMasks: [UInt32] = []
-    private var cachedColliderNodes: [VRMNode?] = []
-    private var cachedSyntheticColliderNodes: [VRMNode?] = []
-    private var cachedSyntheticGroupMask: UInt32 = 0
+    private var cachedSphereColliders: [CachedSphereEntry] = []
+    private var cachedCapsuleColliders: [CachedCapsuleEntry] = []
+    private var cachedPlaneColliders: [CachedPlaneEntry] = []
     private var boneInitialAxes: [CachedBoneInitialAxis] = []
 
     // Reused scratch buffers for sleep/wake checks to avoid per-frame heap allocations.
@@ -1503,9 +1526,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// appends them to the given destination arrays. They live in the reserved
     /// synthetic group (`groupMask` bit) so every spring collides with them.
     ///
-    /// This is the single shared implementation behind the three synthetic-upload
-    /// passes (`populateSpringBoneData`, `updateAnimatedPositions`, and
-    /// `captureTargetColliderTransforms`). It mirrors the authored upload idiom:
+    /// This is the single shared upload implementation behind `populateSpringBoneData`
+    /// and `updateAnimatedPositions`. `rebuildTargetCaptureCaches` mirrors this exact
+    /// synthetic shape handling (including `inside` variants and the `.plane` assertion)
+    /// into the revision-invalidated `cachedSphereColliders`/`cachedCapsuleColliders`
+    /// arrays used by `captureTargetColliderTransforms`.
     /// a `simd_float3x3` rotation extracted from the node's `worldMatrix`,
     /// `worldPosition + worldRotation * offset` for the world center, capsule
     /// `p1 = worldPosition + worldRotation * tail` (`tail` is a local position,
@@ -2513,13 +2538,16 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             let parentRotInv = simd_conjugate(parentRot)
             let targetDirParent = simd_act(parentRotInv, targetDir)
 
-            // Retrieve precomputed static initial axis and inverse initial rotation
+            // Retrieve precomputed static initial axis and inverse initial rotation,
+            // falling back to live calculation if `initialRotation` was mutated after setup.
             let initialRotInv: simd_quatf
             let initialAxis: SIMD3<Float>
             let initialAxisNorm: SIMD3<Float>
-            if globalIndex < boneInitialAxes.count {
+            let currentInitialRot = currentNode.initialRotation
+            if globalIndex < boneInitialAxes.count,
+               boneInitialAxes[globalIndex].isValid,
+               boneInitialAxes[globalIndex].initialRotation == currentInitialRot {
                 let cached = boneInitialAxes[globalIndex]
-                guard cached.isValid else { continue }
                 initialRotInv = cached.initialRotInv
                 initialAxis = cached.initialAxis
                 initialAxisNorm = cached.initialAxisNorm
@@ -2530,7 +2558,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                    simd_length(bindDirInParentSpace) < 0.001 {
                     continue
                 }
-                initialRotInv = simd_conjugate(currentNode.initialRotation)
+                initialRotInv = simd_conjugate(currentInitialRot)
                 initialAxis = simd_act(initialRotInv, bindDirInParentSpace)
                 initialAxisNorm = simd_normalize(initialAxis)
             }
@@ -2696,25 +2724,22 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     // MARK: - Frame Interpolation State Capture
 
-    /// Ensures the pre-resolved flat caches match the current `model` and `springBone`.
+    /// Ensures the pre-resolved flat caches match `model`'s current revisions.
     private func ensureTargetCaptureCaches(model: VRMModel, springBone: VRMSpringBone) {
         let modelID = ObjectIdentifier(model)
-        if cachedCacheModelID == modelID,
-           cachedCacheSpringCount == springBone.springs.count,
-           cachedCacheColliderCount == springBone.colliders.count,
-           cachedCacheGroupCount == springBone.colliderGroups.count,
-           cachedCacheSyntheticCount == springBone.syntheticColliders.count {
+        let parentRev = VRMNode.parentHierarchyRevision.load(ordering: .relaxed)
+        if cachedCacheModelID == modelID &&
+           cachedSpringBoneRevision == model.springBoneRevision &&
+           cachedParentHierarchyRevision == parentRev {
             return
         }
-        rebuildTargetCaptureCaches(model: model, springBone: springBone)
+        rebuildTargetCaptureCaches(model: model, springBone: springBone, parentRev: parentRev)
     }
 
-    private func rebuildTargetCaptureCaches(model: VRMModel, springBone: VRMSpringBone) {
+    private func rebuildTargetCaptureCaches(model: VRMModel, springBone: VRMSpringBone, parentRev: UInt64? = nil) {
         cachedCacheModelID = ObjectIdentifier(model)
-        cachedCacheSpringCount = springBone.springs.count
-        cachedCacheColliderCount = springBone.colliders.count
-        cachedCacheGroupCount = springBone.colliderGroups.count
-        cachedCacheSyntheticCount = springBone.syntheticColliders.count
+        cachedSpringBoneRevision = model.springBoneRevision
+        cachedParentHierarchyRevision = parentRev ?? VRMNode.parentHierarchyRevision.load(ordering: .relaxed)
 
         // 1. Flat root nodes
         cachedRootNodes.removeAll(keepingCapacity: true)
@@ -2727,6 +2752,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         // 2. Flat bind-direction entries & precomputed static bone initial axes
+        //    (guarded by live `initialRotation` equality check and live `jointNode.parent` read)
         cachedBindDirEntries.removeAll(keepingCapacity: true)
         cachedBindDirEntries.reserveCapacity(boneBindDirections.count)
         boneInitialAxes.removeAll(keepingCapacity: true)
@@ -2742,18 +2768,22 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                     cachedBindDirEntries.append(CachedBindDirEntry(parent: jointNode.parent, localBindDir: localBindDir))
                     let valid = !localBindDir.x.isNaN && !localBindDir.y.isNaN && !localBindDir.z.isNaN &&
                                 simd_length(localBindDir) >= 0.001
-                    let initRotInv = simd_conjugate(jointNode.initialRotation)
+                    let initRot = jointNode.initialRotation
+                    let initRotInv = simd_conjugate(initRot)
                     let initAxis = valid ? simd_act(initRotInv, localBindDir) : SIMD3<Float>(0, -1, 0)
                     let initAxisNorm = valid ? simd_normalize(initAxis) : SIMD3<Float>(0, -1, 0)
                     boneInitialAxes.append(CachedBoneInitialAxis(
+                        initialRotation: initRot,
                         initialRotInv: initRotInv,
                         initialAxis: initAxis,
                         initialAxisNorm: initAxisNorm,
                         isValid: valid
                     ))
                 } else {
+                    let identity = simd_quatf(ix: 0, iy: 0, iz: 0, r: 1)
                     boneInitialAxes.append(CachedBoneInitialAxis(
-                        initialRotInv: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
+                        initialRotation: identity,
+                        initialRotInv: identity,
                         initialAxis: SIMD3<Float>(0, -1, 0),
                         initialAxisNorm: SIMD3<Float>(0, -1, 0),
                         isValid: false
@@ -2762,9 +2792,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // 3. Flat pre-resolved collider group masks & nodes (authored + synthetic).
-        //    Collider shapes are still read live each frame so runtime shape mutations
-        //    on `springBone.colliders` take effect immediately.
+        // 3. Pre-partitioned flat collider arrays (authored + synthetic)
         var colliderToGroupMask: [Int: UInt32] = [:]
         for (groupIndex, group) in springBone.colliderGroups.enumerated() {
             let bit = UInt32(1 << min(groupIndex, 31))
@@ -2776,21 +2804,55 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         cachedColliderGroupCount = springBone.colliderGroups.count
         cachedColliderCount = springBone.colliders.count
 
-        cachedColliderGroupMasks.removeAll(keepingCapacity: true)
-        cachedColliderGroupMasks.reserveCapacity(springBone.colliders.count)
-        cachedColliderNodes.removeAll(keepingCapacity: true)
-        cachedColliderNodes.reserveCapacity(springBone.colliders.count)
+        cachedSphereColliders.removeAll(keepingCapacity: true)
+        cachedCapsuleColliders.removeAll(keepingCapacity: true)
+        cachedPlaneColliders.removeAll(keepingCapacity: true)
+
         for (colliderIndex, collider) in springBone.colliders.enumerated() {
-            cachedColliderGroupMasks.append(colliderToGroupMask[colliderIndex] ?? 1)
-            cachedColliderNodes.append(model.nodes[safe: collider.node])
+            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+            let groupMask = colliderToGroupMask[colliderIndex] ?? 1
+            switch collider.shape {
+            case .sphere(let offset, let radius):
+                cachedSphereColliders.append(CachedSphereEntry(
+                    node: colliderNode, offset: offset, radius: radius, groupMask: groupMask, inside: false))
+            case .insideSphere(let offset, let radius):
+                cachedSphereColliders.append(CachedSphereEntry(
+                    node: colliderNode, offset: offset, radius: radius, groupMask: groupMask, inside: true))
+            case .capsule(let offset, let radius, let tail):
+                cachedCapsuleColliders.append(CachedCapsuleEntry(
+                    node: colliderNode, offset: offset, tail: tail, radius: radius, groupMask: groupMask, inside: false))
+            case .insideCapsule(let offset, let radius, let tail):
+                cachedCapsuleColliders.append(CachedCapsuleEntry(
+                    node: colliderNode, offset: offset, tail: tail, radius: radius, groupMask: groupMask, inside: true))
+            case .plane(let offset, let normal):
+                cachedPlaneColliders.append(CachedPlaneEntry(
+                    node: colliderNode, offset: offset, normal: normal, groupMask: groupMask))
+            }
         }
 
-        cachedSyntheticGroupMask = springBone.syntheticColliders.isEmpty
-            ? 0 : (1 << UInt32(min(springBone.colliderGroups.count, 31)))
-        cachedSyntheticColliderNodes.removeAll(keepingCapacity: true)
-        cachedSyntheticColliderNodes.reserveCapacity(springBone.syntheticColliders.count)
-        for collider in springBone.syntheticColliders {
-            cachedSyntheticColliderNodes.append(model.nodes[safe: collider.node])
+        // Mirror appendSyntheticColliders (issue #309) into the flat caches.
+        if !springBone.syntheticColliders.isEmpty {
+            let syntheticGroupMask: UInt32 = 1 << UInt32(min(springBone.colliderGroups.count, 31))
+            for collider in springBone.syntheticColliders {
+                guard let colliderNode = model.nodes[safe: collider.node] else { continue }
+                switch collider.shape {
+                case .sphere(let offset, let radius):
+                    cachedSphereColliders.append(CachedSphereEntry(
+                        node: colliderNode, offset: offset, radius: radius, groupMask: syntheticGroupMask, inside: false))
+                case .insideSphere(let offset, let radius):
+                    cachedSphereColliders.append(CachedSphereEntry(
+                        node: colliderNode, offset: offset, radius: radius, groupMask: syntheticGroupMask, inside: true))
+                case .capsule(let offset, let radius, let tail):
+                    cachedCapsuleColliders.append(CachedCapsuleEntry(
+                        node: colliderNode, offset: offset, tail: tail, radius: radius, groupMask: syntheticGroupMask, inside: false))
+                case .insideCapsule(let offset, let radius, let tail):
+                    cachedCapsuleColliders.append(CachedCapsuleEntry(
+                        node: colliderNode, offset: offset, tail: tail, radius: radius, groupMask: syntheticGroupMask, inside: true))
+                case .plane:
+                    assertionFailure("rebuildTargetCaptureCaches received a synthetic .plane; planes are not supported on the synthetic upload path")
+                    continue
+                }
+            }
         }
     }
 
@@ -2816,7 +2878,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         captureTargetWorldBindDirections()
 
         // 3. Capture collider transforms
-        captureTargetColliderTransforms(springBone: springBone)
+        captureTargetColliderTransforms()
     }
 
     /// Captures world-space bind directions based on current animated parent orientations
@@ -2841,88 +2903,54 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
 
     /// Captures collider transforms based on current animated node positions/orientations
-    private func captureTargetColliderTransforms(springBone: VRMSpringBone) {
+    private func captureTargetColliderTransforms() {
         targetSphereColliders.removeAll(keepingCapacity: true)
         targetCapsuleColliders.removeAll(keepingCapacity: true)
         targetPlaneColliders.removeAll(keepingCapacity: true)
 
-        let colliders = springBone.colliders
-        for i in 0..<colliders.count {
-            guard let colliderNode = cachedColliderNodes[i] else { continue }
-            let groupMask = cachedColliderGroupMasks[i]
-            let wm = colliderNode.worldMatrix
+        targetSphereColliders.reserveCapacity(cachedSphereColliders.count)
+        for entry in cachedSphereColliders {
+            let wm = entry.node.worldMatrix
             let worldRotation = simd_float3x3(
                 SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
                 SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
                 SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
             )
             let worldPos = SIMD3<Float>(wm[3][0], wm[3][1], wm[3][2])
-
-            switch colliders[i].shape {
-            case .sphere(let offset, let radius):
-                let worldCenter = worldPos + worldRotation * offset
-                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask))
-
-            case .insideSphere(let offset, let radius):
-                let worldCenter = worldPos + worldRotation * offset
-                targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask, inside: true))
-
-            case .capsule(let offset, let radius, let tail):
-                let worldP0 = worldPos + worldRotation * offset
-                let worldP1 = worldPos + worldRotation * tail
-                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask))
-
-            case .insideCapsule(let offset, let radius, let tail):
-                let worldP0 = worldPos + worldRotation * offset
-                let worldP1 = worldPos + worldRotation * tail
-                targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask, inside: true))
-
-            case .plane(let offset, let normal):
-                let worldPoint = worldPos + worldRotation * offset
-                let worldNormal = worldRotation * normal
-                let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
-                targetPlaneColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupMask: groupMask))
-            }
+            let worldCenter = worldPos + worldRotation * entry.offset
+            targetSphereColliders.append(SphereCollider(
+                center: worldCenter, radius: entry.radius, groupMask: entry.groupMask, inside: entry.inside))
         }
 
-        // Append synthetic colliders (issue #309) using cached node references.
-        let synthetics = springBone.syntheticColliders
-        if !synthetics.isEmpty {
-            let syntheticGroupMask = cachedSyntheticGroupMask
-            for i in 0..<synthetics.count {
-                guard let colliderNode = cachedSyntheticColliderNodes[i] else { continue }
-                let wm = colliderNode.worldMatrix
-                let worldRotation = simd_float3x3(
-                    SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
-                    SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
-                    SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
-                )
-                let worldPos = SIMD3<Float>(wm[3][0], wm[3][1], wm[3][2])
+        targetCapsuleColliders.reserveCapacity(cachedCapsuleColliders.count)
+        for entry in cachedCapsuleColliders {
+            let wm = entry.node.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+            let worldPos = SIMD3<Float>(wm[3][0], wm[3][1], wm[3][2])
+            let worldP0 = worldPos + worldRotation * entry.offset
+            let worldP1 = worldPos + worldRotation * entry.tail
+            targetCapsuleColliders.append(CapsuleCollider(
+                p0: worldP0, p1: worldP1, radius: entry.radius, groupMask: entry.groupMask, inside: entry.inside))
+        }
 
-                switch synthetics[i].shape {
-                case .sphere(let offset, let radius):
-                    let worldCenter = worldPos + worldRotation * offset
-                    targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: syntheticGroupMask))
-
-                case .insideSphere(let offset, let radius):
-                    let worldCenter = worldPos + worldRotation * offset
-                    targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: syntheticGroupMask, inside: true))
-
-                case .capsule(let offset, let radius, let tail):
-                    let worldP0 = worldPos + worldRotation * offset
-                    let worldP1 = worldPos + worldRotation * tail
-                    targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: syntheticGroupMask))
-
-                case .insideCapsule(let offset, let radius, let tail):
-                    let worldP0 = worldPos + worldRotation * offset
-                    let worldP1 = worldPos + worldRotation * tail
-                    targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: syntheticGroupMask, inside: true))
-
-                case .plane:
-                    assertionFailure("captureTargetColliderTransforms received a synthetic .plane; planes are not supported on the synthetic upload path")
-                    continue
-                }
-            }
+        targetPlaneColliders.reserveCapacity(cachedPlaneColliders.count)
+        for entry in cachedPlaneColliders {
+            let wm = entry.node.worldMatrix
+            let worldRotation = simd_float3x3(
+                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+            )
+            let worldPos = SIMD3<Float>(wm[3][0], wm[3][1], wm[3][2])
+            let worldPoint = worldPos + worldRotation * entry.offset
+            let worldNormal = worldRotation * entry.normal
+            let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
+            targetPlaneColliders.append(PlaneCollider(
+                point: worldPoint, normal: normalizedNormal, groupMask: entry.groupMask))
         }
 
         // Apply runtime radius overrides (e.g., for hair clipping prevention)

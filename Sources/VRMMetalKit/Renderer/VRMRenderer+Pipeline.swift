@@ -122,10 +122,11 @@ extension VRMRenderer {
     }
 
     func setupTripleBuffering() {
-        // Create triple-buffered uniform buffers with private storage for GPU efficiency
-        let uniformSize = MemoryLayout<Uniforms>.size
+        // Create triple-buffered uniform buffers sized for stereo / multi-view
+        // compositor frames (256-byte aligned slice per view).
+        let bufferLength = Self.uniformViewSliceStride * Self.defaultUniformViewCapacity
         for _ in 0..<Self.maxBufferedFrames {
-            if let buffer = device.makeBuffer(length: uniformSize, options: .storageModeShared) {
+            if let buffer = device.makeBuffer(length: bufferLength, options: .storageModeShared) {
                 buffer.label = "Uniform Buffer \(uniformsBuffers.count)"
                 uniformsBuffers.append(buffer)
             }
