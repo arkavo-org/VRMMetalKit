@@ -48,12 +48,38 @@ public struct SpringBoneSleepGate: Equatable, Sendable {
         guard curr.count == prev.count, !curr.isEmpty else {
             return Array(repeating: Float.greatestFiniteMagnitude, count: ranges.count)
         }
-        return ranges.map { range in
-            var maxVel: Float = 0
-            for i in range where i < curr.count {
-                maxVel = max(maxVel, simd_length(curr[i] - prev[i]) * invDt)
+        var out: [Float] = []
+        out.reserveCapacity(ranges.count)
+        fillChainMaxVelocities(into: &out, curr: curr, prev: prev, ranges: ranges, invDt: invDt)
+        return out
+    }
+
+    internal static func fillChainMaxVelocities(
+        into out: inout [Float],
+        curr: [SIMD3<Float>],
+        prev: [SIMD3<Float>],
+        ranges: [Range<Int>],
+        invDt: Float
+    ) {
+        out.removeAll(keepingCapacity: true)
+        guard curr.count == prev.count, !curr.isEmpty else {
+            for _ in 0..<ranges.count {
+                out.append(Float.greatestFiniteMagnitude)
             }
-            return maxVel
+            return
+        }
+        let count = curr.count
+        for range in ranges {
+            var maxDistSq: Float = 0
+            let upper = min(range.upperBound, count)
+            if range.lowerBound < upper {
+                for i in range.lowerBound..<upper {
+                    let d = curr[i] - prev[i]
+                    let distSq = simd_length_squared(d)
+                    if distSq > maxDistSq { maxDistSq = distSq }
+                }
+            }
+            out.append(sqrt(maxDistSq) * invDt)
         }
     }
 
@@ -67,21 +93,46 @@ public struct SpringBoneSleepGate: Equatable, Sendable {
         movedColliderMasks: [UInt32],
         chainColliderMasks: [UInt32]
     ) -> [Bool] {
-        if globalWake {
-            return Array(repeating: true, count: chainCount)
-        }
+        var combinedMask: UInt32 = 0
+        for m in movedColliderMasks { combinedMask |= m }
         var mask = Array(repeating: false, count: chainCount)
+        fillWakeMask(
+            into: &mask,
+            chainCount: chainCount,
+            globalWake: globalWake,
+            movedRootIndices: movedRootIndices,
+            combinedMovedColliderMask: combinedMask,
+            chainColliderMasks: chainColliderMasks
+        )
+        return mask
+    }
+
+    internal static func fillWakeMask(
+        into mask: inout [Bool],
+        chainCount: Int,
+        globalWake: Bool,
+        movedRootIndices: [Int],
+        combinedMovedColliderMask: UInt32,
+        chainColliderMasks: [UInt32]
+    ) {
+        if mask.count != chainCount {
+            mask = Array(repeating: globalWake, count: chainCount)
+        } else {
+            for i in 0..<chainCount {
+                mask[i] = globalWake
+            }
+        }
+        if globalWake { return }
         for index in movedRootIndices where index >= 0 && index < chainCount {
             mask[index] = true
         }
-        guard !movedColliderMasks.isEmpty else { return mask }
-        for chain in 0..<chainCount {
-            let chainMask = chain < chainColliderMasks.count ? chainColliderMasks[chain] : 0
-            if movedColliderMasks.contains(where: { $0 & chainMask != 0 }) {
+        guard combinedMovedColliderMask != 0 else { return }
+        let maskLimit = min(chainCount, chainColliderMasks.count)
+        for chain in 0..<maskLimit {
+            if (combinedMovedColliderMask & chainColliderMasks[chain]) != 0 {
                 mask[chain] = true
             }
         }
-        return mask
     }
 
     /// Advances sleep counters. A `true` wake bit forces that chain awake.

@@ -454,7 +454,7 @@ public class VRMModel: @unchecked Sendable {
 
         await context.updatePhase(.parsingGLTF, progress: 0.0)
 
-        let data = try Data(contentsOf: url)
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
         try await context.checkCancellation()
 
         await context.updatePhase(.parsingGLTF, progress: 1.0)

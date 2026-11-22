@@ -815,7 +815,9 @@ public class GLTFParser {
                 break
             }
 
-            let chunkData = data.subdata(in: chunkStart..<chunkEnd)
+            let sliceStart = data.startIndex + chunkStart
+            let sliceEnd = data.startIndex + chunkEnd
+            let chunkData = data[sliceStart..<sliceEnd]
 
             if chunkType == 0x4E4F534A { // "JSON"
                 jsonChunk = chunkData

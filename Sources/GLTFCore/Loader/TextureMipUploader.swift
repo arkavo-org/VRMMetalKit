@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+import Foundation
 import Metal
 
 /// Uploads a decoded straight-alpha RGBA bitmap as a fully mipmapped Metal
@@ -118,31 +119,63 @@ enum TextureMipUploader {
 
         // Level 1 filters the caller's bytes (honoring their row stride);
         // every later level filters the bytes just uploaded for the level
-        // above it, so only that level and the one being built are alive.
-        var previous: [UInt8] = []
+        // above it, reusing two ping-pong scratch buffers so we avoid
+        // per-level heap allocations while keeping peak transient memory tiny.
+        let level1W = max(1, width / 2)
+        let level1H = max(1, height / 2)
+        let level2W = max(1, level1W / 2)
+        let level2H = max(1, level1H / 2)
+        var scratchA = [UInt8](repeating: 0, count: level1W * level1H * 4)
+        var scratchB = texture.mipmapLevelCount > 2 ? [UInt8](repeating: 0, count: level2W * level2H * 4) : []
         var w = width, h = height
         for level in 1..<texture.mipmapLevelCount {
             let nw = max(1, w / 2), nh = max(1, h / 2)
-            let encoded: [UInt8]
+            let destUsesA = (level & 1) == 1
             if level == 1 {
-                encoded = downsample(source: straightData.assumingMemoryBound(to: UInt8.self),
-                                     bytesPerRow: bytesPerRow,
-                                     width: w, height: h, to: nw, nh,
-                                     srgb: srgb, alphaIsCoverage: alphaIsCoverage)
-            } else {
-                encoded = previous.withUnsafeBufferPointer { src in
-                    downsample(source: src.baseAddress!, bytesPerRow: w * 4,
-                               width: w, height: h, to: nw, nh,
+                scratchA.withUnsafeMutableBufferPointer { dst in
+                    downsample(source: straightData.assumingMemoryBound(to: UInt8.self),
+                               bytesPerRow: bytesPerRow,
+                               width: w, height: h,
+                               dest: dst.baseAddress!, to: nw, nh,
                                srgb: srgb, alphaIsCoverage: alphaIsCoverage)
                 }
+                scratchA.withUnsafeBytes { buf in
+                    texture.replace(region: MTLRegionMake2D(0, 0, nw, nh),
+                                    mipmapLevel: level,
+                                    withBytes: buf.baseAddress!,
+                                    bytesPerRow: nw * 4)
+                }
+            } else if destUsesA {
+                scratchB.withUnsafeBufferPointer { src in
+                    scratchA.withUnsafeMutableBufferPointer { dst in
+                        downsample(source: src.baseAddress!, bytesPerRow: w * 4,
+                                   width: w, height: h,
+                                   dest: dst.baseAddress!, to: nw, nh,
+                                   srgb: srgb, alphaIsCoverage: alphaIsCoverage)
+                    }
+                }
+                scratchA.withUnsafeBytes { buf in
+                    texture.replace(region: MTLRegionMake2D(0, 0, nw, nh),
+                                    mipmapLevel: level,
+                                    withBytes: buf.baseAddress!,
+                                    bytesPerRow: nw * 4)
+                }
+            } else {
+                scratchA.withUnsafeBufferPointer { src in
+                    scratchB.withUnsafeMutableBufferPointer { dst in
+                        downsample(source: src.baseAddress!, bytesPerRow: w * 4,
+                                   width: w, height: h,
+                                   dest: dst.baseAddress!, to: nw, nh,
+                                   srgb: srgb, alphaIsCoverage: alphaIsCoverage)
+                    }
+                }
+                scratchB.withUnsafeBytes { buf in
+                    texture.replace(region: MTLRegionMake2D(0, 0, nw, nh),
+                                    mipmapLevel: level,
+                                    withBytes: buf.baseAddress!,
+                                    bytesPerRow: nw * 4)
+                }
             }
-            encoded.withUnsafeBytes { buf in
-                texture.replace(region: MTLRegionMake2D(0, 0, nw, nh),
-                                mipmapLevel: level,
-                                withBytes: buf.baseAddress!,
-                                bytesPerRow: nw * 4)
-            }
-            previous = encoded
             w = nw; h = nh
         }
         return texture
@@ -157,44 +190,247 @@ enum TextureMipUploader {
     /// `nw`/`nh` must be `max(1, w/2)` / `max(1, h/2)`.
     private static func downsample(source: UnsafePointer<UInt8>, bytesPerRow: Int,
                                    width w: Int, height h: Int,
+                                   dest dst: UnsafeMutablePointer<UInt8>,
                                    to nw: Int, _ nh: Int,
-                                   srgb: Bool, alphaIsCoverage: Bool) -> [UInt8] {
-        let decode = srgb ? srgbDecode : unormDecode
-        let xTaps = boxTaps(source: w, dest: nw)
-        let yTaps = boxTaps(source: h, dest: nh)
-        var out = [UInt8](repeating: 0, count: nw * nh * 4)
-        out.withUnsafeMutableBufferPointer { dst in
-            for y in 0..<nh {
-                for x in 0..<nw {
-                    // RGB accumulate at weight w·alpha (coverage) or w
-                    // (independent); `norm` is the matching RGB divisor
-                    // (= alpha sum, resp. 1). Alpha always averages plainly.
-                    var r: Float = 0, g: Float = 0, b: Float = 0, a: Float = 0, norm: Float = 0
-                    for ty in 0..<yTaps.count {
-                        let row = source + yTaps.index[y * yTaps.count + ty] * bytesPerRow
-                        let wy = yTaps.weight[y * yTaps.count + ty]
-                        for tx in 0..<xTaps.count {
-                            let s = row + xTaps.index[x * xTaps.count + tx] * 4
-                            let wgt = wy * xTaps.weight[x * xTaps.count + tx]
-                            let alpha = Float(s[3]) / 255
-                            let wc = alphaIsCoverage ? wgt * alpha : wgt
-                            r += decode[Int(s[0])] * wc
-                            g += decode[Int(s[1])] * wc
-                            b += decode[Int(s[2])] * wc
-                            norm += wc
-                            a += wgt * alpha
+                                   srgb: Bool, alphaIsCoverage: Bool) {
+        if w == 2 * nw && h == 2 * nh {
+            downsampleEven2x2(source: source, bytesPerRow: bytesPerRow,
+                              dest: dst, nw: nw, nh: nh,
+                              srgb: srgb, alphaIsCoverage: alphaIsCoverage)
+            return
+        }
+        downsampleGeneral(source: source, bytesPerRow: bytesPerRow,
+                          width: w, height: h,
+                          dest: dst, to: nw, nh,
+                          srgb: srgb, alphaIsCoverage: alphaIsCoverage)
+    }
+
+    private struct SendablePointer<T>: @unchecked Sendable {
+        let ptr: UnsafePointer<T>
+    }
+    private struct SendableMutablePointer<T>: @unchecked Sendable {
+        let ptr: UnsafeMutablePointer<T>
+    }
+
+    /// Specialized 2×2 box filter for even dimensions (every power-of-2 texture).
+    /// Eliminates boxTaps allocation, indirect tap indexing, inner-loop branching,
+    /// and per-tap division, and parallelizes large levels across CPU cores.
+    private static func downsampleEven2x2(source: UnsafePointer<UInt8>, bytesPerRow: Int,
+                                          dest dst: UnsafeMutablePointer<UInt8>,
+                                          nw: Int, nh: Int,
+                                          srgb: Bool, alphaIsCoverage: Bool) {
+        let decodeTable = srgb ? srgbDecode : unormDecode
+        decodeTable.withUnsafeBufferPointer { decodeBuf in
+            unormDecode.withUnsafeBufferPointer { alphaBuf in
+                srgbEncodeTable.withUnsafeBufferPointer { encodeBuf in
+                    let srcWrap = SendablePointer(ptr: source)
+                    let dstWrap = SendableMutablePointer(ptr: dst)
+                    let decWrap = SendablePointer(ptr: decodeBuf.baseAddress!)
+                    let alpWrap = SendablePointer(ptr: alphaBuf.baseAddress!)
+                    let encWrap = SendablePointer(ptr: encodeBuf.baseAddress!)
+
+                    if nw * nh >= 16384 && nh >= 8 {
+                        let bands = min(nh, max(1, ProcessInfo.processInfo.activeProcessorCount))
+                        let rowsPerBand = (nh + bands - 1) / bands
+                        let activeBands = (nh + rowsPerBand - 1) / rowsPerBand
+                        DispatchQueue.concurrentPerform(iterations: activeBands) { band in
+                            let startY = band * rowsPerBand
+                            let endY = min(startY + rowsPerBand, nh)
+                            Self.downsampleEven2x2Rows(
+                                source: srcWrap.ptr, bytesPerRow: bytesPerRow,
+                                dst: dstWrap.ptr, nw: nw,
+                                dec: decWrap.ptr, alp: alpWrap.ptr, enc: encWrap.ptr,
+                                srgb: srgb, alphaIsCoverage: alphaIsCoverage,
+                                startY: startY, endY: endY
+                            )
                         }
+                    } else {
+                        Self.downsampleEven2x2Rows(
+                            source: srcWrap.ptr, bytesPerRow: bytesPerRow,
+                            dst: dstWrap.ptr, nw: nw,
+                            dec: decWrap.ptr, alp: alpWrap.ptr, enc: encWrap.ptr,
+                            srgb: srgb, alphaIsCoverage: alphaIsCoverage,
+                            startY: 0, endY: nh
+                        )
                     }
-                    let d = (y * nw + x) * 4
-                    let inv: Float = norm > 0 ? 1 / norm : 0
-                    dst[d + 0] = encode(r * inv, srgb: srgb)
-                    dst[d + 1] = encode(g * inv, srgb: srgb)
-                    dst[d + 2] = encode(b * inv, srgb: srgb)
-                    dst[d + 3] = UInt8((min(max(a, 0), 1) * 255).rounded())
                 }
             }
         }
-        return out
+    }
+
+    @inline(__always)
+    private static func encodeFastSRGB(_ linear: Float, enc: UnsafePointer<Float>) -> UInt8 {
+        let x = min(max(linear, 0), 1) * 4096
+        let i = Int(x)
+        let v: Float
+        if i >= 4096 {
+            v = 1
+        } else {
+            let f = x - Float(i)
+            v = enc[i] + (enc[i + 1] - enc[i]) * f
+        }
+        return UInt8((min(max(v, 0), 1) * 255).rounded())
+    }
+
+    @inline(__always)
+    private static func encodeLinear(_ linear: Float) -> UInt8 {
+        UInt8((min(max(linear, 0), 1) * 255).rounded())
+    }
+
+    private static func downsampleEven2x2Rows(
+        source: UnsafePointer<UInt8>, bytesPerRow: Int,
+        dst: UnsafeMutablePointer<UInt8>, nw: Int,
+        dec: UnsafePointer<Float>, alp: UnsafePointer<Float>, enc: UnsafePointer<Float>,
+        srgb: Bool, alphaIsCoverage: Bool,
+        startY: Int, endY: Int
+    ) {
+        if alphaIsCoverage {
+            if srgb {
+                for y in startY..<endY {
+                    let row0 = source + (2 * y) * bytesPerRow
+                    let row1 = row0 + bytesPerRow
+                    var out = dst + y * nw * 4
+                    var sx = 0
+                    for _ in 0..<nw {
+                        let a00 = alp[Int(row0[sx + 3])]
+                        let a01 = alp[Int(row0[sx + 7])]
+                        let a10 = alp[Int(row1[sx + 3])]
+                        let a11 = alp[Int(row1[sx + 7])]
+                        let aSum = a00 + a01 + a10 + a11
+                        if aSum > 0 {
+                            let invA = 1.0 / aSum
+                            let r = (dec[Int(row0[sx + 0])] * a00 + dec[Int(row0[sx + 4])] * a01
+                                   + dec[Int(row1[sx + 0])] * a10 + dec[Int(row1[sx + 4])] * a11) * invA
+                            let g = (dec[Int(row0[sx + 1])] * a00 + dec[Int(row0[sx + 5])] * a01
+                                   + dec[Int(row1[sx + 1])] * a10 + dec[Int(row1[sx + 5])] * a11) * invA
+                            let b = (dec[Int(row0[sx + 2])] * a00 + dec[Int(row0[sx + 6])] * a01
+                                   + dec[Int(row1[sx + 2])] * a10 + dec[Int(row1[sx + 6])] * a11) * invA
+                            out[0] = encodeFastSRGB(r, enc: enc)
+                            out[1] = encodeFastSRGB(g, enc: enc)
+                            out[2] = encodeFastSRGB(b, enc: enc)
+                            out[3] = UInt8((min(max(aSum * 0.25, 0), 1) * 255).rounded())
+                        } else {
+                            out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 0
+                        }
+                        sx += 8
+                        out += 4
+                    }
+                }
+            } else {
+                for y in startY..<endY {
+                    let row0 = source + (2 * y) * bytesPerRow
+                    let row1 = row0 + bytesPerRow
+                    var out = dst + y * nw * 4
+                    var sx = 0
+                    for _ in 0..<nw {
+                        let a00 = alp[Int(row0[sx + 3])]
+                        let a01 = alp[Int(row0[sx + 7])]
+                        let a10 = alp[Int(row1[sx + 3])]
+                        let a11 = alp[Int(row1[sx + 7])]
+                        let aSum = a00 + a01 + a10 + a11
+                        if aSum > 0 {
+                            let invA = 1.0 / aSum
+                            let r = (dec[Int(row0[sx + 0])] * a00 + dec[Int(row0[sx + 4])] * a01
+                                   + dec[Int(row1[sx + 0])] * a10 + dec[Int(row1[sx + 4])] * a11) * invA
+                            let g = (dec[Int(row0[sx + 1])] * a00 + dec[Int(row0[sx + 5])] * a01
+                                   + dec[Int(row1[sx + 1])] * a10 + dec[Int(row1[sx + 5])] * a11) * invA
+                            let b = (dec[Int(row0[sx + 2])] * a00 + dec[Int(row0[sx + 6])] * a01
+                                   + dec[Int(row1[sx + 2])] * a10 + dec[Int(row1[sx + 6])] * a11) * invA
+                            out[0] = encodeLinear(r)
+                            out[1] = encodeLinear(g)
+                            out[2] = encodeLinear(b)
+                            out[3] = UInt8((min(max(aSum * 0.25, 0), 1) * 255).rounded())
+                        } else {
+                            out[0] = 0; out[1] = 0; out[2] = 0; out[3] = 0
+                        }
+                        sx += 8
+                        out += 4
+                    }
+                }
+            }
+        } else if srgb {
+            for y in startY..<endY {
+                let row0 = source + (2 * y) * bytesPerRow
+                let row1 = row0 + bytesPerRow
+                var out = dst + y * nw * 4
+                var sx = 0
+                for _ in 0..<nw {
+                    let r = (dec[Int(row0[sx + 0])] + dec[Int(row0[sx + 4])]
+                           + dec[Int(row1[sx + 0])] + dec[Int(row1[sx + 4])]) * 0.25
+                    let g = (dec[Int(row0[sx + 1])] + dec[Int(row0[sx + 5])]
+                           + dec[Int(row1[sx + 1])] + dec[Int(row1[sx + 5])]) * 0.25
+                    let b = (dec[Int(row0[sx + 2])] + dec[Int(row0[sx + 6])]
+                           + dec[Int(row1[sx + 2])] + dec[Int(row1[sx + 6])]) * 0.25
+                    let a = (alp[Int(row0[sx + 3])] + alp[Int(row0[sx + 7])]
+                           + alp[Int(row1[sx + 3])] + alp[Int(row1[sx + 7])]) * 0.25
+                    out[0] = encodeFastSRGB(r, enc: enc)
+                    out[1] = encodeFastSRGB(g, enc: enc)
+                    out[2] = encodeFastSRGB(b, enc: enc)
+                    out[3] = UInt8((min(max(a, 0), 1) * 255).rounded())
+                    sx += 8
+                    out += 4
+                }
+            }
+        } else {
+            for y in startY..<endY {
+                let row0 = source + (2 * y) * bytesPerRow
+                let row1 = row0 + bytesPerRow
+                var out = dst + y * nw * 4
+                var sx = 0
+                for _ in 0..<nw {
+                    let r = (dec[Int(row0[sx + 0])] + dec[Int(row0[sx + 4])]
+                           + dec[Int(row1[sx + 0])] + dec[Int(row1[sx + 4])]) * 0.25
+                    let g = (dec[Int(row0[sx + 1])] + dec[Int(row0[sx + 5])]
+                           + dec[Int(row1[sx + 1])] + dec[Int(row1[sx + 5])]) * 0.25
+                    let b = (dec[Int(row0[sx + 2])] + dec[Int(row0[sx + 6])]
+                           + dec[Int(row1[sx + 2])] + dec[Int(row1[sx + 6])]) * 0.25
+                    let a = (alp[Int(row0[sx + 3])] + alp[Int(row0[sx + 7])]
+                           + alp[Int(row1[sx + 3])] + alp[Int(row1[sx + 7])]) * 0.25
+                    out[0] = encodeLinear(r)
+                    out[1] = encodeLinear(g)
+                    out[2] = encodeLinear(b)
+                    out[3] = UInt8((min(max(a, 0), 1) * 255).rounded())
+                    sx += 8
+                    out += 4
+                }
+            }
+        }
+    }
+
+    private static func downsampleGeneral(source: UnsafePointer<UInt8>, bytesPerRow: Int,
+                                          width w: Int, height h: Int,
+                                          dest dst: UnsafeMutablePointer<UInt8>,
+                                          to nw: Int, _ nh: Int,
+                                          srgb: Bool, alphaIsCoverage: Bool) {
+        let decode = srgb ? srgbDecode : unormDecode
+        let xTaps = boxTaps(source: w, dest: nw)
+        let yTaps = boxTaps(source: h, dest: nh)
+        for y in 0..<nh {
+            for x in 0..<nw {
+                var r: Float = 0, g: Float = 0, b: Float = 0, a: Float = 0, norm: Float = 0
+                for ty in 0..<yTaps.count {
+                    let row = source + yTaps.index[y * yTaps.count + ty] * bytesPerRow
+                    let wy = yTaps.weight[y * yTaps.count + ty]
+                    for tx in 0..<xTaps.count {
+                        let s = row + xTaps.index[x * xTaps.count + tx] * 4
+                        let wgt = wy * xTaps.weight[x * xTaps.count + tx]
+                        let alpha = unormDecode[Int(s[3])]
+                        let wc = alphaIsCoverage ? wgt * alpha : wgt
+                        r += decode[Int(s[0])] * wc
+                        g += decode[Int(s[1])] * wc
+                        b += decode[Int(s[2])] * wc
+                        norm += wc
+                        a += wgt * alpha
+                    }
+                }
+                let d = (y * nw + x) * 4
+                let inv: Float = norm > 0 ? 1 / norm : 0
+                dst[d + 0] = encode(r * inv, srgb: srgb)
+                dst[d + 1] = encode(g * inv, srgb: srgb)
+                dst[d + 2] = encode(b * inv, srgb: srgb)
+                dst[d + 3] = UInt8((min(max(a, 0), 1) * 255).rounded())
+            }
+        }
     }
 
     /// Per-axis taps of the exact area average from `source` texels to

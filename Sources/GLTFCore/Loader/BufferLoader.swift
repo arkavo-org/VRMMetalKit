@@ -592,10 +592,13 @@ public class BufferLoader: @unchecked Sendable {
             )
         }
 
-        let slicedData = fullData.subdata(in: offset..<(offset + length))
-        return device.makeBuffer(bytes: slicedData.withUnsafeBytes { $0.baseAddress! },
-                                length: slicedData.count,
-                                options: .storageModeShared)
+        guard length > 0 else { return nil }
+        return fullData.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return nil }
+            return device.makeBuffer(bytes: base.advanced(by: offset),
+                                     length: length,
+                                     options: .storageModeShared)
+        }
     }
 
     // Returns the entire buffer data and the bufferView for offset calculation

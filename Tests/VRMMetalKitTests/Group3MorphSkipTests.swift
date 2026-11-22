@@ -15,6 +15,7 @@
 //
 
 import XCTest
+import Metal
 @testable import VRMMetalKit
 
 /// Group 3: skip morph GPU work when expression weights are unchanged,
@@ -117,5 +118,43 @@ final class Group3MorphSkipTests: XCTestCase {
             capacity,
             "weightsForMesh must refill the same scratch, not allocate a new array"
         )
+    }
+
+    func testBuildActiveSetSelectsTopKDescendingWithTieBreakingOnArraySlice() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal device not available")
+        }
+        let system = try VRMMorphTargetSystem(device: device)
+
+        // 12 active weights (including negative and tied magnitudes) plus sub-epsilon entries
+        var weights = [Float](repeating: 0, count: 64)
+        weights[2] = 0.00001  // below epsilon
+        weights[5] = 0.4
+        weights[7] = -0.9     // #1 (|w|=0.9)
+        weights[10] = 0.7     // #2 (tie with 15, lower index wins)
+        weights[15] = -0.7    // #3
+        weights[20] = 0.6     // #4
+        weights[25] = 0.55    // #5
+        weights[30] = -0.5    // #6
+        weights[35] = 0.45    // #7
+        weights[40] = 0.42    // #8
+        weights[45] = 0.35    // dropped
+        weights[50] = 0.1     // dropped
+
+        let slice = weights[0..<64]
+        let active = system.buildActiveSet(weights: slice)
+        XCTAssertEqual(active.count, VRMMorphTargetSystem.maxActiveMorphs)
+        XCTAssertEqual(active.map(\.index), [7, 10, 15, 20, 25, 30, 35, 40])
+        XCTAssertEqual(active[0].weight, -0.9, accuracy: 1e-6)
+        XCTAssertEqual(active[1].weight, 0.7, accuracy: 1e-6)
+        XCTAssertEqual(active[2].weight, -0.7, accuracy: 1e-6)
+
+        // Repeated call with identical slice reuses cached active set
+        let repeated = system.buildActiveSet(weights: slice)
+        XCTAssertEqual(repeated.map(\.index), active.map(\.index))
+
+        // All-zero slice clears active set cleanly
+        let zeros = [Float](repeating: 0, count: 64)
+        XCTAssertTrue(system.buildActiveSet(weights: zeros[0..<64]).isEmpty)
     }
 }

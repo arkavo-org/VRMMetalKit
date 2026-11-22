@@ -189,3 +189,68 @@ forced a COW copy while it was alive during that write — a race window on the
 completion thread that no per-frame phase can observe. `springReadback` begins
 after the lock in both A and C, so `springBone` is the discriminating phase.
 The commit stands on its hoist and instrumentation, not on the copy.
+
+## Measured: CPU hot-path, SpringBone, command-encode & loading optimizations (`1130e8c`+)
+
+Interleaved A/B/A/B/A/B release measurements on an idle Apple M4 Max (128 GB,
+macOS 27.2.1, Swift 6.4.2). **A** is `main` (`1130e8c`); **B** adds:
+- Lazy `VRMNode.normalMatrix` caching, direct TRS `updateLocalMatrix()`, and
+  non-recursive `updateWorldTransformShallow()` for $O(L)$ SpringBone chain
+  writeback (eliminating double `updateLocalMatrix()`, $O(L^2)$ subtree walks,
+  and the redundant post-spring full-skeleton `model.updateNodeTransforms()`).
+- Pre-resolved flat SpringBone capture caches (`cachedRootNodes`,
+  `cachedBindDirEntries`, `cachedColliderGroupMasks`, `cachedColliderNodes`,
+  `cachedSyntheticColliderNodes`, and precomputed static `boneInitialAxes`,
+  reading live `collider.shape` per frame) and zero-allocation sleep/wake
+  tracking with bitmask-OR collider matching (`SpringBoneSleepGate`).
+- `VRMRenderer` `commandEncode` cleanup: `EncoderStateCache` vertex-texture
+  dedup, shared `uniformsBuffer` binding for skinned draws (avoiding per-draw
+  496-byte `setVertexBytes`), hoisted frame constants (`vertexOffset`,
+  `lightCount`, `usesDebugFragment`), `hasMorphedPositionsFlag` dedup,
+  precomputed `RenderItem` flags/cull mode, and single-pass `MToonMaterialUniforms`
+  initialization.
+- Zero-copy top-8 `VRMMorphTargetSystem.buildActiveSet` (eliminates
+  `Array(ArraySlice)` copy and $O(m \log m)$ sort).
+- Zero-allocation parallel `TextureBlockCompressor` (BC7 Mode 6), specialized
+  parallel even-2×2 `TextureMipUploader`, memory-mapped GLB reads, and zero-copy
+  chunk/bufferView slices.
+
+### Render CPU hotspots (1000 frames, animated + ultra spring + `--fixed-step`)
+
+| Model | Phase | A median ms | A p95 ms | A min/max | B median ms | B p95 ms | B min/max | Delta |
+|-------|-------|-------------|----------|-----------|-------------|----------|-----------|-------|
+| `AvatarSample_A_1.0` | `cpuBudget` | 0.1360 | 0.1517 | 0.1352 / 0.1363 | 0.1027 | 0.1171 | 0.1023 / 0.1035 | **-24.5%** |
+| `AvatarSample_A_1.0` | `encode` | 0.1049 | 0.1200 | 0.1042 / 0.1050 | 0.0743 | 0.0886 | 0.0740 / 0.0749 | **-29.2%** |
+| `AvatarSample_A_1.0` | `transformUpdate` | 0.0128 | 0.0146 | 0.0128 / 0.0129 | 0.0066 | 0.0082 | 0.0065 / 0.0066 | **-48.7%** |
+| `AvatarSample_A_1.0` | `springBone` | 0.0301 | 0.0359 | 0.0301 / 0.0302 | 0.0170 | 0.0197 | 0.0170 / 0.0171 | **-43.4%** |
+| `AvatarSample_A_1.0` | `springTargetCapture` | 0.0070 | 0.0077 | 0.0070 / 0.0071 | 0.0036 | 0.0041 | 0.0035 / 0.0036 | **-49.1%** |
+| `AvatarSample_A_1.0` | `springReadback` | 0.0093 | 0.0098 | 0.0093 / 0.0094 | 0.0061 | 0.0063 | 0.0060 / 0.0061 | **-34.5%** |
+| `AvatarSample_A_1.0` | `commandEncode` | 0.0579 | 0.0716 | 0.0575 / 0.0582 | 0.0403 | 0.0490 | 0.0397 / 0.0403 | **-30.5%** |
+| `AvatarSample_A_1.0` | `animation` | 0.0310 | 0.0328 | 0.0309 / 0.0313 | 0.0285 | 0.0306 | 0.0281 / 0.0285 | **-8.1%** |
+| `AvatarSample_U_1.0` | `cpuBudget` | 0.2721 | 0.2935 | 0.2720 / 0.2723 | 0.1864 | 0.2053 | 0.1863 / 0.1868 | **-31.5%** |
+| `AvatarSample_U_1.0` | `encode` | 0.2197 | 0.2390 | 0.2195 / 0.2200 | 0.1412 | 0.1582 | 0.1411 / 0.1412 | **-35.7%** |
+| `AvatarSample_U_1.0` | `transformUpdate` | 0.0440 | 0.0514 | 0.0437 / 0.0444 | 0.0221 | 0.0255 | 0.0220 / 0.0221 | **-49.9%** |
+| `AvatarSample_U_1.0` | `springBone` | 0.1070 | 0.1217 | 0.1068 / 0.1075 | 0.0543 | 0.0683 | 0.0543 / 0.0543 | **-49.2%** |
+| `AvatarSample_U_1.0` | `springTargetCapture` | 0.0258 | 0.0284 | 0.0256 / 0.0258 | 0.0123 | 0.0130 | 0.0121 / 0.0124 | **-52.2%** |
+| `AvatarSample_U_1.0` | `springReadback` | 0.0491 | 0.0585 | 0.0491 / 0.0496 | 0.0325 | 0.0440 | 0.0324 / 0.0329 | **-33.8%** |
+| `AvatarSample_U_1.0` | `commandEncode` | 0.0774 | 0.0920 | 0.0768 / 0.0778 | 0.0516 | 0.0656 | 0.0515 / 0.0519 | **-33.3%** |
+| `AvatarSample_U_1.0` | `animation` | 0.0520 | 0.0591 | 0.0519 / 0.0525 | 0.0452 | 0.0531 | 0.0449 / 0.0454 | **-13.2%** |
+
+### visionOS stereo & multi-avatar scaling
+
+| Scenario | Metric | A median ms (min/max) | B median ms (min/max) | Delta |
+|----------|--------|-----------------------|-----------------------|-------|
+| visionOS stereo preferred (`AvatarSample_U`, 90 Hz) | `cpuBudget` | 0.4051 (0.3893 / 0.4070) | 0.2701 (0.2701 / 0.2767) | **-33.3%** |
+| visionOS stereo preferred (`AvatarSample_U`, 90 Hz) | `encode` | 0.3466 (0.3320 / 0.3497) | 0.2157 (0.2106 / 0.2234) | **-37.8%** |
+| 5-avatar crowd (`AvatarSample_A`, ultra spring) | `cpuBudget` | 0.6670 (0.6626 / 0.7306) | 0.4928 (0.4880 / 0.5097) | **-26.1%** |
+| 5-avatar crowd (`AvatarSample_A`, ultra spring) | `encode` | 0.5193 (0.5174 / 0.5774) | 0.3556 (0.3513 / 0.3727) | **-31.5%** |
+
+### Load latency & peak RSS (`--mode load --frames 5`, `/usr/bin/time -l`)
+
+| Model / Preset | A median ms (min/max) | B median ms (min/max) | Load Δ | A Peak RSS | B Peak RSS | RSS Δ |
+|----------------|-----------------------|-----------------------|--------|------------|------------|-------|
+| `AvatarSample_A` (`default`) | 169.9 (169.7 / 170.7) | 169.6 (169.5 / 169.7) | -0.2% | 381.4 MiB | 361.5 MiB | **-5.2%** |
+| `AvatarSample_A` (`max`, BC7) | 632.6 (624.7 / 633.4) | 175.0 (174.4 / 176.0) | **-72.3%** | 399.9 MiB | 313.0 MiB | **-21.7%** |
+| `AvatarSample_U` (`default`) | 194.5 (194.2 / 196.4) | 195.2 (194.6 / 196.0) | +0.4% | 551.0 MiB | 530.7 MiB | **-3.7%** |
+| `AvatarSample_U` (`max`, BC7) | 1059.0 (1054.3 / 1063.6) | 200.7 (200.7 / 201.1) | **-81.0%** | 504.3 MiB | 420.0 MiB | **-16.7%** |
+| `AvatarSample_A` (mipmapped `9987`) | 212.0 (210.6 / 217.2) | 192.2 (185.6 / 192.5) | **-9.4%** | — | — | — |

@@ -170,6 +170,37 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     private var cachedColliderGroupCount: Int = -1
     private var cachedColliderCount: Int = -1
 
+    // Pre-resolved flat caches populated from model + springBone to avoid per-frame
+    // dictionary probes and safe-index bounds checks while still reading live
+    // collider shapes so runtime shape edits remain immediately visible.
+    private struct CachedBindDirEntry {
+        let parent: VRMNode?
+        let localBindDir: SIMD3<Float>
+    }
+    private struct CachedBoneInitialAxis {
+        let initialRotInv: simd_quatf
+        let initialAxis: SIMD3<Float>
+        let initialAxisNorm: SIMD3<Float>
+        let isValid: Bool
+    }
+    private var cachedCacheModelID: ObjectIdentifier?
+    private var cachedCacheSpringCount: Int = -1
+    private var cachedCacheColliderCount: Int = -1
+    private var cachedCacheGroupCount: Int = -1
+    private var cachedCacheSyntheticCount: Int = -1
+    private var cachedRootNodes: [VRMNode] = []
+    private var cachedBindDirEntries: [CachedBindDirEntry] = []
+    private var cachedColliderGroupMasks: [UInt32] = []
+    private var cachedColliderNodes: [VRMNode?] = []
+    private var cachedSyntheticColliderNodes: [VRMNode?] = []
+    private var cachedSyntheticGroupMask: UInt32 = 0
+    private var boneInitialAxes: [CachedBoneInitialAxis] = []
+
+    // Reused scratch buffers for sleep/wake checks to avoid per-frame heap allocations.
+    private var wakeMaskScratch: [Bool] = []
+    private var wakeVelocitiesScratch: [Float] = []
+    private var wakeMovedRootFlags: [Bool] = []
+
     // Cached model scale for scale-aware thresholds
     private var cachedModelScale: Float = 1.0
 
@@ -703,21 +734,30 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         let sleepGateEnabled = commandBuffer != nil
         if sleepGateEnabled {
             snapshotLock.lock()
-            let snapshotVelocities = completedChainVelocities
-            snapshotLock.unlock()
-            let velocities: [Float]
-            if snapshotVelocities.count == chainRanges.count {
-                velocities = snapshotVelocities
+            if completedChainVelocities.count == chainRanges.count {
+                if wakeVelocitiesScratch.count != completedChainVelocities.count {
+                    wakeVelocitiesScratch = completedChainVelocities
+                } else {
+                    for i in 0..<completedChainVelocities.count {
+                        wakeVelocitiesScratch[i] = completedChainVelocities[i]
+                    }
+                }
             } else {
-                // No completed frame yet — stay awake. Do not contents() in-flight bonePos*.
-                velocities = SpringBoneSleepGate.chainMaxVelocities(
-                    curr: [], prev: [], ranges: chainRanges, invDt: 1)
+                SpringBoneSleepGate.fillChainMaxVelocities(
+                    into: &wakeVelocitiesScratch,
+                    curr: [],
+                    prev: [],
+                    ranges: chainRanges,
+                    invDt: 1
+                )
             }
-            let wakeMask = computeWakeMask(globalParams: globalParams,
-                                           foreign: clampedForeign,
-                                           external: clampedExternal)
-            sleepGate.apply(velocities: velocities,
-                            wakeMask: wakeMask,
+            snapshotLock.unlock()
+            computeWakeMask(into: &wakeMaskScratch,
+                            globalParams: globalParams,
+                            foreign: clampedForeign,
+                            external: clampedExternal)
+            sleepGate.apply(velocities: wakeVelocitiesScratch,
+                            wakeMask: wakeMaskScratch,
                             ranges: chainRanges,
                             threshold: sleepThreshold,
                             delay: sleepDelayFrames)
@@ -730,7 +770,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // would make every spring kernel early-out on those chains while
             // the CPU (sleepGate) believes them awake.
             wakeAllChains()
-            lastWakeMotion = WakeMotion(refreshAll: true)
+            lastWakeMotion.refreshAll = true
+            lastWakeMotion.roots.removeAll(keepingCapacity: true)
+            lastWakeMotion.spheres.removeAll(keepingCapacity: true)
+            lastWakeMotion.capsules.removeAll(keepingCapacity: true)
+            lastWakeMotion.planes.removeAll(keepingCapacity: true)
+            lastWakeMotion.foreignMoved = false
+            lastWakeMotion.externalMoved = false
         }
 
         let allChainsAsleep = sleepGateEnabled && sleepGate.allAsleep
@@ -1203,12 +1249,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         return ranges
     }
 
-    /// Builds a per-chain wake mask from completed-frame heuristics.
+    /// Builds a per-chain wake mask from completed-frame heuristics into `mask`.
     /// Global events (settling, quality, wind/force, explicit wake) wake every
     /// chain. Root and collider motion wake only the chains they actually affect.
-    private func computeWakeMask(globalParams: SpringBoneGlobalParams,
+    private func computeWakeMask(into mask: inout [Bool],
+                                 globalParams: SpringBoneGlobalParams,
                                  foreign: ForeignColliderSnapshot,
-                                 external: ForeignColliderSnapshot) -> [Bool] {
+                                 external: ForeignColliderSnapshot) {
         var globalWake = false
         if forceWakePending {
             forceWakePending = false
@@ -1221,73 +1268,78 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             globalWake = true
         }
         if let prev = previousGlobalParamsForSleep {
-            if simd_distance(prev.gravity, globalParams.gravity) > 0.001 ||
+            if simd_distance_squared(prev.gravity, globalParams.gravity) > 0.001 * 0.001 ||
                abs(prev.windAmplitude - globalParams.windAmplitude) > 0.001 ||
-               simd_distance(prev.windDirection, globalParams.windDirection) > 0.01 ||
-               simd_distance(prev.externalVelocity, globalParams.externalVelocity) > 0.001 ||
+               simd_distance_squared(prev.windDirection, globalParams.windDirection) > 0.01 * 0.01 ||
+               simd_distance_squared(prev.externalVelocity, globalParams.externalVelocity) > 0.001 * 0.001 ||
                abs(prev.dragMultiplier - globalParams.dragMultiplier) > 0.001 {
                 globalWake = true
             }
         }
 
-        var movedRoots: [Int] = []
-        var movedColliderMasks: [UInt32] = []
-        var motion = WakeMotion(refreshAll: globalWake)
+        lastWakeMotion.refreshAll = globalWake
+        lastWakeMotion.roots.removeAll(keepingCapacity: true)
+        lastWakeMotion.spheres.removeAll(keepingCapacity: true)
+        lastWakeMotion.capsules.removeAll(keepingCapacity: true)
+        lastWakeMotion.planes.removeAll(keepingCapacity: true)
+        lastWakeMotion.foreignMoved = false
+        lastWakeMotion.externalMoved = false
+
+        var combinedColliderMask: UInt32 = 0
         if !globalWake {
             let motionThreshold = wakeMotionThreshold
+            let motionThresholdSq = motionThreshold * motionThreshold
 
             if !previousRootPositionsForSleep.isEmpty,
                previousRootPositionsForSleep.count == targetRootPositions.count {
                 for i in 0..<targetRootPositions.count {
-                    if simd_distance(targetRootPositions[i], previousRootPositionsForSleep[i]) > motionThreshold {
-                        movedRoots.append(i)
+                    if simd_distance_squared(targetRootPositions[i], previousRootPositionsForSleep[i]) > motionThresholdSq {
+                        lastWakeMotion.roots.append(i)
                     }
                 }
             }
 
-            let spheres = movedSpheres(
+            combinedColliderMask |= scanMovedSpheres(
                 previous: previousSphereCollidersForSleep,
                 current: targetSphereColliders,
-                threshold: motionThreshold)
-            let capsules = movedCapsules(
+                threshold: motionThreshold,
+                thresholdSq: motionThresholdSq,
+                movedIndices: &lastWakeMotion.spheres)
+            combinedColliderMask |= scanMovedCapsules(
                 previous: previousCapsuleCollidersForSleep,
                 current: targetCapsuleColliders,
-                threshold: motionThreshold)
-            let planes = movedPlanes(
+                threshold: motionThreshold,
+                thresholdSq: motionThresholdSq,
+                movedIndices: &lastWakeMotion.capsules)
+            combinedColliderMask |= scanMovedPlanes(
                 previous: previousPlaneCollidersForSleep,
                 current: targetPlaneColliders,
-                threshold: motionThreshold)
-            movedColliderMasks.append(contentsOf: spheres.masks)
-            movedColliderMasks.append(contentsOf: capsules.masks)
-            movedColliderMasks.append(contentsOf: planes.masks)
-            motion.roots = movedRoots
-            motion.spheres = spheres.indices
-            motion.capsules = capsules.indices
-            motion.planes = planes.indices
+                thresholdSq: motionThresholdSq,
+                movedIndices: &lastWakeMotion.planes)
 
             if foreignColliderGroupIndex != 0xFFFFFFFF {
                 let foreignBit: UInt32 = 1 << foreignColliderGroupIndex
                 if foreignCollidersChanged(previous: previousForeignForSleep,
                                            current: foreign,
                                            threshold: motionThreshold) {
-                    movedColliderMasks.append(foreignBit)
-                    motion.foreignMoved = true
+                    combinedColliderMask |= foreignBit
+                    lastWakeMotion.foreignMoved = true
                 }
                 if foreignCollidersChanged(previous: previousExternalForSleep,
                                            current: external,
                                            threshold: motionThreshold) {
-                    movedColliderMasks.append(foreignBit)
-                    motion.externalMoved = true
+                    combinedColliderMask |= foreignBit
+                    lastWakeMotion.externalMoved = true
                 }
             }
         }
 
-        lastWakeMotion = motion
-        return SpringBoneSleepGate.wakeMask(
+        SpringBoneSleepGate.fillWakeMask(
+            into: &mask,
             chainCount: chainRanges.count,
             globalWake: globalWake,
-            movedRootIndices: movedRoots,
-            movedColliderMasks: movedColliderMasks,
+            movedRootIndices: lastWakeMotion.roots,
+            combinedMovedColliderMask: combinedColliderMask,
             chainColliderMasks: chainColliderMasks
         )
     }
@@ -1307,69 +1359,80 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                                          threshold: Float) -> Bool {
         if previous.spheres.count != current.spheres.count { return true }
         if previous.capsules.count != current.capsules.count { return true }
+        let thresholdSq = threshold * threshold
         for i in current.spheres.indices {
-            if simd_distance(previous.spheres[i].center, current.spheres[i].center) > threshold ||
+            if simd_distance_squared(previous.spheres[i].center, current.spheres[i].center) > thresholdSq ||
                abs(previous.spheres[i].radius - current.spheres[i].radius) > threshold ||
                previous.spheres[i].responseScale != current.spheres[i].responseScale { return true }
         }
         for i in current.capsules.indices {
-            if simd_distance(previous.capsules[i].p0, current.capsules[i].p0) > threshold ||
-               simd_distance(previous.capsules[i].p1, current.capsules[i].p1) > threshold ||
+            if simd_distance_squared(previous.capsules[i].p0, current.capsules[i].p0) > thresholdSq ||
+               simd_distance_squared(previous.capsules[i].p1, current.capsules[i].p1) > thresholdSq ||
                abs(previous.capsules[i].radius - current.capsules[i].radius) > threshold ||
                previous.capsules[i].responseScale != current.capsules[i].responseScale { return true }
         }
         return false
     }
 
-    /// Colliders whose current transform differs from their wake anchor by more
-    /// than `threshold`: the indices (so the anchors can be refreshed) and the
-    /// group masks (so intersecting chains can be woken). A count change is
-    /// reported as "everything moved" with no indices; the anchors are then
-    /// replaced wholesale.
-    private func movedSpheres(previous: [SphereCollider], current: [SphereCollider], threshold: Float)
-        -> (indices: [Int], masks: [UInt32]) {
-        if previous.count != current.count { return ([], previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF]) }
-        var indices: [Int] = []
-        var masks: [UInt32] = []
+    /// Scans colliders whose current transform differs from their wake anchor by more
+    /// than `threshold`, appending moved indices into `movedIndices` and returning
+    /// the bitwise OR of their group masks.
+    private func scanMovedSpheres(previous: [SphereCollider],
+                                  current: [SphereCollider],
+                                  threshold: Float,
+                                  thresholdSq: Float,
+                                  movedIndices: inout [Int]) -> UInt32 {
+        if previous.count != current.count {
+            return (previous.isEmpty && current.isEmpty) ? 0 : 0xFFFFFFFF
+        }
+        var combinedMask: UInt32 = 0
         for i in previous.indices {
-            if simd_distance(previous[i].center, current[i].center) > threshold ||
+            if simd_distance_squared(previous[i].center, current[i].center) > thresholdSq ||
                abs(previous[i].radius - current[i].radius) > threshold {
-                indices.append(i)
-                masks.append(current[i].groupMask)
+                movedIndices.append(i)
+                combinedMask |= current[i].groupMask
             }
         }
-        return (indices, masks)
+        return combinedMask
     }
 
-    private func movedCapsules(previous: [CapsuleCollider], current: [CapsuleCollider], threshold: Float)
-        -> (indices: [Int], masks: [UInt32]) {
-        if previous.count != current.count { return ([], previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF]) }
-        var indices: [Int] = []
-        var masks: [UInt32] = []
+    private func scanMovedCapsules(previous: [CapsuleCollider],
+                                   current: [CapsuleCollider],
+                                   threshold: Float,
+                                   thresholdSq: Float,
+                                   movedIndices: inout [Int]) -> UInt32 {
+        if previous.count != current.count {
+            return (previous.isEmpty && current.isEmpty) ? 0 : 0xFFFFFFFF
+        }
+        var combinedMask: UInt32 = 0
         for i in previous.indices {
-            if simd_distance(previous[i].p0, current[i].p0) > threshold ||
-               simd_distance(previous[i].p1, current[i].p1) > threshold ||
+            if simd_distance_squared(previous[i].p0, current[i].p0) > thresholdSq ||
+               simd_distance_squared(previous[i].p1, current[i].p1) > thresholdSq ||
                abs(previous[i].radius - current[i].radius) > threshold {
-                indices.append(i)
-                masks.append(current[i].groupMask)
+                movedIndices.append(i)
+                combinedMask |= current[i].groupMask
             }
         }
-        return (indices, masks)
+        return combinedMask
     }
 
-    private func movedPlanes(previous: [PlaneCollider], current: [PlaneCollider], threshold: Float)
-        -> (indices: [Int], masks: [UInt32]) {
-        if previous.count != current.count { return ([], previous.isEmpty && current.isEmpty ? [] : [0xFFFFFFFF]) }
-        var indices: [Int] = []
-        var masks: [UInt32] = []
+    private func scanMovedPlanes(previous: [PlaneCollider],
+                                 current: [PlaneCollider],
+                                 thresholdSq: Float,
+                                 movedIndices: inout [Int]) -> UInt32 {
+        if previous.count != current.count {
+            return (previous.isEmpty && current.isEmpty) ? 0 : 0xFFFFFFFF
+        }
+        var combinedMask: UInt32 = 0
+        let normalThresholdSq: Float = 0.01 * 0.01
         for i in previous.indices {
-            if simd_distance(previous[i].point, current[i].point) > threshold ||
-               simd_distance(previous[i].normal, current[i].normal) > 0.01 {
-                indices.append(i)
-                masks.append(current[i].groupMask)
+            if simd_distance_squared(previous[i].point, current[i].point) > thresholdSq ||
+               simd_distance_squared(previous[i].normal, current[i].normal) > normalThresholdSq {
+                movedIndices.append(i)
+                combinedMask |= current[i].groupMask
             }
         }
-        return (indices, masks)
+        return combinedMask
     }
 
     private func uploadChainSleepFlags() {
@@ -1402,9 +1465,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             || previousRootPositionsForSleep.count != targetRootPositions.count {
             previousRootPositionsForSleep = targetRootPositions
         } else {
-            let movedRoots = Set(motion.roots)
-            for i in targetRootPositions.indices
-            where !(i < asleep.count && asleep[i]) || movedRoots.contains(i) {
+            let rootCount = targetRootPositions.count
+            if wakeMovedRootFlags.count != rootCount {
+                wakeMovedRootFlags = Array(repeating: false, count: rootCount)
+            } else {
+                for i in 0..<rootCount { wakeMovedRootFlags[i] = false }
+            }
+            for idx in motion.roots where idx >= 0 && idx < rootCount {
+                wakeMovedRootFlags[idx] = true
+            }
+            for i in 0..<rootCount
+            where !(i < asleep.count && asleep[i]) || wakeMovedRootFlags[i] {
                 previousRootPositionsForSleep[i] = targetRootPositions[i]
             }
         }
@@ -2048,6 +2119,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         latestCompletedFrame = 0
         lastAppliedFrame = 0
         snapshotLock.unlock()
+
+        // Pre-resolve flat per-frame capture caches and static bone initial axes
+        rebuildTargetCaptureCaches(model: model, springBone: springBone)
     }
 
     private func updateAnimatedPositions(model: VRMModel, buffers: SpringBoneBuffers, substepIndex: Int = 0) {
@@ -2269,7 +2343,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 dst.update(from: prevPointer, count: numBones)
             }
             let invDt = quality.substepRateHz > 0 ? Float(quality.substepRateHz) : 1
-            completedChainVelocities = SpringBoneSleepGate.chainMaxVelocities(
+            SpringBoneSleepGate.fillChainMaxVelocities(
+                into: &completedChainVelocities,
                 curr: latestPositionsSnapshot,
                 prev: latestPrevPositionsSnapshot,
                 ranges: chainRanges,
@@ -2397,9 +2472,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         #endif
 
         // Update bone rotations to point toward physics-simulated positions
-        for i in 0..<nodePositions.count - 1 {
+        let lastIndex = nodePositions.count - 1
+        for i in 0..<lastIndex {
             let (currentNode, currentPos, globalIndex) = nodePositions[i]
-            let (_, nextPos, _) = nodePositions[i + 1]
+            let (nextNode, nextPos, _) = nodePositions[i + 1]
+            defer { propagateChainNode(currentNode, nextChainNode: nextNode) }
 
             // NaN guard: skip if positions are invalid
             if currentPos.x.isNaN || currentPos.y.isNaN || currentPos.z.isNaN ||
@@ -2419,16 +2496,6 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             // Use setFromUnitVectors(initialAxis, newLocalDirection) where BOTH are in bone's local space.
             // This computes ABSOLUTE rotation, not accumulated delta.
 
-            // Get bind direction stored in PARENT's local space (at bind time)
-            guard globalIndex < boneBindDirections.count else { continue }
-            let bindDirInParentSpace = boneBindDirections[globalIndex]
-
-            // NaN guard: skip if bind direction is invalid
-            if bindDirInParentSpace.x.isNaN || bindDirInParentSpace.y.isNaN || bindDirInParentSpace.z.isNaN ||
-               simd_length(bindDirInParentSpace) < 0.001 {
-                continue
-            }
-
             // Get parent's world rotation (CURRENT, after earlier bones in chain were updated)
             guard let parent = currentNode.parent else { continue }
             let parentRot = extractRotation(from: parent.worldMatrix)
@@ -2437,36 +2504,45 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             if parentRot.real.isNaN || parentRot.imag.x.isNaN ||
                parentRot.imag.y.isNaN || parentRot.imag.z.isNaN {
                 vrmLogPhysics("[SpringBone] ⚠️ Parent rotation NaN, resetting node \(currentNode.name ?? "unnamed")")
-                currentNode.localRotation = currentNode.initialRotation
+                currentNode.rotation = currentNode.initialRotation
                 currentNode.updateLocalMatrix()
-                currentNode.updateWorldTransform()
                 continue
             }
 
-            // Per three-vrm spec: compute swing rotation and apply ON TOP of initial rotation.
-            // This preserves the bone's original twist/roll from bind pose.
-            //
             // Step 1: Transform target direction to parent's local space
             let parentRotInv = simd_conjugate(parentRot)
             let targetDirParent = simd_act(parentRotInv, targetDir)
 
-            // Step 2: Transform target direction to bone's REST frame (bind pose local space)
-            // This tells us "where is the target relative to the bone's original orientation"
-            let initialRotInv = simd_conjugate(currentNode.initialRotation)
-            let targetDirRest = simd_act(initialRotInv, targetDirParent)
+            // Retrieve precomputed static initial axis and inverse initial rotation
+            let initialRotInv: simd_quatf
+            let initialAxis: SIMD3<Float>
+            let initialAxisNorm: SIMD3<Float>
+            if globalIndex < boneInitialAxes.count {
+                let cached = boneInitialAxes[globalIndex]
+                guard cached.isValid else { continue }
+                initialRotInv = cached.initialRotInv
+                initialAxis = cached.initialAxis
+                initialAxisNorm = cached.initialAxisNorm
+            } else {
+                guard globalIndex < boneBindDirections.count else { continue }
+                let bindDirInParentSpace = boneBindDirections[globalIndex]
+                if bindDirInParentSpace.x.isNaN || bindDirInParentSpace.y.isNaN || bindDirInParentSpace.z.isNaN ||
+                   simd_length(bindDirInParentSpace) < 0.001 {
+                    continue
+                }
+                initialRotInv = simd_conjugate(currentNode.initialRotation)
+                initialAxis = simd_act(initialRotInv, bindDirInParentSpace)
+                initialAxisNorm = simd_normalize(initialAxis)
+            }
 
-            // Step 3: Get bone's initial forward axis in its local space
-            let initialAxis = simd_act(initialRotInv, bindDirInParentSpace)
+            // Step 2: Transform target direction to bone's REST frame (bind pose local space)
+            let targetDirRest = simd_act(initialRotInv, targetDirParent)
 
             // Step 4: Calculate "swing" rotation needed to align initial axis with target
             //
             // SOFT DEADZONE: Instead of hard cutoff, smoothly blend physics influence.
             // - Deadzone: 0.001 (1mm) - below this, use initial rotation (sleep)
             // - Fade range: 0.005 (5mm) - smooth transition to full physics
-            // This prevents both flutter (at rest) and popping (during transition)
-            //
-            // For unit vectors: distance ≈ 2*sin(θ/2) ≈ θ for small angles
-            let initialAxisNorm = simd_normalize(initialAxis)
             let targetDirNorm = simd_normalize(targetDirRest)
             let displacement = simd_length(targetDirNorm - initialAxisNorm)
 
@@ -2500,9 +2576,15 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 }
             }
 
-            // NaN guard: skip if rotation is invalid
-            if newRotation.real.isNaN || newRotation.imag.x.isNaN ||
-               newRotation.imag.y.isNaN || newRotation.imag.z.isNaN {
+            // Final NaN/Inf guard before applying - reset to bind pose if calculation produced bad values
+            // IMPORTANT: Check both isNaN AND isInfinite - Inf quaternions produce NaN matrices
+            if newRotation.real.isNaN || newRotation.real.isInfinite ||
+               newRotation.imag.x.isNaN || newRotation.imag.x.isInfinite ||
+               newRotation.imag.y.isNaN || newRotation.imag.y.isInfinite ||
+               newRotation.imag.z.isNaN || newRotation.imag.z.isInfinite {
+                vrmLogPhysics("[SpringBone] ⚠️ Calculated rotation NaN/Inf, resetting node \(currentNode.name ?? "unnamed")")
+                currentNode.rotation = currentNode.initialRotation
+                currentNode.updateLocalMatrix()
                 continue
             }
 
@@ -2514,22 +2596,31 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
             #endif
 
-            // Final NaN/Inf guard before applying - reset to bind pose if calculation produced bad values
-            // IMPORTANT: Check both isNaN AND isInfinite - Inf quaternions produce NaN matrices
-            if newRotation.real.isNaN || newRotation.real.isInfinite ||
-               newRotation.imag.x.isNaN || newRotation.imag.x.isInfinite ||
-               newRotation.imag.y.isNaN || newRotation.imag.y.isInfinite ||
-               newRotation.imag.z.isNaN || newRotation.imag.z.isInfinite {
-                vrmLogPhysics("[SpringBone] ⚠️ Calculated rotation NaN/Inf, resetting node \(currentNode.name ?? "unnamed")")
-                currentNode.localRotation = currentNode.initialRotation
-                currentNode.updateLocalMatrix()
-                currentNode.updateWorldTransform()
-                continue
-            }
-
-            currentNode.localRotation = newRotation
+            currentNode.rotation = newRotation
             currentNode.updateLocalMatrix()
-            currentNode.updateWorldTransform()
+        }
+
+        // Propagate the final tip node (and any of its descendants) once after the chain loop.
+        if lastIndex >= 0 {
+            nodePositions[lastIndex].0.updateWorldTransform()
+        }
+    }
+
+    /// Updates `node`'s world transform in O(1) without recursively walking `nextChainNode`
+    /// (which will be updated in the next iteration of the chain loop), while still
+    /// propagating to any side-branch children so the entire subtree remains consistent.
+    @inline(__always)
+    private func propagateChainNode(_ node: VRMNode, nextChainNode: VRMNode) {
+        if nextChainNode.parent === node {
+            node.updateWorldTransformShallow()
+            if node.children.count > 1 {
+                for child in node.children where child !== nextChainNode {
+                    child.updateWorldTransform()
+                }
+            }
+        } else {
+            // Non-contiguous chain topology (intermediate non-spring bone): fall back to full walk.
+            node.updateWorldTransform()
         }
     }
 
@@ -2605,19 +2696,115 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
     // MARK: - Frame Interpolation State Capture
 
+    /// Ensures the pre-resolved flat caches match the current `model` and `springBone`.
+    private func ensureTargetCaptureCaches(model: VRMModel, springBone: VRMSpringBone) {
+        let modelID = ObjectIdentifier(model)
+        if cachedCacheModelID == modelID,
+           cachedCacheSpringCount == springBone.springs.count,
+           cachedCacheColliderCount == springBone.colliders.count,
+           cachedCacheGroupCount == springBone.colliderGroups.count,
+           cachedCacheSyntheticCount == springBone.syntheticColliders.count {
+            return
+        }
+        rebuildTargetCaptureCaches(model: model, springBone: springBone)
+    }
+
+    private func rebuildTargetCaptureCaches(model: VRMModel, springBone: VRMSpringBone) {
+        cachedCacheModelID = ObjectIdentifier(model)
+        cachedCacheSpringCount = springBone.springs.count
+        cachedCacheColliderCount = springBone.colliders.count
+        cachedCacheGroupCount = springBone.colliderGroups.count
+        cachedCacheSyntheticCount = springBone.syntheticColliders.count
+
+        // 1. Flat root nodes
+        cachedRootNodes.removeAll(keepingCapacity: true)
+        cachedRootNodes.reserveCapacity(springBone.springs.count)
+        for spring in springBone.springs {
+            if let firstJoint = spring.joints.first,
+               let node = model.nodes[safe: firstJoint.node] {
+                cachedRootNodes.append(node)
+            }
+        }
+
+        // 2. Flat bind-direction entries & precomputed static bone initial axes
+        cachedBindDirEntries.removeAll(keepingCapacity: true)
+        cachedBindDirEntries.reserveCapacity(boneBindDirections.count)
+        boneInitialAxes.removeAll(keepingCapacity: true)
+        boneInitialAxes.reserveCapacity(boneBindDirections.count)
+
+        var boneIndex = 0
+        for spring in springBone.springs {
+            for joint in spring.joints {
+                defer { boneIndex += 1 }
+                guard boneIndex < boneBindDirections.count else { continue }
+                let localBindDir = boneBindDirections[boneIndex]
+                if let jointNode = model.nodes[safe: joint.node] {
+                    cachedBindDirEntries.append(CachedBindDirEntry(parent: jointNode.parent, localBindDir: localBindDir))
+                    let valid = !localBindDir.x.isNaN && !localBindDir.y.isNaN && !localBindDir.z.isNaN &&
+                                simd_length(localBindDir) >= 0.001
+                    let initRotInv = simd_conjugate(jointNode.initialRotation)
+                    let initAxis = valid ? simd_act(initRotInv, localBindDir) : SIMD3<Float>(0, -1, 0)
+                    let initAxisNorm = valid ? simd_normalize(initAxis) : SIMD3<Float>(0, -1, 0)
+                    boneInitialAxes.append(CachedBoneInitialAxis(
+                        initialRotInv: initRotInv,
+                        initialAxis: initAxis,
+                        initialAxisNorm: initAxisNorm,
+                        isValid: valid
+                    ))
+                } else {
+                    boneInitialAxes.append(CachedBoneInitialAxis(
+                        initialRotInv: simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
+                        initialAxis: SIMD3<Float>(0, -1, 0),
+                        initialAxisNorm: SIMD3<Float>(0, -1, 0),
+                        isValid: false
+                    ))
+                }
+            }
+        }
+
+        // 3. Flat pre-resolved collider group masks & nodes (authored + synthetic).
+        //    Collider shapes are still read live each frame so runtime shape mutations
+        //    on `springBone.colliders` take effect immediately.
+        var colliderToGroupMask: [Int: UInt32] = [:]
+        for (groupIndex, group) in springBone.colliderGroups.enumerated() {
+            let bit = UInt32(1 << min(groupIndex, 31))
+            for colliderIndex in group.colliders {
+                colliderToGroupMask[colliderIndex, default: 0] |= bit
+            }
+        }
+        cachedColliderToGroupMask = colliderToGroupMask
+        cachedColliderGroupCount = springBone.colliderGroups.count
+        cachedColliderCount = springBone.colliders.count
+
+        cachedColliderGroupMasks.removeAll(keepingCapacity: true)
+        cachedColliderGroupMasks.reserveCapacity(springBone.colliders.count)
+        cachedColliderNodes.removeAll(keepingCapacity: true)
+        cachedColliderNodes.reserveCapacity(springBone.colliders.count)
+        for (colliderIndex, collider) in springBone.colliders.enumerated() {
+            cachedColliderGroupMasks.append(colliderToGroupMask[colliderIndex] ?? 1)
+            cachedColliderNodes.append(model.nodes[safe: collider.node])
+        }
+
+        cachedSyntheticGroupMask = springBone.syntheticColliders.isEmpty
+            ? 0 : (1 << UInt32(min(springBone.colliderGroups.count, 31)))
+        cachedSyntheticColliderNodes.removeAll(keepingCapacity: true)
+        cachedSyntheticColliderNodes.reserveCapacity(springBone.syntheticColliders.count)
+        for collider in springBone.syntheticColliders {
+            cachedSyntheticColliderNodes.append(model.nodes[safe: collider.node])
+        }
+    }
+
     /// Captures all target transforms from animation for this frame
     /// Called once at the start of the frame before substep loop
     /// Captures: root positions, world bind directions, collider transforms
     private func captureTargetTransforms(model: VRMModel) {
         guard let springBone = model.springBone else { return }
+        ensureTargetCaptureCaches(model: model, springBone: springBone)
 
         // 1. Capture root positions
         targetRootPositions.removeAll(keepingCapacity: true)
-        for spring in springBone.springs {
-            if let firstJoint = spring.joints.first,
-               let node = model.nodes[safe: firstJoint.node] {
-                targetRootPositions.append(node.worldPosition)
-            }
+        for node in cachedRootNodes {
+            targetRootPositions.append(node.worldPosition)
         }
 
         // First frame initialization
@@ -2626,38 +2813,24 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         // 2. Capture world bind directions (transforms static bind dirs by current parent rotation)
-        captureTargetWorldBindDirections(model: model, springBone: springBone)
+        captureTargetWorldBindDirections()
 
         // 3. Capture collider transforms
-        captureTargetColliderTransforms(model: model, springBone: springBone)
+        captureTargetColliderTransforms(springBone: springBone)
     }
 
     /// Captures world-space bind directions based on current animated parent orientations
-    private func captureTargetWorldBindDirections(model: VRMModel, springBone: VRMSpringBone) {
+    private func captureTargetWorldBindDirections() {
         targetWorldBindDirections.removeAll(keepingCapacity: true)
+        targetWorldBindDirections.reserveCapacity(cachedBindDirEntries.count)
 
-        var boneIndex = 0
-        for spring in springBone.springs {
-            for joint in spring.joints {
-                guard boneIndex < boneBindDirections.count,
-                      let jointNode = model.nodes[safe: joint.node] else {
-                    boneIndex += 1
-                    continue
-                }
-
-                let localBindDir = boneBindDirections[boneIndex]
-
-                // Transform by the node's ACTUAL parent (matches how we stored it)
-                if let nodeParent = jointNode.parent {
-                    let parentRot = extractRotation(from: nodeParent.worldMatrix)
-                    let worldBindDir = simd_act(parentRot, localBindDir)
-                    targetWorldBindDirections.append(simd_normalize(worldBindDir))
-                } else {
-                    // Root bone - local is world
-                    targetWorldBindDirections.append(localBindDir)
-                }
-
-                boneIndex += 1
+        for entry in cachedBindDirEntries {
+            if let nodeParent = entry.parent {
+                let parentRot = extractRotation(from: nodeParent.worldMatrix)
+                let worldBindDir = simd_act(parentRot, entry.localBindDir)
+                targetWorldBindDirections.append(simd_normalize(worldBindDir))
+            } else {
+                targetWorldBindDirections.append(entry.localBindDir)
             }
         }
 
@@ -2668,87 +2841,96 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     }
 
     /// Captures collider transforms based on current animated node positions/orientations
-    private func captureTargetColliderTransforms(model: VRMModel, springBone: VRMSpringBone) {
-        // Build collider-to-group-MEMBERSHIP mapping (OR of every group's bit —
-        // a collider in several groups must be visible to springs referencing
-        // ANY of them). Clamp each bit to 31 so the shader's `1u << bit` is
-        // well-defined (UB at >=32). The mapping is static after load, so it is
-        // cached and rebuilt only when the spring-bone configuration changes.
-        let colliderToGroupMask: [Int: UInt32]
-        if let cached = cachedColliderToGroupMask,
-           cachedColliderGroupCount == springBone.colliderGroups.count,
-           cachedColliderCount == springBone.colliders.count {
-            colliderToGroupMask = cached
-        } else {
-            var map: [Int: UInt32] = [:]
-            for (groupIndex, group) in springBone.colliderGroups.enumerated() {
-                let bit = UInt32(1 << min(groupIndex, 31))
-                for colliderIndex in group.colliders {
-                    map[colliderIndex, default: 0] |= bit
-                }
-            }
-            cachedColliderToGroupMask = map
-            cachedColliderGroupCount = springBone.colliderGroups.count
-            cachedColliderCount = springBone.colliders.count
-            colliderToGroupMask = map
-        }
-
+    private func captureTargetColliderTransforms(springBone: VRMSpringBone) {
         targetSphereColliders.removeAll(keepingCapacity: true)
         targetCapsuleColliders.removeAll(keepingCapacity: true)
         targetPlaneColliders.removeAll(keepingCapacity: true)
 
-        for (colliderIndex, collider) in springBone.colliders.enumerated() {
-            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-            let groupMask = colliderToGroupMask[colliderIndex] ?? 1   // no group ⇒ bit 0 (legacy default)
-
+        let colliders = springBone.colliders
+        for i in 0..<colliders.count {
+            guard let colliderNode = cachedColliderNodes[i] else { continue }
+            let groupMask = cachedColliderGroupMasks[i]
             let wm = colliderNode.worldMatrix
             let worldRotation = simd_float3x3(
                 SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
                 SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
                 SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
             )
+            let worldPos = SIMD3<Float>(wm[3][0], wm[3][1], wm[3][2])
 
-            switch collider.shape {
+            switch colliders[i].shape {
             case .sphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
+                let worldCenter = worldPos + worldRotation * offset
                 targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask))
 
             case .insideSphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
+                let worldCenter = worldPos + worldRotation * offset
                 targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask, inside: true))
 
             case .capsule(let offset, let radius, let tail):
-                let worldP0 = colliderNode.worldPosition + worldRotation * offset
-                let worldP1 = colliderNode.worldPosition + worldRotation * tail
+                let worldP0 = worldPos + worldRotation * offset
+                let worldP1 = worldPos + worldRotation * tail
                 targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask))
 
             case .insideCapsule(let offset, let radius, let tail):
-                let worldP0 = colliderNode.worldPosition + worldRotation * offset
-                let worldP1 = colliderNode.worldPosition + worldRotation * tail
+                let worldP0 = worldPos + worldRotation * offset
+                let worldP1 = worldPos + worldRotation * tail
                 targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask, inside: true))
 
             case .plane(let offset, let normal):
-                let worldOffset = worldRotation * offset
+                let worldPoint = worldPos + worldRotation * offset
                 let worldNormal = worldRotation * normal
-                let worldPoint = colliderNode.worldPosition + worldOffset
                 let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
                 targetPlaneColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupMask: groupMask))
             }
         }
 
-        // Append synthetic colliders (issue #309) via the shared helper.
-        let syntheticGroupMask: UInt32 = springBone.syntheticColliders.isEmpty
-            ? 0 : (1 << UInt32(min(springBone.colliderGroups.count, 31)))
-        appendSyntheticColliders(
-            springBone.syntheticColliders, model: model, groupMask: syntheticGroupMask,
-            spheres: &targetSphereColliders, capsules: &targetCapsuleColliders)
+        // Append synthetic colliders (issue #309) using cached node references.
+        let synthetics = springBone.syntheticColliders
+        if !synthetics.isEmpty {
+            let syntheticGroupMask = cachedSyntheticGroupMask
+            for i in 0..<synthetics.count {
+                guard let colliderNode = cachedSyntheticColliderNodes[i] else { continue }
+                let wm = colliderNode.worldMatrix
+                let worldRotation = simd_float3x3(
+                    SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
+                    SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
+                    SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
+                )
+                let worldPos = SIMD3<Float>(wm[3][0], wm[3][1], wm[3][2])
+
+                switch synthetics[i].shape {
+                case .sphere(let offset, let radius):
+                    let worldCenter = worldPos + worldRotation * offset
+                    targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: syntheticGroupMask))
+
+                case .insideSphere(let offset, let radius):
+                    let worldCenter = worldPos + worldRotation * offset
+                    targetSphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: syntheticGroupMask, inside: true))
+
+                case .capsule(let offset, let radius, let tail):
+                    let worldP0 = worldPos + worldRotation * offset
+                    let worldP1 = worldPos + worldRotation * tail
+                    targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: syntheticGroupMask))
+
+                case .insideCapsule(let offset, let radius, let tail):
+                    let worldP0 = worldPos + worldRotation * offset
+                    let worldP1 = worldPos + worldRotation * tail
+                    targetCapsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: syntheticGroupMask, inside: true))
+
+                case .plane:
+                    assertionFailure("captureTargetColliderTransforms received a synthetic .plane; planes are not supported on the synthetic upload path")
+                    continue
+                }
+            }
+        }
 
         // Apply runtime radius overrides (e.g., for hair clipping prevention)
-        for (index, overrideRadius) in sphereColliderRadiusOverrides {
-            if index < targetSphereColliders.count {
-                targetSphereColliders[index].radius = overrideRadius
+        if !sphereColliderRadiusOverrides.isEmpty {
+            for (index, overrideRadius) in sphereColliderRadiusOverrides {
+                if index < targetSphereColliders.count {
+                    targetSphereColliders[index].radius = overrideRadius
+                }
             }
         }
 
