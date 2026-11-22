@@ -233,6 +233,40 @@ final class VRMLoaderLimitsTests: XCTestCase {
         }
     }
 
+    func testVRM0SpringBoneChainExpansionIsIdempotentWithMetalDevice() async throws {
+        // A VRM 0.x root -> child -> grandchild chain must expand once to 3 joints,
+        // never twice (which would duplicate child->grandchild into 5 joints).
+        let glb = try makeMinimalVRM0WithSpringBoneChain(chainLength: 3)
+
+        var exact = VRMLoaderLimits.default
+        exact.maxSpringBones = 3
+        let model = try await VRMModel.load(from: glb, device: MTLCreateSystemDefaultDevice(), limits: exact)
+        let totalAfterLoad = model.springBone?.springs.reduce(0) { $0 + $1.joints.count } ?? 0
+        XCTAssertEqual(totalAfterLoad, 3)
+        XCTAssertEqual(model.springBone?.springs.count, 1)
+        if let buffers = model.springBoneBuffers {
+            XCTAssertEqual(buffers.numBones, 3)
+        }
+
+        // Calling expandVRM0SpringBoneChains() again must be a no-op.
+        model.expandVRM0SpringBoneChains()
+        let totalAfterRepeat = model.springBone?.springs.reduce(0) { $0 + $1.joints.count } ?? 0
+        XCTAssertEqual(totalAfterRepeat, 3)
+        XCTAssertEqual(model.springBone?.springs.count, 1)
+
+        // Tighter limit must still reject based on expanded count (3 > 2).
+        var tooTight = VRMLoaderLimits.default
+        tooTight.maxSpringBones = 2
+        do {
+            _ = try await VRMModel.load(from: glb, device: MTLCreateSystemDefaultDevice(), limits: tooTight)
+            XCTFail("Expected VRMError.limitExceeded for expanded VRM 0.x chain (3 > 2)")
+        } catch VRMError.limitExceeded(let kind, let limit, let observed) {
+            XCTAssertEqual(kind, "springBones")
+            XCTAssertEqual(limit, 2)
+            XCTAssertEqual(observed, 3)
+        }
+    }
+
     // MARK: - 6. maxCustomExpressions (VRM 1.0 & VRM 0.x)
 
     func testMaxCustomExpressionsVRM1RejectsAtOneAndAcceptsAtMax() async throws {
@@ -373,6 +407,44 @@ final class VRMLoaderLimitsTests: XCTestCase {
             "springs": [["name": "hair", "joints": joints]],
         ]
         root["extensions"] = extensions
+        return try packGLB(json: root)
+    }
+
+    private func makeMinimalVRM0WithSpringBoneChain(chainLength: Int) throws -> Data {
+        var (root, nodes) = baseVRM1Root()
+        let baseIdx = nodes.count
+        for i in 0..<chainLength {
+            var node: [String: Any] = ["name": "vrm0_hair_\(i)", "translation": [0.0, -0.1, 0.0]]
+            if i + 1 < chainLength {
+                node["children"] = [baseIdx + i + 1]
+            }
+            nodes.append(node)
+        }
+        root["nodes"] = nodes
+        var humanBones: [[String: Any]] = []
+        for (idx, name) in Self.minimalBoneNames.enumerated() {
+            humanBones.append(["bone": name, "node": idx, "useDefaultValues": true])
+        }
+        root["extensions"] = [
+            "VRM": [
+                "specVersion": "0.0",
+                "meta": ["title": "LimitsVRM0Spring", "author": "Tests"],
+                "humanoid": ["humanBones": humanBones],
+                "secondaryAnimation": [
+                    "boneGroups": [[
+                        "comment": "hair",
+                        "stiffiness": 1.0,
+                        "gravityPower": 0.0,
+                        "gravityDir": ["x": 0.0, "y": -1.0, "z": 0.0],
+                        "dragForce": 0.4,
+                        "hitRadius": 0.02,
+                        "bones": [baseIdx],
+                        "colliderGroups": [],
+                    ]],
+                    "colliderGroups": [],
+                ],
+            ],
+        ]
         return try packGLB(json: root)
     }
 

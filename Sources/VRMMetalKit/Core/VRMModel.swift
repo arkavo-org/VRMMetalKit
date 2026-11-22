@@ -169,6 +169,10 @@ public class VRMModel: @unchecked Sendable {
     // PERFORMANCE: Pre-computed node lookup table (normalized names)
     private var nodeLookupTable: [String: VRMNode] = [:]
 
+    // Guards `expandVRM0SpringBoneChains()` so repeated calls (e.g. quota validation
+    // during `load` followed by `initializeSpringBoneGPUSystem`) are idempotent.
+    private var didExpandVRM0SpringBoneChains = false
+
     // MARK: - Initialization
 
     /// Creates a VRM model from already-parsed VRM extension data and a glTF document.
@@ -1200,8 +1204,8 @@ public class VRMModel: @unchecked Sendable {
         // VRMC_springBone-1.0 already encodes the full chain in springs[].joints.
         // Re-expanding would treat every joint as a chain root and inflate the
         // joint count (see issue #182).
-        guard isVRM0 else { return }
-        guard var springBone = springBone else { return }
+        guard isVRM0, !didExpandVRM0SpringBoneChains, var springBone = springBone else { return }
+        didExpandVRM0SpringBoneChains = true
 
         var expandedSprings: [VRMSpring] = []
 
