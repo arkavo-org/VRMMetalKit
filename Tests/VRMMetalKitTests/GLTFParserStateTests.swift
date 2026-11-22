@@ -63,7 +63,9 @@ final class GLTFParserStateTests: XCTestCase {
         let firstGLB = makeGLB(binaryChunk: firstBinaryPayload)
         let (_, firstBinary) = try parser.parse(data: firstGLB)
         XCTAssertEqual(firstBinary, firstBinaryPayload, "first parse should return the BIN chunk bytes")
+        XCTAssertEqual(firstBinary?.startIndex, 0, "public parse(data:) must return zero-based binaryData")
         XCTAssertEqual(parser.binaryChunk, firstBinaryPayload, "parser.binaryChunk should reflect the first parse")
+        XCTAssertEqual(parser.binaryChunk?.startIndex, 0, "public parser.binaryChunk must be zero-based")
 
         let secondGLB = makeGLB(binaryChunk: nil)
         let (_, secondBinary) = try parser.parse(data: secondGLB)

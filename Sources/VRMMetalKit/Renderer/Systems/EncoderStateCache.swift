@@ -37,6 +37,7 @@ final class EncoderStateCache {
 
     private var vertexBuffers: [(buffer: MTLBuffer, offset: Int)?] = Array(repeating: nil, count: slotCount)
     private var fragmentBuffers: [(buffer: MTLBuffer, offset: Int)?] = Array(repeating: nil, count: slotCount)
+    private var vertexTextures: [MTLTexture?] = Array(repeating: nil, count: slotCount)
     private var fragmentTextures: [MTLTexture?] = Array(repeating: nil, count: slotCount)
     private var vertexSamplers: [MTLSamplerState?] = Array(repeating: nil, count: slotCount)
     private var fragmentSamplers: [MTLSamplerState?] = Array(repeating: nil, count: slotCount)
@@ -53,11 +54,33 @@ final class EncoderStateCache {
         depthBias = nil
         for i in 0..<vertexBuffers.count { vertexBuffers[i] = nil }
         for i in 0..<fragmentBuffers.count { fragmentBuffers[i] = nil }
+        for i in 0..<vertexTextures.count { vertexTextures[i] = nil }
         for i in 0..<fragmentTextures.count { fragmentTextures[i] = nil }
         for i in 0..<vertexSamplers.count { vertexSamplers[i] = nil }
         for i in 0..<fragmentSamplers.count { fragmentSamplers[i] = nil }
         skippedCalls = 0
         emittedCalls = 0
+    }
+
+    func invalidateVertexBuffer(index: Int) {
+        if index >= 0 && index < vertexBuffers.count {
+            vertexBuffers[index] = nil
+        }
+    }
+
+    func setVertexTexture(_ encoder: MTLRenderCommandEncoder, _ texture: MTLTexture?, index: Int) {
+        guard index >= 0 && index < vertexTextures.count else {
+            encoder.setVertexTexture(texture, index: index)
+            emittedCalls &+= 1
+            return
+        }
+        if vertexTextures[index] === texture {
+            skippedCalls &+= 1
+            return
+        }
+        encoder.setVertexTexture(texture, index: index)
+        vertexTextures[index] = texture
+        emittedCalls &+= 1
     }
 
     func setRenderPipelineState(_ encoder: MTLRenderCommandEncoder, _ state: MTLRenderPipelineState) {

@@ -141,4 +141,65 @@ final class TextureBlockCompressorTests: XCTestCase {
         }
         XCTAssertEqual(try XCTUnwrap(texture).pixelFormat, .rgba8Unorm)
     }
+
+    func testNonMultipleOfFourAndParallelBandDimensionsStayWithinThreshold() {
+        for (width, height) in [(13, 11), (132, 132)] {
+            var rgba = [UInt8](repeating: 0, count: width * height * 4)
+            for y in 0..<height {
+                for x in 0..<width {
+                    let i = (y * width + x) * 4
+                    // Mix solid regions (exercises constant-block fast path) and smooth ramps
+                    if y < height / 2 {
+                        rgba[i + 0] = 180
+                        rgba[i + 1] = 120
+                        rgba[i + 2] = 60
+                        rgba[i + 3] = 254
+                    } else {
+                        let v = UInt8((x * 255) / max(1, width - 1))
+                        rgba[i + 0] = v
+                        rgba[i + 1] = v
+                        rgba[i + 2] = v
+                        rgba[i + 3] = 254
+                    }
+                }
+            }
+            let encoded = rgba.withUnsafeBufferPointer { buf in
+                TextureBlockCompressor.encodeBC7Mode6(
+                    rgba: buf.baseAddress!, width: width, height: height, bytesPerRow: width * 4)
+            }
+            let blocksX = (width + 3) / 4
+            let blocksY = (height + 3) / 4
+            XCTAssertEqual(encoded.count, blocksX * blocksY * TextureBlockCompressor.blockBytes)
+
+            var absErr = 0
+            var samples = 0
+            encoded.withUnsafeBytes { buf in
+                let blocks = buf.bindMemory(to: UInt8.self)
+                for by in 0..<blocksY {
+                    for bx in 0..<blocksX {
+                        let offset = (by * blocksX + bx) * TextureBlockCompressor.blockBytes
+                        let decoded = TextureBlockCompressor.decodeBC7Mode6Block(blocks.baseAddress! + offset)
+                        for py in 0..<4 {
+                            let y = by * 4 + py
+                            guard y < height else { continue }
+                            for px in 0..<4 {
+                                let x = bx * 4 + px
+                                guard x < width else { continue }
+                                let src = (y * width + x) * 4
+                                let dst = decoded[py * 4 + px]
+                                absErr += abs(Int(rgba[src]) - Int(dst.x))
+                                absErr += abs(Int(rgba[src + 1]) - Int(dst.y))
+                                absErr += abs(Int(rgba[src + 2]) - Int(dst.z))
+                                absErr += abs(Int(rgba[src + 3]) - Int(dst.w))
+                                samples += 4
+                            }
+                        }
+                    }
+                }
+            }
+            let mae = Float(absErr) / Float(samples) / 255.0
+            XCTAssertLessThanOrEqual(mae, TextureBlockCompressor.pixelNearMeanAbsoluteError,
+                                     "MAE \(mae) exceeded threshold for \(width)x\(height)")
+        }
+    }
 }

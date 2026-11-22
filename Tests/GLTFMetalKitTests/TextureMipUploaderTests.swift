@@ -426,7 +426,37 @@ final class TextureMipUploaderTests: XCTestCase {
                 XCTAssertGreaterThanOrEqual(mip.bytes[p * 4 + 0], 250,
                     "level \(level) texel \(p) (a=\(a)) lost red — transparent RGB bled in")
                 XCTAssertLessThanOrEqual(mip.bytes[p * 4 + 1], 5,
-                    "level \(level) texel \(p) gained green — transparent RGB bled in")
+                    "level \(level) texel \(p) (a=\(a)) gained green — transparent RGB bled in")
+            }
+        }
+    }
+
+    /// Exercises the parallel band threshold (dimensions >= 128×128) for both
+    /// even (specialized 2×2 fast path) and odd (general tap path) textures.
+    func testParallelBandThresholdEvenAndOddDimensionsConserveMean() throws {
+        for (w, h) in [(256, 256), (257, 129)] {
+            var straight = [UInt8](repeating: 0, count: w * h * 4)
+            for y in 0..<h {
+                for x in 0..<w {
+                    let p = (y * w + x) * 4
+                    if x < w / 2 {
+                        straight[p + 0] = 240
+                        straight[p + 2] = 60
+                        straight[p + 3] = 255
+                    } else {
+                        straight[p + 1] = 255 // transparent green must not bleed
+                        straight[p + 3] = 0
+                    }
+                }
+            }
+            let texture = try makeTexture(from: straight, width: w, height: h, alphaIsCoverage: true)
+            let ref = premultipliedMean(straight: straight, pixels: w * h)
+            for level in 1..<min(texture.mipmapLevelCount, 4) {
+                let mip = readLevel(texture, level)
+                let mean = premultipliedMean(straight: mip.bytes, pixels: mip.w * mip.h)
+                XCTAssertEqual(mean.a, ref.a, accuracy: 1.5, "\(w)×\(h) level \(level) alpha mean drifted")
+                XCTAssertEqual(mean.r, ref.r, accuracy: 1.5, "\(w)×\(h) level \(level) red mean drifted")
+                XCTAssertLessThanOrEqual(mean.g, 0.5, "\(w)×\(h) level \(level) transparent green bled in")
             }
         }
     }

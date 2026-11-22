@@ -18,6 +18,7 @@
 import Foundation
 import Metal
 import simd
+import Synchronization
 
 // MARK: - VRM Mesh
 
@@ -1173,8 +1174,15 @@ public class VRMNode {
     public let index: Int
     /// Source node name (often the humanoid bone name like `J_Bip_C_Head`).
     public let name: String?
+    /// Monotonically incremented whenever any `VRMNode.parent` link is mutated so
+    /// caches that pre-resolve strong parent pointers can validate in O(1) without
+    /// per-frame `weak` reference loads.
+    internal static let parentHierarchyRevision = Atomic<UInt64>(0)
+
     /// Parent node (weak to avoid retain cycles in the scene graph).
-    public weak var parent: VRMNode?
+    public weak var parent: VRMNode? {
+        didSet { VRMNode.parentHierarchyRevision.wrappingAdd(1, ordering: .relaxed) }
+    }
     /// Child nodes; rendering walks this hierarchy.
     public var children: [VRMNode] = []
 
@@ -1203,10 +1211,29 @@ public class VRMNode {
     /// T/R/S instead.
     public var localMatrix: float4x4 = matrix_identity_float4x4 { didSet { localMatrixDirty = true } }
     /// `parent.worldMatrix * localMatrix`, recomputed by ``updateWorldTransform()``.
-    public var worldMatrix: float4x4 = matrix_identity_float4x4
-    /// Inverse-transpose of the world linear part, cached here so the renderer
-    /// does not recompute it for every primitive drawn from this node.
-    public var normalMatrix: float4x4 = matrix_identity_float4x4
+    public var worldMatrix: float4x4 = matrix_identity_float4x4 {
+        didSet { normalMatrixDirty = true }
+    }
+    private var _normalMatrix: float4x4 = matrix_identity_float4x4
+    private var normalMatrixDirty: Bool = false
+
+    /// Inverse-transpose of the world linear part, computed lazily on read so
+    /// skeleton joint nodes that are never drawn non-skinned skip the 3×3
+    /// matrix inversion during hierarchy walks. Reading mutates the internal
+    /// cache and assumes synchronized access (e.g. under `VRMModel.lock`).
+    public var normalMatrix: float4x4 {
+        get {
+            if normalMatrixDirty {
+                _normalMatrix = AffineNormalMatrix.inverseTranspose(of: worldMatrix)
+                normalMatrixDirty = false
+            }
+            return _normalMatrix
+        }
+        set {
+            _normalMatrix = newValue
+            normalMatrixDirty = false
+        }
+    }
 
     /// Bumps when ``worldMatrix`` is published or changes. Skinning uses this
     /// to skip palette rebuilds for joints that have not moved.
@@ -1299,9 +1326,9 @@ public class VRMNode {
     /// Recomputes ``localMatrix`` as `translate(translation) * rotate(rotation) * scale(scale)`.
     /// Call after mutating ``translation``, ``rotation``, or ``scale`` directly.
     public func updateLocalMatrix() {
-        let t = float4x4(translation: translation)
-
-        // Manual quaternion to matrix conversion (Column-Major)
+        // Direct TRS composition (Column-Major):
+        // T * R * S scales each rotation column by S and places T in column 3,
+        // avoiding two full 4×4 matrix multiplications.
         let x = rotation.imag.x
         let y = rotation.imag.y
         let z = rotation.imag.z
@@ -1317,43 +1344,34 @@ public class VRMNode {
         let wy = w * y
         let wz = w * z
 
-        let col0 = SIMD4<Float>(1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy), 0.0)
-        let col1 = SIMD4<Float>(2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx), 0.0)
-        let col2 = SIMD4<Float>(2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy), 0.0)
-        let col3 = SIMD4<Float>(0.0, 0.0, 0.0, 1.0)
+        let sx = scale.x
+        let sy = scale.y
+        let sz = scale.z
 
-        let r = float4x4([col0, col1, col2, col3])
+        let col0 = SIMD4<Float>((1.0 - 2.0 * (yy + zz)) * sx, (2.0 * (xy + wz)) * sx, (2.0 * (xz - wy)) * sx, 0.0)
+        let col1 = SIMD4<Float>((2.0 * (xy - wz)) * sy, (1.0 - 2.0 * (xx + zz)) * sy, (2.0 * (yz + wx)) * sy, 0.0)
+        let col2 = SIMD4<Float>((2.0 * (xz + wy)) * sz, (2.0 * (yz - wx)) * sz, (1.0 - 2.0 * (xx + yy)) * sz, 0.0)
+        let col3 = SIMD4<Float>(translation.x, translation.y, translation.z, 1.0)
 
-        let s = float4x4(scaling: scale)
-        localMatrix = t * r * s
+        localMatrix = float4x4(col0, col1, col2, col3)
         localMatrixDirty = false
         localMatrixRebuildCount += 1
     }
 
-    /// Recomputes ``worldMatrix`` (and recurses through ``children``) by composing with the parent's world matrix.
-    /// Call from each scene-graph root once per frame after animation has mutated local transforms.
-    ///
-    /// Refreshes ``localMatrix`` from the current ``translation`` / ``rotation``
-    /// / ``scale`` first, so external callers that mutate those properties
-    /// directly (without remembering to invoke ``updateLocalMatrix()``) still
-    /// see the change reach ``worldMatrix``. This closed vrm-conformance #206,
-    /// where the adapter's `root.translation = …; updateWorldTransform()`
-    /// pattern left every spring-bone swing test SHA-identical to its
-    /// no-animation settle pair because the cached `localMatrix` never
-    /// picked up the displacement.
-    public func updateWorldTransform() {
+    /// Recomputes ``worldMatrix`` for this node only (no recursion into ``children``).
+    /// Used by SpringBone chain writeback to update chain joints in O(L) instead of O(L²).
+    @inline(__always)
+    internal func updateWorldTransformShallow() {
         if localMatrixDirty {
             updateLocalMatrix()
         }
 
         #if DEBUG
-        // Check for NaNs before using localMatrix
         if localMatrix[0][0].isNaN || localMatrix[0][1].isNaN || localMatrix[0][2].isNaN || localMatrix[0][3].isNaN ||
            localMatrix[1][0].isNaN || localMatrix[1][1].isNaN || localMatrix[1][2].isNaN || localMatrix[1][3].isNaN ||
            localMatrix[2][0].isNaN || localMatrix[2][1].isNaN || localMatrix[2][2].isNaN || localMatrix[2][3].isNaN ||
            localMatrix[3][0].isNaN || localMatrix[3][1].isNaN || localMatrix[3][2].isNaN || localMatrix[3][3].isNaN {
             vrmLogAnimation("!!! CRITICAL ERROR: NaN detected in localMatrix for node \(name ?? "unnamed") BEFORE world transform update")
-            // Optionally, reset localMatrix to identity to prevent crash
             localMatrix = matrix_identity_float4x4
         }
         #endif
@@ -1368,8 +1386,22 @@ public class VRMNode {
             worldMatrix = newWorld
             worldGeneration &+= 1
             hasPublishedWorld = true
-            normalMatrix = AffineNormalMatrix.inverseTranspose(of: newWorld)
         }
+    }
+
+    /// Recomputes ``worldMatrix`` (and recurses through ``children``) by composing with the parent's world matrix.
+    /// Call from each scene-graph root once per frame after animation has mutated local transforms.
+    ///
+    /// Refreshes ``localMatrix`` from the current ``translation`` / ``rotation``
+    /// / ``scale`` first, so external callers that mutate those properties
+    /// directly (without remembering to invoke ``updateLocalMatrix()``) still
+    /// see the change reach ``worldMatrix``. This closed vrm-conformance #206,
+    /// where the adapter's `root.translation = …; updateWorldTransform()`
+    /// pattern left every spring-bone swing test SHA-identical to its
+    /// no-animation settle pair because the cached `localMatrix` never
+    /// picked up the displacement.
+    public func updateWorldTransform() {
+        updateWorldTransformShallow()
 
         for child in children {
             child.updateWorldTransform()

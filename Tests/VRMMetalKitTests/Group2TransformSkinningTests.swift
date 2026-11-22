@@ -62,6 +62,15 @@ final class Group2TransformSkinningTests: XCTestCase {
         let expected = AffineNormalMatrix.inverseTranspose(of: node.worldMatrix)
         assertUpper3x3Equal(node.normalMatrix, expected, accuracy: 1e-5)
         assertUpper3x3Equal(node.normalMatrix, simd_transpose(simd_inverse(node.worldMatrix)), accuracy: 1e-5)
+
+        // Mutating scale + re-walking invalidates the lazy normalMatrix cache
+        node.scale = SIMD3<Float>(4, 2, 1)
+        node.updateWorldTransform()
+        assertUpper3x3Equal(node.normalMatrix, simd_transpose(simd_inverse(node.worldMatrix)), accuracy: 1e-5)
+
+        // Direct worldMatrix assignment also invalidates normalMatrix
+        node.worldMatrix = float4x4(diagonal: SIMD4<Float>(0.5, 2.0, 4.0, 1.0))
+        assertUpper3x3Equal(node.normalMatrix, simd_transpose(simd_inverse(node.worldMatrix)), accuracy: 1e-5)
     }
 
     // MARK: - World generation

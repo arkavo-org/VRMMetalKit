@@ -746,7 +746,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     ///
     /// Defaults to `false` to preserve the historical guarantee that `draw` produces
     /// correct results even if the caller mutated `node.localMatrix` without telling
-    /// anyone.
+    /// anyone. Note: SpringBone writeback propagates only mutated spring chains, so
+    /// hosts enabling this flag must update world transforms for any non-spring
+    /// node edits before calling `draw`.
     public var skipPreDrawTransformUpdate: Bool = false
 
     private var lastUpdateTime: CFTimeInterval = 0
@@ -906,8 +908,13 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// flag back on).
     public var isAnimationActive: Bool = true
 
-    // Triple-buffered uniforms for avoiding CPU-GPU sync
+    // Triple-buffered uniforms for avoiding CPU-GPU sync.
+    // Each frame buffer holds one 256-byte-aligned slice per compositor view so
+    // stereo / multi-view frames encoded into a single command buffer never
+    // overwrite earlier eyes' view/projection matrices.
     static let maxBufferedFrames = VRMConstants.Rendering.maxBufferedFrames
+    static let uniformViewSliceStride = (MemoryLayout<Uniforms>.stride + 255) & ~255
+    static let defaultUniformViewCapacity = 2
     var uniformsBuffers: [MTLBuffer] = []
     private var currentUniformBufferIndex = 0
     var uniforms = Uniforms()
@@ -920,6 +927,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
     /// the inflight completion handler; ``finishDeferredCompositorFrame`` does.
     private var compositorDeferCompletion = false
     private var compositorHeldSlot = false
+    private var compositorViewIndex = 0
+    private var compositorViewCount = 1
     private var compositorMorphedBuffers: [MorphKey: MTLBuffer] = [:]
 
     // MARK: - Camera
@@ -1106,6 +1115,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let isFaceMaterial: Bool
         let isEyeMaterial: Bool
         let isBodyMaterial: Bool
+        let isMouthOrLipMaterial: Bool
+        var effectiveAlphaModeRaw: UInt32
+        var selectedCullMode: MTLCullMode
 
         // OPTIMIZATION: Render order for single-array sorting (avoids concatenation)
         var renderOrder: Int  // 0=opaque, 1=faceSkin, 2=faceEyebrow, 3=faceEyeline, 4=mask, 5=faceEye, 6=faceHighlight, 7=blend
@@ -1817,12 +1829,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         guard !views.isEmpty else { return }
         compositorDeferCompletion = true
         compositorHeldSlot = false
+        compositorViewCount = views.count
         defer {
             compositorDeferCompletion = false
             compositorSkipSimulation = false
+            compositorViewIndex = 0
+            compositorViewCount = 1
         }
         for (index, view) in views.enumerated() {
             compositorSkipSimulation = index > 0
+            compositorViewIndex = index
             viewMatrix = view.viewMatrix
             projectionMatrix = view.projectionMatrix
             drawOffscreen(
@@ -1931,6 +1947,14 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
             // Get the next uniform buffer in the ring
             currentUniformBufferIndex = (currentUniformBufferIndex + 1) % Self.maxBufferedFrames
+            // Grow the ring slot if a multi-view compositor frame exceeds its capacity.
+            let requiredUniformBytes = max(Self.defaultUniformViewCapacity, compositorViewCount) * Self.uniformViewSliceStride
+            if currentUniformBufferIndex < uniformsBuffers.count,
+               uniformsBuffers[currentUniformBufferIndex].length < requiredUniformBytes,
+               let grown = device.makeBuffer(length: requiredUniformBytes, options: .storageModeShared) {
+                grown.label = "Uniform Buffer \(currentUniformBufferIndex)"
+                uniformsBuffers[currentUniformBufferIndex] = grown
+            }
         }
         guard currentUniformBufferIndex < uniformsBuffers.count else {
             vrmLog("[VRMRenderer] No uniform buffer available at index \(currentUniformBufferIndex)")
@@ -1941,12 +1965,21 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             return
         }
         let uniformsBuffer = uniformsBuffers[currentUniformBufferIndex]
+        let uniformOffset = compositorViewIndex * Self.uniformViewSliceStride
+        guard uniformOffset + MemoryLayout<Uniforms>.size <= uniformsBuffer.length else {
+            vrmLog("[VRMRenderer] Uniform buffer too small for view \(compositorViewIndex)")
+            if simulate {
+                inflightSemaphore.signal()
+                compositorHeldSlot = false
+            }
+            return
+        }
 
         // Validate pipeline states in strict mode
         if config.strict != .off {
             do {
                 try strictValidator?.validatePipelineState(opaquePipelineState, name: "opaque_pipeline")
-                try strictValidator?.validateUniformBuffer(uniformsBuffer, requiredSize: MemoryLayout<Uniforms>.size)
+                try strictValidator?.validateUniformBuffer(uniformsBuffer, requiredSize: uniformOffset + MemoryLayout<Uniforms>.size)
                 if morphTargetSystem?.morphAccumulatePipelineState == nil {
                     throw StrictModeError.missingComputeFunction(name: "morph_accumulate")
                 }
@@ -2073,13 +2106,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                              commandBuffer: commandBuffer)
                 }
 
-                // Read back GPU positions and update node transforms
+                // Read back GPU positions and update node transforms.
+                // `writeBonesToNodes` propagates every mutated chain node and its
+                // descendants directly, so a second full-skeleton `updateNodeTransforms`
+                // walk over untouched bones is redundant.
                 springBoneCompute.writeBonesToNodes(model: model)
-
-                // CRITICAL: Propagate spring bone transforms through entire hierarchy before skinning
-                performanceTracker?.beginPhase(.transformUpdate)
-                model.updateNodeTransforms()
-                performanceTracker?.endPhase(.transformUpdate)
 
                 // Report sleep-gate stats to the performance tracker.
                 performanceTracker?.recordSleepingBones(springBoneCompute.sleepingBoneCount)
@@ -2354,8 +2385,16 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         }
         #endif
 
-        // Copy uniforms to the current buffer
-        uniformsBuffer.contents().copyMemory(from: &uniforms, byteCount: MemoryLayout<Uniforms>.size)
+        // Ensure uniformsBuffer holds identity model/normal matrices so all
+        // skinned draws can bind uniformsBuffer directly instead of calling
+        // setVertexBytes(496 bytes) on every draw.
+        uniforms.modelMatrix = matrix_identity_float4x4
+        uniforms.normalMatrix = matrix_identity_float4x4
+
+        // Copy uniforms to the current view's slice in the ring buffer
+        uniformsBuffer.contents()
+            .advanced(by: uniformOffset)
+            .copyMemory(from: &uniforms, byteCount: MemoryLayout<Uniforms>.size)
 
         // ALPHA MODE QUEUING: Collect all primitives and sort by alpha mode
         // PERFORMANCE OPTIMIZATION: Use cached render items if available
@@ -2494,6 +2533,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
                 let isBodyMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin") ||
                                      nodeNameLower.contains("body") || meshNameLower.contains("body")
+                let isMouthOrLipMaterial = materialNameLower.contains("mouth") || materialNameLower.contains("lip")
                 let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
                                       meshNameLower.contains("face") || meshNameLower.contains("eye")
                 var item = RenderItem(
@@ -2513,6 +2553,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
                     isBodyMaterial: isBodyMaterial,
+                    isMouthOrLipMaterial: isMouthOrLipMaterial,
+                    effectiveAlphaModeRaw: 0,
+                    selectedCullMode: .back,
                     renderOrder: 0,  // Will be set based on category
                     materialRenderQueue: materialRenderQueue,
                     primitiveIndex: globalPrimitiveIndex,
@@ -2651,6 +2694,17 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                 }
 
+                switch item.effectiveAlphaMode {
+                case "mask": item.effectiveAlphaModeRaw = 1
+                case "blend": item.effectiveAlphaModeRaw = 2
+                default: item.effectiveAlphaModeRaw = 0
+                }
+                item.selectedCullMode = selectCullMode(
+                    faceCategory: item.faceCategory,
+                    alphaMode: item.effectiveAlphaMode,
+                    isDoubleSided: item.effectiveDoubleSided
+                )
+
                 // OPTIMIZATION: Add to single pre-allocated array
                 allItems.append(item)
                 globalPrimitiveIndex += 1
@@ -2783,6 +2837,23 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if let cachedSampler = samplerStates["default"] {
             encoderStateCache.setFragmentSamplerState(encoder, cachedSampler, index: 0)
         }
+
+        // Bind frame-constant vertex offset (always 0) once for the whole pass
+        // instead of issuing setVertexBytes on every draw call.
+        var initialVertexOffset: UInt32 = 0
+        encoder.setVertexBytes(&initialVertexOffset, length: MemoryLayout<UInt32>.size, index: ResourceIndices.vertexOffsetBuffer)
+        encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: uniformOffset, index: 1)
+
+        // Frame-constant specialization inputs hoisted out of the draw loop.
+        let frameLightCount = MToonLightSpecialization.count(
+            keyIntensity: uniforms.lightColor_packed.w,
+            fillIntensity: uniforms.light1Color_packed.w,
+            rimIntensity: uniforms.light2Color_packed.w
+        )
+        let usesDebugFrag = MToonDebugMode.usesDebugFragment(debugUVs)
+        let willTrySpecialize = config.enableMToonFunctionConstants && !debugWireframe
+        let hasAnyMorphedBuffers = !morphedBuffers.isEmpty
+        var lastHasMorphedFlag: UInt32? = nil
 
         refreshHairHighlightMaterials(model: model)
         for (index, item) in itemsToRender.enumerated() {
@@ -3082,7 +3153,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let isDoubleSided = item.effectiveDoubleSided
 
             // Contract validation: effective alpha mode should be valid
-            precondition(["opaque", "mask", "blend"].contains(materialAlphaMode),
+            precondition(materialAlphaMode == "opaque" || materialAlphaMode == "mask" || materialAlphaMode == "blend",
                         "Invalid effective alpha mode: \(materialAlphaMode)")
 
             // Choose pipeline based on skinning AND alpha mode
@@ -3102,7 +3173,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("[PIPELINE DEBUG] Node '\(item.node.name ?? "unnamed")': nodeHasSkin=\(nodeHasSkin), meshUsesSkinning=\(meshUsesSkinning), hasSkinning=\(hasSkinning), isSkinned=\(isSkinned)")
             }
 
-            // Select correct pipeline based on alpha mode and debug settings.
+            // Select base pipeline when specialization is off or as fallback.
             let activePipelineState = selectPipelineForDraw(
                 alphaMode: materialAlphaMode,
                 isSkinned: isSkinned,
@@ -3125,7 +3196,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             // This avoids a wasted Metal driver call for ~15/20 draws that switch to
             // a specialized PSO at line ~3389, saving CPU time that competes with
             // concurrent LLM inference on shared CPU cores.
-            let willTrySpecialize = config.enableMToonFunctionConstants && !debugWireframe
             if !willTrySpecialize {
                 encoderStateCache.setRenderPipelineState(encoder, pipeline)
             }
@@ -3158,42 +3228,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("  - Node: \(item.node.name ?? "unnamed"), WorldPos: (\(worldPos.x), \(worldPos.y), \(worldPos.z))")
             }
 
-            // Update model matrix for this node.  VRM 0.0 → 1.0 coordinate
-            // conversion is applied at load time (see
-            // `VRMModel.buildNodeHierarchy` + `applyVRM0InverseBindMatrixConjugation`),
-            // so the render path no longer applies a per-frame Y rotation.
-            let vrmRotation = matrix_identity_float4x4
-            if isSkinned {
-                uniforms.modelMatrix = vrmRotation
-                uniforms.normalMatrix = vrmRotation // Rotation-only matrix works for normals
-                if frameCounter % 60 == 0 {
-                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=true, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation applied")
-                }
-            } else {
-                uniforms.modelMatrix = simd_mul(vrmRotation, item.node.worldMatrix)
-                uniforms.normalMatrix = item.node.normalMatrix
-                if frameCounter % 60 == 0 {
-                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=false, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation * WORLD matrix")
-                }
-            }
-            // Per-draw Uniforms are passed via setVertexBytes (issue #181).
-            // Writing into the shared uniformsBuffer here would race between
-            // draws — every primitive in the encoder reads buffer-slot 1 at
-            // GPU execution time, so the *last* draw's modelMatrix would
-            // clobber every earlier non-skinned draw. setVertexBytes makes
-            // each draw's vertex shader see its own snapshot. The shared
-            // uniformsBuffer is still used by the fragment shader for the
-            // frame-level state (view/proj/lights) and is written once
-            // before the draw loop.
-
             // Always use the unified vertex buffer
             guard let vertexBuffer = primitive.vertexBuffer else {
                 vrmLog("[VRMRenderer] Warning: Primitive has no vertex buffer")
                 continue
             }
-
-            // Track vertex offset for this primitive
-            var currentVertexOffset: UInt32 = 0
 
             // Binding order contract for vertex shader:
             // Uses ResourceIndices constants for strict validation
@@ -3203,7 +3242,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             let meshIdx = item.meshIndex
             let primIdx = item.primIdxInMesh
             let stableKey: MorphKey = (UInt64(meshIdx) << 32) | UInt64(primIdx)
-            let morphedPosBuffer = morphedBuffers[stableKey]
+            let morphedPosBuffer: MTLBuffer? = hasAnyMorphedBuffers ? morphedBuffers[stableKey] : nil
 
             if !primitive.morphTargets.isEmpty && frameCounter < 2 {
                 let meshName = item.mesh.name ?? "?"
@@ -3220,8 +3259,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 encoderStateCache.setVertexBuffer(encoder, morphedPosBuffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
 
                 // Signal presence of morphed positions to the shader
-                var hasMorphedFlag: UInt32 = 1
-                encoder.setVertexBytes(&hasMorphedFlag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+                if lastHasMorphedFlag != 1 {
+                    var hasMorphedFlag: UInt32 = 1
+                    encoder.setVertexBytes(&hasMorphedFlag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+                    lastHasMorphedFlag = 1
+                }
 
                 if frameCounter % 60 == 0 {
                     let meshName = item.mesh.name ?? "?"
@@ -3236,11 +3278,31 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     emptyFloat3Buffer = device.makeBuffer(length: MemoryLayout<SIMD3<Float>>.stride, options: .storageModeShared)
                 }
                 encoderStateCache.setVertexBuffer(encoder, emptyFloat3Buffer, offset: 0, index: ResourceIndices.morphedPositionsBuffer)
-                var hasMorphedFlag: UInt32 = 0
-                encoder.setVertexBytes(&hasMorphedFlag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+                if lastHasMorphedFlag != 0 {
+                    var hasMorphedFlag: UInt32 = 0
+                    encoder.setVertexBytes(&hasMorphedFlag, length: MemoryLayout<UInt32>.size, index: ResourceIndices.hasMorphedPositionsFlag)
+                    lastHasMorphedFlag = 0
+                }
             }
 
-            encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
+            // Skinned draws share identical frame-level Uniforms (identity model/normal
+            // matrices already uploaded to uniformsBuffer), so bind the buffer once via
+            // EncoderStateCache instead of copying 496 bytes via setVertexBytes per draw.
+            // Rigid draws keep setVertexBytes with per-node modelMatrix/normalMatrix.
+            if isSkinned {
+                encoderStateCache.setVertexBuffer(encoder, uniformsBuffer, offset: uniformOffset, index: ResourceIndices.uniformsBuffer)
+                if frameCounter % 60 == 0 {
+                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=true, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation applied")
+                }
+            } else {
+                uniforms.modelMatrix = item.node.worldMatrix
+                uniforms.normalMatrix = item.node.normalMatrix
+                encoder.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: ResourceIndices.uniformsBuffer)
+                encoderStateCache.invalidateVertexBuffer(index: ResourceIndices.uniformsBuffer)
+                if frameCounter % 60 == 0 {
+                    vrmLog("[MATRIX DEBUG] Node '\(item.node.name ?? "unnamed")' isSkinned=false, VRM\(model.isVRM0 ? "0.0" : "1.0") rotation * WORLD matrix")
+                }
+            }
 
             // Update and set joint matrices for skinned meshes
             // meshUsesSkinning was already defined above
@@ -3352,13 +3414,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 // The legacy morphWeightsBuffer vertex slot is no longer read by any shader,
                 // so we skip binding it entirely.
 
-                // Pass vertex offset for proper morph buffer indexing
-                encoder.setVertexBytes(&currentVertexOffset, length: MemoryLayout<UInt32>.size, index: ResourceIndices.vertexOffsetBuffer)
-
                 // Set material and textures using MToon system
-                // Initialize with sensible defaults to prevent white rendering
-                var mtoonUniforms = MToonMaterialUniforms()
-                mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)  // White base
+                var mtoonUniforms: MToonMaterialUniforms
                 var textureCount = 0
 
                 let isFaceMaterial = item.isFaceMaterial
@@ -3372,112 +3429,28 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     vrmLog("  - Is face: \(isFaceMaterial)")
                 }
 
-                // Track material changes
+                let drawMaterial: VRMMaterial?
                 if let materialIndex = primitive.materialIndex {
                     if materialIndex != lastMaterialId {
                         performanceTracker?.recordStateChange(type: .other)
                         lastMaterialId = materialIndex
                     }
+                    drawMaterial = materialIndex < model.materials.count ? model.materials[materialIndex] : nil
+                } else {
+                    drawMaterial = nil
                 }
 
                 if let materialIndex = primitive.materialIndex,
-                   materialIndex < model.materials.count {
-                    let material = model.materials[materialIndex]
-
-                    // Preserve source version for shader paths that truly differ
-                    // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
-                    mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
-
-                    // Set base PBR properties
-                    mtoonUniforms.baseColorFactor = material.baseColorFactor
-                    mtoonUniforms.metallicFactor = material.metallicFactor
-                    mtoonUniforms.roughnessFactor = material.roughnessFactor
-                    // Issue #146: Preserve authored emissive so eye highlights,
-                    // mouth interiors, and accent materials self-illuminate.
-                    // Regressed by: RendererLightingCorrectnessTests.testEmissiveFactorContributesWithNoLights
-                    mtoonUniforms.emissiveFactor = material.emissiveFactor
-
-                    // DEBUG: Log original baseColorFactor for all materials
-                    #if DEBUG
-                    if frameCounter <= 2 {
-                        vrmLog("[Material] '\(item.materialName)' baseColorFactor: \(material.baseColorFactor)")
-                        if material.baseColorFactor.x > 10.0 || material.baseColorFactor.y > 10.0 ||
-                           material.baseColorFactor.z > 10.0 || material.baseColorFactor.w > 10.0 {
-                            vrmLog("  ⚠️ WARNING: baseColorFactor has extreme values!")
-                        }
-                    }
-                    #endif
-
-                    // PHASE 4 FIX: Force face materials to render with full brightness.
-                    // Skipped under disableAutoMaterialOverrides so silhouette /
-                    // stylized renderers retain authored baseColor / shadeColor.
-                    if isFaceMaterial && !self.disableAutoMaterialOverrides {
-                        // AGGRESSIVE FIX: Always force white baseColorFactor for face materials
-                        // This ensures the texture shows at full brightness
-                        if frameCounter <= 2 {
-                            vrmLog("  🔧 [FACE FIX] Forcing baseColorFactor to white for '\(item.materialName)'")
-                            vrmLog("     - Original: \(mtoonUniforms.baseColorFactor)")
-                        }
-                        mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)
-
-                        // LIGHTING FIX: Improve face shading for contours (skin only, not eyes)
-                        if item.faceCategory != "eye" {
-                            mtoonUniforms.shadeColorFactor = SIMD3<Float>(0.78, 0.65, 0.60)  // Stronger warm shadow
-                            mtoonUniforms.shadingToonyFactor = 0.3  // Even softer transition
-                            mtoonUniforms.shadingShiftFactor = -0.2  // More shadow for contours
-                        }
-
-                        // Ensure texture flag is set
-                        if material.baseColorTexture != nil {
-                            mtoonUniforms.hasBaseColorTexture = 1
-                        }
-                    }
-
-                    // Set alpha mode properties - DO NOT override for face parts
-                    if isFaceMaterial {
-                        // Preserve original alpha behavior for face parts (skin/eyes/lashes/lines)
-                        switch materialAlphaMode {
-                        case "mask": mtoonUniforms.alphaMode = 1
-                        case "blend": mtoonUniforms.alphaMode = 2
-                        default: mtoonUniforms.alphaMode = 0
-                        }
-                        mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
-                    } else {
-                        // Use EFFECTIVE alpha mode for other materials and non-mask face materials
-                        switch item.effectiveAlphaMode {
-                        case "mask":
-                            mtoonUniforms.alphaMode = 1
-                        case "blend":
-                            mtoonUniforms.alphaMode = 2
-                        default: // "opaque" or unknown
-                            mtoonUniforms.alphaMode = 0
-                        }
-                        mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
-                    }
-
-                    // If material has MToon extension, use those properties
+                   let material = drawMaterial {
                     if let mtoon = material.mtoon {
                         mtoonUniforms = baseMToonUniforms(materialIndex: materialIndex, mtoon: mtoon)
                         mtoonUniforms.time = drawUVAnimationTime
                         mtoonUniforms.baseColorFactor = material.baseColorFactor // Keep base color from PBR
-                        // glTF-core normalTextureInfo.scale lives on
-                        // VRMMaterial (the glTF base layer), not on the
-                        // MToon extension struct, so thread it in here
-                        // after the mtoon-derived defaults land. VMK#290.
                         mtoonUniforms.normalScale = material.normalScale
-                        // Sibling glTF-core textureInfo: occlusionTexture
-                        // with its `strength` scalar. The binding flag is
-                        // set later when the texture slot is populated.
-                        // VMK#293.
                         mtoonUniforms.occlusionStrength = material.occlusionStrength
-                        // Preserve source version for shader paths that truly differ
-                        // by VRM version (0 = VRM 0.x, 1 = VRM 1.0).
                         mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
-                        // UV FIX: Shift FaceMouth UVs to lip texture area (bottom right of atlas)
-                        // The mouth mesh UVs are centered at (0.4, 0.48) which is the blank face area
-                        // We need to shift them to the lip texture area around (0.7, 0.7)
-                        if item.materialNameLower.contains("mouth") || item.materialNameLower.contains("lip") {
+                        if item.isMouthOrLipMaterial {
                             mtoonUniforms.uvOffsetX = 0.35  // Shift right to lip area
                             mtoonUniforms.uvOffsetY = 0.25  // Shift down to lip area
                             mtoonUniforms.uvScale = 0.5     // Scale down to fit lip texture
@@ -3486,54 +3459,56 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                             }
                         }
 
-                        // Restore authored emissive after MToonMaterialUniforms.init(from:)
-                        // resets it. Required for silhouette/stylized renderers that route
-                        // iris glow / accent colors through emissiveFactor.
                         mtoonUniforms.emissiveFactor = material.emissiveFactor
-
-                        // ALPHA FIX: Restore effectiveAlphaMode AFTER MToon init
-                        // MToon extension may have wrong alphaMode; use our detected/fixed value
-                        switch item.effectiveAlphaMode {
-                        case "mask":
-                            mtoonUniforms.alphaMode = 1
+                        mtoonUniforms.alphaMode = item.effectiveAlphaModeRaw
+                        if item.effectiveAlphaModeRaw == 1 {
                             mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
-                        case "blend":
-                            mtoonUniforms.alphaMode = 2
-                        default:
-                            mtoonUniforms.alphaMode = 0
                         }
                     } else {
-                        // NO MToon extension - use default PBR values
-                        switch item.effectiveAlphaMode {
-                        case "mask":
-                            mtoonUniforms.alphaMode = 1
-                        case "blend":
-                            mtoonUniforms.alphaMode = 2
-                        default:
-                            mtoonUniforms.alphaMode = 0
+                        mtoonUniforms = MToonMaterialUniforms()
+                        mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
+                        mtoonUniforms.baseColorFactor = material.baseColorFactor
+                        mtoonUniforms.metallicFactor = material.metallicFactor
+                        mtoonUniforms.roughnessFactor = material.roughnessFactor
+                        mtoonUniforms.emissiveFactor = material.emissiveFactor
+
+                        #if DEBUG
+                        if frameCounter <= 2 {
+                            vrmLog("[Material] '\(item.materialName)' baseColorFactor: \(material.baseColorFactor)")
+                            if material.baseColorFactor.x > 10.0 || material.baseColorFactor.y > 10.0 ||
+                               material.baseColorFactor.z > 10.0 || material.baseColorFactor.w > 10.0 {
+                                vrmLog("  ⚠️ WARNING: baseColorFactor has extreme values!")
+                            }
                         }
+                        #endif
+
+                        if isFaceMaterial && !self.disableAutoMaterialOverrides {
+                            if frameCounter <= 2 {
+                                vrmLog("  🔧 [FACE FIX] Forcing baseColorFactor to white for '\(item.materialName)'")
+                                vrmLog("     - Original: \(mtoonUniforms.baseColorFactor)")
+                            }
+                            mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)
+                            if item.faceCategory != "eye" {
+                                mtoonUniforms.shadeColorFactor = SIMD3<Float>(0.78, 0.65, 0.60)
+                                mtoonUniforms.shadingToonyFactor = 0.3
+                                mtoonUniforms.shadingShiftFactor = -0.2
+                            }
+                            if material.baseColorTexture != nil {
+                                mtoonUniforms.hasBaseColorTexture = 1
+                            }
+                        }
+
+                        mtoonUniforms.alphaMode = item.effectiveAlphaModeRaw
                         mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
 
-                    // Eye material rendering adjustments
-                    if let faceCat = item.faceCategory, faceCat == "eye" {
-                        // Eyes should appear vivid and unshaded; disable stylized shading paths
-                        mtoonUniforms.shadeColorFactor = SIMD3<Float>(repeating: 1.0)
-                        mtoonUniforms.shadingToonyFactor = 0.0
-                        mtoonUniforms.shadingShiftFactor = 0.0
-                        mtoonUniforms.rimLightingMixFactor = 0.0
-                        mtoonUniforms.parametricRimColorFactor = SIMD3<Float>(repeating: 0.0)
-                        mtoonUniforms.hasMatcapTexture = 0
-                        // LIGHTING FIX: Don't boost emissive - let lighting handle visibility
-                        // if all(mtoonUniforms.emissiveFactor .< SIMD3<Float>(repeating: 0.2)) {
-                        //     mtoonUniforms.emissiveFactor = SIMD3<Float>(repeating: 0.2)
-                        // }
-                    }
-
-                        // Log MToon material properties (commented out to reduce noise)
-                        // vrmLog("[VRMRenderer] Using MToon material for primitive:")
-                        // vrmLog("  - Shade color: \(mtoon.shadeColorFactor)")
-                        // vrmLog("  - Matcap factor: \(mtoon.matcapFactor)")
-                        // vrmLog("  - Rim color: \(mtoon.parametricRimColorFactor)")
+                        if let faceCat = item.faceCategory, faceCat == "eye" {
+                            mtoonUniforms.shadeColorFactor = SIMD3<Float>(repeating: 1.0)
+                            mtoonUniforms.shadingToonyFactor = 0.0
+                            mtoonUniforms.shadingShiftFactor = 0.0
+                            mtoonUniforms.rimLightingMixFactor = 0.0
+                            mtoonUniforms.parametricRimColorFactor = SIMD3<Float>(repeating: 0.0)
+                            mtoonUniforms.hasMatcapTexture = 0
+                        }
                     }
 
                     applySurfaceExtensionUniforms(&mtoonUniforms, materialIndex: materialIndex, material: material)
@@ -3662,6 +3637,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
 
                     // Log texture binding only once per material
                     // Removed per-primitive logging to reduce noise
+                } else {
+                    mtoonUniforms = MToonMaterialUniforms()
+                    mtoonUniforms.baseColorFactor = SIMD4<Float>(1.0, 1.0, 1.0, 1.0)
                 }
 
             // Enhanced face/body material detection - check both material names AND mesh/node names
@@ -3694,13 +3672,8 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 vrmLog("  - Will apply special rendering fixes")
             }
 
-            // Single source of truth for this draw's cull mode (see
-            // selectCullMode). Each case below applies it; the per-category /
-            // per-alpha-mode switches still own depth state, winding, and bias.
-            let selectedCullMode = selectCullMode(
-                faceCategory: item.faceCategory,
-                alphaMode: materialAlphaMode,
-                isDoubleSided: isDoubleSided)
+            // Single source of truth for this draw's cull mode (precomputed on RenderItem).
+            let selectedCullMode = item.selectedCullMode
 
             // FACE RENDERING: Apply deterministic states per face category
             if let faceCategory = item.faceCategory {
@@ -3951,7 +3924,9 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                let specializedPipeline = specializedMToonPipelineIfAvailable(
                 isSkinned: isSkinned,
                 materialAlphaMode: materialAlphaMode,
-                mtoonUniforms: mtoonUniforms
+                mtoonUniforms: mtoonUniforms,
+                lightCount: frameLightCount,
+                usesDebugFragment: usesDebugFrag
             ) {
                 if frameCounter < 2 {
                     vrmLog("[PSO] Switching to specialized MToon pipeline: \(specializedPipeline.label ?? "UNKNOWN")")
@@ -3970,20 +3945,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 }
             }
 
-            // VMK#264 / VMK#266: when this draw is using the A2C pipeline
-            // for a MASK material, remap the uniform's alphaMode from 1
-            // (MASK with discard) to 3 (MASK_A2C, no discard, hardware
-            // computes subsample coverage from output alpha). Without this
-            // remap the shader's `alphaMode == 1` discard_fragment() wipes
-            // the fragment before A2C can use it. Only remap if the
-            // uniform is already 1 — body-material demotion to OPAQUE etc.
-            // should not accidentally become MASK_A2C. Placed before the
-            // indexed/non-indexed split so both draw paths see the
-            // override.
-            // The debug fragment is never built with alpha-to-coverage enabled,
-            // so remapping to MASK_A2C there would only drop the cutout discard
-            // the debug modes rely on.
-            if mtoonUniforms.alphaMode == 1, !MToonDebugMode.usesDebugFragment(debugUVs) {
+            if mtoonUniforms.alphaMode == 1, !usesDebugFrag {
                 mtoonUniforms.alphaMode = alphaModeForUniform(
                     alphaMode: "mask",
                     isSkinned: isSkinned
@@ -4039,10 +4001,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
                 }
 
-                let drawMaterial: VRMMaterial? = {
-                    guard let idx = primitive.materialIndex, idx < model.materials.count else { return nil }
-                    return model.materials[idx]
-                }()
                 let mergeOutline = MToonOutlineDraw.shouldMerge(
                     globalOutlineWidth: effectiveOutlineWidthScale,
                     mtoon: drawMaterial?.mtoon,
@@ -4064,7 +4022,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                        index: 8)
 
                 // Also pass main uniforms to fragment shader for lighting
-                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: 0, index: 1)
+                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: uniformOffset, index: 1)
 
                 // CRITICAL DEBUG: Test if we're reaching draw code
                 if frameCounter < 2 {
@@ -4391,7 +4349,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                                        index: 8)
 
                 // Also pass main uniforms to fragment shader for lighting
-                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: 0, index: 1)
+                encoderStateCache.setFragmentBuffer(encoder, uniformsBuffer, offset: uniformOffset, index: 1)
 
                 encoder.drawPrimitives(
                     type: primitive.primitiveType,
@@ -4841,7 +4799,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
             texture = outlineWidthFallbackTexture ?? makeOutlineWidthFallbackTexture()
             sampler = samplerStates["default"]
         }
-        encoder.setVertexTexture(texture, index: 0)
+        encoderStateCache.setVertexTexture(encoder, texture, index: 0)
         encoderStateCache.setVertexSamplerState(encoder, sampler, index: 0)
 
         // The hull animates the width mask's UVs, scaled by the UV animation
@@ -4851,7 +4809,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
            textureIndex < model.textures.count {
             animationMask = model.textures[textureIndex].mtlTexture
         }
-        encoder.setVertexTexture(animationMask ?? outlineWidthFallbackTexture ?? makeOutlineWidthFallbackTexture(), index: 1)
+        encoderStateCache.setVertexTexture(encoder, animationMask ?? outlineWidthFallbackTexture ?? makeOutlineWidthFallbackTexture(), index: 1)
     }
 
     private func makeOutlineWidthFallbackTexture() -> MTLTexture? {
@@ -5235,6 +5193,11 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         if let opaqueState = depthStencilStates["opaque"] {
             encoderStateCache.setDepthStencilState(encoder,opaqueState)
         }
+
+        // The outline pass bypassed EncoderStateCache for raw vertex buffer/bytes
+        // binds (slots 0, 1, 20, 22); reset so any subsequent pass on the same
+        // encoder rebinds from a clean state.
+        encoderStateCache.reset()
     }
 
     private func bindAttributeStream(_ encoder: MTLRenderCommandEncoder, primitive: VRMPrimitive) {
@@ -5411,14 +5374,31 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         materialAlphaMode: String,
         mtoonUniforms: MToonMaterialUniforms
     ) -> MTLRenderPipelineState? {
-        var features = MToonFunctionConstantKey(material: mtoonUniforms)
-        features.enableMaterialization = config.enableMaterialization
-        features.lightCount = MToonLightSpecialization.count(
+        let lightCount = MToonLightSpecialization.count(
             keyIntensity: uniforms.lightColor_packed.w,
             fillIntensity: uniforms.light1Color_packed.w,
             rimIntensity: uniforms.light2Color_packed.w
         )
-        if MToonDebugMode.usesDebugFragment(debugUVs) {
+        return specializedMToonPipelineIfAvailable(
+            isSkinned: isSkinned,
+            materialAlphaMode: materialAlphaMode,
+            mtoonUniforms: mtoonUniforms,
+            lightCount: lightCount,
+            usesDebugFragment: MToonDebugMode.usesDebugFragment(debugUVs)
+        )
+    }
+
+    private func specializedMToonPipelineIfAvailable(
+        isSkinned: Bool,
+        materialAlphaMode: String,
+        mtoonUniforms: MToonMaterialUniforms,
+        lightCount: UInt8,
+        usesDebugFragment: Bool
+    ) -> MTLRenderPipelineState? {
+        var features = MToonFunctionConstantKey(material: mtoonUniforms)
+        features.enableMaterialization = config.enableMaterialization
+        features.lightCount = lightCount
+        if usesDebugFragment {
             features.debugVisualization = true
             return specializedMToonPipelineState(isSkinned: isSkinned, features: features)
         }

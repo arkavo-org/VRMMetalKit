@@ -106,7 +106,6 @@ public class VRMMorphTargetSystem {
     private var activeSet: [ActiveMorph] = []
     private var activeSetBuffer: MTLBuffer?
     private var lastActiveSetWeights: [Float]?
-    private var candidatesBuffer: [ActiveMorph] = []
 
     // Morphed output buffers (per primitive)
     private var morphedPositionBuffers: [Int: MTLBuffer] = [:] // primitiveID -> buffer
@@ -240,49 +239,88 @@ public class VRMMorphTargetSystem {
         let epsilon = VRMMorphTargetSystem.morphEpsilon
 
         // Fast path when the weights are empty or all effectively zero.
-        if weights.isEmpty || weights.allSatisfy({ abs($0) <= epsilon }) {
-            activeSet = []
-            lastActiveSetWeights = []
-            return []
+        var anyActive = false
+        for w in weights {
+            if abs(w) > epsilon {
+                anyActive = true
+                break
+            }
         }
-
-        // Cache a concrete copy of the weights for cheap equality checks.
-        let weightsArray: [Float] = (weights as? [Float]) ?? Array(weights)
-
-        // Reuse the previously-built active set if the weights haven't changed.
-        if let last = lastActiveSetWeights,
-           last.count == weightsArray.count,
-           !zip(last, weightsArray).contains(where: { abs($0 - $1) > epsilon }) {
+        if !anyActive {
+            activeSet.removeAll(keepingCapacity: true)
+            lastActiveSetWeights?.removeAll(keepingCapacity: true)
+            if lastActiveSetWeights == nil {
+                lastActiveSetWeights = []
+            }
             return activeSet
         }
 
-        // Reuse the pre-sized scratch buffer instead of allocating each frame.
-        candidatesBuffer.removeAll(keepingCapacity: true)
-        for (index, weight) in weightsArray.enumerated() {
-            if abs(weight) > epsilon {
-                candidatesBuffer.append(ActiveMorph(index: UInt32(index), weight: weight))
+        // Reuse the previously-built active set if the weights haven't changed.
+        if let last = lastActiveSetWeights, last.count == weights.count {
+            var changed = false
+            var i = 0
+            for w in weights {
+                if abs(last[i] - w) > epsilon {
+                    changed = true
+                    break
+                }
+                i += 1
+            }
+            if !changed {
+                return activeSet
             }
         }
 
-        // Sort by absolute weight descending
-        candidatesBuffer.sort { abs($0.weight) > abs($1.weight) }
-
-        // Take top K morphs
-        let activeCount = min(candidatesBuffer.count, VRMMorphTargetSystem.maxActiveMorphs)
+        // Maintain top-K (K = maxActiveMorphs = 8) directly in `activeSet`,
+        // sorted descending by |weight| with stable lower-index tie-breaking.
+        // Avoids copying `weights` into a temporary Array and avoids O(m log m)
+        // sorting of all active morphs when K is small.
+        let maxActive = VRMMorphTargetSystem.maxActiveMorphs
         activeSet.removeAll(keepingCapacity: true)
-        for i in 0..<activeCount {
-            activeSet.append(candidatesBuffer[i])
+        if activeSet.capacity < maxActive {
+            activeSet.reserveCapacity(maxActive)
+        }
+        var minAbsInTop: Float = 0
+
+        var idx: UInt32 = 0
+        for weight in weights {
+            let aw = abs(weight)
+            if aw > epsilon {
+                if activeSet.count < maxActive || aw > minAbsInTop {
+                    let entry = ActiveMorph(index: idx, weight: weight)
+                    var insertAt = activeSet.count
+                    while insertAt > 0 && aw > abs(activeSet[insertAt - 1].weight) {
+                        insertAt -= 1
+                    }
+                    if activeSet.count < maxActive {
+                        activeSet.insert(entry, at: insertAt)
+                    } else if insertAt < maxActive {
+                        activeSet.removeLast()
+                        activeSet.insert(entry, at: insertAt)
+                    }
+                    if activeSet.count == maxActive {
+                        minAbsInTop = abs(activeSet[maxActive - 1].weight)
+                    }
+                }
+            }
+            idx &+= 1
         }
 
         // Update active set buffer
         if let buffer = activeSetBuffer, !activeSet.isEmpty {
-            let pointer = buffer.contents().bindMemory(to: ActiveMorph.self, capacity: activeCount)
-            for (i, morph) in activeSet.enumerated() {
-                pointer[i] = morph
+            let pointer = buffer.contents().bindMemory(to: ActiveMorph.self, capacity: activeSet.count)
+            for i in 0..<activeSet.count {
+                pointer[i] = activeSet[i]
             }
         }
 
-        lastActiveSetWeights = weightsArray
+        // Update cached weights in place (reusing capacity without heap churn)
+        if lastActiveSetWeights == nil {
+            lastActiveSetWeights = Array(weights)
+        } else {
+            lastActiveSetWeights!.removeAll(keepingCapacity: true)
+            lastActiveSetWeights!.append(contentsOf: weights)
+        }
         return activeSet
     }
 

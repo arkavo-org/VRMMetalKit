@@ -14,6 +14,7 @@
 // limitations under the License.
 //
 
+import Foundation
 import Metal
 
 /// Load-time BC7 encoder used by ``VRMLoadingOptimization/aggressiveTextureCompression``.
@@ -68,16 +69,18 @@ enum TextureBlockCompressor {
         descriptor.storageMode = .shared
         guard let dest = device.makeTexture(descriptor: descriptor) else { return nil }
 
+        var rgba = [UInt8](repeating: 0, count: source.width * source.height * 4)
         for level in 0..<source.mipmapLevelCount {
             let width = max(1, source.width >> level)
             let height = max(1, source.height >> level)
-            var rgba = [UInt8](repeating: 0, count: width * height * 4)
-            source.getBytes(
-                &rgba,
-                bytesPerRow: width * 4,
-                from: MTLRegionMake2D(0, 0, width, height),
-                mipmapLevel: level
-            )
+            rgba.withUnsafeMutableBytes { raw in
+                source.getBytes(
+                    raw.baseAddress!,
+                    bytesPerRow: width * 4,
+                    from: MTLRegionMake2D(0, 0, width, height),
+                    mipmapLevel: level
+                )
+            }
             let encoded = rgba.withUnsafeBufferPointer { buf in
                 encodeBC7Mode6(
                     rgba: buf.baseAddress!,
@@ -99,6 +102,13 @@ enum TextureBlockCompressor {
         return dest
     }
 
+    private struct SendablePointer<T>: @unchecked Sendable {
+        let ptr: UnsafePointer<T>
+    }
+    private struct SendableMutableRawPointer: @unchecked Sendable {
+        let ptr: UnsafeMutableRawPointer
+    }
+
     /// Encodes tightly-or-strided RGBA8 bytes as a BC7 Mode 6 image.
     static func encodeBC7Mode6(
         rgba: UnsafePointer<UInt8>,
@@ -108,33 +118,109 @@ enum TextureBlockCompressor {
     ) -> Data {
         let blocksX = (width + blockSize - 1) / blockSize
         let blocksY = (height + blockSize - 1) / blockSize
-        var out = Data(count: blocksX * blocksY * blockBytes)
+        let totalBlocks = blocksX * blocksY
+        var out = Data(count: totalBlocks * blockBytes)
         out.withUnsafeMutableBytes { raw in
-            let dest = raw.bindMemory(to: UInt8.self)
-            var destOffset = 0
-            for by in 0..<blocksY {
-                for bx in 0..<blocksX {
-                    var pixels = [SIMD4<UInt8>](repeating: .zero, count: 16)
-                    for py in 0..<blockSize {
-                        let y = min(by * blockSize + py, height - 1)
-                        for px in 0..<blockSize {
-                            let x = min(bx * blockSize + px, width - 1)
-                            let src = rgba + y * bytesPerRow + x * 4
-                            pixels[py * blockSize + px] = SIMD4<UInt8>(src[0], src[1], src[2], src[3])
-                        }
-                    }
-                    var block = encodeBlock(pixels)
-                    withUnsafeBytes(of: &block) { blockBytes in
-                        let src = blockBytes.bindMemory(to: UInt8.self)
-                        for i in 0..<Self.blockBytes {
-                            dest[destOffset + i] = src[i]
-                        }
-                    }
-                    destOffset += Self.blockBytes
+            guard let baseAddr = raw.baseAddress else { return }
+            let srcWrap = SendablePointer(ptr: rgba)
+            let dstWrap = SendableMutableRawPointer(ptr: baseAddr)
+
+            if totalBlocks >= 1024 && blocksY >= 4 {
+                let bands = min(blocksY, max(1, ProcessInfo.processInfo.activeProcessorCount))
+                let rowsPerBand = (blocksY + bands - 1) / bands
+                let activeBands = (blocksY + rowsPerBand - 1) / rowsPerBand
+                DispatchQueue.concurrentPerform(iterations: activeBands) { band in
+                    let startRow = band * rowsPerBand
+                    let endRow = min(startRow + rowsPerBand, blocksY)
+                    Self.encodeBC7RowRange(
+                        rgba: srcWrap.ptr,
+                        destBase: dstWrap.ptr,
+                        width: width,
+                        height: height,
+                        bytesPerRow: bytesPerRow,
+                        blocksX: blocksX,
+                        startRow: startRow,
+                        endRow: endRow
+                    )
                 }
+            } else {
+                Self.encodeBC7RowRange(
+                    rgba: srcWrap.ptr,
+                    destBase: dstWrap.ptr,
+                    width: width,
+                    height: height,
+                    bytesPerRow: bytesPerRow,
+                    blocksX: blocksX,
+                    startRow: 0,
+                    endRow: blocksY
+                )
             }
         }
         return out
+    }
+
+    private static func encodeBC7RowRange(
+        rgba: UnsafePointer<UInt8>,
+        destBase: UnsafeMutableRawPointer,
+        width: Int,
+        height: Int,
+        bytesPerRow: Int,
+        blocksX: Int,
+        startRow: Int,
+        endRow: Int
+    ) {
+        withUnsafeTemporaryAllocation(of: SIMD4<Int32>.self, capacity: 16) { pixelsBuf in
+            withUnsafeTemporaryAllocation(of: Int32.self, capacity: 32) { idxBuf in
+                let pixels = pixelsBuf.baseAddress!
+                let bestIndices = idxBuf.baseAddress!
+                let trialIndices = idxBuf.baseAddress! + 16
+                for by in startRow..<endRow {
+                    let y0 = by * blockSize
+                    let rowByteOffset = by * blocksX * blockBytes
+                    let fullBlockY = (y0 + 3) < height
+                    let r0 = rgba + min(y0 + 0, height - 1) * bytesPerRow
+                    let r1 = rgba + min(y0 + 1, height - 1) * bytesPerRow
+                    let r2 = rgba + min(y0 + 2, height - 1) * bytesPerRow
+                    let r3 = rgba + min(y0 + 3, height - 1) * bytesPerRow
+                    for bx in 0..<blocksX {
+                        let x0 = bx * blockSize
+                        if fullBlockY && (x0 + 3) < width {
+                            let off = x0 * 4
+                            loadRow4(r0 + off, pixels + 0)
+                            loadRow4(r1 + off, pixels + 4)
+                            loadRow4(r2 + off, pixels + 8)
+                            loadRow4(r3 + off, pixels + 12)
+                        } else {
+                            for py in 0..<4 {
+                                let y = min(y0 + py, height - 1)
+                                let row = rgba + y * bytesPerRow
+                                for px in 0..<4 {
+                                    let x = min(x0 + px, width - 1)
+                                    let s = row + x * 4
+                                    pixels[py * 4 + px] = SIMD4<Int32>(Int32(s[0]), Int32(s[1]), Int32(s[2]), Int32(s[3]))
+                                }
+                            }
+                        }
+                        let (lo, hi) = encodeBlockNoAlloc(
+                            pixels: pixels,
+                            bestIndices: bestIndices,
+                            trialIndices: trialIndices
+                        )
+                        let blockByteOffset = rowByteOffset + bx * blockBytes
+                        destBase.storeBytes(of: lo.littleEndian, toByteOffset: blockByteOffset, as: UInt64.self)
+                        destBase.storeBytes(of: hi.littleEndian, toByteOffset: blockByteOffset + 8, as: UInt64.self)
+                    }
+                }
+            }
+        }
+    }
+
+    @inline(__always)
+    private static func loadRow4(_ src: UnsafePointer<UInt8>, _ dst: UnsafeMutablePointer<SIMD4<Int32>>) {
+        dst[0] = SIMD4<Int32>(Int32(src[0]), Int32(src[1]), Int32(src[2]), Int32(src[3]))
+        dst[1] = SIMD4<Int32>(Int32(src[4]), Int32(src[5]), Int32(src[6]), Int32(src[7]))
+        dst[2] = SIMD4<Int32>(Int32(src[8]), Int32(src[9]), Int32(src[10]), Int32(src[11]))
+        dst[3] = SIMD4<Int32>(Int32(src[12]), Int32(src[13]), Int32(src[14]), Int32(src[15]))
     }
 
     /// Decodes one Mode 6 block to 16 RGBA pixels (row-major). Used by tests.
@@ -189,136 +275,144 @@ enum TextureBlockCompressor {
     ]
 
     /// Picks the shared p-bit that reconstructs `endpoint` with the least L1 error.
-    private static func bestPBit(_ endpoint: SIMD4<Int>) -> UInt32 {
-        var best: UInt32 = 0
-        var bestErr = Int.max
-        for p in 0...1 {
-            let q = applyPBit(endpoint, UInt32(p))
-            let err = abs(q.x - endpoint.x) + abs(q.y - endpoint.y)
-                + abs(q.z - endpoint.z) + abs(q.w - endpoint.w)
-            if err < bestErr {
-                bestErr = err
-                best = UInt32(p)
+    @inline(__always)
+    private static func bestPBit(_ endpoint: SIMD4<Int32>) -> UInt32 {
+        let q0 = endpoint & ~SIMD4<Int32>(repeating: 1)
+        let q1 = q0 | SIMD4<Int32>(repeating: 1)
+        let d0 = endpoint &- q0
+        let d1 = q1 &- endpoint
+        let err0 = abs(d0.x) &+ abs(d0.y) &+ abs(d0.z) &+ abs(d0.w)
+        let err1 = abs(d1.x) &+ abs(d1.y) &+ abs(d1.z) &+ abs(d1.w)
+        return err1 < err0 ? 1 : 0
+    }
+
+    @inline(__always)
+    private static func applyPBit(_ endpoint: SIMD4<Int32>, _ p: UInt32) -> SIMD4<Int32> {
+        let bit = Int32(p)
+        return (endpoint & ~SIMD4<Int32>(repeating: 1)) | SIMD4<Int32>(repeating: bit)
+    }
+
+    private static let mode6Axes: (SIMD4<Int32>, SIMD4<Int32>, SIMD4<Int32>, SIMD4<Int32>, SIMD4<Int32>, SIMD4<Int32>) = (
+        SIMD4<Int32>(77, 150, 29, 0),
+        SIMD4<Int32>(1, 0, 0, 0),
+        SIMD4<Int32>(0, 1, 0, 0),
+        SIMD4<Int32>(0, 0, 1, 0),
+        SIMD4<Int32>(0, 0, 0, 1),
+        SIMD4<Int32>(1, 1, 1, 1)
+    )
+
+    @inline(__always)
+    private static func encodeBlockNoAlloc(
+        pixels: UnsafePointer<SIMD4<Int32>>,
+        bestIndices: UnsafeMutablePointer<Int32>,
+        trialIndices: UnsafeMutablePointer<Int32>
+    ) -> (UInt64, UInt64) {
+        let p0 = pixels[0]
+        var allEqual = true
+        for i in 1..<16 {
+            if pixels[i] != p0 {
+                allEqual = false
+                break
             }
         }
-        return best
-    }
 
-    private static func applyPBit(_ endpoint: SIMD4<Int>, _ p: UInt32) -> SIMD4<Int> {
-        let bit = Int(p)
-        return SIMD4<Int>(
-            (endpoint.x & ~1) | bit,
-            (endpoint.y & ~1) | bit,
-            (endpoint.z & ~1) | bit,
-            (endpoint.w & ~1) | bit
-        )
-    }
+        var ep0: SIMD4<Int32>
+        var ep1: SIMD4<Int32>
 
-    private static func encodeBlock(_ pixels: [SIMD4<UInt8>]) -> (UInt64, UInt64) {
-        var ep0 = SIMD4<Int>(repeating: 0)
-        var ep1 = ep0
-        var indices = [Int](repeating: 0, count: 16)
-        var bestErr = Int.max
-        let axes: [SIMD4<Int>] = [
-            SIMD4(77, 150, 29, 0),
-            SIMD4(1, 0, 0, 0),
-            SIMD4(0, 1, 0, 0),
-            SIMD4(0, 0, 1, 0),
-            SIMD4(0, 0, 0, 1),
-            SIMD4(1, 1, 1, 1)
-        ]
-        for axis in axes {
-            var minC = SIMD4<Int>(Int(pixels[0].x), Int(pixels[0].y), Int(pixels[0].z), Int(pixels[0].w))
-            var maxC = minC
-            var minP = minC.x * axis.x + minC.y * axis.y + minC.z * axis.z + minC.w * axis.w
-            var maxP = minP
-            for p in pixels {
-                let c = SIMD4<Int>(Int(p.x), Int(p.y), Int(p.z), Int(p.w))
-                let proj = c.x * axis.x + c.y * axis.y + c.z * axis.z + c.w * axis.w
-                if proj < minP { minP = proj; minC = c }
-                if proj > maxP { maxP = proj; maxC = c }
-            }
-            var trial = [Int](repeating: 0, count: 16)
-            let dir = maxC &- minC
-            let len2 = max(1, dir.x * dir.x + dir.y * dir.y + dir.z * dir.z + dir.w * dir.w)
-            var err = 0
-            for i in 0..<16 {
-                let p = pixels[i]
-                let c = SIMD4<Int>(Int(p.x), Int(p.y), Int(p.z), Int(p.w))
-                let t = min(1.0, max(0.0, Float((c &- minC).x * dir.x + (c &- minC).y * dir.y
-                    + (c &- minC).z * dir.z + (c &- minC).w * dir.w) / Float(len2)))
-                let idx = Int((t * 15.0).rounded())
-                trial[i] = idx
-                let w = Int(Self.weights4[idx])
-                let recon = (minC &* (64 - w) &+ maxC &* w &+ SIMD4<Int>(repeating: 32)) &>> 6
-                err += abs(recon.x - c.x) + abs(recon.y - c.y) + abs(recon.z - c.z) + abs(recon.w - c.w)
-            }
-            if err < bestErr {
+        if allEqual {
+            ep0 = p0
+            ep1 = p0
+            for i in 0..<16 { bestIndices[i] = 0 }
+        } else {
+            ep0 = p0
+            ep1 = p0
+            var bestErr: Int32 = .max
+
+            @inline(__always)
+            func evaluateAxis(_ axis: SIMD4<Int32>) {
+                var minC = p0
+                var maxC = p0
+                var minP = p0.x &* axis.x &+ p0.y &* axis.y &+ p0.z &* axis.z &+ p0.w &* axis.w
+                var maxP = minP
+                for i in 1..<16 {
+                    let c = pixels[i]
+                    let proj = c.x &* axis.x &+ c.y &* axis.y &+ c.z &* axis.z &+ c.w &* axis.w
+                    if proj < minP { minP = proj; minC = c }
+                    if proj > maxP { maxP = proj; maxC = c }
+                }
+                let dir = maxC &- minC
+                let len2 = max(Int32(1), dir.x &* dir.x &+ dir.y &* dir.y &+ dir.z &* dir.z &+ dir.w &* dir.w)
+                let invLen2 = 1.0 / Float(len2)
+                var err: Int32 = 0
+                for i in 0..<16 {
+                    let c = pixels[i]
+                    let d = c &- minC
+                    let dot = d.x &* dir.x &+ d.y &* dir.y &+ d.z &* dir.z &+ d.w &* dir.w
+                    let t = min(1.0, max(0.0, Float(dot) * invLen2))
+                    let idx = Int32((t * 15.0).rounded())
+                    trialIndices[i] = idx
+                    let w = Int32(Self.weights4[Int(idx)])
+                    let recon = (minC &* (64 &- w) &+ maxC &* w &+ SIMD4<Int32>(repeating: 32)) &>> 6
+                    let diff = recon &- c
+                    err &+= abs(diff.x) &+ abs(diff.y) &+ abs(diff.z) &+ abs(diff.w)
+                    if err >= bestErr { return }
+                }
                 bestErr = err
                 ep0 = minC
                 ep1 = maxC
-                indices = trial
+                for i in 0..<16 { bestIndices[i] = trialIndices[i] }
             }
+
+            evaluateAxis(mode6Axes.0)
+            if bestErr > 0 { evaluateAxis(mode6Axes.1) }
+            if bestErr > 0 { evaluateAxis(mode6Axes.2) }
+            if bestErr > 0 { evaluateAxis(mode6Axes.3) }
+            if bestErr > 0 { evaluateAxis(mode6Axes.4) }
+            if bestErr > 0 { evaluateAxis(mode6Axes.5) }
         }
 
         // Mode 6 stores pixel 0's index in 3 bits (MSB implicit 0). Swap
         // endpoints when that MSB would have been set.
-        if indices[0] >= 8 {
+        if bestIndices[0] >= 8 {
             swap(&ep0, &ep1)
             for i in 0..<16 {
-                indices[i] = 15 - indices[i]
+                bestIndices[i] = 15 &- bestIndices[i]
             }
         }
 
         // One p-bit is shared across all four channels of an endpoint.
-        let p0 = bestPBit(ep0)
-        let p1 = bestPBit(ep1)
-        ep0 = applyPBit(ep0, p0)
-        ep1 = applyPBit(ep1, p1)
+        let pBit0 = bestPBit(ep0)
+        let pBit1 = bestPBit(ep1)
+        ep0 = applyPBit(ep0, pBit0)
+        ep1 = applyPBit(ep1, pBit1)
 
-        var writer = BitWriter()
-        writer.write(0b1000000, 7) // mode 6, LSB-first
-        writer.write(UInt32(ep0.x >> 1), 7)
-        writer.write(UInt32(ep1.x >> 1), 7)
-        writer.write(UInt32(ep0.y >> 1), 7)
-        writer.write(UInt32(ep1.y >> 1), 7)
-        writer.write(UInt32(ep0.z >> 1), 7)
-        writer.write(UInt32(ep1.z >> 1), 7)
-        writer.write(UInt32(ep0.w >> 1), 7)
-        writer.write(UInt32(ep1.w >> 1), 7)
-        writer.write(UInt32(p0), 1)
-        writer.write(UInt32(p1), 1)
-        writer.write(UInt32(indices[0] & 0x7), 3)
+        // Direct 128-bit Mode 6 bit packing (identical layout to BitWriter):
+        // bits 0..6:   mode (0b1000000 = 64)
+        // bits 7..62:  r0, r1, g0, g1, b0, b1, a0, a1 (8 × 7 bits = 56 bits; total 63 bits)
+        // bit  63:     p0
+        // bit  64:     p1
+        // bits 65..67: index[0] (3 bits)
+        // bits 68..127: index[1..15] (15 × 4 bits = 60 bits)
+        var lo: UInt64 = 0b1000000
+        lo |= UInt64(UInt32(ep0.x >> 1) & 0x7F) << 7
+        lo |= UInt64(UInt32(ep1.x >> 1) & 0x7F) << 14
+        lo |= UInt64(UInt32(ep0.y >> 1) & 0x7F) << 21
+        lo |= UInt64(UInt32(ep1.y >> 1) & 0x7F) << 28
+        lo |= UInt64(UInt32(ep0.z >> 1) & 0x7F) << 35
+        lo |= UInt64(UInt32(ep1.z >> 1) & 0x7F) << 42
+        lo |= UInt64(UInt32(ep0.w >> 1) & 0x7F) << 49
+        lo |= UInt64(UInt32(ep1.w >> 1) & 0x7F) << 56
+        lo |= UInt64(pBit0 & 1) << 63
+
+        var hi: UInt64 = UInt64(pBit1 & 1)
+        hi |= UInt64(UInt32(bestIndices[0]) & 0x7) << 1
         for i in 1..<16 {
-            writer.write(UInt32(indices[i] & 0xF), 4)
+            hi |= UInt64(UInt32(bestIndices[i]) & 0xF) << (4 * i)
         }
-        return (writer.lo, writer.hi)
+        return (lo, hi)
     }
 
-    // MARK: - Bit packing
-
-    private struct BitWriter {
-        var lo: UInt64 = 0
-        var hi: UInt64 = 0
-        var pos: Int = 0
-
-        mutating func write(_ raw: UInt32, _ bitCount: Int) {
-            precondition(bitCount > 0 && bitCount <= 32)
-            precondition(pos + bitCount <= 128)
-            let mask: UInt64 = bitCount == 64 ? .max : (UInt64(1) << bitCount) - 1
-            let value = UInt64(raw) & mask
-            if pos < 64 {
-                lo |= value << pos
-                let overflow = pos + bitCount - 64
-                if overflow > 0 {
-                    hi |= value >> (bitCount - overflow)
-                }
-            } else {
-                hi |= value << (pos - 64)
-            }
-            pos += bitCount
-        }
-    }
+    // MARK: - Bit reading (test decoder)
 
     private struct BitReader {
         let lo: UInt64

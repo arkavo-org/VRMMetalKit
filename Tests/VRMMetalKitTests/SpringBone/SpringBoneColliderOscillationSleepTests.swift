@@ -311,4 +311,27 @@ final class SpringBoneColliderOscillationSleepTests: XCTestCase {
         XCTAssertGreaterThan(resleep, 0)
         XCTAssertTrue(h.awake(in: h.disjoint).isEmpty)
     }
+
+    /// Reattaching an existing collider to a different node without changing
+    /// collection counts must invalidate the target-capture cache immediately.
+    func testSameCountColliderNodeReattachmentWakesIntersectingChains() async throws {
+        let h = try await settledHarness()
+        let anchorBefore = h.anchorCenter
+        let originalNodeIndex = try XCTUnwrap(h.model.springBone?.colliders[h.colliderIndex].node)
+        let replacementNodeIndex = try XCTUnwrap(
+            h.model.nodes.indices.first { idx in
+                idx != originalNodeIndex &&
+                simd_distance(h.model.nodes[idx].worldPosition, h.nodeWorldPosition) > max(0.1, 10 * h.threshold)
+            },
+            "expected a distant node to reattach the collider to"
+        )
+
+        h.model.springBone?.colliders[h.colliderIndex].node = replacementNodeIndex
+        h.step()
+
+        XCTAssertEqual(h.awake(in: h.intersecting).count, h.intersecting.count,
+            "reattaching a collider to a distant node (same count) must wake intersecting chains")
+        XCTAssertGreaterThan(simd_distance(h.anchorCenter, anchorBefore), h.threshold,
+            "the collider anchor must reflect the newly attached node's transform")
+    }
 }

@@ -198,7 +198,8 @@ public class TextureLoader {
             )
         }
 
-        return bufferData.subdata(in: offset..<(offset + length))
+        let start = bufferData.startIndex + offset
+        return bufferData[start..<(start + length)]
     }
 
     private func loadImageFromDataURI(_ uri: String, textureIndex: Int) throws -> Data {

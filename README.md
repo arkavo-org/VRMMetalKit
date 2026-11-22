@@ -86,6 +86,19 @@ swift run VRMRender -w 2048 -h 2048 --camera-pos 0,1.5,-2 model.vrm output.png
 - `--camera-target <x,y,z>` - Camera look-at target (default: 0,1.5,0)
 - `--msaa <samples>` - MSAA sample count: 1, 2, or 4 (default: 1)
 
+### VRMVideoRenderer (VRMA animation + SpringBone physics)
+
+`VRMVideoRenderer` renders a VRM avatar driven by a `.vrma` animation clip with 120 Hz GPU SpringBone physics (hair, ears, cloth, tail) directly to video:
+
+![AvatarSample_U VRMA animation with SpringBone physics](AvatarSample_U_physics.webp)
+
+*`AvatarSample_U_1.0.vrm.glb` animated with `VRMA_01.vrma` and GPU SpringBone physics (4 s, 20 fps animated WebP, ~480 KB).*
+
+```bash
+swift run VRMVideoRenderer AvatarSample_U_1.0.vrm.glb VRMA_01.vrma preview.mov \
+  -w 720 -h 720 -f 30 -d 5.0
+```
+
 ### GLTFRender (glTF 2.0 assets)
 
 `GLTFRender` is the inanimate-objects counterpart — single PNG output from any glTF 2.0 `.glb`. Loads + animates + renders in one call.

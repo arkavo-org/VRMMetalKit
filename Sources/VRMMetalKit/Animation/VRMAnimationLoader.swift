@@ -134,7 +134,7 @@ public enum VRMAnimationLoader {
         let data = try Data(contentsOf: url)
 
         let parser = GLTFParser()
-        let (document, binary) = try parser.parse(data: data)
+        let (document, binary) = try parser.parseZeroCopy(data: data)
         let buffer = BufferLoader(
             document: document,
             binaryData: binary,

@@ -271,7 +271,7 @@ public final class GLTFAssetLoader {
     public func load(from url: URL, device: MTLDevice) async throws -> GLTFAsset {
         let data = try Data(contentsOf: url)
         let parser = GLTFParser()
-        let parsed = try parser.parse(data: data, filePath: url.path)
+        let parsed = try parser.parseZeroCopy(data: data, filePath: url.path)
         return try await build(
             document: parsed.document,
             binaryData: parsed.binaryData,
