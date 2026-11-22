@@ -70,4 +70,12 @@ public final class ParallelMeshLoader: @unchecked Sendable {
     ) async -> [Int: VRMMesh] {
         await inner.loadMeshesParallel(indices: indices, progressCallback: progressCallback)
     }
+
+    /// Decodes the requested glTF meshes in parallel, propagating decode, quota, or cancellation errors.
+    public func loadMeshesParallelThrowing(
+        indices: [Int],
+        progressCallback: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> [Int: VRMMesh] {
+        try await inner.loadMeshesParallelThrowing(indices: indices, progressCallback: progressCallback)
+    }
 }

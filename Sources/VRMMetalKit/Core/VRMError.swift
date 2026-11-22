@@ -30,6 +30,9 @@ public enum VRMError: Error {
 
     /// The VRM meta block fails validation (e.g. missing required `licenseUrl` on 1.0).
     case invalidMeta(String)
+
+    /// A document resource exceeded a configured ``VRMLoaderLimits`` quota.
+    case limitExceeded(kind: String, limit: Int, observed: Int)
 }
 
 extension VRMError: LocalizedError {
@@ -71,6 +74,18 @@ extension VRMError: LocalizedError {
             Suggestion: Ensure the VRM model's meta block includes all required fields. For VRM 1.0, 'licenseUrl' is required by the VRMC_vrm spec.
 
             VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/meta.md
+            """
+
+        case .limitExceeded(let kind, let limit, let observed):
+            return """
+            ❌ VRM Loader Limit Exceeded: '\(kind)'
+
+            Observed \(kind): \(observed)
+            Configured limit: \(limit)
+
+            Suggestion: Reject untrusted files that exceed memory or structural quotas, or pass a higher `VRMLoaderLimits` (such as `.permissive` or a custom value) to `VRMModel.load` / `VRMAnimationLoader.loadVRMA` if this file is trusted.
+
+            VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/README.md
             """
         }
     }

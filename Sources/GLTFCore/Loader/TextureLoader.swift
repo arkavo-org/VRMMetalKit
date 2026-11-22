@@ -84,12 +84,10 @@ public class TextureLoader {
             return nil
         }
 
-        guard let images = document.images, sourceIndex < images.count else {
+        guard let images = document.images, let image = images[safe: sourceIndex] else {
             vrmLog("[TextureLoader] Error: Source index \(sourceIndex) out of bounds for images array (count: \(document.images?.count ?? 0))")
             return nil
         }
-
-        let image = images[sourceIndex]
 
         // Load image data
         let imageData: Data
@@ -175,7 +173,7 @@ public class TextureLoader {
 
     private func loadImageFromBufferView(_ bufferViewIndex: Int, textureIndex: Int) throws -> Data {
         guard let bufferView = document.bufferViews?[safe: bufferViewIndex],
-              let _ = document.buffers?[safe: bufferView.buffer] else {
+              document.buffers?[safe: bufferView.buffer] != nil else {
             throw GLTFError.missingBuffer(
                 bufferIndex: bufferViewIndex,
                 requiredBy: "texture[\(textureIndex)] loading from bufferView",
@@ -190,11 +188,12 @@ public class TextureLoader {
         let offset = bufferView.byteOffset ?? 0
         let length = bufferView.byteLength
 
-        guard offset + length <= bufferData.count else {
+        guard offset >= 0, offset <= bufferData.count,
+              length >= 0, length <= bufferData.count - offset else {
             throw GLTFError.missingBuffer(
                 bufferIndex: bufferView.buffer,
-                requiredBy: "texture[\(textureIndex)] buffer data validation (offset: \(offset), length: \(length), available: \(bufferData.count))",
-                expectedSize: offset + length,
+                requiredBy: "texture[\(textureIndex)] bufferView[\(bufferViewIndex)] range validation (offset: \(offset), length: \(length), available: \(bufferData.count))",
+                expectedSize: nil,
                 filePath: baseURL?.path
             )
         }

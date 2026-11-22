@@ -442,50 +442,76 @@ public class VRMModel: @unchecked Sendable {
     public static func load(
         from url: URL,
         device: MTLDevice? = nil,
-        options: VRMLoadingOptions = .default
+        options: VRMLoadingOptions = .default,
+        limits: VRMLoaderLimits? = nil
     ) async throws -> VRMModel {
         let context = await VRMLoadingContext(options: options)
-        
+        let effectiveLimits = limits ?? options.limits
+
         await context.updatePhase(.parsingGLTF, progress: 0.0)
-        
+
         let data = try Data(contentsOf: url)
         try await context.checkCancellation()
-        
+
         await context.updatePhase(.parsingGLTF, progress: 1.0)
-        
-        let model = try await load(
+
+        return try await load(
             from: data,
             filePath: url.path,
+            baseURL: url.deletingLastPathComponent(),
             device: device,
-            context: context
+            context: context,
+            limits: effectiveLimits
         )
-        // Store the base URL for loading external resources
-        model.baseURL = url.deletingLastPathComponent()
-        return model
     }
 
     /// Loads a VRM model from raw data.
     ///
     /// Use this method when loading from network responses or in-memory data.
+    /// External relative resource URIs are not resolved for in-memory loads (`baseURL` remains `nil`).
     ///
     /// - Parameters:
     ///   - data: Raw VRM/GLB file data.
     ///   - filePath: Optional path for error messages.
     ///   - device: Optional Metal device for GPU resources.
+    ///   - options: Optional loading options (progress, cancellation, optimizations, and limits).
+    ///   - limits: Optional override for ``VRMLoaderLimits``. Defaults to `options?.limits ?? .default`.
     ///
     /// - Returns: A fully loaded `VRMModel` ready for rendering.
     ///
-    /// - Throws: `VRMError` if the data is invalid.
-    public static func load(from data: Data, filePath: String? = nil, device: MTLDevice? = nil) async throws -> VRMModel {
-        try await load(from: data, filePath: filePath, device: device, context: nil)
-    }
-    
-    /// Internal loading method with context for progress and cancellation.
-    private static func load(
+    /// - Throws: `VRMError` if the data is invalid or exceeds configured quotas.
+    public static func load(
         from data: Data,
         filePath: String? = nil,
         device: MTLDevice? = nil,
-        context: VRMLoadingContext?
+        options: VRMLoadingOptions? = nil,
+        limits: VRMLoaderLimits? = nil
+    ) async throws -> VRMModel {
+        let context: VRMLoadingContext?
+        if let options {
+            context = await VRMLoadingContext(options: options)
+        } else {
+            context = nil
+        }
+        let effectiveLimits = limits ?? options?.limits ?? .default
+        return try await load(
+            from: data,
+            filePath: filePath,
+            baseURL: nil,
+            device: device,
+            context: context,
+            limits: effectiveLimits
+        )
+    }
+
+    /// Internal loading method with context for progress, cancellation, and loader limits.
+    private static func load(
+        from data: Data,
+        filePath: String? = nil,
+        baseURL: URL? = nil,
+        device: MTLDevice? = nil,
+        context: VRMLoadingContext?,
+        limits: VRMLoaderLimits
     ) async throws -> VRMModel {
         let skipLogging = context?.options.optimizations.contains(.skipVerboseLogging) ?? false
         
@@ -530,19 +556,42 @@ public class VRMModel: @unchecked Sendable {
         await context?.updatePhase(.parsingVRMExtension, progress: 0.5)
         
         let vrmParser = VRMExtensionParser()
-        let model = try vrmParser.parseVRMExtension(vrmExtension, document: document, filePath: filePath)
+        let model = try vrmParser.parseVRMExtension(
+            vrmExtension,
+            document: document,
+            filePath: filePath,
+            limits: limits
+        )
+        model.baseURL = baseURL
         model.device = device
         
         await context?.updatePhase(.parsingVRMExtension, progress: 1.0)
         
         // Load resources with buffer data
-        try await model.loadResources(binaryData: binaryData, context: context)
+        do {
+            try await model.loadResources(binaryData: binaryData, context: context, limits: limits)
+        } catch GLTFError.limitExceeded(let kind, let limit, let observed) {
+            throw VRMError.limitExceeded(kind: kind, limit: limit, observed: observed)
+        }
+
+        // Enforce spring-bone quota even on CPU-only (device == nil) loads.
+        if model.springBone != nil {
+            model.expandVRM0SpringBoneChains()
+            let totalBones = model.springBone?.springs.reduce(0) { $0 + $1.joints.count } ?? 0
+            if totalBones > limits.maxSpringBones {
+                throw VRMError.limitExceeded(
+                    kind: "springBones",
+                    limit: limits.maxSpringBones,
+                    observed: totalBones
+                )
+            }
+        }
 
         // Initialize SpringBone GPU system if device and spring bone data present
         if let device = device, model.springBone != nil {
             await context?.updatePhase(.initializingPhysics, progress: 0.5)
             let augmentColliders = context?.options.augmentSpringBoneColliders ?? true
-            try model.initializeSpringBoneGPUSystem(device: device, augmentColliders: augmentColliders)
+            try model.initializeSpringBoneGPUSystem(device: device, augmentColliders: augmentColliders, limits: limits)
             await context?.updatePhase(.initializingPhysics, progress: 1.0)
         }
 
@@ -557,7 +606,8 @@ public class VRMModel: @unchecked Sendable {
 
     private func loadResources(
         binaryData: Data? = nil,
-        context: VRMLoadingContext? = nil
+        context: VRMLoadingContext? = nil,
+        limits: VRMLoaderLimits = .default
     ) async throws {
         let skipLogging = context?.options.optimizations.contains(.skipVerboseLogging) ?? false
         let useBufferPreloading = context?.options.optimizations.contains(.preloadBuffers) ?? false
@@ -589,8 +639,10 @@ public class VRMModel: @unchecked Sendable {
             document: gltf,
             binaryData: binaryData,
             baseURL: baseURL,
-            preloadedData: preloadedBuffers
+            preloadedData: preloadedBuffers,
+            limits: limits
         )
+        try bufferLoader.validateTotalBufferBytes()
 
         // Identify which textures need linear format (not sRGB):
         // - Normal maps (geometrical data, not color)
@@ -695,9 +747,9 @@ public class VRMModel: @unchecked Sendable {
                 parallelLoader.compressColorTextures = compressColorTextures
                 
                 let indices = Array(0..<textureCount)
-                let loadedTextures = await parallelLoader.loadTexturesParallel(
+                let loadedTextures = try await parallelLoader.loadTexturesParallelThrowing(
                     indices: indices,
-                    normalMapIndices: allLinearTextureIndices
+                    linearTextureIndices: allLinearTextureIndices
                 ) { completed, total in
                     Task {
                         await context?.updateProgress(
@@ -869,7 +921,7 @@ public class VRMModel: @unchecked Sendable {
             )
             
             let indices = Array(0..<meshCount)
-            let loadedMeshes = await parallelLoader.loadMeshesParallel(
+            let loadedMeshes = try await parallelLoader.loadMeshesParallelThrowing(
                 indices: indices
             ) { completed, total in
                 Task {
@@ -1218,7 +1270,11 @@ public class VRMModel: @unchecked Sendable {
     ///     colliders (issue #309) and persists them on `springBone.syntheticColliders`
     ///     before sizing GPU buffers. Authored colliders are never mutated.
     /// - Throws: An error if buffer allocation fails.
-    public func initializeSpringBoneGPUSystem(device: MTLDevice, augmentColliders: Bool = true) throws {
+    public func initializeSpringBoneGPUSystem(
+        device: MTLDevice,
+        augmentColliders: Bool = true,
+        limits: VRMLoaderLimits = .default
+    ) throws {
         guard springBone != nil else {
             return // No SpringBone data in this model
         }
@@ -1316,13 +1372,14 @@ public class VRMModel: @unchecked Sendable {
                 + VRMConstants.Physics.externalColliderCapsuleSlots
             : 0
         springBoneBuffers = SpringBoneBuffers(device: device)
-        springBoneBuffers?.allocateBuffers(
+        try springBoneBuffers?.allocateBuffers(
             numBones: totalBones,
             numSpheres: totalSpheres,
             numCapsules: totalCapsules,
             numPlanes: totalPlanes,
             foreignSphereSlots: foreignSphereSlots,
-            foreignCapsuleSlots: foreignCapsuleSlots
+            foreignCapsuleSlots: foreignCapsuleSlots,
+            limits: limits
         )
 
         // Initialize global parameters

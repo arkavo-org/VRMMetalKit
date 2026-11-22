@@ -126,12 +126,26 @@ public enum VRMAnimationLoader {
     /// - Throws: An `NSError` (domain `"VRMAnimationLoader"`) when the file
     ///   contains no animations, or any error thrown by ``GLTFParser`` /
     ///   ``BufferLoader`` during parsing.
-    public static func loadVRMA(from url: URL, model: VRMModel? = nil) throws -> AnimationClip {
+    public static func loadVRMA(
+        from url: URL,
+        model: VRMModel? = nil,
+        limits: VRMLoaderLimits = .default
+    ) throws -> AnimationClip {
         let data = try Data(contentsOf: url)
 
         let parser = GLTFParser()
         let (document, binary) = try parser.parse(data: data)
-        let buffer = BufferLoader(document: document, binaryData: binary, baseURL: url.deletingLastPathComponent())
+        let buffer = BufferLoader(
+            document: document,
+            binaryData: binary,
+            baseURL: url.deletingLastPathComponent(),
+            limits: limits
+        )
+        do {
+            try buffer.validateTotalBufferBytes()
+        } catch GLTFError.limitExceeded(let kind, let limit, let observed) {
+            throw VRMError.limitExceeded(kind: kind, limit: limit, observed: observed)
+        }
 
         guard let animations = document.animations, !animations.isEmpty else {
             throw NSError(domain: "VRMAnimationLoader", code: 400, userInfo: [NSLocalizedDescriptionKey: "No animations in VRMA"])
@@ -140,10 +154,38 @@ public enum VRMAnimationLoader {
         // Use first animation for now
         let anim = animations[0]
 
+        if anim.samplers.count > limits.maxAnimationSamplers {
+            throw VRMError.limitExceeded(
+                kind: "animationSamplers",
+                limit: limits.maxAnimationSamplers,
+                observed: anim.samplers.count
+            )
+        }
+
         // Determine duration as the max of input time tracks
         var duration: Float = 0
         for sampler in anim.samplers {
-            let times = try buffer.loadAccessorAsFloat(sampler.input)
+            if let inputAccessor = document.accessors?[safe: sampler.input],
+               inputAccessor.count > limits.maxKeyframesPerSampler {
+                throw VRMError.limitExceeded(
+                    kind: "keyframesPerSampler",
+                    limit: limits.maxKeyframesPerSampler,
+                    observed: inputAccessor.count
+                )
+            }
+            let times: [Float]
+            do {
+                times = try buffer.loadAccessorAsFloat(sampler.input)
+            } catch GLTFError.limitExceeded(let kind, let limit, let observed) {
+                throw VRMError.limitExceeded(kind: kind, limit: limit, observed: observed)
+            }
+            if times.count > limits.maxKeyframesPerSampler {
+                throw VRMError.limitExceeded(
+                    kind: "keyframesPerSampler",
+                    limit: limits.maxKeyframesPerSampler,
+                    observed: times.count
+                )
+            }
             if let last = times.last { duration = max(duration, last) }
         }
         if duration <= 0 { duration = 1.0 }
@@ -176,8 +218,14 @@ public enum VRMAnimationLoader {
             guard channel.sampler < anim.samplers.count else { continue }
             let sampler = anim.samplers[channel.sampler]
 
-            let times = try buffer.loadAccessorAsFloat(sampler.input)
-            let values = try buffer.loadAccessorAsFloat(sampler.output)
+            let times: [Float]
+            let values: [Float]
+            do {
+                times = try buffer.loadAccessorAsFloat(sampler.input)
+                values = try buffer.loadAccessorAsFloat(sampler.output)
+            } catch GLTFError.limitExceeded(let kind, let limit, let observed) {
+                throw VRMError.limitExceeded(kind: kind, limit: limit, observed: observed)
+            }
             let path = channel.target.path // "rotation", "translation", "scale", or morph weights (ignored)
             guard let nodeIndex = channel.target.node else { continue }
 

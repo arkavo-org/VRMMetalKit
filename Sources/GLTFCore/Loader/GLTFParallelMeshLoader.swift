@@ -99,5 +99,40 @@ public final class GLTFParallelMeshLoader<Mesh: Sendable>: @unchecked Sendable {
 
         return results
     }
+
+    /// Decodes the requested glTF meshes in parallel, propagating errors (including
+    /// quota violations and cancellation) instead of silently omitting failed meshes.
+    public func loadMeshesParallelThrowing(
+        indices: [Int],
+        progressCallback: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> [Int: Mesh] {
+        let totalCount = indices.count
+        var results: [Int: Mesh] = [:]
+        var loaded = 0
+
+        try await withThrowingTaskGroup(of: (Int, Mesh?).self) { group in
+            for meshIndex in indices {
+                group.addTask { [weak self] in
+                    guard let self,
+                          let gltfMesh = self.document.meshes?[safe: meshIndex] else {
+                        return (meshIndex, nil)
+                    }
+                    let mesh = try await self.load(meshIndex, gltfMesh, self.document, self.device, self.bufferLoader)
+                    return (meshIndex, mesh)
+                }
+            }
+
+            let reporter = CoalescedProgressReporter(total: totalCount, callback: progressCallback)
+            for try await (index, mesh) in group {
+                loaded += 1
+                if let mesh {
+                    results[index] = mesh
+                }
+                await reporter.reportIfNeeded(completed: loaded)
+            }
+        }
+
+        return results
+    }
 }
 
