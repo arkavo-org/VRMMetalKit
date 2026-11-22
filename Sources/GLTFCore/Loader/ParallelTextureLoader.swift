@@ -66,7 +66,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
     ///   - bufferLoader: ``BufferLoader`` used to resolve embedded image bytes.
     ///   - document: The decoded ``GLTFDocument``.
     ///   - baseURL: Directory used to resolve relative image URIs. External-file reads outside this directory are rejected.
-    ///   - maxConcurrentLoads: Reserved for future use; currently advisory only.
+    ///   - maxConcurrentLoads: Maximum number of textures decoded and uploaded simultaneously (clamped to `>= 1`).
     public init(
         device: MTLDevice,
         bufferLoader: BufferLoader,
@@ -79,10 +79,10 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         self.bufferLoader = bufferLoader
         self.document = document
         self.baseURL = baseURL
-        self.maxConcurrentLoads = maxConcurrentLoads
+        self.maxConcurrentLoads = max(1, maxConcurrentLoads)
     }
 
-    /// Decodes and uploads the requested glTF textures in parallel.
+    /// Decodes and uploads the requested glTF textures in parallel (best-effort).
     ///
     /// VRM/MToon variant — only flags normal maps as linear. PBR consumers
     /// should use ``loadTexturesParallel(indices:linearTextureIndices:progressCallback:)``
@@ -106,13 +106,14 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         )
     }
 
-    /// Decodes and uploads the requested glTF textures in parallel, with explicit
-    /// per-texture color-space control.
+    /// Decodes and uploads the requested glTF textures in parallel with explicit
+    /// per-texture color-space control (best-effort).
     ///
-    /// glTF 2.0 mandates these slots be linear: normal, metallic-roughness,
-    /// occlusion, and any other data textures (masks, channel-packed maps).
-    /// Color textures (baseColor, emissive) are sRGB. Callers must pass every
-    /// linear-data texture index here; everything not listed defaults to sRGB.
+    /// Concurrency is bounded to `maxConcurrentLoads` using a rolling task window
+    /// so peak decoded image memory stays proportional to the window size rather
+    /// than the total texture count. Individual texture failures are omitted from
+    /// the returned map; use ``loadTexturesParallelThrowing(indices:linearTextureIndices:progressCallback:)``
+    /// for strict error propagation matching ``TextureLoader``.
     ///
     /// - Parameters:
     ///   - indices: Texture indices to load. Out-of-range indices are skipped silently.
@@ -127,41 +128,110 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         let totalCount = indices.count
         var results: [Int: MTLTexture] = [:]
         var loaded = 0
+        let concurrencyLimit = max(1, maxConcurrentLoads)
 
         await withTaskGroup(of: (Int, MTLTexture?).self) { group in
-            for textureIndex in indices {
+            let reporter = CoalescedProgressReporter(total: totalCount, callback: progressCallback)
+            var nextIndex = 0
+
+            while nextIndex < min(concurrencyLimit, totalCount) {
+                let textureIndex = indices[nextIndex]
+                nextIndex += 1
+                let isLinear = linearTextureIndices.contains(textureIndex)
                 group.addTask { [weak self] in
                     guard let self else { return (textureIndex, nil) }
-                    let isLinear = linearTextureIndices.contains(textureIndex)
                     let texture = try? await self.loadTexture(at: textureIndex, sRGB: !isLinear)
                     return (textureIndex, texture)
                 }
             }
 
-            // Coalesce progress hops to the main actor instead of one per texture.
-            let reporter = CoalescedProgressReporter(total: totalCount, callback: progressCallback)
             for await (index, texture) in group {
                 loaded += 1
                 if let texture {
                     results[index] = texture
                 }
                 await reporter.reportIfNeeded(completed: loaded)
+
+                if nextIndex < totalCount {
+                    let textureIndex = indices[nextIndex]
+                    nextIndex += 1
+                    let isLinear = linearTextureIndices.contains(textureIndex)
+                    group.addTask { [weak self] in
+                        guard let self else { return (textureIndex, nil) }
+                        let texture = try? await self.loadTexture(at: textureIndex, sRGB: !isLinear)
+                        return (textureIndex, texture)
+                    }
+                }
             }
         }
 
         return results
     }
-    
+
+    /// Decodes and uploads the requested glTF textures in parallel, propagating
+    /// the first decode, buffer, path, or cancellation error.
+    ///
+    /// Uses the same bounded rolling window (`maxConcurrentLoads`) as
+    /// ``loadTexturesParallel(indices:linearTextureIndices:progressCallback:)``
+    /// while preserving strict error semantics matching sequential ``TextureLoader``.
+    public func loadTexturesParallelThrowing(
+        indices: [Int],
+        linearTextureIndices: Set<Int>,
+        progressCallback: (@Sendable (Int, Int) -> Void)? = nil
+    ) async throws -> [Int: MTLTexture] {
+        let totalCount = indices.count
+        var results: [Int: MTLTexture] = [:]
+        var loaded = 0
+        let concurrencyLimit = max(1, maxConcurrentLoads)
+
+        try await withThrowingTaskGroup(of: (Int, MTLTexture?).self) { group in
+            let reporter = CoalescedProgressReporter(total: totalCount, callback: progressCallback)
+            var nextIndex = 0
+
+            while nextIndex < min(concurrencyLimit, totalCount) {
+                try Task.checkCancellation()
+                let textureIndex = indices[nextIndex]
+                nextIndex += 1
+                let isLinear = linearTextureIndices.contains(textureIndex)
+                group.addTask { [weak self] in
+                    guard let self else { return (textureIndex, nil) }
+                    let texture = try await self.loadTexture(at: textureIndex, sRGB: !isLinear)
+                    return (textureIndex, texture)
+                }
+            }
+
+            for try await (index, texture) in group {
+                loaded += 1
+                if let texture {
+                    results[index] = texture
+                }
+                await reporter.reportIfNeeded(completed: loaded)
+
+                if nextIndex < totalCount {
+                    try Task.checkCancellation()
+                    let textureIndex = indices[nextIndex]
+                    nextIndex += 1
+                    let isLinear = linearTextureIndices.contains(textureIndex)
+                    group.addTask { [weak self] in
+                        guard let self else { return (textureIndex, nil) }
+                        let texture = try await self.loadTexture(at: textureIndex, sRGB: !isLinear)
+                        return (textureIndex, texture)
+                    }
+                }
+            }
+        }
+
+        return results
+    }
+
     private func loadTexture(at index: Int, sRGB: Bool = true) async throws -> MTLTexture? {
         guard let gltfTexture = document.textures?[safe: index],
               let sourceIndex = gltfTexture.source,
               let images = document.images,
-              sourceIndex < images.count else {
+              let image = images[safe: sourceIndex] else {
             return nil
         }
-        
-        let image = images[sourceIndex]
-        
+
         let imageData: Data
         if let bufferViewIndex = image.bufferView {
             imageData = try loadImageFromBufferView(bufferViewIndex, textureIndex: index)
@@ -174,7 +244,7 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         } else {
             return nil
         }
-        
+
         // Whether to build a mip chain is the sampler's call; whether alpha
         // weights it is the material's.
         let sampler = gltfTexture.sampler.flatMap { document.samplers?[safe: $0] }
@@ -184,10 +254,10 @@ public final class ParallelTextureLoader: @unchecked Sendable {
         return try await createTexture(from: imageData, textureIndex: index, sRGB: sRGB,
                                        mipmapped: mipmapped, alphaIsCoverage: alphaIsCoverage)
     }
-    
+
     private func loadImageFromBufferView(_ bufferViewIndex: Int, textureIndex: Int) throws -> Data {
         guard let bufferView = document.bufferViews?[safe: bufferViewIndex],
-              let _ = document.buffers?[safe: bufferView.buffer] else {
+              document.buffers?[safe: bufferView.buffer] != nil else {
             throw GLTFError.missingBuffer(
                 bufferIndex: bufferViewIndex,
                 requiredBy: "texture[\(textureIndex)] loading from bufferView",
@@ -195,20 +265,21 @@ public final class ParallelTextureLoader: @unchecked Sendable {
                 filePath: baseURL?.path
             )
         }
-        
+
         let bufferData = try bufferLoader.getBufferData(bufferIndex: bufferView.buffer)
         let offset = bufferView.byteOffset ?? 0
         let length = bufferView.byteLength
-        
-        guard offset + length <= bufferData.count else {
+
+        guard offset >= 0, offset <= bufferData.count,
+              length >= 0, length <= bufferData.count - offset else {
             throw GLTFError.missingBuffer(
                 bufferIndex: bufferView.buffer,
-                requiredBy: "texture[\(textureIndex)] buffer data validation",
-                expectedSize: offset + length,
+                requiredBy: "texture[\(textureIndex)] bufferView[\(bufferViewIndex)] range validation (offset: \(offset), length: \(length), available: \(bufferData.count))",
+                expectedSize: nil,
                 filePath: baseURL?.path
             )
         }
-        
+
         return bufferData.subdata(in: offset..<(offset + length))
     }
     

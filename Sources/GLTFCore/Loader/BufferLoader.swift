@@ -51,6 +51,18 @@ public class BufferLoader: @unchecked Sendable {
     private let binaryData: Data?
     private let baseURL: URL?
 
+    /// Default maximum total elements (`count * components`) decoded from a single accessor.
+    public static let defaultMaxAccessorElements: Int = 10_000_000
+
+    /// Default maximum total buffer-view bytes across a single document.
+    public static let defaultMaxTotalBufferBytes: Int = 256 * 1024 * 1024
+
+    /// Maximum total scalar elements allowed in a single accessor (`count * components`).
+    public let maxAccessorElements: Int
+
+    /// Maximum total buffer-view bytes allowed across one document.
+    public let maxTotalBufferBytes: Int
+
     /// Preloaded buffer data (optional optimization)
     private var preloadedData: [Int: Data]?
 
@@ -64,6 +76,8 @@ public class BufferLoader: @unchecked Sendable {
     private let accessorCacheLock = NSLock()
     private var floatAccessorCache: [Int: [Float]] = [:]
     private var uint32AccessorCache: [Int: [UInt32]] = [:]
+    private var accountedBufferViews: Set<Int> = []
+    private var accountedBufferViewBytes: Int = 0
 
     /// The file path for error reporting
     public var filePath: String? {
@@ -77,11 +91,41 @@ public class BufferLoader: @unchecked Sendable {
     ///   - binaryData: The raw `BIN` chunk from a GLB file, or `nil` for `.gltf` JSON files whose buffers live in external `.bin` files or `data:` URIs.
     ///   - baseURL: Directory used to resolve relative buffer URIs. External buffer reads are rejected if they would resolve outside this directory.
     ///   - preloadedData: Optional map of buffer index to in-memory `Data`, typically supplied by ``BufferPreloader`` to skip filesystem I/O.
-    public init(document: GLTFDocument, binaryData: Data?, baseURL: URL? = nil, preloadedData: [Int: Data]? = nil) {
+    ///   - maxAccessorElements: Maximum scalar elements (`count * components`) decoded from a single accessor.
+    ///   - maxTotalBufferBytes: Maximum total buffer-view bytes allowed across one document.
+    public init(
+        document: GLTFDocument,
+        binaryData: Data?,
+        baseURL: URL? = nil,
+        preloadedData: [Int: Data]? = nil,
+        maxAccessorElements: Int = BufferLoader.defaultMaxAccessorElements,
+        maxTotalBufferBytes: Int = BufferLoader.defaultMaxTotalBufferBytes
+    ) {
         self.document = document
         self.binaryData = binaryData
         self.baseURL = baseURL
         self.preloadedData = preloadedData
+        self.maxAccessorElements = maxAccessorElements
+        self.maxTotalBufferBytes = maxTotalBufferBytes
+    }
+
+    /// Validates that the sum of all declared `bufferViews` byte lengths does not exceed ``maxTotalBufferBytes``.
+    ///
+    /// Call up front before loading textures or meshes to reject oversized documents prior to allocation.
+    public func validateTotalBufferBytes() throws {
+        var total = 0
+        for bufferView in document.bufferViews ?? [] {
+            guard bufferView.byteLength > 0 else { continue }
+            let (next, overflow) = total.addingReportingOverflow(bufferView.byteLength)
+            if overflow || next > maxTotalBufferBytes {
+                throw GLTFError.limitExceeded(
+                    kind: "totalBufferBytes",
+                    limit: maxTotalBufferBytes,
+                    observed: overflow ? Int.max : next
+                )
+            }
+            total = next
+        }
     }
 
     /// Installs a preloaded buffer index map, bypassing on-demand `data:` URI decoding and file reads.
@@ -586,9 +630,30 @@ public class BufferLoader: @unchecked Sendable {
                 context: "loadBufferView", filePath: filePath)
         }
 
+        try accountBufferViewBytes(bufferViewIndex: bufferViewIndex, byteLength: bufferView.byteLength)
+
         // Return the entire buffer data and the bufferView
         // The accessor loading functions will apply the combined offset
         return (data, bufferView)
+    }
+
+    private func accountBufferViewBytes(bufferViewIndex: Int, byteLength: Int) throws {
+        guard byteLength > 0 else { return }
+        accessorCacheLock.lock()
+        defer { accessorCacheLock.unlock() }
+        if accountedBufferViews.contains(bufferViewIndex) {
+            return
+        }
+        let (nextTotal, overflow) = accountedBufferViewBytes.addingReportingOverflow(byteLength)
+        if overflow || nextTotal > maxTotalBufferBytes {
+            throw GLTFError.limitExceeded(
+                kind: "totalBufferBytes",
+                limit: maxTotalBufferBytes,
+                observed: overflow ? Int.max : nextTotal
+            )
+        }
+        accountedBufferViews.insert(bufferViewIndex)
+        accountedBufferViewBytes = nextTotal
     }
 
     private func loadDataURI(_ uri: String) throws -> Data {
@@ -840,6 +905,14 @@ public class BufferLoader: @unchecked Sendable {
                 reason: "Unknown accessor type '\(accessor.type)'; expected SCALAR, VEC2, VEC3, VEC4, MAT2, MAT3, or MAT4",
                 context: context,
                 filePath: filePath
+            )
+        }
+        let totalElements = accessor.count * componentCount(for: accessor.type)
+        if totalElements > maxAccessorElements {
+            throw GLTFError.limitExceeded(
+                kind: "accessorElements",
+                limit: maxAccessorElements,
+                observed: totalElements
             )
         }
     }

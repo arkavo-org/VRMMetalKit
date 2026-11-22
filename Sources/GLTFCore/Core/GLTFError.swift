@@ -57,6 +57,9 @@ public enum GLTFError: Error {
 
     /// Loading was cancelled via Swift Concurrency task cancellation.
     case loadingCancelled
+
+    /// A document resource exceeded a configured loader safety quota.
+    case limitExceeded(kind: String, limit: Int, observed: Int)
 }
 
 extension GLTFError: LocalizedError {
@@ -255,6 +258,18 @@ extension GLTFError: LocalizedError {
             • The loading task wasn't explicitly cancelled
             • The parent Task wasn't cancelled
             • No timeout or cancellation token was triggered
+            """
+
+        case .limitExceeded(let kind, let limit, let observed):
+            return """
+            ❌ Loader Quota Exceeded (\(kind))
+
+            Observed \(kind): \(observed)
+            Configured limit: \(limit)
+
+            Suggestion: Reject untrusted files that exceed memory/CPU quotas, or raise the corresponding field on `VRMLoaderLimits` (e.g. `.permissive`) if this asset is trusted.
+
+            glTF Spec: https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html
             """
         }
     }

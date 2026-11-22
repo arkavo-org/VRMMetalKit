@@ -100,6 +100,26 @@ public final class SpringBoneBuffers: @unchecked Sendable {
     }
 
     func allocateBuffers(numBones: Int, numSpheres: Int, numCapsules: Int, numPlanes: Int = 0,
+                         foreignSphereSlots: Int = 0, foreignCapsuleSlots: Int = 0,
+                         limits: VRMLoaderLimits) throws {
+        if numBones > limits.maxSpringBones {
+            throw VRMError.limitExceeded(
+                kind: "springBones",
+                limit: limits.maxSpringBones,
+                observed: numBones
+            )
+        }
+        allocateBuffers(
+            numBones: numBones,
+            numSpheres: numSpheres,
+            numCapsules: numCapsules,
+            numPlanes: numPlanes,
+            foreignSphereSlots: foreignSphereSlots,
+            foreignCapsuleSlots: foreignCapsuleSlots
+        )
+    }
+
+    func allocateBuffers(numBones: Int, numSpheres: Int, numCapsules: Int, numPlanes: Int = 0,
                          foreignSphereSlots: Int = 0, foreignCapsuleSlots: Int = 0) {
         self.numBones = numBones
         self.numSpheres = numSpheres

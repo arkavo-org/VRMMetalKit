@@ -179,10 +179,14 @@ public struct VRMLoadingOptimization: OptionSet, Sendable {
     /// Builds ``VRMMaterial`` instances in parallel.
     public static let parallelMaterialLoading = VRMLoadingOptimization(rawValue: 1 << 8)
 
-    /// Default optimization set: skip verbose logging. ``parallelTextureDecoding``
-    /// is included but currently has no effect, so this set does no parallel
-    /// work; add ``parallelTextureLoading`` for that.
-    public static let `default`: VRMLoadingOptimization = [.skipVerboseLogging, .parallelTextureDecoding]
+    /// Default optimization set: skip verbose logging and decode/upload textures
+    /// concurrently with a bounded concurrency window (`ParallelTextureLoader`)
+    /// while preserving strict error propagation.
+    public static let `default`: VRMLoadingOptimization = [
+        .skipVerboseLogging,
+        .parallelTextureDecoding,
+        .parallelTextureLoading
+    ]
 
     /// Most aggressive optimization preset. Trades some image quality for shortest load time.
     public static let maximumPerformance: VRMLoadingOptimization = [
@@ -266,6 +270,9 @@ public struct VRMLoadingOptions: Sendable {
     /// positions differ from pre-#309 versions on affected models.
     public let augmentSpringBoneColliders: Bool
 
+    /// Memory and structural quotas enforced during model loading.
+    public let limits: VRMLoaderLimits
+
     /// Creates loading options.
     ///
     /// - Parameters:
@@ -276,18 +283,21 @@ public struct VRMLoadingOptions: Sendable {
     ///     `CancellationError` regardless of this flag.
     ///   - optimizations: Performance optimizations to apply (default: .default).
     ///   - augmentSpringBoneColliders: Synthesize bone-derived colliders additive to authored ones (default: true).
+    ///   - limits: Configurable memory and structural quotas enforced during load (default: `.default`).
     public init(
         progressCallback: (@Sendable (VRMLoadingProgress) -> Void)? = nil,
         progressUpdateInterval: TimeInterval = 0.1,
         enableCancellation: Bool = true,
         optimizations: VRMLoadingOptimization = .default,
-        augmentSpringBoneColliders: Bool = true
+        augmentSpringBoneColliders: Bool = true,
+        limits: VRMLoaderLimits = .default
     ) {
         self.progressCallback = progressCallback
         self.progressUpdateInterval = progressUpdateInterval
         self.enableCancellation = enableCancellation
         self.optimizations = optimizations
         self.augmentSpringBoneColliders = augmentSpringBoneColliders
+        self.limits = limits
     }
     
     /// Default options: no progress callback, cancellation enabled, ``VRMLoadingOptimization/default`` optimizations.

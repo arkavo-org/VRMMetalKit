@@ -102,7 +102,12 @@ public class VRMExtensionParser {
     /// - Throws:
     ///   - ``VRMError/missingVRMExtension(filePath:suggestion:)`` if the extension is not a dictionary.
     ///   - ``GLTFError/invalidJSON(context:underlyingError:filePath:)`` if `meta` or `humanoid` is missing or malformed.
-    public func parseVRMExtension(_ extension: Any, document: GLTFDocument, filePath: String? = nil) throws -> VRMModel {
+    public func parseVRMExtension(
+        _ extension: Any,
+        document: GLTFDocument,
+        filePath: String? = nil,
+        limits: VRMLoaderLimits = .default
+    ) throws -> VRMModel {
         guard let vrmDict = `extension` as? [String: Any] else {
             throw VRMError.missingVRMExtension(
                 filePath: filePath,
@@ -175,7 +180,7 @@ public class VRMExtensionParser {
 
         // VRM 1.0 uses "expressions", VRM 0.0 uses "blendShapeMaster"
         if let expressionsDict = vrmDict["expressions"] as? [String: Any] {
-            let expressions = try parseExpressions(expressionsDict)
+            let expressions = try parseExpressions(expressionsDict, limits: limits)
             // VRM 1.0 `morphTargetBind.node` is a glTF *node* index, but the
             // renderer and VRMExpressionController key morph weights by *mesh*
             // index (VRM 0.x binds — parseBlendShapeMaster — already store the
@@ -186,7 +191,7 @@ public class VRMExtensionParser {
             model.expressions = expressions
         } else if let blendShapeMaster = vrmDict["blendShapeMaster"] as? [String: Any] {
             // Parse VRM 0.0 blendShapeMaster
-            model.expressions = try parseBlendShapeMaster(blendShapeMaster)
+            model.expressions = try parseBlendShapeMaster(blendShapeMaster, limits: limits)
         }
 
         // Parse SpringBone extension if present
@@ -525,7 +530,7 @@ public class VRMExtensionParser {
         return rangeMap
     }
 
-    private func parseBlendShapeMaster(_ dict: [String: Any]) throws -> VRMExpressions {
+    private func parseBlendShapeMaster(_ dict: [String: Any], limits: VRMLoaderLimits) throws -> VRMExpressions {
         let expressions = VRMExpressions()
 
         // VRM 0.0 uses blendShapeGroups array
@@ -535,6 +540,17 @@ public class VRMExtensionParser {
 
                 // Map VRM 0.0 presetName to VRM 1.0 expression preset
                 let presetName = group["presetName"] as? String ?? name
+
+                let mappedPreset = mapVRM0PresetToVRM1(presetName)
+                if mappedPreset == nil,
+                   expressions.custom[name] == nil,
+                   expressions.custom.count >= limits.maxCustomExpressions {
+                    throw VRMError.limitExceeded(
+                        kind: "customExpressions",
+                        limit: limits.maxCustomExpressions,
+                        observed: expressions.custom.count + 1
+                    )
+                }
 
                 // Create expression from VRM 0.0 blendshape group
                 var expression = VRMExpression(name: name)
@@ -653,7 +669,7 @@ public class VRMExtensionParser {
         }
     }
 
-    private func parseExpressions(_ dict: [String: Any]) throws -> VRMExpressions {
+    private func parseExpressions(_ dict: [String: Any], limits: VRMLoaderLimits) throws -> VRMExpressions {
         let expressions = VRMExpressions()
 
         if let presetDict = dict["preset"] as? [String: Any] {
@@ -668,6 +684,13 @@ public class VRMExtensionParser {
         }
 
         if let customDict = dict["custom"] as? [String: Any] {
+            if customDict.count > limits.maxCustomExpressions {
+                throw VRMError.limitExceeded(
+                    kind: "customExpressions",
+                    limit: limits.maxCustomExpressions,
+                    observed: customDict.count
+                )
+            }
             for (customName, expressionData) in customDict {
                 guard let expressionDict = expressionData as? [String: Any] else {
                     continue
