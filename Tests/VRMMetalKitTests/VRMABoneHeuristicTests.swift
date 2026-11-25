@@ -19,13 +19,16 @@ import simd
 @testable import VRMMetalKit
 
 /// Regression tests for issue #135: bone-name fallback heuristics supporting
-/// Mixamo, Blender, namespace prefixes, and synonyms alongside VRM 1.0 and Unity.
+/// Mixamo, Blender, namespace prefixes, and synonyms alongside VRM 1.0 and Unity,
+/// plus deterministic single-track-per-bone resolution without leaf/finger clobbering.
 final class VRMABoneHeuristicTests: XCTestCase {
 
     func testMixamoBoneNames() {
         let cases: [(String, VRMHumanoidBone)] = [
             ("mixamorig:Hips", .hips),
             ("mixamorig:Spine", .spine),
+            ("mixamorig:Spine1", .chest),
+            ("mixamorig:Spine2", .upperChest),
             ("mixamorig:Chest", .chest),
             ("mixamorig:UpperChest", .upperChest),
             ("mixamorig:Neck", .neck),
@@ -118,13 +121,22 @@ final class VRMABoneHeuristicTests: XCTestCase {
         }
     }
 
-    func testNonHumanoidAndLeafEndBonesReturnNil() {
+    func testNonHumanoidHelperAndLeafEndBonesReturnNil() {
         let ignored = [
             "",
+            "mixamorig:",
+            "Armature|",
             "mixamorig:HeadTop_End",
             "mixamorig:LeftToe_End",
             "mixamorig:LeftHandThumb1",
             "mixamorig:RightHandIndex2",
+            "toe_end.L",
+            "Bip01 HeadNub",
+            "upperarm_twist_01_l",
+            "calf_twist_01_l",
+            "DEF-upper_arm.L.001",
+            "hand_ik.L",
+            "ik_foot_r",
             "LeftEye",
             "RightEye",
             "Hair_Front_L",
@@ -135,69 +147,207 @@ final class VRMABoneHeuristicTests: XCTestCase {
         ]
         for name in ignored {
             XCTAssertNil(VRMAnimationLoader.heuristicBone(forNodeName: name),
-                "Non-humanoid or leaf bone '\(name)' must not map to a humanoid bone")
+                "Non-humanoid, helper, or leaf bone '\(name)' must not map to a humanoid bone")
         }
     }
 
-    /// End-to-end test loading an animation GLB without `VRMC_vrm_animation`
-    /// containing Mixamo-prefixed bones against a VRM 1.0 model.
-    func testLoadVRMARetargetsMixamoNamedAnimationOnVRM1Model() async throws {
+    /// End-to-end test loading a full real Mixamo skeleton (`Spine`/`Spine1`/`Spine2`,
+    /// `HeadTop_End`, finger sub-bones, helper bones, empty-after-strip prefixes) with
+    /// distinct per-node rotations against a VRM 1.0 builder model.
+    func testLoadVRMARetargetsFullMixamoRigDeterministicallyOnVRM1Model() async throws {
         let modelData = try VRMBuilder().setSkeleton(.defaultHumanoid).build().serialize()
         let model = try await VRMModel.load(from: modelData, device: nil)
 
-        let glb = try makePlainAnimationGLB(nodeNames: [
-            "mixamorig:Hips",
-            "mixamorig:LeftArm",
-            "mixamorig:LeftForeArm",
-            "mixamorig:RightUpLeg",
-            "mixamorig:RightLeg",
+        try assertFullMixamoClipRetargeting(on: model)
+    }
+
+    /// Same end-to-end Mixamo rig test against a Unity `J_Bip_*`-named VRM model,
+    /// also verifying `mixamorig:Chest` never ambiguously binds to `.upperChest`.
+    func testLoadVRMARetargetsMixamoRigDeterministicallyOnUnityNamedModel() async throws {
+        let model = try await makeUnityNamedVRM1Model()
+        try assertFullMixamoClipRetargeting(on: model)
+
+        let chestAngle: Float = 0.42
+        let glb = try makePlainAnimationGLB(nodes: [
+            ("mixamorig:Chest", chestAngle),
+            ("mixamorig:", 0.99),
+            ("e", 0.77),
         ])
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mixamo-\(UUID().uuidString).vrma")
+            .appendingPathComponent("mixamo-chest-\(UUID().uuidString).vrma")
         try glb.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let clip = try VRMAnimationLoader.loadVRMA(from: url, model: model)
-        let mappedBones = Set(clip.jointTracks.map(\.bone))
-
-        XCTAssertTrue(mappedBones.contains(.hips))
-        XCTAssertTrue(mappedBones.contains(.leftUpperArm))
-        XCTAssertTrue(mappedBones.contains(.leftLowerArm))
-        XCTAssertTrue(mappedBones.contains(.rightUpperLeg))
-        XCTAssertTrue(mappedBones.contains(.rightLowerLeg))
+        XCTAssertEqual(clip.jointTracks.count, 1,
+            "Only mixamorig:Chest should map to a humanoid track; empty prefix and 1-char names must not")
+        XCTAssertEqual(clip.jointTracks.first?.bone, .chest,
+            "mixamorig:Chest must deterministically map to .chest (not .upperChest)")
     }
 
     /// End-to-end test loading an animation GLB without `VRMC_vrm_animation`
-    /// containing Blender `.L`/`.R` and `Armature|` bones against a VRM 1.0 model.
+    /// containing Blender `.L`/`.R` and `Armature|` bones against a VRM 1.0 model,
+    /// asserting exact track count and sampled rotations.
     func testLoadVRMARetargetsBlenderNamedAnimationOnVRM1Model() async throws {
         let modelData = try VRMBuilder().setSkeleton(.defaultHumanoid).build().serialize()
         let model = try await VRMModel.load(from: modelData, device: nil)
 
-        let glb = try makePlainAnimationGLB(nodeNames: [
-            "Armature|Hips",
-            "arm.L",
-            "forearm.R",
-            "thigh.R",
-            "shin.L",
-        ])
+        let expectedAngles: [(name: String, bone: VRMHumanoidBone, angle: Float)] = [
+            ("Armature|Hips", .hips, 0.15),
+            ("arm.L", .leftUpperArm, 0.30),
+            ("forearm.R", .rightLowerArm, 0.45),
+            ("thigh.R", .rightUpperLeg, 0.60),
+            ("shin.L", .leftLowerLeg, 0.75),
+            ("hand.L", .leftHand, 0.90),
+        ]
+        let extraNodes: [(String, Float)] = [
+            ("DEF-upper_arm.L.001", 1.20),
+            ("hand_ik.L", 1.35),
+            ("toe_end.L", 1.50),
+            ("Armature|", 1.65),
+        ]
+        let glb = try makePlainAnimationGLB(
+            nodes: expectedAngles.map { ($0.name, $0.angle) } + extraNodes)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("blender-\(UUID().uuidString).vrma")
         try glb.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
 
         let clip = try VRMAnimationLoader.loadVRMA(from: url, model: model)
-        let mappedBones = Set(clip.jointTracks.map(\.bone))
+        XCTAssertEqual(clip.jointTracks.count, expectedAngles.count,
+            "Expected exactly \(expectedAngles.count) humanoid tracks without helper/end duplicates")
+        XCTAssertEqual(clip.nodeTracks.count, extraNodes.count,
+            "Helper, duplicate, end, and prefix-only nodes must route to non-humanoid tracks")
 
-        XCTAssertTrue(mappedBones.contains(.hips))
-        XCTAssertTrue(mappedBones.contains(.leftUpperArm))
-        XCTAssertTrue(mappedBones.contains(.rightLowerArm))
-        XCTAssertTrue(mappedBones.contains(.rightUpperLeg))
-        XCTAssertTrue(mappedBones.contains(.leftLowerLeg))
+        let trackByBone = Dictionary(uniqueKeysWithValues: clip.jointTracks.map { ($0.bone, $0) })
+        for entry in expectedAngles {
+            let track = try XCTUnwrap(trackByBone[entry.bone], "Missing track for \(entry.bone)")
+            let sampled = try XCTUnwrap(track.rotationSampler?(1.0))
+            let expectedQuat = simd_quatf(angle: entry.angle, axis: SIMD3<Float>(0, 0, 1))
+            XCTAssertEqual(abs(simd_dot(sampled.vector, expectedQuat.vector)), 1.0, accuracy: 1e-4,
+                "Bone \(entry.bone) sampled wrong rotation (expected angle \(entry.angle))")
+        }
     }
 
-    // MARK: - Helper
+    // MARK: - Helpers
 
-    private func makePlainAnimationGLB(nodeNames: [String]) throws -> Data {
+    private func assertFullMixamoClipRetargeting(on model: VRMModel) throws {
+        let expected: [(name: String, bone: VRMHumanoidBone, angle: Float)] = [
+            ("mixamorig:Hips", .hips, 0.10),
+            ("mixamorig:Spine", .spine, 0.20),
+            ("mixamorig:Spine1", .chest, 0.30),
+            ("mixamorig:Spine2", .upperChest, 0.40),
+            ("mixamorig:Neck", .neck, 0.50),
+            ("mixamorig:Head", .head, 0.60),
+            ("mixamorig:LeftShoulder", .leftShoulder, 0.70),
+            ("mixamorig:LeftArm", .leftUpperArm, 0.80),
+            ("mixamorig:LeftForeArm", .leftLowerArm, 0.90),
+            ("mixamorig:LeftHand", .leftHand, 1.00),
+            ("mixamorig:RightUpLeg", .rightUpperLeg, 1.10),
+            ("mixamorig:RightLeg", .rightLowerLeg, 1.20),
+            ("mixamorig:RightFoot", .rightFoot, 1.30),
+            ("mixamorig:RightToeBase", .rightToes, 1.40),
+        ]
+        // Leaf, finger, and helper nodes that must NOT clobber head/hand/toes/arm
+        let nonHumanoid: [(String, Float)] = [
+            ("mixamorig:HeadTop_End", 2.00),
+            ("mixamorig:LeftHandThumb1", 2.10),
+            ("mixamorig:LeftHandIndex1", 2.20),
+            ("mixamorig:RightToe_End", 2.30),
+            ("upperarm_twist_01_l", 2.40),
+            ("Bip01 HeadNub", 2.50),
+        ]
+
+        let glb = try makePlainAnimationGLB(
+            nodes: expected.map { ($0.name, $0.angle) } + nonHumanoid)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mixamo-full-\(UUID().uuidString).vrma")
+        try glb.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let clip = try VRMAnimationLoader.loadVRMA(from: url, model: model)
+        XCTAssertEqual(clip.jointTracks.count, expected.count,
+            "Expected exactly one track per humanoid bone (\(expected.count)), got \(clip.jointTracks.count)")
+        XCTAssertEqual(clip.nodeTracks.count, nonHumanoid.count,
+            "Leaf/finger/helper nodes must be routed to nodeTracks, not humanoid tracks")
+
+        let trackByBone = Dictionary(uniqueKeysWithValues: clip.jointTracks.map { ($0.bone, $0) })
+        for entry in expected {
+            let track = try XCTUnwrap(trackByBone[entry.bone], "Missing track for \(entry.bone)")
+            let sampled = try XCTUnwrap(track.rotationSampler?(1.0))
+            let expectedQuat = simd_quatf(angle: entry.angle, axis: SIMD3<Float>(0, 0, 1))
+            XCTAssertEqual(abs(simd_dot(sampled.vector, expectedQuat.vector)), 1.0, accuracy: 1e-4,
+                "Bone \(entry.bone) sampled wrong rotation (expected \(entry.name) angle \(entry.angle))")
+        }
+    }
+
+    private func makeUnityNamedVRM1Model() async throws -> VRMModel {
+        let unityNames: [(VRMHumanoidBone, String)] = [
+            (.hips, "J_Bip_C_Hips"),
+            (.spine, "J_Bip_C_Spine"),
+            (.chest, "J_Bip_C_Chest"),
+            (.upperChest, "J_Bip_C_UpperChest"),
+            (.neck, "J_Bip_C_Neck"),
+            (.head, "J_Bip_C_Head"),
+            (.leftShoulder, "J_Bip_L_Shoulder"),
+            (.leftUpperArm, "J_Bip_L_UpperArm"),
+            (.leftLowerArm, "J_Bip_L_LowerArm"),
+            (.leftHand, "J_Bip_L_Hand"),
+            (.rightShoulder, "J_Bip_R_Shoulder"),
+            (.rightUpperArm, "J_Bip_R_UpperArm"),
+            (.rightLowerArm, "J_Bip_R_LowerArm"),
+            (.rightHand, "J_Bip_R_Hand"),
+            (.leftUpperLeg, "J_Bip_L_UpperLeg"),
+            (.leftLowerLeg, "J_Bip_L_LowerLeg"),
+            (.leftFoot, "J_Bip_L_Foot"),
+            (.leftToes, "J_Bip_L_ToeBase"),
+            (.rightUpperLeg, "J_Bip_R_UpperLeg"),
+            (.rightLowerLeg, "J_Bip_R_LowerLeg"),
+            (.rightFoot, "J_Bip_R_Foot"),
+            (.rightToes, "J_Bip_R_ToeBase"),
+        ]
+        var nodes: [[String: Any]] = []
+        var humanBones: [String: Any] = [:]
+        for (idx, pair) in unityNames.enumerated() {
+            nodes.append(["name": pair.1])
+            humanBones[pair.0.rawValue] = ["node": idx]
+        }
+        let json: [String: Any] = [
+            "asset": ["version": "2.0"],
+            "scene": 0,
+            "scenes": [["nodes": Array(0..<nodes.count)]],
+            "nodes": nodes,
+            "extensionsUsed": ["VRMC_vrm"],
+            "extensions": [
+                "VRMC_vrm": [
+                    "specVersion": "1.0",
+                    "meta": [
+                        "name": "UnityBoneTest",
+                        "authors": ["Test"],
+                        "licenseUrl": "https://vrm.dev/licenses/1.0/",
+                    ],
+                    "humanoid": ["humanBones": humanBones],
+                ]
+            ],
+        ]
+        var jsonData = try JSONSerialization.data(withJSONObject: json)
+        while jsonData.count % 4 != 0 { jsonData.append(0x20) }
+
+        var glb = Data()
+        func appendU32(_ v: UInt32) {
+            var le = v.littleEndian
+            withUnsafeBytes(of: &le) { glb.append(contentsOf: $0) }
+        }
+        appendU32(0x46546C67)
+        appendU32(2)
+        appendU32(UInt32(12 + 8 + jsonData.count))
+        appendU32(UInt32(jsonData.count))
+        appendU32(0x4E4F534A)
+        glb.append(jsonData)
+        return try await VRMModel.load(from: glb, device: nil)
+    }
+
+    private func makePlainAnimationGLB(nodes inputNodes: [(String, Float)]) throws -> Data {
         var floats: [Float] = []
         var bufferViews: [[String: Any]] = []
         var accessors: [[String: Any]] = []
@@ -224,9 +374,8 @@ final class VRMABoneHeuristicTests: XCTestCase {
             return accIndex
         }
 
-        let angle: Float = 0.5
-        let q = simd_quatf(angle: angle, axis: SIMD3<Float>(0, 0, 1))
-        for (i, name) in nodeNames.enumerated() {
+        for (i, (name, angle)) in inputNodes.enumerated() {
+            let q = simd_quatf(angle: angle, axis: SIMD3<Float>(0, 0, 1))
             nodes.append(["name": name])
             let timeAcc = addAccessor([0.0, 1.0], type: "SCALAR", count: 2)
             let rotAcc = addAccessor([
@@ -252,7 +401,7 @@ final class VRMABoneHeuristicTests: XCTestCase {
         let json: [String: Any] = [
             "asset": ["version": "2.0"],
             "scene": 0,
-            "scenes": [["nodes": Array(0..<nodeNames.count)]],
+            "scenes": [["nodes": Array(0..<inputNodes.count)]],
             "nodes": nodes,
             "buffers": [["byteLength": bin.count]],
             "bufferViews": bufferViews,

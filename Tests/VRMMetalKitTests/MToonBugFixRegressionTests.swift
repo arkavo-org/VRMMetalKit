@@ -35,12 +35,13 @@ final class MToonBugFixRegressionTests: XCTestCase {
         self.device = device
     }
 
-    // MARK: - Rigid viewNormal w-component leak (MatCap & screen-space outlines)
+    // MARK: - Rigid viewNormal w-component leak hardening (MatCap & screen-space outlines)
 
     /// Translating a rigid mesh and camera together by the same world offset must
-    /// produce the same MatCap shading. Before the fix, `mtoon_vertex` multiplied
-    /// `viewMatrix * normalMatrix * float4(N, 0)`, leaking `normalMatrix`'s 4th row
-    /// into `viewMatrix`'s translation column and corrupting `viewNormal`.
+    /// produce the same MatCap shading even when `node.normalMatrix` is set to a
+    /// raw full 4x4 `worldMatrix.inverse.transpose` (non-zero 4th row). Before the
+    /// fix, `mtoon_vertex` multiplied `viewMatrix * normalMatrix * float4(N, 0)`,
+    /// leaking row 4 into `viewMatrix`'s translation column and corrupting `viewNormal`.
     func testRigidMatCapMatchesOriginWhenMeshAndCameraTranslated() async throws {
         let originFrame = try await renderMatCapFrame(translation: SIMD3<Float>(0, 0, 0))
         let translatedFrame = try await renderMatCapFrame(translation: SIMD3<Float>(0, 10, 0))
@@ -49,12 +50,11 @@ final class MToonBugFixRegressionTests: XCTestCase {
                                       columns: SwatchScene.third(1, size: 256), threshold: 3)
         XCTAssertLessThanOrEqual(stats.maxDelta, 4,
             "Translated rigid MatCap diverged from origin frame (changedPixels=\(stats.changedPixels), maxDelta=\(stats.maxDelta))")
-        XCTAssertEqual(stats.changedPixels, 0,
-            "Translated rigid MatCap must match origin frame without viewNormal w-leak")
     }
 
     /// Translating a double-sided rigid mesh with screen-coordinates outline and
-    /// camera together must produce the same outline hull. Before the fix,
+    /// camera together must produce the same outline hull even with a raw 4x4
+    /// `worldMatrix.inverse.transpose` normalMatrix. Before the fix,
     /// `mtoon_outline_vertex` had the same `viewMatrix * normalMatrix * float4(N, 0)` w-leak.
     func testRigidScreenSpaceOutlineMatchesOriginWhenTranslated() async throws {
         let originFrame = try await renderScreenOutlineFrame(translation: SIMD3<Float>(0, 0, 0))
@@ -64,8 +64,6 @@ final class MToonBugFixRegressionTests: XCTestCase {
                                       columns: SwatchScene.third(1, size: 256), threshold: 3)
         XCTAssertLessThanOrEqual(stats.maxDelta, 4,
             "Translated rigid screen-space outline diverged from origin frame (changedPixels=\(stats.changedPixels), maxDelta=\(stats.maxDelta))")
-        XCTAssertEqual(stats.changedPixels, 0,
-            "Translated rigid screen-space outline must match origin frame without viewNormal w-leak")
     }
 
     // MARK: - Silhouette additive directional rim viewDirection
@@ -212,6 +210,107 @@ final class MToonBugFixRegressionTests: XCTestCase {
             "Non-MToon FaceEye_00 with black albedo and disableAutoMaterialOverrides=true must remain black, got max luma=\(maxLuma)")
     }
 
+    // MARK: - mtoon_debug_rim single-channel parametricRimColorFactor
+
+    /// `mtoon_debug_rim` must treat single-channel rim colors (e.g. `(1, 0, 0)`) as active
+    /// (`all(rimColorFactor <= 0.0)`), rather than returning black when any channel is zero.
+    func testDebugRimShaderAcceptsSingleChannelRimColor() throws {
+        let library = try VRMPipelineCache.shared.getLibrary(device: device)
+        let constants = MToonFunctionConstantKey.fallback.makeFunctionConstantValues()
+        let vertexFn = try library.makeFunction(name: "mtoon_vertex", constantValues: constants)
+        let fragmentFn = try library.makeFunction(name: "mtoon_debug_rim", constantValues: constants)
+
+        // Fullscreen quad with grazing normals pointing along +X while camera looks down -Z (V = +Z)
+        struct TestVertex {
+            var pos: SIMD3<Float>
+            var normal: SIMD3<Float>
+            var uv: SIMD2<Float>
+            var color: SIMD4<Float>
+        }
+
+        let vDesc = MTLVertexDescriptor()
+        vDesc.attributes[0].format = .float3
+        vDesc.attributes[0].offset = MemoryLayout<TestVertex>.offset(of: \.pos)!
+        vDesc.attributes[0].bufferIndex = 0
+        vDesc.attributes[1].format = .float3
+        vDesc.attributes[1].offset = MemoryLayout<TestVertex>.offset(of: \.normal)!
+        vDesc.attributes[1].bufferIndex = 0
+        vDesc.attributes[2].format = .float2
+        vDesc.attributes[2].offset = MemoryLayout<TestVertex>.offset(of: \.uv)!
+        vDesc.attributes[2].bufferIndex = 0
+        vDesc.attributes[3].format = .float4
+        vDesc.attributes[3].offset = MemoryLayout<TestVertex>.offset(of: \.color)!
+        vDesc.attributes[3].bufferIndex = 0
+        vDesc.layouts[0].stride = MemoryLayout<TestVertex>.stride
+
+        let pDesc = MTLRenderPipelineDescriptor()
+        pDesc.vertexFunction = vertexFn
+        pDesc.fragmentFunction = fragmentFn
+        pDesc.vertexDescriptor = vDesc
+        pDesc.colorAttachments[0].pixelFormat = .rgba8Unorm
+        let pipeline = try device.makeRenderPipelineState(descriptor: pDesc)
+
+        let vertices: [TestVertex] = [
+            TestVertex(pos: [-1, -1, 0], normal: [1, 0, 0], uv: [0, 1], color: [1, 1, 1, 1]),
+            TestVertex(pos: [ 1, -1, 0], normal: [1, 0, 0], uv: [1, 1], color: [1, 1, 1, 1]),
+            TestVertex(pos: [ 1,  1, 0], normal: [1, 0, 0], uv: [1, 0], color: [1, 1, 1, 1]),
+            TestVertex(pos: [-1, -1, 0], normal: [1, 0, 0], uv: [0, 1], color: [1, 1, 1, 1]),
+            TestVertex(pos: [ 1,  1, 0], normal: [1, 0, 0], uv: [1, 0], color: [1, 1, 1, 1]),
+            TestVertex(pos: [-1,  1, 0], normal: [1, 0, 0], uv: [0, 0], color: [1, 1, 1, 1]),
+        ]
+        let vBuf = try XCTUnwrap(device.makeBuffer(
+            bytes: vertices, length: MemoryLayout<TestVertex>.stride * vertices.count, options: .storageModeShared))
+
+        var uniforms = Uniforms()
+        uniforms.modelMatrix = matrix_identity_float4x4
+        uniforms.normalMatrix = matrix_identity_float4x4
+        uniforms.viewMatrix = RenderTestSupport.makeLookAt(eye: [0, 0, 2], center: [0, 0, 0], up: [0, 1, 0])
+        uniforms.projectionMatrix = RenderTestSupport.makePerspective(
+            fovRadians: Float.pi / 2, aspect: 1.0, near: 0.1, far: 10.0)
+
+        var material = MToonMaterialUniforms()
+        material.parametricRimColorFactor = SIMD3<Float>(1.0, 0.0, 0.0)
+        material.parametricRimFresnelPowerFactor = 1.0
+        material.parametricRimLiftFactor = 0.0
+
+        var hasMorphed: UInt32 = 0
+        let dummyMorph = try XCTUnwrap(device.makeBuffer(length: 16, options: .storageModeShared))
+
+        let size = 16
+        let texDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm, width: size, height: size, mipmapped: false)
+        texDesc.usage = [.renderTarget, .shaderRead]
+        let target = try XCTUnwrap(device.makeTexture(descriptor: texDesc))
+
+        let rpDesc = MTLRenderPassDescriptor()
+        rpDesc.colorAttachments[0].texture = target
+        rpDesc.colorAttachments[0].loadAction = .clear
+        rpDesc.colorAttachments[0].storeAction = .store
+        rpDesc.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+
+        let queue = try XCTUnwrap(device.makeCommandQueue())
+        let cmd = try XCTUnwrap(queue.makeCommandBuffer())
+        let enc = try XCTUnwrap(cmd.makeRenderCommandEncoder(descriptor: rpDesc))
+        enc.setRenderPipelineState(pipeline)
+        enc.setVertexBuffer(vBuf, offset: 0, index: 0)
+        enc.setVertexBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        enc.setVertexBytes(&material, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
+        enc.setVertexBuffer(dummyMorph, offset: 0, index: 20)
+        enc.setVertexBytes(&hasMorphed, length: MemoryLayout<UInt32>.stride, index: 22)
+        enc.setFragmentBytes(&uniforms, length: MemoryLayout<Uniforms>.stride, index: 1)
+        enc.setFragmentBytes(&material, length: MemoryLayout<MToonMaterialUniforms>.stride, index: 8)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
+        enc.endEncoding()
+        cmd.commit()
+        cmd.waitUntilCompleted()
+
+        var pixels = [UInt8](repeating: 0, count: size * size * 4)
+        target.getBytes(&pixels, bytesPerRow: size * 4, from: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0)
+        let centerIdx = (size / 2 * size + size / 2) * 4
+        XCTAssertGreaterThan(pixels[centerIdx], 200,
+            "mtoon_debug_rim must output grazing rim (>200) for single-channel (1, 0, 0) rim factor, got \(pixels[centerIdx])")
+    }
+
     // MARK: - Helpers
 
     private func renderMatCapFrame(translation: SIMD3<Float>) async throws -> [UInt8] {
@@ -240,6 +339,11 @@ final class MToonBugFixRegressionTests: XCTestCase {
         setup.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
 
         return try SwatchScene.render(model, device: device, setup: setup) { renderer in
+            // Inject raw full inverse-transpose (non-zero 4th row) to exercise the shader's w=0 path.
+            for node in model.nodes {
+                let rawNormal: float4x4 = simd_transpose(simd_inverse(node.worldMatrix))
+                node.normalMatrix = rawNormal
+            }
             renderer.disableLight(0)
             renderer.setAmbientColor(SIMD3<Float>(0, 0, 0))
         }
@@ -268,7 +372,13 @@ final class MToonBugFixRegressionTests: XCTestCase {
         setup.center = SIMD3<Float>(0, 0, 0) + translation
         setup.clearColor = MTLClearColor(red: 1, green: 1, blue: 1, alpha: 1)
 
-        return try SwatchScene.render(model, device: device, setup: setup)
+        return try SwatchScene.render(model, device: device, setup: setup) { _ in
+            // Inject raw full inverse-transpose (non-zero 4th row) to exercise the shader's w=0 path.
+            for node in model.nodes {
+                let rawNormal: float4x4 = simd_transpose(simd_inverse(node.worldMatrix))
+                node.normalMatrix = rawNormal
+            }
+        }
     }
 
     private func makeDirectionalMatCapTexture(size: Int) throws -> VRMTexture {

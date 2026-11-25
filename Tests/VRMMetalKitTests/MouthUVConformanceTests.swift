@@ -40,6 +40,8 @@ final class MouthUVConformanceTests: XCTestCase {
     func testMouthAndLipMaterialsSampleAuthoredUVsUnmodified() async throws {
         for fixture in [SwatchScene.Fixture.rigid, .skinned] {
             let neutralRef = try await renderQuadrantSwatch(fixture: fixture, materialName: "NeutralSwatch_00")
+            // FaceMouth_00 and FaceEyebrow_00 share faceOverlay cull (.none) and depth-bias state,
+            // isolating UV sampling from cull-mode differences at sphere silhouette edges.
             let faceOverlayRef = try await renderQuadrantSwatch(fixture: fixture, materialName: "FaceEyebrow_00")
             let mouth = try await renderQuadrantSwatch(fixture: fixture, materialName: "FaceMouth_00")
             let lip = try await renderQuadrantSwatch(fixture: fixture, materialName: "UpperLip_00")

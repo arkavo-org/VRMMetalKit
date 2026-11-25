@@ -333,56 +333,89 @@ public enum VRMAnimationLoader {
                 if let nodeIndex = humanoid.getBoneNode(bone),
                    nodeIndex < model.nodes.count,
                    let nodeName = model.nodes[nodeIndex].name {
-                    map[normalize(nodeName)] = bone
+                    let normalized = normalize(nodeName)
+                    if !normalized.isEmpty {
+                        map[normalized] = bone
+                    }
                 }
             }
             return map
         }()
 
+        let nodeDepths = buildNodeDepths(document: document)
+
+        // Resolve all animated nodes deterministically, deduplicating to one track per
+        // humanoid bone (priority: VRMA extension > exact model name > heuristic > unique
+        // relaxed match; ties broken by shallower hierarchy depth, then lower nodeIndex).
+        struct HumanoidCandidate {
+            let nodeIndex: Int
+            let nodeName: String
+            let tracks: [String: KeyTrack]
+            let bone: VRMHumanoidBone
+            let priority: Int
+            let depth: Int
+        }
+
+        var humanoidCandidates: [HumanoidCandidate] = []
+        var nonHumanoidNodes: [(nodeIndex: Int, nodeName: String, tracks: [String: KeyTrack])] = []
+
+        for nodeIndex in nodeTracks.keys.sorted() {
+            guard let tracks = nodeTracks[nodeIndex] else { continue }
+            let nodeName = document.nodes?[safe: nodeIndex]?.name ?? ""
+            if let resolved = Self.resolveHumanoidBone(
+                nodeIndex: nodeIndex,
+                nodeName: nodeName,
+                animationNodeToBone: animationNodeToBone,
+                modelNameToBone: modelNameToBone
+            ) {
+                humanoidCandidates.append(HumanoidCandidate(
+                    nodeIndex: nodeIndex,
+                    nodeName: nodeName,
+                    tracks: tracks,
+                    bone: resolved.bone,
+                    priority: resolved.priority,
+                    depth: nodeDepths[nodeIndex] ?? Int.max
+                ))
+            } else {
+                nonHumanoidNodes.append((nodeIndex, nodeName, tracks))
+            }
+        }
+
+        humanoidCandidates.sort { lhs, rhs in
+            if lhs.priority != rhs.priority { return lhs.priority < rhs.priority }
+            if lhs.depth != rhs.depth { return lhs.depth < rhs.depth }
+            return lhs.nodeIndex < rhs.nodeIndex
+        }
+
         // Build JointTracks by sampling functions
         #if DEBUG
         var debugLoggedBones: Set<VRMHumanoidBone> = []
         #endif
+        var assignedBones: Set<VRMHumanoidBone> = []
 
-        for (nodeIndex, tracks) in nodeTracks {
-            // Resolve node name and retarget to model's humanoid bones
-            let nodeName = document.nodes?[safe: nodeIndex]?.name ?? ""
-            let norm = normalize(nodeName)
-            let bone: VRMHumanoidBone?
-            if let mappedBone = animationNodeToBone[nodeIndex] {
-                bone = mappedBone
-            } else if let b = modelNameToBone[norm] {
-                bone = b
-            } else {
-                // Try relaxed matching against model map
-                if let (_, mappedBone) = modelNameToBone.first(where: { key, _ in key.contains(norm) || norm.contains(key) }) {
-                    bone = mappedBone
-                } else {
-                    bone = Self.heuristicBone(forNodeName: nodeName)
-                }
-            }
-
-            // If this node doesn't map to a humanoid bone, treat it as a non-humanoid node
-            // (hair, bust, accessories, etc.)
-            if let boneUnwrapped = bone {
-                // HUMANOID BONE TRACK
+        for candidate in humanoidCandidates {
+            if assignedBones.insert(candidate.bone).inserted {
                 #if DEBUG
-                if debugLoggedBones.insert(boneUnwrapped).inserted {
-                    vrmLogLoader("[VRMAnimationLoader] Retargeted node \(nodeName) -> bone \(boneUnwrapped)")
+                if debugLoggedBones.insert(candidate.bone).inserted {
+                    vrmLogLoader("[VRMAnimationLoader] Retargeted node \(candidate.nodeName) -> bone \(candidate.bone)")
                 }
                 #endif
-                processHumanoidTrack(bone: boneUnwrapped, nodeName: nodeName, tracks: tracks,
+                processHumanoidTrack(bone: candidate.bone, nodeName: candidate.nodeName, tracks: candidate.tracks,
                                     animationRestTransforms: animationRestTransforms,
                                     modelRestTransforms: modelRestTransforms,
-                                    nodeIndex: nodeIndex,
+                                    nodeIndex: candidate.nodeIndex,
                                     clip: &clip)
             } else {
-                // NON-HUMANOID NODE TRACK (hair, bust, accessories)
-                processNonHumanoidTrack(nodeName: nodeName, tracks: tracks,
-                                       animationRestTransforms: animationRestTransforms,
-                                       nodeIndex: nodeIndex,
-                                       clip: &clip)
+                nonHumanoidNodes.append((candidate.nodeIndex, candidate.nodeName, candidate.tracks))
             }
+        }
+
+        nonHumanoidNodes.sort { $0.nodeIndex < $1.nodeIndex }
+        for node in nonHumanoidNodes {
+            processNonHumanoidTrack(nodeName: node.nodeName, tracks: node.tracks,
+                                   animationRestTransforms: animationRestTransforms,
+                                   nodeIndex: node.nodeIndex,
+                                   clip: &clip)
         }
 
         // Process expression tracks from VRMC_vrm_animation extension
@@ -557,24 +590,106 @@ public enum VRMAnimationLoader {
         return String(result).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Fallback heuristic mapping node names to `VRMHumanoidBone` when the VRMA
-    /// extension and target model humanoid map do not supply an exact match.
-    ///
-    /// Recognizes VRM 1.0 (`leftUpperArm`), Unity/VRM 0.0 (`J_Bip_L_UpperArm`),
-    /// Mixamo (`mixamorig:LeftArm`, `mixamorig:LeftForeArm`, `mixamorig:LeftUpLeg`),
-    /// and Blender (`arm.L`, `thigh.R`, `Armature|Hips`) conventions.
-    internal static func heuristicBone(forNodeName name: String) -> VRMHumanoidBone? {
+    /// Returns `true` for leaf end-effectors, rig helper bones (twist/roll/IK/FK/nub,
+    /// Blender `.001` numeric duplicates), and unmapped finger sub-bones so neither
+    /// fallback heuristics nor relaxed model-name matching can bind them over real joints.
+    internal static func isExcludedFallbackNode(_ name: String) -> Bool {
         let base = stripNamespacePrefix(name).lowercased()
-        guard !base.isEmpty else { return nil }
+        guard !base.isEmpty else { return true }
 
         let tokens = base.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
         let compact = tokens.joined()
 
-        // Skip leaf end-effector dummy bones (e.g. Mixamo HeadTop_End, LeftToe_End)
-        // and finger sub-bones (e.g. LeftHandThumb1) so they do not shadow parent joints.
-        if tokens.last == "end" || compact.hasSuffix("headtop") {
+        let helperTokens: Set<String> = ["end", "nub", "twist", "roll", "ik", "fk"]
+        if tokens.contains(where: { helperTokens.contains($0) }) {
+            return true
+        }
+        if compact.hasSuffix("headtop") || compact.hasSuffix("nub") {
+            return true
+        }
+        if tokens.contains(where: { $0.count >= 3 && $0.allSatisfy(\.isNumber) }) {
+            return true
+        }
+        if compact.contains("thumb") || compact.contains("index") || compact.contains("middle")
+            || compact.contains("ring") || compact.contains("pinky") || compact.contains("little")
+            || compact.contains("finger") {
+            return true
+        }
+        return false
+    }
+
+    private static func resolveHumanoidBone(
+        nodeIndex: Int,
+        nodeName: String,
+        animationNodeToBone: [Int: VRMHumanoidBone],
+        modelNameToBone: [String: VRMHumanoidBone]
+    ) -> (bone: VRMHumanoidBone, priority: Int)? {
+        if let mappedBone = animationNodeToBone[nodeIndex] {
+            return (mappedBone, 0)
+        }
+        let norm = normalize(nodeName)
+        if !norm.isEmpty, let exactBone = modelNameToBone[norm] {
+            return (exactBone, 1)
+        }
+        if isExcludedFallbackNode(nodeName) {
             return nil
         }
+        if let heuristic = heuristicBone(forNodeName: nodeName) {
+            return (heuristic, 2)
+        }
+        guard norm.count >= 3 else { return nil }
+
+        // Unique relaxed fallback against the target model's humanoid node names:
+        // prefer suffix matches, then general substring matches, only when unambiguous.
+        let suffixMatches = Set(modelNameToBone.compactMap { key, bone in
+            (key.hasSuffix(norm) || norm.hasSuffix(key)) ? bone : nil
+        })
+        if suffixMatches.count == 1, let unique = suffixMatches.first {
+            return (unique, 3)
+        }
+        let containsMatches = Set(modelNameToBone.compactMap { key, bone in
+            (key.contains(norm) || norm.contains(key)) ? bone : nil
+        })
+        if containsMatches.count == 1, let unique = containsMatches.first {
+            return (unique, 3)
+        }
+        return nil
+    }
+
+    private static func buildNodeDepths(document: GLTFDocument) -> [Int: Int] {
+        guard let nodes = document.nodes, !nodes.isEmpty else { return [:] }
+        var parentOf: [Int: Int] = [:]
+        for (parentIdx, node) in nodes.enumerated() {
+            for childIdx in node.children ?? [] {
+                parentOf[childIdx] = parentIdx
+            }
+        }
+        var depths: [Int: Int] = [:]
+        for idx in 0..<nodes.count {
+            var depth = 0
+            var cursor = idx
+            var visited: Set<Int> = [idx]
+            while let parent = parentOf[cursor], visited.insert(parent).inserted {
+                depth += 1
+                cursor = parent
+            }
+            depths[idx] = depth
+        }
+        return depths
+    }
+
+    /// Fallback heuristic mapping node names to `VRMHumanoidBone` when the VRMA
+    /// extension and target model humanoid map do not supply an exact match.
+    ///
+    /// Recognizes VRM 1.0 (`leftUpperArm`), Unity/VRM 0.0 (`J_Bip_L_UpperArm`),
+    /// Mixamo (`mixamorig:Spine`/`Spine1`/`Spine2`, `mixamorig:LeftArm`, `mixamorig:LeftForeArm`,
+    /// `mixamorig:LeftUpLeg`), and Blender (`arm.L`, `thigh.R`, `Armature|Hips`) conventions.
+    internal static func heuristicBone(forNodeName name: String) -> VRMHumanoidBone? {
+        guard !isExcludedFallbackNode(name) else { return nil }
+
+        let base = stripNamespacePrefix(name).lowercased()
+        let tokens = base.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+        let compact = tokens.joined()
 
         let isLeft = base.contains("left")
             || base.contains("_l_")
@@ -594,6 +709,8 @@ public enum VRMAnimationLoader {
             if compact.contains("hips") || compact.contains("pelvis") { return .hips }
             if compact.contains("upperchest") || (compact.contains("upper") && compact.contains("chest")) { return .upperChest }
             if compact.contains("chest") { return .chest }
+            if compact.hasSuffix("spine2") || compact.hasSuffix("spine02") { return .upperChest }
+            if compact.hasSuffix("spine1") || compact.hasSuffix("spine01") { return .chest }
             if compact.contains("spine") { return .spine }
             if compact.contains("neck") { return .neck }
             if compact.contains("head") { return .head }
@@ -612,13 +729,6 @@ public enum VRMAnimationLoader {
             .joined()
             .replacingOccurrences(of: "left", with: "")
             .replacingOccurrences(of: "right", with: "")
-
-        let isFinger = stem.contains("thumb") || stem.contains("index") || stem.contains("middle")
-            || stem.contains("ring") || stem.contains("pinky") || stem.contains("little")
-            || stem.contains("finger")
-        if isFinger {
-            return nil
-        }
 
         if stem.contains("shoulder") || stem.contains("clavicle") {
             return isLeft ? .leftShoulder : .rightShoulder
