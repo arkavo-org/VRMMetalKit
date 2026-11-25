@@ -32,6 +32,14 @@ let package = Package(
         .library(
             name: "GLTFMetalKit",
             targets: ["GLTFMetalKit"]
+        ),
+        .library(
+            name: "VRMAProcessKit",
+            targets: ["VRMAProcessKit"]
+        ),
+        .executable(
+            name: "VRMAProcess",
+            targets: ["VRMAProcess"]
         )
     ],
     dependencies: [
