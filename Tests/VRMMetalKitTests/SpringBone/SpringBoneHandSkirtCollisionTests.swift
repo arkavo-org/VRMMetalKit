@@ -941,6 +941,98 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
                       "Ring component must return to sleep together once settled (asleep=\(system.testChainAsleep))")
     }
 
+    func testLowerBodyHemInheritanceStopsAtChestAndRequiresDownwardHang() throws {
+        let gltfJson = #"{"asset":{"version":"2.0"}}"#
+        let gltf = try JSONDecoder().decode(GLTFDocument.self, from: Data(gltfJson.utf8))
+        let humanoid = VRMHumanoid()
+        let model = VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: humanoid, gltf: gltf)
+
+        // Realistic VRM humanoid hierarchy: hips (0) -> spine (1) -> chest (2) -> upperChest (3)
+        let hips = VRMNode(index: 0, gltfNode: GLTFNode(name: "Hips"))
+        hips.translation = SIMD3<Float>(0, 0.90, 0)
+        hips.updateLocalMatrix()
+
+        let spine = VRMNode(index: 1, gltfNode: GLTFNode(name: "Spine"))
+        spine.translation = SIMD3<Float>(0, 0.12, 0)
+        spine.parent = hips
+        spine.updateLocalMatrix()
+        hips.children.append(spine)
+
+        let chest = VRMNode(index: 2, gltfNode: GLTFNode(name: "Chest"))
+        chest.translation = SIMD3<Float>(0, 0.14, 0)
+        chest.parent = spine
+        chest.updateLocalMatrix()
+        spine.children.append(chest)
+
+        let upperChest = VRMNode(index: 3, gltfNode: GLTFNode(name: "UpperChest"))
+        upperChest.translation = SIMD3<Float>(0, 0.14, 0)
+        upperChest.parent = chest
+        upperChest.updateLocalMatrix()
+        chest.children.append(upperChest)
+
+        humanoid.humanBones[.hips] = VRMHumanoid.VRMHumanBone(node: 0)
+        humanoid.humanBones[.spine] = VRMHumanoid.VRMHumanBone(node: 1)
+        humanoid.humanBones[.chest] = VRMHumanoid.VRMHumanBone(node: 2)
+        humanoid.humanBones[.upperChest] = VRMHumanoid.VRMHumanBone(node: 3)
+
+        var nodes: [VRMNode] = [hips, spine, chest, upperChest]
+        func addTwoJointChain(parent: VRMNode, name: String, rootOffset: SIMD3<Float>, tipOffset: SIMD3<Float>) -> VRMSpring {
+            let rIdx = nodes.count
+            let rNode = VRMNode(index: rIdx, gltfNode: GLTFNode(name: "\(name)_0"))
+            rNode.translation = rootOffset
+            rNode.parent = parent
+            rNode.updateLocalMatrix()
+            parent.children.append(rNode)
+            nodes.append(rNode)
+
+            let tIdx = nodes.count
+            let tNode = VRMNode(index: tIdx, gltfNode: GLTFNode(name: "\(name)_1"))
+            tNode.translation = tipOffset
+            tNode.parent = rNode
+            tNode.updateLocalMatrix()
+            rNode.children.append(tNode)
+            nodes.append(tNode)
+
+            var j0 = VRMSpringJoint(node: rIdx); j0.hitRadius = 0.02
+            var j1 = VRMSpringJoint(node: tIdx); j1.hitRadius = 0.0
+            var sp = VRMSpring(name: name)
+            sp.joints = [j0, j1]
+            return sp
+        }
+
+        // 1. Standalone necktie under upperChest (hangs down, NOT part of a cloth sheet) -> must NOT inherit.
+        let necktie = addTwoJointChain(parent: upperChest, name: "Necktie",
+                                       rootOffset: SIMD3(0, 0, 0.08), tipOffset: SIMD3(0, -0.18, 0))
+        // 2. Standalone chest ribbon under chest -> must NOT inherit.
+        let chestRibbon = addTwoJointChain(parent: chest, name: "ChestRibbon",
+                                           rootOffset: SIMD3(0.05, 0, 0.08), tipOffset: SIMD3(0, -0.14, 0))
+        // 3. Upward-pointing waist antenna under hips -> must NOT inherit (does not hang downward).
+        let waistUp = addTwoJointChain(parent: hips, name: "WaistWing",
+                                       rootOffset: SIMD3(0, 0, -0.10), tipOffset: SIMD3(0, 0.16, -0.04))
+        // 4. Downward-hanging waist sash under hips -> MUST inherit parent hitRadius.
+        let waistSash = addTwoJointChain(parent: hips, name: "WaistSash",
+                                         rootOffset: SIMD3(0.12, -0.02, 0.04), tipOffset: SIMD3(0, -0.22, 0))
+
+        model.nodes = nodes
+        hips.updateWorldTransform()
+
+        var sb = VRMSpringBone()
+        sb.springs = [necktie, chestRibbon, waistUp, waistSash]
+        model.springBone = sb
+
+        let result = SpringBoneSkirtRingDetector.buildCollisionAux(model: model, hasSyntheticColliders: true)
+        XCTAssertEqual(result.aux.count, 8)
+        XCTAssertEqual(result.aux[1].syntheticRadius, 0.0, accuracy: 1e-6,
+                       "Unlinked upperChest necktie must not inherit terminal hitRadius via hips ancestry")
+        XCTAssertEqual(result.aux[3].syntheticRadius, 0.0, accuracy: 1e-6,
+                       "Unlinked chest ribbon must not inherit terminal hitRadius via hips ancestry")
+        XCTAssertEqual(result.aux[5].syntheticRadius, 0.0, accuracy: 1e-6,
+                       "Upward-pointing hips accessory must not inherit terminal hitRadius")
+        XCTAssertEqual(result.aux[7].syntheticRadius, 0.02, accuracy: 1e-6,
+                       "Downward-hanging hips sash must inherit parent hitRadius")
+        XCTAssertEqual(result.inheritedHemRadiusCount, 1)
+    }
+
     // MARK: - 4. GPU Kernel: Chord Collision, Hem Radius Scoping & Determinism
 
     func testGPUSkirtChordBlocksCapsuleInOpenAirGapBetweenChains() throws {

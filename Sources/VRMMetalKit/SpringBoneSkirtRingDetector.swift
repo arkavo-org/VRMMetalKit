@@ -164,6 +164,7 @@ enum SpringBoneSkirtRingDetector {
             )
         }
 
+        let allHumanoidNodes = humanoidNodeSet(model: model, bones: Array(VRMHumanoidBone.allCases))
         let excludedNodes = humanoidNodeSet(model: model, bones: excludedAncestorBones)
         let lowerBodyNodes = humanoidNodeSet(model: model, bones: lowerBodyAncestorBones)
         let hasHumanoid = model.humanoid != nil
@@ -199,7 +200,11 @@ enum SpringBoneSkirtRingDetector {
             }
 
             let excludedByAncestor = descendsFrom(node: rootNode, in: excludedNodes)
-            let isLowerBody = descendsFrom(node: rootNode, in: lowerBodyNodes)
+            let isLowerBody = nearestHumanoidAncestorIn(
+                node: rootNode,
+                humanoidNodes: allHumanoidNodes,
+                targets: lowerBodyNodes
+            )
 
             let tipPos = jointPositions.last ?? rootPos
             let dy = tipPos.y - rootPos.y
@@ -295,7 +300,7 @@ enum SpringBoneSkirtRingDetector {
         let linkedChainSet = Set(chainAdj.keys)
         for chain in chains where chain.eligibleForSheet {
             let isTerminalEligible = linkedChainSet.contains(chain.chainIndex)
-                || chain.lowerBodyAncestor
+                || (chain.lowerBodyAncestor && chain.hangsDownward)
                 || (!hasHumanoid && chain.hangsDownward)
             guard isTerminalEligible else { continue }
 
@@ -846,6 +851,27 @@ enum SpringBoneSkirtRingDetector {
         var depth = 0
         while let n = cur, depth < 64 {
             if targetNodes.contains(n.index) { return true }
+            cur = n.parent
+            depth += 1
+        }
+        return false
+    }
+
+    /// Walks up from `node` until the nearest mapped humanoid bone and returns
+    /// whether that bone is in `targets`. Prevents upper-torso descendants
+    /// (`chest`/`upperChest`/`shoulders`) from matching `.hips`/`.spine`.
+    private static func nearestHumanoidAncestorIn(
+        node: VRMNode?,
+        humanoidNodes: Set<Int>,
+        targets: Set<Int>
+    ) -> Bool {
+        guard !humanoidNodes.isEmpty, !targets.isEmpty else { return false }
+        var cur = node
+        var depth = 0
+        while let n = cur, depth < 64 {
+            if humanoidNodes.contains(n.index) {
+                return targets.contains(n.index)
+            }
             cur = n.parent
             depth += 1
         }
