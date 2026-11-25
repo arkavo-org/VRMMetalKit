@@ -406,7 +406,9 @@ public enum VRMAnimationLoader {
                                     nodeIndex: candidate.nodeIndex,
                                     clip: &clip)
             } else {
-                nonHumanoidNodes.append((candidate.nodeIndex, candidate.nodeName, candidate.tracks))
+                #if DEBUG
+                vrmLogLoader("[VRMAnimationLoader] Skipping duplicate humanoid candidate '\(candidate.nodeName)' for bone \(candidate.bone)")
+                #endif
             }
         }
 

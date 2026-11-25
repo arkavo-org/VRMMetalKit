@@ -229,6 +229,49 @@ final class VRMABoneHeuristicTests: XCTestCase {
         }
     }
 
+    /// Duplicate humanoid candidates for the same bone must be dropped rather
+    /// than routed to `nodeTracks`, preventing raw node-name playback from
+    /// overwriting the winning retargeted humanoid track.
+    func testDuplicateHumanoidCandidatesDoNotOverwriteWinningBoneTrack() async throws {
+        let modelData = try VRMBuilder().setSkeleton(.defaultHumanoid).build().serialize()
+        let model = try await VRMModel.load(from: modelData, device: nil)
+
+        let headIndex = try XCTUnwrap(model.humanoid?.getBoneNode(.head))
+        let headNodeName = try XCTUnwrap(model.nodes[headIndex].name)
+
+        let winnerAngle: Float = 0.35
+        let duplicateAngle: Float = 1.40
+        // Node 0 maps explicitly to .head via VRMC_vrm_animation (priority 0).
+        // Node 1 shares the model's exact head node name (priority 1) and would
+        // overwrite the retargeted bone if emitted as a raw NodeTrack.
+        let glb = try makePlainAnimationGLB(
+            nodes: [
+                ("Armature|Head", winnerAngle),
+                (headNodeName, duplicateAngle),
+            ],
+            vrmaHumanBones: ["head": 0]
+        )
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dup-humanoid-\(UUID().uuidString).vrma")
+        try glb.write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let clip = try VRMAnimationLoader.loadVRMA(from: url, model: model)
+        XCTAssertEqual(clip.jointTracks.count, 1)
+        XCTAssertTrue(clip.nodeTracks.isEmpty,
+            "Losing duplicate humanoid candidate must not be emitted as a raw NodeTrack")
+
+        let player = AnimationPlayer()
+        player.load(clip)
+        player.isLooping = false
+        player.play()
+        player.update(deltaTime: 1.0, model: model)
+
+        let expectedQuat = simd_quatf(angle: winnerAngle, axis: SIMD3<Float>(0, 0, 1))
+        XCTAssertEqual(abs(simd_dot(model.nodes[headIndex].rotation.vector, expectedQuat.vector)), 1.0, accuracy: 1e-4,
+            "Head bone rotation must come from the winning humanoid track, not a raw duplicate NodeTrack")
+    }
+
     // MARK: - Helpers
 
     private func assertFullMixamoClipRetargeting(on model: VRMModel) throws {
@@ -347,7 +390,10 @@ final class VRMABoneHeuristicTests: XCTestCase {
         return try await VRMModel.load(from: glb, device: nil)
     }
 
-    private func makePlainAnimationGLB(nodes inputNodes: [(String, Float)]) throws -> Data {
+    private func makePlainAnimationGLB(
+        nodes inputNodes: [(String, Float)],
+        vrmaHumanBones: [String: Int] = [:]
+    ) throws -> Data {
         var floats: [Float] = []
         var bufferViews: [[String: Any]] = []
         var accessors: [[String: Any]] = []
@@ -398,7 +444,7 @@ final class VRMABoneHeuristicTests: XCTestCase {
         floats.withUnsafeBytes { bin.append(contentsOf: $0) }
         while bin.count % 4 != 0 { bin.append(0) }
 
-        let json: [String: Any] = [
+        var json: [String: Any] = [
             "asset": ["version": "2.0"],
             "scene": 0,
             "scenes": [["nodes": Array(0..<inputNodes.count)]],
@@ -412,6 +458,16 @@ final class VRMABoneHeuristicTests: XCTestCase {
                 "samplers": samplers,
             ]],
         ]
+        if !vrmaHumanBones.isEmpty {
+            let mapped = Dictionary(uniqueKeysWithValues: vrmaHumanBones.map { ($0.key, ["node": $0.value]) })
+            json["extensionsUsed"] = ["VRMC_vrm_animation"]
+            json["extensions"] = [
+                "VRMC_vrm_animation": [
+                    "specVersion": "1.0",
+                    "humanoid": ["humanBones": mapped],
+                ]
+            ]
+        }
 
         var jsonData = try JSONSerialization.data(withJSONObject: json)
         while jsonData.count % 4 != 0 { jsonData.append(0x20) }
