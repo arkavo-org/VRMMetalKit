@@ -37,6 +37,23 @@ public struct LocomotionMetadata: Sendable, Equatable {
     }
 }
 
+/// Non-fatal diagnostics recorded while loading a VRMA clip.
+public enum VRMADiagnostic: Sendable, Equatable, CustomStringConvertible {
+    /// The animation contained no playable tracks (no joint, node, morph, expression, or lookAt tracks).
+    case emptyAnimation(channelCount: Int, samplerCount: Int)
+    /// The animation's raw keyframe duration was `<= 0` seconds (e.g. an aborted capture or single-keyframe pose).
+    case zeroDuration(rawDuration: Float)
+
+    public var description: String {
+        switch self {
+        case .emptyAnimation(let channelCount, let samplerCount):
+            return "VRMA animation has 0 playable tracks (channels=\(channelCount), samplers=\(samplerCount))"
+        case .zeroDuration(let rawDuration):
+            return "VRMA animation has non-positive raw duration (\(rawDuration)s)"
+        }
+    }
+}
+
 /// Time-keyed clip of joint, node, morph, and expression samplers driven by an ``AnimationPlayer``.
 ///
 /// ## Discussion
@@ -81,6 +98,19 @@ public struct AnimationClip {
     /// locomotion blend layer will refuse it. Only contract version 1
     /// parses; unknown versions read as nil, same semantics as absence.
     public var locomotion: LocomotionMetadata?
+
+    /// Non-fatal load-time diagnostics (e.g. empty clip or zero raw duration).
+    public var diagnostics: [VRMADiagnostic] = []
+
+    /// `true` when the clip contains no playable tracks of any kind
+    /// (no joint, node, morph, expression, or look-at tracks).
+    public var isEmpty: Bool {
+        jointTracks.isEmpty
+            && nodeTracks.isEmpty
+            && morphTracks.isEmpty
+            && expressionTracks.isEmpty
+            && lookAtTargetSampler == nil
+    }
 
     /// Creates an empty clip with the given duration in seconds.
     public init(duration: Float) {
@@ -133,6 +163,102 @@ public struct AnimationClip {
     /// Appends a typed expression track for a recognised ``VRMExpressionPreset``.
     public mutating func addExpressionTrack(_ track: ExpressionTrack) {
         expressionTracks.append(track)
+    }
+
+    /// Removes animation tracks whose target nodes are owned by runtime subsystems
+    /// (`SpringBoneComputeSystem` and ``VRMLookAtController``) so baked secondary or
+    /// eye tracks in stock `.vrma` clips do not freeze hair/bust physics or stomp eye gaze.
+    ///
+    /// Specifically strips:
+    /// - Humanoid ``jointTracks`` targeting `.leftEye` or `.rightEye`.
+    /// - Non-humanoid ``nodeTracks`` resolving to any SpringBone joint (or descendant)
+    ///   or eye bone node on `model`.
+    /// - Non-humanoid ``nodeTracks`` matching VRoid secondary/eye node naming conventions
+    ///   (`J_Sec_*`, `*FaceEye*`, `leftEye`/`rightEye`, `eyeL`/`eyeR`), even when `model`
+    ///   is `nil`.
+    ///
+    /// - Parameter model: Optional target ``VRMModel`` used to resolve SpringBone and eye
+    ///   node indices accurately regardless of naming convention.
+    /// - Returns: Total number of tracks removed across ``jointTracks`` and ``nodeTracks``.
+    @discardableResult
+    public mutating func stripRuntimeOwnedTracks(for model: VRMModel? = nil) -> Int {
+        let jointBefore = jointTracks.count
+        jointTracks.removeAll { $0.bone == .leftEye || $0.bone == .rightEye }
+        let removedJoints = jointBefore - jointTracks.count
+
+        var ownedNodeIndices = Set<Int>()
+        var ownedNormalizedNames = Set<String>()
+
+        if let model {
+            if let humanoid = model.humanoid {
+                if let leftEye = humanoid.getBoneNode(.leftEye) {
+                    ownedNodeIndices.insert(leftEye)
+                }
+                if let rightEye = humanoid.getBoneNode(.rightEye) {
+                    ownedNodeIndices.insert(rightEye)
+                }
+            }
+
+            if let springBone = model.springBone {
+                var stack: [VRMNode] = []
+                for spring in springBone.springs {
+                    for joint in spring.joints {
+                        guard joint.node >= 0, joint.node < model.nodes.count else { continue }
+                        if ownedNodeIndices.insert(joint.node).inserted {
+                            stack.append(model.nodes[joint.node])
+                        }
+                    }
+                }
+                while let current = stack.popLast() {
+                    for child in current.children {
+                        if ownedNodeIndices.insert(child.index).inserted {
+                            stack.append(child)
+                        }
+                    }
+                }
+            }
+
+            for index in ownedNodeIndices where index >= 0 && index < model.nodes.count {
+                if let name = model.nodes[index].name {
+                    ownedNormalizedNames.insert(Self.normalizeNodeTrackName(name))
+                }
+            }
+        }
+
+        let nodeBefore = nodeTracks.count
+        nodeTracks.removeAll { track in
+            if ownedNormalizedNames.contains(track.nodeNameNormalized) {
+                return true
+            }
+            if let model,
+               let resolved = model.findNodeByNormalizedName(track.nodeNameNormalized),
+               ownedNodeIndices.contains(resolved.index) {
+                return true
+            }
+            return Self.isRuntimeOwnedNodeName(track.nodeNameNormalized)
+        }
+        let removedNodes = nodeBefore - nodeTracks.count
+
+        return removedJoints + removedNodes
+    }
+
+    private static func normalizeNodeTrackName(_ name: String) -> String {
+        name.lowercased()
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: ".", with: "")
+    }
+
+    private static func isRuntimeOwnedNodeName(_ normalized: String) -> Bool {
+        if normalized.hasPrefix("jsec") {
+            return true
+        }
+        if normalized.contains("faceeye") {
+            return true
+        }
+        return normalized == "lefteye"
+            || normalized == "righteye"
+            || normalized == "eyel"
+            || normalized == "eyer"
     }
 }
 

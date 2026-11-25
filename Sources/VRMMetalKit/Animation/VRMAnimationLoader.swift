@@ -129,7 +129,9 @@ public enum VRMAnimationLoader {
     public static func loadVRMA(
         from url: URL,
         model: VRMModel? = nil,
-        limits: VRMLoaderLimits = .default
+        limits: VRMLoaderLimits = .default,
+        stripRuntimeOwnedTracks: Bool = false,
+        rejectEmptyAnimation: Bool = false
     ) throws -> AnimationClip {
         let data = try Data(contentsOf: url)
 
@@ -188,9 +190,13 @@ public enum VRMAnimationLoader {
             }
             if let last = times.last { duration = max(duration, last) }
         }
+        let rawDuration = duration
         if duration <= 0 { duration = 1.0 }
 
         var clip = AnimationClip(duration: duration)
+        if rawDuration <= 0 {
+            clip.diagnostics.append(.zeroDuration(rawDuration: rawDuration))
+        }
 
         // Parse locomotion metadata from extras.arkavo on animations[0].
         //
@@ -249,6 +255,7 @@ public enum VRMAnimationLoader {
         // directly without per-format conversion.
 
         // Map animation node indices to humanoid bones using the VRMA extension data first.
+        var excludedEyeNodes: Set<Int> = []
         let animationNodeToBone: [Int: VRMHumanoidBone] = {
             guard
                 let extensionDict = document.extensions?["VRMC_vrm_animation"] as? [String: Any],
@@ -261,19 +268,21 @@ public enum VRMAnimationLoader {
             var map: [Int: VRMHumanoidBone] = [:]
             for (boneName, value) in humanBones {
                 guard let bone = VRMHumanoidBone(rawValue: boneName) else { continue }
+                guard let boneDict = value as? [String: Any],
+                      let nodeAny = boneDict["node"],
+                      let nodeIndex = intValue(from: nodeAny) else {
+                    continue
+                }
                 // Spec (VRMC_vrm_animation-1.0): leftEye and rightEye must not have animation data.
                 if bone == .leftEye || bone == .rightEye {
+                    excludedEyeNodes.insert(nodeIndex)
                     #if VRM_METALKIT_ENABLE_LOGS
                     vrmLogLoader("[VRMAnimationLoader] Skipping eye bone '\(boneName)' per VRMC_vrm_animation spec")
                     #endif
                     continue
                 }
 
-                if let boneDict = value as? [String: Any],
-                   let nodeAny = boneDict["node"],
-                   let nodeIndex = intValue(from: nodeAny) {
-                    map[nodeIndex] = bone
-                }
+                map[nodeIndex] = bone
             }
             return map
         }()
@@ -360,6 +369,7 @@ public enum VRMAnimationLoader {
         var nonHumanoidNodes: [(nodeIndex: Int, nodeName: String, tracks: [String: KeyTrack])] = []
 
         for nodeIndex in nodeTracks.keys.sorted() {
+            if excludedEyeNodes.contains(nodeIndex) { continue }
             guard let tracks = nodeTracks[nodeIndex] else { continue }
             let nodeName = document.nodes?[safe: nodeIndex]?.name ?? ""
             if let resolved = Self.resolveHumanoidBone(
@@ -476,6 +486,23 @@ public enum VRMAnimationLoader {
             #if VRM_METALKIT_ENABLE_LOGS
             vrmLogLoader("[VRMAnimationLoader] Parsed lookAt block -> node \(lookAtNodeIndex)")
             #endif
+        }
+
+        if stripRuntimeOwnedTracks {
+            clip.stripRuntimeOwnedTracks(for: model)
+        }
+
+        if clip.isEmpty {
+            clip.diagnostics.append(.emptyAnimation(channelCount: anim.channels.count, samplerCount: anim.samplers.count))
+            vrmLogLoader("[VRMAnimationLoader] WARNING: VRMA '\(url.lastPathComponent)' has 0 playable tracks (channels=\(anim.channels.count), samplers=\(anim.samplers.count), rawDuration=\(rawDuration)s)")
+            if rejectEmptyAnimation {
+                throw VRMError.emptyAnimation(
+                    filePath: url.path,
+                    channelCount: anim.channels.count,
+                    samplerCount: anim.samplers.count,
+                    duration: rawDuration
+                )
+            }
         }
 
         return clip
