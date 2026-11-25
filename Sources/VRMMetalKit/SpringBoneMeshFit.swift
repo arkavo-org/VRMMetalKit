@@ -20,8 +20,9 @@ import simd
 
 /// Unified, mesh-name-agnostic skinned-mesh collider fitter (#377, #478).
 ///
-/// Scans all skinned meshes in a single zero-allocation pass over their split GPU
-/// vertex/attribute buffers, deduplicating primitives that share identical
+/// Scans all skinned meshes in a single pass directly over their split GPU
+/// vertex/attribute buffers without per-primitive `interleavedVertices()`
+/// reconstruction, deduplicating primitives that share identical
 /// `POSITION`/`JOINTS_0`/`WEIGHTS_0` accessors (common in VRoid Studio exports).
 /// Classifies vertices strictly by humanoid/spring joint weight rather than mesh
 /// name so non-VRoid naming conventions (`Garment_outfit.*`, `Accessory_*`, etc.)
@@ -134,6 +135,30 @@ enum SpringBoneMeshFit {
             verticesBySide: scan.bustVertices,
             model: model,
             radiusPercentile: radiusPercentile
+        )
+    }
+
+    static func computeBreastColliders(
+        model: VRMModel,
+        radiusPercentile: Float = 1.0,
+        radiusScale: Float = 1.0
+    ) -> [VRMCollider] {
+        guard let humanoid = model.humanoid else { return [] }
+        let scan = scanAllRegions(
+            model: model,
+            humanoid: humanoid,
+            includeBreasts: true,
+            includeShoulders: false,
+            includeTorso: false,
+            includeHands: false
+        )
+        return buildBreastColliders(
+            from: scan.bustSides,
+            verticesBySide: scan.bustVertices,
+            humanoid: humanoid,
+            model: model,
+            radiusPercentile: radiusPercentile,
+            radiusScale: radiusScale
         )
     }
 
@@ -349,7 +374,7 @@ enum SpringBoneMeshFit {
             guard jointCount > 0, skin.inverseBindMatrices.count == jointCount else { continue }
 
             // Build O(1) slot-lookup tables for this skin.
-            var bustSlotToSide = [Int8](repeating: -1, count: jointCount)
+            var bustSlotToSide = [Int](repeating: -1, count: jointCount)
             var shoulderSlotToSide = [Int8](repeating: -1, count: jointCount)
             var isTorsoSlot = [Bool](repeating: false, count: jointCount)
             var handSlotToSide = [Int8](repeating: -1, count: jointCount)
@@ -359,7 +384,7 @@ enum SpringBoneMeshFit {
                 let jointNodeIndex = skin.joints[slot].index
                 if wantBreasts {
                     for (sideIdx, side) in result.bustSides.enumerated() where side.bustNodes.contains(jointNodeIndex) {
-                        bustSlotToSide[slot] = Int8(sideIdx)
+                        bustSlotToSide[slot] = sideIdx
                         anyMatch = true
                         break
                     }
@@ -468,7 +493,7 @@ enum SpringBoneMeshFit {
         weights: SIMD4<Float>,
         jointCount: Int,
         skinMatrices: [float4x4],
-        bustSlotToSide: [Int8],
+        bustSlotToSide: [Int],
         shoulderSlotToSide: [Int8],
         isTorsoSlot: [Bool],
         handSlotToSide: [Int8],
@@ -493,7 +518,7 @@ enum SpringBoneMeshFit {
         if w3 > domW { domW = w3; domSlot = j3 }
 
         let domValid = domSlot >= 0 && domSlot < jointCount && domW > 0.5
-        let bustSide: Int8 = (wantBreasts && domValid) ? bustSlotToSide[domSlot] : -1
+        let bustSide: Int = (wantBreasts && domValid) ? bustSlotToSide[domSlot] : -1
         let shoulderSide: Int8 = (wantShoulders && domValid) ? shoulderSlotToSide[domSlot] : -1
         let torsoHit: Bool = (wantTorso && domValid) ? isTorsoSlot[domSlot] : false
 
@@ -530,7 +555,7 @@ enum SpringBoneMeshFit {
         guard wp.x.isFinite && wp.y.isFinite && wp.z.isFinite else { return }
 
         if bustSide >= 0 {
-            result.bustVertices[Int(bustSide)].append(wp)
+            result.bustVertices[bustSide].append(wp)
         }
         if shoulderSide >= 0 {
             let side = result.shoulderSides[Int(shoulderSide)]
@@ -978,9 +1003,9 @@ enum SpringBoneMeshFit {
 
         guard reach > 0.01, breadth > 0.01, thickness > 0.003 else { return nil }
 
-        // Guard against malformed assets that skin large props/weapons directly to the hand bone.
+        // Guard against malformed assets that skin large props/weapons/cuffs directly to the hand bone.
         if forearmLen > 0.02 {
-            if reach > forearmLen * 1.8 || breadth > forearmLen * 1.5 || thickness > forearmLen * 1.2 {
+            if reach > forearmLen * 1.8 || breadth > forearmLen * 1.5 || thickness > forearmLen * 0.65 {
                 return nil
             }
         }
@@ -1100,7 +1125,7 @@ enum SpringBoneMeshFit {
     @inline(__always)
     private static func percentile(_ sorted: [Float], _ p: Float) -> Float {
         guard !sorted.isEmpty else { return 0 }
-        let idx = min(sorted.count - 1, max(0, Int(Float(sorted.count - 1) * p)))
+        let idx = min(sorted.count - 1, max(0, Int((Float(sorted.count - 1) * p).rounded())))
         return sorted[idx]
     }
 }

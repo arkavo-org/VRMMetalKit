@@ -1303,7 +1303,10 @@ public class VRMModel: @unchecked Sendable {
         // path hard-guards `colliders.count == numCapsules`, so the count seeded
         // here must match the count uploaded later in
         // `SpringBoneComputeSystem.populateSpringBoneData(model:)`.
-        if augmentColliders {
+        // Preserve the 32-bit collider-group mask invariant (CLAUDE.md §4): up to 31
+        // authored groups (bits 0–30) leave bit 31 free for the synthetic group; with
+        // 32+ authored groups every bit is claimed, so disable all synthetic augmentation.
+        if augmentColliders && expandedSpringBone.colliderGroups.count < 32 {
             var synthetic = SpringBoneColliderAugmentor.synthesize(model: self)
             let prefixCount = synthetic.count
             // Single-pass mesh-name-agnostic collider fit (#377, #478): scans all

@@ -88,6 +88,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Gates the pre-capsule `copyParentPositions()` snapshot so non-skirted
     /// models pay zero extra dispatch overhead.
     private var hasRingNeighbors: Bool = false
+    /// Connected components of non-empty chain indices coupled by skirt ring chords.
+    /// Keeps ring neighbors waking and sleeping in lockstep on the async sleep path.
+    private var ringChainComponents: [[Int]] = []
     /// Reserved collider-group index for cross-avatar FOREIGN colliders (design
     /// §7). Distinct from the synthetic group so foreign colliders stay OUT of
     /// the synthetic group's swept-CCD scoping (foreign contact is discrete).
@@ -787,6 +790,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                             globalParams: globalParams,
                             foreign: clampedForeign,
                             external: clampedExternal)
+            synchronizeRingSleepInputs()
             sleepGate.apply(velocities: wakeVelocitiesScratch,
                             wakeMask: wakeMaskScratch,
                             ranges: chainRanges,
@@ -1383,6 +1387,41 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         )
     }
 
+    /// Synchronizes sleep-gate inputs across each skirt ring connected component so
+    /// coupled ring chains always wake and sleep in lockstep — preventing a sleeping
+    /// neighbor from early-returning in `springBoneCollideCapsules` and halving
+    /// two-ended mid-span chord projection.
+    private func synchronizeRingSleepInputs() {
+        guard !ringChainComponents.isEmpty else { return }
+        let limit = min(sleepGate.asleep.count, min(wakeMaskScratch.count, wakeVelocitiesScratch.count))
+        for component in ringChainComponents {
+            var anyWake = false
+            var anyAwake = false
+            var anyAsleep = false
+            var maxVel: Float = 0
+            for c in component where c >= 0 && c < limit {
+                if wakeMaskScratch[c] { anyWake = true }
+                if sleepGate.asleep[c] {
+                    anyAsleep = true
+                } else {
+                    anyAwake = true
+                    if wakeVelocitiesScratch[c] > maxVel {
+                        maxVel = wakeVelocitiesScratch[c]
+                    }
+                }
+            }
+            if anyWake || (anyAwake && anyAsleep) {
+                for c in component where c >= 0 && c < limit {
+                    wakeMaskScratch[c] = true
+                }
+            } else if anyAwake {
+                for c in component where c >= 0 && c < limit {
+                    wakeVelocitiesScratch[c] = maxVel
+                }
+            }
+        }
+    }
+
     /// Foreign (cross-avatar / external) colliders wake physics like authored
     /// colliders do: a changed count (partner/prop appears or leaves), a moved
     /// centre/endpoint, or a changed radius beyond `threshold` wakes settled chains
@@ -1700,7 +1739,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // >=32 groups all clamp to 31) and leak authored colliders through the
         // spring filter.
         let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
-        let hasSyntheticColliders = !springBone.syntheticColliders.isEmpty
+        let hasSyntheticColliders = !springBone.syntheticColliders.isEmpty && springBone.colliderGroups.count < 32
         let syntheticGroupBit: UInt32 = hasSyntheticColliders ? (1 << syntheticGroupIndex) : 0
         // Scope swept (continuous) sphere collision to the synthetic group only
         // (#313), as the precomputed group BIT the shader ANDs against each
@@ -1934,18 +1973,23 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Append synthetic colliders (issue #309) via the shared helper. They
         // live in the reserved synthetic group so every spring collides with them.
-        appendSyntheticColliders(
-            springBone.syntheticColliders, model: model, groupMask: syntheticGroupBit,
-            spheres: &sphereColliders, capsules: &capsuleColliders)
+        if hasSyntheticColliders {
+            appendSyntheticColliders(
+                springBone.syntheticColliders, model: model, groupMask: syntheticGroupBit,
+                spheres: &sphereColliders, capsules: &capsuleColliders)
+        }
 
         // Update buffers
         buffers.updateBoneParameters(boneParams)
+        let chainSyntheticEnabled = chainColliderMasks.map { ($0 & syntheticGroupBit) != 0 }
         let ringDetection = SpringBoneSkirtRingDetector.buildCollisionAux(
             model: model,
-            hasSyntheticColliders: hasSyntheticColliders
+            hasSyntheticColliders: hasSyntheticColliders,
+            chainSyntheticEnabled: chainSyntheticEnabled
         )
-        hasRingNeighbors = ringDetection.hasRingNeighbors
-        buffers.updateCollisionAux(ringDetection.aux)
+        let auxUploaded = buffers.updateCollisionAux(ringDetection.aux)
+        hasRingNeighbors = auxUploaded && ringDetection.hasRingNeighbors
+        ringChainComponents = hasRingNeighbors ? ringDetection.ringChainComponents : []
         buffers.updateRestLengths(restLengths)
 
         // GPU needs WORLD directions for stiffness calculation
@@ -2199,8 +2243,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             requestPhysicsReset = false
         }
 
-        // Update last root positions for next frame's teleportation check
-        lastRootPositions = targetRootPositions
+        // Update last root positions in place (preserving backing storage on both arrays)
+        lastRootPositions.removeAll(keepingCapacity: true)
+        lastRootPositions.append(contentsOf: targetRootPositions)
 
         // Copy to GPU buffer at the correct aligned offset for this substep
         if !targetRootPositions.isEmpty {
@@ -2252,8 +2297,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             wakeAllChains()
         }
 
-        // Update last root positions for next frame's teleportation check
-        lastRootPositions = targetRootPositions
+        // Update last root positions in place (preserving backing storage on both arrays)
+        lastRootPositions.removeAll(keepingCapacity: true)
+        lastRootPositions.append(contentsOf: targetRootPositions)
     }
 
     /// Resets all interpolation state to current target (prevents lerping from stale data after teleport)
@@ -2757,8 +2803,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Mirror appendSyntheticColliders (issue #309) into the flat caches.
-        if !springBone.syntheticColliders.isEmpty {
+        // Mirror appendSyntheticColliders (issue #309) into the flat caches when a
+        // free unaliased group bit exists (< 32 authored groups).
+        if !springBone.syntheticColliders.isEmpty && springBone.colliderGroups.count < 32 {
             let syntheticGroupMask: UInt32 = 1 << UInt32(min(springBone.colliderGroups.count, 31))
             for collider in springBone.syntheticColliders {
                 guard let colliderNode = model.nodes[safe: collider.node] else { continue }
@@ -3332,6 +3379,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     ///   - model: The VRM model to warm up
     ///   - steps: Number of physics steps to run silently (default: 30, ~0.5s at 60fps)
     func warmupPhysics(model: VRMModel, steps: Int = 30) {
+        // Drain any pending self-owned frame before touching shared buffers so a
+        // late completion handler cannot overwrite the settled warmup snapshot.
+        waitForPendingFrame()
+
         guard let buffers = model.springBoneBuffers,
               var globalParams = model.springBoneGlobalParams,
               buffers.numBones > 0 else {
@@ -3400,10 +3451,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Integrate the fixed pose with the same stiffness and drag used after
         // warmup, so the published state settles toward their equilibrium.
-        // Because the pose, colliders, and globalParams are static during warmup,
-        // upload slot 0 once and batch all warmup steps into a single command
+        // Pose, colliders, and static warmup windPhase are constant across steps,
+        // so upload slot 0 once and batch all warmup steps into a single command
         // buffer (eliminating per-step collider rebuilds and CPU↔GPU stalls while
         // preserving exact sequential encoder ordering on the GPU).
+        var warmupSucceeded = true
         if steps > 0 {
             let warmupDeltaTime: TimeInterval = 1.0 / 60.0  // Simulate at 60fps
             updateAnimatedPositions(model: model, buffers: buffers, substepIndex: 0)
@@ -3436,12 +3488,23 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 }
                 warmupCB.commit()
                 warmupCB.waitUntilCompleted()
+                if warmupCB.status == .error {
+                    warmupSucceeded = false
+                    if let error = warmupCB.error {
+                        vrmLogPhysics("[SpringBone] Warmup GPU command buffer failed: \(error.localizedDescription)")
+                    }
+                }
             } else {
                 for _ in 0..<steps {
                     executeXPBDStep(buffers: buffers, globalParams: params, substepIndex: 0)
                     waitForPendingFrame()
                 }
             }
+        }
+
+        guard warmupSucceeded else {
+            timeAccumulator = 0
+            return
         }
 
         // Step 5: Final reset to zero velocity at settled positions

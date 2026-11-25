@@ -83,30 +83,11 @@ enum SpringBoneBreastCollider {
     static func computeBreastColliders(model: VRMModel,
                                        radiusPercentile: Float = 1.0,
                                        radiusScale: Float = 1.0) -> [VRMCollider] {
-        guard let humanoid = model.humanoid else { return [] }
-        let superiorBone = humanoid.getBoneNode(.upperChest)
-            ?? humanoid.getBoneNode(.chest) ?? humanoid.getBoneNode(.spine)
-        guard let superiorNode = superiorBone, superiorNode < model.nodes.count else { return [] }
-        let superiorWorld = model.nodes[superiorNode].worldPosition
-
-        var out: [VRMCollider] = []
-        for fit in fitBreasts(model: model, radiusPercentile: radiusPercentile) {
-            let anchorWorld = model.nodes[fit.anchor].worldMatrix
-            let invAnchor = simd_inverse(anchorWorld)
-            // p0 = breast centroid (inferior-anterior); p1 = a point up toward the
-            // collarbone entry (upperChest height, kept at the breast's forward z
-            // so the capsule tracks the anterior chest wall, not the spine).
-            let p0 = fit.centroidWorld
-            let p1 = SIMD3<Float>(fit.centroidWorld.x, superiorWorld.y, fit.centroidWorld.z)
-            let o0 = invAnchor * SIMD4<Float>(p0, 1)
-            let o1 = invAnchor * SIMD4<Float>(p1, 1)
-            let offset = SIMD3<Float>(o0.x, o0.y, o0.z)
-            let tail = SIMD3<Float>(o1.x, o1.y, o1.z)
-            let radius = fit.radius * radiusScale
-            guard offset.x.isFinite, tail.x.isFinite, radius.isFinite, radius > 1e-4 else { continue }
-            out.append(VRMCollider(node: fit.anchor, shape: .capsule(offset: offset, radius: radius, tail: tail)))
-        }
-        return out
+        SpringBoneMeshFit.computeBreastColliders(
+            model: model,
+            radiusPercentile: radiusPercentile,
+            radiusScale: radiusScale
+        )
     }
 
     /// Per-side deltoid/shoulder COLLIDERS for the swept synthetic group (#377

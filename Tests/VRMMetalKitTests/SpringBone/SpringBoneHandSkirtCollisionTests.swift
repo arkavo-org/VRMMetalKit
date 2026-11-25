@@ -136,6 +136,29 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
                        "Torso collider fit must not depend on mesh name containing 'body'")
         XCTAssertEqual(renamedFit.hands.count, baseline.hands.count,
                        "Hand paddle fit must not depend on mesh name containing 'body'")
+
+        // Verify fitted collider nodes and shapes match exactly, not just counts.
+        func assertSameColliders(_ lhs: [VRMCollider], _ rhs: [VRMCollider], label: String) {
+            XCTAssertEqual(lhs.count, rhs.count, "\(label) count mismatch")
+            for (a, b) in zip(lhs, rhs) {
+                XCTAssertEqual(a.node, b.node, "\(label) node mismatch")
+                switch (a.shape, b.shape) {
+                case let (.sphere(o1, r1), .sphere(o2, r2)):
+                    XCTAssertLessThan(simd_distance(o1, o2), 1e-6, "\(label) sphere offset mismatch")
+                    XCTAssertEqual(r1, r2, accuracy: 1e-6, "\(label) sphere radius mismatch")
+                case let (.capsule(o1, r1, t1), .capsule(o2, r2, t2)):
+                    XCTAssertLessThan(simd_distance(o1, o2), 1e-6, "\(label) capsule offset mismatch")
+                    XCTAssertLessThan(simd_distance(t1, t2), 1e-6, "\(label) capsule tail mismatch")
+                    XCTAssertEqual(r1, r2, accuracy: 1e-6, "\(label) capsule radius mismatch")
+                default:
+                    XCTFail("\(label) shape type mismatch")
+                }
+            }
+        }
+        assertSameColliders(renamedFit.breasts, baseline.breasts, label: "breasts")
+        assertSameColliders(renamedFit.shoulders, baseline.shoulders, label: "shoulders")
+        assertSameColliders(renamedFit.torso, baseline.torso, label: "torso")
+        assertSameColliders(renamedFit.hands, baseline.hands, label: "hands")
     }
 
     func testHandPaddleBoneFallbackWithoutSkinnedMeshes() throws {
@@ -348,14 +371,17 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
         let sb = try XCTUnwrap(model.springBone)
 
         let onResult = SpringBoneSkirtRingDetector.buildCollisionAux(model: model, hasSyntheticColliders: true)
-        // AvatarSample_U: 5 Skirt layers (5x6 chains) + 1 CoatSkirt layer (6 chains) = 6 rings.
-        XCTAssertEqual(onResult.ringCount, 6,
-                       "AvatarSample_U should detect 5 Skirt rings + 1 CoatSkirt ring")
+        // AvatarSample_U has 3 actually skinned cloth sheets (layers _01 & _02 full 6-chain
+        // flared skirt rings + layer _03 open-front back panel); the 20 unskinned VRoid
+        // template chains carry zero mesh vertices and are skipped automatically.
+        XCTAssertEqual(onResult.ringCount, 3,
+                       "AvatarSample_U should detect its 3 skinned cloth sheets via mesh topology")
         XCTAssertTrue(onResult.hasRingNeighbors)
         XCTAssertGreaterThanOrEqual(onResult.inheritedHemRadiusCount, 36,
-                                    "All 30 Skirt + 6 CoatSkirt terminal hem joints should inherit parent hitRadius")
+                                    "All lower-body terminal hem joints should inherit parent hitRadius")
 
-        // Verify Sleeve, Hair, and Bust chains are NEVER linked into rings and Sleeve hems stay 0.
+        // Verify Sleeve, Hair, and Bust chains are NEVER linked into rings, Sleeve hems stay 0,
+        // and no kinematic root joint (j == 0) ever receives a ring neighbor.
         var boneIdx = 0
         for spring in sb.springs where !spring.joints.isEmpty {
             let name = (spring.name ?? "").lowercased()
@@ -363,11 +389,17 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
             let isHairOrBust = name.contains("hair") || name.contains("bust")
             for (j, joint) in spring.joints.enumerated() {
                 let aux = onResult.aux[boneIdx]
+                if j == 0 {
+                    XCTAssertEqual(aux.ringLeft, SpringBoneSkirtRingDetector.noNeighbor,
+                                   "Kinematic root joint must never receive ringLeft")
+                    XCTAssertEqual(aux.ringRight, SpringBoneSkirtRingDetector.noNeighbor,
+                                   "Kinematic root joint must never receive ringRight")
+                }
                 if isSleeve || isHairOrBust {
                     XCTAssertEqual(aux.ringLeft, SpringBoneSkirtRingDetector.noNeighbor,
-                                   "Non-skirt chain '\(name)' must never receive ring neighbors")
+                                   "Non-cloth-sheet chain '\(name)' must never receive ring neighbors")
                     XCTAssertEqual(aux.ringRight, SpringBoneSkirtRingDetector.noNeighbor,
-                                   "Non-skirt chain '\(name)' must never receive ring neighbors")
+                                   "Non-cloth-sheet chain '\(name)' must never receive ring neighbors")
                 }
                 if isSleeve && j == spring.joints.count - 1 {
                     XCTAssertEqual(aux.syntheticRadius, joint.hitRadius, accuracy: 1e-6,
@@ -377,11 +409,326 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
             }
         }
 
+        // Name-agnosticism proof: renaming every spring to an opaque non-English/numbered
+        // identifier must produce bit-identical cloth-sheet chords and components.
+        let chainSyntheticMask = sb.springs.compactMap { sp -> Bool? in
+            guard !sp.joints.isEmpty else { return nil }
+            return !(sp.name ?? "").lowercased().contains("bust")
+        }
+        var renamedSB = sb
+        for i in renamedSB.springs.indices {
+            renamedSB.springs[i].name = "布チェーン_\(i)"
+        }
+        model.springBone = renamedSB
+        let renamedResult = SpringBoneSkirtRingDetector.buildCollisionAux(
+            model: model,
+            hasSyntheticColliders: true,
+            chainSyntheticEnabled: chainSyntheticMask
+        )
+        XCTAssertEqual(renamedResult.ringCount, onResult.ringCount)
+        XCTAssertEqual(renamedResult.linkedBoneCount, onResult.linkedBoneCount)
+        XCTAssertEqual(renamedResult.inheritedHemRadiusCount, onResult.inheritedHemRadiusCount)
+        XCTAssertEqual(renamedResult.ringChainComponents, onResult.ringChainComponents)
+        for i in onResult.aux.indices {
+            XCTAssertEqual(renamedResult.aux[i].ringLeft, onResult.aux[i].ringLeft)
+            XCTAssertEqual(renamedResult.aux[i].ringRight, onResult.aux[i].ringRight)
+            XCTAssertEqual(renamedResult.aux[i].syntheticRadius, onResult.aux[i].syntheticRadius)
+        }
+
         // With augmentation OFF, ring detection and hem inheritance must be completely inert.
         let offResult = SpringBoneSkirtRingDetector.buildCollisionAux(model: model, hasSyntheticColliders: false)
         XCTAssertFalse(offResult.hasRingNeighbors)
         XCTAssertEqual(offResult.ringCount, 0)
         XCTAssertEqual(offResult.inheritedHemRadiusCount, 0)
+    }
+
+    func testMeshTopologyDetectsUpperBodyCapeAndRespectsOpenFrontSlitWithoutNames() throws {
+        let gltfJson = #"{"asset":{"version":"2.0"}}"#
+        let gltf = try JSONDecoder().decode(GLTFDocument.self, from: Data(gltfJson.utf8))
+        let humanoid = VRMHumanoid()
+        let model = VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: humanoid, gltf: gltf)
+
+        let upperChest = VRMNode(index: 0, gltfNode: GLTFNode(name: "UpperChest"))
+        upperChest.translation = SIMD3<Float>(0, 1.30, 0)
+        upperChest.updateLocalMatrix()
+        humanoid.humanBones[.upperChest] = VRMHumanoid.VRMHumanBone(node: 0)
+
+        var nodes: [VRMNode] = [upperChest]
+        var springs: [VRMSpring] = []
+        var skinJoints: [VRMNode] = []
+        // 4 cape panels hanging from upperChest with opaque names (no "skirt"/"cape" words!),
+        // arranged at -135°, -45°, +45°, +135° (60°-90° front slit between chain 1 and chain 2).
+        let anglesDeg: [Float] = [-135, -45, 45, 135]
+        for (k, deg) in anglesDeg.enumerated() {
+            let rad = deg * .pi / 180.0
+            let rIdx = nodes.count
+            let rNode = VRMNode(index: rIdx, gltfNode: GLTFNode(name: "Opaque_\(k)_A"))
+            rNode.translation = SIMD3<Float>(sin(rad) * 0.16, 0.0, cos(rad) * 0.16)
+            rNode.parent = upperChest
+            rNode.updateLocalMatrix()
+            upperChest.children.append(rNode)
+            nodes.append(rNode)
+
+            let tIdx = nodes.count
+            let tNode = VRMNode(index: tIdx, gltfNode: GLTFNode(name: "Opaque_\(k)_B"))
+            tNode.translation = SIMD3<Float>(0, -0.25, 0)
+            tNode.parent = rNode
+            tNode.updateLocalMatrix()
+            rNode.children.append(tNode)
+            nodes.append(tNode)
+
+            skinJoints.append(rNode)
+            var j0 = VRMSpringJoint(node: rIdx); j0.hitRadius = 0.018
+            var j1 = VRMSpringJoint(node: tIdx); j1.hitRadius = 0.0
+            var sp = VRMSpring(name: "Panel_\(k)")
+            sp.joints = [j0, j1]
+            springs.append(sp)
+        }
+        let meshNode = VRMNode(index: nodes.count, gltfNode: GLTFNode(name: "GarmentMesh", mesh: 0, skin: 0))
+        meshNode.updateLocalMatrix()
+        nodes.append(meshNode)
+        model.nodes = nodes
+        upperChest.updateWorldTransform()
+
+        // Stitch chains (0-1), (0-3), (3-2) with mesh quads — leaving the front slit (1-2) UNSTITCHED.
+        let skin = VRMSkin(name: "CapeSkin")
+        skin.joints = skinJoints
+        skin.inverseBindMatrices = skinJoints.map { simd_inverse($0.worldMatrix) }
+        model.skins = [skin]
+
+        var verts: [VRMVertex] = []
+        var indices: [UInt16] = []
+        for (c0, c1) in [(0, 1), (0, 3), (3, 2)] {
+            let base = UInt16(verts.count)
+            for row in 0..<2 {
+                let y: Float = 1.30 - Float(row) * 0.25
+                verts.append(VRMVertex(
+                    position: SIMD3<Float>(0, y, 0),
+                    normal: SIMD3<Float>(0, 0, 1),
+                    texCoord: .zero,
+                    color: SIMD4<Float>(1, 1, 1, 1),
+                    joints: SIMD4<UInt32>(UInt32(c0), 0, 0, 0),
+                    weights: SIMD4<Float>(1, 0, 0, 0)
+                ))
+                verts.append(VRMVertex(
+                    position: SIMD3<Float>(0.1, y, 0),
+                    normal: SIMD3<Float>(0, 0, 1),
+                    texCoord: .zero,
+                    color: SIMD4<Float>(1, 1, 1, 1),
+                    joints: SIMD4<UInt32>(UInt32(c1), 0, 0, 0),
+                    weights: SIMD4<Float>(1, 0, 0, 0)
+                ))
+            }
+            indices.append(contentsOf: [base, base + 1, base + 2, base + 1, base + 3, base + 2])
+        }
+        let prim = VRMPrimitive()
+        prim.uploadVertices(verts, device: device)
+        prim.indexCount = indices.count
+        prim.indexType = .uint16
+        prim.primitiveType = .triangle
+        prim.indexBuffer = indices.withUnsafeBytes { bytes in
+            device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared)
+        }
+        let mesh = VRMMesh(name: "Cloak")
+        mesh.primitives = [prim]
+        model.meshes = [mesh]
+
+        var sb = VRMSpringBone()
+        sb.springs = springs
+        model.springBone = sb
+
+        let result = SpringBoneSkirtRingDetector.buildCollisionAux(model: model, hasSyntheticColliders: true)
+        XCTAssertEqual(result.ringCount, 1, "All 4 stitched cape panels should form 1 connected cloth sheet")
+        XCTAssertEqual(result.inheritedHemRadiusCount, 4, "All 4 cape terminals should inherit parent hitRadius")
+        // Chain 1 (bone 3) and chain 2 (bone 5) flank the unstitched 90° front slit:
+        // despite being < 110° apart, they MUST NOT bridge because zero triangles connect them.
+        XCTAssertNotEqual(result.aux[3].ringLeft, 5, "Unstitched front slit must not bridge (chain 1 -> chain 2)")
+        XCTAssertNotEqual(result.aux[3].ringRight, 5, "Unstitched front slit must not bridge (chain 1 -> chain 2)")
+        XCTAssertNotEqual(result.aux[5].ringLeft, 3, "Unstitched front slit must not bridge (chain 2 -> chain 1)")
+        XCTAssertNotEqual(result.aux[5].ringRight, 3, "Unstitched front slit must not bridge (chain 2 -> chain 1)")
+        // Stitched edge (chain 0 bone 1 <-> chain 1 bone 3) MUST link.
+        XCTAssertTrue(result.aux[3].ringLeft == 1 || result.aux[3].ringRight == 1,
+                      "Stitched cape seam (chain 0 <-> chain 1) must be linked")
+    }
+
+    func testMeshFitHandlesOver128BustSpringsWithoutOverflow() throws {
+        let gltfJson = #"{"asset":{"version":"2.0"}}"#
+        let gltf = try JSONDecoder().decode(GLTFDocument.self, from: Data(gltfJson.utf8))
+        let humanoid = VRMHumanoid()
+        let model = VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: humanoid, gltf: gltf)
+
+        let upperChest = VRMNode(index: 0, gltfNode: GLTFNode(name: "UpperChest"))
+        upperChest.translation = SIMD3<Float>(0, 1.3, 0)
+        upperChest.updateLocalMatrix()
+        humanoid.humanBones[.upperChest] = VRMHumanoid.VRMHumanBone(node: 0)
+
+        var nodes: [VRMNode] = [upperChest]
+        var springs: [VRMSpring] = []
+        // 135 Bust-named springs exceeds Int8.max (127); must not trap during skin slot mapping.
+        for i in 0..<135 {
+            let nIdx = nodes.count
+            let n = VRMNode(index: nIdx, gltfNode: GLTFNode(name: "Bust_\(i)"))
+            n.translation = SIMD3<Float>(0.05, -0.05, 0.08)
+            n.parent = upperChest
+            n.updateLocalMatrix()
+            upperChest.children.append(n)
+            nodes.append(n)
+
+            var sp = VRMSpring(name: "Bust_\(i)")
+            sp.joints = [VRMSpringJoint(node: nIdx)]
+            springs.append(sp)
+        }
+        let meshNode = VRMNode(index: nodes.count, gltfNode: GLTFNode(name: "Body", mesh: 0, skin: 0))
+        meshNode.updateLocalMatrix()
+        nodes.append(meshNode)
+        model.nodes = nodes
+        upperChest.updateWorldTransform()
+
+        let skin = VRMSkin(name: "BustSkin")
+        let lastBustNode = nodes[135]
+        skin.joints = [lastBustNode]
+        skin.inverseBindMatrices = [simd_inverse(lastBustNode.worldMatrix)]
+        model.skins = [skin]
+
+        var verts: [VRMVertex] = []
+        for k in 0..<12 {
+            let ang = Float(k) * (2.0 * .pi / 12.0)
+            verts.append(VRMVertex(
+                position: SIMD3<Float>(0.05 + cos(ang) * 0.04, 1.25 + sin(ang) * 0.04, 0.08),
+                normal: SIMD3<Float>(0, 0, 1),
+                texCoord: .zero,
+                color: SIMD4<Float>(1, 1, 1, 1),
+                joints: SIMD4<UInt32>(0, 0, 0, 0),
+                weights: SIMD4<Float>(1, 0, 0, 0)
+            ))
+        }
+        let prim = VRMPrimitive()
+        prim.uploadVertices(verts, device: device)
+        let mesh = VRMMesh(name: "Body")
+        mesh.primitives = [prim]
+        model.meshes = [mesh]
+
+        var sb = VRMSpringBone()
+        sb.springs = springs
+        model.springBone = sb
+
+        let fitted = SpringBoneMeshFit.computeAll(model: model)
+        XCTAssertEqual(fitted.breasts.count, 1, "135th bust spring must fit cleanly without Int8 overflow")
+    }
+
+    func testColliderGroupLimit32DisablesAllSyntheticAugmentation() throws {
+        let gltfJson = #"{"asset":{"version":"2.0"}}"#
+        let gltf = try JSONDecoder().decode(GLTFDocument.self, from: Data(gltfJson.utf8))
+        let humanoid = VRMHumanoid()
+        let model = VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: humanoid, gltf: gltf)
+
+        let hips = VRMNode(index: 0, gltfNode: GLTFNode(name: "Hips"))
+        hips.translation = SIMD3<Float>(0, 0.9, 0); hips.updateLocalMatrix()
+        let lLower = VRMNode(index: 1, gltfNode: GLTFNode(name: "L_LowerArm"))
+        lLower.translation = SIMD3<Float>(0.3, 0.4, 0); lLower.parent = hips; lLower.updateLocalMatrix(); hips.children.append(lLower)
+        let lHand = VRMNode(index: 2, gltfNode: GLTFNode(name: "L_Hand"))
+        lHand.translation = SIMD3<Float>(0.24, 0, 0); lHand.parent = lLower; lHand.updateLocalMatrix(); lLower.children.append(lHand)
+        let sRoot = VRMNode(index: 3, gltfNode: GLTFNode(name: "S_Root"))
+        sRoot.translation = SIMD3<Float>(0.1, 0, 0.1); sRoot.parent = hips; sRoot.updateLocalMatrix(); hips.children.append(sRoot)
+        let sTip = VRMNode(index: 4, gltfNode: GLTFNode(name: "S_Tip"))
+        sTip.translation = SIMD3<Float>(0, -0.15, 0); sTip.parent = sRoot; sTip.updateLocalMatrix(); sRoot.children.append(sTip)
+
+        model.nodes = [hips, lLower, lHand, sRoot, sTip]
+        model.device = device
+        hips.updateWorldTransform()
+        humanoid.humanBones[.hips] = VRMHumanoid.VRMHumanBone(node: 0)
+        humanoid.humanBones[.leftLowerArm] = VRMHumanoid.VRMHumanBone(node: 1)
+        humanoid.humanBones[.leftHand] = VRMHumanoid.VRMHumanBone(node: 2)
+
+        var sb = VRMSpringBone()
+        sb.colliders = [VRMCollider(node: 0, shape: .sphere(offset: .zero, radius: 0.08))]
+        // 32 authored collider groups claim all 32 mask bits -> no free bit for synthetic group!
+        sb.colliderGroups = (0..<32).map { VRMColliderGroup(name: "Grp_\($0)", colliders: [0]) }
+        var sp = VRMSpring(name: "Cloth")
+        sp.joints = [VRMSpringJoint(node: 3), VRMSpringJoint(node: 4)]
+        sp.colliderGroups = [31]
+        sb.springs = [sp]
+        model.springBone = sb
+
+        try model.initializeSpringBoneGPUSystem(device: device, augmentColliders: true)
+        let loadedSB = try XCTUnwrap(model.springBone)
+        XCTAssertTrue(loadedSB.syntheticColliders.isEmpty,
+                      "With 32 authored collider groups, all synthetic augmentation (including bone-fallback hand paddles) must be disabled so bit 31 never aliases authored group 31 (CLAUDE.md §4)")
+    }
+
+    func testUnequalLengthChainsNeverLinkToKinematicRoot() throws {
+        let gltfJson = #"{"asset":{"version":"2.0"}}"#
+        let gltf = try JSONDecoder().decode(GLTFDocument.self, from: Data(gltfJson.utf8))
+        let humanoid = VRMHumanoid()
+        let model = VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: humanoid, gltf: gltf)
+
+        let hips = VRMNode(index: 0, gltfNode: GLTFNode(name: "Hips"))
+        hips.translation = SIMD3<Float>(0, 0.90, 0)
+        hips.updateLocalMatrix()
+        humanoid.humanBones[.hips] = VRMHumanoid.VRMHumanBone(node: 0)
+
+        var nodes: [VRMNode] = [hips]
+        var springs: [VRMSpring] = []
+        // 4 chains around hips: alternating 4-joint chains (root y=0.90, j1 y=0.75, j2 y=0.60, j3 y=0.45)
+        // and 3-joint chains (root y=0.75 — exact same Y as j1 of the 4-joint chain! — j1 y=0.60, j2 y=0.45).
+        let specs: [(deg: Float, rootY: Float, count: Int)] = [
+            (0, 0.75, 3),
+            (90, 0.90, 4),
+            (180, 0.75, 3),
+            (-90, 0.90, 4),
+        ]
+        var rootBoneIndices: Set<Int> = []
+        var runningBone = 0
+        for (k, spec) in specs.enumerated() {
+            let rad = spec.deg * .pi / 180.0
+            rootBoneIndices.insert(runningBone)
+            var joints: [VRMSpringJoint] = []
+            var parentNode: VRMNode = hips
+            for j in 0..<spec.count {
+                let idx = nodes.count
+                let n = VRMNode(index: idx, gltfNode: GLTFNode(name: "Chain_\(k)_\(j)"))
+                if j == 0 {
+                    n.translation = SIMD3<Float>(sin(rad) * 0.16, spec.rootY - 0.90, cos(rad) * 0.16)
+                } else {
+                    n.translation = SIMD3<Float>(0, -0.15, 0)
+                }
+                n.parent = parentNode
+                n.updateLocalMatrix()
+                parentNode.children.append(n)
+                nodes.append(n)
+                parentNode = n
+
+                var sj = VRMSpringJoint(node: idx)
+                sj.hitRadius = (j == spec.count - 1) ? 0.0 : 0.015
+                joints.append(sj)
+                runningBone += 1
+            }
+            var sp = VRMSpring(name: "Panel_\(k)")
+            sp.joints = joints
+            springs.append(sp)
+        }
+        model.nodes = nodes
+        hips.updateWorldTransform()
+        var sb = VRMSpringBone()
+        sb.springs = springs
+        model.springBone = sb
+
+        let result = SpringBoneSkirtRingDetector.buildCollisionAux(model: model, hasSyntheticColliders: true)
+        XCTAssertEqual(result.ringCount, 1)
+        for (boneIdx, aux) in result.aux.enumerated() {
+            if rootBoneIndices.contains(boneIdx) {
+                XCTAssertEqual(aux.ringLeft, SpringBoneSkirtRingDetector.noNeighbor, "Root bone \(boneIdx) must not have ringLeft")
+                XCTAssertEqual(aux.ringRight, SpringBoneSkirtRingDetector.noNeighbor, "Root bone \(boneIdx) must not have ringRight")
+            }
+            if aux.ringLeft != SpringBoneSkirtRingDetector.noNeighbor {
+                XCTAssertFalse(rootBoneIndices.contains(Int(aux.ringLeft)),
+                               "Bone \(boneIdx) ringLeft must never reference kinematic root \(aux.ringLeft)")
+            }
+            if aux.ringRight != SpringBoneSkirtRingDetector.noNeighbor {
+                XCTAssertFalse(rootBoneIndices.contains(Int(aux.ringRight)),
+                               "Bone \(boneIdx) ringRight must never reference kinematic root \(aux.ringRight)")
+            }
+        }
     }
 
     func testOpenFrontCoatSkirtDoesNotBridgeAcrossWideFrontGap() throws {
@@ -488,7 +835,13 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
             rNode.children.append(cNode)
             nodes.append(cNode)
 
-            var sp = VRMSpring(name: "Skirt")
+            // Unique per-chain non-English / tricky names ("CocktailDress_01", "SkirtRear_02", ...)
+            // must all unify purely by geometry on bone-only rigs without English string heuristics.
+            let trickyNames = [
+                "CocktailDress_01", "SkirtRear_02", "HeartSkirt_03",
+                "Outerwear_04", "SwingPanel_05", "骨チェーン_06",
+            ]
+            var sp = VRMSpring(name: trickyNames[k])
             var j0 = VRMSpringJoint(node: rootIdx); j0.hitRadius = 0.014
             var j1 = VRMSpringJoint(node: childIdx); j1.hitRadius = 0.0
             sp.joints = [j0, j1]
@@ -501,8 +854,91 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
         model.springBone = sb
 
         let result = SpringBoneSkirtRingDetector.buildCollisionAux(model: model, hasSyntheticColliders: true)
-        XCTAssertEqual(result.ringCount, 1, "Single-layer numbered Skirt_01..Skirt_06 must form 1 unified 6-chain ring")
+        XCTAssertEqual(result.ringCount, 1, "Unique per-chain and non-English spring names must form 1 unified 6-chain ring")
         XCTAssertEqual(result.linkedBoneCount, 6, "All 6 child bones must have ring neighbors")
+    }
+
+    func testAsyncSleepGateKeepsRingNeighborsAwakeInLockstep() throws {
+        let gltfJson = #"{"asset":{"version":"2.0"}}"#
+        let gltf = try JSONDecoder().decode(GLTFDocument.self, from: Data(gltfJson.utf8))
+        let humanoid = VRMHumanoid()
+        let model = VRMModel(specVersion: .v1_0, meta: VRMMeta(licenseUrl: ""), humanoid: humanoid, gltf: gltf)
+
+        let hips = VRMNode(index: 0, gltfNode: GLTFNode(name: "Hips"))
+        hips.translation = SIMD3<Float>(0, 0.9, 0)
+        hips.updateLocalMatrix()
+        humanoid.humanBones[.hips] = VRMHumanoid.VRMHumanBone(node: 0)
+
+        var nodes: [VRMNode] = [hips]
+        var springs: [VRMSpring] = []
+        for k in 0..<6 {
+            let rad = Float(k) * (2.0 * .pi / 6.0)
+            let rIdx = nodes.count
+            let rNode = VRMNode(index: rIdx, gltfNode: GLTFNode(name: "Chain_\(k)"))
+            rNode.translation = SIMD3<Float>(sin(rad) * 0.16, -0.02, cos(rad) * 0.16)
+            rNode.parent = hips
+            rNode.updateLocalMatrix()
+            hips.children.append(rNode)
+            nodes.append(rNode)
+
+            let cIdx = nodes.count
+            let cNode = VRMNode(index: cIdx, gltfNode: GLTFNode(name: "Chain_\(k)_end"))
+            cNode.translation = SIMD3<Float>(0, -0.15, 0)
+            cNode.parent = rNode
+            cNode.updateLocalMatrix()
+            rNode.children.append(cNode)
+            nodes.append(cNode)
+
+            var j0 = VRMSpringJoint(node: rIdx); j0.hitRadius = 0.015; j0.stiffness = 0.5; j0.dragForce = 0.8; j0.gravityPower = 0.0
+            var j1 = VRMSpringJoint(node: cIdx); j1.hitRadius = 0.0; j1.stiffness = 0.5; j1.dragForce = 0.8; j1.gravityPower = 0.0
+            var sp = VRMSpring(name: "Ring_\(k)")
+            sp.joints = [j0, j1]
+            springs.append(sp)
+        }
+        model.nodes = nodes
+        model.device = device
+        hips.updateWorldTransform()
+
+        var sb = VRMSpringBone()
+        sb.springs = springs
+        // Distant synthetic capsule so hasSyntheticColliders is true without touching at rest.
+        sb.syntheticColliders = [
+            VRMCollider(node: 0, shape: .capsule(offset: SIMD3(5, 0, 0), radius: 0.02, tail: SIMD3(5, -0.1, 0)))
+        ]
+        model.springBone = sb
+
+        let totalBones = 12
+        let buffers = SpringBoneBuffers(device: device)
+        buffers.allocateBuffers(numBones: totalBones, numSpheres: 0, numCapsules: 1, numPlanes: 0)
+        model.springBoneBuffers = buffers
+        model.springBoneGlobalParams = SpringBoneTestFixtures.defaultGlobalParams(numBones: totalBones)
+
+        let system = try SpringBoneComputeSystem(device: device)
+        try system.populateSpringBoneData(model: model)
+
+        // Run shared-command-buffer (async sleep-gate enabled) frames until the entire ring sleeps.
+        for _ in 0..<80 {
+            try SpringBoneTestFixtures.runFrame(system: system, model: model, commandQueue: commandQueue)
+        }
+        XCTAssertEqual(system.testChainAsleep.count, 6)
+        XCTAssertTrue(system.testChainAsleep.allSatisfy { $0 },
+                      "Settled ring chains must all transition to sleep together (asleep=\(system.testChainAsleep))")
+
+        // Move ONLY chain 0's root (node 1). Ring connected-component synchronization must wake
+        // ALL 6 ring chains in lockstep so mid-span chords never run one-sided against a sleeping neighbor.
+        model.nodes[1].translation.x += 0.05
+        model.nodes[1].updateLocalMatrix()
+        hips.updateWorldTransform()
+        try SpringBoneTestFixtures.runFrame(system: system, model: model, commandQueue: commandQueue)
+        XCTAssertTrue(system.testChainAsleep.allSatisfy { !$0 },
+                      "Waking chain 0 must wake every chain in its ring connected component in lockstep (asleep=\(system.testChainAsleep))")
+
+        // After settling again with no motion, all 6 chains must return to sleep together.
+        for _ in 0..<80 {
+            try SpringBoneTestFixtures.runFrame(system: system, model: model, commandQueue: commandQueue)
+        }
+        XCTAssertTrue(system.testChainAsleep.allSatisfy { $0 },
+                      "Ring component must return to sleep together once settled (asleep=\(system.testChainAsleep))")
     }
 
     // MARK: - 4. GPU Kernel: Chord Collision, Hem Radius Scoping & Determinism
@@ -713,14 +1149,107 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
         }
     }
 
-    // MARK: - 5. End-to-End AvatarSample_U Hand-Into-Skirt Gate (#478)
+    // MARK: - 5. End-to-End AvatarSample_U Rest-Pose & Hand-Into-Skirt Gates (#478)
+
+    @MainActor
+    func testAvatarSampleU_restPoseSkirtDoesNotPuffWithRingChords() async throws {
+        let path = getTestModelPath("AvatarSample_U_1.0.vrm.glb")
+        try requireFixture(path, hint: "AvatarSample_U_1.0.vrm.glb")
+
+        func settledSkirtPositions(enableChords: Bool) async throws -> [Int: SIMD3<Float>] {
+            let model = try await VRMModel.load(
+                from: URL(fileURLWithPath: path),
+                device: device,
+                options: VRMLoadingOptions(augmentSpringBoneColliders: true)
+            )
+            let sb = try XCTUnwrap(model.springBone)
+            let ringInfo = SpringBoneSkirtRingDetector.buildCollisionAux(model: model, hasSyntheticColliders: true)
+
+            var config = RendererConfig()
+            config.sampleCount = 1
+            config.strict = .off
+            config.synchronousSpringBone = true
+            let renderer = VRMRenderer(device: device, config: config)
+            renderer.loadModel(model)
+            renderer.enableSpringBone = true
+            renderer.simulationDeltaTime = 1.0 / 60.0
+            renderer.viewMatrix = matrix_identity_float4x4
+            renderer.projectionMatrix = matrix_identity_float4x4
+
+            if !enableChords, let buffers = model.springBoneBuffers {
+                // Clear ring chord links while keeping hand paddles and inherited hem radius active.
+                let stripped = ringInfo.aux.map {
+                    SpringBoneCollisionAux(
+                        ringLeft: SpringBoneSkirtRingDetector.noNeighbor,
+                        ringRight: SpringBoneSkirtRingDetector.noNeighbor,
+                        syntheticRadius: $0.syntheticRadius,
+                        flags: 0
+                    )
+                }
+                buffers.updateCollisionAux(stripped)
+            }
+
+            let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .bgra8Unorm, width: 64, height: 64, mipmapped: false)
+            colorDesc.usage = [.renderTarget, .shaderRead]; colorDesc.storageMode = .private
+            let depthDesc = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: .depth32Float, width: 64, height: 64, mipmapped: false)
+            depthDesc.usage = .renderTarget; depthDesc.storageMode = .private
+            let colorTex = try XCTUnwrap(device.makeTexture(descriptor: colorDesc))
+            let depthTex = try XCTUnwrap(device.makeTexture(descriptor: depthDesc))
+
+            for _ in 0..<60 {
+                let cb = try XCTUnwrap(commandQueue.makeCommandBuffer())
+                let rpd = MTLRenderPassDescriptor()
+                rpd.colorAttachments[0].texture = colorTex
+                rpd.colorAttachments[0].loadAction = .clear
+                rpd.colorAttachments[0].storeAction = .store
+                rpd.depthAttachment.texture = depthTex
+                rpd.depthAttachment.loadAction = .clear
+                rpd.depthAttachment.clearDepth = 1.0
+                rpd.depthAttachment.storeAction = .dontCare
+                renderer.drawOffscreenHeadless(to: colorTex, depth: depthTex, commandBuffer: cb, renderPassDescriptor: rpd)
+                cb.commit()
+                while cb.status != .completed && cb.status != .error { await Task.yield() }
+            }
+
+            var out: [Int: SIMD3<Float>] = [:]
+            var bIdx = 0
+            for sp in sb.springs where !sp.joints.isEmpty {
+                for j in sp.joints {
+                    if ringInfo.aux[bIdx].ringLeft != SpringBoneSkirtRingDetector.noNeighbor ||
+                       ringInfo.aux[bIdx].ringRight != SpringBoneSkirtRingDetector.noNeighbor {
+                        out[j.node] = model.nodes[j.node].worldPosition
+                    }
+                    bIdx += 1
+                }
+            }
+            return out
+        }
+
+        let withoutChords = try await settledSkirtPositions(enableChords: false)
+        let withChords = try await settledSkirtPositions(enableChords: true)
+        XCTAssertFalse(withChords.isEmpty, "AvatarSample_U must have linked cloth-sheet joints")
+
+        var maxDisp: Float = 0
+        for (nodeIdx, pOn) in withChords {
+            if let pOff = withoutChords[nodeIdx] {
+                let d = simd_distance(pOn, pOff)
+                if d > maxDisp { maxDisp = d }
+            }
+        }
+        print(String(format: "[#478 rest-pose U] max skirt displacement (chords ON vs OFF)=%.3fmm over %d joints",
+                     maxDisp * 1000, withChords.count))
+        XCTAssertLessThan(maxDisp, 0.003,
+                          "Skirt ring chords must not puff AvatarSample_U's dress at rest against leg capsules (maxDisp=\(maxDisp)m)")
+    }
 
     @MainActor
     func testAvatarSampleU_handIntoFlaredSkirt_augmentedDeflectsSkirtChords() async throws {
         let path = getTestModelPath("AvatarSample_U_1.0.vrm.glb")
         try requireFixture(path, hint: "AvatarSample_U_1.0.vrm.glb")
 
-        func measureHandSkirtPenetration(augment: Bool) async throws -> (penSamples: Int, totalSamples: Int, worstDepth: Float) {
+        func measureHandSkirtPenetration(augment: Bool, enableChords: Bool) async throws -> (penSamples: Int, totalSamples: Int, worstDepth: Float) {
             let model = try await VRMModel.load(
                 from: URL(fileURLWithPath: path),
                 device: device,
@@ -729,11 +1258,11 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
             let humanoid = try XCTUnwrap(model.humanoid)
             let sb = try XCTUnwrap(model.springBone)
 
-            // Independent hand-paddle oracle measured from the mesh (same on both runs).
+            // Independent hand-paddle oracle measured from the mesh (same on all runs).
             let handOracle = SpringBoneMeshFit.computeHandColliders(model: model)
             XCTAssertFalse(handOracle.isEmpty, "AvatarSample_U must fit hand paddle capsules")
 
-            // Skirt ring chords (adjacent chains on all 5 VRoid Skirt layers, non-root joints).
+            // Visible skinned skirt ring chords detected from mesh topology.
             let ringInfo = SpringBoneSkirtRingDetector.buildCollisionAux(model: model, hasSyntheticColliders: true)
             var boneToNode: [Int] = []
             for sp in sb.springs where !sp.joints.isEmpty {
@@ -747,7 +1276,7 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
                     chords.append((boneToNode[bIdx], boneToNode[Int(right)]))
                 }
             }
-            XCTAssertFalse(chords.isEmpty, "AvatarSample_U must expose skirt ring chords")
+            XCTAssertFalse(chords.isEmpty, "AvatarSample_U must expose skinned skirt ring chords")
 
             // Pose: lower both arms naturally alongside the hips (~76°) and angle forward slightly
             // so the hands descend from outside the dress into the flared skirt's Front↔Side
@@ -792,6 +1321,19 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
             renderer.simulationDeltaTime = 1.0 / 60.0
             renderer.viewMatrix = matrix_identity_float4x4
             renderer.projectionMatrix = matrix_identity_float4x4
+
+            if augment && !enableChords, let buffers = model.springBoneBuffers {
+                // Ablation: keep hand paddles & inherited hem radius ON, disable ring chords only.
+                let stripped = ringInfo.aux.map {
+                    SpringBoneCollisionAux(
+                        ringLeft: SpringBoneSkirtRingDetector.noNeighbor,
+                        ringRight: SpringBoneSkirtRingDetector.noNeighbor,
+                        syntheticRadius: $0.syntheticRadius,
+                        flags: 0
+                    )
+                }
+                buffers.updateCollisionAux(stripped)
+            }
 
             let colorDesc = MTLTextureDescriptor.texture2DDescriptor(
                 pixelFormat: .bgra8Unorm, width: 64, height: 64, mipmapped: false)
@@ -844,20 +1386,24 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
             return (penSamples, totalSamples, worstDepth)
         }
 
-        let off = try await measureHandSkirtPenetration(augment: false)
-        let on = try await measureHandSkirtPenetration(augment: true)
+        let off = try await measureHandSkirtPenetration(augment: false, enableChords: false)
+        let paddlesOnly = try await measureHandSkirtPenetration(augment: true, enableChords: false)
+        let full = try await measureHandSkirtPenetration(augment: true, enableChords: true)
         print(String(
-            format: "[#478 hand->skirt U] OFF pen=%d/%d worst=%.1fmm  ON pen=%d/%d worst=%.1fmm",
+            format: "[#478 hand->skirt U] OFF=%d/%d (%.1fmm)  PADDLES_ONLY=%d/%d (%.1fmm)  FULL=%d/%d (%.1fmm)",
             off.penSamples, off.totalSamples, off.worstDepth * 1000,
-            on.penSamples, on.totalSamples, on.worstDepth * 1000
+            paddlesOnly.penSamples, paddlesOnly.totalSamples, paddlesOnly.worstDepth * 1000,
+            full.penSamples, full.totalSamples, full.worstDepth * 1000
         ))
 
         XCTAssertGreaterThan(off.penSamples, 0,
                              "Non-vacuity: pose must drive AvatarSample_U hands into skirt chords when augment is off")
-        XCTAssertLessThan(on.penSamples, off.penSamples / 4,
-                          "Hand paddle + skirt ring chord collision must sharply reduce hand-through-skirt clipping (on=\(on.penSamples) vs off=\(off.penSamples))")
-        XCTAssertLessThan(on.worstDepth, max(off.worstDepth * 0.5, 0.012),
-                          "Worst hand-to-skirt chord penetration must drop sharply (on=\(on.worstDepth)m vs off=\(off.worstDepth)m)")
+        XCTAssertGreaterThan(paddlesOnly.penSamples, 0,
+                             "Ablation non-vacuity: hand paddles alone without ring chords still allow hands to slip between sparse radial chains")
+        XCTAssertEqual(full.penSamples, 0,
+                       "Hand paddles + cloth-sheet chord collision must eliminate hand-through-skirt clipping (full=\(full.penSamples) vs paddlesOnly=\(paddlesOnly.penSamples) vs off=\(off.penSamples))")
+        XCTAssertLessThan(full.worstDepth, 0.005,
+                          "Worst hand-to-skirt chord penetration must stay under 5mm (got \(full.worstDepth)m)")
     }
 
     private static func segmentSegmentDist(

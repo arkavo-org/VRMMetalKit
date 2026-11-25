@@ -197,10 +197,11 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         }
     }
 
-    func updateCollisionAux(_ aux: [SpringBoneCollisionAux]) {
+    @discardableResult
+    func updateCollisionAux(_ aux: [SpringBoneCollisionAux]) -> Bool {
         guard aux.count == numBones else {
             vrmLogPhysics("⚠️ [SpringBoneBuffers] CollisionAux count mismatch: expected \(numBones), got \(aux.count)")
-            return
+            return false
         }
         if collisionAux == nil && numBones > 0 {
             collisionAux = device.makeBuffer(
@@ -209,11 +210,13 @@ public final class SpringBoneBuffers: @unchecked Sendable {
             )
             collisionAux?.label = "SpringBone CollisionAux"
         }
-        guard let buffer = collisionAux, numBones > 0 else { return }
+        guard numBones > 0 else { return true }
+        guard let buffer = collisionAux else { return false }
         buffer.contents().copyMemory(
             from: aux,
             byteCount: MemoryLayout<SpringBoneCollisionAux>.stride * numBones
         )
+        return true
     }
 
     func updateRestLengths(_ lengths: [Float]) {
