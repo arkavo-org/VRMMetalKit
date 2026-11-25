@@ -281,13 +281,11 @@ final class MouthRenderingTests: XCTestCase {
         }
     }
     
-    /// Test 6: FaceMouth vs Face_SKIN UV comparison
-    /// 
-    /// This test documents the issue and its fix:
-    /// - ISSUE: Mouth and face share the same source UVs centered at (0.4, 0.48)
-    ///   which samples from the blank face area of the texture atlas.
-    /// - FIX: UV offset is applied in the shader (uvOffsetX=0.35, uvOffsetY=0.25, uvScale=0.5)
-    ///   to shift sampling to the lip texture area in the bottom right.
+    /// Test 6: FaceMouth vs Face_SKIN shared vertex buffer UV comparison
+    ///
+    /// Both primitives share the same Face mesh vertex buffer in AvatarSample_A,
+    /// so scanning the full interleaved vertex buffer returns identical UV centroids.
+    /// Per glTF 2.0 / VRM 1.0, TEXCOORD_0 is sampled directly without name-based UV shifts.
     func testMouthVsFaceUVComparison() async throws {
         guard let path = modelPath else {
             throw XCTSkip("AvatarSample_A_1.0.vrm.glb not found")
@@ -325,17 +323,10 @@ final class MouthRenderingTests: XCTestCase {
         let mouthCentroid = calculateCentroid(mouthUVs)
         let faceCentroid = calculateCentroid(faceUVs)
         
-        print("Mouth UV centroid (source): (\(mouthCentroid.x), \(mouthCentroid.y))")
-        print("Face UV centroid: (\(faceCentroid.x), \(faceCentroid.y))")
-        print("NOTE: Shader applies UV offset (0.35, 0.25) and scale (0.5) for mouth")
-        print("      Transformed mouth UV centroid: (~0.75, ~0.75) -> lip texture area")
-        
-        // Both have same source UVs (this is the original issue)
-        // The fix is applied in the shader via uvOffsetX/Y
-        XCTAssertEqual(mouthCentroid.x, faceCentroid.x, accuracy: 0.001, 
-            "Source UVs are the same - shader fix applies offset")
+        XCTAssertEqual(mouthCentroid.x, faceCentroid.x, accuracy: 0.001,
+            "Shared Face mesh vertex buffer should expose identical full-buffer UV centroid")
         XCTAssertEqual(mouthCentroid.y, faceCentroid.y, accuracy: 0.001,
-            "Source UVs are the same - shader fix applies offset")
+            "Shared Face mesh vertex buffer should expose identical full-buffer UV centroid")
     }
     
     private func calculateCentroid(_ uvs: [SIMD2<Float>]) -> SIMD2<Float> {
