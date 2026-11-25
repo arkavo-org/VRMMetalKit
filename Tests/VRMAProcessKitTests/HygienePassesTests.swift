@@ -310,6 +310,139 @@ final class HygienePassesTests: XCTestCase {
         XCTAssertEqual(abs(vals[3]), 1.0, accuracy: 1e-6)
     }
 
+    func testNormalizeRestPoseRewritesNonHumanoidChildRotationChannelsLinearAndCubic() throws {
+        let times: [Float] = [0, 0.5, 1.0]
+        let hipsRest = simd_normalize(simd_quatf(angle: 97.2 * .pi / 180, axis: SIMD3<Float>(1, 0, 0)))
+        let accRest = simd_normalize(simd_quatf(angle: 20.0 * .pi / 180, axis: SIMD3<Float>(0, 1, 0)))
+
+        let qHips: [simd_quatf] = [
+            hipsRest,
+            simd_normalize(hipsRest * simd_quatf(angle: 0.3, axis: SIMD3<Float>(0, 1, 0))),
+            simd_normalize(hipsRest * simd_quatf(angle: -0.2, axis: SIMD3<Float>(0, 0, 1))),
+        ]
+        // Non-humanoid LINEAR rotation track with intentional antipodal flip at k=1.
+        let qRibbon: [simd_quatf] = [
+            accRest,
+            -simd_normalize(accRest * simd_quatf(angle: 0.4, axis: SIMD3<Float>(1, 0, 0))),
+            simd_normalize(accRest * simd_quatf(angle: -0.25, axis: SIMD3<Float>(0, 0, 1))),
+        ]
+        // Non-humanoid CUBICSPLINE rotation track (3 VEC4s per keyframe: inTangent, value, outTangent)
+        // with non-zero tangents and antipodal flip at k=1.
+        let inT0 = simd_quatf(ix: 0.01, iy: 0.02, iz: 0.03, r: 0.0)
+        let outT0 = simd_quatf(ix: -0.02, iy: 0.01, iz: 0.04, r: 0.0)
+        let cubicFloats: [Float] =
+            quatFloats([inT0, qRibbon[0], outT0]) +
+            quatFloats([inT0, qRibbon[1], outT0]) +
+            quatFloats([inT0, qRibbon[2], outT0])
+
+        let lookAtQuats: [simd_quatf] = [
+            simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
+            simd_quatf(angle: 0.15, axis: SIMD3<Float>(0, 1, 0)),
+            simd_quatf(ix: 0, iy: 0, iz: 0, r: 1),
+        ]
+
+        let nodes: [[String: Any]] = [
+            [
+                "name": "Hips",
+                "rotation": [hipsRest.imag.x, hipsRest.imag.y, hipsRest.imag.z, hipsRest.real],
+                "children": [1, 2, 3],
+            ],
+            [
+                "name": "Accessory_Ribbon",
+                "translation": [0.0, 0.2, 0.0],
+                "rotation": [accRest.imag.x, accRest.imag.y, accRest.imag.z, accRest.real],
+            ],
+            [
+                "name": "Hair_Cubic",
+                "translation": [0.0, 0.1, -0.05],
+                "rotation": [accRest.imag.x, accRest.imag.y, accRest.imag.z, accRest.real],
+            ],
+            [
+                "name": "LookAtNode",
+            ],
+        ]
+
+        let rawContainer = try buildVRMA(
+            nodes: nodes,
+            humanBones: ["hips": 0],
+            lookAtNode: 3,
+            tracks: [
+                TrackSpec(node: 0, path: "rotation", times: times, values: quatFloats(qHips), type: "VEC4"),
+                TrackSpec(node: 1, path: "rotation", times: times, values: quatFloats(qRibbon), type: "VEC4"),
+                TrackSpec(node: 2, path: "rotation", times: times, values: cubicFloats, type: "VEC4", interpolation: "CUBICSPLINE"),
+                TrackSpec(node: 3, path: "rotation", times: times, values: quatFloats(lookAtQuats), type: "VEC4"),
+            ]
+        )
+
+        // Run through processHygiene(stripNonHumanoid: false) to verify public pipeline too.
+        let outData = try LocomotionIngest.processHygiene(
+            glb: try rawContainer.serialize(),
+            stripNonHumanoid: false,
+            stripEyeChannels: false,
+            normalizeRestPose: true
+        )
+        let outContainer = try GLBContainer(data: outData)
+        let inspector = try VRMAClipInspector(container: outContainer)
+        let anim = (outContainer.json["animations"] as! [[String: Any]])[0]
+        let channels = anim["channels"] as! [[String: Any]]
+        let samplers = anim["samplers"] as! [[String: Any]]
+
+        func rotationFloats(forNode nodeIdx: Int) throws -> [Float] {
+            let ch = try XCTUnwrap(channels.first {
+                let t = $0["target"] as? [String: Any]
+                return t?["node"] as? Int == nodeIdx && t?["path"] as? String == "rotation"
+            })
+            let outAcc = samplers[ch["sampler"] as! Int]["output"] as! Int
+            return try inspector.floats(accessor: outAcc)
+        }
+
+        let hipsOut = try rotationFloats(forNode: 0)
+        let ribbonOut = try rotationFloats(forNode: 1)
+        let cubicOut = try rotationFloats(forNode: 2)
+        let lookAtOut = try rotationFloats(forNode: 3)
+
+        func quatAt(_ arr: [Float], _ i: Int) -> simd_quatf {
+            simd_quatf(ix: arr[i * 4], iy: arr[i * 4 + 1], iz: arr[i * 4 + 2], r: arr[i * 4 + 3])
+        }
+
+        // Verify exact world-orientation preservation: R'_hips(k) * Q'_child(k) == R_hips(k) * Q_child(k)
+        // and hemisphere continuity for both LINEAR (node 1) and CUBICSPLINE (node 2).
+        for k in 0..<times.count {
+            let qHNew = quatAt(hipsOut, k)
+            let qRNew = quatAt(ribbonOut, k)
+            let expectedWorld = simd_normalize(qHips[k] * qRibbon[k])
+            let actualWorldLinear = simd_normalize(qHNew * qRNew)
+            let diffLinear = simd_normalize(simd_inverse(expectedWorld) * actualWorldLinear)
+            let angleLinear = 2.0 * atan2(simd_length(diffLinear.imag), abs(diffLinear.real))
+            XCTAssertLessThan(angleLinear, 1e-5, "LINEAR non-humanoid child world orientation mismatch at k=\(k)")
+
+            let qCNew = quatAt(cubicOut, k * 3 + 1)
+            let actualWorldCubic = simd_normalize(qHNew * qCNew)
+            let diffCubic = simd_normalize(simd_inverse(expectedWorld) * actualWorldCubic)
+            let angleCubic = 2.0 * atan2(simd_length(diffCubic.imag), abs(diffCubic.real))
+            XCTAssertLessThan(angleCubic, 1e-5, "CUBICSPLINE non-humanoid child world orientation mismatch at k=\(k)")
+
+            if k > 0 {
+                XCTAssertGreaterThanOrEqual(simd_dot(qRNew.vector, quatAt(ribbonOut, k - 1).vector), 0)
+                XCTAssertGreaterThanOrEqual(simd_dot(qCNew.vector, quatAt(cubicOut, (k - 1) * 3 + 1).vector), 0)
+            }
+
+            // CUBICSPLINE tangents must also be rotated by W_parent (and sign-matched with value).
+            let expectedInT = hipsRest * inT0
+            let actualInT = quatAt(cubicOut, k * 3)
+            let signMatch: Float = simd_dot(qCNew.vector, (hipsRest * qRibbon[k]).vector) >= 0 ? 1 : -1
+            XCTAssertEqual(actualInT.imag.x, signMatch * expectedInT.imag.x, accuracy: 1e-5)
+            XCTAssertEqual(actualInT.imag.y, signMatch * expectedInT.imag.y, accuracy: 1e-5)
+            XCTAssertEqual(actualInT.imag.z, signMatch * expectedInT.imag.z, accuracy: 1e-5)
+            XCTAssertEqual(actualInT.real, signMatch * expectedInT.real, accuracy: 1e-5)
+
+            // lookAt channel must NOT be rotated by parentW.
+            let qLook = quatAt(lookAtOut, k)
+            let diffLook = simd_normalize(simd_inverse(lookAtQuats[k]) * qLook)
+            XCTAssertLessThan(2.0 * atan2(simd_length(diffLook.imag), abs(diffLook.real)), 1e-5)
+        }
+    }
+
     // MARK: - 4. enforceMinimumArmAbduction
 
     func testEnforceMinimumArmAbductionFloorsHangingArmsPreservesLoopAndRaisedGestures() throws {

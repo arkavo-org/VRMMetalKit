@@ -216,56 +216,50 @@ public struct VRMAClipEditor {
                     let vals = try inspector.floats(accessor: outputAcc)
                     let u = simd_normalize(worldRot * simd_inverse(localRot))
                     let v = simd_inverse(worldRot)
+                    let outFloats = try Self.transformRotationFloats(
+                        vals: vals,
+                        accCount: accCount,
+                        isCubic: isCubic,
+                        left: u,
+                        right: v
+                    )
 
-                    var outFloats: [Float] = []
-                    outFloats.reserveCapacity(vals.count)
+                    let newAcc = Self.appendFloatAccessor(
+                        floats: outFloats,
+                        type: "VEC4",
+                        count: accCount,
+                        bin: &bin,
+                        bufferViews: &bufferViews,
+                        accessors: &accessors
+                    )
+                    Self.repointSamplerOutput(
+                        channelIndex: ci,
+                        newOutputAccessor: newAcc,
+                        channels: &channels,
+                        samplers: &samplers,
+                        samplerUseCounts: &samplerUseCounts
+                    )
+                } else if path == "rotation",
+                          !normalizedNodes.contains(node),
+                          !inspector.expressionNodes.contains(node),
+                          inspector.lookAtNode != node,
+                          let parentIdx = rest.parent[node],
+                          normalizedNodes.contains(parentIdx),
+                          parentIdx >= 0, parentIdx < rest.worldRotation.count {
+                    let parentW = rest.worldRotation[parentIdx]
+                    if 1.0 - abs(parentW.real) <= VRMAClipInspector.identityRotationEpsilon { continue }
 
-                    if isCubic {
-                        guard vals.count == accCount * 4, accCount % 3 == 0 else {
-                            throw VRMAClipInspector.InspectError.badAccessor
-                        }
-                        let keyCount = accCount / 3
-                        var prevVal: simd_quatd?
-                        for k in 0..<keyCount {
-                            let base = k * 12
-                            let inT = u * simd_quatd(ix: Double(vals[base]), iy: Double(vals[base + 1]), iz: Double(vals[base + 2]), r: Double(vals[base + 3])) * v
-                            let rawVal = simd_normalize(simd_quatd(ix: Double(vals[base + 4]), iy: Double(vals[base + 5]), iz: Double(vals[base + 6]), r: Double(vals[base + 7])))
-                            var val = simd_normalize(u * rawVal * v)
-                            let outT = u * simd_quatd(ix: Double(vals[base + 8]), iy: Double(vals[base + 9]), iz: Double(vals[base + 10]), r: Double(vals[base + 11])) * v
-
-                            var finalInT = inT
-                            var finalOutT = outT
-                            if let prev = prevVal, simd_dot(val.vector, prev.vector) < 0 {
-                                val = -val
-                                finalInT = -finalInT
-                                finalOutT = -finalOutT
-                            }
-                            prevVal = val
-                            Self.appendQuat(finalInT, to: &outFloats)
-                            Self.appendQuat(val, to: &outFloats)
-                            Self.appendQuat(finalOutT, to: &outFloats)
-                        }
-                    } else {
-                        guard vals.count == accCount * 4 else {
-                            throw VRMAClipInspector.InspectError.badAccessor
-                        }
-                        var prev: simd_quatd?
-                        for k in 0..<accCount {
-                            let base = k * 4
-                            let raw = simd_normalize(simd_quatd(
-                                ix: Double(vals[base]),
-                                iy: Double(vals[base + 1]),
-                                iz: Double(vals[base + 2]),
-                                r: Double(vals[base + 3])
-                            ))
-                            var q = simd_normalize(u * raw * v)
-                            if let p = prev, simd_dot(q.vector, p.vector) < 0 {
-                                q = -q
-                            }
-                            prev = q
-                            Self.appendQuat(q, to: &outFloats)
-                        }
-                    }
+                    // Non-humanoid child of a normalized parent: parent's world frame
+                    // shifted by W_parent⁻¹ (`R'_p(t) = R_p(t) · W_parent⁻¹`), so
+                    // `q'(t) = W_parent · q(t)` preserves exact world orientation.
+                    let vals = try inspector.floats(accessor: outputAcc)
+                    let outFloats = try Self.transformRotationFloats(
+                        vals: vals,
+                        accCount: accCount,
+                        isCubic: isCubic,
+                        left: parentW,
+                        right: simd_quatd(ix: 0, iy: 0, iz: 0, r: 1)
+                    )
 
                     let newAcc = Self.appendFloatAccessor(
                         floats: outFloats,
@@ -778,6 +772,63 @@ public struct VRMAClipEditor {
     }
 
     // MARK: - Private Binary Helpers
+
+    private static func transformRotationFloats(
+        vals: [Float],
+        accCount: Int,
+        isCubic: Bool,
+        left u: simd_quatd,
+        right v: simd_quatd
+    ) throws -> [Float] {
+        var outFloats: [Float] = []
+        outFloats.reserveCapacity(vals.count)
+
+        if isCubic {
+            guard vals.count == accCount * 4, accCount % 3 == 0 else {
+                throw VRMAClipInspector.InspectError.badAccessor
+            }
+            let keyCount = accCount / 3
+            var prevVal: simd_quatd?
+            for k in 0..<keyCount {
+                let base = k * 12
+                var inT = u * simd_quatd(ix: Double(vals[base]), iy: Double(vals[base + 1]), iz: Double(vals[base + 2]), r: Double(vals[base + 3])) * v
+                let rawVal = simd_normalize(simd_quatd(ix: Double(vals[base + 4]), iy: Double(vals[base + 5]), iz: Double(vals[base + 6]), r: Double(vals[base + 7])))
+                var val = simd_normalize(u * rawVal * v)
+                var outT = u * simd_quatd(ix: Double(vals[base + 8]), iy: Double(vals[base + 9]), iz: Double(vals[base + 10]), r: Double(vals[base + 11])) * v
+
+                if let prev = prevVal, simd_dot(val.vector, prev.vector) < 0 {
+                    val = -val
+                    inT = -inT
+                    outT = -outT
+                }
+                prevVal = val
+                appendQuat(inT, to: &outFloats)
+                appendQuat(val, to: &outFloats)
+                appendQuat(outT, to: &outFloats)
+            }
+        } else {
+            guard vals.count == accCount * 4 else {
+                throw VRMAClipInspector.InspectError.badAccessor
+            }
+            var prev: simd_quatd?
+            for k in 0..<accCount {
+                let base = k * 4
+                let raw = simd_normalize(simd_quatd(
+                    ix: Double(vals[base]),
+                    iy: Double(vals[base + 1]),
+                    iz: Double(vals[base + 2]),
+                    r: Double(vals[base + 3])
+                ))
+                var q = simd_normalize(u * raw * v)
+                if let p = prev, simd_dot(q.vector, p.vector) < 0 {
+                    q = -q
+                }
+                prev = q
+                appendQuat(q, to: &outFloats)
+            }
+        }
+        return outFloats
+    }
 
     private static func appendQuat(_ q: simd_quatd, to out: inout [Float]) {
         out.append(Float(q.imag.x))
