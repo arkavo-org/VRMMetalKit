@@ -53,52 +53,9 @@ enum SpringBoneBreastCollider {
     }
 
     private static func fitBreasts(model: VRMModel, radiusPercentile: Float) -> [BreastFit] {
-        guard let springBone = model.springBone else { return [] }
-        var sides: [(anchor: Int, bustNodes: Set<Int>)] = []
-        for spring in springBone.springs where (spring.name ?? "").lowercased().contains("bust") {
-            let nodeIndices = spring.joints.map { $0.node }
-            guard let anchor = nodeIndices.first else { continue }
-            sides.append((anchor, Set(nodeIndices)))
+        SpringBoneMeshFit.computeBreastFits(model: model, radiusPercentile: radiusPercentile).map {
+            BreastFit(anchor: $0.anchor, centroidWorld: $0.centroidWorld, radius: $0.radius)
         }
-        guard !sides.isEmpty, let (meshIndex, skin) = bodyMeshAndSkin(model: model) else { return [] }
-
-        let skinMatrices = skin.joints.indices.map { i in
-            skin.joints[i].worldMatrix * skin.inverseBindMatrices[i]
-        }
-        let sideSlots: [Set<Int>] = sides.map { side in
-            Set(skin.joints.indices.filter { side.bustNodes.contains(skin.joints[$0].index) })
-        }
-
-        var sideVerts: [[SIMD3<Float>]] = Array(repeating: [], count: sides.count)
-        for primitive in model.meshes[meshIndex].primitives {
-            let verts = primitive.interleavedVertices()
-            guard !verts.isEmpty else { continue }
-            for v in verts {
-                let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
-                let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
-                var domSlot = -1
-                var domW: Float = 0
-                for k in 0..<4 where ws[k] > domW { domW = ws[k]; domSlot = js[k] }
-                guard domSlot >= 0, domW > 0.5 else { continue }
-                for (s, slots) in sideSlots.enumerated() where slots.contains(domSlot) {
-                    sideVerts[s].append(skinVertex(v.position, v.joints, v.weights, skinMatrices))
-                    break
-                }
-            }
-        }
-
-        var out: [BreastFit] = []
-        for (s, side) in sides.enumerated() {
-            let verts = sideVerts[s]
-            guard verts.count >= 8, side.anchor >= 0, side.anchor < model.nodes.count else { continue }
-            let centroid = verts.reduce(SIMD3<Float>(repeating: 0), +) / Float(verts.count)
-            let dists = verts.map { simd_length($0 - centroid) }.sorted()
-            let pIdx = min(dists.count - 1, max(0, Int(Float(dists.count - 1) * radiusPercentile)))
-            let radius = dists[pIdx]
-            guard radius.isFinite, radius > 1e-4 else { continue }
-            out.append(BreastFit(anchor: side.anchor, centroidWorld: centroid, radius: radius))
-        }
-        return out
     }
 
     /// Per-side breast bounding spheres (the MEASURING stick / mesh proxy).
@@ -126,30 +83,11 @@ enum SpringBoneBreastCollider {
     static func computeBreastColliders(model: VRMModel,
                                        radiusPercentile: Float = 1.0,
                                        radiusScale: Float = 1.0) -> [VRMCollider] {
-        guard let humanoid = model.humanoid else { return [] }
-        let superiorBone = humanoid.getBoneNode(.upperChest)
-            ?? humanoid.getBoneNode(.chest) ?? humanoid.getBoneNode(.spine)
-        guard let superiorNode = superiorBone, superiorNode < model.nodes.count else { return [] }
-        let superiorWorld = model.nodes[superiorNode].worldPosition
-
-        var out: [VRMCollider] = []
-        for fit in fitBreasts(model: model, radiusPercentile: radiusPercentile) {
-            let anchorWorld = model.nodes[fit.anchor].worldMatrix
-            let invAnchor = simd_inverse(anchorWorld)
-            // p0 = breast centroid (inferior-anterior); p1 = a point up toward the
-            // collarbone entry (upperChest height, kept at the breast's forward z
-            // so the capsule tracks the anterior chest wall, not the spine).
-            let p0 = fit.centroidWorld
-            let p1 = SIMD3<Float>(fit.centroidWorld.x, superiorWorld.y, fit.centroidWorld.z)
-            let o0 = invAnchor * SIMD4<Float>(p0, 1)
-            let o1 = invAnchor * SIMD4<Float>(p1, 1)
-            let offset = SIMD3<Float>(o0.x, o0.y, o0.z)
-            let tail = SIMD3<Float>(o1.x, o1.y, o1.z)
-            let radius = fit.radius * radiusScale
-            guard offset.x.isFinite, tail.x.isFinite, radius.isFinite, radius > 1e-4 else { continue }
-            out.append(VRMCollider(node: fit.anchor, shape: .capsule(offset: offset, radius: radius, tail: tail)))
-        }
-        return out
+        SpringBoneMeshFit.computeBreastColliders(
+            model: model,
+            radiusPercentile: radiusPercentile,
+            radiusScale: radiusScale
+        )
     }
 
     /// Per-side deltoid/shoulder COLLIDERS for the swept synthetic group (#377
@@ -173,64 +111,11 @@ enum SpringBoneBreastCollider {
     static func computeShoulderColliders(model: VRMModel,
                                          radiusPercentile: Float = 0.95,
                                          radiusScale: Float = 1.0) -> [VRMCollider] {
-        guard let humanoid = model.humanoid, let (meshIndex, skin) = bodyMeshAndSkin(model: model) else { return [] }
-        let skinMatrices = skin.joints.indices.map { skin.joints[$0].worldMatrix * skin.inverseBindMatrices[$0] }
-
-        let sides: [(shoulder: VRMHumanoidBone, upper: VRMHumanoidBone, lower: VRMHumanoidBone)] = [
-            (.leftShoulder, .leftUpperArm, .leftLowerArm),
-            (.rightShoulder, .rightUpperArm, .rightLowerArm)
-        ]
-        var out: [VRMCollider] = []
-        for side in sides {
-            guard let upperNode = humanoid.getBoneNode(side.upper), upperNode >= 0, upperNode < model.nodes.count else { continue }
-            let upperOrigin = model.nodes[upperNode].worldPosition
-            var armLen: Float = 0.2
-            if let lowerNode = humanoid.getBoneNode(side.lower), lowerNode >= 0, lowerNode < model.nodes.count {
-                let l = simd_length(model.nodes[lowerNode].worldPosition - upperOrigin)
-                if l > 1e-3 { armLen = l }
-            }
-            // Lateral axis (shoulder → upperArm, pointing away from the
-            // midline). Verts behind the socket along this axis belong to the
-            // collarbone/chest, not the deltoid.
-            var lateralDir: SIMD3<Float>?
-            if let shoulderNode = humanoid.getBoneNode(side.shoulder), shoulderNode >= 0, shoulderNode < model.nodes.count {
-                let d = upperOrigin - model.nodes[shoulderNode].worldPosition
-                if simd_length(d) > 1e-4 { lateralDir = simd_normalize(d) }
-            }
-            let regionNodes = Set([side.shoulder, side.upper].compactMap { humanoid.getBoneNode($0) })
-            let regionSlots = Set(skin.joints.indices.filter { regionNodes.contains(skin.joints[$0].index) })
-
-            var verts: [SIMD3<Float>] = []
-            for primitive in model.meshes[meshIndex].primitives {
-                let loaded = primitive.interleavedVertices()
-                guard !loaded.isEmpty else { continue }
-                for v in loaded {
-                    let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
-                    let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
-                    var domSlot = -1
-                    var domW: Float = 0
-                    for k in 0..<4 where ws[k] > domW { domW = ws[k]; domSlot = js[k] }
-                    guard domSlot >= 0, domW > 0.5, regionSlots.contains(domSlot) else { continue }
-                    let wp = skinVertex(v.position, v.joints, v.weights, skinMatrices)
-                    // Proximal deltoid only — exclude the mid/lower arm.
-                    guard simd_length(wp - upperOrigin) < armLen * 0.5 else { continue }
-                    // Lateral deltoid only — exclude verts medial of the socket.
-                    if let dir = lateralDir, simd_dot(wp - upperOrigin, dir) < 0 { continue }
-                    verts.append(wp)
-                }
-            }
-            guard verts.count >= 8 else { continue }
-            let centroid = verts.reduce(SIMD3<Float>(repeating: 0), +) / Float(verts.count)
-            let dists = verts.map { simd_length($0 - centroid) }.sorted()
-            let pIdx = min(dists.count - 1, max(0, Int(Float(dists.count - 1) * radiusPercentile)))
-            let radius = dists[pIdx] * radiusScale
-            guard radius.isFinite, radius > 1e-4 else { continue }
-            let localC = simd_inverse(model.nodes[upperNode].worldMatrix) * SIMD4<Float>(centroid, 1)
-            guard localC.x.isFinite, localC.y.isFinite, localC.z.isFinite else { continue }
-            out.append(VRMCollider(node: upperNode,
-                                   shape: .sphere(offset: SIMD3<Float>(localC.x, localC.y, localC.z), radius: radius)))
-        }
-        return out
+        SpringBoneMeshFit.computeShoulderColliders(
+            model: model,
+            radiusPercentile: radiusPercentile,
+            radiusScale: radiusScale
+        )
     }
 
     /// Mesh-fitted upper-TORSO collider (#377 upper body): the clothed upper
@@ -240,82 +125,14 @@ enum SpringBoneBreastCollider {
     /// the spine→upperChest axis with a radius fitted to the clothed torso
     /// surface (verts weighted to spine/chest/upperChest, EXCLUDING the bust which
     /// the breast capsule already covers). Anchored on the spine. Empty when the
-    /// bones / body mesh don't resolve.
+    /// bones / skinned meshes don't resolve.
     static func computeTorsoCollider(model: VRMModel,
                                      radiusPercentile: Float = 0.90,
                                      radiusScale: Float = 1.0) -> [VRMCollider] {
-        guard let humanoid = model.humanoid, let (meshIndex, skin) = bodyMeshAndSkin(model: model) else { return [] }
-        guard let spineNode = humanoid.getBoneNode(.spine), spineNode >= 0, spineNode < model.nodes.count else { return [] }
-        let superiorBone = humanoid.getBoneNode(.upperChest) ?? humanoid.getBoneNode(.chest)
-        guard let superiorNode = superiorBone, superiorNode < model.nodes.count else { return [] }
-        let p0 = model.nodes[spineNode].worldPosition       // axis base
-        let p1 = model.nodes[superiorNode].worldPosition    // axis top
-        let axis = p1 - p0
-        let axisLen = simd_length(axis)
-        guard axisLen > 1e-3 else { return [] }
-
-        let skinMatrices = skin.joints.indices.map { skin.joints[$0].worldMatrix * skin.inverseBindMatrices[$0] }
-        let regionNodes = Set([VRMHumanoidBone.spine, .chest, .upperChest].compactMap { humanoid.getBoneNode($0) })
-        let regionSlots = Set(skin.joints.indices.filter { regionNodes.contains(skin.joints[$0].index) })
-
-        func perpDist(_ p: SIMD3<Float>) -> Float {
-            let t = max(0, min(1, simd_dot(p - p0, axis) / (axisLen * axisLen)))
-            return simd_length(p - (p0 + t * axis))
-        }
-        var dists: [Float] = []
-        for primitive in model.meshes[meshIndex].primitives {
-            let loaded = primitive.interleavedVertices()
-            guard !loaded.isEmpty else { continue }
-            for v in loaded {
-                let js = [Int(v.joints.x), Int(v.joints.y), Int(v.joints.z), Int(v.joints.w)]
-                let ws = [v.weights.x, v.weights.y, v.weights.z, v.weights.w]
-                var domSlot = -1
-                var domW: Float = 0
-                for k in 0..<4 where ws[k] > domW { domW = ws[k]; domSlot = js[k] }
-                guard domSlot >= 0, domW > 0.5, regionSlots.contains(domSlot) else { continue }
-                dists.append(perpDist(skinVertex(v.position, v.joints, v.weights, skinMatrices)))
-            }
-        }
-        guard dists.count >= 16 else { return [] }
-        dists.sort()
-        let pIdx = min(dists.count - 1, max(0, Int(Float(dists.count - 1) * radiusPercentile)))
-        let radius = dists[pIdx] * radiusScale
-        guard radius.isFinite, radius > 1e-4 else { return [] }
-        // Capsule along spine→superior in the spine's local frame.
-        let inv = simd_inverse(model.nodes[spineNode].worldMatrix)
-        let o0 = inv * SIMD4<Float>(p0, 1)
-        let o1 = inv * SIMD4<Float>(p1, 1)
-        let offset = SIMD3<Float>(o0.x, o0.y, o0.z)
-        let tail = SIMD3<Float>(o1.x, o1.y, o1.z)
-        guard offset.x.isFinite, tail.x.isFinite else { return [] }
-        return [VRMCollider(node: spineNode, shape: .capsule(offset: offset, radius: radius, tail: tail))]
-    }
-
-    /// The body/skin mesh and its skin. Matches the mesh whose name contains
-    /// "body" (VRoid exports the torso/skin/dress under a "Body" mesh) and that
-    /// binds a skin.
-    private static func bodyMeshAndSkin(model: VRMModel) -> (Int, VRMSkin)? {
-        for (mi, mesh) in model.meshes.enumerated() {
-            guard (mesh.name ?? "").lowercased().contains("body") else { continue }
-            guard let node = model.nodes.first(where: { $0.mesh == mi }),
-                  let skinIndex = node.skin, skinIndex >= 0, skinIndex < model.skins.count else { continue }
-            return (mi, model.skins[skinIndex])
-        }
-        return nil
-    }
-
-    /// Linear-blend skinning of one vertex to world space (mirrors the GPU path).
-    private static func skinVertex(_ position: SIMD3<Float>, _ joints: SIMD4<UInt32>,
-                                   _ weights: SIMD4<Float>, _ skinMatrices: [float4x4]) -> SIMD3<Float> {
-        let wsum = max(weights.x + weights.y + weights.z + weights.w, 1e-6)
-        let w = weights / wsum
-        let js = [Int(joints.x), Int(joints.y), Int(joints.z), Int(joints.w)]
-        let ws = [w.x, w.y, w.z, w.w]
-        var m = float4x4(0)
-        for k in 0..<4 where ws[k] > 0 && js[k] >= 0 && js[k] < skinMatrices.count {
-            m += skinMatrices[js[k]] * ws[k]
-        }
-        let p = m * SIMD4<Float>(position, 1)
-        return SIMD3<Float>(p.x, p.y, p.z)
+        SpringBoneMeshFit.computeTorsoCollider(
+            model: model,
+            radiusPercentile: radiusPercentile,
+            radiusScale: radiusScale
+        )
     }
 }

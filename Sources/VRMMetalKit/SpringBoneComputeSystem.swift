@@ -84,6 +84,13 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// collider's `groupMask`): `0` = no synthetic group present → swept
     /// collision never engages.
     private var sweptColliderGroupMask: UInt32 = 0
+    /// True when at least one bone participates in a skirt ring chord (#478).
+    /// Gates the pre-capsule `copyParentPositions()` snapshot so non-skirted
+    /// models pay zero extra dispatch overhead.
+    private var hasRingNeighbors: Bool = false
+    /// Connected components of non-empty chain indices coupled by skirt ring chords.
+    /// Keeps ring neighbors waking and sleeping in lockstep on the async sleep path.
+    private var ringChainComponents: [[Int]] = []
     /// Reserved collider-group index for cross-avatar FOREIGN colliders (design
     /// §7). Distinct from the synthetic group so foreign colliders stay OUT of
     /// the synthetic group's swept-CCD scoping (foreign contact is discrete).
@@ -350,6 +357,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// in `executeXPBDStep`. Allocated lazily once `centerSpringRecords`
     /// is non-empty.
     private var centerDeltaBuffer: MTLBuffer?
+    /// Reused per-frame cache of computed center deltas keyed by center node index
+    /// so springs sharing a center node (e.g. 68 springs all referencing root)
+    /// invert the center matrix once per substep instead of once per spring (#222).
+    private var centerDeltaScratch: [Int: float4x4] = [:]
 
     /// 80-byte mirror of the `CenterDeltaRecord` struct in
     /// `SpringBoneCenterDelta.metal` (4 × uint header + 4×4 float matrix).
@@ -779,6 +790,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                             globalParams: globalParams,
                             foreign: clampedForeign,
                             external: clampedExternal)
+            synchronizeRingSleepInputs()
             sleepGate.apply(velocities: wakeVelocitiesScratch,
                             wakeMask: wakeMaskScratch,
                             ranges: chainRanges,
@@ -1013,6 +1025,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         computeEncoder.setBuffer(buffers.restLengths, offset: 0, index: 4)
         computeEncoder.setBuffer(buffers.parentPosPrev, offset: 0, index: 18)
         computeEncoder.setBuffer(buffers.parentPosCurr, offset: 0, index: 19)
+        if let collisionAux = buffers.collisionAux {
+            computeEncoder.setBuffer(collisionAux, offset: 0, index: 20)
+        }
 
         // Colliders and bindDirections are rewritten per substep, so each
         // dispatch must read its own slot (VMK#396).
@@ -1140,6 +1155,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
 
         if globalParams.numCapsules > 0 {
+            if hasRingNeighbors {
+                // Freeze post-sphere positions into parentPosCurr so skirt ring
+                // chord checks read an immutable snapshot with zero SIMD-group races (#452, #478).
+                copyParentPositions()
+            }
             computeEncoder.setComputePipelineState(collideCapsulesPipeline)
             // Scope swept (continuous) collision to the synthetic group (#313).
             var sweptGroupCaps = sweptColliderGroupMask
@@ -1365,6 +1385,41 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             combinedMovedColliderMask: combinedColliderMask,
             chainColliderMasks: chainColliderMasks
         )
+    }
+
+    /// Synchronizes sleep-gate inputs across each skirt ring connected component so
+    /// coupled ring chains always wake and sleep in lockstep — preventing a sleeping
+    /// neighbor from early-returning in `springBoneCollideCapsules` and halving
+    /// two-ended mid-span chord projection.
+    private func synchronizeRingSleepInputs() {
+        guard !ringChainComponents.isEmpty else { return }
+        let limit = min(sleepGate.asleep.count, min(wakeMaskScratch.count, wakeVelocitiesScratch.count))
+        for component in ringChainComponents {
+            var anyWake = false
+            var anyAwake = false
+            var anyAsleep = false
+            var maxVel: Float = 0
+            for c in component where c >= 0 && c < limit {
+                if wakeMaskScratch[c] { anyWake = true }
+                if sleepGate.asleep[c] {
+                    anyAsleep = true
+                } else {
+                    anyAwake = true
+                    if wakeVelocitiesScratch[c] > maxVel {
+                        maxVel = wakeVelocitiesScratch[c]
+                    }
+                }
+            }
+            if anyWake || (anyAwake && anyAsleep) {
+                for c in component where c >= 0 && c < limit {
+                    wakeMaskScratch[c] = true
+                }
+            } else if anyAwake {
+                for c in component where c >= 0 && c < limit {
+                    wakeVelocitiesScratch[c] = maxVel
+                }
+            }
+        }
     }
 
     /// Foreign (cross-avatar / external) colliders wake physics like authored
@@ -1684,7 +1739,7 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         // >=32 groups all clamp to 31) and leak authored colliders through the
         // spring filter.
         let syntheticGroupIndex = UInt32(min(springBone.colliderGroups.count, 31))
-        let hasSyntheticColliders = !springBone.syntheticColliders.isEmpty
+        let hasSyntheticColliders = !springBone.syntheticColliders.isEmpty && springBone.colliderGroups.count < 32
         let syntheticGroupBit: UInt32 = hasSyntheticColliders ? (1 << syntheticGroupIndex) : 0
         // Scope swept (continuous) sphere collision to the synthetic group only
         // (#313), as the precomputed group BIT the shader ANDs against each
@@ -1918,12 +1973,23 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Append synthetic colliders (issue #309) via the shared helper. They
         // live in the reserved synthetic group so every spring collides with them.
-        appendSyntheticColliders(
-            springBone.syntheticColliders, model: model, groupMask: syntheticGroupBit,
-            spheres: &sphereColliders, capsules: &capsuleColliders)
+        if hasSyntheticColliders {
+            appendSyntheticColliders(
+                springBone.syntheticColliders, model: model, groupMask: syntheticGroupBit,
+                spheres: &sphereColliders, capsules: &capsuleColliders)
+        }
 
         // Update buffers
         buffers.updateBoneParameters(boneParams)
+        let chainSyntheticEnabled = chainColliderMasks.map { ($0 & syntheticGroupBit) != 0 }
+        let ringDetection = SpringBoneSkirtRingDetector.buildCollisionAux(
+            model: model,
+            hasSyntheticColliders: hasSyntheticColliders,
+            chainSyntheticEnabled: chainSyntheticEnabled
+        )
+        let auxUploaded = buffers.updateCollisionAux(ringDetection.aux)
+        hasRingNeighbors = auxUploaded && ringDetection.hasRingNeighbors
+        ringChainComponents = hasRingNeighbors ? ringDetection.ringChainComponents : []
         buffers.updateRestLengths(restLengths)
 
         // GPU needs WORLD directions for stiffness calculation
@@ -2156,151 +2222,57 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             return
         }
 
-        var animatedPositions: [SIMD3<Float>] = []
-        var rootIndex = 0
+        ensureTargetCaptureCaches(model: model, springBone: springBone)
 
-        // Update root bone positions from animated transforms
-        for spring in springBone.springs {
-            if let firstJoint = spring.joints.first,
-               let node = model.nodes[safe: firstJoint.node] {
-                animatedPositions.append(node.worldPosition)
-                rootIndex += 1
-            }
+        // Update root bone positions from pre-resolved flat cache (zero per-call allocation).
+        targetRootPositions.removeAll(keepingCapacity: true)
+        for node in cachedRootNodes {
+            targetRootPositions.append(node.worldPosition)
         }
 
         // Teleportation detection: check if any root bone moved more than threshold
-        let shouldResetPhysics = detectTeleportation(currentPositions: animatedPositions, buffers: buffers)
+        let shouldResetPhysics = detectTeleportation(currentPositions: targetRootPositions, buffers: buffers)
         if shouldResetPhysics {
-            resetPhysicsState(model: model, buffers: buffers, animatedPositions: animatedPositions)
+            resetPhysicsState(model: model, buffers: buffers, animatedPositions: targetRootPositions)
             vrmLog("⚠️ [SpringBone] Teleportation detected - physics state reset")
         }
 
         // Manual physics reset request (e.g., when returning to idle)
         if requestPhysicsReset {
-            resetPhysicsState(model: model, buffers: buffers, animatedPositions: animatedPositions)
+            resetPhysicsState(model: model, buffers: buffers, animatedPositions: targetRootPositions)
             requestPhysicsReset = false
         }
 
-        // Update last root positions for next frame's teleportation check
-        lastRootPositions = animatedPositions
+        // Update last root positions in place (preserving backing storage on both arrays)
+        lastRootPositions.removeAll(keepingCapacity: true)
+        lastRootPositions.append(contentsOf: targetRootPositions)
 
         // Copy to GPU buffer at the correct aligned offset for this substep
-        if animatedPositions.count > 0 {
+        if !targetRootPositions.isEmpty {
             assert(substepIndex < VRMConstants.Physics.maxSubstepsPerFrame, "substepIndex \(substepIndex) exceeds max allocated capacity")
-            let singleStepLength = MemoryLayout<SIMD3<Float>>.stride * animatedPositions.count
+            let singleStepLength = MemoryLayout<SIMD3<Float>>.stride * targetRootPositions.count
             let byteOffset = substepIndex * alignedStepLength
-            
+
             let dest = animatedRootPositionsBuffer.contents().advanced(by: byteOffset)
             dest.copyMemory(
-                from: animatedPositions,
+                from: targetRootPositions,
                 byteCount: singleStepLength
             )
         }
 
-        // Build collider-to-group-MEMBERSHIP mapping for animated updates (OR of
-        // every group's bit — a collider in several groups must be visible to
-        // springs referencing ANY of them). Clamp each bit to 31 so the shader's
-        // `1u << bit` is well-defined.
-        var colliderToGroupMask: [Int: UInt32] = [:]
-        for (groupIndex, group) in springBone.colliderGroups.enumerated() {
-            let bit = UInt32(1 << min(groupIndex, 31))
-            for colliderIndex in group.colliders {
-                colliderToGroupMask[colliderIndex, default: 0] |= bit
-            }
+        // Capture colliders via revision-cached flat tables (includes synthetic colliders
+        // and runtime sphere radius overrides) without per-call dictionary/array rebuilds (#222),
+        // leaving interpolation `previous*` history untouched for warmup / non-interpolated callers.
+        populateTargetColliderTransforms()
+
+        if !targetSphereColliders.isEmpty {
+            buffers.updateSphereColliders(targetSphereColliders)
         }
-
-        // Update collider positions (they can move with animation)
-        var sphereColliders: [SphereCollider] = []
-        var capsuleColliders: [CapsuleCollider] = []
-        var planeColliders: [PlaneCollider] = []
-
-        for (colliderIndex, collider) in springBone.colliders.enumerated() {
-            guard let colliderNode = model.nodes[safe: collider.node] else { continue }
-            let groupMask = colliderToGroupMask[colliderIndex] ?? 1   // no group ⇒ bit 0 (legacy default)
-
-            // Extract rotation from world matrix (upper 3x3) to transform local offsets
-            let wm = colliderNode.worldMatrix
-            let worldRotation = simd_float3x3(
-                SIMD3<Float>(wm[0][0], wm[0][1], wm[0][2]),
-                SIMD3<Float>(wm[1][0], wm[1][1], wm[1][2]),
-                SIMD3<Float>(wm[2][0], wm[2][1], wm[2][2])
-            )
-
-            #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
-            if updateCounter < 5 {
-                print("[Collider \(colliderIndex)] node=\(collider.node) '\(colliderNode.name ?? "")' nodePos=(\(String(format: "%.3f", colliderNode.worldPosition.x)), \(String(format: "%.3f", colliderNode.worldPosition.y)), \(String(format: "%.3f", colliderNode.worldPosition.z)))")
-            }
-            #endif
-
-            switch collider.shape {
-            case .sphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
-                #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
-                if updateCounter < 5 {
-                    print("  localOffset=(\(String(format: "%.3f", offset.x)), \(String(format: "%.3f", offset.y)), \(String(format: "%.3f", offset.z))) -> worldOffset=(\(String(format: "%.3f", worldOffset.x)), \(String(format: "%.3f", worldOffset.y)), \(String(format: "%.3f", worldOffset.z))) -> center=(\(String(format: "%.3f", worldCenter.x)), \(String(format: "%.3f", worldCenter.y)), \(String(format: "%.3f", worldCenter.z)))")
-                }
-                #endif
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask))
-
-            case .insideSphere(let offset, let radius):
-                let worldOffset = worldRotation * offset
-                let worldCenter = colliderNode.worldPosition + worldOffset
-                sphereColliders.append(SphereCollider(center: worldCenter, radius: radius, groupMask: groupMask, inside: true))
-
-            case .capsule(let offset, let radius, let tail):
-                let worldP0 = colliderNode.worldPosition + worldRotation * offset
-                let worldP1 = colliderNode.worldPosition + worldRotation * tail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask))
-
-            case .insideCapsule(let offset, let radius, let tail):
-                let worldP0 = colliderNode.worldPosition + worldRotation * offset
-                let worldP1 = colliderNode.worldPosition + worldRotation * tail
-                capsuleColliders.append(CapsuleCollider(p0: worldP0, p1: worldP1, radius: radius, groupMask: groupMask, inside: true))
-
-            case .plane(let offset, let normal):
-                let worldOffset = worldRotation * offset
-                let worldNormal = worldRotation * normal
-                let worldPoint = colliderNode.worldPosition + worldOffset
-                let normalizedNormal = simd_length(worldNormal) > 0.001 ? simd_normalize(worldNormal) : SIMD3<Float>(0, 1, 0)
-                planeColliders.append(PlaneCollider(point: worldPoint, normal: normalizedNormal, groupMask: groupMask))
-            }
+        if !targetCapsuleColliders.isEmpty {
+            buffers.updateCapsuleColliders(targetCapsuleColliders)
         }
-
-        // Append synthetic colliders (issue #309) via the shared helper.
-        let syntheticGroupMask: UInt32 = springBone.syntheticColliders.isEmpty
-            ? 0 : (1 << UInt32(min(springBone.colliderGroups.count, 31)))
-        appendSyntheticColliders(
-            springBone.syntheticColliders, model: model, groupMask: syntheticGroupMask,
-            spheres: &sphereColliders, capsules: &capsuleColliders)
-
-        #if VRM_METALKIT_ENABLE_DEBUG_PHYSICS
-        if updateCounter % 600 == 1 && !sphereColliders.isEmpty {
-            print("[SpringBone DEBUG] === Animated Collider Positions (frame \(updateCounter)) ===")
-            for (i, sphere) in sphereColliders.enumerated() {
-                print("  Sphere \(i): center=(\(String(format: "%.3f", sphere.center.x)), \(String(format: "%.3f", sphere.center.y)), \(String(format: "%.3f", sphere.center.z))) groupMask=0x\(String(sphere.groupMask, radix: 16))")
-            }
-        }
-        #endif
-
-        // Apply runtime radius overrides (e.g., for hair clipping prevention)
-        for (index, overrideRadius) in sphereColliderRadiusOverrides {
-            if index < sphereColliders.count {
-                sphereColliders[index].radius = overrideRadius
-            }
-        }
-
-        // Update collider buffers with animated positions
-        if !sphereColliders.isEmpty {
-            buffers.updateSphereColliders(sphereColliders)
-        }
-
-        if !capsuleColliders.isEmpty {
-            buffers.updateCapsuleColliders(capsuleColliders)
-        }
-
-        if !planeColliders.isEmpty {
-            buffers.updatePlaneColliders(planeColliders)
+        if !targetPlaneColliders.isEmpty {
+            buffers.updatePlaneColliders(targetPlaneColliders)
         }
     }
 
@@ -2325,8 +2297,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             wakeAllChains()
         }
 
-        // Update last root positions for next frame's teleportation check
-        lastRootPositions = targetRootPositions
+        // Update last root positions in place (preserving backing storage on both arrays)
+        lastRootPositions.removeAll(keepingCapacity: true)
+        lastRootPositions.append(contentsOf: targetRootPositions)
     }
 
     /// Resets all interpolation state to current target (prevents lerping from stale data after teleport)
@@ -2830,8 +2803,9 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
             }
         }
 
-        // Mirror appendSyntheticColliders (issue #309) into the flat caches.
-        if !springBone.syntheticColliders.isEmpty {
+        // Mirror appendSyntheticColliders (issue #309) into the flat caches when a
+        // free unaliased group bit exists (< 32 authored groups).
+        if !springBone.syntheticColliders.isEmpty && springBone.colliderGroups.count < 32 {
             let syntheticGroupMask: UInt32 = 1 << UInt32(min(springBone.colliderGroups.count, 31))
             for collider in springBone.syntheticColliders {
                 guard let colliderNode = model.nodes[safe: collider.node] else { continue }
@@ -2902,8 +2876,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         }
     }
 
-    /// Captures collider transforms based on current animated node positions/orientations
-    private func captureTargetColliderTransforms() {
+    /// Populates `target*Colliders` from revision-cached flat tables without mutating `previous*Colliders`.
+    private func populateTargetColliderTransforms() {
         targetSphereColliders.removeAll(keepingCapacity: true)
         targetCapsuleColliders.removeAll(keepingCapacity: true)
         targetPlaneColliders.removeAll(keepingCapacity: true)
@@ -2961,6 +2935,11 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
                 }
             }
         }
+    }
+
+    /// Captures collider transforms based on current animated node positions/orientations
+    private func captureTargetColliderTransforms() {
+        populateTargetColliderTransforms()
 
         // First frame initialization
         if previousSphereColliders.isEmpty || previousSphereColliders.count != targetSphereColliders.count {
@@ -3013,8 +2992,16 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         assert(substepIndex < VRMConstants.Physics.maxSubstepsPerFrame, "substepIndex \(substepIndex) exceeds max allocated capacity")
         let byteOffset = substepIndex * alignedStepLength
-        
         let dest = buffer.contents().advanced(by: byteOffset)
+
+        if t >= 1.0 - 1e-6 {
+            dest.copyMemory(
+                from: targetRootPositions,
+                byteCount: MemoryLayout<SIMD3<Float>>.stride * targetRootPositions.count
+            )
+            return
+        }
+
         let ptr = dest.bindMemory(to: SIMD3<Float>.self, capacity: previousRootPositions.count)
         let tv = SIMD3<Float>(repeating: t)
         for i in 0..<previousRootPositions.count {
@@ -3030,9 +3017,17 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
               let bindDirectionsBuffer = buffers.bindDirections,
               !previousWorldBindDirections.isEmpty else { return }
 
-        let ptr = bindDirectionsBuffer.contents()
+        let dest = bindDirectionsBuffer.contents()
             .advanced(by: substepIndex * buffers.bindDirectionsStride)
-            .bindMemory(to: SIMD3<Float>.self, capacity: previousWorldBindDirections.count)
+        if t >= 1.0 - 1e-6 {
+            dest.copyMemory(
+                from: targetWorldBindDirections,
+                byteCount: MemoryLayout<SIMD3<Float>>.stride * targetWorldBindDirections.count
+            )
+            return
+        }
+
+        let ptr = dest.bindMemory(to: SIMD3<Float>.self, capacity: previousWorldBindDirections.count)
         let tv = SIMD3<Float>(repeating: t)
         for i in 0..<previousWorldBindDirections.count {
             // Normalized linear interpolation (nlerp) for direction vectors
@@ -3045,23 +3040,32 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// Interpolates collider transforms for the current substep
     /// Prevents collision geometry from snapping during fast rotations
     private func interpolateColliders(t: Float, buffers: SpringBoneBuffers, substepIndex: Int) {
+        let isFinalTarget = t >= 1.0 - 1e-6
         let tv = SIMD3<Float>(repeating: t)
+
         // Interpolate sphere colliders
         if previousSphereColliders.count == targetSphereColliders.count,
            let sphereBuffer = buffers.sphereColliders,
            !previousSphereColliders.isEmpty {
-            let ptr = sphereBuffer.contents()
+            let dest = sphereBuffer.contents()
                 .advanced(by: substepIndex * buffers.sphereColliderStride)
-                .bindMemory(to: SphereCollider.self, capacity: previousSphereColliders.count)
-            for i in 0..<previousSphereColliders.count {
-                let prev = previousSphereColliders[i]
-                let target = targetSphereColliders[i]
-                ptr[i] = SphereCollider(
-                    center: simd_mix(prev.center, target.center, tv),
-                    radius: prev.radius + t * (target.radius - prev.radius),
-                    groupMask: target.groupMask,
-                    inside: target.inside != 0
+            if isFinalTarget {
+                dest.copyMemory(
+                    from: targetSphereColliders,
+                    byteCount: MemoryLayout<SphereCollider>.stride * targetSphereColliders.count
                 )
+            } else {
+                let ptr = dest.bindMemory(to: SphereCollider.self, capacity: previousSphereColliders.count)
+                for i in 0..<previousSphereColliders.count {
+                    let prev = previousSphereColliders[i]
+                    let target = targetSphereColliders[i]
+                    ptr[i] = SphereCollider(
+                        center: simd_mix(prev.center, target.center, tv),
+                        radius: prev.radius + t * (target.radius - prev.radius),
+                        groupMask: target.groupMask,
+                        inside: target.inside != 0
+                    )
+                }
             }
         }
 
@@ -3069,19 +3073,26 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if previousCapsuleColliders.count == targetCapsuleColliders.count,
            let capsuleBuffer = buffers.capsuleColliders,
            !previousCapsuleColliders.isEmpty {
-            let ptr = capsuleBuffer.contents()
+            let dest = capsuleBuffer.contents()
                 .advanced(by: substepIndex * buffers.capsuleColliderStride)
-                .bindMemory(to: CapsuleCollider.self, capacity: previousCapsuleColliders.count)
-            for i in 0..<previousCapsuleColliders.count {
-                let prev = previousCapsuleColliders[i]
-                let target = targetCapsuleColliders[i]
-                ptr[i] = CapsuleCollider(
-                    p0: simd_mix(prev.p0, target.p0, tv),
-                    p1: simd_mix(prev.p1, target.p1, tv),
-                    radius: prev.radius + t * (target.radius - prev.radius),
-                    groupMask: target.groupMask,
-                    inside: target.inside != 0
+            if isFinalTarget {
+                dest.copyMemory(
+                    from: targetCapsuleColliders,
+                    byteCount: MemoryLayout<CapsuleCollider>.stride * targetCapsuleColliders.count
                 )
+            } else {
+                let ptr = dest.bindMemory(to: CapsuleCollider.self, capacity: previousCapsuleColliders.count)
+                for i in 0..<previousCapsuleColliders.count {
+                    let prev = previousCapsuleColliders[i]
+                    let target = targetCapsuleColliders[i]
+                    ptr[i] = CapsuleCollider(
+                        p0: simd_mix(prev.p0, target.p0, tv),
+                        p1: simd_mix(prev.p1, target.p1, tv),
+                        radius: prev.radius + t * (target.radius - prev.radius),
+                        groupMask: target.groupMask,
+                        inside: target.inside != 0
+                    )
+                }
             }
         }
 
@@ -3089,18 +3100,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         if previousPlaneColliders.count == targetPlaneColliders.count,
            let planeBuffer = buffers.planeColliders,
            !previousPlaneColliders.isEmpty {
-            let ptr = planeBuffer.contents().bindMemory(to: PlaneCollider.self, capacity: previousPlaneColliders.count)
-            for i in 0..<previousPlaneColliders.count {
-                let prev = previousPlaneColliders[i]
-                let target = targetPlaneColliders[i]
-                // nlerp for normal direction
-                let interpolatedNormal = simd_mix(prev.normal, target.normal, tv)
-                let normalLen = simd_length(interpolatedNormal)
-                ptr[i] = PlaneCollider(
-                    point: simd_mix(prev.point, target.point, tv),
-                    normal: normalLen > 0.001 ? interpolatedNormal / normalLen : target.normal,
-                    groupMask: target.groupMask
+            if isFinalTarget {
+                planeBuffer.contents().copyMemory(
+                    from: targetPlaneColliders,
+                    byteCount: MemoryLayout<PlaneCollider>.stride * targetPlaneColliders.count
                 )
+            } else {
+                let ptr = planeBuffer.contents().bindMemory(to: PlaneCollider.self, capacity: previousPlaneColliders.count)
+                for i in 0..<previousPlaneColliders.count {
+                    let prev = previousPlaneColliders[i]
+                    let target = targetPlaneColliders[i]
+                    // nlerp for normal direction
+                    let interpolatedNormal = simd_mix(prev.normal, target.normal, tv)
+                    let normalLen = simd_length(interpolatedNormal)
+                    ptr[i] = PlaneCollider(
+                        point: simd_mix(prev.point, target.point, tv),
+                        normal: normalLen > 0.001 ? interpolatedNormal / normalLen : target.normal,
+                        groupMask: target.groupMask
+                    )
+                }
             }
         }
     }
@@ -3164,22 +3182,25 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         for s in 0..<substepCount {
             let tPrev = Float(s) / Float(substepCount)
             let tCurr = Float(s + 1) / Float(substepCount)
+            centerDeltaScratch.removeAll(keepingCapacity: true)
             for (i, record) in centerSpringRecords.enumerated() {
-                guard let prevMatrix = previousCenterWorldMatrices[record.centerNodeIndex],
-                      let targetMatrix = targetCenterWorldMatrices[record.centerNodeIndex] else {
-                    // Center node missing — write identity so the kernel
-                    // becomes a no-op for this entry.
-                    let slot = s * numRecords + i
-                    ptr[slot] = CenterDeltaRecordGPU(
-                        boneStart: UInt32(record.boneStart),
-                        boneCount: UInt32(record.boneCount),
-                        delta: matrix_identity_float4x4
-                    )
-                    continue
+                let delta: float4x4
+                if let cached = centerDeltaScratch[record.centerNodeIndex] {
+                    delta = cached
+                } else if let prevMatrix = previousCenterWorldMatrices[record.centerNodeIndex],
+                          let targetMatrix = targetCenterWorldMatrices[record.centerNodeIndex] {
+                    if prevMatrix == targetMatrix {
+                        delta = matrix_identity_float4x4
+                    } else {
+                        let centerAtPrev = mixMatrices(prevMatrix, targetMatrix, tPrev)
+                        let centerAtCurr = mixMatrices(prevMatrix, targetMatrix, tCurr)
+                        delta = centerAtCurr * centerAtPrev.inverse
+                    }
+                    centerDeltaScratch[record.centerNodeIndex] = delta
+                } else {
+                    delta = matrix_identity_float4x4
+                    centerDeltaScratch[record.centerNodeIndex] = delta
                 }
-                let centerAtPrev = mixMatrices(prevMatrix, targetMatrix, tPrev)
-                let centerAtCurr = mixMatrices(prevMatrix, targetMatrix, tCurr)
-                let delta = centerAtCurr * centerAtPrev.inverse
                 let slot = s * numRecords + i
                 ptr[slot] = CenterDeltaRecordGPU(
                     boneStart: UInt32(record.boneStart),
@@ -3358,6 +3379,10 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     ///   - model: The VRM model to warm up
     ///   - steps: Number of physics steps to run silently (default: 30, ~0.5s at 60fps)
     func warmupPhysics(model: VRMModel, steps: Int = 30) {
+        // Drain any pending self-owned frame before touching shared buffers so a
+        // late completion handler cannot overwrite the settled warmup snapshot.
+        waitForPendingFrame()
+
         guard let buffers = model.springBoneBuffers,
               var globalParams = model.springBoneGlobalParams,
               buffers.numBones > 0 else {
@@ -3426,38 +3451,60 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
 
         // Integrate the fixed pose with the same stiffness and drag used after
         // warmup, so the published state settles toward their equilibrium.
-        let warmupDeltaTime: TimeInterval = 1.0 / 60.0  // Simulate at 60fps
-        for _ in 0..<steps {
-            // Update animated positions (colliders, bind directions, etc.)
+        // Pose, colliders, and static warmup windPhase are constant across steps,
+        // so upload slot 0 once and batch all warmup steps into a single command
+        // buffer (eliminating per-step collider rebuilds and CPU↔GPU stalls while
+        // preserving exact sequential encoder ordering on the GPU).
+        var warmupSucceeded = true
+        if steps > 0 {
+            let warmupDeltaTime: TimeInterval = 1.0 / 60.0  // Simulate at 60fps
             updateAnimatedPositions(model: model, buffers: buffers, substepIndex: 0)
 
-            // Run one physics step
             var params = globalParams
             params.windPhase += Float(warmupDeltaTime)
+            globalParamsBuffer?.contents().copyMemory(
+                from: &params,
+                byteCount: MemoryLayout<SpringBoneGlobalParams>.stride
+            )
 
-            // Copy params to GPU. Warmup dispatches with substepIndex 0, so
-            // slot 0 is the one the kernels read.
-            globalParamsBuffer?.contents().copyMemory(from: &params, byteCount: MemoryLayout<SpringBoneGlobalParams>.stride)
+            #if DEBUG
+            let cbDesc = MTLCommandBufferDescriptor()
+            cbDesc.errorOptions = .encoderExecutionStatus
+            let warmupCB = commandQueue.makeCommandBuffer(descriptor: cbDesc)
+            #else
+            let warmupCB = commandQueue.makeCommandBuffer()
+            #endif
+            warmupCB?.label = "SpringBone Warmup"
 
-            // Execute XPBD pipeline
-            executeXPBDStep(buffers: buffers, globalParams: params, substepIndex: 0)
-
-            // executeXPBDStep commits its self-owned command buffer without
-            // waiting, but the next loop iteration rewrites the shared
-            // buffers the in-flight step reads (globalParams, collider and
-            // root positions). Unsynchronized, each GPU step races the CPU
-            // writes for the following one and may consume either step's
-            // values — the settled pose then varies run to run. Warmup is a
-            // one-time load cost, so drain every step.
-            waitForPendingFrame()
+            if let warmupCB {
+                for _ in 0..<steps {
+                    executeXPBDStep(
+                        buffers: buffers,
+                        globalParams: params,
+                        sharedCommandBuffer: warmupCB,
+                        substepIndex: 0,
+                        registerCompletedHandler: false
+                    )
+                }
+                warmupCB.commit()
+                warmupCB.waitUntilCompleted()
+                if warmupCB.status == .error {
+                    warmupSucceeded = false
+                    if let error = warmupCB.error {
+                        vrmLogPhysics("[SpringBone] Warmup GPU command buffer failed: \(error.localizedDescription)")
+                    }
+                }
+            } else {
+                for _ in 0..<steps {
+                    executeXPBDStep(buffers: buffers, globalParams: params, substepIndex: 0)
+                    waitForPendingFrame()
+                }
+            }
         }
 
-        // Wait for all GPU work to complete before proceeding
-        // This ensures warmup physics is fully computed before first render
-        if let finalCommandBuffer = commandQueue.makeCommandBuffer() {
-            finalCommandBuffer.label = "SpringBone Warmup Drain"
-            finalCommandBuffer.commit()
-            finalCommandBuffer.waitUntilCompleted()
+        guard warmupSucceeded else {
+            timeAccumulator = 0
+            return
         }
 
         // Step 5: Final reset to zero velocity at settled positions

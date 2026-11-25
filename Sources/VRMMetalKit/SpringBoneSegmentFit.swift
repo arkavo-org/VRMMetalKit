@@ -54,13 +54,16 @@ enum ColliderDimensionAudit {
         return best
     }
 
-    /// Fraction-derived synthetics (the `synthesize` prefix) whose radius
-    /// exceeds ``ceiling`` × the largest authored outside sphere or capsule on
-    /// the same node. A node with no such authored collider is not an offender.
+    /// Fraction-derived synthetics (the `synthesize` prefix, minus any fraction palm
+    /// spheres replaced by mesh-fitted hand paddles) whose radius exceeds
+    /// ``ceiling`` × the largest authored outside sphere or capsule on the same node.
+    /// A node with no such authored collider is not an offender.
     /// Leg capsules are not offenders: see ``SpringBoneSegmentFit``.
     static func offenders(model: VRMModel) -> [Offender] {
         let all = model.springBone?.syntheticColliders ?? []
-        let prefixCount = SpringBoneColliderAugmentor.synthesize(model: model).count
+        let pure = SpringBoneColliderAugmentor.synthesize(model: model)
+        let replaced = SpringBoneSegmentFit.replacedHandSphereCount(in: all, purePrefix: pure, model: model)
+        let prefixCount = max(0, min(pure.count - replaced, all.count))
         let prefix = Array(all.prefix(prefixCount)).filter {
             !SpringBoneSegmentFit.keepsFractionRadius(node: $0.node, model: model)
         }
@@ -144,34 +147,107 @@ enum SpringBoneSegmentFit {
         return legs.contains { humanoid.getBoneNode($0) == node }
     }
 
-    /// How many spheres `apply` appends. The correction changes radii in place
-    /// and appends nothing; the count stays available so load-time assertions
-    /// can add it.
+    /// Net change in sphere count that `apply` introduces on `model`.
+    /// Negative when mesh-fitted hand paddle capsules replace fraction-derived
+    /// palm spheres (#478); zero when no palm spheres are replaced.
     static func appendedSphereCount(model: VRMModel) -> Int {
         var base = SpringBoneColliderAugmentor.synthesize(model: model)
-        base.append(contentsOf: SpringBoneBreastCollider.computeBreastColliders(model: model))
-        base.append(contentsOf: SpringBoneBreastCollider.computeShoulderColliders(model: model))
-        base.append(contentsOf: SpringBoneBreastCollider.computeTorsoCollider(model: model))
+        let prefixCount = base.count
+        let meshFitted = SpringBoneMeshFit.computeAll(model: model)
+        base.append(contentsOf: meshFitted.breasts)
+        base.append(contentsOf: meshFitted.shoulders)
+        base.append(contentsOf: meshFitted.torso)
+        base.append(contentsOf: meshFitted.hands)
         let before = base.count
-        apply(to: &base, model: model)
+        apply(to: &base, prefixCount: prefixCount, model: model)
         return base.count - before
     }
 
-    /// Copies authored hand spheres onto the fraction-derived palms and clamps
+    /// Counts how many fraction-derived palm spheres from `purePrefix` were
+    /// dropped from `loaded` because fitted hand paddle capsules replaced them.
+    static func replacedHandSphereCount(
+        in loaded: [VRMCollider],
+        purePrefix: [VRMCollider],
+        model: VRMModel
+    ) -> Int {
+        guard let humanoid = model.humanoid else { return 0 }
+        var replaced = 0
+        for bone in [VRMHumanoidBone.leftHand, .rightHand] {
+            guard let handNode = humanoid.getBoneNode(bone) else { continue }
+            let pureHadSphere = purePrefix.contains { $0.node == handNode && $0.shape.isSphere }
+            let loadedHasSphere = loaded.contains { $0.node == handNode && $0.shape.isSphere }
+            let loadedHasPaddle = loaded.contains { $0.node == handNode && $0.shape.isCapsule }
+            if pureHadSphere && !loadedHasSphere && loadedHasPaddle {
+                replaced += 1
+            }
+        }
+        return replaced
+    }
+
+    /// Replaces fraction-derived palm spheres on hands that have fitted paddle
+    /// capsules (#478), falls back to authored hand spheres otherwise, and clamps
     /// every other fraction-derived collider to the authored radius on its node.
     static func apply(to synthetic: inout [VRMCollider], model: VRMModel) {
         let prefixCount = min(SpringBoneColliderAugmentor.synthesize(model: model).count, synthetic.count)
-        copyAuthoredHandSpheres(into: &synthetic, prefixCount: prefixCount, model: model)
-        ColliderDimensionAudit.enforce(&synthetic, prefixCount: prefixCount, model: model)
+        apply(to: &synthetic, prefixCount: prefixCount, model: model)
+    }
+
+    static func apply(to synthetic: inout [VRMCollider], prefixCount: Int, model: VRMModel) {
+        var effectivePrefixCount = min(prefixCount, synthetic.count)
+        let replacedNodes = removeReplacedHandSpheres(
+            from: &synthetic,
+            prefixCount: &effectivePrefixCount,
+            model: model
+        )
+        copyAuthoredHandSpheres(
+            into: &synthetic,
+            prefixCount: effectivePrefixCount,
+            excluding: replacedNodes,
+            model: model
+        )
+        ColliderDimensionAudit.enforce(&synthetic, prefixCount: effectivePrefixCount, model: model)
+    }
+
+    /// Removes the fraction-derived palm sphere from the `synthesize` prefix
+    /// whenever the tail already carries mesh/bone-fitted hand paddle capsules
+    /// for that hand node (#478). Removing spheres never alters capsule buffer
+    /// slots 0–9.
+    private static func removeReplacedHandSpheres(
+        from synthetic: inout [VRMCollider],
+        prefixCount: inout Int,
+        model: VRMModel
+    ) -> Set<Int> {
+        guard let humanoid = model.humanoid else { return [] }
+        var replaced = Set<Int>()
+        for bone in [VRMHumanoidBone.leftHand, .rightHand] {
+            guard let node = humanoid.getBoneNode(bone) else { continue }
+            let hasPaddleCapsule = synthetic[prefixCount...].contains {
+                $0.node == node && $0.shape.isCapsule
+            }
+            guard hasPaddleCapsule else { continue }
+            if let sphereIdx = synthetic[..<prefixCount].firstIndex(where: {
+                $0.node == node && $0.shape.isSphere
+            }) {
+                synthetic.remove(at: sphereIdx)
+                prefixCount -= 1
+                replaced.insert(node)
+            }
+        }
+        return replaced
     }
 
     /// The palm sphere keeps the fraction-of-length offset unless it is
-    /// replaced by the sphere the file actually authors.
-    private static func copyAuthoredHandSpheres(into synthetic: inout [VRMCollider],
-                                                prefixCount: Int, model: VRMModel) {
+    /// replaced by a fitted hand paddle or by the sphere the file actually authors.
+    private static func copyAuthoredHandSpheres(
+        into synthetic: inout [VRMCollider],
+        prefixCount: Int,
+        excluding replacedNodes: Set<Int>,
+        model: VRMModel
+    ) {
         guard let humanoid = model.humanoid else { return }
         for bone in [VRMHumanoidBone.leftHand, .rightHand] {
             guard let node = humanoid.getBoneNode(bone),
+                  !replacedNodes.contains(node),
                   let authored = ColliderDimensionAudit.authoredSphere(node: node, model: model),
                   let index = synthetic.prefix(prefixCount).firstIndex(where: {
                       $0.node == node && $0.shape.isSphere
@@ -194,6 +270,11 @@ private extension VRMColliderShape {
 
     var isSphere: Bool {
         if case .sphere = self { return true }
+        return false
+    }
+
+    var isCapsule: Bool {
+        if case .capsule = self { return true }
         return false
     }
 

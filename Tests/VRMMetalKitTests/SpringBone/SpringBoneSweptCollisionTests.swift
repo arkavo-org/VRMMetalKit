@@ -118,12 +118,16 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         var sweptGroup = sweptGroupMask ?? sphere.groupMask
         var chainIndex = [UInt32](repeating: 0, count: numBones)
         var chainSleep = [UInt32](repeating: 0, count: 1)
+        var collisionAux = [SpringBoneCollisionAux](repeating: SpringBoneCollisionAux(), count: numBones)
         let chainIndexBuf = device.makeBuffer(bytes: &chainIndex,
                                               length: MemoryLayout<UInt32>.stride * numBones,
                                               options: .storageModeShared)!
         let chainSleepBuf = device.makeBuffer(bytes: &chainSleep,
                                               length: MemoryLayout<UInt32>.stride,
                                               options: .storageModeShared)!
+        let collisionAuxBuf = device.makeBuffer(bytes: &collisionAux,
+                                                length: MemoryLayout<SpringBoneCollisionAux>.stride * numBones,
+                                                options: .storageModeShared)!
 
         guard let cb = commandQueue.makeCommandBuffer(),
               let enc = cb.makeComputeCommandEncoder() else {
@@ -138,6 +142,7 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         enc.setBytes(&sweptGroup, length: MemoryLayout<UInt32>.size, index: 15)
         enc.setBuffer(chainIndexBuf, offset: 0, index: 16)
         enc.setBuffer(chainSleepBuf, offset: 0, index: 17)
+        enc.setBuffer(collisionAuxBuf, offset: 0, index: 20)
         enc.dispatchThreads(MTLSize(width: numBones, height: 1, depth: 1),
                             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
         enc.endEncoding()
@@ -196,6 +201,18 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
                                            options: .storageModeShared)!
 
         var sweptGroup = sweptGroupMask ?? capsule.groupMask
+        var chainIndex = [UInt32](repeating: 0, count: numBones)
+        var chainSleep = [UInt32](repeating: 0, count: 1)
+        var collisionAux = [SpringBoneCollisionAux](repeating: SpringBoneCollisionAux(), count: numBones)
+        let chainIndexBuf = device.makeBuffer(bytes: &chainIndex,
+                                              length: MemoryLayout<UInt32>.stride * numBones,
+                                              options: .storageModeShared)!
+        let chainSleepBuf = device.makeBuffer(bytes: &chainSleep,
+                                              length: MemoryLayout<UInt32>.stride,
+                                              options: .storageModeShared)!
+        let collisionAuxBuf = device.makeBuffer(bytes: &collisionAux,
+                                                length: MemoryLayout<SpringBoneCollisionAux>.stride * numBones,
+                                                options: .storageModeShared)!
 
         guard let cb = commandQueue.makeCommandBuffer(),
               let enc = cb.makeComputeCommandEncoder() else {
@@ -208,6 +225,10 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         enc.setBuffer(globalParamsBuf, offset: 0, index: 3)
         enc.setBuffer(capsuleBuf, offset: 0, index: 6)
         enc.setBytes(&sweptGroup, length: MemoryLayout<UInt32>.size, index: 15)
+        enc.setBuffer(chainIndexBuf, offset: 0, index: 16)
+        enc.setBuffer(chainSleepBuf, offset: 0, index: 17)
+        enc.setBuffer(currBuf, offset: 0, index: 19)
+        enc.setBuffer(collisionAuxBuf, offset: 0, index: 20)
         enc.dispatchThreads(MTLSize(width: numBones, height: 1, depth: 1),
                             threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
         enc.endEncoding()

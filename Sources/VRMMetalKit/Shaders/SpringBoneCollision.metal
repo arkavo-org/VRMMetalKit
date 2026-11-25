@@ -67,6 +67,13 @@ struct BoneParams {
     float angleLimit;         // Max swing angle from bind dir (radians); 0 = no limit
 };
 
+struct SpringBoneCollisionAux {
+    uint ringLeft;            // Left adjacent skirt ring bone index, or 0xFFFFFFFF
+    uint ringRight;           // Right adjacent skirt ring bone index, or 0xFFFFFFFF
+    float syntheticRadius;    // Effective radius for synthetic-group collision (#478)
+    uint flags;               // Bit 0 = participates in skirt ring chord collision
+};
+
 // Sphere collision function with group filtering. Handles both the base
 // "outside" collision (joint pushed out of the sphere) and the
 // VRMC_springBone_extended_collider "inside" / containment collision
@@ -82,6 +89,7 @@ struct BoneParams {
 // cleanly enter (e.g. prev already inside) we fall back to the discrete
 // endpoint push-out, so shallow resting penetration behaves exactly as before.
 float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadius,
+                                  float syntheticBoneRadius,
                                   uint boneMask, uint sweptGroupMask,
                                   constant SphereCollider* spheres, uint numSpheres) {
     float3 result = position;
@@ -108,7 +116,11 @@ float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadi
         }
 
         // Outside collision (default). Inflated radius = sphere + bone.
-        float R = sphere.radius + boneRadius;
+        // Terminal VRM 1.0 cloth hem joints inherit parent hitRadius for the
+        // synthetic group only (#478), keeping authored colliders spec-exact.
+        bool isSynthetic = (sphere.groupMask & sweptGroupMask) != 0u;
+        float effectiveBoneRadius = isSynthetic ? syntheticBoneRadius : boneRadius;
+        float R = sphere.radius + effectiveBoneRadius;
         float3 toCenter = result - sphere.center;
         float distance = length(toCenter);
 
@@ -137,7 +149,7 @@ float3 collideWithSphereFiltered(float3 prevPos, float3 position, float boneRadi
             float3 m = prevPos - sphere.center;
             float a = dot(d, d);
             float c = dot(m, m) - R * R;
-            if ((sphere.groupMask & sweptGroupMask) != 0u && a > epsilon && c > 0.0) {
+            if (isSynthetic && a > epsilon && c > 0.0) {
                 // Depth gate: only treat this as a tunnel worth clamping when
                 // the joint CENTRE actually passes through the solid sphere
                 // body (closest approach < sphere.radius), not merely grazes
@@ -190,10 +202,18 @@ static float raySphereEntryDist(float3 ro, float3 rdn, float3 center, float r) {
     return -b - sqrt(h);  // nearest root (may be negative if the sphere is behind)
 }
 
-// Minimum distance between segments [p1,q1] and [p2,q2]
-// (Ericson, Real-Time Collision Detection §5.1.9). Used as the capsule depth
-// gate: the closest approach of the swept path to the capsule axis.
-static float segmentSegmentDistance(float3 p1, float3 q1, float3 p2, float3 q2) {
+struct SegmentClosestPoints {
+    float3 c1;
+    float3 c2;
+    float s;
+    float t;
+    float distSq;
+};
+
+// Closest points between segments [p1,q1] and [p2,q2]
+// (Ericson, Real-Time Collision Detection §5.1.9). Used for both the capsule
+// swept depth gate and skirt ring-span chord collision (#478).
+static SegmentClosestPoints segmentSegmentClosest(float3 p1, float3 q1, float3 p2, float3 q2) {
     const float eps = 1e-9;
     float3 d1 = q1 - p1;
     float3 d2 = q2 - p2;
@@ -201,11 +221,12 @@ static float segmentSegmentDistance(float3 p1, float3 q1, float3 p2, float3 q2) 
     float a = dot(d1, d1);
     float e = dot(d2, d2);
     float f = dot(d2, r);
-    float s, t;
+    float s = 0.0;
+    float t = 0.0;
     if (a <= eps && e <= eps) {
-        return length(p1 - p2);
-    }
-    if (a <= eps) {
+        s = 0.0;
+        t = 0.0;
+    } else if (a <= eps) {
         s = 0.0;
         t = clamp(f / e, 0.0, 1.0);
     } else {
@@ -229,7 +250,18 @@ static float segmentSegmentDistance(float3 p1, float3 q1, float3 p2, float3 q2) 
     }
     float3 c1 = p1 + d1 * s;
     float3 c2 = p2 + d2 * t;
-    return length(c1 - c2);
+    float3 diff = c1 - c2;
+    SegmentClosestPoints out;
+    out.c1 = c1;
+    out.c2 = c2;
+    out.s = s;
+    out.t = t;
+    out.distSq = dot(diff, diff);
+    return out;
+}
+
+static float segmentSegmentDistance(float3 p1, float3 q1, float3 p2, float3 q2) {
+    return sqrt(segmentSegmentClosest(p1, q1, p2, q2).distSq);
 }
 
 // Swept point-vs-capsule entry distance (#313). Returns the distance along the
@@ -277,14 +309,51 @@ static float sweptCapsuleEntryDist(float3 ro, float3 rdn, float3 pa, float3 pb, 
     return -1.0;
 }
 
+// Pushes skirt bone `result` outward when the cloth ring chord [result, nbPos]
+// intersects a synthetic outside capsule (#478). Uses an XPBD barycentric weight
+// clamped to [0, 1]: 1.0 at mid-span (s = 0.5) so both adjacent chains clear the
+// capsule in a single substep, tapering smoothly to 0 at s = 1.0 so contact near
+// the neighbor does not spuriously yank this bone.
+static void resolveRingChordAgainstCapsule(thread float3& result,
+                                           float3 prevPos,
+                                           float3 nbPos,
+                                           CapsuleCollider capsule,
+                                           float syntheticBoneRadius) {
+    float R = capsule.radius + syntheticBoneRadius;
+    SegmentClosestPoints cp = segmentSegmentClosest(result, nbPos, capsule.p0, capsule.p1);
+    if (cp.distSq >= R * R) return;
+
+    float oneMinusS = 1.0 - cp.s;
+    float denom = oneMinusS * oneMinusS + cp.s * cp.s;
+    float weight = clamp(oneMinusS / max(denom, 1e-6), 0.0, 1.0);
+    if (weight <= 1e-4) return;
+
+    float dist = sqrt(cp.distSq);
+    float penetration = R - dist;
+    float3 outward;
+    if (dist > 1e-5) {
+        outward = (cp.c1 - cp.c2) / dist;
+    } else {
+        float3 fb = prevPos - cp.c2;
+        float fbLen = length(fb);
+        outward = (fbLen > 1e-5) ? (fb / fbLen) : float3(0.0, 0.0, 1.0);
+    }
+    result += outward * (penetration * weight * capsule.responseScale);
+}
+
 // Capsule collision function with group filtering. Like the sphere kernel, the
 // SYNTHETIC augmented group (#309) additionally gets continuous (swept)
-// collision (#313): when a joint tunnels clean through an outside capsule in one
-// substep (endpoint lands outside), it is clamped to the entry surface. Authored
-// capsules keep the discrete endpoint test — see the CCD-scoping invariant in
-// CLAUDE.md §4 and `collideWithSphereFiltered`.
+// collision (#313) and skirt ring-span chord collision (#478): when a joint
+// tunnels clean through an outside capsule in one substep (endpoint lands
+// outside), it is clamped to the entry surface; for skirt ring joints, the two
+// adjacent circumferential chords are also tested against synthetic outside
+// capsules using the immutable pre-capsule snapshot positions. Authored capsules
+// keep the discrete endpoint test — see CLAUDE.md §4.
 float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRadius,
+                                   float syntheticBoneRadius,
                                    uint boneMask, uint sweptGroupMask,
+                                   uint ringLeft, uint ringRight, uint numBones,
+                                   device const float3* snapshotPositions,
                                    constant CapsuleCollider* capsules, uint numCapsules) {
     float3 result = position;
     const float epsilon = 1e-6;
@@ -310,7 +379,9 @@ float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRad
         }
 
         // Outside collision (default). Inflated radius = capsule + bone.
-        float R = capsule.radius + boneRadius;
+        bool isSynthetic = (capsule.groupMask & sweptGroupMask) != 0u;
+        float effectiveBoneRadius = isSynthetic ? syntheticBoneRadius : boneRadius;
+        float R = capsule.radius + effectiveBoneRadius;
 
         if (distance < R) {
             // Endpoint rests INSIDE: discrete push-out along the endpoint
@@ -318,7 +389,7 @@ float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRad
             float penetration = R - distance;
             float3 outward = toClosest / max(distance, epsilon);
             result += outward * penetration * capsule.responseScale;
-        } else if ((capsule.groupMask & sweptGroupMask) != 0u) {
+        } else if (isSynthetic) {
             // Endpoint OUTSIDE — discrete sees nothing. Sweep prevPos → result
             // against the inflated capsule (synthetic group only) and, if it
             // tunneled through, stop the joint at the entry surface.
@@ -345,6 +416,29 @@ float3 collideWithCapsuleFiltered(float3 prevPos, float3 position, float boneRad
                     float3 n = (axisLen > epsilon) ? toAxis / axisLen : normalize(-seg);
                     result = axisPt + n * R;
                 }
+            }
+        }
+    }
+
+    // Skirt ring-span chord collision (#478): closes circumferential open-air gaps
+    // between sparse radial skirt chains against synthetic outside capsules (hands,
+    // forearms, legs). Runs only on tagged skirt ring joints; reads immutable
+    // pre-capsule snapshot positions so there is zero data race across SIMD groups.
+    bool hasLeft = (ringLeft < numBones);
+    bool hasRight = (ringRight < numBones);
+    if (hasLeft || hasRight) {
+        float3 leftPos = hasLeft ? snapshotPositions[ringLeft] : float3(0.0);
+        float3 rightPos = hasRight ? snapshotPositions[ringRight] : float3(0.0);
+        for (uint i = 0; i < numCapsules; i++) {
+            CapsuleCollider capsule = capsules[i];
+            if (capsule.inside != 0u) continue;
+            if ((capsule.groupMask & sweptGroupMask) == 0u) continue;
+            if ((boneMask & capsule.groupMask) == 0u) continue;
+            if (hasLeft) {
+                resolveRingChordAgainstCapsule(result, prevPos, leftPos, capsule, syntheticBoneRadius);
+            }
+            if (hasRight) {
+                resolveRingChordAgainstCapsule(result, prevPos, rightPos, capsule, syntheticBoneRadius);
             }
         }
     }
@@ -418,6 +512,7 @@ kernel void springBoneCollideSpheres(
     constant uint& sweptGroupMask [[buffer(15)]],
     constant uint* boneChainIndex [[buffer(16)]],
     constant uint* chainSleep [[buffer(17)]],
+    constant SpringBoneCollisionAux* collisionAux [[buffer(20)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numSpheres == 0) return;
@@ -428,11 +523,12 @@ kernel void springBoneCollideSpheres(
     if (boneParams[id].parentIndex == 0xFFFFFFFFu) return;
 
     float boneRadius = boneParams[id].radius;
+    float syntheticBoneRadius = max(boneRadius, collisionAux[id].syntheticRadius);
     uint boneMask = boneParams[id].colliderGroupMask;
     float3 oldPos = bonePosCurr[id];
     float3 prevForSweep = bonePosPrev[id];
-    float3 newPos = collideWithSphereFiltered(prevForSweep, oldPos, boneRadius, boneMask,
-                                              sweptGroupMask,
+    float3 newPos = collideWithSphereFiltered(prevForSweep, oldPos, boneRadius, syntheticBoneRadius,
+                                              boneMask, sweptGroupMask,
                                               sphereColliders, globalParams.numSpheres);
     bonePosCurr[id] = newPos;
     float3 prevPos = bonePosPrev[id];
@@ -449,6 +545,8 @@ kernel void springBoneCollideCapsules(
     constant uint& sweptGroupMask [[buffer(15)]],
     constant uint* boneChainIndex [[buffer(16)]],
     constant uint* chainSleep [[buffer(17)]],
+    device const float3* parentPosCurr [[buffer(19)]],
+    constant SpringBoneCollisionAux* collisionAux [[buffer(20)]],
     uint id [[thread_position_in_grid]]
 ) {
     if (id >= globalParams.numBones || globalParams.numCapsules == 0) return;
@@ -456,11 +554,15 @@ kernel void springBoneCollideCapsules(
     if (boneParams[id].parentIndex == 0xFFFFFFFFu) return;
 
     float boneRadius = boneParams[id].radius;
+    SpringBoneCollisionAux aux = collisionAux[id];
+    float syntheticBoneRadius = max(boneRadius, aux.syntheticRadius);
     uint boneMask = boneParams[id].colliderGroupMask;
     float3 oldPos = bonePosCurr[id];
     float3 prevForSweep = bonePosPrev[id];
-    float3 newPos = collideWithCapsuleFiltered(prevForSweep, oldPos, boneRadius, boneMask,
-                                               sweptGroupMask,
+    float3 newPos = collideWithCapsuleFiltered(prevForSweep, oldPos, boneRadius, syntheticBoneRadius,
+                                               boneMask, sweptGroupMask,
+                                               aux.ringLeft, aux.ringRight, globalParams.numBones,
+                                               parentPosCurr,
                                                capsuleColliders, globalParams.numCapsules);
     bonePosCurr[id] = newPos;
     float3 prevPos = bonePosPrev[id];

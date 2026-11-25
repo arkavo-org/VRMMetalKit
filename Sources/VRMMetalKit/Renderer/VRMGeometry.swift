@@ -229,6 +229,12 @@ public class VRMPrimitive: @unchecked Sendable {
     /// every draw.
     var skinningInputSample: SkinningInputSample?
 
+    /// Source glTF accessor indices for deduplicating multi-primitive meshes
+    /// that share a single vertex stream (e.g. VRoid Studio exports).
+    var positionAccessorIndex: Int?
+    var jointsAccessorIndex: Int?
+    var weightsAccessorIndex: Int?
+
     /// Creates an empty primitive. Use ``load(from:document:device:bufferLoader:)`` to populate from glTF.
     public init() {}
 
@@ -304,6 +310,7 @@ public class VRMPrimitive: @unchecked Sendable {
 
         // Load positions (required)
         if let positionAccessorIndex = gltfPrimitive.attributes["POSITION"] {
+            primitive.positionAccessorIndex = positionAccessorIndex
             let positions = try bufferLoader.loadAccessorAsFloat(positionAccessorIndex)
             let positionCount = (positions.count / 3) * 3
             vertexData.positions = stride(from: 0, to: positionCount, by: 3).map { i in
@@ -357,6 +364,7 @@ public class VRMPrimitive: @unchecked Sendable {
         }
 
         if let jointsAccessorIndex = gltfPrimitive.attributes["JOINTS_0"] {
+            primitive.jointsAccessorIndex = jointsAccessorIndex
             let joints = try bufferLoader.loadAccessorAsUInt32(jointsAccessorIndex)
             let jointCount = (joints.count / 4) * 4
 
@@ -394,6 +402,7 @@ public class VRMPrimitive: @unchecked Sendable {
         }
 
         if let weightsAccessorIndex = gltfPrimitive.attributes["WEIGHTS_0"] {
+            primitive.weightsAccessorIndex = weightsAccessorIndex
             let weights = try bufferLoader.loadAccessorAsFloat(weightsAccessorIndex)
             let weightCount = (weights.count / 4) * 4
             vertexData.weights = stride(from: 0, to: weightCount, by: 4).map { i in

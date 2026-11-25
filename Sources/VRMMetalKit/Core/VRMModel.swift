@@ -1303,32 +1303,27 @@ public class VRMModel: @unchecked Sendable {
         // path hard-guards `colliders.count == numCapsules`, so the count seeded
         // here must match the count uploaded later in
         // `SpringBoneComputeSystem.populateSpringBoneData(model:)`.
-        if augmentColliders {
+        // Preserve the 32-bit collider-group mask invariant (CLAUDE.md §4): up to 31
+        // authored groups (bits 0–30) leave bit 31 free for the synthetic group; with
+        // 32+ authored groups every bit is claimed, so disable all synthetic augmentation.
+        if augmentColliders && expandedSpringBone.colliderGroups.count < 32 {
             var synthetic = SpringBoneColliderAugmentor.synthesize(model: self)
-            // Mesh-aware breast colliders (#377): the visible breast rides forward
-            // on the spring `Bust` bones, far beyond the authored/bone-derived
-            // chest colliders, and hair enters at the collarbone and slides down
-            // behind them. Fit a swept CAPSULE (collarbone→breast) to the skinned
-            // breast mesh so front hair is pushed to the actual breast surface.
-            // Requires the uploaded vertex buffers, so it runs here
-            // (post-`loadResources`), not in the pure augmentor. Appended to the
-            // capsule-buffer tail — the validated synthetic capsule slots (0–9)
-            // are untouched. Empty on rigs without a `Bust` spring / body mesh.
-            synthetic.append(contentsOf: SpringBoneBreastCollider.computeBreastColliders(model: self))
-            // Mesh-fitted shoulder colliders (#377 upper body): the clothed
-            // shoulder sits outside the bone-derived shoulder sphere, so hair
-            // sinks through the dress during dynamic motion. Fit a swept sphere
-            // to the proximal clothed deltoid. Same load-time reason as breast.
-            synthetic.append(contentsOf: SpringBoneBreastCollider.computeShoulderColliders(model: self))
-            // Mesh-fitted upper-torso collider (#377 upper body): fills the clothed
-            // upper chest (above the breast) and torso sides/back (behind it) that
-            // the bone-derived midline torso capsule leaves inside the dress.
-            synthetic.append(contentsOf: SpringBoneBreastCollider.computeTorsoCollider(model: self))
-            // #381: where the VRM already defines a collider, that radius is the
-            // size. A fraction of bone length must not override it. Capsule
-            // slots 0–9 stay put. Leg capsules keep the fraction: clamping U's
-            // thigh from 87 mm to the authored 78 mm holds the skirt in the leg.
-            SpringBoneSegmentFit.apply(to: &synthetic, model: self)
+            let prefixCount = synthetic.count
+            // Single-pass mesh-name-agnostic collider fit (#377, #478): scans all
+            // skinned meshes once (deduplicating shared vertex accessors) to emit
+            // breast capsules, deltoid shoulder spheres, upper-torso capsule, and
+            // adaptive 2/3-capsule hand paddles. All capsules are appended after
+            // slots 0–9 so the validated #309/#381 slot order is preserved and
+            // every fitted collider inherits swept CCD automatically.
+            let meshFitted = SpringBoneMeshFit.computeAll(model: self)
+            synthetic.append(contentsOf: meshFitted.breasts)
+            synthetic.append(contentsOf: meshFitted.shoulders)
+            synthetic.append(contentsOf: meshFitted.torso)
+            synthetic.append(contentsOf: meshFitted.hands)
+            // #381/#478: replace fraction palm spheres where fitted hand paddles
+            // cover the hand, and clamp remaining fraction-derived colliders
+            // (except legs) to the authored radius on the same node.
+            SpringBoneSegmentFit.apply(to: &synthetic, prefixCount: prefixCount, model: self)
             expandedSpringBone.syntheticColliders = synthetic
         } else {
             expandedSpringBone.syntheticColliders = []
