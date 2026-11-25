@@ -145,8 +145,18 @@ public enum AnimationLibrary {
     ///
     /// - Throws: Errors from ``VRMAnimationLoader/loadVRMA(from:model:)``
     ///   (file read, glTF parse, missing animation block).
-    public static func loadClip(from url: URL, model: VRMModel?) throws -> AnimationClip {
+    public static func loadClip(
+        from url: URL,
+        model: VRMModel?,
+        stripRuntimeOwnedTracks: Bool = false,
+        rejectEmptyAnimation: Bool = false
+    ) throws -> AnimationClip {
         // Load a .vrma (GLB) file into an AnimationClip using VRMAnimationLoader
-        return try VRMAnimationLoader.loadVRMA(from: url, model: model)
+        return try VRMAnimationLoader.loadVRMA(
+            from: url,
+            model: model,
+            stripRuntimeOwnedTracks: stripRuntimeOwnedTracks,
+            rejectEmptyAnimation: rejectEmptyAnimation
+        )
     }
 }

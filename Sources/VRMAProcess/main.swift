@@ -17,17 +17,24 @@
 import Foundation
 import VRMAProcessKit
 
-// VRMAProcess — locomotion ingest (GameOfMods locomotion design 2026-06-10 §3).
+// VRMAProcess — locomotion ingest & VRMA asset hygiene CLI.
 // The input file is never modified; producer truth stays on disk.
 
 func usage() {
     let msg = """
-    Usage: VRMAProcess <input.vrma> <output.vrma> [--idle|--walk] [--stride <m/s>]
-      Measures stride speed, writes extras.arkavo (version 1), strips hips
-      XZ (in-place clips), strips non-humanoid baked tracks, loop-trims by
-      pose similarity. --idle/--walk force classification (default: auto,
-      idle below \(LocomotionIngest.idleThreshold) m/s). --stride supplies
-      an authored stride speed for already-in-place walks (licensed packs).
+    Usage: VRMAProcess <input.vrma> <output.vrma> [options]
+      Locomotion ingest (default):
+        Measures stride speed, writes extras.arkavo (version 1), strips hips XZ
+        (in-place clips), strips non-humanoid baked tracks (preserving expressions
+        and lookAt), strips constant eye channels, normalizes rest pose, and
+        loop-trims by pose similarity.
+      Options:
+        --idle | --walk              Force classification (default: auto, idle < \(LocomotionIngest.idleThreshold) m/s)
+        --stride <m/s>               Authored stride speed for already-in-place walks
+        --hygiene-only               Run hygiene passes only (keep hips XZ, skip extras & loop-trim)
+        --min-arm-abduction <deg>    Enforce smooth C1 outward abduction floor on hanging arms (0..90)
+        --no-normalize-rest          Skip baking non-identity humanoid rest rotations to identity
+        --keep-eye-channels          Skip stripping constant leftEye/rightEye channels
 
     """
     FileHandle.standardError.write(Data(msg.utf8))
@@ -42,21 +49,56 @@ guard args.count >= 3 else {
 let inputPath  = args[1]
 let outputPath = args[2]
 
-// Validate extra arguments: --idle or --walk (not both), optional --stride <m/s>.
 var extraArgs = Array(args.dropFirst(3))
-let hasIdle = extraArgs.contains("--idle")
-let hasWalk = extraArgs.contains("--walk")
+var hasIdle = false
+var hasWalk = false
+var hygieneOnly = false
+var normalizeRestPose = true
+var stripConstantEyeChannels = true
 var strideOverride: Float?
-if let i = extraArgs.firstIndex(of: "--stride") {
-    guard i + 1 < extraArgs.count, let v = Float(extraArgs[i + 1]), v.isFinite else {
-        FileHandle.standardError.write(Data("VRMAProcess: ERROR --stride requires a finite numeric m/s value\n".utf8))
+var minArmAbduction: Float?
+
+var i = 0
+while i < extraArgs.count {
+    let arg = extraArgs[i]
+    switch arg {
+    case "--idle":
+        hasIdle = true
+        i += 1
+    case "--walk":
+        hasWalk = true
+        i += 1
+    case "--hygiene-only":
+        hygieneOnly = true
+        i += 1
+    case "--no-normalize-rest":
+        normalizeRestPose = false
+        i += 1
+    case "--keep-eye-channels":
+        stripConstantEyeChannels = false
+        i += 1
+    case "--stride":
+        guard i + 1 < extraArgs.count, let v = Float(extraArgs[i + 1]), v.isFinite else {
+            FileHandle.standardError.write(Data("VRMAProcess: ERROR --stride requires a finite numeric m/s value\n".utf8))
+            usage()
+            exit(2)
+        }
+        strideOverride = v
+        i += 2
+    case "--min-arm-abduction":
+        guard i + 1 < extraArgs.count, let v = Float(extraArgs[i + 1]), v.isFinite, v >= 0, v < 90 else {
+            FileHandle.standardError.write(Data("VRMAProcess: ERROR --min-arm-abduction requires a finite degree value in [0, 90)\n".utf8))
+            usage()
+            exit(2)
+        }
+        minArmAbduction = v
+        i += 2
+    default:
+        FileHandle.standardError.write(Data("VRMAProcess: ERROR unknown argument: \(arg)\n".utf8))
         usage()
         exit(2)
     }
-    strideOverride = v
-    extraArgs.removeSubrange(i...(i + 1))
 }
-let unknownArgs = extraArgs.filter { $0 != "--idle" && $0 != "--walk" }
 
 if hasIdle, strideOverride != nil {
     FileHandle.standardError.write(Data("VRMAProcess: ERROR --stride is meaningless with --idle (idle is the explicit strideSpeed-0 entry)\n".utf8))
@@ -68,8 +110,8 @@ if hasIdle && hasWalk {
     usage()
     exit(2)
 }
-if !unknownArgs.isEmpty {
-    FileHandle.standardError.write(Data("VRMAProcess: ERROR unknown argument(s): \(unknownArgs.joined(separator: " "))\n".utf8))
+if hygieneOnly && (hasIdle || hasWalk || strideOverride != nil) {
+    FileHandle.standardError.write(Data("VRMAProcess: ERROR --hygiene-only cannot be combined with --idle, --walk, or --stride\n".utf8))
     usage()
     exit(2)
 }
@@ -86,10 +128,31 @@ let mode: LocomotionIngest.Mode = hasIdle ? .idle : (hasWalk ? .walk : .auto)
 
 do {
     let input = try Data(contentsOf: resolvedInput)
-    let output = try LocomotionIngest.process(glb: input, mode: mode, strideOverride: strideOverride)
-    try output.write(to: resolvedOutput)
-    if let meta = LocomotionExtras.read(from: try GLBContainer(data: output)) {
-        print("VRMAProcess: \(resolvedOutput.path) strideSpeed=\(meta.strideSpeed) inPlace=\(meta.inPlace) sourceHipsHeight=\(meta.sourceHipsHeight)")
+    let output: Data
+    if hygieneOnly {
+        output = try LocomotionIngest.processHygiene(
+            glb: input,
+            stripNonHumanoid: true,
+            stripEyeChannels: stripConstantEyeChannels,
+            onlyConstantEyes: true,
+            normalizeRestPose: normalizeRestPose,
+            minArmAbductionDegrees: minArmAbduction
+        )
+        try output.write(to: resolvedOutput)
+        print("VRMAProcess: \(resolvedOutput.path) hygiene-only normalizeRest=\(normalizeRestPose) stripEyes=\(stripConstantEyeChannels) minArmAbduction=\(minArmAbduction.map { "\($0)" } ?? "off")")
+    } else {
+        output = try LocomotionIngest.process(
+            glb: input,
+            mode: mode,
+            strideOverride: strideOverride,
+            stripConstantEyeChannels: stripConstantEyeChannels,
+            normalizeRestPose: normalizeRestPose,
+            minArmAbductionDegrees: minArmAbduction
+        )
+        try output.write(to: resolvedOutput)
+        if let meta = LocomotionExtras.read(from: try GLBContainer(data: output)) {
+            print("VRMAProcess: \(resolvedOutput.path) strideSpeed=\(meta.strideSpeed) inPlace=\(meta.inPlace) sourceHipsHeight=\(meta.sourceHipsHeight)")
+        }
     }
 } catch {
     FileHandle.standardError.write(Data("VRMAProcess: ERROR \(error)\n".utf8))

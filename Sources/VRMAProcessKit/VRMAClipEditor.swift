@@ -15,20 +15,26 @@
 //
 
 import Foundation
+import simd
 
-/// All animation samplers must share one keyframe timeline; resample before trimming.
+/// Errors thrown by ``VRMAClipEditor`` write passes.
 public enum EditError: Error, CustomStringConvertible {
     case unalignedKeyframes
+    case invalidParameter(String)
+
     public var description: String {
         switch self {
         case .unalignedKeyframes:
             return "animation channels carry genuinely different keyframe timelines — resample to a shared timeline before trimming"
+        case .invalidParameter(let detail):
+            return "invalid edit parameter: \(detail)"
         }
     }
 }
 
-/// Write-side glb surgery for locomotion ingest. All edits are minimal and
-/// in-place: the bin chunk is only modified where values change.
+/// Write-side glb surgery for VRMA ingest and hygiene passes. All edits are
+/// minimal: unchanged accessors stay untouched and rewritten tracks are
+/// appended as new bufferViews/accessors (or edited in-place for `stripHipsXZ`).
 public struct VRMAClipEditor {
     public var container: GLBContainer
 
@@ -76,25 +82,510 @@ public struct VRMAClipEditor {
         container.bin = bin
     }
 
-    /// Drops animation channels whose target node is not in the
-    /// VRMC_vrm_animation humanBones map (baked hair/eye/accessory tracks).
-    /// Orphaned samplers/accessors are left in place — valid glTF, zero risk
-    /// to untouched data. Returns the number of channels dropped.
+    /// Drops animation channels whose target node is not a VRMC_vrm_animation
+    /// semantic node (preserves `humanBones`, `expressions.preset`,
+    /// `expressions.custom`, and `lookAt.node`; drops baked hair/bust/accessory
+    /// tracks). Orphaned samplers/accessors are left in place — valid glTF,
+    /// zero risk to untouched data. Returns the number of channels dropped.
     @discardableResult
     public mutating func stripNonHumanoidChannels() throws -> Int {
         let inspector = try VRMAClipInspector(container: container)
         guard var anims = container.json["animations"] as? [[String: Any]], !anims.isEmpty,
               let channels = anims[0]["channels"] as? [[String: Any]]
         else { throw VRMAClipInspector.InspectError.noAnimation }
+        let keptNodes = inspector.semanticNodes
         let kept = channels.filter { ch in
             guard let target = ch["target"] as? [String: Any], let node = target["node"] as? Int
             else { return false }
-            return inspector.humanBoneNodes.contains(node)
+            return keptNodes.contains(node)
         }
         let dropped = channels.count - kept.count
         anims[0]["channels"] = kept
         container.json["animations"] = anims
         return dropped
+    }
+
+    /// Drops baked `leftEye` / `rightEye` channels (including unmapped VRoid
+    /// `J_Adj_*_FaceEye` tracks) that would otherwise stomp `VRMLookAtController`.
+    ///
+    /// - Parameter onlyIfConstant: When `true` (default), drops an eye channel only
+    ///   when all keyframes are constant (e.g. constant-identity tracks emitted by
+    ///   `bvh2vrma-converter`). When `false`, drops all eye channels unconditionally.
+    /// - Returns: The number of eye channels dropped.
+    @discardableResult
+    public mutating func stripEyeChannels(onlyIfConstant: Bool = true) throws -> Int {
+        let inspector = try VRMAClipInspector(container: container)
+        guard var anims = container.json["animations"] as? [[String: Any]], !anims.isEmpty,
+              let channels = anims[0]["channels"] as? [[String: Any]],
+              let samplers = anims[0]["samplers"] as? [[String: Any]]
+        else { throw VRMAClipInspector.InspectError.noAnimation }
+
+        let eyes = inspector.eyeNodes
+        guard !eyes.isEmpty else { return 0 }
+
+        var kept: [[String: Any]] = []
+        kept.reserveCapacity(channels.count)
+        var dropped = 0
+
+        for ch in channels {
+            guard let target = ch["target"] as? [String: Any],
+                  let node = target["node"] as? Int,
+                  eyes.contains(node) else {
+                kept.append(ch)
+                continue
+            }
+            let shouldDrop = !onlyIfConstant ? true : try inspector.isChannelConstant(ch, samplers: samplers)
+            if shouldDrop {
+                dropped += 1
+            } else {
+                kept.append(ch)
+            }
+        }
+
+        if dropped > 0 {
+            anims[0]["channels"] = kept
+            container.json["animations"] = anims
+        }
+        return dropped
+    }
+
+    /// Bakes non-identity humanoid (and ancestor) rest rotations into canonical
+    /// VRM 1.0 identity rest pose via `W_A · L_A⁻¹ · Q(t) · W_A⁻¹`, updating child
+    /// node rest translations into the new parent frame and enforcing consecutive
+    /// quaternion hemisphere continuity.
+    ///
+    /// Produces `< 0.00001°` equivalence against `VRMAnimationLoader`'s runtime
+    /// pose normalization while making the asset portable across viewers that assume
+    /// canonical identity rest rotations.
+    ///
+    /// - Returns: The number of humanoid/ancestor nodes whose non-identity rest
+    ///   rotation was baked into identity (0 if already normalized).
+    @discardableResult
+    public mutating func normalizeRestPose() throws -> Int {
+        let inspector = try VRMAClipInspector(container: container)
+        let rest = try inspector.restTransforms()
+        let normalizedNodes = inspector.humanoidAndAncestorNodes(parentMap: rest.parent)
+
+        var nonIdentityCount = 0
+        for idx in normalizedNodes where idx >= 0 && idx < rest.local.count {
+            if 1.0 - abs(rest.local[idx].rotation.real) > VRMAClipInspector.identityRotationEpsilon {
+                nonIdentityCount += 1
+            }
+        }
+        guard nonIdentityCount > 0 else { return 0 }
+
+        guard var nodes = container.json["nodes"] as? [[String: Any]],
+              var accessors = container.json["accessors"] as? [[String: Any]],
+              var bufferViews = container.json["bufferViews"] as? [[String: Any]]
+        else { throw VRMAClipInspector.InspectError.badAccessor }
+
+        var bin = container.bin
+
+        // 1. Rewrite animation channels for affected nodes.
+        if var anims = container.json["animations"] as? [[String: Any]], !anims.isEmpty,
+           var channels = anims[0]["channels"] as? [[String: Any]],
+           var samplers = anims[0]["samplers"] as? [[String: Any]] {
+            var samplerUseCounts: [Int: Int] = [:]
+            for ch in channels {
+                if let si = ch["sampler"] as? Int {
+                    samplerUseCounts[si, default: 0] += 1
+                }
+            }
+
+            for ci in 0..<channels.count {
+                guard let target = channels[ci]["target"] as? [String: Any],
+                      let node = target["node"] as? Int,
+                      let path = target["path"] as? String,
+                      let si = channels[ci]["sampler"] as? Int,
+                      si >= 0, si < samplers.count,
+                      let outputAcc = samplers[si]["output"] as? Int,
+                      outputAcc >= 0, outputAcc < accessors.count,
+                      let accCount = accessors[outputAcc]["count"] as? Int
+                else { continue }
+
+                let interp = (samplers[si]["interpolation"] as? String ?? "LINEAR").uppercased()
+                let isCubic = interp == "CUBICSPLINE"
+
+                if path == "rotation", normalizedNodes.contains(node), node >= 0, node < rest.local.count {
+                    let localRot = rest.local[node].rotation
+                    let worldRot = rest.worldRotation[node]
+                    let localIsId = (1.0 - abs(localRot.real)) <= VRMAClipInspector.identityRotationEpsilon
+                    let worldIsId = (1.0 - abs(worldRot.real)) <= VRMAClipInspector.identityRotationEpsilon
+                    if localIsId && worldIsId { continue }
+
+                    let vals = try inspector.floats(accessor: outputAcc)
+                    let u = simd_normalize(worldRot * simd_inverse(localRot))
+                    let v = simd_inverse(worldRot)
+
+                    var outFloats: [Float] = []
+                    outFloats.reserveCapacity(vals.count)
+
+                    if isCubic {
+                        guard vals.count == accCount * 4, accCount % 3 == 0 else {
+                            throw VRMAClipInspector.InspectError.badAccessor
+                        }
+                        let keyCount = accCount / 3
+                        var prevVal: simd_quatd?
+                        for k in 0..<keyCount {
+                            let base = k * 12
+                            let inT = u * simd_quatd(ix: Double(vals[base]), iy: Double(vals[base + 1]), iz: Double(vals[base + 2]), r: Double(vals[base + 3])) * v
+                            let rawVal = simd_normalize(simd_quatd(ix: Double(vals[base + 4]), iy: Double(vals[base + 5]), iz: Double(vals[base + 6]), r: Double(vals[base + 7])))
+                            var val = simd_normalize(u * rawVal * v)
+                            let outT = u * simd_quatd(ix: Double(vals[base + 8]), iy: Double(vals[base + 9]), iz: Double(vals[base + 10]), r: Double(vals[base + 11])) * v
+
+                            var finalInT = inT
+                            var finalOutT = outT
+                            if let prev = prevVal, simd_dot(val.vector, prev.vector) < 0 {
+                                val = -val
+                                finalInT = -finalInT
+                                finalOutT = -finalOutT
+                            }
+                            prevVal = val
+                            Self.appendQuat(finalInT, to: &outFloats)
+                            Self.appendQuat(val, to: &outFloats)
+                            Self.appendQuat(finalOutT, to: &outFloats)
+                        }
+                    } else {
+                        guard vals.count == accCount * 4 else {
+                            throw VRMAClipInspector.InspectError.badAccessor
+                        }
+                        var prev: simd_quatd?
+                        for k in 0..<accCount {
+                            let base = k * 4
+                            let raw = simd_normalize(simd_quatd(
+                                ix: Double(vals[base]),
+                                iy: Double(vals[base + 1]),
+                                iz: Double(vals[base + 2]),
+                                r: Double(vals[base + 3])
+                            ))
+                            var q = simd_normalize(u * raw * v)
+                            if let p = prev, simd_dot(q.vector, p.vector) < 0 {
+                                q = -q
+                            }
+                            prev = q
+                            Self.appendQuat(q, to: &outFloats)
+                        }
+                    }
+
+                    let newAcc = Self.appendFloatAccessor(
+                        floats: outFloats,
+                        type: "VEC4",
+                        count: accCount,
+                        bin: &bin,
+                        bufferViews: &bufferViews,
+                        accessors: &accessors
+                    )
+                    Self.repointSamplerOutput(
+                        channelIndex: ci,
+                        newOutputAccessor: newAcc,
+                        channels: &channels,
+                        samplers: &samplers,
+                        samplerUseCounts: &samplerUseCounts
+                    )
+                } else if path == "translation",
+                          !inspector.expressionNodes.contains(node),
+                          inspector.lookAtNode != node,
+                          let parentIdx = rest.parent[node],
+                          normalizedNodes.contains(parentIdx),
+                          parentIdx >= 0, parentIdx < rest.worldRotation.count {
+                    let parentW = rest.worldRotation[parentIdx]
+                    if 1.0 - abs(parentW.real) <= VRMAClipInspector.identityRotationEpsilon { continue }
+
+                    let vals = try inspector.floats(accessor: outputAcc)
+                    guard vals.count == accCount * 3 else {
+                        throw VRMAClipInspector.InspectError.badAccessor
+                    }
+                    var outFloats: [Float] = []
+                    outFloats.reserveCapacity(vals.count)
+                    for k in 0..<accCount {
+                        let base = k * 3
+                        let v = SIMD3<Double>(Double(vals[base]), Double(vals[base + 1]), Double(vals[base + 2]))
+                        let r = parentW.act(v)
+                        outFloats.append(Float(r.x))
+                        outFloats.append(Float(r.y))
+                        outFloats.append(Float(r.z))
+                    }
+
+                    let newAcc = Self.appendFloatAccessor(
+                        floats: outFloats,
+                        type: "VEC3",
+                        count: accCount,
+                        bin: &bin,
+                        bufferViews: &bufferViews,
+                        accessors: &accessors
+                    )
+                    Self.repointSamplerOutput(
+                        channelIndex: ci,
+                        newOutputAccessor: newAcc,
+                        channels: &channels,
+                        samplers: &samplers,
+                        samplerUseCounts: &samplerUseCounts
+                    )
+                }
+            }
+
+            anims[0]["channels"] = channels
+            anims[0]["samplers"] = samplers
+            container.json["animations"] = anims
+        }
+
+        // 2. Update node rest transforms in JSON.
+        for i in 0..<nodes.count {
+            let isNormalized = normalizedNodes.contains(i)
+            let parentIdx = rest.parent[i]
+            let parentNormalized = parentIdx.map { normalizedNodes.contains($0) } ?? false
+            let parentW = parentIdx.map { rest.worldRotation[$0] } ?? simd_quatd(ix: 0, iy: 0, iz: 0, r: 1)
+            let parentRotChanged = parentNormalized && (1.0 - abs(parentW.real) > VRMAClipInspector.identityRotationEpsilon)
+            let isExprOrLookAt = inspector.expressionNodes.contains(i) || inspector.lookAtNode == i
+
+            if isNormalized {
+                let hadMatrix = nodes[i]["matrix"] != nil
+                if hadMatrix {
+                    nodes[i].removeValue(forKey: "matrix")
+                    let s = rest.local[i].scale
+                    if simd_length(s - SIMD3<Double>(repeating: 1)) > 1e-6 {
+                        nodes[i]["scale"] = [Float(s.x), Float(s.y), Float(s.z)]
+                    }
+                }
+                nodes[i].removeValue(forKey: "rotation")
+                if !isExprOrLookAt && (parentRotChanged || hadMatrix) {
+                    let tNew = parentRotChanged ? parentW.act(rest.local[i].translation) : rest.local[i].translation
+                    if nodes[i]["translation"] != nil || hadMatrix || simd_length(tNew) > 1e-7 {
+                        nodes[i]["translation"] = [Float(tNew.x), Float(tNew.y), Float(tNew.z)]
+                    }
+                }
+            } else if parentRotChanged && !isExprOrLookAt {
+                let hadMatrix = nodes[i]["matrix"] != nil
+                if hadMatrix {
+                    nodes[i].removeValue(forKey: "matrix")
+                    let s = rest.local[i].scale
+                    if simd_length(s - SIMD3<Double>(repeating: 1)) > 1e-6 {
+                        nodes[i]["scale"] = [Float(s.x), Float(s.y), Float(s.z)]
+                    }
+                }
+                let tNew = parentW.act(rest.local[i].translation)
+                if nodes[i]["translation"] != nil || hadMatrix || simd_length(tNew) > 1e-7 {
+                    nodes[i]["translation"] = [Float(tNew.x), Float(tNew.y), Float(tNew.z)]
+                }
+                let rNew = simd_normalize(parentW * rest.local[i].rotation)
+                if 1.0 - abs(rNew.real) > VRMAClipInspector.identityRotationEpsilon {
+                    nodes[i]["rotation"] = [Float(rNew.imag.x), Float(rNew.imag.y), Float(rNew.imag.z), Float(rNew.real)]
+                } else {
+                    nodes[i].removeValue(forKey: "rotation")
+                }
+            }
+        }
+
+        container.json["nodes"] = nodes
+        container.json["accessors"] = accessors
+        container.json["bufferViews"] = bufferViews
+        if var buffers = container.json["buffers"] as? [[String: Any]], !buffers.isEmpty {
+            buffers[0]["byteLength"] = bin.count
+            container.json["buffers"] = buffers
+        }
+        container.bin = bin
+        return nonIdentityCount
+    }
+
+    /// Enforces a smooth C¹ outward abduction floor on downward-hanging
+    /// `leftUpperArm` and `rightUpperArm` rotation tracks so narrow mocap
+    /// idles/walks clear slim body silhouettes without disturbing raised gestures.
+    ///
+    /// Because the adjustment is a pure, stateless C¹ function of each keyframe's
+    /// arm orientation, loop-continuous input clips remain loop-continuous.
+    ///
+    /// - Parameter minDegrees: Minimum outward coronal abduction angle in degrees,
+    ///   measured from straight down (`(0, -1, 0)`). Must be finite and in `[0, 90)`.
+    /// - Returns: Number of upper-arm rotation channels modified (`0`, `1`, or `2`).
+    @discardableResult
+    public mutating func enforceMinimumArmAbduction(minDegrees: Float) throws -> Int {
+        guard minDegrees.isFinite, minDegrees >= 0, minDegrees < 90 else {
+            throw EditError.invalidParameter("minDegrees must be finite and in [0, 90), got \(minDegrees)")
+        }
+        guard minDegrees > 0 else { return 0 }
+
+        let inspector = try VRMAClipInspector(container: container)
+        let rest = try inspector.restTransforms()
+
+        guard var anims = container.json["animations"] as? [[String: Any]], !anims.isEmpty,
+              var channels = anims[0]["channels"] as? [[String: Any]],
+              var samplers = anims[0]["samplers"] as? [[String: Any]]
+        else { throw VRMAClipInspector.InspectError.noAnimation }
+
+        guard var accessors = container.json["accessors"] as? [[String: Any]],
+              var bufferViews = container.json["bufferViews"] as? [[String: Any]]
+        else { throw VRMAClipInspector.InspectError.badAccessor }
+
+        let minRad = Double(minDegrees) * .pi / 180.0
+        // Transition half-width for the piecewise-quadratic C¹ smooth-max floor.
+        let beta = min(6.0 * .pi / 180.0, 0.5 * minRad)
+
+        var samplerUseCounts: [Int: Int] = [:]
+        for ch in channels {
+            if let si = ch["sampler"] as? Int {
+                samplerUseCounts[si, default: 0] += 1
+            }
+        }
+
+        let armTargets: [(node: Int, outwardSign: Double)] = [
+            inspector.humanBoneNodeByName["leftUpperArm"].map { ($0, 1.0) },
+            inspector.humanBoneNodeByName["rightUpperArm"].map { ($0, -1.0) },
+        ].compactMap { $0 }
+
+        guard !armTargets.isEmpty else { return 0 }
+
+        var bin = container.bin
+        var modifiedChannels = 0
+
+        for (armNode, outwardSign) in armTargets {
+            guard armNode >= 0, armNode < rest.local.count else { continue }
+            let localRot = rest.local[armNode].rotation
+            let worldRot = rest.worldRotation[armNode]
+            let u = simd_normalize(worldRot * simd_inverse(localRot))
+            let v = simd_inverse(worldRot)
+            let invU = simd_inverse(u)
+
+            for ci in 0..<channels.count {
+                guard let target = channels[ci]["target"] as? [String: Any],
+                      target["node"] as? Int == armNode,
+                      target["path"] as? String == "rotation",
+                      let si = channels[ci]["sampler"] as? Int,
+                      si >= 0, si < samplers.count,
+                      let outputAcc = samplers[si]["output"] as? Int,
+                      outputAcc >= 0, outputAcc < accessors.count,
+                      let accCount = accessors[outputAcc]["count"] as? Int
+                else { continue }
+
+                let interp = (samplers[si]["interpolation"] as? String ?? "LINEAR").uppercased()
+                let isCubic = interp == "CUBICSPLINE"
+                let vals = try inspector.floats(accessor: outputAcc)
+
+                var anyKeyAdjusted = false
+                var outFloats: [Float] = []
+                outFloats.reserveCapacity(vals.count)
+
+                func abductionDelta(for rawQ: simd_quatd) -> simd_quatd? {
+                    let qNorm = simd_normalize(u * rawQ * v)
+                    let dir = qNorm.act(SIMD3<Double>(outwardSign, 0, 0))
+                    // C¹ smoothstep downward-hanging gate:
+                    //   dir.y <= -0.5 -> 1.0 (full floor for hanging arms)
+                    //   dir.y >= -0.1 -> 0.0 (zero disturbance for horizontal/raised gestures)
+                    let wDown: Double
+                    if dir.y >= -0.1 {
+                        return nil
+                    } else if dir.y <= -0.5 {
+                        wDown = 1.0
+                    } else {
+                        let t = (-0.1 - dir.y) / 0.4
+                        wDown = t * t * (3.0 - 2.0 * t)
+                    }
+
+                    let alpha = atan2(outwardSign * dir.x, max(-dir.y, 1e-9))
+                    let deficit = minRad - alpha
+                    let deltaAlpha: Double
+                    if deficit <= -beta {
+                        return nil
+                    } else if deficit >= beta {
+                        deltaAlpha = deficit
+                    } else {
+                        let s = deficit + beta
+                        deltaAlpha = (s * s) / (4.0 * beta)
+                    }
+
+                    let deltaTheta = wDown * deltaAlpha
+                    guard deltaTheta > 1e-9 else { return nil }
+                    let rAbd = simd_quatd(angle: outwardSign * deltaTheta, axis: SIMD3<Double>(0, 0, 1))
+                    // Transform back into the channel's rest frame: L_A · W_A⁻¹ · R_abd · W_A · L_A⁻¹.
+                    return simd_normalize(invU * rAbd * u)
+                }
+
+                if isCubic {
+                    guard vals.count == accCount * 4, accCount % 3 == 0 else {
+                        throw VRMAClipInspector.InspectError.badAccessor
+                    }
+                    let keyCount = accCount / 3
+                    var prevVal: simd_quatd?
+                    for k in 0..<keyCount {
+                        let base = k * 12
+                        var inT = simd_quatd(ix: Double(vals[base]), iy: Double(vals[base + 1]), iz: Double(vals[base + 2]), r: Double(vals[base + 3]))
+                        var val = simd_normalize(simd_quatd(ix: Double(vals[base + 4]), iy: Double(vals[base + 5]), iz: Double(vals[base + 6]), r: Double(vals[base + 7])))
+                        var outT = simd_quatd(ix: Double(vals[base + 8]), iy: Double(vals[base + 9]), iz: Double(vals[base + 10]), r: Double(vals[base + 11]))
+
+                        if let leftMul = abductionDelta(for: val) {
+                            anyKeyAdjusted = true
+                            inT = leftMul * inT
+                            val = simd_normalize(leftMul * val)
+                            outT = leftMul * outT
+                        }
+                        if let prev = prevVal, simd_dot(val.vector, prev.vector) < 0 {
+                            inT = -inT
+                            val = -val
+                            outT = -outT
+                        }
+                        prevVal = val
+                        Self.appendQuat(inT, to: &outFloats)
+                        Self.appendQuat(val, to: &outFloats)
+                        Self.appendQuat(outT, to: &outFloats)
+                    }
+                } else {
+                    guard vals.count == accCount * 4 else {
+                        throw VRMAClipInspector.InspectError.badAccessor
+                    }
+                    var prev: simd_quatd?
+                    for k in 0..<accCount {
+                        let base = k * 4
+                        var q = simd_normalize(simd_quatd(
+                            ix: Double(vals[base]),
+                            iy: Double(vals[base + 1]),
+                            iz: Double(vals[base + 2]),
+                            r: Double(vals[base + 3])
+                        ))
+                        if let leftMul = abductionDelta(for: q) {
+                            anyKeyAdjusted = true
+                            q = simd_normalize(leftMul * q)
+                        }
+                        if let p = prev, simd_dot(q.vector, p.vector) < 0 {
+                            q = -q
+                        }
+                        prev = q
+                        Self.appendQuat(q, to: &outFloats)
+                    }
+                }
+
+                if anyKeyAdjusted {
+                    let newAcc = Self.appendFloatAccessor(
+                        floats: outFloats,
+                        type: "VEC4",
+                        count: accCount,
+                        bin: &bin,
+                        bufferViews: &bufferViews,
+                        accessors: &accessors
+                    )
+                    Self.repointSamplerOutput(
+                        channelIndex: ci,
+                        newOutputAccessor: newAcc,
+                        channels: &channels,
+                        samplers: &samplers,
+                        samplerUseCounts: &samplerUseCounts
+                    )
+                    modifiedChannels += 1
+                }
+            }
+        }
+
+        if modifiedChannels > 0 {
+            anims[0]["channels"] = channels
+            anims[0]["samplers"] = samplers
+            container.json["animations"] = anims
+            container.json["accessors"] = accessors
+            container.json["bufferViews"] = bufferViews
+            if var buffers = container.json["buffers"] as? [[String: Any]], !buffers.isEmpty {
+                buffers[0]["byteLength"] = bin.count
+                container.json["buffers"] = buffers
+            }
+            container.bin = bin
+        }
+        return modifiedChannels
     }
 
     /// Pose-similarity loop trim. Works for walk and idle alike (locomotion
@@ -284,5 +775,60 @@ public struct VRMAClipEditor {
             container.json["buffers"] = buffers
         }
         container.bin = bin
+    }
+
+    // MARK: - Private Binary Helpers
+
+    private static func appendQuat(_ q: simd_quatd, to out: inout [Float]) {
+        out.append(Float(q.imag.x))
+        out.append(Float(q.imag.y))
+        out.append(Float(q.imag.z))
+        out.append(Float(q.real))
+    }
+
+    private static func appendFloatAccessor(
+        floats: [Float],
+        type: String,
+        count: Int,
+        bin: inout Data,
+        bufferViews: inout [[String: Any]],
+        accessors: inout [[String: Any]]
+    ) -> Int {
+        while bin.count % 4 != 0 { bin.append(0) }
+        let off = bin.count
+        floats.withUnsafeBytes { bin.append(contentsOf: $0) }
+        bufferViews.append([
+            "buffer": 0,
+            "byteOffset": off,
+            "byteLength": floats.count * 4,
+        ])
+        accessors.append([
+            "bufferView": bufferViews.count - 1,
+            "componentType": 5126,
+            "count": count,
+            "type": type,
+        ])
+        return accessors.count - 1
+    }
+
+    private static func repointSamplerOutput(
+        channelIndex: Int,
+        newOutputAccessor: Int,
+        channels: inout [[String: Any]],
+        samplers: inout [[String: Any]],
+        samplerUseCounts: inout [Int: Int]
+    ) {
+        guard let si = channels[channelIndex]["sampler"] as? Int, si >= 0, si < samplers.count else { return }
+        if (samplerUseCounts[si] ?? 1) > 1 {
+            var cloned = samplers[si]
+            cloned["output"] = newOutputAccessor
+            let newIndex = samplers.count
+            samplers.append(cloned)
+            channels[channelIndex]["sampler"] = newIndex
+            samplerUseCounts[si] = (samplerUseCounts[si] ?? 1) - 1
+            samplerUseCounts[newIndex] = 1
+        } else {
+            samplers[si]["output"] = newOutputAccessor
+        }
     }
 }

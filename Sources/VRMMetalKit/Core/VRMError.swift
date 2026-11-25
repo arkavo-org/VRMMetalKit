@@ -33,6 +33,9 @@ public enum VRMError: Error {
 
     /// A document resource exceeded a configured ``VRMLoaderLimits`` quota.
     case limitExceeded(kind: String, limit: Int, observed: Int)
+
+    /// A VRMA animation file parsed structurally but contains zero playable tracks.
+    case emptyAnimation(filePath: String?, channelCount: Int, samplerCount: Int, duration: Float)
 }
 
 extension VRMError: LocalizedError {
@@ -86,6 +89,18 @@ extension VRMError: LocalizedError {
             Suggestion: Reject untrusted files that exceed memory or structural quotas, or pass a higher `VRMLoaderLimits` (such as `.permissive` or a custom value) to `VRMModel.load` / `VRMAnimationLoader.loadVRMA` if this file is trusted.
 
             VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm-1.0/README.md
+            """
+
+        case .emptyAnimation(let filePath, let channelCount, let samplerCount, let duration):
+            let fileInfo = filePath.map { " in file '\($0)'" } ?? ""
+            return """
+            ❌ Empty VRMA Animation\(fileInfo)
+
+            The VRMA file parsed as valid glTF but contains 0 playable tracks (channels: \(channelCount), samplers: \(samplerCount), duration: \(duration)s).
+
+            Suggestion: Re-export the animation from the capture or authoring tool and verify that at least one humanoid bone, expression, or lookAt channel has non-empty keyframes.
+
+            VRM Spec: https://github.com/vrm-c/vrm-specification/blob/master/specification/VRMC_vrm_animation-1.0/README.md
             """
         }
     }
