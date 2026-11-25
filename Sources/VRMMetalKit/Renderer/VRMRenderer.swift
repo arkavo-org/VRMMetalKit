@@ -1115,7 +1115,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         let isFaceMaterial: Bool
         let isEyeMaterial: Bool
         let isBodyMaterial: Bool
-        let isMouthOrLipMaterial: Bool
         var effectiveAlphaModeRaw: UInt32
         var selectedCullMode: MTLCullMode
 
@@ -2533,7 +2532,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                 let isEyeMaterial = materialNameLower.contains("eye") && !materialNameLower.contains("brow")
                 let isBodyMaterial = materialNameLower.contains("body") || materialNameLower.contains("skin") ||
                                      nodeNameLower.contains("body") || meshNameLower.contains("body")
-                let isMouthOrLipMaterial = materialNameLower.contains("mouth") || materialNameLower.contains("lip")
                 let nodeOrMeshIsFace = nodeNameLower.contains("face") || nodeNameLower.contains("eye") ||
                                       meshNameLower.contains("face") || meshNameLower.contains("eye")
                 var item = RenderItem(
@@ -2553,7 +2551,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     isFaceMaterial: isFaceMaterial,
                     isEyeMaterial: isEyeMaterial,
                     isBodyMaterial: isBodyMaterial,
-                    isMouthOrLipMaterial: isMouthOrLipMaterial,
                     effectiveAlphaModeRaw: 0,
                     selectedCullMode: .back,
                     renderOrder: 0,  // Will be set based on category
@@ -3450,15 +3447,6 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         mtoonUniforms.occlusionStrength = material.occlusionStrength
                         mtoonUniforms.vrmVersion = material.vrmVersion == .v0_0 ? 0 : 1
 
-                        if item.isMouthOrLipMaterial {
-                            mtoonUniforms.uvOffsetX = 0.35  // Shift right to lip area
-                            mtoonUniforms.uvOffsetY = 0.25  // Shift down to lip area
-                            mtoonUniforms.uvScale = 0.5     // Scale down to fit lip texture
-                            if frameCounter <= 2 {
-                                vrmLog("🔧 [MOUTH UV FIX] Applied UV offset for \(item.materialName)")
-                            }
-                        }
-
                         mtoonUniforms.emissiveFactor = material.emissiveFactor
                         mtoonUniforms.alphaMode = item.effectiveAlphaModeRaw
                         if item.effectiveAlphaModeRaw == 1 {
@@ -3501,7 +3489,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                         mtoonUniforms.alphaMode = item.effectiveAlphaModeRaw
                         mtoonUniforms.alphaCutoff = item.effectiveAlphaCutoff
 
-                        if let faceCat = item.faceCategory, faceCat == "eye" {
+                        if let faceCat = item.faceCategory, faceCat == "eye", !self.disableAutoMaterialOverrides {
                             mtoonUniforms.shadeColorFactor = SIMD3<Float>(repeating: 1.0)
                             mtoonUniforms.shadingToonyFactor = 0.0
                             mtoonUniforms.shadingShiftFactor = 0.0

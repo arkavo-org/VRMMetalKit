@@ -402,8 +402,9 @@ vertex VertexOut mtoon_vertex(VertexIn in [[stage_in]],
  out.color = in.color;
 
  if (needsViewNormal(material, uniforms)) {
- // Transform normal to view space for MatCap/rim.
- out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(morphedNormal, 0.0)).xyz);
+ // Transform worldNormal (w = 0) into view space for MatCap/rim so a translated
+ // modelMatrix's normalMatrix 4th row cannot leak into viewMatrix's translation.
+ out.viewNormal = normalize((uniforms.viewMatrix * float4(out.worldNormal, 0.0)).xyz);
  } else {
  out.viewNormal = float3(0.0, 0.0, 1.0);
  }
@@ -1272,13 +1273,14 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
  bool effectiveHasEmissiveTexture = fc_useMaterialFlags ? (material.hasEmissiveTexture > 0) : fc_hasEmissiveTexture;
  bool effectiveHasOcclusionTexture = fc_useMaterialFlags ? (material.hasOcclusionTexture > 0) : fc_hasOcclusionTexture;
  bool effectiveHasUvAnimationMaskTexture = fc_useMaterialFlags ? (material.hasUvAnimationMaskTexture > 0) : fc_hasUvAnimationMaskTexture;
+ // Keep in sync with `hasParametricRim` in MToonShared.h.
  bool effectiveHasParametricRim = fc_useMaterialFlags ? (material.parametricRimColorR > 0.0 || material.parametricRimColorG > 0.0 || material.parametricRimColorB > 0.0) : fc_hasParametricRim;
  uint effectiveAlphaMode = fc_useMaterialFlags ? material.alphaMode : fc_alphaMode;
 
  // Choose UV coordinates (animated or static)
  float2 uv = in.texCoord;
  
- // Apply UV offset for face overlay materials (e.g., mouth -> shift to lip texture area)
+ // Apply optional Block 12 UV offset/scale when explicitly populated on uniforms
  if (material.uvOffsetX != 0.0 || material.uvOffsetY != 0.0 || material.uvScale != 1.0) {
      uv = uv * material.uvScale + float2(material.uvOffsetX, material.uvOffsetY);
  }
@@ -1560,10 +1562,10 @@ fragment float4 mtoon_fragment_v2(VertexOut in [[stage_in]],
 
      rimColor = parametricRimColorFactor * mtoon_float(rimF);
 
-     // Apply rim multiply texture for masking
+     // Apply rim multiply texture (RGB color multiplier per VRMC_materials_mtoon-1.0)
      if (effectiveHasRimMultiplyTexture) {
          float2 rimUV = applyUvRows(uv, material.rimMultiplyUvRow0, material.rimMultiplyUvRow1);
-         mtoon_float rimMask = saturate(mtoon_float(rimMultiplyTexture.sample(textureSampler, rimUV).r));
+         mtoon_float3 rimMask = saturate(mtoon_float3(rimMultiplyTexture.sample(textureSampler, rimUV).rgb));
          rimColor *= rimMask;
      }
  }
@@ -1732,8 +1734,8 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  // Transform to clip space
  float4 clipPos = uniforms.projectionMatrix * uniforms.viewMatrix * worldPos4;
 
- // Calculate screen-space normal
- float3 viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
+ // Calculate screen-space normal from worldNormal (w = 0) to avoid normalMatrix w-leak
+ float3 viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
  float2 screenNormal = normalize(viewNormal.xy);
 
  // Screen coordinates mode: outlineWidthFactor is a ratio to the
@@ -1757,7 +1759,7 @@ vertex VertexOut mtoon_outline_vertex(VertexIn in [[stage_in]],
  }
 
  out.worldNormal = worldNormal;
- out.viewNormal = normalize((uniforms.viewMatrix * uniforms.normalMatrix * float4(in.normal, 0.0)).xyz);
+ out.viewNormal = normalize((uniforms.viewMatrix * float4(worldNormal, 0.0)).xyz);
  out.texCoord = in.texCoord;
  out.color = in.color;
 
@@ -1819,7 +1821,7 @@ fragment float4 mtoon_debug_rim(VertexOut in [[stage_in]],
                          constant MToonMaterial& material [[buffer(8)]],
                          constant Uniforms& uniforms [[buffer(1)]]) {
  float3 rimColorFactor = float3(material.parametricRimColorR, material.parametricRimColorG, material.parametricRimColorB);
- if (any(rimColorFactor <= 0.0)) {
+ if (all(rimColorFactor <= 0.0)) {
  return float4(0, 0, 0, 1);
  }
 

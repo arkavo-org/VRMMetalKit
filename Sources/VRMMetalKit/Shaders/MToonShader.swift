@@ -673,7 +673,8 @@ public struct MToonFunctionConstantKey: Hashable, Sendable {
         self.hasOcclusionTexture = material.hasOcclusionTexture != 0
         self.hasUvAnimationMaskTexture = material.hasUvAnimationMaskTexture != 0
         let rim = material.parametricRimColorFactor
-        self.hasParametricRim = rim.x != 0.0 || rim.y != 0.0 || rim.z != 0.0
+        // Keep in sync with `hasParametricRim` in MToonShared.h (`> 0.0`).
+        self.hasParametricRim = rim.x > 0.0 || rim.y > 0.0 || rim.z > 0.0
         self.alphaMode = UInt8(material.alphaMode)
         self.lightCount = MToonLightSpecialization.maxLights
         self.debugVisualization = false
