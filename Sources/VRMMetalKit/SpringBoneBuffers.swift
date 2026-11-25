@@ -53,6 +53,7 @@ public final class SpringBoneBuffers: @unchecked Sendable {
     var parentPosPrev: MTLBuffer?
     var parentPosCurr: MTLBuffer?
     var boneParams: MTLBuffer?
+    var collisionAux: MTLBuffer?
     var restLengths: MTLBuffer?
     var bindDirections: MTLBuffer?  // Bind pose directions for stiffness spring force
     var sphereColliders: MTLBuffer?
@@ -131,6 +132,7 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         // Allocate SoA buffers with proper alignment
         let bonePosSize = MemoryLayout<SIMD3<Float>>.stride * numBones
         let boneParamsSize = MemoryLayout<BoneParams>.stride * numBones
+        let collisionAuxSize = MemoryLayout<SpringBoneCollisionAux>.stride * numBones
         let restLengthSize = MemoryLayout<Float>.stride * numBones
         let sphereColliderSize = MemoryLayout<SphereCollider>.stride * max(sphereCapacity, 0)
         let capsuleColliderSize = MemoryLayout<CapsuleCollider>.stride * max(capsuleCapacity, 0)
@@ -146,6 +148,14 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         parentPosCurr?.label = "SpringBone ParentPos Curr"
         boneParams = device.makeBuffer(length: boneParamsSize, options: [.storageModeShared])
         boneParams?.label = "SpringBone BoneParams"
+        collisionAux = device.makeBuffer(length: max(collisionAuxSize, MemoryLayout<SpringBoneCollisionAux>.stride),
+                                         options: [.storageModeShared])
+        collisionAux?.label = "SpringBone CollisionAux"
+        if let auxBuf = collisionAux, numBones > 0 {
+            let ptr = auxBuf.contents().bindMemory(to: SpringBoneCollisionAux.self, capacity: numBones)
+            let defaultAux = SpringBoneCollisionAux()
+            for i in 0..<numBones { ptr[i] = defaultAux }
+        }
         restLengths = device.makeBuffer(length: restLengthSize, options: [.storageModeShared])
         restLengths?.label = "SpringBone RestLengths"
         // One slot per substep for the three host-rewritten regions (VMK#396).
@@ -185,6 +195,25 @@ public final class SpringBoneBuffers: @unchecked Sendable {
         for i in 0..<numBones {
             ptr?[i] = parameters[i]
         }
+    }
+
+    func updateCollisionAux(_ aux: [SpringBoneCollisionAux]) {
+        guard aux.count == numBones else {
+            vrmLogPhysics("⚠️ [SpringBoneBuffers] CollisionAux count mismatch: expected \(numBones), got \(aux.count)")
+            return
+        }
+        if collisionAux == nil && numBones > 0 {
+            collisionAux = device.makeBuffer(
+                length: MemoryLayout<SpringBoneCollisionAux>.stride * numBones,
+                options: [.storageModeShared]
+            )
+            collisionAux?.label = "SpringBone CollisionAux"
+        }
+        guard let buffer = collisionAux, numBones > 0 else { return }
+        buffer.contents().copyMemory(
+            from: aux,
+            byteCount: MemoryLayout<SpringBoneCollisionAux>.stride * numBones
+        )
     }
 
     func updateRestLengths(_ lengths: [Float]) {
@@ -343,6 +372,32 @@ public struct BoneParams {
         self.colliderGroupMask = colliderGroupMask
         self.gravityDir = gravityDir
         self.angleLimit = angleLimit
+    }
+}
+
+/// Per-bone auxiliary collision metadata uploaded alongside ``BoneParams``
+/// (`buffer(20)` in `SpringBoneCollision.metal`), keeping ``BoneParams`` ABI-stable (#478).
+struct SpringBoneCollisionAux: Sendable, Equatable {
+    /// Left adjacent skirt ring neighbor bone index, or `0xFFFFFFFF` if none.
+    var ringLeft: UInt32
+    /// Right adjacent skirt ring neighbor bone index, or `0xFFFFFFFF` if none.
+    var ringRight: UInt32
+    /// Effective bone collision radius against synthetic colliders (inherits
+    /// parent `hitRadius` when a VRM 1.0 terminal cloth joint omits `hitRadius`).
+    var syntheticRadius: Float
+    /// Bitflags (bit 0 = bone participates in a skirt ring chord).
+    var flags: UInt32
+
+    init(
+        ringLeft: UInt32 = 0xFFFFFFFF,
+        ringRight: UInt32 = 0xFFFFFFFF,
+        syntheticRadius: Float = 0.0,
+        flags: UInt32 = 0
+    ) {
+        self.ringLeft = ringLeft
+        self.ringRight = ringRight
+        self.syntheticRadius = syntheticRadius
+        self.flags = flags
     }
 }
 

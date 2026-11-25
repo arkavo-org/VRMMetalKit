@@ -75,7 +75,8 @@ final class HairChestPenetrationTests: XCTestCase {
         var breastColliderCount = 0 // #377 mesh-fitted breast capsules (fixture-derived)
         var shoulderColliderCount = 0 // #377 mesh-fitted shoulder spheres (fixture-derived)
         var torsoColliderCount = 0    // #377 mesh-fitted upper-torso capsule (fixture-derived)
-        var segmentSphereCount = 0    // #381 spheres the segment fit appends (none; radii are clamped in place)
+        var handColliderCount = 0     // #478 adaptive 2/3-capsule mesh-fitted hand paddles (fixture-derived)
+        var segmentSphereCount = 0    // #381/#478 net sphere delta (negative when hand paddles replace palm spheres)
         var hairJoints = 0
         var rate: Float { totalSamples > 0 ? Float(penetrations) / Float(totalSamples) : 0 }
         var nearRate: Float { totalSamples > 0 ? Float(nearSamples) / Float(totalSamples) : 0 }
@@ -182,6 +183,7 @@ final class HairChestPenetrationTests: XCTestCase {
         m.breastColliderCount = SpringBoneBreastCollider.computeBreastColliders(model: model).count
         m.shoulderColliderCount = SpringBoneBreastCollider.computeShoulderColliders(model: model).count
         m.torsoColliderCount = SpringBoneBreastCollider.computeTorsoCollider(model: model).count
+        m.handColliderCount = SpringBoneMeshFit.computeHandColliders(model: model).count
         m.segmentSphereCount = SpringBoneSegmentFit.appendedSphereCount(model: model)
         m.hairJoints = hairJointNodeIndices.count
 
@@ -261,8 +263,8 @@ final class HairChestPenetrationTests: XCTestCase {
         print("[HairChest \(modelFile) ON] samples=\(m.totalSamples) joints=\(m.hairJoints) synth=\(m.syntheticCount) "
             + "rate=\(String(format: "%.2f%%", m.rate * 100)) raw=\(m.rawPenetrations) "
             + "near=\(String(format: "%.1f%%", m.nearRate * 100)) worst=\(String(format: "%.1f mm", m.worstDepth * 1000))")
-        XCTAssertEqual(m.syntheticCount, expectedBaseSynthetic + m.breastTwinCount + m.breastColliderCount + m.shoulderColliderCount + m.torsoColliderCount + m.segmentSphereCount,
-            "augmentation must be active in the gated run (\(expectedBaseSynthetic) base + \(m.breastTwinCount) #377 breast twins + \(m.breastColliderCount) breast capsules + \(m.segmentSphereCount) segment spheres)")
+        XCTAssertEqual(m.syntheticCount, expectedBaseSynthetic + m.breastTwinCount + m.breastColliderCount + m.shoulderColliderCount + m.torsoColliderCount + m.handColliderCount + m.segmentSphereCount,
+            "augmentation must be active in the gated run (\(expectedBaseSynthetic) base + \(m.breastTwinCount) #377 breast twins + \(m.breastColliderCount) breast capsules + \(m.handColliderCount) hand paddles + \(m.segmentSphereCount) sphere delta)")
         assertNonVacuous(m, modelFile)
         XCTAssertLessThan(m.rate, 0.01,
             "\(modelFile): hair penetrates a torso/upper-arm capsule >5mm on \(String(format: "%.1f%%", m.rate * 100)) of samples (expected < 1%; augment-off baseline for this fixture is 3.7–7.8%). Worst: \(String(format: "%.1f mm", m.worstDepth * 1000))")
@@ -294,8 +296,8 @@ final class HairChestPenetrationTests: XCTestCase {
             + "on=\(String(format: "%.2f%%", on.rate * 100)) (\(on.penetrations)/\(on.totalSamples), worst \(String(format: "%.1f mm", on.worstDepth * 1000)))")
 
         XCTAssertEqual(off.syntheticCount, 0, "augment-off run must have no synthetic colliders")
-        XCTAssertEqual(on.syntheticCount, 15 + on.breastTwinCount + on.breastColliderCount + on.shoulderColliderCount + on.torsoColliderCount + on.segmentSphereCount,
-                       "augment-on run must carry 15 synthetic colliders + \(on.breastTwinCount) breast twins + \(on.breastColliderCount) breast capsules (#377) + \(on.segmentSphereCount) segment spheres (#381)")
+        XCTAssertEqual(on.syntheticCount, 15 + on.breastTwinCount + on.breastColliderCount + on.shoulderColliderCount + on.torsoColliderCount + on.handColliderCount + on.segmentSphereCount,
+                       "augment-on run must carry 15 synthetic colliders + \(on.breastTwinCount) breast twins + \(on.breastColliderCount) breast capsules (#377) + \(on.handColliderCount) hand paddles (#478) + \(on.segmentSphereCount) sphere delta")
         assertNonVacuous(off, "H off")
         assertNonVacuous(on, "H on")
 

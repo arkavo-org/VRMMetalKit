@@ -223,15 +223,20 @@ final class SpringBoneSegmentFitTests: XCTestCase {
 
         for hand in [VRMHumanoidBone.leftHand, .rightHand] {
             let node = try XCTUnwrap(humanoid.getBoneNode(hand))
-            let authored = try XCTUnwrap(ColliderDimensionAudit.authoredSphere(node: node, model: model))
-            let palm = try XCTUnwrap(synthetic.first { $0.node == node && isSphere($0) })
-            guard case .sphere(let offset, let palmRadius) = palm.shape else {
-                return XCTFail("palm collider must be a sphere")
+            XCTAssertFalse(synthetic.contains { $0.node == node && isSphere($0) },
+                           "\(hand) fraction palm sphere must be replaced by mesh-fitted hand paddle capsules (#478)")
+            let paddles = loadedCapsules.filter { $0.node == node }
+            XCTAssertTrue((2...3).contains(paddles.count),
+                          "\(hand) must emit 2 or 3 adaptive hand paddle capsules, got \(paddles.count)")
+            for paddle in paddles {
+                guard case .capsule(let offset, let paddleRadius, let tail) = paddle.shape else {
+                    return XCTFail("hand paddle must be a capsule")
+                }
+                XCTAssertLessThan(paddleRadius, 0.030,
+                                  "\(hand) paddle radius \(paddleRadius) must stay slim (no #321 forcefield)")
+                XCTAssertGreaterThan(simd_length(tail - offset) + 2 * paddleRadius, 0.08,
+                                     "\(hand) paddle must span wrist through fingers (not collapse onto a 24mm wrist sphere)")
             }
-            print("[#381 \(hand)] authored r=\(authored.radius) offset=\(authored.offset) palm r=\(palmRadius) offset=\(offset)")
-            XCTAssertEqual(palmRadius, authored.radius, accuracy: 1e-4)
-            XCTAssertLessThan(simd_length(offset - authored.offset), 1e-4,
-                              "palm sphere must sit on the authored sphere, not a fraction of forearm length")
         }
 
         if let neck = humanoid.getBoneNode(.neck) {
@@ -395,9 +400,16 @@ final class SpringBoneSegmentFitTests: XCTestCase {
             XCTAssertTrue(r.isFinite && r > 0, "\(file): synthetic radius must be finite and positive")
         }
 
-        let prefixCount = min(pure.count, loaded.count)
+        let handNodes = Set([VRMHumanoidBone.leftHand, .rightHand].compactMap { humanoid?.getBoneNode($0) })
+        let expectedPurePrefix = pure.filter { collider in
+            if handNodes.contains(collider.node) && isSphere(collider) {
+                return !loaded.contains { $0.node == collider.node && !isSphere($0) }
+            }
+            return true
+        }
+        let prefixCount = min(expectedPurePrefix.count, loaded.count)
         for index in 0..<prefixCount {
-            let before = pure[index]
+            let before = expectedPurePrefix[index]
             let after = loaded[index]
             XCTAssertEqual(after.node, before.node, "\(file): prefix node \(index) changed")
             let bone = boneOfNode[after.node] ?? (model.nodes.indices.contains(after.node)
@@ -427,17 +439,20 @@ final class SpringBoneSegmentFitTests: XCTestCase {
 
         if let humanoid {
             for bone in [VRMHumanoidBone.leftHand, .rightHand] {
-                guard let node = humanoid.getBoneNode(bone),
-                      let authored = ColliderDimensionAudit.authoredSphere(node: node, model: model),
-                      let palm = loaded.first(where: { $0.node == node && isSphere($0) }),
-                      case .sphere(let offset, let palmRadius) = palm.shape else { continue }
-                XCTAssertEqual(palmRadius, authored.radius, accuracy: 1e-4,
-                               "\(file): \(bone) palm must copy the authored radius")
-                XCTAssertLessThan(simd_length(offset - authored.offset), 1e-4,
-                                  "\(file): \(bone) palm must sit on the authored sphere")
-                if let maxRadius = ColliderDimensionAudit.maxAuthoredOutsideRadius(node: node, model: model) {
-                    XCTAssertGreaterThanOrEqual(palmRadius + 1e-4, maxRadius,
-                        "\(file): \(bone) palm copied a sphere smaller than another outside collider on that node")
+                guard let node = humanoid.getBoneNode(bone) else { continue }
+                let paddles = loadedCapsules.filter { $0.node == node }
+                if !paddles.isEmpty {
+                    XCTAssertFalse(loaded.contains { $0.node == node && isSphere($0) },
+                                   "\(file): \(bone) fraction palm sphere must be dropped once fitted paddle capsules exist")
+                    XCTAssertTrue((1...3).contains(paddles.count),
+                                  "\(file): \(bone) expected 1–3 hand paddle capsules, got \(paddles.count)")
+                } else if let authored = ColliderDimensionAudit.authoredSphere(node: node, model: model),
+                          let palm = loaded.first(where: { $0.node == node && isSphere($0) }),
+                          case .sphere(let offset, let palmRadius) = palm.shape {
+                    XCTAssertEqual(palmRadius, authored.radius, accuracy: 1e-4,
+                                   "\(file): \(bone) fallback palm must copy the authored radius")
+                    XCTAssertLessThan(simd_length(offset - authored.offset), 1e-4,
+                                      "\(file): \(bone) fallback palm must sit on the authored sphere")
                 }
             }
             let mirror: [(VRMHumanoidBone, VRMHumanoidBone)] = [
