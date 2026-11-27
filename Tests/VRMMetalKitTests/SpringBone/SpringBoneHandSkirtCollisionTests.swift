@@ -1102,8 +1102,12 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
             enc.setBuffer(csBuf, offset: 0, index: 17)
             enc.setBuffer(snapBuf, offset: 0, index: 19)
             enc.setBuffer(auxBuf, offset: 0, index: 20)
-            enc.dispatchThreads(MTLSize(width: n, height: 1, depth: 1),
-                                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+            SpringBoneComputeSystem.dispatchCompute(
+                enc,
+                threadsPerGrid: MTLSize(width: n, height: 1, depth: 1),
+                threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1),
+                supportsNonUniformThreadgroups: device.supportsFamily(.apple4) || device.supportsFamily(.mac2)
+            )
             enc.endEncoding()
             cb.commit()
             cb.waitUntilCompleted()

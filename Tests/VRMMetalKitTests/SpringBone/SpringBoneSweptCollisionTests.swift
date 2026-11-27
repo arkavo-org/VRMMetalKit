@@ -143,8 +143,12 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         enc.setBuffer(chainIndexBuf, offset: 0, index: 16)
         enc.setBuffer(chainSleepBuf, offset: 0, index: 17)
         enc.setBuffer(collisionAuxBuf, offset: 0, index: 20)
-        enc.dispatchThreads(MTLSize(width: numBones, height: 1, depth: 1),
-                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        SpringBoneComputeSystem.dispatchCompute(
+            enc,
+            threadsPerGrid: MTLSize(width: numBones, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1),
+            supportsNonUniformThreadgroups: device.supportsFamily(.apple4) || device.supportsFamily(.mac2)
+        )
         enc.endEncoding()
         cb.commit()
         cb.waitUntilCompleted()
@@ -229,8 +233,12 @@ final class SpringBoneSweptCollisionTests: XCTestCase {
         enc.setBuffer(chainSleepBuf, offset: 0, index: 17)
         enc.setBuffer(currBuf, offset: 0, index: 19)
         enc.setBuffer(collisionAuxBuf, offset: 0, index: 20)
-        enc.dispatchThreads(MTLSize(width: numBones, height: 1, depth: 1),
-                            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+        SpringBoneComputeSystem.dispatchCompute(
+            enc,
+            threadsPerGrid: MTLSize(width: numBones, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1),
+            supportsNonUniformThreadgroups: device.supportsFamily(.apple4) || device.supportsFamily(.mac2)
+        )
         enc.endEncoding()
         cb.commit()
         cb.waitUntilCompleted()

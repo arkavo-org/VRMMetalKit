@@ -151,7 +151,215 @@ final class GLTFIBLTests: XCTestCase {
             "Metallic (lum=\(String(format: "%.1f", metallicLuminance))) was not meaningfully brighter than dielectric (lum=\(String(format: "%.1f", dielectricLuminance))) — IBL split-sum is not picking up the material distinction.")
     }
 
+    func testIBLThreadgroupGridSizeRounding() {
+        let tg = MTLSize(width: 8, height: 8, depth: 1)
+
+        let subGroup = iblThreadgroupGridSize(
+            for: MTLSize(width: 4, height: 4, depth: 6),
+            threadsPerThreadgroup: tg
+        )
+        XCTAssertEqual(subGroup.width, 1)
+        XCTAssertEqual(subGroup.height, 1)
+        XCTAssertEqual(subGroup.depth, 6)
+
+        let nonMultiple = iblThreadgroupGridSize(
+            for: MTLSize(width: 13, height: 7, depth: 6),
+            threadsPerThreadgroup: tg
+        )
+        XCTAssertEqual(nonMultiple.width, 2)
+        XCTAssertEqual(nonMultiple.height, 1)
+        XCTAssertEqual(nonMultiple.depth, 6)
+
+        let exact = iblThreadgroupGridSize(
+            for: MTLSize(width: 256, height: 256, depth: 6),
+            threadsPerThreadgroup: tg
+        )
+        XCTAssertEqual(exact.width, 32)
+        XCTAssertEqual(exact.height, 32)
+        XCTAssertEqual(exact.depth, 6)
+    }
+
+    func testBRDFLUTUniformThreadgroupFallbackMatchesNonUniform() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+        guard let commandQueue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
+        }
+
+        let renderer = try GLTFRenderer(device: device)
+        let nonUniform = try GLTFBRDFLUT.generate(
+            device: device,
+            library: renderer.library,
+            supportsNonUniformThreadgroups: true
+        )
+        let uniform = try GLTFBRDFLUT.generate(
+            device: device,
+            library: renderer.library,
+            supportsNonUniformThreadgroups: false
+        )
+
+        let bytesA = try readback2DTexture(nonUniform, device: device, commandQueue: commandQueue, bytesPerPixel: 4)
+        let bytesB = try readback2DTexture(uniform, device: device, commandQueue: commandQueue, bytesPerPixel: 4)
+        XCTAssertEqual(bytesA, bytesB, "BRDF LUT output differed between uniform and non-uniform compute dispatch")
+    }
+
+    func testProceduralEnvironmentUniformThreadgroupFallbackMatchesNonUniform() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+        guard let commandQueue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
+        }
+
+        let renderer = try GLTFRenderer(device: device)
+        // Non-multiple-of-8 dimensions force partial threadgroups on every pass and every mip (13, 6, 3, 1).
+        let nonUniform = try GLTFEnvironment.makeProcedural(
+            device: device,
+            library: renderer.library,
+            sourceSize: 13,
+            specularSize: 13,
+            diffuseSize: 7,
+            supportsNonUniformThreadgroups: true
+        )
+        let uniform = try GLTFEnvironment.makeProcedural(
+            device: device,
+            library: renderer.library,
+            sourceSize: 13,
+            specularSize: 13,
+            diffuseSize: 7,
+            supportsNonUniformThreadgroups: false
+        )
+
+        let diffuseA = try readbackCubeTexture(nonUniform.diffuse, device: device, commandQueue: commandQueue)
+        let diffuseB = try readbackCubeTexture(uniform.diffuse, device: device, commandQueue: commandQueue)
+        XCTAssertEqual(diffuseA, diffuseB, "Procedural diffuse cubemap differed under uniform threadgroup fallback")
+
+        let specularA = try readbackCubeTexture(nonUniform.specular, device: device, commandQueue: commandQueue)
+        let specularB = try readbackCubeTexture(uniform.specular, device: device, commandQueue: commandQueue)
+        XCTAssertEqual(specularA, specularB, "Procedural specular cubemap differed under uniform threadgroup fallback")
+    }
+
+    func testRadianceHDRUniformThreadgroupFallbackMatchesNonUniform() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available (CI without GPU)")
+        }
+        guard let commandQueue = device.makeCommandQueue() else {
+            XCTFail("Could not create command queue"); return
+        }
+
+        var hdrBytes = [UInt8]()
+        hdrBytes.append(contentsOf: Array("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 4 +X 4\n".utf8))
+        for row in 0..<4 {
+            let shade = UInt8(60 + row * 40)
+            for _ in 0..<4 {
+                hdrBytes.append(contentsOf: [shade, shade, shade, 129])
+            }
+        }
+        let data = Data(hdrBytes)
+
+        let renderer = try GLTFRenderer(device: device)
+        let nonUniform = try GLTFEnvironment.makeFromRadianceHDR(
+            data: data,
+            device: device,
+            library: renderer.library,
+            sourceCubeSize: 13,
+            specularSize: 13,
+            diffuseSize: 7,
+            supportsNonUniformThreadgroups: true
+        )
+        let uniform = try GLTFEnvironment.makeFromRadianceHDR(
+            data: data,
+            device: device,
+            library: renderer.library,
+            sourceCubeSize: 13,
+            specularSize: 13,
+            diffuseSize: 7,
+            supportsNonUniformThreadgroups: false
+        )
+
+        let diffuseA = try readbackCubeTexture(nonUniform.diffuse, device: device, commandQueue: commandQueue)
+        let diffuseB = try readbackCubeTexture(uniform.diffuse, device: device, commandQueue: commandQueue)
+        XCTAssertEqual(diffuseA, diffuseB, "HDR diffuse cubemap differed under uniform threadgroup fallback")
+
+        let specularA = try readbackCubeTexture(nonUniform.specular, device: device, commandQueue: commandQueue)
+        let specularB = try readbackCubeTexture(uniform.specular, device: device, commandQueue: commandQueue)
+        XCTAssertEqual(specularA, specularB, "HDR specular cubemap differed under uniform threadgroup fallback")
+    }
+
     // MARK: - Helpers
+
+    private func readback2DTexture(
+        _ texture: MTLTexture,
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue,
+        bytesPerPixel: Int
+    ) throws -> [UInt8] {
+        let width = texture.width
+        let height = texture.height
+        let bytesPerRow = width * bytesPerPixel
+        let totalBytes = bytesPerRow * height
+        guard let staging = device.makeBuffer(length: totalBytes, options: .storageModeShared),
+              let cb = commandQueue.makeCommandBuffer(),
+              let blit = cb.makeBlitCommandEncoder() else {
+            throw XCTSkip("Could not allocate blit staging buffer")
+        }
+        blit.copy(
+            from: texture,
+            sourceSlice: 0,
+            sourceLevel: 0,
+            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+            sourceSize: MTLSize(width: width, height: height, depth: 1),
+            to: staging,
+            destinationOffset: 0,
+            destinationBytesPerRow: bytesPerRow,
+            destinationBytesPerImage: totalBytes
+        )
+        blit.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+        let ptr = staging.contents().bindMemory(to: UInt8.self, capacity: totalBytes)
+        return Array(UnsafeBufferPointer(start: ptr, count: totalBytes))
+    }
+
+    private func readbackCubeTexture(
+        _ texture: MTLTexture,
+        device: MTLDevice,
+        commandQueue: MTLCommandQueue
+    ) throws -> [UInt8] {
+        let bytesPerPixel = 8 // rgba16Float
+        var allBytes: [UInt8] = []
+        for mip in 0..<texture.mipmapLevelCount {
+            let faceSize = max(texture.width >> mip, 1)
+            let bytesPerRow = faceSize * bytesPerPixel
+            let bytesPerFace = bytesPerRow * faceSize
+            let totalBytes = bytesPerFace * 6
+            guard let staging = device.makeBuffer(length: totalBytes, options: .storageModeShared),
+                  let cb = commandQueue.makeCommandBuffer(),
+                  let blit = cb.makeBlitCommandEncoder() else {
+                throw XCTSkip("Could not allocate cubemap staging buffer")
+            }
+            for face in 0..<6 {
+                blit.copy(
+                    from: texture,
+                    sourceSlice: face,
+                    sourceLevel: mip,
+                    sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                    sourceSize: MTLSize(width: faceSize, height: faceSize, depth: 1),
+                    to: staging,
+                    destinationOffset: face * bytesPerFace,
+                    destinationBytesPerRow: bytesPerRow,
+                    destinationBytesPerImage: bytesPerFace
+                )
+            }
+            blit.endEncoding()
+            cb.commit()
+            cb.waitUntilCompleted()
+            let ptr = staging.contents().bindMemory(to: UInt8.self, capacity: totalBytes)
+            allBytes.append(contentsOf: UnsafeBufferPointer(start: ptr, count: totalBytes))
+        }
+        return allBytes
+    }
 
     private func renderQuad(
         material: GLTFRenderableMaterial,

@@ -132,6 +132,41 @@ public struct GLTFEnvironment {
     }
 }
 
+internal func deviceSupportsNonUniformThreadgroups(_ device: MTLDevice) -> Bool {
+    device.supportsFamily(.apple4) || device.supportsFamily(.mac2)
+}
+
+internal func iblThreadgroupGridSize(
+    for threadsPerGrid: MTLSize,
+    threadsPerThreadgroup: MTLSize
+) -> MTLSize {
+    MTLSize(
+        width: (threadsPerGrid.width + threadsPerThreadgroup.width - 1) / threadsPerThreadgroup.width,
+        height: (threadsPerGrid.height + threadsPerThreadgroup.height - 1) / threadsPerThreadgroup.height,
+        depth: (threadsPerGrid.depth + threadsPerThreadgroup.depth - 1) / threadsPerThreadgroup.depth
+    )
+}
+
+internal func dispatchIBLCompute(
+    _ encoder: MTLComputeCommandEncoder,
+    threadsPerGrid: MTLSize,
+    threadsPerThreadgroup: MTLSize,
+    supportsNonUniformThreadgroups: Bool
+) {
+    guard threadsPerGrid.width > 0, threadsPerGrid.height > 0, threadsPerGrid.depth > 0 else {
+        return
+    }
+    if supportsNonUniformThreadgroups {
+        encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
+    } else {
+        let threadgroups = iblThreadgroupGridSize(
+            for: threadsPerGrid,
+            threadsPerThreadgroup: threadsPerThreadgroup
+        )
+        encoder.dispatchThreadgroups(threadgroups, threadsPerThreadgroup: threadsPerThreadgroup)
+    }
+}
+
 /// Generates the view-independent BRDF integration LUT used by the split-sum
 /// IBL approximation.
 ///
@@ -150,6 +185,18 @@ public enum GLTFBRDFLUT {
     /// texture is ready to use as a fragment input. Run this once at
     /// renderer startup and cache the result.
     public static func generate(device: MTLDevice, library: MTLLibrary) throws -> MTLTexture {
+        try generate(
+            device: device,
+            library: library,
+            supportsNonUniformThreadgroups: deviceSupportsNonUniformThreadgroups(device)
+        )
+    }
+
+    internal static func generate(
+        device: MTLDevice,
+        library: MTLLibrary,
+        supportsNonUniformThreadgroups: Bool
+    ) throws -> MTLTexture {
         guard let kernelFunction = library.makeFunction(name: "gltf_ibl_brdf_lut") else {
             throw GLTFRendererError.missingShaderFunction(name: "gltf_ibl_brdf_lut")
         }
@@ -178,11 +225,16 @@ public enum GLTFBRDFLUT {
         encoder.setComputePipelineState(pipelineState)
         encoder.setTexture(texture, index: 0)
 
-        let threadWidth = pipelineState.threadExecutionWidth
-        let threadHeight = pipelineState.maxTotalThreadsPerThreadgroup / threadWidth
+        let threadWidth = max(1, pipelineState.threadExecutionWidth)
+        let threadHeight = max(1, pipelineState.maxTotalThreadsPerThreadgroup / threadWidth)
         let threadsPerThreadgroup = MTLSize(width: threadWidth, height: threadHeight, depth: 1)
         let threadsPerGrid = MTLSize(width: size, height: size, depth: 1)
-        encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerThreadgroup)
+        dispatchIBLCompute(
+            encoder,
+            threadsPerGrid: threadsPerGrid,
+            threadsPerThreadgroup: threadsPerThreadgroup,
+            supportsNonUniformThreadgroups: supportsNonUniformThreadgroups
+        )
         encoder.endEncoding()
 
         commandBuffer.commit()
@@ -323,6 +375,26 @@ extension GLTFEnvironment {
         specularSize: Int = 256,
         diffuseSize: Int = 32
     ) throws -> GLTFEnvironment {
+        try makeProcedural(
+            device: device,
+            library: library,
+            params: params,
+            sourceSize: sourceSize,
+            specularSize: specularSize,
+            diffuseSize: diffuseSize,
+            supportsNonUniformThreadgroups: deviceSupportsNonUniformThreadgroups(device)
+        )
+    }
+
+    internal static func makeProcedural(
+        device: MTLDevice,
+        library: MTLLibrary,
+        params: GLTFProceduralSkyParams = .default,
+        sourceSize: Int = 256,
+        specularSize: Int = 256,
+        diffuseSize: Int = 32,
+        supportsNonUniformThreadgroups: Bool
+    ) throws -> GLTFEnvironment {
         let specularMipCount = max(Int(floor(log2(Double(specularSize)))) + 1, 1)
 
         // --- Allocate textures ---------------------------------------------
@@ -402,7 +474,12 @@ extension GLTFEnvironment {
 
             let threadsPerGrid = MTLSize(width: sourceSize, height: sourceSize, depth: 6)
             let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
-            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            dispatchIBLCompute(
+                encoder,
+                threadsPerGrid: threadsPerGrid,
+                threadsPerThreadgroup: threadsPerGroup,
+                supportsNonUniformThreadgroups: supportsNonUniformThreadgroups
+            )
             encoder.endEncoding()
         }
 
@@ -437,7 +514,12 @@ extension GLTFEnvironment {
 
             let threadsPerGrid = MTLSize(width: faceSize, height: faceSize, depth: 6)
             let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
-            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            dispatchIBLCompute(
+                encoder,
+                threadsPerGrid: threadsPerGrid,
+                threadsPerThreadgroup: threadsPerGroup,
+                supportsNonUniformThreadgroups: supportsNonUniformThreadgroups
+            )
             encoder.endEncoding()
         }
 
@@ -454,7 +536,12 @@ extension GLTFEnvironment {
 
             let threadsPerGrid = MTLSize(width: diffuseSize, height: diffuseSize, depth: 6)
             let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
-            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            dispatchIBLCompute(
+                encoder,
+                threadsPerGrid: threadsPerGrid,
+                threadsPerThreadgroup: threadsPerGroup,
+                supportsNonUniformThreadgroups: supportsNonUniformThreadgroups
+            )
             encoder.endEncoding()
         }
 
@@ -496,6 +583,26 @@ extension GLTFEnvironment {
         sourceCubeSize: Int = 512,
         specularSize: Int = 256,
         diffuseSize: Int = 32
+    ) throws -> GLTFEnvironment {
+        try makeFromRadianceHDR(
+            data: data,
+            device: device,
+            library: library,
+            sourceCubeSize: sourceCubeSize,
+            specularSize: specularSize,
+            diffuseSize: diffuseSize,
+            supportsNonUniformThreadgroups: deviceSupportsNonUniformThreadgroups(device)
+        )
+    }
+
+    internal static func makeFromRadianceHDR(
+        data: Data,
+        device: MTLDevice,
+        library: MTLLibrary,
+        sourceCubeSize: Int = 512,
+        specularSize: Int = 256,
+        diffuseSize: Int = 32,
+        supportsNonUniformThreadgroups: Bool
     ) throws -> GLTFEnvironment {
         let hdr = try GLTFRadianceHDR(data: data)
         let specularMipCount = max(Int(floor(log2(Double(specularSize)))) + 1, 1)
@@ -598,7 +705,12 @@ extension GLTFEnvironment {
             encoder.setSamplerState(panoSampler, index: 0)
             let threadsPerGrid = MTLSize(width: sourceCubeSize, height: sourceCubeSize, depth: 6)
             let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
-            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            dispatchIBLCompute(
+                encoder,
+                threadsPerGrid: threadsPerGrid,
+                threadsPerThreadgroup: threadsPerGroup,
+                supportsNonUniformThreadgroups: supportsNonUniformThreadgroups
+            )
             encoder.endEncoding()
         }
 
@@ -625,7 +737,12 @@ extension GLTFEnvironment {
             encoder.setBytes(&prefilterParams, length: MemoryLayout<ShaderPrefilterParams>.stride, index: 0)
             let threadsPerGrid = MTLSize(width: faceSize, height: faceSize, depth: 6)
             let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
-            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            dispatchIBLCompute(
+                encoder,
+                threadsPerGrid: threadsPerGrid,
+                threadsPerThreadgroup: threadsPerGroup,
+                supportsNonUniformThreadgroups: supportsNonUniformThreadgroups
+            )
             encoder.endEncoding()
         }
 
@@ -640,7 +757,12 @@ extension GLTFEnvironment {
             encoder.setSamplerState(envSampler, index: 0)
             let threadsPerGrid = MTLSize(width: diffuseSize, height: diffuseSize, depth: 6)
             let threadsPerGroup = MTLSize(width: 8, height: 8, depth: 1)
-            encoder.dispatchThreads(threadsPerGrid, threadsPerThreadgroup: threadsPerGroup)
+            dispatchIBLCompute(
+                encoder,
+                threadsPerGrid: threadsPerGrid,
+                threadsPerThreadgroup: threadsPerGroup,
+                supportsNonUniformThreadgroups: supportsNonUniformThreadgroups
+            )
             encoder.endEncoding()
         }
 
