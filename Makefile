@@ -1,7 +1,7 @@
 # Makefile for VRMMetalKit shader compilation
 # Copyright 2025 Arkavo
 
-.PHONY: help style-lint shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-hotspots bench-visionos bench-visionos-sim
+.PHONY: help style-lint cosmetics-qa shaders shaders-macos shaders-ios shaders-iossim shaders-visionos shaders-visionossim gltf-shaders clean test docs docs-static gputrace gputrace-baseline bench-baseline bench-gate bench-hotspots bench-visionos bench-visionos-sim
 
 help:
 	@echo "VRMMetalKit Build Targets:"
@@ -15,6 +15,7 @@ help:
 	@echo "  make clean         - Remove temporary build files"
 	@echo "  make test          - Run Swift tests"
 	@echo "  make style-lint    - Lint the repo-root VRM fixtures against the VRoid-lineage anime style profile"
+	@echo "  make cosmetics-qa  - Render 6-panel VRMMetalKit 2.0 cosmetics visual QA contact sheet on a real VRM avatar"
 	@echo "  make gputrace      - Capture a .gputrace of the bundled avatar render (inspect with gpudebug)"
 	@echo "  make gputrace-baseline - Capture a .gputrace matching the VRMBenchmark baseline (animated + spring, 1024px)"
 	@echo "  make bench-baseline - Record the authoritative perf baseline (run on the dedicated perf machine)"
@@ -315,3 +316,11 @@ docs-static:
 		--hosting-base-path VRMMetalKit \
 		--output-path .build/docs
 	@echo "✅ Static site written to .build/docs"
+
+# Render 6-panel VRMMetalKit 2.0 real-avatar cosmetics visual QA & contact sheet
+COSMETICS_QA_MODEL ?= AvatarSample_A_1.0.vrm.glb
+COSMETICS_QA_OUT ?= /tmp/vrm-cosmetics-qa
+cosmetics-qa:
+	@echo "🎨 Running VRMMetalKit 2.0 cosmetics visual QA on $(COSMETICS_QA_MODEL)..."
+	@swift run --disable-sandbox VRMRender --cosmetics-qa $(COSMETICS_QA_OUT) $(COSMETICS_QA_MODEL)
+	@echo "🖼️  Contact sheet: $(COSMETICS_QA_OUT)/contact_sheet.png"
