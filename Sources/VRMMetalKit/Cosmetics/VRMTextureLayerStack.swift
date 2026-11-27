@@ -154,6 +154,7 @@ public enum VRMTextureSlot: Hashable, Sendable {
 
 private struct CosmeticBaseCopyParamsCPU {
     var solidColor: SIMD4<Float>
+    var baseMultiplier: SIMD4<Float>
     var hasBaseTexture: UInt32
     var decodeBaseSRGB: UInt32
     var pad0: UInt32 = 0
@@ -215,18 +216,23 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
     private let finalizeOutputPipeline: MTLComputePipelineState
     private let defaultCommandQueue: MTLCommandQueue?
 
-    // Working float16 linear ping-pong canvases + double-buffered mipmapped outputs
+    // Working float16 linear ping-pong canvases + per-target triple-buffered mipmapped output rings
     private var canvasA: MTLTexture?
     private var canvasB: MTLTexture?
     private var canvasSize: (width: Int, height: Int) = (0, 0)
 
-    private var outputRing: [MTLTexture] = []
-    private var outputRingIndex: Int = 0
-    private var outputConfig: (width: Int, height: Int, sRGB: Bool)?
+    private struct TextureRing {
+        static let slotCount = 3
+        var textures: [MTLTexture] = []
+        var nextIndex: Int = 0
+        var width: Int = 0
+        var height: Int = 0
+        var sRGB: Bool = false
+    }
 
-    private var finishRing: [MTLTexture] = []
-    private var finishRingIndex: Int = 0
-    private var finishConfig: (width: Int, height: Int)?
+    // Standalone rings used by direct encodeComposite / composite calls (disjoint from material bindings).
+    private var standaloneColorRing = TextureRing()
+    private var standaloneFinishRing = TextureRing()
 
     private var dummy1x1Texture: MTLTexture?
 
@@ -241,9 +247,12 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         var linkedShadeWrapper: VRMTexture?
         var hadLinkedShadeSameWrapper: Bool
         var originalMetallicRoughnessTexture: VRMTexture?
+        var originalHasCosmeticFinishMap: Bool
         var originalMetallicFactor: Float
         var originalRoughnessFactor: Float
         var modifiedFinish: Bool
+        var colorRing = TextureRing()
+        var finishRing = TextureRing()
     }
 
     private var bindings: [MaterialBindingKey: MaterialBindingState] = [:]
@@ -416,6 +425,32 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         height explicitHeight: Int? = nil,
         sRGB: Bool = true,
         baseFinishTexture: MTLTexture? = nil,
+        baseFinishMetallicFactor: Float? = nil,
+        baseFinishRoughnessFactor: Float? = nil,
+        commandBuffer: MTLCommandBuffer
+    ) throws -> (color: MTLTexture, finish: MTLTexture?) {
+        try encodeCompositeInternal(
+            baseTexture: baseTexture,
+            width: explicitWidth,
+            height: explicitHeight,
+            sRGB: sRGB,
+            baseFinishTexture: baseFinishTexture,
+            baseFinishMetallicFactor: baseFinishMetallicFactor,
+            baseFinishRoughnessFactor: baseFinishRoughnessFactor,
+            bindingKey: nil,
+            commandBuffer: commandBuffer
+        )
+    }
+
+    private func encodeCompositeInternal(
+        baseTexture: MTLTexture?,
+        width explicitWidth: Int?,
+        height explicitHeight: Int?,
+        sRGB: Bool,
+        baseFinishTexture: MTLTexture?,
+        baseFinishMetallicFactor: Float?,
+        baseFinishRoughnessFactor: Float?,
+        bindingKey: MaterialBindingKey?,
         commandBuffer: MTLCommandBuffer
     ) throws -> (color: MTLTexture, finish: MTLTexture?) {
         if let baseTexture {
@@ -452,7 +487,12 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         }
 
         try ensureWorkingCanvases(width: resolvedWidth, height: resolvedHeight)
-        let outTexture = try acquireOutputTexture(width: resolvedWidth, height: resolvedHeight, sRGB: sRGB)
+        let outTexture = try acquireOutputTexture(
+            width: resolvedWidth,
+            height: resolvedHeight,
+            sRGB: sRGB,
+            bindingKey: bindingKey
+        )
         guard let outWriteView = sRGB ? outTexture.makeTextureView(pixelFormat: .rgba8Unorm) : outTexture else {
             throw VRMCosmeticError.textureAllocationFailed(
                 width: resolvedWidth,
@@ -473,6 +513,7 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
 
         var copyParams = CosmeticBaseCopyParamsCPU(
             solidColor: solidBaseColor,
+            baseMultiplier: SIMD4<Float>(1, 1, 1, 1),
             hasBaseTexture: baseTexture != nil ? 1 : 0,
             decodeBaseSRGB: 0
         )
@@ -505,12 +546,22 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         var finishTexture: MTLTexture? = nil
 
         if hasFinishLayers {
-            let finOut = try acquireFinishTexture(width: resolvedWidth, height: resolvedHeight)
+            let finOut = try acquireFinishTexture(
+                width: resolvedWidth,
+                height: resolvedHeight,
+                bindingKey: bindingKey
+            )
             src = canvasA!
             dst = canvasB!
 
+            let solidRoughness = max(0, min(1, baseFinishRoughnessFactor ?? 1.0))
+            let solidMetallic = max(0, min(1, baseFinishMetallicFactor ?? 0.0))
+            let mulRoughness = max(0, min(1, baseFinishRoughnessFactor ?? 1.0))
+            let mulMetallic = max(0, min(1, baseFinishMetallicFactor ?? 1.0))
+
             var finCopy = CosmeticBaseCopyParamsCPU(
-                solidColor: SIMD4<Float>(0, 1, 0, 1), // matte default: G=1 roughness, B=0 metallic
+                solidColor: SIMD4<Float>(0, solidRoughness, solidMetallic, 1),
+                baseMultiplier: SIMD4<Float>(1, mulRoughness, mulMetallic, 1),
                 hasBaseTexture: baseFinishTexture != nil ? 1 : 0,
                 decodeBaseSRGB: 0
             )
@@ -572,19 +623,48 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         height: Int? = nil,
         sRGB: Bool = true,
         baseFinishTexture: MTLTexture? = nil,
+        baseFinishMetallicFactor: Float? = nil,
+        baseFinishRoughnessFactor: Float? = nil,
         commandQueue: MTLCommandQueue? = nil
+    ) throws -> (color: MTLTexture, finish: MTLTexture?) {
+        try compositeInternal(
+            baseTexture: baseTexture,
+            width: width,
+            height: height,
+            sRGB: sRGB,
+            baseFinishTexture: baseFinishTexture,
+            baseFinishMetallicFactor: baseFinishMetallicFactor,
+            baseFinishRoughnessFactor: baseFinishRoughnessFactor,
+            bindingKey: nil,
+            commandQueue: commandQueue
+        )
+    }
+
+    private func compositeInternal(
+        baseTexture: MTLTexture?,
+        width: Int?,
+        height: Int?,
+        sRGB: Bool,
+        baseFinishTexture: MTLTexture?,
+        baseFinishMetallicFactor: Float?,
+        baseFinishRoughnessFactor: Float?,
+        bindingKey: MaterialBindingKey?,
+        commandQueue: MTLCommandQueue?
     ) throws -> (color: MTLTexture, finish: MTLTexture?) {
         guard let queue = commandQueue ?? defaultCommandQueue,
               let commandBuffer = queue.makeCommandBuffer() else {
             throw VRMCosmeticError.commandEncodingFailed("Failed to create command buffer")
         }
         commandBuffer.label = "VRM Cosmetic Composite Sync"
-        let result = try encodeComposite(
+        let result = try encodeCompositeInternal(
             baseTexture: baseTexture,
             width: width,
             height: height,
             sRGB: sRGB,
             baseFinishTexture: baseFinishTexture,
+            baseFinishMetallicFactor: baseFinishMetallicFactor,
+            baseFinishRoughnessFactor: baseFinishRoughnessFactor,
+            bindingKey: bindingKey,
             commandBuffer: commandBuffer
         )
         commandBuffer.commit()
@@ -640,6 +720,7 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
                 linkedShadeWrapper: distinctLinkedShade,
                 hadLinkedShadeSameWrapper: sameWrapper,
                 originalMetallicRoughnessTexture: material.metallicRoughnessTexture,
+                originalHasCosmeticFinishMap: material.hasCosmeticFinishMap,
                 originalMetallicFactor: material.metallicFactor,
                 originalRoughnessFactor: material.roughnessFactor,
                 modifiedFinish: false
@@ -652,12 +733,15 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
             faceLandmarks = modelLandmarks
         }
 
-        let result = try composite(
+        let result = try compositeInternal(
             baseTexture: state.originalBaseMTLTexture,
             width: width,
             height: height,
             sRGB: true,
             baseFinishTexture: slot == .baseColor ? state.originalMetallicRoughnessTexture?.mtlTexture : nil,
+            baseFinishMetallicFactor: slot == .baseColor ? state.originalMetallicFactor : nil,
+            baseFinishRoughnessFactor: slot == .baseColor ? state.originalRoughnessFactor : nil,
+            bindingKey: key,
             commandQueue: commandQueue
         )
 
@@ -681,11 +765,13 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
                         mrTex.sampler = material.baseColorTexture?.sampler
                         material.metallicRoughnessTexture = mrTex
                     }
+                    material.hasCosmeticFinishMap = true
                     material.metallicFactor = 1.0
                     material.roughnessFactor = 1.0
                     self.bindings[key]?.modifiedFinish = true
                 } else if self.bindings[key]?.modifiedFinish == true {
                     material.metallicRoughnessTexture = state.originalMetallicRoughnessTexture
+                    material.hasCosmeticFinishMap = state.originalHasCosmeticFinishMap
                     material.metallicFactor = state.originalMetallicFactor
                     material.roughnessFactor = state.originalRoughnessFactor
                     self.bindings[key]?.modifiedFinish = false
@@ -743,6 +829,7 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
                 }
                 if state.modifiedFinish {
                     material.metallicRoughnessTexture = state.originalMetallicRoughnessTexture
+                    material.hasCosmeticFinishMap = state.originalHasCosmeticFinishMap
                     material.metallicFactor = state.originalMetallicFactor
                     material.roughnessFactor = state.originalRoughnessFactor
                 }
@@ -823,10 +910,29 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         canvasSize = (width, height)
     }
 
-    private func acquireOutputTexture(width: Int, height: Int, sRGB: Bool) throws -> MTLTexture {
-        if let cfg = outputConfig, cfg == (width, height, sRGB), outputRing.count == 2 {
-            let tex = outputRing[outputRingIndex]
-            outputRingIndex = (outputRingIndex + 1) % 2
+    private func acquireOutputTexture(
+        width: Int,
+        height: Int,
+        sRGB: Bool,
+        bindingKey: MaterialBindingKey?
+    ) throws -> MTLTexture {
+        if let key = bindingKey, var state = bindings[key] {
+            let tex = try acquireColorTexture(from: &state.colorRing, width: width, height: height, sRGB: sRGB)
+            bindings[key] = state
+            return tex
+        }
+        return try acquireColorTexture(from: &standaloneColorRing, width: width, height: height, sRGB: sRGB)
+    }
+
+    private func acquireColorTexture(
+        from ring: inout TextureRing,
+        width: Int,
+        height: Int,
+        sRGB: Bool
+    ) throws -> MTLTexture {
+        if ring.width == width, ring.height == height, ring.sRGB == sRGB, ring.textures.count == TextureRing.slotCount {
+            let tex = ring.textures[ring.nextIndex]
+            ring.nextIndex = (ring.nextIndex + 1) % TextureRing.slotCount
             return tex
         }
         let pixelFormat: MTLPixelFormat = sRGB ? .rgba8Unorm_srgb : .rgba8Unorm
@@ -841,25 +947,40 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         desc.usage = [.shaderRead, .shaderWrite, .pixelFormatView]
         desc.storageMode = .shared
 
-        var ring: [MTLTexture] = []
-        ring.reserveCapacity(2)
-        for i in 0..<2 {
+        var textures: [MTLTexture] = []
+        textures.reserveCapacity(TextureRing.slotCount)
+        for i in 0..<TextureRing.slotCount {
             guard let tex = device.makeTexture(descriptor: desc) else {
                 throw VRMCosmeticError.textureAllocationFailed(width: width, height: height, pixelFormat: pixelFormat)
             }
             tex.label = "Cosmetic Output \(i) (\(width)x\(height))"
-            ring.append(tex)
+            textures.append(tex)
         }
-        outputRing = ring
-        outputRingIndex = 1
-        outputConfig = (width, height, sRGB)
-        return ring[0]
+        ring = TextureRing(textures: textures, nextIndex: 1 % TextureRing.slotCount, width: width, height: height, sRGB: sRGB)
+        return textures[0]
     }
 
-    private func acquireFinishTexture(width: Int, height: Int) throws -> MTLTexture {
-        if let cfg = finishConfig, cfg == (width, height), finishRing.count == 2 {
-            let tex = finishRing[finishRingIndex]
-            finishRingIndex = (finishRingIndex + 1) % 2
+    private func acquireFinishTexture(
+        width: Int,
+        height: Int,
+        bindingKey: MaterialBindingKey?
+    ) throws -> MTLTexture {
+        if let key = bindingKey, var state = bindings[key] {
+            let tex = try acquireFinishTexture(from: &state.finishRing, width: width, height: height)
+            bindings[key] = state
+            return tex
+        }
+        return try acquireFinishTexture(from: &standaloneFinishRing, width: width, height: height)
+    }
+
+    private func acquireFinishTexture(
+        from ring: inout TextureRing,
+        width: Int,
+        height: Int
+    ) throws -> MTLTexture {
+        if ring.width == width, ring.height == height, ring.textures.count == TextureRing.slotCount {
+            let tex = ring.textures[ring.nextIndex]
+            ring.nextIndex = (ring.nextIndex + 1) % TextureRing.slotCount
             return tex
         }
         let mipCount = max(1, Int(floor(log2(Double(max(width, height))))) + 1)
@@ -873,19 +994,17 @@ public final class VRMTextureLayerStack: @unchecked Sendable {
         desc.usage = [.shaderRead, .shaderWrite]
         desc.storageMode = .shared
 
-        var ring: [MTLTexture] = []
-        ring.reserveCapacity(2)
-        for i in 0..<2 {
+        var textures: [MTLTexture] = []
+        textures.reserveCapacity(TextureRing.slotCount)
+        for i in 0..<TextureRing.slotCount {
             guard let tex = device.makeTexture(descriptor: desc) else {
                 throw VRMCosmeticError.textureAllocationFailed(width: width, height: height, pixelFormat: .rgba8Unorm)
             }
             tex.label = "Cosmetic Finish Map \(i) (\(width)x\(height))"
-            ring.append(tex)
+            textures.append(tex)
         }
-        finishRing = ring
-        finishRingIndex = 1
-        finishConfig = (width, height)
-        return ring[0]
+        ring = TextureRing(textures: textures, nextIndex: 1 % TextureRing.slotCount, width: width, height: height, sRGB: false)
+        return textures[0]
     }
 
     private func getOrCreateDummyTexture() throws -> MTLTexture {

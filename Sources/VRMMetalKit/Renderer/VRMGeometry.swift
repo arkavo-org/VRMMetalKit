@@ -1605,8 +1605,12 @@ public class VRMMaterial: @unchecked Sendable {
     public var emissiveTexture: VRMTexture?
     /// glTF `pbrMetallicRoughness.metallicRoughnessTexture` (linear; G = roughness, B = metallic).
     public var metallicRoughnessTexture: VRMTexture?
+    /// `true` when ``metallicRoughnessTexture`` carries a runtime cosmetic finish map
+    /// (managed by ``VRMTextureLayerStack``) that should render per-pixel gloss/metallic
+    /// even when ``RendererConfig/enableMaterialFinish`` is `false`.
+    public var hasCosmeticFinishMap: Bool = false
     /// glTF metallic factor. Ignored by the MToon path unless
-    /// ``RendererConfig/enableMaterialFinish`` is on; then values below ~0.7
+    /// ``RendererConfig/enableMaterialFinish`` or ``hasCosmeticFinishMap`` is on; then values below ~0.7
     /// produce a broad sheen and values from ~0.7 a tight metal highlight.
     /// See ``MToonSpecularMode``.
     public var metallicFactor: Float = 0.0

@@ -3631,7 +3631,10 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
                     }
 
                     // Index 9: Per-pixel metallic/roughness finish map (glTF G=roughness, B=metallic).
-                    if let mtlTexture = material.metallicRoughnessTexture?.mtlTexture {
+                    // Gated by RendererConfig.enableMaterialFinish for authored glTF MR textures, or
+                    // activated per-material when a cosmetic finish map is applied via VRMTextureLayerStack.
+                    if (config.enableMaterialFinish || material.hasCosmeticFinishMap),
+                       let mtlTexture = material.metallicRoughnessTexture?.mtlTexture {
                         encoderStateCache.setFragmentTexture(encoder, mtlTexture, index: 9)
                         mtoonUniforms.hasFinishMapTexture = 1
                         (mtoonUniforms.finishMapUvRow0, mtoonUniforms.finishMapUvRow1) =
@@ -4893,7 +4896,7 @@ public final class VRMRenderer: NSObject, @unchecked Sendable {
         materialIndex: Int,
         material: VRMMaterial
     ) {
-        if config.enableMaterialFinish || material.metallicRoughnessTexture?.mtlTexture != nil {
+        if config.enableMaterialFinish || material.hasCosmeticFinishMap {
             uniforms.metallicFactor = material.metallicFactor
             uniforms.roughnessFactor = material.roughnessFactor
         } else {

@@ -557,4 +557,180 @@ final class CosmeticMakeupTests: XCTestCase {
         let edgeIdx = (32 * 64 + 18) * 4
         XCTAssertGreaterThan(rgba[edgeIdx], 180)
     }
+
+    // MARK: - 8. PR Review Regressions (Finish Gating, Per-Binding Pools, Authored MR Factor Preservation)
+
+    func testAuthoredMetallicRoughnessTextureRespectsEnableMaterialFinishFlag() throws {
+        let baseMTL = try makeSolidTexture(width: 32, height: 32, rgba: (60, 60, 60, 255))
+        // Authored glTF MR texture with full metallic (B=255) and low roughness (G=38)
+        let authoredMR = try makeSolidTexture(width: 32, height: 32, rgba: (0, 38, 255, 255), pixelFormat: .rgba8Unorm)
+
+        let gltfMat = try JSONDecoder().decode(GLTFMaterial.self, from: Data(#"{"name":"AuthoredPBR"}"#.utf8))
+        let mat = VRMMaterial(from: gltfMat, textures: [])
+        mat.baseColorTexture = VRMTexture(name: "base", mtlTexture: baseMTL)
+        mat.metallicRoughnessTexture = VRMTexture(name: "authored_mr", mtlTexture: authoredMR)
+        mat.metallicFactor = 1.0
+        mat.roughnessFactor = 1.0
+        mat.mtoon = VRMMToonMaterial()
+        mat.mtoon?.shadeColorFactor = [0.2, 0.2, 0.2]
+        mat.mtoon?.outlineWidthMode = .none
+        XCTAssertFalse(mat.hasCosmeticFinishMap)
+
+        let model = try makeQuadModel(material: mat)
+
+        // With enableMaterialFinish == false, authored MR texture MUST NOT produce MToon specular
+        var offCfg = RendererConfig()
+        offCfg.colorPixelFormat = .rgba8Unorm
+        offCfg.enableMaterialFinish = false
+        let offRenderer = VRMRenderer(device: device, config: offCfg)
+        offRenderer.loadModelWithoutWarmup(model)
+        offRenderer.setLight(0, direction: [0, 0, -1], color: [1, 1, 1], intensity: 2.0)
+        offRenderer.disableLight(1)
+        offRenderer.disableLight(2)
+        offRenderer.setAmbientColor([0, 0, 0])
+        let offRGBA = try renderOffscreen(renderer: offRenderer, size: 64)
+
+        // Compare against identical material without any MR texture
+        let plainMat = VRMMaterial(from: gltfMat, textures: [])
+        plainMat.baseColorTexture = VRMTexture(name: "base", mtlTexture: baseMTL)
+        plainMat.mtoon = VRMMToonMaterial()
+        plainMat.mtoon?.shadeColorFactor = [0.2, 0.2, 0.2]
+        plainMat.mtoon?.outlineWidthMode = .none
+        let plainModel = try makeQuadModel(material: plainMat)
+        offRenderer.loadModelWithoutWarmup(plainModel)
+        let plainRGBA = try renderOffscreen(renderer: offRenderer, size: 64)
+
+        let centerIdx = (32 * 64 + 32) * 4
+        let offLuma = Int(offRGBA[centerIdx]) + Int(offRGBA[centerIdx + 1]) + Int(offRGBA[centerIdx + 2])
+        let plainLuma = Int(plainRGBA[centerIdx]) + Int(plainRGBA[centerIdx + 1]) + Int(plainRGBA[centerIdx + 2])
+        XCTAssertEqual(offLuma, plainLuma, accuracy: 2,
+            "Authored metallicRoughnessTexture must stay inactive when enableMaterialFinish is false")
+
+        // Opting in via enableMaterialFinish == true activates the authored MR finish
+        var onCfg = RendererConfig()
+        onCfg.colorPixelFormat = .rgba8Unorm
+        onCfg.enableMaterialFinish = true
+        let onRenderer = VRMRenderer(device: device, config: onCfg)
+        onRenderer.loadModelWithoutWarmup(model)
+        onRenderer.setLight(0, direction: [0, 0, -1], color: [1, 1, 1], intensity: 2.0)
+        onRenderer.disableLight(1)
+        onRenderer.disableLight(2)
+        onRenderer.setAmbientColor([0, 0, 0])
+        let onRGBA = try renderOffscreen(renderer: onRenderer, size: 64)
+        let onLuma = Int(onRGBA[centerIdx]) + Int(onRGBA[centerIdx + 1]) + Int(onRGBA[centerIdx + 2])
+        XCTAssertGreaterThan(onLuma, offLuma + 40,
+            "Enabling enableMaterialFinish must activate authored metallicRoughnessTexture specular")
+    }
+
+    func testSharedLayerStackAcrossThreeMaterialsNeverAliasesBoundTextures() throws {
+        let baseA = try makeSolidTexture(width: 16, height: 16, rgba: (255, 0, 0, 255))
+        let baseB = try makeSolidTexture(width: 16, height: 16, rgba: (0, 255, 0, 255))
+        let baseC = try makeSolidTexture(width: 16, height: 16, rgba: (0, 0, 255, 255))
+        let subtleDecal = try makeSolidTexture(width: 16, height: 16, rgba: (255, 255, 255, 32))
+
+        let gltfMat = try JSONDecoder().decode(GLTFMaterial.self, from: Data(#"{"name":"Mat"}"#.utf8))
+        let matA = VRMMaterial(from: gltfMat, textures: [])
+        matA.baseColorTexture = VRMTexture(name: "A", mtlTexture: baseA)
+        let matB = VRMMaterial(from: gltfMat, textures: [])
+        matB.baseColorTexture = VRMTexture(name: "B", mtlTexture: baseB)
+        let matC = VRMMaterial(from: gltfMat, textures: [])
+        matC.baseColorTexture = VRMTexture(name: "C", mtlTexture: baseC)
+
+        let stack = try VRMTextureLayerStack(
+            device: device,
+            layers: [
+                VRMTextureLayer(
+                    texture: subtleDecal,
+                    blendMode: .normal,
+                    opacity: 0.1,
+                    finish: VRMFinishOverride(metallic: 0.8, roughness: 0.2)
+                )
+            ]
+        )
+
+        try stack.apply(to: matA)
+        try stack.apply(to: matB)
+        try stack.apply(to: matC)
+
+        let texA = try XCTUnwrap(matA.baseColorTexture?.mtlTexture)
+        let texB = try XCTUnwrap(matB.baseColorTexture?.mtlTexture)
+        let texC = try XCTUnwrap(matC.baseColorTexture?.mtlTexture)
+        XCTAssertFalse(texA === texB)
+        XCTAssertFalse(texA === texC)
+        XCTAssertFalse(texB === texC)
+
+        let finA = try XCTUnwrap(matA.metallicRoughnessTexture?.mtlTexture)
+        let finB = try XCTUnwrap(matB.metallicRoughnessTexture?.mtlTexture)
+        let finC = try XCTUnwrap(matC.metallicRoughnessTexture?.mtlTexture)
+        XCTAssertFalse(finA === finB)
+        XCTAssertFalse(finA === finC)
+        XCTAssertFalse(finB === finC)
+
+        // Material A must still contain its red pixels after applying to B and C
+        let pxA = readPixel(texA, x: 8, y: 8)
+        let pxB = readPixel(texB, x: 8, y: 8)
+        let pxC = readPixel(texC, x: 8, y: 8)
+        XCTAssertGreaterThan(pxA.r, 230)
+        XCTAssertLessThan(pxA.b, 80)
+        XCTAssertGreaterThan(pxB.g, 230)
+        XCTAssertLessThan(pxB.r, 80)
+        XCTAssertGreaterThan(pxC.b, 230)
+        XCTAssertLessThan(pxC.r, 80)
+    }
+
+    func testFinishLayerPreservesAuthoredMetallicRoughnessFactorsOnUnpaintedPixels() throws {
+        let baseMTL = try makeSolidTexture(width: 32, height: 32, rgba: (80, 80, 80, 255))
+        // Authored MR texture has B=255 (1.0) and G=204 (0.8), but material authored metallicFactor = 0.0, roughnessFactor = 0.5.
+        let authoredMR = try makeSolidTexture(width: 32, height: 32, rgba: (0, 204, 255, 255), pixelFormat: .rgba8Unorm)
+        let decalMTL = try makeSolidTexture(width: 16, height: 16, rgba: (80, 80, 80, 255))
+
+        let gltfMat = try JSONDecoder().decode(GLTFMaterial.self, from: Data(#"{"name":"Face_MR"}"#.utf8))
+        let mat = VRMMaterial(from: gltfMat, textures: [])
+        mat.baseColorTexture = VRMTexture(name: "face", mtlTexture: baseMTL)
+        mat.metallicRoughnessTexture = VRMTexture(name: "authored_mr", mtlTexture: authoredMR)
+        mat.metallicFactor = 0.0
+        mat.roughnessFactor = 0.5
+        mat.mtoon = VRMMToonMaterial()
+        mat.mtoon?.shadeColorFactor = [0.2, 0.2, 0.2]
+        mat.mtoon?.outlineWidthMode = .none
+
+        let landmarks = VRMFaceLandmarks(regions: [
+            .lips: VRMUVRect(minU: 0.55, minV: 0.10, maxU: 0.95, maxV: 0.90)
+        ])
+        let stack = try VRMTextureLayerStack(
+            device: device,
+            layers: [
+                VRMTextureLayer(
+                    name: "lip_gloss",
+                    texture: decalMTL,
+                    blendMode: .normal,
+                    opacity: 1.0,
+                    finish: VRMFinishOverride(metallic: 0.9, roughness: 0.15),
+                    landmarkRegion: .lips
+                )
+            ],
+            faceLandmarks: landmarks
+        )
+
+        try stack.apply(to: mat)
+        XCTAssertTrue(mat.hasCosmeticFinishMap)
+        let finishTex = try XCTUnwrap(mat.metallicRoughnessTexture?.mtlTexture)
+
+        // Unpainted left region (u = 0.25 -> x = 8): must preserve G ≈ 0.8 * 0.5 = 0.40 (~102) and B == 1.0 * 0.0 = 0
+        let unpainted = readPixel(finishTex, x: 8, y: 16)
+        XCTAssertEqual(unpainted.b, 0, accuracy: 2, "Unpainted region must preserve authored metallicFactor=0")
+        XCTAssertEqual(unpainted.g, 102, accuracy: 4, "Unpainted region must preserve authored roughnessFactor * mr.g")
+
+        // Painted right region (u = 0.75 -> x = 24): reflects cosmetic finish override (metallic=0.9 -> ~230, roughness=0.15 -> ~38)
+        let painted = readPixel(finishTex, x: 24, y: 16)
+        XCTAssertEqual(painted.b, 230, accuracy: 4)
+        XCTAssertEqual(painted.g, 38, accuracy: 4)
+
+        // Clearing restores original MR texture, factors, and clears hasCosmeticFinishMap
+        stack.clear(from: mat)
+        XCTAssertFalse(mat.hasCosmeticFinishMap)
+        XCTAssertEqual(mat.metallicFactor, 0.0, accuracy: 1e-6)
+        XCTAssertEqual(mat.roughnessFactor, 0.5, accuracy: 1e-6)
+        XCTAssertTrue(mat.metallicRoughnessTexture?.mtlTexture === authoredMR)
+    }
 }

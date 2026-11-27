@@ -19,6 +19,7 @@ using namespace metal;
 
 struct CosmeticBaseCopyParams {
     float4 solidColor;
+    float4 baseMultiplier;
     uint32_t hasBaseTexture;
     uint32_t decodeBaseSRGB;
     uint32_t pad0;
@@ -106,6 +107,7 @@ kernel void cosmetic_copy_base(
         if (params.decodeBaseSRGB != 0u) {
             color.rgb = cosmeticSRGBToLinear(color.rgb);
         }
+        color *= params.baseMultiplier;
     }
     outCanvas.write(color, gid);
 }
