@@ -425,10 +425,10 @@ public class VRMExtensionParser {
                 humanoid.humanBones[bone] = VRMHumanoid.VRMHumanBone(node: nodeIndex)
             }
         } else if let humanBonesArray = dict["humanBones"] as? [[String: Any]] {
-            // VRM 0.0 format - array of bone objects
+            // VRM 0.0 format - array of bone objects (remap VRM 0.x thumb chain to VRM 1.0)
             for boneData in humanBonesArray {
                 guard let boneName = boneData["bone"] as? String,
-                      let bone = VRMHumanoidBone(rawValue: boneName),
+                      let bone = VRMHumanoidBone(vrm0Name: boneName),
                       let nodeIndex = boneData["node"] as? Int else {
                     continue
                 }

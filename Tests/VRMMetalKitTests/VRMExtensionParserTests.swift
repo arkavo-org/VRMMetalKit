@@ -1365,6 +1365,140 @@ final class VRMExtensionParserTests: XCTestCase {
         XCTAssertEqual(bind.meshIndex, 5, "no mesh on node 5 → meshIndex falls back to the node value")
     }
 
+    // MARK: - VRM 0.x Humanoid Thumb Bone Remapping
+
+    func testVRM0NameRoundTripCoversAllBones() {
+        for bone in VRMHumanoidBone.allCases {
+            XCTAssertEqual(VRMHumanoidBone(vrm0Name: bone.vrm0Name), bone, "\(bone)")
+        }
+        XCTAssertEqual(VRMHumanoidBone(vrm0Name: "leftThumbProximal"), .leftThumbMetacarpal)
+        XCTAssertEqual(VRMHumanoidBone(vrm0Name: "leftThumbIntermediate"), .leftThumbProximal)
+        XCTAssertEqual(VRMHumanoidBone(vrm0Name: "leftThumbDistal"), .leftThumbDistal)
+        XCTAssertEqual(VRMHumanoidBone(vrm0Name: "rightThumbProximal"), .rightThumbMetacarpal)
+        XCTAssertEqual(VRMHumanoidBone(vrm0Name: "rightThumbIntermediate"), .rightThumbProximal)
+        XCTAssertEqual(VRMHumanoidBone(vrm0Name: "rightThumbDistal"), .rightThumbDistal)
+        XCTAssertEqual(VRMHumanoidBone.leftThumbMetacarpal.vrm0Name, "leftThumbProximal")
+        XCTAssertEqual(VRMHumanoidBone.leftThumbProximal.vrm0Name, "leftThumbIntermediate")
+        XCTAssertEqual(VRMHumanoidBone.leftThumbDistal.vrm0Name, "leftThumbDistal")
+        XCTAssertEqual(VRMHumanoidBone.rightThumbMetacarpal.vrm0Name, "rightThumbProximal")
+        XCTAssertEqual(VRMHumanoidBone.rightThumbProximal.vrm0Name, "rightThumbIntermediate")
+        XCTAssertEqual(VRMHumanoidBone.rightThumbDistal.vrm0Name, "rightThumbDistal")
+        XCTAssertNil(VRMHumanoidBone(vrm0Name: ""))
+        XCTAssertNil(VRMHumanoidBone(vrm0Name: "unknownBone"))
+    }
+
+    func testVRM0FullHumanoidRemapsThumbBonesAndPreservesAll55Bones() throws {
+        let vrm0All55Bones: [String] = [
+            "hips", "spine", "chest", "upperChest", "neck", "head",
+            "leftEye", "rightEye", "jaw",
+            "leftUpperLeg", "leftLowerLeg", "leftFoot", "leftToes",
+            "rightUpperLeg", "rightLowerLeg", "rightFoot", "rightToes",
+            "leftShoulder", "leftUpperArm", "leftLowerArm", "leftHand",
+            "rightShoulder", "rightUpperArm", "rightLowerArm", "rightHand",
+            "leftThumbProximal", "leftThumbIntermediate", "leftThumbDistal",
+            "leftIndexProximal", "leftIndexIntermediate", "leftIndexDistal",
+            "leftMiddleProximal", "leftMiddleIntermediate", "leftMiddleDistal",
+            "leftRingProximal", "leftRingIntermediate", "leftRingDistal",
+            "leftLittleProximal", "leftLittleIntermediate", "leftLittleDistal",
+            "rightThumbProximal", "rightThumbIntermediate", "rightThumbDistal",
+            "rightIndexProximal", "rightIndexIntermediate", "rightIndexDistal",
+            "rightMiddleProximal", "rightMiddleIntermediate", "rightMiddleDistal",
+            "rightRingProximal", "rightRingIntermediate", "rightRingDistal",
+            "rightLittleProximal", "rightLittleIntermediate", "rightLittleDistal"
+        ]
+        XCTAssertEqual(vrm0All55Bones.count, 55)
+
+        let nodeIndexByVRM0Name = Dictionary(
+            uniqueKeysWithValues: vrm0All55Bones.enumerated().map { ($1, $0) }
+        )
+        let humanBonesArray: [[String: Any]] = vrm0All55Bones.enumerated().map { idx, name in
+            ["bone": name, "node": idx, "useDefaultValues": true]
+        }
+
+        let document = createMinimalGLTFDocument(nodes: vrm0All55Bones.count)
+        let vrmDict: [String: Any] = [
+            "exporterVersion": "TestExporter",
+            "specVersion": "0.0",
+            "meta": ["title": "Full VRM0 Rig", "author": "Test"],
+            "humanoid": ["humanBones": humanBonesArray]
+        ]
+
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+        let humanoid = try XCTUnwrap(model.humanoid)
+
+        XCTAssertEqual(model.specVersion, .v0_0)
+        XCTAssertEqual(humanoid.humanBones.count, 55)
+        XCTAssertEqual(humanoid.humanBones[.leftThumbMetacarpal]?.node, nodeIndexByVRM0Name["leftThumbProximal"])
+        XCTAssertEqual(humanoid.humanBones[.leftThumbProximal]?.node, nodeIndexByVRM0Name["leftThumbIntermediate"])
+        XCTAssertEqual(humanoid.humanBones[.leftThumbDistal]?.node, nodeIndexByVRM0Name["leftThumbDistal"])
+        XCTAssertEqual(humanoid.humanBones[.rightThumbMetacarpal]?.node, nodeIndexByVRM0Name["rightThumbProximal"])
+        XCTAssertEqual(humanoid.humanBones[.rightThumbProximal]?.node, nodeIndexByVRM0Name["rightThumbIntermediate"])
+        XCTAssertEqual(humanoid.humanBones[.rightThumbDistal]?.node, nodeIndexByVRM0Name["rightThumbDistal"])
+        XCTAssertEqual(humanoid.humanBones[.leftIndexProximal]?.node, nodeIndexByVRM0Name["leftIndexProximal"])
+        XCTAssertEqual(humanoid.humanBones[.leftIndexIntermediate]?.node, nodeIndexByVRM0Name["leftIndexIntermediate"])
+        XCTAssertEqual(humanoid.humanBones[.rightIndexIntermediate]?.node, nodeIndexByVRM0Name["rightIndexIntermediate"])
+    }
+
+    func testVRM1HumanoidKeepsThumbBoneNamesUnshifted() throws {
+        var humanBones = minimalHumanBones()
+        humanBones["leftThumbMetacarpal"] = ["node": 20]
+        humanBones["leftThumbProximal"] = ["node": 21]
+        humanBones["leftThumbDistal"] = ["node": 22]
+        humanBones["rightThumbMetacarpal"] = ["node": 23]
+        humanBones["rightThumbProximal"] = ["node": 24]
+        humanBones["rightThumbDistal"] = ["node": 25]
+
+        let document = createMinimalGLTFDocument(nodes: 26)
+        let vrmDict: [String: Any] = [
+            "specVersion": "1.0",
+            "meta": ["name": "VRM1 Thumbs", "licenseUrl": "https://example.com/license"],
+            "humanoid": ["humanBones": humanBones]
+        ]
+
+        let model = try parser.parseVRMExtension(vrmDict, document: document)
+        let humanoid = try XCTUnwrap(model.humanoid)
+
+        XCTAssertEqual(humanoid.humanBones[.leftThumbMetacarpal]?.node, 20)
+        XCTAssertEqual(humanoid.humanBones[.leftThumbProximal]?.node, 21)
+        XCTAssertEqual(humanoid.humanBones[.leftThumbDistal]?.node, 22)
+        XCTAssertEqual(humanoid.humanBones[.rightThumbMetacarpal]?.node, 23)
+        XCTAssertEqual(humanoid.humanBones[.rightThumbProximal]?.node, 24)
+        XCTAssertEqual(humanoid.humanBones[.rightThumbDistal]?.node, 25)
+    }
+
+    func testVRM0CosmeticExtensionRemapsThumbBones() throws {
+        let requiredAndThumbs: [(String, Int)] = [
+            ("hips", 0), ("spine", 1), ("head", 2),
+            ("leftUpperLeg", 3), ("leftLowerLeg", 4), ("leftFoot", 5),
+            ("rightUpperLeg", 6), ("rightLowerLeg", 7), ("rightFoot", 8),
+            ("leftUpperArm", 9), ("leftLowerArm", 10), ("leftHand", 11),
+            ("rightUpperArm", 12), ("rightLowerArm", 13), ("rightHand", 14),
+            ("leftThumbProximal", 15), ("leftThumbIntermediate", 16), ("leftThumbDistal", 17),
+            ("rightThumbProximal", 18), ("rightThumbIntermediate", 19), ("rightThumbDistal", 20)
+        ]
+        let humanBonesArray: [[String: Any]] = requiredAndThumbs.map { ["bone": $0.0, "node": $0.1] }
+        let document = createMinimalGLTFDocument(
+            nodes: 21,
+            extensions: [
+                "VRM": [
+                    "specVersion": "0.0",
+                    "meta": ["title": "VRM0 Cosmetic"],
+                    "humanoid": ["humanBones": humanBonesArray]
+                ]
+            ]
+        )
+
+        let data = try parser.parseCosmeticExtensions(document: document)
+        let humanoid = try XCTUnwrap(data.humanoid)
+
+        XCTAssertEqual(humanoid.humanBones[.leftThumbMetacarpal]?.node, 15)
+        XCTAssertEqual(humanoid.humanBones[.leftThumbProximal]?.node, 16)
+        XCTAssertEqual(humanoid.humanBones[.leftThumbDistal]?.node, 17)
+        XCTAssertEqual(humanoid.humanBones[.rightThumbMetacarpal]?.node, 18)
+        XCTAssertEqual(humanoid.humanBones[.rightThumbProximal]?.node, 19)
+        XCTAssertEqual(humanoid.humanBones[.rightThumbDistal]?.node, 20)
+    }
+
     private func minimalHumanBones() -> [String: Any] {
         [
             "hips": ["node": 0], "spine": ["node": 7], "chest": ["node": 8],
