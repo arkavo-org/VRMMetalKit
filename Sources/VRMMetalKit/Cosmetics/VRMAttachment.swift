@@ -404,7 +404,8 @@ extension VRMModel {
     /// Shows or hides an attached cosmetic without detaching it or rebuilding render items.
     @discardableResult
     public func setHidden(_ hidden: Bool, for handle: VRMAttachmentHandle) -> Bool {
-        withLock {
+        var changed = false
+        let found: Bool = withLock {
             guard let instance = attachments.first(where: { $0.handle == handle }) else {
                 return false
             }
@@ -412,9 +413,14 @@ extension VRMModel {
                 instance.isHidden = hidden
                 instance.pivotNode.isHidden = hidden
                 bumpVisibilityRevisionLocked()
+                changed = true
             }
             return true
         }
+        if changed {
+            finalizeModelLocalBounds()
+        }
+        return found
     }
 
     /// Detaches the cosmetic identified by `handle` along with any nested child attachments

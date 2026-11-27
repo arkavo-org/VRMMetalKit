@@ -974,12 +974,41 @@ final class CosmeticWearablesTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: path), "Missing metallib slice: \(slice)")
         }
 
-        let macLibURL = resDir.appendingPathComponent("VRMMetalKitShaders.metallib")
-        let lib = try device.makeLibrary(URL: macLibURL)
+        let lib = try VRMShaderLibraryLoader.loadBundledLibrary(device: device)
         XCTAssertNotNil(lib.makeFunction(name: "skinned_mtoon_vertex"))
         XCTAssertNotNil(lib.makeFunction(name: "skinned_mtoon_depth_vertex"))
         XCTAssertNotNil(lib.makeFunction(name: "skinned_mtoon_outline_vertex"))
         XCTAssertNotNil(lib.makeFunction(name: "cosmetic_composite_layer"))
+    }
+
+    func testSetHiddenRefreshesCachedModelLocalBounds() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal not available")
+        }
+
+        let host = try makeSkinnedHostModel(device: device)
+        let baselineMaxX = host.modelLocalBounds.max.x
+
+        let glb = try makeRigidQuadGLB(materials: [GLBMaterialSpec(name: "Wing")])
+        let asset = try await VRMCosmeticAsset.load(from: glb, device: device)
+        // Attach far to the right (+X = 5.0) so it clearly expands host bounds
+        let wing = try host.attach(asset, to: .head)
+        XCTAssertTrue(host.updateTransform(for: wing, translation: SIMD3<Float>(5.0, 0, 0)))
+        let expandedMaxX = host.modelLocalBounds.max.x
+        XCTAssertGreaterThan(expandedMaxX, baselineMaxX + 3.0)
+
+        // Hiding the wing must immediately shrink cached modelLocalBounds back to baseline
+        XCTAssertTrue(host.setHidden(true, for: wing))
+        XCTAssertEqual(host.modelLocalBounds.max.x, baselineMaxX, accuracy: 1e-3)
+
+        // Triggering an unrelated bounds refresh while hidden keeps baseline bounds
+        let other = try host.attach(asset, to: .head)
+        host.detach(other)
+        XCTAssertEqual(host.modelLocalBounds.max.x, baselineMaxX, accuracy: 1e-3)
+
+        // Unhiding the wing must immediately expand cached modelLocalBounds back out
+        XCTAssertTrue(host.setHidden(false, for: wing))
+        XCTAssertEqual(host.modelLocalBounds.max.x, expandedMaxX, accuracy: 1e-3)
     }
 
     // MARK: - 6. Thread-Safety Concurrent Attach / UpdateTransform / Render Stress

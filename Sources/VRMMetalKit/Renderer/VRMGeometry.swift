@@ -1881,6 +1881,7 @@ public class VRMMaterial: @unchecked Sendable {
         self.occlusionStrength = other.occlusionStrength
         self.emissiveTexture = remapTexture(other.emissiveTexture)
         self.metallicRoughnessTexture = remapTexture(other.metallicRoughnessTexture)
+        self.hasCosmeticFinishMap = other.hasCosmeticFinishMap
         self.metallicFactor = other.metallicFactor
         self.roughnessFactor = other.roughnessFactor
         self.emissiveFactor = other.emissiveFactor
