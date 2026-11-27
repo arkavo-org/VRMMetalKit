@@ -52,7 +52,7 @@ import Synchronization
 final class SpringBoneComputeSystem: @unchecked Sendable {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
-    var supportsNonUniformThreadgroups: Bool
+    let supportsNonUniformThreadgroups: Bool
 
     private var kinematicPipeline: MTLComputePipelineState?
     private var copyParentPositionsPipeline: MTLComputePipelineState?
@@ -454,10 +454,21 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
     /// GPU, not for completion handlers that run on a separate queue.
     private var pendingSnapshotSemaphore: DispatchSemaphore?
 
-    init(device: MTLDevice) throws {
+    static func deviceSupportsNonUniformThreadgroups(_ device: MTLDevice) -> Bool {
+        device.supportsFamily(.apple4) || device.supportsFamily(.mac2)
+    }
+
+    convenience init(device: MTLDevice) throws {
+        try self.init(
+            device: device,
+            supportsNonUniformThreadgroups: Self.deviceSupportsNonUniformThreadgroups(device)
+        )
+    }
+
+    init(device: MTLDevice, supportsNonUniformThreadgroups: Bool) throws {
         self.device = device
         self.commandQueue = MetalQueueFactory.makeCommandQueue(device: device)!
-        self.supportsNonUniformThreadgroups = device.supportsFamily(.apple4) || device.supportsFamily(.mac2)
+        self.supportsNonUniformThreadgroups = supportsNonUniformThreadgroups
 
         // Load compute shaders from pre-compiled .metallib
         var library: MTLLibrary?
@@ -1010,6 +1021,8 @@ final class SpringBoneComputeSystem: @unchecked Sendable {
         threadsPerThreadgroup: MTLSize,
         supportsNonUniformThreadgroups: Bool
     ) {
+        assert(threadsPerGrid.width > 0 && threadsPerGrid.height > 0 && threadsPerGrid.depth > 0,
+               "SpringBone compute dispatch grid dimensions must be positive")
         guard threadsPerGrid.width > 0, threadsPerGrid.height > 0, threadsPerGrid.depth > 0 else {
             return
         }

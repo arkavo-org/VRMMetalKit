@@ -153,6 +153,8 @@ internal func dispatchIBLCompute(
     threadsPerThreadgroup: MTLSize,
     supportsNonUniformThreadgroups: Bool
 ) {
+    assert(threadsPerGrid.width > 0 && threadsPerGrid.height > 0 && threadsPerGrid.depth > 0,
+           "IBL compute dispatch grid dimensions must be positive")
     guard threadsPerGrid.width > 0, threadsPerGrid.height > 0, threadsPerGrid.depth > 0 else {
         return
     }

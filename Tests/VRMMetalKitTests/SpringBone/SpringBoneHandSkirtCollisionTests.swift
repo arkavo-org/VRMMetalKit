@@ -1106,7 +1106,7 @@ final class SpringBoneHandSkirtCollisionTests: XCTestCase {
                 enc,
                 threadsPerGrid: MTLSize(width: n, height: 1, depth: 1),
                 threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1),
-                supportsNonUniformThreadgroups: device.supportsFamily(.apple4) || device.supportsFamily(.mac2)
+                supportsNonUniformThreadgroups: SpringBoneComputeSystem.deviceSupportsNonUniformThreadgroups(device)
             )
             enc.endEncoding()
             cb.commit()

@@ -179,6 +179,16 @@ final class GLTFIBLTests: XCTestCase {
         XCTAssertEqual(exact.depth, 6)
     }
 
+    #if targetEnvironment(simulator)
+    func testSimulatorDisablesNonUniformThreadgroupsForIBL() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("No Metal device available")
+        }
+        XCTAssertFalse(deviceSupportsNonUniformThreadgroups(device),
+                       "Simulator GPUs must fall back to uniform threadgroup dispatches for IBL")
+    }
+    #endif
+
     func testBRDFLUTUniformThreadgroupFallbackMatchesNonUniform() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("No Metal device available (CI without GPU)")
@@ -188,20 +198,22 @@ final class GLTFIBLTests: XCTestCase {
         }
 
         let renderer = try GLTFRenderer(device: device)
-        let nonUniform = try GLTFBRDFLUT.generate(
-            device: device,
-            library: renderer.library,
-            supportsNonUniformThreadgroups: true
-        )
         let uniform = try GLTFBRDFLUT.generate(
             device: device,
             library: renderer.library,
             supportsNonUniformThreadgroups: false
         )
+        let bytesUniform = try readback2DTexture(uniform, device: device, commandQueue: commandQueue, bytesPerPixel: 4)
+        XCTAssertTrue(bytesUniform.contains { $0 != 0 }, "Uniform-dispatched BRDF LUT must contain non-zero data")
 
-        let bytesA = try readback2DTexture(nonUniform, device: device, commandQueue: commandQueue, bytesPerPixel: 4)
-        let bytesB = try readback2DTexture(uniform, device: device, commandQueue: commandQueue, bytesPerPixel: 4)
-        XCTAssertEqual(bytesA, bytesB, "BRDF LUT output differed between uniform and non-uniform compute dispatch")
+        guard deviceSupportsNonUniformThreadgroups(device) else { return }
+        let nonUniform = try GLTFBRDFLUT.generate(
+            device: device,
+            library: renderer.library,
+            supportsNonUniformThreadgroups: true
+        )
+        let bytesNonUniform = try readback2DTexture(nonUniform, device: device, commandQueue: commandQueue, bytesPerPixel: 4)
+        XCTAssertEqual(bytesNonUniform, bytesUniform, "BRDF LUT output differed between uniform and non-uniform compute dispatch")
     }
 
     func testProceduralEnvironmentUniformThreadgroupFallbackMatchesNonUniform() throws {
@@ -213,15 +225,6 @@ final class GLTFIBLTests: XCTestCase {
         }
 
         let renderer = try GLTFRenderer(device: device)
-        // Non-multiple-of-8 dimensions force partial threadgroups on every pass and every mip (13, 6, 3, 1).
-        let nonUniform = try GLTFEnvironment.makeProcedural(
-            device: device,
-            library: renderer.library,
-            sourceSize: 13,
-            specularSize: 13,
-            diffuseSize: 7,
-            supportsNonUniformThreadgroups: true
-        )
         let uniform = try GLTFEnvironment.makeProcedural(
             device: device,
             library: renderer.library,
@@ -230,14 +233,25 @@ final class GLTFIBLTests: XCTestCase {
             diffuseSize: 7,
             supportsNonUniformThreadgroups: false
         )
+        let diffuseUniform = try readbackCubeTexture(uniform.diffuse, device: device, commandQueue: commandQueue)
+        let specularUniform = try readbackCubeTexture(uniform.specular, device: device, commandQueue: commandQueue)
+        XCTAssertTrue(diffuseUniform.contains { $0 != 0 }, "Uniform-dispatched procedural diffuse cubemap must be populated")
+        XCTAssertTrue(specularUniform.contains { $0 != 0 }, "Uniform-dispatched procedural specular cubemap must be populated")
 
-        let diffuseA = try readbackCubeTexture(nonUniform.diffuse, device: device, commandQueue: commandQueue)
-        let diffuseB = try readbackCubeTexture(uniform.diffuse, device: device, commandQueue: commandQueue)
-        XCTAssertEqual(diffuseA, diffuseB, "Procedural diffuse cubemap differed under uniform threadgroup fallback")
+        guard deviceSupportsNonUniformThreadgroups(device) else { return }
+        let nonUniform = try GLTFEnvironment.makeProcedural(
+            device: device,
+            library: renderer.library,
+            sourceSize: 13,
+            specularSize: 13,
+            diffuseSize: 7,
+            supportsNonUniformThreadgroups: true
+        )
+        let diffuseNonUniform = try readbackCubeTexture(nonUniform.diffuse, device: device, commandQueue: commandQueue)
+        XCTAssertEqual(diffuseNonUniform, diffuseUniform, "Procedural diffuse cubemap differed under uniform threadgroup fallback")
 
-        let specularA = try readbackCubeTexture(nonUniform.specular, device: device, commandQueue: commandQueue)
-        let specularB = try readbackCubeTexture(uniform.specular, device: device, commandQueue: commandQueue)
-        XCTAssertEqual(specularA, specularB, "Procedural specular cubemap differed under uniform threadgroup fallback")
+        let specularNonUniform = try readbackCubeTexture(nonUniform.specular, device: device, commandQueue: commandQueue)
+        XCTAssertEqual(specularNonUniform, specularUniform, "Procedural specular cubemap differed under uniform threadgroup fallback")
     }
 
     func testRadianceHDRUniformThreadgroupFallbackMatchesNonUniform() throws {
@@ -259,15 +273,6 @@ final class GLTFIBLTests: XCTestCase {
         let data = Data(hdrBytes)
 
         let renderer = try GLTFRenderer(device: device)
-        let nonUniform = try GLTFEnvironment.makeFromRadianceHDR(
-            data: data,
-            device: device,
-            library: renderer.library,
-            sourceCubeSize: 13,
-            specularSize: 13,
-            diffuseSize: 7,
-            supportsNonUniformThreadgroups: true
-        )
         let uniform = try GLTFEnvironment.makeFromRadianceHDR(
             data: data,
             device: device,
@@ -277,14 +282,26 @@ final class GLTFIBLTests: XCTestCase {
             diffuseSize: 7,
             supportsNonUniformThreadgroups: false
         )
+        let diffuseUniform = try readbackCubeTexture(uniform.diffuse, device: device, commandQueue: commandQueue)
+        let specularUniform = try readbackCubeTexture(uniform.specular, device: device, commandQueue: commandQueue)
+        XCTAssertTrue(diffuseUniform.contains { $0 != 0 }, "Uniform-dispatched HDR diffuse cubemap must be populated")
+        XCTAssertTrue(specularUniform.contains { $0 != 0 }, "Uniform-dispatched HDR specular cubemap must be populated")
 
-        let diffuseA = try readbackCubeTexture(nonUniform.diffuse, device: device, commandQueue: commandQueue)
-        let diffuseB = try readbackCubeTexture(uniform.diffuse, device: device, commandQueue: commandQueue)
-        XCTAssertEqual(diffuseA, diffuseB, "HDR diffuse cubemap differed under uniform threadgroup fallback")
+        guard deviceSupportsNonUniformThreadgroups(device) else { return }
+        let nonUniform = try GLTFEnvironment.makeFromRadianceHDR(
+            data: data,
+            device: device,
+            library: renderer.library,
+            sourceCubeSize: 13,
+            specularSize: 13,
+            diffuseSize: 7,
+            supportsNonUniformThreadgroups: true
+        )
+        let diffuseNonUniform = try readbackCubeTexture(nonUniform.diffuse, device: device, commandQueue: commandQueue)
+        XCTAssertEqual(diffuseNonUniform, diffuseUniform, "HDR diffuse cubemap differed under uniform threadgroup fallback")
 
-        let specularA = try readbackCubeTexture(nonUniform.specular, device: device, commandQueue: commandQueue)
-        let specularB = try readbackCubeTexture(uniform.specular, device: device, commandQueue: commandQueue)
-        XCTAssertEqual(specularA, specularB, "HDR specular cubemap differed under uniform threadgroup fallback")
+        let specularNonUniform = try readbackCubeTexture(nonUniform.specular, device: device, commandQueue: commandQueue)
+        XCTAssertEqual(specularNonUniform, specularUniform, "HDR specular cubemap differed under uniform threadgroup fallback")
     }
 
     // MARK: - Helpers

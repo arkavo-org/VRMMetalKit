@@ -19,10 +19,10 @@ import Metal
 import simd
 @testable import VRMMetalKit
 
-/// Regression tests for issue #491: Simulator GPUs do not support non-uniform
-/// threadgroup sizes (`dispatchThreads`). When `supportsNonUniformThreadgroups`
-/// is `false`, `SpringBoneComputeSystem` must round up to whole threadgroups
-/// via `dispatchThreadgroups` and produce bit-identical simulation output.
+/// Verifies that `SpringBoneComputeSystem` rounds up to whole threadgroups via
+/// `dispatchThreadgroups` when non-uniform threadgroup sizes are unavailable,
+/// producing valid finite positions on all GPUs and bit-identical output on
+/// devices that also support `dispatchThreads`.
 final class SpringBoneUniformThreadgroupTests: XCTestCase {
 
     private var device: MTLDevice!
@@ -33,6 +33,14 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
         }
         self.device = device
     }
+
+    #if targetEnvironment(simulator)
+    func testSimulatorDisablesNonUniformThreadgroups() throws {
+        let system = try SpringBoneComputeSystem(device: device)
+        XCTAssertFalse(system.supportsNonUniformThreadgroups,
+                       "Simulator GPUs must fall back to uniform threadgroup dispatches")
+    }
+    #endif
 
     func testThreadgroupGridSizeRounding() {
         let tg1D = MTLSize(width: 256, height: 1, depth: 1)
@@ -75,14 +83,7 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
     /// Exercises all 5 compute dispatch sites in `executeXPBDStep` (kinematic,
     /// center delta, copy parent positions, per-bone kernels, and colliders)
     /// for a small partial threadgroup (8 bones < 256).
-    func testUniformThreadgroupFallbackMatchesNonUniformForSmallChain() throws {
-        let nonUniform = try simulateChain(
-            boneCount: 8,
-            supportsNonUniform: true,
-            includeCenterNode: true,
-            includeColliders: true,
-            serialized: false
-        )
+    func testUniformThreadgroupFallbackForSmallChain() throws {
         let uniform = try simulateChain(
             boneCount: 8,
             supportsNonUniform: false,
@@ -90,26 +91,24 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
             includeColliders: true,
             serialized: false
         )
+        assertFinitePositions(uniform, expectedCount: 8)
 
-        XCTAssertEqual(uniform.curr.count, nonUniform.curr.count)
-        for bone in uniform.curr.indices {
-            XCTAssertEqual(uniform.curr[bone], nonUniform.curr[bone],
-                           "bonePosCurr[\(bone)] differed between uniform and non-uniform dispatch")
-            XCTAssertEqual(uniform.prev[bone], nonUniform.prev[bone],
-                           "bonePosPrev[\(bone)] differed between uniform and non-uniform dispatch")
+        guard SpringBoneComputeSystem.deviceSupportsNonUniformThreadgroups(device) else {
+            return
         }
+        let nonUniform = try simulateChain(
+            boneCount: 8,
+            supportsNonUniform: true,
+            includeCenterNode: true,
+            includeColliders: true,
+            serialized: false
+        )
+        assertExactMatch(uniform, nonUniform, context: "small chain")
     }
 
     /// Exercises a bone count spanning multiple 256-thread groups with a partial
     /// tail group (260 bones = 1 full group + 4 active threads + 252 tail lanes).
-    func testUniformThreadgroupFallbackMatchesNonUniformAcrossMultipleGroups() throws {
-        let nonUniform = try simulateChain(
-            boneCount: 260,
-            supportsNonUniform: true,
-            includeCenterNode: false,
-            includeColliders: true,
-            serialized: false
-        )
+    func testUniformThreadgroupFallbackAcrossMultipleGroups() throws {
         let uniform = try simulateChain(
             boneCount: 260,
             supportsNonUniform: false,
@@ -117,25 +116,23 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
             includeColliders: true,
             serialized: false
         )
+        assertFinitePositions(uniform, expectedCount: 260)
 
-        XCTAssertEqual(uniform.curr.count, 260)
-        for bone in uniform.curr.indices {
-            XCTAssertEqual(uniform.curr[bone], nonUniform.curr[bone],
-                           "bonePosCurr[\(bone)] differed across multi-group uniform fallback")
-            XCTAssertEqual(uniform.prev[bone], nonUniform.prev[bone],
-                           "bonePosPrev[\(bone)] differed across multi-group uniform fallback")
+        guard SpringBoneComputeSystem.deviceSupportsNonUniformThreadgroups(device) else {
+            return
         }
+        let nonUniform = try simulateChain(
+            boneCount: 260,
+            supportsNonUniform: true,
+            includeCenterNode: false,
+            includeColliders: true,
+            serialized: false
+        )
+        assertExactMatch(uniform, nonUniform, context: "multi-group")
     }
 
     /// Exercises the serialized per-bone dispatch branch under uniform fallback.
-    func testUniformThreadgroupFallbackMatchesNonUniformWhenSerialized() throws {
-        let nonUniform = try simulateChain(
-            boneCount: 6,
-            supportsNonUniform: true,
-            includeCenterNode: false,
-            includeColliders: false,
-            serialized: true
-        )
+    func testUniformThreadgroupFallbackWhenSerialized() throws {
         let uniform = try simulateChain(
             boneCount: 6,
             supportsNonUniform: false,
@@ -143,16 +140,50 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
             includeColliders: false,
             serialized: true
         )
+        assertFinitePositions(uniform, expectedCount: 6)
 
-        for bone in uniform.curr.indices {
-            XCTAssertEqual(uniform.curr[bone], nonUniform.curr[bone],
-                           "Serialized bonePosCurr[\(bone)] differed under uniform fallback")
-            XCTAssertEqual(uniform.prev[bone], nonUniform.prev[bone],
-                           "Serialized bonePosPrev[\(bone)] differed under uniform fallback")
+        guard SpringBoneComputeSystem.deviceSupportsNonUniformThreadgroups(device) else {
+            return
         }
+        let nonUniform = try simulateChain(
+            boneCount: 6,
+            supportsNonUniform: true,
+            includeCenterNode: false,
+            includeColliders: false,
+            serialized: true
+        )
+        assertExactMatch(uniform, nonUniform, context: "serialized")
     }
 
     // MARK: - Helpers
+
+    private func assertFinitePositions(
+        _ result: (curr: [SIMD3<Float>], prev: [SIMD3<Float>]),
+        expectedCount: Int
+    ) {
+        XCTAssertEqual(result.curr.count, expectedCount)
+        XCTAssertEqual(result.prev.count, expectedCount)
+        for bone in 0..<expectedCount {
+            XCTAssertTrue(result.curr[bone].x.isFinite && result.curr[bone].y.isFinite && result.curr[bone].z.isFinite,
+                          "bonePosCurr[\(bone)] is non-finite: \(result.curr[bone])")
+            XCTAssertTrue(result.prev[bone].x.isFinite && result.prev[bone].y.isFinite && result.prev[bone].z.isFinite,
+                          "bonePosPrev[\(bone)] is non-finite: \(result.prev[bone])")
+        }
+    }
+
+    private func assertExactMatch(
+        _ uniform: (curr: [SIMD3<Float>], prev: [SIMD3<Float>]),
+        _ nonUniform: (curr: [SIMD3<Float>], prev: [SIMD3<Float>]),
+        context: String
+    ) {
+        XCTAssertEqual(uniform.curr.count, nonUniform.curr.count)
+        for bone in uniform.curr.indices {
+            XCTAssertEqual(uniform.curr[bone], nonUniform.curr[bone],
+                           "\(context) bonePosCurr[\(bone)] differed between uniform and non-uniform dispatch")
+            XCTAssertEqual(uniform.prev[bone], nonUniform.prev[bone],
+                           "\(context) bonePosPrev[\(bone)] differed between uniform and non-uniform dispatch")
+        }
+    }
 
     private func simulateChain(
         boneCount: Int,
@@ -168,7 +199,6 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
             rootY: 1.0
         )
 
-        // Optional center node (appended after chain nodes so node indices 0..<boneCount remain the chain).
         var centerNodeIndex: Int?
         if includeCenterNode {
             let centerGltf = try SpringBoneTestFixtures.makeGLTFNode(
@@ -181,7 +211,6 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
             centerNodeIndex = centerNode.index
         }
 
-        // Optional collider anchor node.
         var colliderNodeIndex: Int?
         if includeColliders {
             let colliderGltf = try SpringBoneTestFixtures.makeGLTFNode(
@@ -228,12 +257,13 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
             numPlanes: includeColliders ? 1 : 0
         )
 
-        let system = try SpringBoneComputeSystem(device: device)
-        system.supportsNonUniformThreadgroups = supportsNonUniform
+        let system = try SpringBoneComputeSystem(
+            device: device,
+            supportsNonUniformThreadgroups: supportsNonUniform
+        )
         system.testSerializeBoneDispatches = serialized
         try system.populateSpringBoneData(model: model)
 
-        // Displace joints so predict, distance, and collider kernels all perform active work.
         for bone in 1..<boneCount {
             let rest = SpringBoneTestFixtures.readBonePosition(model: model, boneIndex: bone)
             let phase = Float(bone % 7) * 0.005
@@ -246,7 +276,6 @@ final class SpringBoneUniformThreadgroupTests: XCTestCase {
             )
         }
 
-        // Move root and center node to exercise kinematic and centerDelta kernels.
         model.nodes[0].translation += SIMD3<Float>(0.02, 0.01, 0)
         model.nodes[0].updateWorldTransform()
         if let centerIdx = centerNodeIndex {
